@@ -2,10 +2,12 @@ name: Release
 # A `v*` tag tests the commit, builds the archives and uploads them to a draft
 # release. The release is published only after every asset is attached, so the
 # Homebrew formula, npm packages, cargo binstall and install.sh never see a
-# half-filled release.
+# half-filled release. sampo.yml dispatches it on the tag it creates, because tags
+# pushed with GITHUB_TOKEN start no workflows; a tag pushed by hand starts it directly.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
@@ -47,71 +49,28 @@ jobs:
           kache stats
           kache daemon stop
 
-  build:
-    strategy:
-      fail-fast: true
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            native: true
-          # Cross-compiled on the arm64 runner, so it is built but not executed.
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            native: false
-          # 22.04 runners keep the glibc requirement at 2.35, so the binaries also
-          # run on Debian 12 and Ubuntu 22.04 hosts that SSH bootstrap installs onto.
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
-            native: true
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-22.04-arm
-            native: true
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    env:
-      TARGET: ${{ matrix.target }}
-      # kache passes every compile straight to rustc here: shipped binaries are always
-      # compiled from source, and release targets share no cache entries with CI anyway.
-      KACHE_DISABLED: "1"
+  tag-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Install pinned toolchain
+      - id: version
         run: |
-          rustup toolchain install
-          rustup target add "$TARGET"
-      # .cargo/config.toml names kache as rustc wrapper, so it must exist even when disabled.
-      - uses: ./.github/actions/kache
-      - name: Check the tag against the workspace and plugin versions
-        run: |
-          version=${GITHUB_REF_NAME#v}
-          crate=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "devlanes") | .version')
-          plugin=$(jq -r .version agent-plugin/.claude-plugin/plugin.json)
-          if [ "$version" != "$crate" ] || [ "$version" != "$plugin" ]; then
-            echo "::error::tag $GITHUB_REF_NAME, devlanes $crate and agent-plugin/.claude-plugin/plugin.json $plugin must match"
+          case $GITHUB_REF in
+          refs/tags/v*) echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT" ;;
+          *)
+            echo "::error::run this workflow on a v* tag, not $GITHUB_REF"
             exit 1
-          fi
-          echo "VERSION=$version" >> "$GITHUB_ENV"
-      - name: Build
-        # The tag marks official builds in the daemon handshake and doctor; others say local.
-        env:
-          DEVLANES_BUILD_ID: ${{ github.ref_name }}
-        run: cargo build --release --locked --target "$TARGET" -p devlanes -p devlanes-hosts-helper
-      # build.rs regenerates the served schemas; a difference means they were committed stale.
-      - name: Check the committed schemas
-        run: git diff --exit-code crates/config/schema.json crates/config/user-schema.json
-      - name: Smoke test
-        if: matrix.native
-        run: |
-          "target/$TARGET/release/devlanes" --version | grep -Fx "devlanes $VERSION"
-          "target/$TARGET/release/devlanes-hosts" version | grep -F "build=release"
-      - name: Package
-        run: sh packaging/scripts/package.sh "$VERSION" "$TARGET" dist
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: dist-${{ matrix.target }}
-          path: dist/
-          if-no-files-found: error
+            ;;
+          esac
+
+  # Fails when the tag doesn't match the committed Cargo.toml and plugin.json versions.
+  build:
+    needs: tag-version
+    uses: ./.github/workflows/build.yml
+    with:
+      version: ${{ needs.tag-version.outputs.version }}
 
   release:
     needs: [test, build]

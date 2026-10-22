@@ -6,7 +6,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+publish = false
 
 # `cargo binstall --git https://github.com/devlanes-run/devlanes devlanes` downloads the
 # release archive built by .github/workflows/release.yml instead of compiling.

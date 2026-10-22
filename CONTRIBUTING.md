@@ -170,9 +170,29 @@ Run a crate's ignored tests with `cargo nextest run -p <crate> --run-ignored onl
 
 `crates/tui/screens/*.txt` and its `index.md` are every TUI state drawn against a fake daemon, as text with the styles of each cell, so a pull request shows what changed on screen. Any change to what the TUI draws changes them, including changes outside `crates/tui`. Rewrite them with `DEVLANES_BLESS=1 cargo nextest run -p devlanes-tui -E 'test(screens_are_current)'`, check the diff and commit them with the change; the test fails in CI while they're stale. `cargo run -p devlanes-tui --example screens` writes the same files plus gitignored PNG and ANSI versions for looking at the screens.
 
+## Change files
+
+Every pull request adds a change file in `.sampo/changesets/`, which [Sampo](https://github.com/bruits/sampo) turns into the next version and the crates' changelogs. Create one with `sampo add` (install it with `cargo install --locked sampo`), or write it by hand:
+
+```markdown
+---
+cargo/devlanes: patch
+cargo/devlanes-daemon: patch
+---
+
+Fixed `devlanes start` leaving a lane's services stopped after a config reload.
+```
+
+- List every crate whose behaviour changed, as `cargo/<package name>`. Add `cargo/devlanes` when users of the binary notice the change; those entries become the GitHub release notes.
+- Until 1.0, use `minor` for breaking changes (CLI, config, protocol, state on disk) and `patch` for everything else. Sampo applies plain SemVer, so `major` would jump to 1.0.0.
+- Write one or two sentences for someone reading the changelog: start with a verb (Added, Changed, Fixed, Removed), name the command or option, and say what a user has to do if anything. Leave out implementation details.
+- Changes nobody outside the repository notices (refactors, tests, CI) need no change file.
+
+Sampo's bot comments on pull requests that have none. A new crate needs `publish = false` in its own manifest, since Sampo doesn't follow `publish.workspace = true` yet and would try to publish it, and an entry in `packages.fixed` of `.sampo/config.toml` so it keeps the shared version.
+
 ## Releases
 
-`packaging/README.md` describes the tag-driven release workflow and the Homebrew and npm packages.
+Merging the release pull request that CI keeps up to date releases everything; `packaging/README.md` describes the workflow and the Homebrew and npm packages.
 
 ## License
 

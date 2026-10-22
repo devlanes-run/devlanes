@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 
 # `cargo binstall --git https://github.com/devlanes-run/devlanes devlanes-hosts-helper`
 # takes devlanes-hosts from the same release archive as devlanes.
