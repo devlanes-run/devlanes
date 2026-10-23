@@ -138,8 +138,10 @@ fn worktree_add_move_and_remove_reach_the_running_daemon() -> Result<()> {
         &first.to_string_lossy(),
         &moved.to_string_lossy(),
     ])?;
+    // The new path shows before the config there is read and the layout
+    // computed again, so wait for the ports too.
     let one_moved = lane_where(&lab, "lane 1 at its new path", "fixture-two@1", |l| {
-        same_path(l, &moved)
+        same_path(l, &moved) && l["port_block"].is_array()
     })?;
     assert_eq!(one_moved["branch"], "feat/watch", "{one_moved}");
     assert_eq!(one_moved["port_block"], one["port_block"], "{one_moved}");
