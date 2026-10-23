@@ -1,10 +1,10 @@
 # Repository conventions
 
-Rust 2024, pinned stable toolchain, macOS and Linux. Packages live in `crates/<name>` as `devlanes-<name>`; the composition root is `bins/devlanes`. Add crates when needed. Shared dependencies and lints belong in the root manifest.
+Rust 2024, pinned stable toolchain, macOS, Linux and Windows 11 24H2 or later. Packages live in `crates/<name>` as `devlanes-<name>`; the composition root is `bins/devlanes`. Add crates when needed. Shared dependencies and lints belong in the root manifest.
 
 `core` owns domain types and traits; integrations implement them; only the binary registers concrete integrations. `testing` provides isolated homes, Git repositories and `fixture-server`, initially without a core dependency. Core unit tests must not depend on testing. Keep integration tests in one binary per crate at `tests/it/main.rs`.
 
-Use typed library errors and propagate expected failures. Add concise rustdoc to functions and methods. Inline comments explain why, when or where. Unsafe code is denied except in explicitly approved OS-boundary crates, where each block needs a safety explanation. Keep blocking filesystem/process work off async executor threads.
+Use typed library errors and propagate expected failures. Add concise rustdoc to functions and methods. Inline comments explain why, when or where. Unsafe code is denied except in the approved OS-boundary crates (`sys`, `runner-pty`, `sys-windows`), where each block needs a safety explanation. Windows FFI lives only in `sys-windows` as safe wrappers; Windows-specific code goes in `<name>-windows` crates or `cfg(windows)` modules, never in runtime OS branches in shared logic, and leaves macOS and Linux behaviour unchanged. Keep blocking filesystem/process work off async executor threads.
 
 Accepted exception: the daemon depends on `git`, `resolver-dns`, `resolver-hosts` and `sync` directly instead of through core traits. They are daemon-internal mechanisms with one implementation each, so a trait would add indirection without a second implementer; reviews should not flag it.
 

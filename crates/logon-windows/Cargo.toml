@@ -1,0 +1,15 @@
+[package]
+name = "devlanes-logon-windows"
+description = "Logon start of the devlanes daemon through the HKCU Run key on Windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# The crate is empty on other platforms, so its dependencies are Windows-only too.
+[target.'cfg(windows)'.dependencies]
+devlanes-sys-windows = { path = "../sys-windows" }

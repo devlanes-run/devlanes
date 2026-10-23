@@ -8,7 +8,7 @@ devlanes runs a project's dev services once per Git worktree. Each worktree is a
 brew install devlanes-run/tap/devlanes
 ```
 
-The [README](../README.md#install) lists the npm, cargo and `install.sh` options and the source build. devlanes runs on macOS and Linux.
+The [README](../README.md#install) lists the npm, cargo and `install.sh` options and the source build. devlanes runs on macOS and Linux. Windows support is in progress; [the Windows guide](guides/windows.md) covers its install and its prerequisite, Git for Windows.
 
 ## First config
 
@@ -63,7 +63,7 @@ cd ../acme-checkout
 devlanes start
 ```
 
-A worktree becomes a lane the first time devlanes runs in it (here, `start`), or when `devlanes lane new <branch>` creates it; a worktree that only exists gets no lane, except the one on the primary branch. The daemon follows moved and removed worktrees by itself. `devlanes lane ls` lists every lane, and commands take a lane reference such as `2`, `feat/checkout` or `acme@2:api` from any directory. Removing a worktree stops its lane, and a lane whose folder is gone is cleaned once nothing runs in it; its logs stay until log retention removes them. `devlanes lane clean <lane> --yes` removes a lane's data and frees its ports by hand.
+A worktree becomes a lane the first time devlanes runs in it (here, `start`), or when `devlanes lane new <branch>` creates it; a worktree that only exists gets no lane, except the one on the primary branch. The daemon follows moved and removed worktrees by itself. `devlanes lane ls` lists every lane, and commands take a lane reference such as `2`, `feat/checkout` or `acme@2:api` from any directory. Removing a worktree stops its lane, and a lane whose folder is gone is cleaned once nothing runs in it; its logs stay until log retention removes them. Windows cannot delete a folder a running process works in, so there run `devlanes stop` in the worktree before `git worktree remove`. `devlanes lane clean <lane> --yes` removes a lane's data and frees its ports by hand.
 
 To run a folder twice, for example with two profiles, `devlanes lane new --name review` in it adds a second lane with its own index, ports and domain. `--lane review` addresses it; commands run in the folder keep using its first lane.
 
@@ -123,7 +123,7 @@ For more detail in the daemon's log, restart it with a level: `DEVLANES_LOG=debu
 
 - [CLI reference](reference/cli.md): every command and option.
 - [Config reference](reference/config.md): every field of `devlanes.yaml` and the user `config.yaml`.
-- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [terminals](guides/terminals.md), [remote setup](guides/remote-setup.md).
+- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [terminals](guides/terminals.md), [remote setup](guides/remote-setup.md), [Windows](guides/windows.md).
 - [Remote boxes](remote.md): run lanes on another machine and use them locally.
 - [Design](design.md): lanes, ports, the daemon and startup order.
 - [Observability](observability.md): the daemon's spans and diagnostics, and plans for tracing and benchmarks.

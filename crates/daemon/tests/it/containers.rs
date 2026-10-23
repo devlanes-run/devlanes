@@ -76,6 +76,10 @@ fn ready_config(ready: &str) -> String {
     )
 }
 
+#[cfg_attr(
+    windows,
+    ignore = "the test harness sets no Git sh.exe, so container `cmd` checks fail with shell_missing"
+)]
 #[tokio::test(flavor = "multi_thread")]
 /// A container's `ready` gates the infra phase: a passing `cmd` or `log` check
 /// lets services start, a failing one fails the start with

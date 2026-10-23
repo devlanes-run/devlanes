@@ -44,7 +44,7 @@ fn logs_hint(data: &Value) -> Option<Hint> {
 pub(crate) fn spawn_cause(data: &Value) -> String {
     let program = text(data, "program");
     match text(data, "reason").as_str() {
-        "not_found" if program.contains('/') => format!("{program}: no such file"),
+        "not_found" if explicit_program(&program) => format!("{program}: no such file"),
         "not_found" => format!("{program}: command not found on PATH"),
         "not_executable" => format!("{program} is not executable"),
         "cwd_missing" => format!("working directory {} does not exist", text(data, "cwd")),
@@ -61,13 +61,26 @@ pub(crate) fn spawn_cause(data: &Value) -> String {
     }
 }
 
+/// Whether the program was named by path rather than looked up on PATH.
+#[cfg(unix)]
+fn explicit_program(program: &str) -> bool {
+    program.contains('/')
+}
+
+/// Whether the program was named by path rather than looked up on PATH:
+/// Windows paths also use `\` and drive letters (`C:tool`).
+#[cfg(windows)]
+fn explicit_program(program: &str) -> bool {
+    program.contains(['/', '\\']) || program.as_bytes().get(1) == Some(&b':')
+}
+
 /// The fix for a spawn the program, not the unit, broke: the lane's PATH for a
 /// program not found there, `chmod +x` for one that cannot run.
 pub(crate) fn spawn_hint(data: &Value) -> Option<Hint> {
     let unit = text(data, "unit");
     let lane = text(data, "lane");
     match text(data, "reason").as_str() {
-        "not_found" if !text(data, "program").contains('/') && !unit.is_empty() => {
+        "not_found" if !explicit_program(&text(data, "program")) && !unit.is_empty() => {
             let mut args = vec!["env", "show", unit.as_str()];
             if !lane.is_empty() {
                 args.extend(["--lane", lane.as_str()]);
@@ -365,7 +378,8 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         ),
         "exited" => (
             match int(data, "code") {
-                Some(code) => format!("exited with code {code}"),
+                Some(code) => crate::exit::words(code)
+                    .map_or_else(|| format!("exited with code {code}"), str::to_owned),
                 None => match int(data, "signal") {
                     Some(signal) => format!("killed by signal {signal}"),
                     None => "exited".into(),
@@ -677,7 +691,10 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             let task = text(data, "task");
             (
                 match int(data, "exit_code") {
-                    Some(code) => format!("task {task} failed with exit code {code}"),
+                    Some(code) => match crate::exit::words(code) {
+                        Some(words) => format!("task {task} was {words}"),
+                        None => format!("task {task} failed with exit code {code}"),
+                    },
                     None => format!("task {task} failed"),
                 },
                 (!task.is_empty()).then(|| {
@@ -990,6 +1007,8 @@ fn unsafe_home(data: &Value) -> (String, Option<Hint>) {
             None => "another user owns it".into(),
         },
         "symlink" => "it is a symlink".into(),
+        "reparse_point" => "it is a symlink or junction".into(),
+        "acl" => "other accounts can access it".into(),
         "not_a_directory" => "it is not a directory".into(),
         _ => text(data, "message"),
     };
@@ -1174,7 +1193,8 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
         ),
         "exited" => (
             match int(data, "code") {
-                Some(code) => format!("exited with code {code}"),
+                Some(code) => crate::exit::words(code)
+                    .map_or_else(|| format!("exited with code {code}"), str::to_owned),
                 None => format!("killed by signal {}", field(data, "signal")),
             },
             Some(Hint::logs(lane, unit, 200)),
@@ -1185,7 +1205,8 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
                 int(data, "exit_code"),
                 data.get("signal").and_then(Value::as_i64),
             ) {
-                (Some(code), _) => format!("exit code {code}"),
+                (Some(code), _) => crate::exit::words(code)
+                    .map_or_else(|| format!("exit code {code}"), str::to_owned),
                 (None, Some(signal)) => format!("signal {signal}"),
                 _ => "no exit status".into(),
             };
