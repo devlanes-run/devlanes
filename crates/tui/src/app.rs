@@ -3415,27 +3415,36 @@ impl App {
             _ => {}
         }
         self.daemon.copy = Some(copy);
-        self.daemon_reveal(copy.cursor, shown.len(), layout.max_scroll);
+        self.daemon.scroll = self.daemon_reveal(copy.cursor, &entries, &shown, layout);
     }
 
-    /// Scrolls the daemon log the least that brings `cursor`'s line into view.
-    fn daemon_reveal(&mut self, cursor: crate::daemonlog::LogPos, shown: usize, max_scroll: usize) {
-        let line = crate::daemonlog::LogPos {
-            column: 0,
-            ..cursor
-        };
+    /// The least scroll that brings `cursor`'s line into view. The box is
+    /// anchored at its newest entry, so the line shows while it and the lines
+    /// below it fit: count down from it, one entry's lines at a time.
+    fn daemon_reveal(
+        &self,
+        cursor: crate::daemonlog::LogPos,
+        entries: &[crate::daemonlog::Entry],
+        shown: &[crate::daemonlog::Shown],
+        layout: crate::daemonlog::LogView,
+    ) -> usize {
+        let count = shown.len();
         // Below the box: its entry becomes the newest shown.
-        let bottom = shown.saturating_sub(1 + cursor.entry);
+        let bottom = count.saturating_sub(1 + cursor.entry);
         if self.daemon.scroll > bottom {
-            self.daemon.scroll = bottom;
-            return;
+            return bottom;
         }
-        // Above it: one entry at a time, until the line shows.
-        while self.daemon.scroll < max_scroll
-            && self.daemon_visible().first().is_some_and(|top| line < *top)
-        {
-            self.daemon.scroll += 1;
+        let lines = |index: usize| {
+            crate::ui::daemon::entry_lines(self, entries, shown, index, layout.width).len()
+        };
+        let mut used = lines(cursor.entry).saturating_sub(cursor.line);
+        let mut last = cursor.entry;
+        while last + 1 < count && used + lines(last + 1) <= layout.height {
+            last += 1;
+            used += lines(last);
         }
+        let needed = (count - 1 - last).min(layout.max_scroll);
+        self.daemon.scroll.max(needed)
     }
 
     /// Records the start of an action on `lane`.

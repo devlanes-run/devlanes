@@ -451,6 +451,52 @@ async fn daemon_log_text_is_selected_cell_by_cell_like_a_pane() -> TestResult {
 }
 
 #[tokio::test]
+async fn copy_mode_jumps_scroll_the_long_log_to_the_cursor() -> TestResult {
+    let mut app = daemon_app(100, 30).await?;
+    let lines: Vec<String> = (0..300)
+        .map(|i| {
+            format!(
+                "2026-10-21T10:{:02}:{:02}.000Z  INFO devlanes_daemon: entry {i}",
+                i / 60,
+                i % 60
+            )
+        })
+        .collect();
+    app.update(Msg::DaemonLog(Ok(LogChunk {
+        lines,
+        position: LogPosition {
+            offset: 9000,
+            file: (1, 2),
+        },
+        reset: false,
+    })));
+    render(&app)?;
+    let max = app.daemon_log_view.get().max_scroll;
+    assert!(max > 200, "{max}");
+    app.update(key(KeyCode::Char('c')));
+    // g: the oldest line, with the oldest entries filling the box.
+    app.update(key(KeyCode::Char('g')));
+    assert_eq!(app.daemon.copy.map(|c| c.cursor.entry), Some(0));
+    assert_eq!(app.daemon.scroll, max);
+    app.update(key(KeyCode::Char('G')));
+    assert_eq!(app.daemon.scroll, 0);
+    // k past the top of the box scrolls by one entry, not more.
+    let text = screen(&render(&app)?);
+    let top = text
+        .lines()
+        .find_map(|line| line.split("entry ").nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|n| n.parse::<usize>().ok())
+        .ok_or("no entry on screen")?;
+    let visible = 299 - top;
+    for _ in 0..=visible {
+        app.update(key(KeyCode::Char('k')));
+    }
+    assert_eq!(app.daemon.scroll, 1, "one entry above the old top");
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_log_that_fits_does_not_scroll() -> TestResult {
     let mut app = daemon_app(120, 40).await?;
     let before = screen(&render(&app)?);
