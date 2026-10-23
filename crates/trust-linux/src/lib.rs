@@ -5,6 +5,12 @@
 //! not a terminal so CI with passwordless sudo works and a missing password fails
 //! fast with [`TrustError::InteractionRequired`] instead of hanging. In a terminal,
 //! sudo prompts on `/dev/tty`. NSS databases belong to the user and need no sudo.
+//! Inside WSL the `windows` target reaches the Windows user root store
+//! ([`WindowsStore`]).
+
+mod windows;
+
+pub use windows::{WINDOWS_ID, WindowsStore};
 
 use std::io::{self, IsTerminal as _};
 use std::path::{Path, PathBuf};
@@ -127,6 +133,9 @@ pub struct LinuxTrust {
     home: PathBuf,
     sysroot: PathBuf,
     privilege: Privilege,
+    /// Windows' `certutil.exe` or why it is out of reach; `None` detects it
+    /// when the `windows` target is asked for.
+    windows: Option<Result<PathBuf, String>>,
 }
 
 impl LinuxTrust {
@@ -141,6 +150,7 @@ impl LinuxTrust {
             home: home.into(),
             sysroot: PathBuf::from("/"),
             privilege,
+            windows: None,
         }
     }
 
@@ -148,6 +158,14 @@ impl LinuxTrust {
     #[must_use]
     pub fn with_sysroot(mut self, sysroot: impl Into<PathBuf>) -> Self {
         self.sysroot = sysroot.into();
+        self
+    }
+
+    /// Sets Windows' `certutil.exe` for the `windows` target, or why it is out
+    /// of reach, instead of detecting WSL.
+    #[must_use]
+    pub fn with_windows_certutil(mut self, certutil: Result<PathBuf, String>) -> Self {
+        self.windows = Some(certutil);
         self
     }
 
@@ -166,9 +184,20 @@ impl LinuxTrust {
         ))
     }
 
-    /// The store for `target`; mobile targets are [`TrustError::Unsupported`].
+    /// The store for `target`; mobile targets are [`TrustError::Unsupported`],
+    /// and `windows` outside WSL or without interop is [`TrustError::Unavailable`].
+    /// Blocking for `windows` the first time (WSL detection).
     pub fn store(&self, target: TrustTarget) -> Result<Box<dyn TrustStore>, TrustError> {
         match target {
+            TrustTarget::Windows => {
+                let certutil = self.windows.clone().unwrap_or_else(windows::certutil);
+                match certutil {
+                    Ok(certutil) => {
+                        Ok(Box::new(WindowsStore::new(self.executor.clone(), certutil)))
+                    }
+                    Err(reason) => Err(TrustError::Unavailable { target, reason }),
+                }
+            }
             TrustTarget::System => Ok(Box::new(SystemStore::new(
                 self.executor.clone(),
                 &self.sysroot,

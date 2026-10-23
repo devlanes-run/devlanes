@@ -19,6 +19,7 @@ Start with [getting started](getting-started.md). The two references are generat
 - [Service patterns](guides/services.md): APIs behind a frontend, workers, several ports, wildcards, replicas, lifecycle tasks, CI.
 - [Terminals](guides/terminals.md): tab progress bars, clipboard.
 - [Remote setup](guides/remote-setup.md): preparing a box and a client for `devlanes remote connect`.
+- [WSL](guides/wsl.md): devlanes inside a WSL distro with the browser on Windows: trusting the CA in Windows, opening URLs, systemd, worktrees on Windows drives.
 
 ## Other
 

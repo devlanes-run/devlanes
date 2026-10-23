@@ -1628,6 +1628,7 @@ dependencies = [
  "devlanes-core",
  "libc",
  "rustix",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 
@@ -1713,6 +1714,7 @@ version = "0.3.0"
 dependencies = [
  "async-trait",
  "devlanes-pki",
+ "devlanes-sys",
  "devlanes-trust",
  "rustix",
  "tempfile",
@@ -1744,6 +1746,7 @@ dependencies = [
  "devlanes-config",
  "devlanes-core",
  "devlanes-proto",
+ "devlanes-sys",
  "devlanes-term",
  "futures-util",
  "insta",

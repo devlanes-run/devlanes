@@ -20,3 +20,4 @@ libc = "0.2"
 
 [dev-dependencies]
 rustix = { version = "1", features = ["fs", "process", "pty", "std"] }
+tempfile.workspace = true

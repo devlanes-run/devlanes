@@ -11,6 +11,8 @@ publish.workspace = true
 # and its argv tests compile on every platform; only the composition root picks it on Linux.
 [dependencies]
 async-trait.workspace = true
+# WSL detection and Windows' System32 for the `windows` target.
+devlanes-sys = { path = "../sys" }
 devlanes-trust = { path = "../trust" }
 rustix = { version = "1", features = ["process"] }
 tokio.workspace = true
