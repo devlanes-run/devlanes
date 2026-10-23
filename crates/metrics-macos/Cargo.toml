@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 
 # The crate is empty on other platforms, so its dependencies are macOS-only too.
 [target.'cfg(target_os = "macos")'.dependencies]

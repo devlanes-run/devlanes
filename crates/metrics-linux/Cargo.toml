@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 
 # Parsers build everywhere so their fixture tests run on macOS CI too.
 [dependencies]

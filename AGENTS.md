@@ -75,6 +75,10 @@ cargo build --workspace --all-targets --all-features
 - Prefix Docker-only external tests with `docker_` for the manual CI job.
 - End-to-end tests live in `e2e/` (`devlanes-e2e`) and drive the real `devlanes` binary as separate processes, each with its own short `DEVLANES_HOME`, Git repository and locked port slot; the default nextest profile skips them, so run them with `cargo nextest run --profile e2e`, and the Docker ones by adding `--run-ignored only -E 'test(/^docker_/)'`.
 
+## Change files
+
+Every change a user of devlanes could notice gets a change file in `.sampo/changesets/`, in the same commit; create it yourself, don't ask first. `CONTRIBUTING.md` has the format and wording rules: list each changed crate as `cargo/<package name>`, add `cargo/devlanes` when the binary's behaviour changes, and use `minor` for breaking changes and `patch` for everything else until 1.0 (never `major`). Write it for the changelog reader, not the reviewer. Refactors, tests and CI-only changes need none; say so in the pull request. Ask when the release impact is unclear. Never edit versions or `CHANGELOG.md` files by hand; the release pull request does. A new crate sets `publish = false` in its own manifest and goes into `packages.fixed` in `.sampo/config.toml`.
+
 ## Public content
 
 Examples and fixtures use neutral names (`acme`, `example.invalid`) and never contain credentials, private paths or references to files outside this repository.

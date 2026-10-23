@@ -1,6 +1,6 @@
 # Packaging
 
-Release archives, checksums, the SSH bootstrap manifest, the Homebrew formula and the npm packages all come from `.github/workflows/release.yml` and the scripts here. `install.sh` at the repository root installs from the same archives.
+Release archives, checksums, the SSH bootstrap manifest, the Homebrew formula and the npm packages all come from `.github/workflows/release.yml` and the scripts here; `.github/workflows/build.yml` builds the archives for it and for the `next` builds of `main`. `install.sh` at the repository root installs from the same archives.
 
 | Path | Purpose |
 |---|---|
@@ -19,20 +19,29 @@ Release archives, checksums, the SSH bootstrap manifest, the Homebrew formula an
 | cargo binstall | `cargo binstall --git https://github.com/devlanes-run/devlanes devlanes` |
 | Script | `curl -fsSL https://devlanes.run/install.sh \| sh` |
 | Source | `cargo install --locked --git https://github.com/devlanes-run/devlanes devlanes devlanes-hosts-helper` |
+| Latest build of `main` | `curl -fsSL https://raw.githubusercontent.com/devlanes-run/devlanes/main/install.sh \| DEVLANES_VERSION=next sh` |
 
 Every channel except the source build installs the release archives.
 
+## Next builds
+
+`.github/workflows/next.yml` builds every commit on `main` after the CI workflow passes on it, with the same `build.yml` as releases. The version is the current one with the patch bumped and `-next.N` added, where N counts the commits since the last stable tag: after 0.3.0 that's `0.3.1-next.14`, which sorts after 0.3.0 and before any release that follows. That version is written into the build only, never committed. The archives, `SHA256SUMS`, `release-manifest.json`, the schemas and `install.sh` then replace the assets of the GitHub prerelease `next`, whose tag moves to that commit. Only `install.sh` reads it: npm, Homebrew, cargo binstall and the website stay on stable releases, and a prerelease is never GitHub's `latest`. A newer commit cancels a build still running. Repository settings must not enable immutable releases, which forbid replacing assets.
+
 ## Releasing
 
-1. Set `version` in `[workspace.package]` of the root `Cargo.toml` and in `agent-plugin/.claude-plugin/plugin.json`, and merge.
-2. Push a tag `vX.Y.Z` that matches both. The workflow fails if they differ. A version with a `-` suffix is a prerelease.
+Releases come from the change files in `.sampo/changesets` (`CONTRIBUTING.md` describes them). `.github/workflows/sampo.yml` runs [Sampo's GitHub Action](https://github.com/bruits/sampo/tree/main/crates/sampo-github-action) on every push to `main`:
 
-The workflow then runs these jobs:
+1. While change files are pending, it keeps the pull request "Release (main)" from the branch `release/main` up to date. That runs `sampo release`, which consumes the change files, bumps the version in the root `Cargo.toml`, refreshes `Cargo.lock` and writes each crate's `CHANGELOG.md`. The workflow then copies the version into `agent-plugin/.claude-plugin/plugin.json` on that branch.
+2. Merging it leaves no change files, so the action runs `sampo publish`. Every crate has `publish = false`, so that publishes nothing and only tags the new versions: `vX.Y.Z` for `devlanes` (`short_tags` in `.sampo/config.toml`) and `devlanes-<name>-vX.Y.Z` for the other crates. The workflow then dispatches `release.yml` on the new `vX.Y.Z` tag.
+
+`.sampo/config.toml` puts every crate in one `fixed` group, so they share the version. Don't edit versions by hand. Sampo applies plain SemVer, so until 1.0 a breaking change is `minor` (0.3.x to 0.4.0) and everything else `patch`. Release notes are GitHub's generated notes; the changelogs have the details.
+
+`release.yml` also runs for a `v*` tag pushed by hand, and checks that the tag matches both versions. A version with a `-` suffix is a prerelease. It runs these jobs:
 
 | Job | Does |
 |---|---|
 | `test` | Runs the workspace tests on Linux and macOS, in parallel with `build` |
-| `build` | Builds `devlanes` and `devlanes-hosts` for each target, fails if the committed config schemas differ from the generated ones, and packs the archive |
+| `build` | Runs `build.yml`: builds `devlanes` and `devlanes-hosts` for each target, fails if the tag doesn't match the committed versions or if the committed config schemas differ from the generated ones, and packs the archive |
 | `release` | Writes `SHA256SUMS`, `release-manifest.json` and the formula, copies `schema.json` and `user-schema.json`, attests the archives' build provenance, and uploads everything to a draft release. A rerun refills the draft and refuses to touch a published release |
 | `publish` | Publishes the draft |
 | `website` | Stable versions only. Triggers a rebuild of `devlanes-run/website`, which copies `install.sh`, `schema.json` and `user-schema.json` from the latest stable release to `https://devlanes.run/install.sh`, `https://devlanes.run/v1/schema.json` and `https://devlanes.run/v1/user-schema.json` |
@@ -62,6 +71,8 @@ gh attestation verify devlanes-0.1.0-aarch64-apple-darwin.tar.gz --repo devlanes
 ```
 
 ## Credentials
+
+`sampo.yml` only uses the workflow's `GITHUB_TOKEN`. GitHub starts no workflows for what that token pushes, which is why the job dispatches `release.yml` itself and why CI on the release pull request waits for someone to approve the runs.
 
 `homebrew-publish` pushes to the tap with the repository secret `HOMEBREW_TAP_TOKEN`, a fine-grained token with Contents read and write on `devlanes-run/homebrew-tap` only. It expires on the date set when it was created; replace the secret before then. `website` sends its dispatch with `WEBSITE_DISPATCH_TOKEN`, a fine-grained token with Contents write on `devlanes-run/website` only.
 

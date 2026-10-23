@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-publish.workspace = true
+publish = false
 
 # Commands are only built here and run through an injected executor, so the crate
 # and its argv tests compile on every platform; only the composition root picks it on macOS.
