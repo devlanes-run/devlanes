@@ -250,6 +250,40 @@ fn selection() {
     );
 }
 
+#[tokio::test]
+/// An `autostart` expression acts like the literal it evaluates to in each lane: a
+/// glob in the default profile, or no profile at all, keeps it only when true, while
+/// names and command-line selectors start it either way.
+async fn autostart_expressions_follow_the_lane() {
+    let services = "project: demo\nservices:\n  api: { run: a }\n  worker: { run: w, autostart: '${{ lane.index == 0 }}' }\n  tool: { run: t, autostart: false }\n";
+    let profiled = format!("{services}profiles:\n  default: ['*']\n  named: [worker]\n");
+    for yaml in [services.to_owned(), profiled.clone()] {
+        let config = parse(&yaml);
+        for (index, expected) in [(0, &["api", "worker"][..]), (1, &["api"][..])] {
+            let lane = plain(&yaml, index).await;
+            assert_eq!(lane.autostart("worker"), Some(index == 0));
+            let mut selection = select(&config, None, &[]).expect("default");
+            assert_eq!(selection.services, ["api", "worker"]);
+            assert_eq!(selection.autostart_pending, ["worker"]);
+            selection.apply_autostart(&lane);
+            assert_eq!(selection.services, expected, "lane {index}");
+            assert!(selection.autostart_pending.is_empty());
+        }
+    }
+    let config = parse(&profiled);
+    let lane = plain(&profiled, 1).await;
+    let mut named = select(&config, Some("named"), &[]).expect("named");
+    assert!(named.autostart_pending.is_empty());
+    named.apply_autostart(&lane);
+    assert_eq!(named.services, ["worker"]);
+    for selector in ["worker", "w*", "t*"] {
+        let mut chosen = select(&config, None, &[selector.to_owned()]).expect("selector");
+        assert!(chosen.autostart_pending.is_empty(), "{selector}");
+        chosen.apply_autostart(&lane);
+        assert_eq!(chosen.services.len(), 1, "{selector}");
+    }
+}
+
 /// Config with overlapping profiles for the multi-profile tests.
 const PROFILES: &str = r#"
 project: demo

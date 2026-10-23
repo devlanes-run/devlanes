@@ -556,8 +556,8 @@ pub struct ReadyCheck {
     /// port. It only proves the socket is open, not that the app works.
     pub tcp: Option<TcpReady>,
     /// Ready once a GET request to `path` on the unit's main port answers with `status`, or
-    /// with any status below 500 when `status` is unset. Best when the app has a health
-    /// route that fails while it is broken.
+    /// with a 2xx status when `status` is unset. Redirects are not followed. Best when the
+    /// app has a health route that fails while it is broken.
     pub http: Option<HttpReady>,
     /// Ready once a line of output matches this regular expression, with colors and other
     /// terminal escape codes removed; recent lines printed before the check began count
@@ -594,14 +594,16 @@ pub enum TcpReady {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"path":"/healthz","status":200,"timeout":"60s"}]))]
-/// HTTP readiness probe against the unit's main port.
+/// HTTP readiness probe against the unit's main port. Passes on a 2xx answer, or on
+/// exactly `status` when it is set.
 pub struct HttpReady {
     /// Path requested with GET, such as `/healthz`; defaults to `/`.
     #[schemars(extend("examples" = ["/healthz","/-/health"]))]
     pub path: Option<Templated<String>>,
     #[schemars(extend("examples" = [200]))]
-    /// Status code that counts as ready, between 100 and 599. When unset, any status below
-    /// 500 counts, so a 404 from a server that is up still passes.
+    /// Status code that counts as ready, between 100 and 599; only that exact code passes.
+    /// When unset, any status from 200 to 299 counts, so a 404 or a redirect keeps waiting.
+    /// Set it to accept another code, such as `302` for a route that redirects to a login.
     pub status: Option<Templated<u16>>,
     /// How long the HTTP check may take to pass, replacing the check's `timeout`; defaults
     /// to 60s. When it runs out, a service is marked failed but keeps running, and for an

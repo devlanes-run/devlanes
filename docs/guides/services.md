@@ -178,7 +178,7 @@ profiles:
   e2e: { include: [+api, +web], run_scripts: { dev: start }, env: { NODE_ENV: production } }
 ```
 
-A unit's colour comes from its first tag, so put the category tag (`api`, `web`, `worker`, `db`) first and selection tags after. Profiles select by name, glob or `+tag`; with a `default` profile, a plain `devlanes start` starts exactly that selection. `--profile` repeats and the union is started.
+A unit's colour comes from its first tag with a `color` under `tags`, else its first category tag (`api`, `web`, `worker`, `db`), so put the category tag first and selection tags after. Profiles select by name, glob or `+tag`; with a `default` profile, a plain `devlanes start` starts exactly that selection. `--profile` repeats and the union is started.
 
 ## Monorepo with several apps
 

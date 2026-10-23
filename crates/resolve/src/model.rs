@@ -448,6 +448,14 @@ impl ResolvedLane {
         self.services.values().filter(move |s| s.name == service)
     }
 
+    /// Evaluated `autostart` of `service`: true when any replica's is, `None` when
+    /// no replica planned (the failure is in [`Self::errors`]).
+    pub fn autostart(&self, service: &str) -> Option<bool> {
+        self.units_of(service)
+            .map(|unit| unit.autostart)
+            .reduce(|any, next| any || next)
+    }
+
     /// Fails with the first planning error among `services`, so a start can
     /// report it (a locked vault included) before spawning anything.
     pub fn check_services<'s>(

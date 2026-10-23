@@ -252,10 +252,11 @@ impl Client {
         let deadline = Instant::now() + START_TIMEOUT;
         let mut message = Vec::new();
         timeout(START_TIMEOUT, async {
-            // Bound an invalid child's output rather than buffering arbitrary stdout.
+            // Bound an invalid child's output rather than buffering arbitrary stdout; a
+            // failure reason such as an invalid config with its path still fits.
             use tokio::io::AsyncReadExt;
             (&mut reader)
-                .take(128)
+                .take(4096)
                 .read_until(b'\n', &mut message)
                 .await
         })

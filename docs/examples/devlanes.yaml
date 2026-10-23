@@ -5,7 +5,7 @@
 # Project name shared by every worktree of this repository.
 project: acme
 
-# Optional color overrides; a unit uses its first tag. Other tag names remain valid.
+# Optional color overrides; a unit uses the first of its tags listed here. Other tag names remain valid.
 tags:
   api: { color: cyan, description: HTTP APIs }
   worker: { color: bright-magenta }

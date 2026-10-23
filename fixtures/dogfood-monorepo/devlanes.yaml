@@ -190,7 +190,7 @@ services:
     run_script: { file: web/app/package.json, name: dev }
     env: { ACME_APP_PORT: "${{ self.port }}" }
     hosts: ["app.${{ lane.domain }}"]
-    ready: { http: { path: / } }
+    ready: { http: { path: /, status: 302 } }
     tags: [web, stage-web, essential]
 
   members-portal:

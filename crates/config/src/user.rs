@@ -262,14 +262,15 @@ impl Default for UpdatesConfig {
 #[schemars(extend("examples" = [{"retention":"7d","remote_hosts_retention":"90d"}]))]
 pub struct HistoryConfig {
     /// How long records of finished service and task runs (start and end times, exit
-    /// status) are kept after the run ends; defaults to `7d`. A run that still has log
-    /// index entries or a metrics summary in the database stays until those expire, and
-    /// `state.max_size` can delete runs sooner.
+    /// status) are kept after the run ends; defaults to `7d` and must be longer than
+    /// `0s`. A run that still has log index entries or a metrics summary in the database
+    /// stays until those expire, and `state.max_size` can delete runs sooner.
     #[schemars(extend("examples" = ["7d","30d"]))]
     pub retention: ConfigDuration,
     /// How long a remote box stays listed by `devlanes remote ls` after its last
-    /// successful connection; defaults to `90d`. A record without a connection time is
-    /// never deleted by age, and `state.max_size` can delete records sooner.
+    /// successful connection; defaults to `90d` and must be longer than `0s`. A record
+    /// without a connection time is never deleted by age, and `state.max_size` can
+    /// delete records sooner.
     #[schemars(extend("examples" = ["90d","180d"]))]
     pub remote_hosts_retention: ConfigDuration,
 }
@@ -442,9 +443,10 @@ pub struct HostnamesConfig {
     pub hosts_file: Option<HostsFile>,
     /// Top-level domain for the `resolver` strategy, such as `test`; required there. It
     /// must be `test`, `internal`, `home.arpa` or a domain under one of them (or under
-    /// `localhost`), because any other name could belong to a real site. A new devlanes CA
-    /// may sign names under the `tld` set when it is created, whatever the strategy, so
-    /// switching to another `tld` later needs a new CA.
+    /// `localhost`), made of valid DNS labels, because any other name could belong to a
+    /// real site; the file is rejected otherwise, whatever the strategy. A new devlanes
+    /// CA may sign names under the `tld` set when it is created, whatever the strategy,
+    /// so switching to another `tld` later needs a new CA.
     #[schemars(extend("examples" = ["test"]))]
     pub tld: Option<String>,
     /// Reserved for the planned `public` resolver; any value is rejected for now.
@@ -651,12 +653,14 @@ pub struct LogsConfig {
 #[schemars(extend("examples" = [{"days":7,"max_size":"5GiB"}]))]
 pub struct LogRetention {
     /// Delete output older than this many days, along with its index entries in the
-    /// database; defaults to 7. The newest log file of each stopped service is kept.
-    #[schemars(extend("examples" = [7]))]
+    /// database; defaults to 7 and must be at least 1. The newest log file of each
+    /// stopped service is kept.
+    #[schemars(range(min = 1), extend("examples" = [7]))]
     pub days: u32,
-    /// Total size of stored output across all projects and lanes; defaults to `5GiB`.
-    /// Over it, the oldest output goes first wherever it is, but each stopped service's
-    /// newest file and up to 1 MiB of a running service's current file are kept.
+    /// Total size of stored output across all projects and lanes; defaults to `5GiB`
+    /// and must be above zero. Over it, the oldest output goes first wherever it is, but
+    /// each stopped service's newest file and up to 1 MiB of a running service's current
+    /// file are kept.
     pub max_size: ByteSize,
 }
 
@@ -676,8 +680,9 @@ impl Default for LogRetention {
 #[schemars(extend("examples" = [{"retention":"7d"}]))]
 pub struct MetricsConfig {
     /// How long per-minute CPU and memory samples, per-run summaries and startup memory
-    /// peaks are kept; defaults to `7d`. Shorter keeps less history for graphs and for the
-    /// memory a start is expected to need; `state.max_size` can delete samples sooner.
+    /// peaks are kept; defaults to `7d` and must be longer than `0s`. Shorter keeps less
+    /// history for graphs and for the memory a start is expected to need;
+    /// `state.max_size` can delete samples sooner.
     #[schemars(extend("examples" = ["7d","30d"]))]
     pub retention: ConfigDuration,
 }
@@ -762,14 +767,16 @@ impl TerminalConfig {
 }
 
 impl UserConfig {
-    /// Reject the deferred public resolver and invalid machine-wide resource ranges.
-    /// Messages start with the offending field path.
+    /// Reject the deferred public resolver, invalid machine-wide resource ranges, a
+    /// `hostnames.tld` that could name a real site and retention limits that would
+    /// delete everything. Messages start with the offending field path.
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.state.max_size.0 == 0 {
             return Err(ConfigError::plain(
                 "state.max_size: must be greater than zero",
             ));
         }
+        self.validate_retention()?;
         for (path, deferred) in [
             (
                 "hostnames.resolver",
@@ -811,8 +818,45 @@ impl UserConfig {
                 "hostnames.tld: required for the resolver strategy",
             ));
         }
+        if let Some(tld) = &self.hostnames.tld
+            && let Err(reason) = check_tld(tld)
+        {
+            return Err(ConfigError::plain(format!(
+                "hostnames.tld: `{tld}` cannot be used: {reason}"
+            )));
+        }
         self.startup.validate()?;
         self.lanes.validate()?;
+        Ok(())
+    }
+
+    /// Zero limits would delete all stored output or history at the next cleanup
+    /// instead of keeping some; the daemon gives zero no other meaning.
+    fn validate_retention(&self) -> Result<(), ConfigError> {
+        if self.logs.retention.days == 0 {
+            return Err(ConfigError::plain(
+                "logs.retention.days: must be at least 1; 0 would delete all stored output",
+            ));
+        }
+        if self.logs.retention.max_size.0 == 0 {
+            return Err(ConfigError::plain(
+                "logs.retention.max_size: must be greater than zero; 0B would delete all stored output",
+            ));
+        }
+        for (path, retention) in [
+            ("history.retention", &self.history.retention),
+            (
+                "history.remote_hosts_retention",
+                &self.history.remote_hosts_retention,
+            ),
+            ("metrics.retention", &self.metrics.retention),
+        ] {
+            if retention.0.is_zero() {
+                return Err(ConfigError::plain(format!(
+                    "{path}: must be longer than 0s; 0s would delete every record at the next cleanup"
+                )));
+            }
+        }
         Ok(())
     }
 
@@ -859,6 +903,59 @@ impl UserConfig {
                 TrustTarget::IosSimulator | TrustTarget::AndroidEmulator
             )
         });
+    }
+}
+
+/// Special-use zones `hostnames.tld` may equal or sit under, as in
+/// `devlanes_resolver_dns::RESERVED_ZONES`.
+const RESERVED_TLDS: &[&str] = &["test", "internal", "home.arpa"];
+
+/// Why `tld` cannot be used, by the rule of `devlanes_resolver_dns::Zone::new`
+/// (`crates/resolver-dns/src/zone.rs`). Duplicated because config must not depend on
+/// the DNS server crate and its runtime; a test in `bins/devlanes` keeps the two in step.
+fn check_tld(tld: &str) -> Result<(), &'static str> {
+    let name = tld.strip_suffix('.').unwrap_or(tld).to_ascii_lowercase();
+    if name.is_empty() {
+        return Err("it is empty");
+    }
+    if name.len() > 253 {
+        return Err("it is longer than 253 characters");
+    }
+    for label in name.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return Err("every label must be 1 to 63 characters");
+        }
+        if !label
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            || label.starts_with('-')
+            || label.ends_with('-')
+        {
+            return Err("labels may only hold letters, digits and inner hyphens");
+        }
+    }
+    if name
+        .rsplit('.')
+        .next()
+        .is_some_and(|last| last.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return Err("the last label cannot be numeric");
+    }
+    let under = |suffix: &str| {
+        name.strip_suffix(suffix)
+            .is_some_and(|rest| rest.ends_with('.'))
+    };
+    if RESERVED_TLDS
+        .iter()
+        .any(|suffix| name == *suffix || under(suffix))
+        || under("localhost")
+    {
+        Ok(())
+    } else {
+        Err(
+            "the TLD must be test, internal or home.arpa, a domain under one of them, \
+             or a domain under localhost",
+        )
     }
 }
 

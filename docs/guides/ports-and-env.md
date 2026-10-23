@@ -51,7 +51,7 @@ services:
 
 `hosts[].port` and `ready.tcp` also allocate the name they mention, and the wrangler preset allocates `inspector`. Another service reads them as `${{ services.api.ports.metrics }}`, but only the owning service's own fields allocate; a reference from elsewhere to an unknown name fails at start as undefined. The primary port is named `default` in `hosts[].port` and `ready.tcp`.
 
-Replicas each get their own ports: `${{ self.port }}` differs per replica, named ports too. `replicas` must be a literal number, since every lane allocates the same set.
+Replicas each get their own ports: `${{ self.port }}` differs per replica, named ports too. `replicas` is a plain number and takes no expression, since every lane allocates the same set.
 
 ### Reading other services
 
@@ -97,7 +97,7 @@ Tasks and infra commands get layers 1 to 8 as well, minus the service-only varia
 
 ### Expressions
 
-Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is exactly one expression keeps its type (`replicas: ${{ 2 }}` is a number); mixed text is a string. Undefined names are errors; `| default('x')` makes them optional. Filters such as `upper`, `replace`, `join`, `int` and the `a if cond else b` form are available.
+Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is exactly one expression keeps its type (`autostart: ${{ lane.index == 0 }}` is a boolean); mixed text is a string. Undefined names are errors; `| default('x')` makes them optional. Filters such as `upper`, `replace`, `join`, `int` and the `a if cond else b` form are available.
 
 | Namespace | Contents |
 | --- | --- |

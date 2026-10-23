@@ -79,7 +79,7 @@ lanes:
 - `inspector` is allocated automatically for every wrangler service; `--inspector-port` gets it. Route a hostname to it with `hosts: [{ host: "inspect.${{ lane.domain }}", port: inspector }]`.
 - `vars` become `--var KEY:VALUE`, which override the `vars` in `wrangler.toml`. Numbers and booleans are stringified.
 - Each lane gets its own dev registry, `wrangler-registry` in the [lane data folder](ports-and-env.md#lane-data-folder) (`WRANGLER_REGISTRY_PATH=${{ lane.data_path }}/wrangler-registry`), so service bindings between workers of one lane resolve to that lane's workers, also when two lanes run from one folder. `isolate_registry: false` turns that off. The same variable is set for every unit of a project that contains a `wrangler.toml|json|jsonc`, so a plain `node` worker in the same repo talks to the right registry too. Do not set it yourself.
-- A `dev` script that already passes `--port` or `--inspector-port` is refused with the fix in the message. Move the default into `wrangler.toml` (`dev.port`, `dev.inspector_port`) and let the flag override it.
+- A `dev` script that already passes `--port` or `--inspector-port` is refused with the fix in the message, and so are those flags in `args` (by `devlanes config check`). Move the default into `wrangler.toml` (`dev.port`, `dev.inspector_port`) and let the flag override it.
 - workerd does not resolve `*.localhost` itself. `lanes.hosts_file: always` writes the lane's exact hostnames to `/etc/hosts` (after `devlanes certs trust --hosts`), so worker-to-worker `fetch` by hostname works. Wildcards cannot go in `/etc/hosts`; use service bindings or the registry for those.
 
 Durable Objects, D1, KV and R2 local state live under `.wrangler/` in the worker's directory. That is per worktree, so lanes in separate worktrees keep separate state, but lanes of one folder (`devlanes lane new --name`) share it. The same goes for any config file a dev script generates into the worker's directory: two lanes overwrite each other's copy, and a running `wrangler dev` that watches it reloads with the other lane's ports. Write both to the lane data folder instead:
@@ -99,7 +99,7 @@ Everything the preset does:
 - Adds `--port <self.port> --inspector-port <self.ports.inspector>`, then `--var KEY:VALUE` per entry of `vars` (in key order), then `wrangler.args`.
 - Allocates the `inspector` port.
 - Sets `WRANGLER_REGISTRY_PATH`; with `isolate_registry: false` it also removes the value the Cloudflare platform integration set.
-- Refuses a var name that is empty or contains `:`, and a script that passes `--port`, `--inspector-port` or `--inspectorPort`.
+- Refuses a var name that is empty or contains `:`, and `--port`, `--inspector-port` or `--inspectorPort` in the script or in `args`.
 
 By hand, without the checks:
 

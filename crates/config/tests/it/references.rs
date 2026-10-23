@@ -261,7 +261,7 @@ fn schema_patterns_and_preset_agreement() {
     for value in [
         json!({"services":{"api":{"stop":{"timeout":"15s"}}}}),
         json!({"services":{"api":{"stop":{"timeout":"${{ lane.index }}s"}}}}),
-        json!({"services":{"api":{"replicas":"${{ lane.index }}"}}}),
+        json!({"services":{"api":{"replicas":2}}}),
         json!({"services":{"api":{"preset":"vite","vite":{"args":[]}}}}),
         json!({"services":{"api":{"extends":"web","vite":{"args":[]}}}}),
     ] {
@@ -270,6 +270,7 @@ fn schema_patterns_and_preset_agreement() {
     for value in [
         json!({"services":{"api":{"stop":{"timeout":"10fortnights"}}}}),
         json!({"services":{"api":{"replicas":"two"}}}),
+        json!({"services":{"api":{"replicas":"${{ lane.index }}"}}}),
         json!({"services":{"api":{"preset":"next","vite":{"args":[]}}}}),
     ] {
         assert!(!project.is_valid(&value), "accepted {value}");

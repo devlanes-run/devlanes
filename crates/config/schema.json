@@ -423,7 +423,7 @@
     },
     "HttpReady": {
       "additionalProperties": false,
-      "description": "HTTP readiness probe against the unit's main port.",
+      "description": "HTTP readiness probe against the unit's main port. Passes on a 2xx answer, or on exactly `status` when it is set.",
       "examples": [
         {
           "path": "/healthz",
@@ -431,7 +431,7 @@
           "timeout": "60s"
         }
       ],
-      "markdownDescription": "HTTP readiness probe against the unit's main port.",
+      "markdownDescription": "HTTP readiness probe against the unit's main port. Passes on a 2xx answer, or on exactly `status` when it is set.",
       "properties": {
         "path": {
           "anyOf": [
@@ -464,11 +464,11 @@
               "type": "null"
             }
           ],
-          "description": "Status code that counts as ready, between 100 and 599. When unset, any status below 500 counts, so a 404 from a server that is up still passes.",
+          "description": "Status code that counts as ready, between 100 and 599; only that exact code passes. When unset, any status from 200 to 299 counts, so a 404 or a redirect keeps waiting. Set it to accept another code, such as `302` for a route that redirects to a login.",
           "examples": [
             200
           ],
-          "markdownDescription": "Status code that counts as ready, between 100 and 599. When unset, any status below 500 counts, so a 404 from a server that is up still passes."
+          "markdownDescription": "Status code that counts as ready, between 100 and 599; only that exact code passes. When unset, any status from 200 to 299 counts, so a 404 or a redirect keeps waiting. Set it to accept another code, such as `302` for a route that redirects to a login."
         },
         "timeout": {
           "anyOf": [
@@ -994,7 +994,7 @@
     },
     "InjectedPresetOptions2": {
       "additionalProperties": false,
-      "description": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically, and a `run_script` script that already passes either port flag is refused at start.",
+      "description": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically. `args` that pass either port flag are refused by `devlanes config check`, and a `run_script` script that does is refused at start.",
       "examples": [
         {
           "args": [
@@ -1007,10 +1007,10 @@
           }
         }
       ],
-      "markdownDescription": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically, and a `run_script` script that already passes either port flag is refused at start.",
+      "markdownDescription": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically. `args` that pass either port flag are refused by `devlanes config check`, and a `run_script` script that does is refused at start.",
       "properties": {
         "args": {
-          "description": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. Do not repeat `--port` or `--inspector-port` here, since the preset already sets them. A local override or `extends` child that sets `args` replaces the inherited list.",
+          "description": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. `--port` and `--inspector-port` (or `--inspectorPort`) are refused here, since the preset already sets them per lane. A local override or `extends` child that sets `args` replaces the inherited list.",
           "examples": [
             [
               "--env-file",
@@ -1018,15 +1018,15 @@
             ]
           ],
           "items": {
-            "description": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. Do not repeat `--port` or `--inspector-port` here, since the preset already sets them. A local override or `extends` child that sets `args` replaces the inherited list.",
+            "description": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. `--port` and `--inspector-port` (or `--inspectorPort`) are refused here, since the preset already sets them per lane. A local override or `extends` child that sets `args` replaces the inherited list.",
             "examples": [
               "--env-file",
               ".dev.vars"
             ],
-            "markdownDescription": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. Do not repeat `--port` or `--inspector-port` here, since the preset already sets them. A local override or `extends` child that sets `args` replaces the inherited list.",
+            "markdownDescription": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. `--port` and `--inspector-port` (or `--inspectorPort`) are refused here, since the preset already sets them per lane. A local override or `extends` child that sets `args` replaces the inherited list.",
             "type": "string"
           },
-          "markdownDescription": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. Do not repeat `--port` or `--inspector-port` here, since the preset already sets them. A local override or `extends` child that sets `args` replaces the inherited list.",
+          "markdownDescription": "Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example `[--env-file, .dev.vars]`. `--port` and `--inspector-port` (or `--inspectorPort`) are refused here, since the preset already sets them per lane. A local override or `extends` child that sets `args` replaces the inherited list.",
           "type": [
             "array",
             "null"
@@ -1580,7 +1580,7 @@
               "type": "null"
             }
           ],
-          "description": "Ready once a GET request to `path` on the unit's main port answers with `status`, or with any status below 500 when `status` is unset. Best when the app has a health route that fails while it is broken.",
+          "description": "Ready once a GET request to `path` on the unit's main port answers with `status`, or with a 2xx status when `status` is unset. Redirects are not followed. Best when the app has a health route that fails while it is broken.",
           "examples": [
             {
               "path": "/healthz",
@@ -1588,7 +1588,7 @@
               "timeout": "60s"
             }
           ],
-          "markdownDescription": "Ready once a GET request to `path` on the unit's main port answers with `status`, or with any status below 500 when `status` is unset. Best when the app has a health route that fails while it is broken."
+          "markdownDescription": "Ready once a GET request to `path` on the unit's main port answers with `status`, or with a 2xx status when `status` is unset. Redirects are not followed. Best when the app has a health route that fails while it is broken."
         },
         "log": {
           "anyOf": [
@@ -1904,12 +1904,12 @@
               "type": "null"
             }
           ],
-          "description": "Set false for an on-demand service: a plain `devlanes start` without a `default` profile skips it, and so do globs such as `*` in profiles. Naming it or its `+tag`, on the command line or in a profile, still starts it. Defaults to true; only a literal `false` takes effect.",
+          "description": "Set false for an on-demand service: a plain `devlanes start` without a `default` profile skips it, and so do globs such as `*` in profiles. Naming it or its `+tag`, on the command line or in a profile, still starts it. An expression is evaluated for each lane and acts like the `true` or `false` it gives, such as `${{ lane.index == 0 }}` to autostart only in the main lane. With `replicas`, the service starts all its copies when any copy's expression gives true. Defaults to true.",
           "examples": [
             true,
             false
           ],
-          "markdownDescription": "Set false for an on-demand service: a plain `devlanes start` without a `default` profile skips it, and so do globs such as `*` in profiles. Naming it or its `+tag`, on the command line or in a profile, still starts it. Defaults to true; only a literal `false` takes effect."
+          "markdownDescription": "Set false for an on-demand service: a plain `devlanes start` without a `default` profile skips it, and so do globs such as `*` in profiles. Naming it or its `+tag`, on the command line or in a profile, still starts it. An expression is evaluated for each lane and acts like the `true` or `false` it gives, such as `${{ lane.index == 0 }}` to autostart only in the main lane. With `replicas`, the service starts all its copies when any copy's expression gives true. Defaults to true."
         },
         "cwd": {
           "anyOf": [
@@ -2131,23 +2131,19 @@
           "markdownDescription": "When the service counts as up: `devlanes start` waits for it, and `after: services` tasks run once every started service is ready. Write `started` (ready once the process runs) or a mapping with one of `tcp`, `http`, `log` or `cmd`, plus `timeout` (default 60s). Without it, a service with `hosts` waits for TCP on its port and one without hosts uses `started`. A check that times out marks the service failed, which also skips `after: services` tasks; the process keeps running and is not restarted."
         },
         "replicas": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Templated_uint16",
-              "description": "",
-              "examples": [],
-              "markdownDescription": ""
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Number of copies of this service to run, each with its own port, for example several queue workers. They run as `<name>.1` to `<name>.N`, `${{ replica.index }}` counts from 1, and `services.<name>` in expressions means the first copy; use `${{ replica.index }}` in `hosts` to give each copy its own hostname. Must be a literal number; defaults to 1.",
+          "description": "Number of copies of this service to run, each with its own port, for example several queue workers. They run as `<name>.1` to `<name>.N`, `${{ replica.index }}` counts from 1, and `services.<name>` in expressions means the first copy; use `${{ replica.index }}` in `hosts` to give each copy its own hostname. A plain number of at least 1, the same in every lane, because each copy reserves ports in every lane's block; `${{ ... }}` expressions are not allowed. Defaults to 1.",
           "examples": [
             1,
             2
           ],
-          "markdownDescription": "Number of copies of this service to run, each with its own port, for example several queue workers. They run as `<name>.1` to `<name>.N`, `${{ replica.index }}` counts from 1, and `services.<name>` in expressions means the first copy; use `${{ replica.index }}` in `hosts` to give each copy its own hostname. Must be a literal number; defaults to 1."
+          "format": "uint16",
+          "markdownDescription": "Number of copies of this service to run, each with its own port, for example several queue workers. They run as `<name>.1` to `<name>.N`, `${{ replica.index }}` counts from 1, and `services.<name>` in expressions means the first copy; use `${{ replica.index }}` in `hosts` to give each copy its own hostname. A plain number of at least 1, the same in every lane, because each copy reserves ports in every lane's block; `${{ ... }}` expressions are not allowed. Defaults to 1.",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "run": {
           "anyOf": [
@@ -2309,7 +2305,7 @@
         },
         "wrangler": {
           "$ref": "#/$defs/InjectedPresetOptions2",
-          "description": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically, and a `run_script` script that already passes either port flag is refused at start.",
+          "description": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically. `args` that pass either port flag are refused by `devlanes config check`, and a `run_script` script that does is refused at start.",
           "examples": [
             {
               "args": [
@@ -2322,7 +2318,7 @@
               }
             }
           ],
-          "markdownDescription": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically, and a `run_script` script that already passes either port flag is refused at start.",
+          "markdownDescription": "Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The `inspector` port is allocated automatically. `args` that pass either port flag are refused by `devlanes config check`, and a `run_script` script that does is refused at start.",
           "type": "object"
         }
       },

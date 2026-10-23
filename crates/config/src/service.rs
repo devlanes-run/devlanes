@@ -299,8 +299,10 @@ service_fields! {
     hidden: Templated<bool>,
     /// Set false for an on-demand service: a plain `devlanes start` without a `default`
     /// profile skips it, and so do globs such as `*` in profiles. Naming it or its `+tag`,
-    /// on the command line or in a profile, still starts it. Defaults to true; only a
-    /// literal `false` takes effect.
+    /// on the command line or in a profile, still starts it. An expression is evaluated for
+    /// each lane and acts like the `true` or `false` it gives, such as
+    /// `${{ lane.index == 0 }}` to autostart only in the main lane. With `replicas`, the
+    /// service starts all its copies when any copy's expression gives true. Defaults to true.
     #[schemars(extend("examples" = [true,false]))]
     autostart: Templated<bool>,
     /// Secrets profile for this service, replacing the project's `fnox.profile`. fnox puts
@@ -316,10 +318,11 @@ service_fields! {
     /// Number of copies of this service to run, each with its own port, for example several
     /// queue workers. They run as `<name>.1` to `<name>.N`, `${{ replica.index }}` counts
     /// from 1, and `services.<name>` in expressions means the first copy; use
-    /// `${{ replica.index }}` in `hosts` to give each copy its own hostname. Must be a
-    /// literal number; defaults to 1.
+    /// `${{ replica.index }}` in `hosts` to give each copy its own hostname. A plain number
+    /// of at least 1, the same in every lane, because each copy reserves ports in every
+    /// lane's block; `${{ ... }}` expressions are not allowed. Defaults to 1.
     #[schemars(extend("examples" = [1,2]))]
-    replicas: Templated<u16>,
+    replicas: u16,
 }
 
 impl<E: Extensions> ServiceConfig<E> {

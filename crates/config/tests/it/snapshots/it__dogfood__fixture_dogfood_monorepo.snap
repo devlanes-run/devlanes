@@ -478,7 +478,7 @@ expression: config
         "tcp": null,
         "http": {
           "path": "/",
-          "status": null,
+          "status": 302,
           "timeout": null
         },
         "log": null,

@@ -143,6 +143,18 @@ async fn adapter_rejects_hardcoded_flags_in_script() {
     );
 }
 
+/// `--port` in `wrangler.args` fails the launch instead of reaching Wrangler twice.
+#[tokio::test]
+async fn adapter_rejects_port_flags_in_args() {
+    let mut fake = Fake::new(DraftCommand::Shell("wrangler dev".to_owned()));
+    fake.options = Some(serde_json::json!({ "args": ["--local", "--inspectorPort=9229"] }));
+    let error = fake.apply().await.err().expect("port flag in args");
+    assert!(
+        matches!(&error, Error::InvalidInput(message) if message.contains("`args` passes `--inspectorPort=9229`")),
+        "{error}"
+    );
+}
+
 /// Other presets, unknown keys and registry opt-out.
 #[tokio::test]
 async fn adapter_scope_and_options() {

@@ -31,14 +31,14 @@ pub const REGISTRY_ENV: &str = "WRANGLER_REGISTRY_PATH";
 /// worktree: lanes that run from one folder would share it there.
 pub const REGISTRY_DIR: &str = "wrangler-registry";
 
-/// Script flags that collide with the ones this preset adds. yargs also accepts
-/// the camelCase spelling of every dashed option.
+/// Script and `args` flags that collide with the ones this preset adds. yargs also
+/// accepts the camelCase spelling of every dashed option.
 const RESERVED_FLAGS: &[&str] = &["--port", "--inspector-port", "--inspectorPort"];
 
 /// Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own
 /// `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The
-/// `inspector` port is allocated automatically, and a `run_script` script that already passes
-/// either port flag is refused at start.
+/// `inspector` port is allocated automatically. `args` that pass either port flag are refused
+/// by `devlanes config check`, and a `run_script` script that does is refused at start.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"vars":{"PUBLIC_BASE_URL":"${{ self.public_url }}"},"args":["--env-file",".dev.vars"],"isolate_registry":true}]))]
@@ -56,9 +56,9 @@ pub struct WranglerOptions {
     #[schemars(schema_with = "scalar_map_schema", extend("examples" = [{"PUBLIC_BASE_URL":"${{ self.public_url }}"}]))]
     pub vars: BTreeMap<String, String>,
     /// Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example
-    /// `[--env-file, .dev.vars]`. Do not repeat `--port` or `--inspector-port` here, since the
-    /// preset already sets them. A local override or `extends` child that sets `args` replaces
-    /// the inherited list.
+    /// `[--env-file, .dev.vars]`. `--port` and `--inspector-port` (or `--inspectorPort`) are
+    /// refused here, since the preset already sets them per lane. A local override or
+    /// `extends` child that sets `args` replaces the inherited list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [["--env-file",".dev.vars"]]))]
     pub args: Option<Vec<String>>,
@@ -147,6 +147,12 @@ pub enum WranglerError {
         if .flags.len() == 1 { "it" } else { "them" }
     )]
     HardcodedFlags { flags: Vec<String> },
+    #[error(
+        "`args` passes {}, which preset wrangler sets per lane. Remove {} from `args`; devlanes passes `--port <self.port> --inspector-port <self.ports.inspector>`. To keep the flags, drop `preset: wrangler` and use `run` with `--port ${{{{ self.port }}}} --inspector-port ${{{{ self.ports.inspector }}}}`",
+        .flags.join(", "),
+        if .flags.len() == 1 { "it" } else { "them" }
+    )]
+    ArgsFlags { flags: Vec<String> },
 }
 
 /// Returns the named ports to allocate before expressions are evaluated, so
@@ -166,6 +172,28 @@ pub fn check_script(body: &str) -> Result<(), WranglerError> {
         .split_whitespace()
         .map(|token| token.trim_matches(|c| c == '"' || c == '\''))
         .collect();
+    let flags = reserved_flags(&tokens);
+    if flags.is_empty() {
+        Ok(())
+    } else {
+        Err(WranglerError::HardcodedFlags { flags })
+    }
+}
+
+/// Rejects `args` that pass `--port` or `--inspector-port`, which the preset
+/// adds itself.
+pub fn check_args(args: &[String]) -> Result<(), WranglerError> {
+    let tokens: Vec<&str> = args.iter().map(String::as_str).collect();
+    let flags = reserved_flags(&tokens);
+    if flags.is_empty() {
+        Ok(())
+    } else {
+        Err(WranglerError::ArgsFlags { flags })
+    }
+}
+
+/// Renders each reserved flag in `tokens` with its value, such as `` `--port 8787` ``.
+fn reserved_flags(tokens: &[&str]) -> Vec<String> {
     let mut flags = Vec::new();
     for (index, token) in tokens.iter().enumerate() {
         let (flag, inline_value) = token
@@ -181,11 +209,7 @@ pub fn check_script(body: &str) -> Result<(), WranglerError> {
         };
         flags.push(format!("`{rendered}`"));
     }
-    if flags.is_empty() {
-        Ok(())
-    } else {
-        Err(WranglerError::HardcodedFlags { flags })
-    }
+    flags
 }
 
 /// Renders `--port`, `--inspector-port`, `--var` and user args, plus the
@@ -194,6 +218,7 @@ pub fn contribution(input: &WranglerInput<'_>) -> Result<Contribution, WranglerE
     if let Some(body) = input.script_body {
         check_script(body)?;
     }
+    check_args(input.options.args.as_deref().unwrap_or_default())?;
     let inspector = input
         .ports
         .get(INSPECTOR_PORT)
@@ -245,12 +270,16 @@ pub fn options_schema() -> schemars::Schema {
 }
 
 /// Parses evaluated options; a service without a `wrangler:` key gets defaults.
+/// Port flags in `args` are refused here so `devlanes config check` reports them.
 pub fn parse_options(value: Option<&serde_json::Value>) -> Result<WranglerOptions, Error> {
-    match value {
-        None | Some(serde_json::Value::Null) => Ok(WranglerOptions::default()),
+    let options: WranglerOptions = match value {
+        None | Some(serde_json::Value::Null) => return Ok(WranglerOptions::default()),
         Some(value) => serde_json::from_value(value.clone())
-            .map_err(|e| Error::InvalidInput(format!("{NAME} options: {e}"))),
-    }
+            .map_err(|e| Error::InvalidInput(format!("{NAME} options: {e}")))?,
+    };
+    check_args(options.args.as_deref().unwrap_or_default())
+        .map_err(|e| Error::InvalidInput(format!("{NAME} options: {e}")))?;
+    Ok(options)
 }
 
 /// Core contributor for services with `preset: wrangler`.
@@ -445,6 +474,71 @@ mod tests {
     fn hardcoded_flag_message_has_the_fix() {
         let error = check_script("wrangler dev --port 8787").expect_err("hardcoded port");
         insta::assert_snapshot!(error.to_string(), @"the script hardcodes `--port 8787`, which preset wrangler sets per lane. Remove it from the script; devlanes passes `--port <self.port> --inspector-port <self.ports.inspector>`. To keep the flags, drop `preset: wrangler` and use `run` with `--port ${{ self.port }} --inspector-port ${{ self.ports.inspector }}`");
+    }
+
+    /// Table of `args` lists and the flags reported for them.
+    #[test]
+    fn args_flag_detection() {
+        let cases: &[(&[&str], &[&str])] = &[
+            (&[], &[]),
+            (&["--env-file", ".dev.vars", "--local"], &[]),
+            (&["--port", "8787"], &["`--port 8787`"]),
+            (&["--port=8787"], &["`--port=8787`"]),
+            (&["--inspector-port", "9229"], &["`--inspector-port 9229`"]),
+            (&["--inspectorPort=9229"], &["`--inspectorPort=9229`"]),
+            (
+                &["--port", "8787", "--inspectorPort", "9229"],
+                &["`--port 8787`", "`--inspectorPort 9229`"],
+            ),
+            (&["--port", "--local"], &["`--port`"]),
+            (&["--portal", "1", "--report-port", "2"], &[]),
+        ];
+        for (args, expected) in cases {
+            let args: Vec<String> = args.iter().map(|arg| (*arg).to_owned()).collect();
+            let found = match check_args(&args) {
+                Ok(()) => Vec::new(),
+                Err(WranglerError::ArgsFlags { flags }) => flags,
+                Err(other) => panic!("unexpected error for {args:?}: {other}"),
+            };
+            assert_eq!(&found, expected, "args: {args:?}");
+        }
+    }
+
+    /// The `args` message names the flag and both ways out, like the script one.
+    #[test]
+    fn args_flag_message_has_the_fix() {
+        let error =
+            check_args(&["--inspector-port".into(), "9229".into()]).expect_err("port flag in args");
+        insta::assert_snapshot!(error.to_string(), @"`args` passes `--inspector-port 9229`, which preset wrangler sets per lane. Remove it from `args`; devlanes passes `--port <self.port> --inspector-port <self.ports.inspector>`. To keep the flags, drop `preset: wrangler` and use `run` with `--port ${{ self.port }} --inspector-port ${{ self.ports.inspector }}`");
+    }
+
+    /// Port flags in `args` fail both parsing and the contribution.
+    #[test]
+    fn args_flags_are_refused() {
+        let value = serde_json::json!({ "args": ["--port", "8787"] });
+        let error = parse_options(Some(&value)).expect_err("port flag in args");
+        assert!(
+            matches!(&error, Error::InvalidInput(message) if message.starts_with("wrangler options: `args` passes `--port 8787`")),
+            "{error}"
+        );
+        let options = WranglerOptions {
+            args: Some(vec!["--port=8787".into()]),
+            ..WranglerOptions::default()
+        };
+        let ports = ports();
+        let error = contribution(&WranglerInput {
+            port: 1,
+            ports: &ports,
+            lane_data: Path::new("/d"),
+            options: &options,
+            script_body: None,
+        });
+        assert_eq!(
+            error,
+            Err(WranglerError::ArgsFlags {
+                flags: vec!["`--port=8787`".to_owned()]
+            })
+        );
     }
 
     /// Hardcoded flags fail the contribution when a script body is supplied.

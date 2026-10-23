@@ -27,7 +27,8 @@ pub async fn dispatch(cli: &Cli, runtime: &Runtime, action: Action) -> u8 {
         Err(error) => {
             let hint = confirmation_hint(&error)
                 .or_else(|| legacy_state_hint(&error))
-                .or_else(|| fix_hint(&error));
+                .or_else(|| fix_hint(&error))
+                .or_else(|| crate::user_config::hint(&error));
             let rendered = runtime.reporter().error(&error, hint.as_ref());
             tracing::debug!(
                 code = %error.code,

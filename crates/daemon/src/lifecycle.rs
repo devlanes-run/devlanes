@@ -317,6 +317,9 @@ pub(crate) struct StartCx {
     pub reference: String,
     pub actor: Actor,
     pub services: Vec<String>,
+    /// `Selection::autostart_pending`: entries of `services` that resolution drops
+    /// when their `autostart` expression evaluates to false.
+    pub autostart_pending: Vec<String>,
     /// Profiles in effect, in the order given.
     pub profiles: Vec<String>,
     /// False when the profiles turn infra off. Set from the selection before infra
@@ -551,6 +554,11 @@ impl LanePhase for ResolvePhase {
             Ok(resolved) => {
                 // Infra came up already when it was on; this governs `infra.setup`.
                 cx.infra_enabled &= resolved.infra_enabled;
+                // A failed plan keeps its service, so the services phase reports it.
+                let pending = std::mem::take(&mut cx.autostart_pending);
+                cx.services.retain(|name| {
+                    !pending.contains(name) || resolved.autostart(name) != Some(false)
+                });
                 // From here a stop can name the tasks and setup entries this start
                 // may run, also between their spawn and their record on the lane.
                 for (name, task) in &resolved.tasks {
@@ -1886,6 +1894,7 @@ impl Inner {
             reference: reference.clone(),
             actor: options.actor.clone(),
             services: selection.services.clone(),
+            autostart_pending: selection.autostart_pending.clone(),
             profiles: selection.profiles.clone(),
             infra_enabled,
             infra_templated,
@@ -2667,6 +2676,7 @@ impl Inner {
             reference: reference.clone(),
             actor: options.actor.clone(),
             services,
+            autostart_pending: Vec::new(),
             profiles: lane.st().profiles.clone(),
             infra_enabled: true,
             infra_templated: false,
@@ -3018,12 +3028,34 @@ impl Inner {
         }
     }
 
-    /// The lane's profiles and the services they select, for `why`.
+    /// The lane's profiles and the services they select, for `why`. `autostart`
+    /// expressions use the lane's precomputed layout.
+    // TODO: the layout is evaluated without secrets and with the infra values known when it
+    // was built, while a start evaluates `autostart` with both. An expression reading a
+    // secret or an infra value (a port, a container's state) can make `why` report a
+    // selection that differs from what a start picks. Evaluate it the way a start does.
     pub(crate) fn profile_services(lane: &LaneRt) -> Option<(Vec<String>, BTreeSet<String>)> {
         let st = lane.st();
         let config = st.config.loaded()?;
         let selection = devlanes_resolve::select_profiles(config, &st.profiles, &[]).ok()?;
-        Some((selection.profiles, selection.services.into_iter().collect()))
+        let autostart_off = |name: &String| {
+            selection.autostart_pending.contains(name)
+                && st.view.as_ref().is_some_and(|view| {
+                    view.services
+                        .iter()
+                        .filter(|s| &s.name == name)
+                        .map(|s| s.autostart)
+                        .reduce(|any, next| any || next)
+                        == Some(false)
+                })
+        };
+        let services = selection
+            .services
+            .iter()
+            .filter(|name| !autostart_off(name))
+            .cloned()
+            .collect();
+        Some((selection.profiles, services))
     }
 
     /// Runs the `ready` checks of the lane's plain containers concurrently; the

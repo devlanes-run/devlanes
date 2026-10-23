@@ -27,13 +27,11 @@ static SHOWN: AtomicU8 = AtomicU8::new(0);
 /// The longest `finish` waits for the follower to clear before giving up on it.
 const FINISH_WAIT: Duration = Duration::from_secs(3);
 
-/// The `terminal.progress` setting from the user config; auto when unset or unreadable.
+/// The `terminal.progress` setting from the user config; auto when unset or
+/// invalid (with a warning).
 pub fn configured_mode(paths: &Paths) -> ProgressMode {
-    let config = devlanes_config::load_user(paths.home.join("config.yaml")).ok();
-    match config
-        .and_then(|config| config.terminal)
-        .map(|t| t.progress())
-    {
+    let terminal = crate::user_config::display(paths).terminal.as_ref();
+    match terminal.map(devlanes_config::TerminalConfig::progress) {
         Some(devlanes_config::TerminalProgress::Always) => ProgressMode::Always,
         Some(devlanes_config::TerminalProgress::Never) => ProgressMode::Never,
         _ => ProgressMode::Auto,

@@ -455,6 +455,74 @@ fn lane_data_root() {
     );
 }
 
+/// `hostnames.tld` must be a special-use name whatever the strategy, so a TLD that
+/// could belong to a real site fails at load, located at the key; a lenient load
+/// drops only that key.
+#[test]
+fn user_tld_validation() {
+    for tld in [
+        "test",
+        "Test.",
+        "internal",
+        "dev.internal",
+        "home.arpa",
+        "lab.home.arpa",
+        "dev.localhost",
+    ] {
+        for resolver in ["resolver", "localhost"] {
+            parse_user(&format!(
+                "hostnames: {{ resolver: {resolver}, tld: '{tld}' }}"
+            ))
+            .unwrap_or_else(|error| panic!("{tld} with {resolver}: {}", error.message));
+        }
+    }
+    for tld in [
+        "dev",
+        "local",
+        "localhost",
+        "com",
+        "test.com",
+        "contest",
+        "a..test",
+        "-x.test",
+        "x_y.test",
+        "123",
+    ] {
+        for resolver in ["resolver", "localhost"] {
+            let source = format!("hostnames:\n  resolver: {resolver}\n  tld: '{tld}'\n");
+            let error = parse_user(&source).expect_err(&source);
+            assert!(
+                error.message.starts_with("hostnames.tld: `"),
+                "{source}: {}",
+                error.message
+            );
+            assert_eq!(error.location.line, 3, "{source}: {}", error.message);
+        }
+    }
+    assert!(
+        parse_user("hostnames: { tld: dev }")
+            .expect_err("public TLD")
+            .message
+            .contains("must be test, internal or home.arpa")
+    );
+    assert!(
+        parse_user("hostnames: { resolver: resolver, tld: '' }")
+            .expect_err("empty")
+            .message
+            .contains("required for the resolver strategy")
+    );
+    let (config, issues) = parse_user_lenient(
+        "config.yaml",
+        "hostnames:\n  tld: dev\n  hosts_file: never\n",
+    );
+    assert_eq!(config.hostnames.tld, None);
+    assert!(matches!(
+        config.hostnames.hosts_file,
+        Some(HostsFile::Never)
+    ));
+    assert_eq!(issues.len(), 1, "{issues:?}");
+}
+
 /// Startup pacing parses typed percentages and derives windows from the core count.
 #[test]
 fn startup_settings() {
@@ -541,7 +609,7 @@ fn nested_map_and_empty_list_overrides() {
 /// The caller can resolve lane/env graphs and then evaluate typed service fields.
 #[test]
 fn typed_runtime_evaluation() {
-    let config = parse_project("project: demo\nlanes:\n  vars:\n    url: 'http://${{ lane.host }}'\n    host: localhost\nservices:\n  api:\n    run: 'server --port ${{ self.port }}'\n    replicas: '${{ lane.index + 1 }}'\n    env: { URL: '${{ lane.url }}' }\n",None).expect("config");
+    let config = parse_project("project: demo\nlanes:\n  vars:\n    url: 'http://${{ lane.host }}'\n    host: localhost\nservices:\n  api:\n    run: 'server --port ${{ self.port }}'\n    autostart: '${{ lane.index == 1 }}'\n    env: { URL: '${{ lane.url }}' }\n",None).expect("config");
     let mut context = ExpressionContext {
         lane: json!({"index":1}),
         service: json!({"port":20001}),
@@ -553,7 +621,7 @@ fn typed_runtime_evaluation() {
         context.lane[name] = serde_json::to_value(value).expect("scalar");
     }
     let service = evaluate_typed(&config.services["api"], &context).expect("typed service");
-    assert_eq!(service.replicas, Some(Templated::Literal(2)));
+    assert_eq!(service.autostart, Some(Templated::Literal(true)));
     assert_eq!(
         service.env["URL"],
         Templated::Literal(Scalar::String("http://localhost".into()))
@@ -675,7 +743,7 @@ fn schema_parser_type_agreement() {
     let validator = jsonschema::validator_for(&schema).expect("schema");
     for value in [
         json!({"services":{"api":{"run":"server","autostart":true,"replicas":2}}}),
-        json!({"services":{"api":{"run":"server","replicas":"${{ lane.index + 1 }}"}}}),
+        json!({"services":{"api":{"run":"server","autostart":"${{ lane.index == 0 }}"}}}),
         json!({"services":{"api":{"preset":"wrangler","wrangler":{"vars":{"COUNT":3},"args":["--local"]}}}}),
     ] {
         assert!(validator.is_valid(&value), "schema rejected {value}");
@@ -686,6 +754,7 @@ fn schema_parser_type_agreement() {
         json!({"services":{"api":{"wrangler":{"unknown":true}}}}),
         json!({"services":{"api":{"tauri":{"identifier":42}}}}),
         json!({"services":{"api":{"replicas":false}}}),
+        json!({"services":{"api":{"replicas":"${{ lane.index + 1 }}"}}}),
     ] {
         assert!(!validator.is_valid(&value), "schema accepted {value}");
     }

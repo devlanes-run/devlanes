@@ -435,7 +435,8 @@ pub async fn tcp_open(port: u16) -> bool {
     connect(port).await.is_some()
 }
 
-/// Minimal HTTP/1.1 probe; avoids a client dependency for one status line.
+/// Minimal HTTP/1.1 probe; avoids a client dependency for one status line. Passes on
+/// exactly `expected`, or on any 2xx status when `expected` is unset.
 async fn http_ok(port: u16, path: &str, expected: Option<u16>) -> bool {
     let Some(mut stream) = connect(port).await else {
         return false;
@@ -456,8 +457,9 @@ async fn http_ok(port: u16, path: &str, expected: Option<u16>) -> bool {
         .and_then(|code| code.parse::<u16>().ok());
     match (status, expected) {
         (Some(code), Some(want)) => code == want,
-        // Without an explicit status, anything below 500 means the server is up.
-        (Some(code), None) => code < 500,
+        // Redirects are not followed, so a 3xx (often a login page) or a 404 from a
+        // half-started router must not count as healthy.
+        (Some(code), None) => (200..300).contains(&code),
         (None, _) => false,
     }
 }
@@ -481,6 +483,39 @@ mod tests {
         assert!(http_ok(port, "/", None).await);
         assert!(http_ok(port, "/", Some(204)).await);
         assert!(!http_ok(port, "/", Some(200)).await);
+        Ok(())
+    }
+
+    /// Without `status` only 2xx passes; with it, only that exact code does.
+    #[tokio::test]
+    async fn http_probe_needs_2xx_unless_a_status_is_set() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = listener.local_addr()?.port();
+        // The path is the status code to answer with, such as `/404`.
+        tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buffer = [0_u8; 512];
+                let read = stream.read(&mut buffer).await.unwrap_or(0);
+                let request = String::from_utf8_lossy(&buffer[..read]);
+                let code = request
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|path| path.strip_prefix('/'))
+                    .unwrap_or("500")
+                    .to_owned();
+                let response = format!("HTTP/1.1 {code} Status\r\nContent-Length: 0\r\n\r\n");
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        assert!(http_ok(port, "/200", None).await);
+        assert!(http_ok(port, "/299", None).await);
+        assert!(!http_ok(port, "/302", None).await);
+        assert!(!http_ok(port, "/404", None).await);
+        assert!(!http_ok(port, "/500", None).await);
+        assert!(http_ok(port, "/404", Some(404)).await);
+        assert!(http_ok(port, "/302", Some(302)).await);
+        assert!(!http_ok(port, "/200", Some(204)).await);
         Ok(())
     }
 

@@ -149,6 +149,28 @@ fn command(
     Ok(())
 }
 
+/// Reject `cwd` next to `run_script` on a merged unit; `template` names the inherited source.
+fn script_cwd(
+    path: &str,
+    script: &Option<RunScript>,
+    cwd: &Option<Templated<String>>,
+    template: Option<&str>,
+) -> Result<(), ConfigError> {
+    // The resolver starts a script in its file's directory, so the `cwd` would do nothing.
+    if script.is_none() || cwd.is_none() {
+        return Ok(());
+    }
+    let inherited = template
+        .map(|name| format!(" (it may come from template `{name}`)"))
+        .unwrap_or_default();
+    Err(fail(
+        &format!("{path}.cwd"),
+        format!(
+            "cwd cannot be combined with run_script, which runs in the script file's directory; remove cwd{inherited}"
+        ),
+    ))
+}
+
 /// Reject `preset` with `run` on a merged service; `template` names the inherited source.
 fn preset_script(
     path: &str,
@@ -311,6 +333,12 @@ fn validate_inner<E: Extensions>(
             return Err(fail(&path, "service requires run or run_script"));
         }
         command(&path, &service.run, &service.run_script, false)?;
+        script_cwd(
+            &path,
+            &service.run_script,
+            &service.cwd,
+            service.extends.as_deref(),
+        )?;
         preset_script(
             &path,
             service.preset.as_deref(),
@@ -352,7 +380,7 @@ fn validate_inner<E: Extensions>(
                 ));
             }
         }
-        if matches!(service.replicas, Some(Templated::Literal(0))) {
+        if service.replicas == Some(0) {
             return Err(fail(&format!("{path}.replicas"), "must be positive"));
         }
         if let Some(display) = &service.name
@@ -381,6 +409,7 @@ fn validate_inner<E: Extensions>(
     for (name, task) in &config.tasks {
         let path = format!("tasks.{name}");
         command(&path, &task.run, &task.run_script, task.steps.is_some())?;
+        script_cwd(&path, &task.run_script, &task.cwd, None)?;
         if task.when.is_some()
             && matches!(
                 task.interactive,

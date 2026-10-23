@@ -50,7 +50,7 @@ tasks:
 - `file`: the file that defines the script, relative to the worktree root (not to the directory of `devlanes.yaml`). It must stay inside the worktree. Its name picks the runner (table below).
 - `name`: the script, target, recipe, task or binary in that file.
 
-A string such as `run_script: apps/api/package.json#dev` is refused with the mapping to write instead. The command always runs in the directory of `file`; a `cwd` on the same unit is ignored. `${{ }}` is not evaluated in `file` or `name`.
+A string such as `run_script: apps/api/package.json#dev` is refused with the mapping to write instead. The command always runs in the directory of `file`, so `devlanes config check` refuses a `cwd` on the same unit, including one inherited through `extends`. `${{ }}` is not evaluated in `file` or `name`.
 
 ## Runners
 

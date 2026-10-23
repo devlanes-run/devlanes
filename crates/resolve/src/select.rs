@@ -3,7 +3,7 @@ use devlanes_config::{
 };
 use globset::Glob;
 
-use crate::ResolveError;
+use crate::{ResolveError, ResolvedLane};
 
 /// Services to start and the profiles that apply to them.
 #[derive(Debug, Clone)]
@@ -17,6 +17,20 @@ pub struct Selection {
     pub profile: Option<String>,
     /// Object-form options of the profiles, merged (see [`select_profiles`]).
     pub profile_options: Option<ProfileOptions>,
+    /// Entries of `services` kept only because their `autostart` is an expression,
+    /// which needs the lane to evaluate. [`Selection::apply_autostart`] drops the ones
+    /// that evaluate to false.
+    pub autostart_pending: Vec<String>,
+}
+
+impl Selection {
+    /// Drops the [`Self::autostart_pending`] services whose `autostart` evaluated to
+    /// false in `lane`. A service that failed to plan stays, so the start reports it.
+    pub fn apply_autostart(&mut self, lane: &ResolvedLane) {
+        let pending = std::mem::take(&mut self.autostart_pending);
+        self.services
+            .retain(|name| !pending.contains(name) || lane.autostart(name) != Some(false));
+    }
 }
 
 /// One profile as clients list it (TUI picker, `devlanes profiles`).
@@ -167,6 +181,9 @@ pub fn select<E: Extensions>(
 ///   keeps on-demand services stopped.
 /// - Without profiles, `default` is used when defined; otherwise every
 ///   `autostart` service starts.
+/// - Where `autostart` matters and is an expression, the service is kept and
+///   listed in `autostart_pending`; [`Selection::apply_autostart`] settles it once
+///   the lane is resolved.
 ///
 /// `profile_options` merges the profiles: `env` and `run_scripts` in the order
 /// given (later wins); `infra: false` only when every profile says so literally.
@@ -181,6 +198,7 @@ pub fn select_profiles<E: Extensions, P: AsRef<str>>(
         .iter()
         .filter_map(|name| config.profiles.get(name))
         .collect();
+    let mut autostart_pending = Vec::new();
     let services = if !selectors.is_empty() {
         let mut chosen = vec![false; config.services.len()];
         for selector in selectors {
@@ -208,29 +226,48 @@ pub fn select_profiles<E: Extensions, P: AsRef<str>>(
     } else if !configured.is_empty() {
         let mut result = Vec::new();
         for (name, service) in &config.services {
-            let mut keep = false;
+            let mut keep = Keep::No;
             for profile in &configured {
-                keep |= profile_selects(profile, name, service)?;
+                keep = keep.max(profile_selects(profile, name, service)?);
             }
-            if keep {
+            if keep == Keep::Pending {
+                autostart_pending.push(name.clone());
+            }
+            if keep != Keep::No {
                 result.push(name.clone());
             }
         }
         result
     } else {
-        config
-            .services
-            .iter()
-            .filter(|(_, service)| autostart(&service.autostart))
-            .map(|(name, _)| name.clone())
-            .collect()
+        let mut result = Vec::new();
+        for (name, service) in &config.services {
+            let keep = autostart(&service.autostart);
+            if keep == Keep::Pending {
+                autostart_pending.push(name.clone());
+            }
+            if keep != Keep::No {
+                result.push(name.clone());
+            }
+        }
+        result
     };
     Ok(Selection {
         services,
         profile: names.first().cloned(),
         profile_options: merge_options(config, &names),
         profiles: names,
+        autostart_pending,
     })
+}
+
+/// Whether selection keeps a service, ordered so the strongest reason wins
+/// across profiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Keep {
+    No,
+    /// Kept unless its `autostart` expression evaluates to false for the lane.
+    Pending,
+    Yes,
 }
 
 /// Whether one profile's `include` minus `exclude` keeps `service`.
@@ -238,7 +275,7 @@ fn profile_selects<E: Extensions>(
     profile: &ProfileConfig,
     name: &str,
     service: &ServiceConfig<E>,
-) -> Result<bool, ResolveError> {
+) -> Result<Keep, ResolveError> {
     let (include, exclude): (&[String], &[String]) = match profile {
         ProfileConfig::Selectors(values) => (values, &[]),
         ProfileConfig::Object(options) => (
@@ -257,20 +294,24 @@ fn profile_selects<E: Extensions>(
     }
     for selector in exclude {
         if matches(selector, name, tags)? != Match::No {
-            return Ok(false);
+            return Ok(Keep::No);
         }
     }
     Ok(match included {
-        Match::Explicit => true,
+        Match::Explicit => Keep::Yes,
         Match::Pattern => autostart(&service.autostart),
-        Match::No => false,
+        Match::No => Keep::No,
     })
 }
 
-/// Literal `autostart`, defaulting to true. Expressions count as true because
-/// selection has no lane context.
-fn autostart(value: &Option<Templated<bool>>) -> bool {
-    !matches!(value, Some(Templated::Literal(false)))
+/// `autostart`, defaulting to true. An expression needs the lane, so the service
+/// stays pending until [`Selection::apply_autostart`].
+fn autostart(value: &Option<Templated<bool>>) -> Keep {
+    match value {
+        None | Some(Templated::Literal(true)) => Keep::Yes,
+        Some(Templated::Literal(false)) => Keep::No,
+        Some(Templated::Expression(_)) => Keep::Pending,
+    }
 }
 
 /// Matches one selector against a service name and its tags.

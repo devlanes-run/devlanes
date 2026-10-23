@@ -35,7 +35,7 @@ services:
     hosts: "docs.${{ lane.domain }}"
 ```
 
-- `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a bin), and runs in that file's directory. The `file#name` string form is refused. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: the script is checked before start, profiles can remap its name, and presets require it (`preset` with `run` is refused; drop the preset and write its flags into `run` instead).
+- `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a bin), and runs in that file's directory, so `devlanes config check` refuses a `cwd` next to it. The `file#name` string form is refused. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: the script is checked before start, profiles can remap its name, and presets require it (`preset` with `run` is refused; drop the preset and write its flags into `run` instead).
 - `infra.setup` and `infra.teardown` entries take only `run`.
 - A multi-line `run` string is a shell script. Without `cwd`, `run` starts at the lane's worktree root.
 - `autostart: false` keeps a service out of a plain `devlanes start` when no `default` profile exists; naming the service or its tag still starts it.
@@ -200,7 +200,7 @@ profiles:
   staging-web: { include: [+web], infra: false }
 ```
 
-A unit's color comes from its first tag: a color set under `tags`, else the tag's category (`api`, `server`, `gateway`: blue; `web`, `app`, `ui`: green; `worker`, `queue`, `cron`: magenta; `db`, `redis`: yellow; `docs`: cyan; `admin`: white; `stub`, `mock`: gray), else the name. Put the category tag first and selection tags such as `essential` after it.
+A unit's color is the first of: the first tag with a `color` under `tags`; the first tag naming a category; the preset's category; the category of the name's first segment (`wrk-email` reads `wrk`); a hash of the first tag, or of that segment without tags. Categories include `api`, `server`, `backend`, `gateway`: blue; `web`, `app`, `frontend`, `ui`, `vite`, `next`: green; `worker`, `wrk`, `queue`, `job`, `cron`: magenta; `db`, `postgres`, `redis`, `docs`: cyan; `admin`: bright-magenta; `desktop`, `mobile`, `tauri`: bright-cyan; `stub`, `mock`, `fake`: gray. Put the category tag first and selection tags such as `essential` after it.
 
 Profiles select services by name, glob or `+tag`. Globs skip `autostart: false` services; names and tags include them. When a `default` profile exists, a plain `devlanes start` starts exactly its selection and `autostart` stops mattering outside globs, so use one of the two mechanisms, not both.
 
@@ -231,7 +231,7 @@ Templates resolve after local overrides. Mappings (`env`, `ready`, `stop`, prese
 | `wrangler` | `--port`, `--inspector-port` (a named `inspector` port), `--var` per var, `WRANGLER_REGISTRY_PATH` in the lane data folder | `wrangler: { vars, args, isolate_registry }` |
 | `tauri` | a per-lane, per-replica identifier and dev URL, through an overlay in the lane data folder | `tauri: { identifier, dev_url, product_name, before_dev_command }` |
 
-With `run_script`, a preset's flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script that already passes `--port` or `--inspector-port`. Without a preset, pass the flags yourself with `${{ self.port }}`. Do not set `WRANGLER_REGISTRY_PATH`: devlanes sets it per lane for every unit of a project with a wrangler config. Wrangler's local state (`.wrangler/`) sits in the worktree, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
+With `run_script`, a preset's flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script or `wrangler.args` that already passes `--port` or `--inspector-port`. Without a preset, pass the flags yourself with `${{ self.port }}`. Do not set `WRANGLER_REGISTRY_PATH`: devlanes sets it per lane for every unit of a project with a wrangler config. Wrangler's local state (`.wrangler/`) sits in the worktree, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
 
 ## Sync
 

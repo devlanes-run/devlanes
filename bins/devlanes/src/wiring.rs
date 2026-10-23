@@ -32,10 +32,8 @@ use tokio_util::sync::CancellationToken;
 /// timeouts with.
 pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
     use std::io::IsTerminal;
-    // A config that does not load leaves the TUI on its detected defaults.
-    let tui = devlanes_config::load_user(paths.home.join("config.yaml"))
-        .map(|config| config.tui)
-        .unwrap_or_default();
+    // An invalid key leaves only that setting on its default, with a warning.
+    let tui = &crate::user_config::display(paths).tui;
     devlanes_tui::Options {
         // The TUI is always human output; it still needs a terminal that draws the bar.
         progress: devlanes_term::progress_support_from_env(
@@ -73,7 +71,7 @@ pub async fn ui(paths: &Paths) -> Result<u8, RpcError> {
 
 /// Builds the daemon engine with every concrete integration. Integrations that
 /// cannot start (no Docker, no CA, a busy proxy port) degrade to reported errors
-/// instead of failing the daemon.
+/// instead of failing the daemon; an invalid user config fails it.
 pub async fn engine(
     paths: &Paths,
     shutdown: CancellationToken,
@@ -82,7 +80,7 @@ pub async fn engine(
         Ok(limit) => tracing::info!(?limit, "raised the open-file limit"),
         Err(error) => tracing::warn!(%error, "cannot raise the open-file limit"),
     }
-    let (user, user_config_errors) = load_user_config(&paths.home).await;
+    let user = load_user_config(&paths.home).await?;
     let (hosts_policy, hosts_tld) = devlanes_daemon::hosts::user_policy(&user);
     // The probe can wait on upstream DNS, so it runs while the store, CA and proxy start.
     let hosts_probe = (hosts_policy.user_mode() != devlanes_resolver_hosts::HostsFileMode::Never)
@@ -129,7 +127,6 @@ pub async fn engine(
     options.db_path = paths.db.clone();
     options.logs = paths.logs.clone();
     options.user = user;
-    options.user_config_errors = user_config_errors;
     let engine: Arc<dyn Handler> = Arc::new(Engine::new(options, store, integ, shutdown));
     Ok(engine)
 }
@@ -184,32 +181,26 @@ async fn hosts_file(
     ))
 }
 
-/// `~/.devlanes/config.yaml`, or defaults when absent or invalid (logged).
-async fn load_user_config(home: &Path) -> (devlanes_config::UserConfig, Vec<Value>) {
+/// `~/.devlanes/config.yaml`, or defaults when the file is absent. An invalid file stops
+/// the daemon from starting: running with silently defaulted settings (another CA, other
+/// ports) surprises more than an error naming the line to fix.
+async fn load_user_config(home: &Path) -> anyhow::Result<devlanes_config::UserConfig> {
     let path = home.join("config.yaml");
     tokio::task::spawn_blocking(move || {
         if !path.exists() {
-            return (devlanes_config::UserConfig::default(), Vec::new());
+            return Ok(devlanes_config::UserConfig::default());
         }
-        // A bad key falls back to its default alone; `daemon status` and doctor
-        // list what was left out.
-        let (config, errors) = devlanes_config::load_user_lenient(&path);
-        let located: Vec<Value> = errors
-            .iter()
-            .map(|error| {
-                tracing::warn!(error = %error.message, "user config setting ignored");
-                json!({
-                    "message": error.message,
-                    "file": error.location.file,
-                    "line": error.location.line,
-                    "column": error.location.column,
-                })
-            })
-            .collect();
-        (config, located)
+        devlanes_config::load_user(&path).map_err(|error| {
+            anyhow::anyhow!(
+                "{} is invalid at line {}, column {}: {}; fix it and run the command again",
+                path.display(),
+                error.location.line,
+                error.location.column,
+                error.message
+            )
+        })
     })
-    .await
-    .unwrap_or_default()
+    .await?
 }
 
 /// Platform, env-manager and preset contributors (priority orders them).
@@ -2052,30 +2043,32 @@ mod tests {
     }
 
     #[tokio::test]
-    /// A bad user config key falls back to its default alone and keeps the
-    /// located error for `daemon status` and `doctor`; a missing file is no error.
-    async fn invalid_user_config_is_kept_for_doctor() {
+    /// A missing user config means defaults; an invalid one stops the daemon with
+    /// the file and line to fix instead of running on defaults.
+    async fn invalid_user_config_refuses_to_start() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let (_, errors) = load_user_config(tmp.path()).await;
-        assert!(errors.is_empty(), "no file, no error");
+        let user = load_user_config(tmp.path())
+            .await
+            .expect("no file, defaults");
+        assert_eq!(
+            user.proxy.https_port,
+            devlanes_config::UserConfig::default().proxy.https_port
+        );
+        let path = tmp.path().join("config.yaml");
         std::fs::write(
-            tmp.path().join("config.yaml"),
+            &path,
             "proxy:\n  http_port: [not, a, port]\n  https_port: 9443\n",
         )
         .expect("config");
-        let (user, errors) = load_user_config(tmp.path()).await;
-        assert_eq!(user.proxy.https_port, 9443, "the valid key stays");
-        let error = errors.first().expect("error kept");
-        assert!(!error["message"].as_str().unwrap_or_default().is_empty());
-        assert_eq!(error["line"], 2, "{error}");
+        let message = load_user_config(tmp.path())
+            .await
+            .expect_err("invalid config refused")
+            .to_string();
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(message.contains("line 2"), "{message}");
         assert!(
-            error["file"]
-                .as_str()
-                .is_some_and(|file| file.ends_with("config.yaml"))
-        );
-        assert_eq!(
-            user.proxy.http_port,
-            devlanes_config::UserConfig::default().proxy.http_port
+            !message.contains('\n'),
+            "fits the readiness line: {message}"
         );
     }
 

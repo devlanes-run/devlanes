@@ -107,22 +107,22 @@
         "remote_hosts_retention": {
           "$ref": "#/$defs/ConfigDuration",
           "default": "7776000000ms",
-          "description": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner.",
+          "description": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner.",
           "examples": [
             "90d",
             "180d"
           ],
-          "markdownDescription": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner."
+          "markdownDescription": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner."
         },
         "retention": {
           "$ref": "#/$defs/ConfigDuration",
           "default": "604800000ms",
-          "description": "How long records of finished service and task runs (start and end times, exit status) are kept after the run ends; defaults to `7d`. A run that still has log index entries or a metrics summary in the database stays until those expire, and `state.max_size` can delete runs sooner.",
+          "description": "How long records of finished service and task runs (start and end times, exit status) are kept after the run ends; defaults to `7d` and must be longer than `0s`. A run that still has log index entries or a metrics summary in the database stays until those expire, and `state.max_size` can delete runs sooner.",
           "examples": [
             "7d",
             "30d"
           ],
-          "markdownDescription": "How long records of finished service and task runs (start and end times, exit status) are kept after the run ends; defaults to `7d`. A run that still has log index entries or a metrics summary in the database stays until those expire, and `state.max_size` can delete runs sooner."
+          "markdownDescription": "How long records of finished service and task runs (start and end times, exit status) are kept after the run ends; defaults to `7d` and must be longer than `0s`. A run that still has log index entries or a metrics summary in the database stays until those expire, and `state.max_size` can delete runs sooner."
         }
       },
       "type": "object"
@@ -212,11 +212,11 @@
         },
         "tld": {
           "default": null,
-          "description": "Top-level domain for the `resolver` strategy, such as `test`; required there. It must be `test`, `internal`, `home.arpa` or a domain under one of them (or under `localhost`), because any other name could belong to a real site. A new devlanes CA may sign names under the `tld` set when it is created, whatever the strategy, so switching to another `tld` later needs a new CA.",
+          "description": "Top-level domain for the `resolver` strategy, such as `test`; required there. It must be `test`, `internal`, `home.arpa` or a domain under one of them (or under `localhost`), made of valid DNS labels, because any other name could belong to a real site; the file is rejected otherwise, whatever the strategy. A new devlanes CA may sign names under the `tld` set when it is created, whatever the strategy, so switching to another `tld` later needs a new CA.",
           "examples": [
             "test"
           ],
-          "markdownDescription": "Top-level domain for the `resolver` strategy, such as `test`; required there. It must be `test`, `internal`, `home.arpa` or a domain under one of them (or under `localhost`), because any other name could belong to a real site. A new devlanes CA may sign names under the `tld` set when it is created, whatever the strategy, so switching to another `tld` later needs a new CA.",
+          "markdownDescription": "Top-level domain for the `resolver` strategy, such as `test`; required there. It must be `test`, `internal`, `home.arpa` or a domain under one of them (or under `localhost`), made of valid DNS labels, because any other name could belong to a real site; the file is rejected otherwise, whatever the strategy. A new devlanes CA may sign names under the `tld` set when it is created, whatever the strategy, so switching to another `tld` later needs a new CA.",
           "type": [
             "string",
             "null"
@@ -263,23 +263,23 @@
       "properties": {
         "days": {
           "default": 7,
-          "description": "Delete output older than this many days, along with its index entries in the database; defaults to 7. The newest log file of each stopped service is kept.",
+          "description": "Delete output older than this many days, along with its index entries in the database; defaults to 7 and must be at least 1. The newest log file of each stopped service is kept.",
           "examples": [
             7
           ],
           "format": "uint32",
-          "markdownDescription": "Delete output older than this many days, along with its index entries in the database; defaults to 7. The newest log file of each stopped service is kept.",
-          "minimum": 0,
+          "markdownDescription": "Delete output older than this many days, along with its index entries in the database; defaults to 7 and must be at least 1. The newest log file of each stopped service is kept.",
+          "minimum": 1,
           "type": "integer"
         },
         "max_size": {
           "$ref": "#/$defs/ByteSize",
           "default": "5368709120B",
-          "description": "Total size of stored output across all projects and lanes; defaults to `5GiB`. Over it, the oldest output goes first wherever it is, but each stopped service's newest file and up to 1 MiB of a running service's current file are kept.",
+          "description": "Total size of stored output across all projects and lanes; defaults to `5GiB` and must be above zero. Over it, the oldest output goes first wherever it is, but each stopped service's newest file and up to 1 MiB of a running service's current file are kept.",
           "examples": [
             "5GiB"
           ],
-          "markdownDescription": "Total size of stored output across all projects and lanes; defaults to `5GiB`. Over it, the oldest output goes first wherever it is, but each stopped service's newest file and up to 1 MiB of a running service's current file are kept."
+          "markdownDescription": "Total size of stored output across all projects and lanes; defaults to `5GiB` and must be above zero. Over it, the oldest output goes first wherever it is, but each stopped service's newest file and up to 1 MiB of a running service's current file are kept."
         }
       },
       "type": "object"
@@ -328,12 +328,12 @@
         "retention": {
           "$ref": "#/$defs/ConfigDuration",
           "default": "604800000ms",
-          "description": "How long per-minute CPU and memory samples, per-run summaries and startup memory peaks are kept; defaults to `7d`. Shorter keeps less history for graphs and for the memory a start is expected to need; `state.max_size` can delete samples sooner.",
+          "description": "How long per-minute CPU and memory samples, per-run summaries and startup memory peaks are kept; defaults to `7d` and must be longer than `0s`. Shorter keeps less history for graphs and for the memory a start is expected to need; `state.max_size` can delete samples sooner.",
           "examples": [
             "7d",
             "30d"
           ],
-          "markdownDescription": "How long per-minute CPU and memory samples, per-run summaries and startup memory peaks are kept; defaults to `7d`. Shorter keeps less history for graphs and for the memory a start is expected to need; `state.max_size` can delete samples sooner."
+          "markdownDescription": "How long per-minute CPU and memory samples, per-run summaries and startup memory peaks are kept; defaults to `7d` and must be longer than `0s`. Shorter keeps less history for graphs and for the memory a start is expected to need; `state.max_size` can delete samples sooner."
         }
       },
       "type": "object"

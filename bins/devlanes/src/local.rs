@@ -48,7 +48,8 @@ pub async fn run(runtime: &Runtime, action: Action) -> Result<u8, RpcError> {
             let mut code = 0;
             let mut step = |result| {
                 if let Some(error) = add_step(&mut code, result) {
-                    emit(&runtime.reporter().error(&error, None));
+                    let hint = crate::user_config::hint(&error);
+                    emit(&runtime.reporter().error(&error, hint.as_ref()));
                 }
             };
             if hosts {
@@ -109,18 +110,18 @@ pub(crate) fn mkcert_caroot(output: &std::process::Output) -> Result<PathBuf, St
     Ok(root)
 }
 
-/// Loads the same CA the daemon uses (its own, or mkcert's when configured).
+/// Loads the CA `config` selects (devlanes' own, or mkcert's).
 ///
 /// For removal (`create` false) devlanes' own CA is only read: `ca.pem` alone is
 /// enough, and `None` means there is none to remove. Untrusting must never create
 /// a CA.
 pub(crate) async fn certificate(
     paths: &Paths,
+    config: &devlanes_config::UserConfig,
     create: bool,
 ) -> Result<Option<CaCertificate>, RpcError> {
-    let mkcert = mkcert_selected(paths);
-    let config = devlanes_config::load_user(paths.home.join("config.yaml")).unwrap_or_default();
-    let tld = ca_tld(&config);
+    let mkcert = mkcert_selected(config);
+    let tld = ca_tld(config);
     let home = paths.home.clone();
     let pem = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
         if mkcert {
@@ -194,14 +195,12 @@ pub(crate) fn recreate_ca_command(home: &Path) -> String {
 }
 
 /// Whether the user config selects `tls.ca: mkcert`.
-pub(crate) fn mkcert_selected(paths: &Paths) -> bool {
-    let config = devlanes_config::load_user(paths.home.join("config.yaml")).unwrap_or_default();
+pub(crate) fn mkcert_selected(config: &devlanes_config::UserConfig) -> bool {
     matches!(config.tls.ca, devlanes_config::CaKind::Mkcert)
 }
 
 /// Configured trust targets, defaulting to the system store; mobile targets are refused.
-fn targets(paths: &Paths) -> Vec<TrustTarget> {
-    let config = devlanes_config::load_user(paths.home.join("config.yaml")).unwrap_or_default();
+fn targets(config: &devlanes_config::UserConfig) -> Vec<TrustTarget> {
     let configured: Vec<TrustTarget> = config
         .tls
         .trust
@@ -263,17 +262,19 @@ fn store(
 /// Whether each configured trust store trusts the CA, for `doctor`:
 /// `[{store, state: trusted|untrusted|unknown, reason?}]`, `null` without a CA.
 /// Read-only and never prompts: a store that would need a password is `unknown`.
+/// The config is read as the daemon reads it; doctor lists its problems itself.
 pub(crate) async fn trust_report() -> Value {
     let Ok(paths) = Paths::discover() else {
         return Value::Null;
     };
-    let mkcert = mkcert_selected(&paths);
-    let Ok(Some(certificate)) = certificate(&paths, false).await else {
+    let config = crate::user_config::lenient(&paths).await;
+    let mkcert = mkcert_selected(&config);
+    let Ok(Some(certificate)) = certificate(&paths, &config, false).await else {
         return Value::Null;
     };
     let mut done = BTreeSet::new();
     let mut report = Vec::new();
-    for target in targets(&paths) {
+    for target in targets(&config) {
         let status = async {
             target.ensure_supported()?;
             let store: Arc<dyn TrustStore> = Arc::from(store(target, !mkcert, false)?);
@@ -306,10 +307,13 @@ fn trust_entry(target: TrustTarget, status: &TrustStatus) -> Value {
 }
 
 /// Installs or removes the CA in every configured store; one failure doesn't skip the rest.
+/// An invalid user config fails before any store is touched: a partial read could
+/// pick another CA or other stores than the file names.
 async fn trust(runtime: &Runtime, install: bool) -> Result<u8, RpcError> {
     let paths = Paths::discover()
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
-    let mkcert = mkcert_selected(&paths);
+    let config = crate::user_config::load(&paths).await?;
+    let mkcert = mkcert_selected(&config);
     let say = |text: String| {
         if !runtime.quiet {
             emit(&Rendered {
@@ -327,7 +331,7 @@ async fn trust(runtime: &Runtime, install: bool) -> Result<u8, RpcError> {
         );
         return Ok(0);
     }
-    let Some(certificate) = certificate(&paths, install).await? else {
+    let Some(certificate) = certificate(&paths, &config, install).await? else {
         say(format!(
             "no devlanes CA under {}; nothing to untrust\n",
             paths.home.join("ca").display()
@@ -337,7 +341,7 @@ async fn trust(runtime: &Runtime, install: bool) -> Result<u8, RpcError> {
     let mut done = BTreeSet::new();
     let mut failed = false;
     let mut lines = String::new();
-    for target in targets(&paths) {
+    for target in targets(&config) {
         let result = async {
             target.ensure_supported()?;
             let store: Arc<dyn TrustStore> =
@@ -541,12 +545,19 @@ fn not_configured() -> RpcError {
 async fn resolver_install(runtime: &Runtime, install: bool) -> Result<u8, RpcError> {
     let paths = Paths::discover()
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
-    let config = devlanes_config::load_user(paths.home.join("config.yaml")).unwrap_or_default();
-    let hostnames = config.hostnames;
-    let tld = (hostnames.resolver == devlanes_config::Resolver::Resolver)
-        .then_some(hostnames.tld)
-        .flatten()
-        .filter(|tld| !tld.is_empty());
+    let (tld, config_error) = match crate::user_config::load(&paths).await {
+        Ok(config) => {
+            let hostnames = config.hostnames;
+            let tld = (hostnames.resolver == devlanes_config::Resolver::Resolver)
+                .then_some(hostnames.tld)
+                .flatten()
+                .filter(|tld| !tld.is_empty());
+            (tld, None)
+        }
+        Err(error) if install => return Err(error),
+        // Removal can still go by the record of the last install.
+        Err(error) => (None, Some(error)),
+    };
     // The daemon listens on the default address; there is no setting for it.
     let server = devlanes_resolver_dns::default_listen();
     let record = resolver_record(&paths);
@@ -562,6 +573,11 @@ async fn resolver_install(runtime: &Runtime, install: bool) -> Result<u8, RpcErr
     })
     .await
     .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
+    if let Some(error) = config_error
+        && recorded.is_none()
+    {
+        return Err(error);
+    }
     // Removal can proceed from the record even when the TLD is now unusable.
     let configured = match configured {
         Ok(file) => file,

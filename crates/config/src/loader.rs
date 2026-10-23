@@ -439,6 +439,20 @@ pub(crate) fn parse_yaml<T: DeserializeOwned>(file: &str, source: &str) -> Resul
         });
         // Miette owns source rendering and the location, so drop serde-saphyr's own copies.
         let mut message = strip_location(&error.without_snippet().to_string()).to_owned();
+        // serde-saphyr names a scalar that does not parse by its Rust type alone.
+        if let Some(ty) = message
+            .strip_prefix("invalid ")
+            .filter(|ty| matches!(*ty, "u16" | "u32" | "u64" | "i64" | "f64"))
+        {
+            message = format!("invalid value, expected {ty}");
+        }
+        message = crate::scalar::plain_type_names(&message);
+        // Templated settings take an expression before decoding, so one failing here
+        // sits in a setting that takes only a plain value, such as `replicas`.
+        let value = source.get(offset..).unwrap_or_default();
+        if value.trim_start_matches(['\'', '"']).starts_with("${{") {
+            message.push_str("; this setting takes a plain value, not a `${{ ... }}` expression");
+        }
         if let Some((_, unknown)) = message.split_once("unknown field `")
             && let Some((key, expected)) = unknown.split_once('`')
             && let Some(hint) = unknown_key_hint(key, expected)

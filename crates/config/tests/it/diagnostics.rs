@@ -220,6 +220,38 @@ fn wrong_type_messages_use_yaml_words() {
     assert!(!error.message.contains("u16"), "{}", error.message);
 }
 
+/// `replicas` takes a plain number: an expression fails to load and says why, in YAML
+/// words, while a literal still loads.
+#[test]
+fn replicas_rejects_expressions() {
+    for value in ["'${{ lane.index + 1 }}'", "${{ 2 }}"] {
+        let source =
+            format!("project: demo\nservices:\n  api:\n    run: server\n    replicas: {value}\n");
+        let message = parse_project(&source, None)
+            .expect_err("expression replicas")
+            .message;
+        assert!(
+            message.contains("not a `${{ ... }}` expression"),
+            "{message}"
+        );
+        assert!(message.contains("whole number"), "{message}");
+        assert!(!message.contains("u16"), "{message}");
+    }
+    let config = parse_project(
+        "project: demo\nservices:\n  api:\n    run: server\n    replicas: 2\n",
+        None,
+    )
+    .expect("literal replicas");
+    assert_eq!(config.services["api"].replicas, Some(2));
+    assert!(
+        parse_project(
+            "project: demo\nservices:\n  api:\n    run: server\n    replicas: 0\n",
+            None
+        )
+        .is_err()
+    );
+}
+
 /// `gui` is reserved only on services; elsewhere it is a plain unknown key.
 #[test]
 fn gui_is_reserved_only_on_services() {
@@ -503,6 +535,50 @@ fn missing_compose_file_is_an_error() {
     assert!(check(dir.path()).expect("both present").warnings.is_empty());
 }
 
+/// A script runs in its file's directory, so `cwd` next to `run_script` is refused, also
+/// when one of them comes from a template.
+#[test]
+fn cwd_with_run_script_is_refused() {
+    let hint = "cwd cannot be combined with run_script, which runs in the script file's directory; remove cwd";
+    for (source, needle, path) in [
+        (
+            "project: demo\nservices:\n  api:\n    run_script: { file: apps/api/package.json, name: dev }\n    cwd: apps/api\n",
+            "cwd:",
+            "services.api.cwd",
+        ),
+        (
+            "project: demo\ntasks:\n  migrate:\n    run_script: { file: apps/api/package.json, name: migrate }\n    cwd: apps/api\n",
+            "cwd:",
+            "tasks.migrate.cwd",
+        ),
+        (
+            "project: demo\ntemplates:\n  base:\n    run_script: { file: apps/api/package.json, name: dev }\nservices:\n  api:\n    extends: base\n    cwd: apps/api\n",
+            "cwd: apps/api",
+            "services.api.cwd",
+        ),
+    ] {
+        assert_project_error(source, needle, &format!("{path}: {hint}"));
+    }
+    // The service has no `cwd` key of its own, so the error points at the service.
+    let inherited = "project: demo\ntemplates:\n  base:\n    cwd: apps/api\nservices:\n  api:\n    extends: base\n    run_script: { file: apps/api/package.json, name: dev }\n";
+    assert_project_error(
+        inherited,
+        "extends: base",
+        &format!("services.api.cwd: {hint} (it may come from template `base`)"),
+    );
+    // A local `run_script` replaces the base `run` but keeps its `cwd`.
+    let error = parse_project(
+        "project: demo\ntasks:\n  migrate: { run: ./migrate, cwd: apps/api }\n",
+        Some("tasks:\n  migrate: { run_script: { file: apps/api/package.json, name: migrate } }\n"),
+    )
+    .expect_err("merged task");
+    assert!(
+        error.message.starts_with("tasks.migrate.cwd: "),
+        "{}",
+        error.message
+    );
+}
+
 /// A preset only wraps `run_script`; with `run` the error points at `run`, also when a
 /// template brings the preset.
 #[test]
@@ -544,4 +620,34 @@ fn infra_commands_take_only_run() {
         "ignore_errors",
         "infra.teardown.drop: infra command requires run",
     );
+}
+
+/// The wrangler preset's own port flags in `args` fail the check at the preset block.
+#[test]
+fn wrangler_port_flags_in_args_are_refused() {
+    let source = "project: demo\nservices:\n  api:\n    preset: wrangler\n    run_script: { file: package.json, name: dev }\n    wrangler:\n      args: [--port, '8787']\n";
+    let config = parse_project(source, None).expect("options deferred");
+    let error = validate_with_presets(&config, &super::registered_validator)
+        .expect_err("port flag in args");
+    assert!(
+        error.message.starts_with("services.api.wrangler: ")
+            && error.message.contains("`args` passes `--port 8787`"),
+        "{}",
+        error.message
+    );
+    // A block mapping's position is its first key.
+    assert_eq!(error.location.line, line_of(source, "args:"));
+}
+
+/// `cwd` stays valid with `run`, including when `run` replaces an inherited `run_script`.
+#[test]
+fn cwd_with_run_is_accepted() {
+    let config = parse_project(
+        "project: demo\ntemplates:\n  base:\n    run_script: { file: apps/api/package.json, name: dev }\n    cwd: apps/api\nservices:\n  api:\n    extends: base\n    run: pnpm dev\n  web:\n    run_script: { file: apps/web/package.json, name: dev }\ntasks:\n  migrate: { run: ./migrate, cwd: apps/api }\ninfra:\n  setup:\n    seed: { run: make seed, cwd: infra }\n",
+        None,
+    )
+    .expect("cwd with run");
+    let api = &config.services["api"];
+    assert!(api.run_script.is_none());
+    assert_eq!(api.cwd, Some(Templated::Literal("apps/api".into())));
 }

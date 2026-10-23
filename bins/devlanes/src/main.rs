@@ -17,6 +17,7 @@ mod output;
 mod progress;
 mod remote;
 mod start_ui;
+mod user_config;
 mod verbose;
 mod wiring;
 
