@@ -1,5 +1,6 @@
-//! Path comparison that follows the host file system's case rules, and the
-//! file names user-given names (projects, services, tasks) are stored under.
+//! Path comparison that follows the host file system's case rules, the file
+//! names user-given names (projects, services, tasks) are stored under, the
+//! user's home, and whether a program is named by path.
 //!
 //! Identity paths (project roots, worktrees, request cwds) come from Git and
 //! from canonicalization, which can disagree on case and separators on
@@ -12,11 +13,15 @@ use std::{borrow::Cow, path::Path};
 
 #[cfg(windows)]
 pub use os::{colliding_names, fold_case};
-pub use os::{forward_slashes, name_on_disk, path_starts_with, same_path, strip_path_prefix};
+pub use os::{
+    forward_slashes, name_on_disk, names_a_path, path_starts_with, same_path, strip_path_prefix,
+    user_home,
+};
 
 #[cfg(unix)]
 mod os {
     use super::{Cow, Path};
+    use std::path::PathBuf;
 
     /// Whether `a` and `b` name the same path: exact comparison on Unix.
     pub fn same_path(a: &Path, b: &Path) -> bool {
@@ -44,6 +49,17 @@ mod os {
     pub fn forward_slashes(path: &Path) -> String {
         path.display().to_string()
     }
+
+    /// Whether `program` names a file rather than a command looked up on
+    /// `PATH`: it contains a `/`.
+    pub fn names_a_path(program: &str) -> bool {
+        program.contains('/')
+    }
+
+    /// The user's home directory from `HOME`.
+    pub fn user_home() -> Option<PathBuf> {
+        std::env::var_os("HOME").map(PathBuf::from)
+    }
 }
 
 #[cfg(windows)]
@@ -53,7 +69,7 @@ mod os {
         collections::HashMap,
         ffi::OsStr,
         fmt::Write as _,
-        path::{Component, Prefix},
+        path::{Component, PathBuf, Prefix},
     };
 
     /// `text` with every character mapped to its simple uppercase form when
@@ -244,6 +260,19 @@ mod os {
     pub fn forward_slashes(path: &Path) -> String {
         path.to_string_lossy().replace('\\', "/")
     }
+
+    /// Whether `program` names a file rather than a command looked up on
+    /// `PATH`: either separator, or a drive prefix (`C:tool`).
+    pub fn names_a_path(program: &str) -> bool {
+        program.contains(['/', '\\'])
+            || matches!(program.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic())
+    }
+
+    /// The user's profile directory. `std::env::home_dir` ignores `HOME` on
+    /// Windows, which Git Bash sets to a POSIX-style path.
+    pub fn user_home() -> Option<PathBuf> {
+        std::env::home_dir()
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +332,8 @@ mod tests {
             forward_slashes(Path::new("/data/a\\b")),
             "/data/a\\b".to_owned()
         );
+        assert!(names_a_path("./tool") && names_a_path("/usr/bin/tool"));
+        assert!(!names_a_path(r".\tool") && !names_a_path("C:tool"));
     }
 
     #[cfg(windows)]
@@ -480,6 +511,18 @@ mod tests {
                 forward_slashes(Path::new(r"C:\Users\acme\.devlanes\data\acme\5")),
                 "C:/Users/acme/.devlanes/data/acme/5"
             );
+        }
+
+        #[test]
+        /// Either separator or a drive letter names a path; a bare name or a
+        /// colon elsewhere does not.
+        fn programs_named_by_path() {
+            for program in [r".\tool", "bin/tool", r"C:\tools\x.exe", "c:tool"] {
+                assert!(names_a_path(program), "{program}");
+            }
+            for program in ["tool", "tool.exe", "1:tool", "db:migrate", ""] {
+                assert!(!names_a_path(program), "{program}");
+            }
         }
     }
 }

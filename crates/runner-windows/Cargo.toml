@@ -15,7 +15,7 @@ workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 devlanes-core = { path = "../core" }
-devlanes-git = { path = "../git" }
+devlanes-shell-windows = { path = "../shell-windows" }
 devlanes-sys = { path = "../sys" }
 devlanes-sys-windows = { path = "../sys-windows" }
 thiserror.workspace = true

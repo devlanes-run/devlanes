@@ -156,18 +156,27 @@ fn watch_signals(shutdown: CancellationToken, interrupt: CancellationToken) {
     });
 }
 
-/// Ctrl-C and Ctrl-Break (`daemon run` started by hand in a console) shut the
-/// daemon down like SIGINT and SIGTERM on Unix. Logoff and system shutdown
-/// come as `WM_ENDSESSION` to a hidden window instead, and Windows ends the
-/// process soon after that message is answered, so the answer is held until
-/// the shutdown is done, at most 5 s.
+/// Ctrl-C, Ctrl-Break and closing the console window (`daemon run` started by
+/// hand in a console) shut the daemon down like SIGINT and SIGTERM on Unix;
+/// after a close Windows ends the process about 5 s later. A daemon the
+/// client or the logon start launched has a console without a window, which
+/// its ready probes and helpers share, so console events there are taken and
+/// ignored: one a helper raises must not stop the daemon, and without a
+/// handler the default one would end it.
+///
+/// Logoff and system shutdown come as `WM_ENDSESSION` to a hidden window
+/// instead, and Windows ends the process soon after that message is
+/// answered, so the answer is held until the shutdown is done, at most 5 s.
+/// A `WM_CLOSE` to that window (`taskkill` without `/f`) is a signal
+/// shutdown too.
 #[cfg(windows)]
 fn watch_signals(shutdown: CancellationToken, interrupt: CancellationToken) {
-    use tokio::signal::windows::{ctrl_break, ctrl_c};
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
     /// Longest Windows waits for the `WM_ENDSESSION` answer.
     const SESSION_END_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-    match (ctrl_c(), ctrl_break()) {
-        (Ok(mut ctrl_c), Ok(mut ctrl_break)) => {
+    let by_hand = devlanes_sys_windows::console::has_window();
+    match (ctrl_c(), ctrl_break(), ctrl_close()) {
+        (Ok(mut ctrl_c), Ok(mut ctrl_break), Ok(mut ctrl_close)) => {
             let (shutdown, interrupt) = (shutdown.clone(), interrupt.clone());
             // Runs until the process exits: a later event must still be acted on.
             tokio::spawn(async move {
@@ -175,14 +184,22 @@ fn watch_signals(shutdown: CancellationToken, interrupt: CancellationToken) {
                     let name = tokio::select! {
                         Some(()) = ctrl_c.recv() => "Ctrl-C",
                         Some(()) = ctrl_break.recv() => "Ctrl-Break",
+                        Some(()) = ctrl_close.recv() => "console closed",
                         else => return,
                     };
-                    stop_on(name, &shutdown, &interrupt);
+                    if by_hand {
+                        stop_on(name, &shutdown, &interrupt);
+                    } else {
+                        tracing::debug!(
+                            signal = name,
+                            "ignored: the daemon's console has no window"
+                        );
+                    }
                 }
             });
         }
-        (Err(error), _) | (_, Err(error)) => {
-            tracing::warn!(%error, "console handlers not installed; Ctrl-C ends the daemon without a shutdown");
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+            tracing::warn!(%error, "console handlers not installed; a console event ends the daemon without a shutdown");
         }
     }
     let runtime = tokio::runtime::Handle::current();
@@ -192,6 +209,7 @@ fn watch_signals(shutdown: CancellationToken, interrupt: CancellationToken) {
                 devlanes_sys_windows::window::SessionEnd::Logoff => "logoff",
                 devlanes_sys_windows::window::SessionEnd::Shutdown => "shutdown",
                 devlanes_sys_windows::window::SessionEnd::CloseApp => "close request",
+                devlanes_sys_windows::window::SessionEnd::Close => "WM_CLOSE",
             };
             stop_on(name, &shutdown, &interrupt);
             // The task holds the answer until the runtime drops it, which happens

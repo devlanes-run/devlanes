@@ -52,22 +52,11 @@ pub fn fold_name(name: String) -> String {
 
 /// An environment variable name as devlanes keeps it: uppercased on Windows,
 /// where names ignore case, so `Path` and `PATH` are one key wherever
-/// environments are captured, merged or looked up. Characters with a
-/// single-character uppercase form map to it and the rest stay, which is how
-/// Windows compares names.
+/// environments are captured, merged or looked up. The folding is
+/// [`crate::paths::fold_case`]'s, which is how Windows compares names.
 #[cfg(windows)]
 pub fn fold_name(name: String) -> String {
-    let upper = |c: char| {
-        let mut upper = c.to_uppercase();
-        match (upper.next(), upper.next()) {
-            (Some(single), None) => single,
-            _ => c,
-        }
-    };
-    if name.chars().all(|c| upper(c) == c) {
-        return name;
-    }
-    name.chars().map(upper).collect()
+    crate::paths::fold_case(&name)
 }
 
 /// `env` unchanged: Unix names are case-sensitive.

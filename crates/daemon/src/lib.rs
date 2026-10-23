@@ -76,6 +76,7 @@ pub enum Error {
     AlreadyRunning,
     /// Windows: another process created the daemon's pipe name first, while
     /// this daemon held the lock, so it is no daemon of this home.
+    #[cfg(windows)]
     #[error("another process holds the daemon's pipe {}", .0.display())]
     EndpointTaken(PathBuf),
     #[error("unsafe daemon directory: {0}")]
@@ -370,6 +371,7 @@ impl Server {
         let listener = match LocalListener::bind(&options.socket).await {
             Ok(listener) => listener,
             Err(BindError::AlreadyListening(_)) => return Err(Error::AlreadyRunning),
+            #[cfg(windows)]
             Err(BindError::Taken(path)) => return Err(Error::EndpointTaken(path)),
             Err(BindError::Io(error)) => return Err(error.into()),
         };

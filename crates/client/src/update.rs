@@ -158,7 +158,7 @@ pub fn binstall_lists_devlanes(text: &str) -> bool {
 
 /// macOS and Linux: `install.sh`, POSIX shell quoting, paths matched as they
 /// are, and installers that replace a running executable by renaming over it.
-#[cfg(not(windows))]
+#[cfg(unix)]
 mod os {
     use std::path::{Path, PathBuf};
 
@@ -486,7 +486,7 @@ mod tests {
     }
 
     /// Only install.sh's default directory is named install.sh.
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn standalone_binaries_are_named_by_directory() {
         let home = Path::new("/nonexistent-home");
@@ -510,7 +510,7 @@ mod tests {
         );
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     #[test]
     fn upgrade_commands() {
         assert_eq!(

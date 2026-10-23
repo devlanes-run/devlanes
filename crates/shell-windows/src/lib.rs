@@ -1,5 +1,22 @@
 //! Git for Windows' `sh.exe`, which runs `run:` strings and `ready.cmd` on
 //! Windows in place of `/bin/sh`, and how it is started.
+//!
+//! ```no_run
+//! # async fn demo() {
+//! use std::collections::BTreeMap;
+//!
+//! if let Some(shell) = devlanes_shell_windows::windows_shell().await {
+//!     let mut env = BTreeMap::from([("PATH".to_owned(), r"C:\Windows".to_owned())]);
+//!     devlanes_shell_windows::shell_env(&mut env, &shell);
+//!     let line = devlanes_shell_windows::shell_command_line(&shell, "echo ready");
+//!     # let _ = line;
+//! }
+//! # }
+//! ```
+
+// macOS and Linux run `/bin/sh` directly.
+#![cfg(windows)]
+#![deny(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;

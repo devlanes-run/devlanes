@@ -200,6 +200,12 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
     if let Some(ports) = setup.ports {
         integ.ports = ports;
     }
+    // Container `cmd` checks and `ready.cmd` run through Git's sh.exe on
+    // Windows, found the way the daemon finds it at start.
+    #[cfg(windows)]
+    {
+        integ.shell = devlanes_shell_windows::windows_shell().await;
+    }
     std::fs::create_dir_all(home).expect("home");
     let store = Store::open(home.join("state.db")).await.expect("store");
     let mut options = EngineOptions::new(home, home.join("d.sock"));

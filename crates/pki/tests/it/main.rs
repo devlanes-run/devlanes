@@ -434,12 +434,13 @@ fn refuses_exposed_or_linked_keys() -> Result {
     Ok(())
 }
 
-/// Runs each `icacls` step of `fix` (`icacls "<path>" args && ...`) through
+/// Runs each `icacls` step of `fix` (`icacls "<path>" args; ...`) through
 /// System32's `icacls`, splitting arguments at spaces outside double quotes.
 #[cfg(windows)]
 fn run_icacls_fix(fix: &str) -> Result {
     let icacls = devlanes_sys_windows::file::system_directory()?.join("icacls.exe");
-    for step in fix.split(" && ") {
+    assert!(!fix.contains("&&"), "{fix}");
+    for step in fix.split("; ") {
         let mut args = Vec::new();
         let (mut current, mut quoted) = (String::new(), false);
         for c in step.chars() {

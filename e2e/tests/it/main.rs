@@ -1,7 +1,4 @@
 //! End-to-end tests: every test drives the real `devlanes` binary in its own [`Lab`].
-//!
-//! On Windows, tests that need a later porting step are ignored with the step in
-//! the reason.
 
 mod cli;
 mod diagnostics;

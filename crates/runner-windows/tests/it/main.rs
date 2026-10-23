@@ -440,7 +440,7 @@ async fn pty_sigint_types_ctrl_c() {
 #[tokio::test]
 async fn pty_shell_units_stop_on_ctrl_break() {
     bounded(async {
-        let shell = devlanes_git::windows_shell()
+        let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
@@ -509,7 +509,7 @@ async fn pty_batch_prompts_are_answered() {
 #[tokio::test]
 async fn pty_teardown_of_a_chatty_unit() {
     bounded(async {
-        let shell = devlanes_git::windows_shell()
+        let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
@@ -644,7 +644,7 @@ async fn foreground_commands_resolve_like_units() {
 #[tokio::test]
 async fn run_strings_find_git_tools() {
     bounded(async {
-        let shell = devlanes_git::windows_shell()
+        let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
@@ -671,7 +671,7 @@ async fn run_strings_find_git_tools() {
 #[tokio::test]
 async fn run_strings_go_through_git_sh() {
     bounded(async {
-        let shell = devlanes_git::windows_shell()
+        let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");
@@ -750,7 +750,7 @@ async fn sigint_sends_ctrl_c() {
 #[tokio::test]
 async fn sigint_through_the_shell_is_ctrl_break() {
     bounded(async {
-        let shell = devlanes_git::windows_shell()
+        let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");

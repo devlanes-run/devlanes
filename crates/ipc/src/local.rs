@@ -19,6 +19,7 @@ pub enum BindError {
     AlreadyListening(PathBuf),
     /// Windows only: another process created the pipe name first. Callers hold
     /// the singleton lock, so it is not a daemon of this home.
+    #[cfg(windows)]
     #[error("another process holds the daemon's pipe {}", .0.display())]
     Taken(PathBuf),
     #[error(transparent)]
@@ -62,7 +63,7 @@ impl LocalListener {
     /// On Unix a socket that refuses connections is left over from a crashed
     /// daemon and is replaced; one that accepts is
     /// [`BindError::AlreadyListening`]. On Windows `path` is a pipe name
-    /// (`\\.\pipe\...`) and an existing one is [`BindError::Taken`].
+    /// (`\\.\pipe\...`) and an existing one is `BindError::Taken`.
     pub async fn bind(path: &Path) -> Result<Self, BindError> {
         imp::bind(path).await.map(Self)
     }
@@ -214,15 +215,22 @@ mod imp {
     use std::time::Duration;
 
     use devlanes_sys_windows::pipe::{ERROR_NO_DATA, ERROR_PIPE_BUSY, PipeFactory, server_owner};
-    use devlanes_sys_windows::security::trusted_owner;
     use devlanes_sys_windows::token;
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
     use tokio::net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer};
 
     use super::{BindError, ConnectError, ProbeError};
 
-    /// `ERROR_ACCESS_DENIED`: a first instance of a name that exists already.
+    /// `ERROR_ACCESS_DENIED`: a first instance of a name that exists already,
+    /// or a client open the pipe's descriptor refuses.
     const ERROR_ACCESS_DENIED: i32 = 5;
+
+    /// The wait after a replacement instance could not be created; each
+    /// failure in a row doubles it, up to [`RETRY_MAX`].
+    const RETRY_FIRST: Duration = Duration::from_millis(50);
+
+    /// The longest wait between attempts to create a replacement instance.
+    const RETRY_MAX: Duration = Duration::from_secs(1);
 
     /// One end of a pipe connection.
     pub(super) enum Stream {
@@ -239,6 +247,9 @@ mod imp {
         /// listener lives, so clients never find the name missing between
         /// accepts.
         next: NamedPipeServer,
+        /// How long the next failed creation of a replacement instance waits;
+        /// zero after a success.
+        retry: Duration,
     }
 
     /// Creates the first instance of the name, so a pipe someone else created
@@ -246,7 +257,11 @@ mod imp {
     pub(super) async fn bind(path: &Path) -> Result<Listener, BindError> {
         let pipes = PipeFactory::current_user(path.as_os_str())?;
         match pipes.create(true) {
-            Ok(next) => Ok(Listener { pipes, next }),
+            Ok(next) => Ok(Listener {
+                pipes,
+                next,
+                retry: Duration::ZERO,
+            }),
             Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED) => {
                 Err(BindError::Taken(path.to_owned()))
             }
@@ -258,12 +273,26 @@ mod imp {
         /// Waits on the waiting instance and puts a fresh one in its place
         /// before handing the connected one over. A client that left before
         /// the accept (`ERROR_NO_DATA`) is skipped.
+        ///
+        /// When the fresh instance cannot be created (out of memory or
+        /// handles), the error comes back after a wait that doubles with each
+        /// failure in a row, up to a second, so a caller that logs and accepts
+        /// again does not spin. The connected instance stays waiting and the
+        /// next accept hands it over.
         pub(super) async fn accept(&mut self) -> io::Result<Stream> {
             loop {
                 let connected = self.next.connect().await;
                 // After a failed connect the instance is broken and would fail
                 // every later accept the same way, so it is replaced either way.
-                let fresh = self.pipes.create(false)?;
+                let fresh = match self.pipes.create(false) {
+                    Ok(fresh) => fresh,
+                    Err(error) => {
+                        self.retry = (self.retry * 2).clamp(RETRY_FIRST, RETRY_MAX);
+                        tokio::time::sleep(self.retry).await;
+                        return Err(error);
+                    }
+                };
+                self.retry = Duration::ZERO;
                 let current = std::mem::replace(&mut self.next, fresh);
                 match connected {
                     Ok(()) => return Ok(Stream::Server(current)),
@@ -275,9 +304,16 @@ mod imp {
     }
 
     /// Opens the pipe, retrying while every instance is busy (the server is
-    /// between handing one over and offering the next), then checks its owner.
-    /// No server-side check exists: the pipe's descriptor admits only this
-    /// user, and only this user (or an administrator) can own a pipe as them.
+    /// between handing one over and offering the next), then checks that its
+    /// owner is this user. No server-side check exists: the pipe's descriptor
+    /// admits only this user, and only this user (or an administrator) can
+    /// own a pipe as them.
+    ///
+    /// The daemon always sets this user as the owner, elevated or not, so a
+    /// pipe owned by anyone else, Administrators included, is not this
+    /// user's daemon. A pipe that refuses to open stays a permission error,
+    /// as on Unix: the daemon's medium-integrity label also refuses this
+    /// user's sandboxed (low-integrity) processes, which is the common case.
     pub(super) async fn connect(path: &Path) -> Result<Stream, ConnectError> {
         let client = loop {
             match ClientOptions::new().open(path.as_os_str()) {
@@ -288,9 +324,7 @@ mod imp {
                 Err(error) => return Err(error.into()),
             }
         };
-        // An elevated daemon's pipe can be owned by Administrators; no other
-        // account can own a pipe as them, so that still rules out squatters.
-        if !trusted_owner(&server_owner(&client)?, &token::current_user()?) {
+        if server_owner(&client)? != token::current_user()? {
             return Err(ConnectError::WrongPeer);
         }
         Ok(Stream::Client(client))
@@ -463,6 +497,7 @@ mod windows_tests {
     use std::time::Duration;
 
     use devlanes_sys_windows::pipe::PipeFactory;
+    use devlanes_sys_windows::security::SecurityDescriptor;
 
     use super::*;
 
@@ -484,6 +519,28 @@ mod windows_tests {
             .map_err(io::Error::other)?;
         assert!(client.is_ok(), "an own pipe passes the owner check");
         drop(squatter);
+        Ok(())
+    }
+
+    /// A pipe whose descriptor refuses this user is a permission error, the
+    /// same answer a sandboxed process of this user gets, never a missing daemon.
+    #[tokio::test]
+    async fn a_refused_pipe_is_a_permission_error() -> io::Result<()> {
+        let name = PathBuf::from(format!(
+            r"\\.\pipe\devlanes-ipc-test-{}-refused",
+            std::process::id()
+        ));
+        let system_only = SecurityDescriptor::from_sddl("D:P(A;;GA;;;SY)")?;
+        let server = PipeFactory::new(&name, system_only).create(true)?;
+        let refused = tokio::time::timeout(Duration::from_secs(10), connect(&name))
+            .await
+            .map_err(io::Error::other)?;
+        let kind = match &refused {
+            Err(ConnectError::Io(error)) => Some(error.kind()),
+            _ => None,
+        };
+        assert_eq!(kind, Some(io::ErrorKind::PermissionDenied));
+        drop(server);
         Ok(())
     }
 }

@@ -628,7 +628,11 @@ async fn proxy(
     let lan = user.proxy.lan;
     let mut status = serde_json::Map::new();
     let https = match &ca {
-        Some(_) => match devlanes_proxy::bind_listeners(user.proxy.https_port, 8443, lan) {
+        Some(_) => match devlanes_proxy::bind_listeners(
+            user.proxy.https_port,
+            devlanes_config::HTTPS_FALLBACK_PORT,
+            lan,
+        ) {
             Ok(listeners) => Some(listeners),
             Err(error) => {
                 status.insert(
@@ -673,7 +677,11 @@ async fn proxy(
             }
         }
     }
-    match devlanes_proxy::bind_listeners(user.proxy.http_port, 8080, lan) {
+    match devlanes_proxy::bind_listeners(
+        user.proxy.http_port,
+        devlanes_config::HTTP_FALLBACK_PORT,
+        lan,
+    ) {
         Ok(listeners) => {
             status.insert(
                 "http".into(),
@@ -896,7 +904,7 @@ impl devlanes_transport_ssh::PromptRelay for PromptBridge {
 /// `shell_missing` without one.
 #[cfg(windows)]
 async fn windows_shell() -> Option<PathBuf> {
-    let shell = devlanes_git::windows_shell().await;
+    let shell = devlanes_shell_windows::windows_shell().await;
     match &shell {
         Some(path) => {
             tracing::info!(shell = %path.display(), "shell for run strings and ready.cmd")

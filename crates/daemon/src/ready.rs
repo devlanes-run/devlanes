@@ -609,10 +609,10 @@ mod windows {
             .saturating_duration_since(Instant::now())
             .min(CMD_ATTEMPT);
         let mut env = env.clone();
-        devlanes_git::shell_env(&mut env, shell);
+        devlanes_shell_windows::shell_env(&mut env, shell);
         // The per-drive `=C:` entries cannot go into an environment block.
         env.retain(|name, _| !name.starts_with('='));
-        let line = devlanes_git::shell_command_line(shell, command);
+        let line = devlanes_shell_windows::shell_command_line(shell, command);
         let (shell, cwd) = (shell.to_path_buf(), cwd.to_path_buf());
         // Process creation touches the disk, so it stays off the executor.
         let started = tokio::task::spawn_blocking(move || start(&shell, &line, &cwd, &env)).await;
@@ -837,7 +837,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn cmd_probe_runs_through_git_sh() {
-        let shell = devlanes_git::windows_shell()
+        let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let cwd = std::env::temp_dir();
@@ -861,7 +861,7 @@ mod tests {
     #[cfg(windows)]
     #[tokio::test]
     async fn cmd_probe_timeout_ends_the_tree() {
-        let shell = devlanes_git::windows_shell()
+        let shell = devlanes_shell_windows::windows_shell()
             .await
             .expect("Git for Windows' sh.exe");
         let dir = tempfile::tempdir().expect("tempdir");

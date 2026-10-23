@@ -9,12 +9,6 @@ use std::{
 };
 use tokio::process::Command;
 
-#[cfg(windows)]
-mod windows;
-
-#[cfg(windows)]
-pub use windows::{quote_msys, shell_command_line, shell_env, windows_shell};
-
 /// Git failures retain stderr for diagnostics without exposing a request environment.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

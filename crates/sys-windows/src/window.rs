@@ -5,7 +5,8 @@ use std::cell::RefCell;
 use std::ffi::OsStr;
 use std::io;
 use std::ptr;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -14,10 +15,10 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, ENDSESSION_CLOSEAPP, ENDSESSION_LOGOFF,
-    EnumWindows, GetMessageW, GetWindowThreadProcessId, IsWindowVisible, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_ENDSESSION,
-    WM_QUERYENDSESSION, WNDCLASSW, WS_OVERLAPPED,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, ENDSESSION_CLOSEAPP,
+    ENDSESSION_LOGOFF, EnumWindows, GetMessageW, GetWindowThreadProcessId, IsWindowVisible, MSG,
+    PostMessageW, PostQuitMessage, RegisterClassW, TranslateMessage, WM_APP, WM_CLOSE, WM_DESTROY,
+    WM_ENDSESSION, WM_QUERYENDSESSION, WNDCLASSW, WS_OVERLAPPED,
 };
 use windows_sys::core::BOOL;
 
@@ -101,7 +102,8 @@ unsafe extern "system" fn enumerated(window: HWND, state: LPARAM) -> BOOL {
     BOOL::from(visit(window, pid))
 }
 
-/// Why the session ends, from the `WM_ENDSESSION` flags.
+/// Why the watch asks the process to stop: the `WM_ENDSESSION` flags, or a
+/// `WM_CLOSE` from another program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SessionEnd {
     /// The user logs off.
@@ -110,6 +112,10 @@ pub enum SessionEnd {
     Shutdown,
     /// The Restart Manager closes the program, typically for an installer.
     CloseApp,
+    /// Another program sent the hidden window `WM_CLOSE`, as `taskkill`
+    /// without `/f` does: a polite request to exit, like `SIGTERM`. The
+    /// session goes on, so nothing waits for [`Done`].
+    Close,
 }
 
 impl SessionEnd {
@@ -144,6 +150,8 @@ impl Done {
 struct Watcher {
     on_end: Box<dyn Fn(SessionEnd, Done)>,
     timeout: Duration,
+    /// Set by [`SessionWatch`]'s drop just before it posts [`STOP`].
+    stopping: Arc<AtomicBool>,
 }
 
 thread_local! {
@@ -154,6 +162,12 @@ thread_local! {
 /// The class every watch window uses; registered once per process.
 const CLASS: &str = "devlanes-session-end";
 
+/// The private message that ends a watch once [`Watcher::stopping`] is set.
+/// `WM_CLOSE` cannot do it, since other programs send that one to ask the
+/// process to exit, and the flag keeps a stray `STOP` from another program
+/// from ending the watch either.
+const STOP: u32 = WM_APP + 1;
+
 /// A running session-end watch. Dropping it closes the window and joins its
 /// thread.
 #[derive(Debug)]
@@ -162,12 +176,15 @@ pub struct SessionWatch {
     /// only used to post messages to it.
     window: isize,
     thread: Option<JoinHandle<()>>,
+    stopping: Arc<AtomicBool>,
 }
 
 /// Starts a hidden top-level window on its own thread that calls `on_end`
 /// there when `WM_ENDSESSION` says the session ends, then holds its answer
 /// until `on_end`'s [`Done`] is finished or dropped, at most `timeout`.
-/// Windows ends the process soon after the answer.
+/// Windows ends the process soon after the answer. A `WM_CLOSE` from another
+/// program calls `on_end` with [`SessionEnd::Close`] and leaves the window
+/// in place.
 ///
 /// Windows tells GUI processes, and every process that loaded `user32.dll`
 /// (creating this window does), through these messages to top-level windows
@@ -179,6 +196,8 @@ pub fn watch_session_end(
     on_end: impl Fn(SessionEnd, Done) + Send + 'static,
 ) -> io::Result<SessionWatch> {
     let (sender, receiver) = mpsc::channel();
+    let stopping = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&stopping);
     let thread = std::thread::Builder::new()
         .name("session-end".into())
         .spawn(move || {
@@ -193,6 +212,7 @@ pub fn watch_session_end(
                 *slot.borrow_mut() = Some(Watcher {
                     on_end: Box::new(on_end),
                     timeout,
+                    stopping: flag,
                 });
             });
             let _ = sender.send(Ok(window as isize));
@@ -203,6 +223,7 @@ pub fn watch_session_end(
         Ok(Ok(window)) => Ok(SessionWatch {
             window,
             thread: Some(thread),
+            stopping,
         }),
         Ok(Err(error)) => {
             let _ = thread.join();
@@ -216,10 +237,11 @@ pub fn watch_session_end(
 }
 
 impl Drop for SessionWatch {
-    /// Closes the window, which ends its message loop, and waits for the thread.
+    /// Destroys the window, which ends its message loop, and waits for the thread.
     fn drop(&mut self) {
+        self.stopping.store(true, Ordering::SeqCst);
         // SAFETY: posting to a window handle that may already be gone only fails.
-        let posted = unsafe { PostMessageW(self.window as HWND, WM_CLOSE, 0, 0) } != 0;
+        let posted = unsafe { PostMessageW(self.window as HWND, STOP, 0, 0) } != 0;
         if posted && let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -315,13 +337,40 @@ unsafe extern "system" fn procedure(
             }
             0
         }
+        // The default handling would destroy the window, and logoff would
+        // then end the process without a shutdown.
+        WM_CLOSE => {
+            WATCHER.with(|slot| {
+                if let Ok(watcher) = slot.try_borrow()
+                    && let Some(watcher) = watcher.as_ref()
+                {
+                    let (sender, _) = mpsc::channel();
+                    (watcher.on_end)(SessionEnd::Close, Done(sender));
+                }
+            });
+            0
+        }
+        STOP => {
+            let stopping = WATCHER.with(|slot| {
+                slot.try_borrow().is_ok_and(|watcher| {
+                    watcher
+                        .as_ref()
+                        .is_some_and(|watcher| watcher.stopping.load(Ordering::SeqCst))
+                })
+            });
+            if stopping {
+                // SAFETY: the window belongs to this thread; destroying it
+                // sends WM_DESTROY, which ends the loop.
+                unsafe { DestroyWindow(window) };
+            }
+            0
+        }
         WM_DESTROY => {
             // SAFETY: ends this thread's message loop.
             unsafe { PostQuitMessage(0) };
             0
         }
-        // SAFETY: default handling for a message of this thread's own window;
-        // for WM_CLOSE it destroys the window.
+        // SAFETY: default handling for a message of this thread's own window.
         _ => unsafe { DefWindowProcW(window, message, wparam, lparam) },
     }
 }
@@ -395,6 +444,24 @@ mod tests {
                 .iter()
                 .all(|window| window.handle != watch.window)
         );
+    }
+
+    /// `WM_CLOSE` and a `STOP` from someone else are requests that leave the
+    /// window running: the first calls the callback, the second nothing.
+    #[test]
+    fn close_requests_keep_the_window() {
+        let (sender, receiver) = mpsc::channel();
+        let watch = watch_session_end(Duration::from_secs(30), move |end, _done| {
+            let _ = sender.send(end);
+        })
+        .expect("watch");
+        send(&watch, WM_CLOSE, 0, 0);
+        assert_eq!(receiver.try_recv(), Ok(SessionEnd::Close));
+        send(&watch, STOP, 0, 0);
+        send(&watch, WM_ENDSESSION, 1, ENDSESSION_LOGOFF as LPARAM);
+        assert_eq!(receiver.try_recv(), Ok(SessionEnd::Logoff));
+        drop(watch);
+        assert!(receiver.recv_timeout(Duration::from_secs(5)).is_err());
     }
 
     /// A callback that drops its `Done` releases the answer, and the reason

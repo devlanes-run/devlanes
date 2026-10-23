@@ -2,8 +2,9 @@
 # Dry run of the release scripts against fake binaries: package.sh and package.ps1
 # for every target, manifest.sh, the Homebrew formula, the npm packages (packed,
 # then installed from the tarballs on macOS and Linux arm64/x64) and install.sh from
-# a local release directory. Needs tar, gzip, unzip, jq, node, npm, curl and pwsh;
-# CI runs it on every push. check.ps1 covers install.ps1 and the launcher on Windows.
+# a local release directory. Needs tar, gzip, jq, node, npm and curl, plus pwsh and
+# unzip for the package.ps1 part, which is skipped without pwsh. CI runs it on every
+# push. check.ps1 covers package.ps1, install.ps1 and the launcher on Windows.
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -26,19 +27,27 @@ for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu
 done
 mkdir "$work/winbin"
 printf 'fake devlanes.exe %s\n' "$version" >"$work/winbin/devlanes.exe"
-for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
-	pwsh -NoProfile -NonInteractive -File "$root/packaging/scripts/package.ps1" \
-		-Version "$version" -Target "$target" -OutDir "$work/dist" -BinDir "$work/winbin" >/dev/null
-	listed=$(unzip -Z1 "$work/dist/devlanes-$version-$target.zip" | tr '\n' ' ')
-	[ "$listed" = "devlanes-$version-$target/LICENSE devlanes-$version-$target/devlanes.exe " ] || {
-		echo "unexpected entries in the $target zip: $listed" >&2
-		exit 1
-	}
-done
+# package.ps1 needs PowerShell, which Unix hosts may lack; check.ps1 checks the
+# zips on Windows either way.
+zips=0
+if command -v pwsh >/dev/null 2>&1; then
+	for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
+		pwsh -NoProfile -NonInteractive -File "$root/packaging/scripts/package.ps1" \
+			-Version "$version" -Target "$target" -OutDir "$work/dist" -BinDir "$work/winbin" >/dev/null
+		listed=$(unzip -Z1 "$work/dist/devlanes-$version-$target.zip" | tr '\n' ' ')
+		[ "$listed" = "devlanes-$version-$target/LICENSE devlanes-$version-$target/devlanes.exe " ] || {
+			echo "unexpected entries in the $target zip: $listed" >&2
+			exit 1
+		}
+	done
+	zips=2
+else
+	echo "pwsh not found: skipped the package.ps1 dry run"
+fi
 sh "$root/packaging/scripts/manifest.sh" "$version" "$work/dist" "https://example.invalid/download/v$version" >/dev/null
 jq -e '.artifacts | length == 4' "$work/dist/release-manifest.json" >/dev/null
 [ "$(grep -c '\.tar\.gz$' "$work/dist/SHA256SUMS")" -eq 4 ]
-[ "$(grep -c '\.zip$' "$work/dist/SHA256SUMS")" -eq 2 ]
+[ "$(grep -c '\.zip$' "$work/dist/SHA256SUMS")" -eq "$zips" ]
 
 sh "$root/packaging/homebrew/render.sh" "$version" "$work/dist/SHA256SUMS" >"$work/devlanes.rb"
 if command -v ruby >/dev/null 2>&1; then ruby -c "$work/devlanes.rb" >/dev/null; fi

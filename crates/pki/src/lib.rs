@@ -498,10 +498,28 @@ fn check_private(path: &Path, directory: bool) -> Result<(), Error> {
     verdict.map_err(|problem| insecure_path(path, problem, directory))
 }
 
-/// [`Error::InsecurePath`] for `problem`, with an `icacls` fix when other
-/// accounts have access: `/reset` drops the explicit grants (`/grant:r` only
-/// replaces this user's), then the path keeps a grant to this user alone; a
-/// directory also resets everything inside so it inherits that.
+/// The `icacls` commands that make `path` private to this user: `/reset`
+/// drops the explicit grants (`/grant:r` only replaces this user's own), then
+/// the path keeps a grant to this user alone; a `directory` also resets
+/// everything inside so it inherits that, since one recursive grant would
+/// leave the entries' explicit grants in place. The steps are joined with
+/// `; `, which Windows PowerShell 5.1 (it rejects `&&`), PowerShell 7 and Git
+/// Bash all run in order. `None` when this user's SID cannot be read.
+#[cfg(windows)]
+pub fn icacls_fix(path: &Path, directory: bool) -> Option<String> {
+    let user = devlanes_sys_windows::token::current_user().ok()?;
+    let shown = path.display();
+    Some(if directory {
+        format!(
+            r#"icacls "{shown}" /reset; icacls "{shown}" /inheritance:r /grant:r "*{user}:(OI)(CI)F"; icacls "{shown}\*" /reset /T /C"#
+        )
+    } else {
+        format!(r#"icacls "{shown}" /reset; icacls "{shown}" /inheritance:r /grant:r "*{user}:F""#)
+    })
+}
+
+/// [`Error::InsecurePath`] for `problem`, with the [`icacls_fix`] when other
+/// accounts have access.
 #[cfg(windows)]
 fn insecure_path(
     path: &Path,
@@ -530,19 +548,7 @@ fn insecure_path(
             false,
         ),
     };
-    let user = devlanes_sys_windows::token::current_user().ok();
-    let fix = user.filter(|_| fixable).map(|user| {
-        let shown = path.display();
-        if directory {
-            format!(
-                r#"icacls "{shown}" /reset && icacls "{shown}" /inheritance:r /grant:r "*{user}:(OI)(CI)F" && icacls "{shown}\*" /reset /T /C"#
-            )
-        } else {
-            format!(
-                r#"icacls "{shown}" /reset && icacls "{shown}" /inheritance:r /grant:r "*{user}:F""#
-            )
-        }
-    });
+    let fix = fixable.then(|| icacls_fix(path, directory)).flatten();
     Error::InsecurePath {
         path: path.to_owned(),
         problem,

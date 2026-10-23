@@ -13,7 +13,9 @@ use std::path::Path;
 use std::ptr;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE};
+use windows_sys::Win32::Foundation::{
+    DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::System::Console::HPCON;
 use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
@@ -36,8 +38,19 @@ pub enum Stream<'a> {
     /// The `NUL` device.
     Null,
     /// A handle of this process, such as the child's end of a [`pipe`]. It
-    /// does not need to be inheritable.
+    /// does not need to be inheritable. `INVALID_HANDLE_VALUE` (a missing
+    /// standard handle) counts as [`Stream::Null`].
     Handle(BorrowedHandle<'a>),
+}
+
+impl<'a> Stream<'a> {
+    /// `self`, with `INVALID_HANDLE_VALUE` read as [`Stream::Null`].
+    fn or_null(self) -> Self {
+        match self {
+            Self::Handle(handle) if handle.as_raw_handle() == INVALID_HANDLE_VALUE => Self::Null,
+            other => other,
+        }
+    }
 }
 
 /// The child's standard streams.
@@ -109,6 +122,7 @@ pub struct Spawn<'a> {
     /// The standard streams.
     pub stdio: Stdio<'a>,
     /// Further handles the child inherits besides its standard streams.
+    /// `INVALID_HANDLE_VALUE` is refused with `ErrorKind::InvalidInput`.
     pub inherit: &'a [BorrowedHandle<'a>],
     /// The job the child runs in from its first instruction.
     pub job: Option<&'a Job>,
@@ -140,8 +154,33 @@ pub fn spawn(spec: &Spawn<'_>) -> io::Result<Child> {
     let mut command_line = wide(spec.command_line)?;
     let cwd = spec.cwd.map(|cwd| wide(cwd.as_os_str())).transpose()?;
 
+    // -1 is also the pseudo-handle of the current process, so duplicating it
+    // would give the child a full-access handle to this one.
+    if spec
+        .inherit
+        .iter()
+        .any(|handle| handle.as_raw_handle() == INVALID_HANDLE_VALUE)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "INVALID_HANDLE_VALUE cannot be inherited",
+        ));
+    }
+    let stdio = match spec.stdio {
+        Stdio::Handles {
+            stdin,
+            stdout,
+            stderr,
+        } => Stdio::Handles {
+            stdin: stdin.or_null(),
+            stdout: stdout.or_null(),
+            stderr: stderr.or_null(),
+        },
+        console @ Stdio::PseudoConsole(_) => console,
+    };
+
     // Sources of inherited handles, in the order std slots then extras.
-    let null = match spec.stdio {
+    let null = match stdio {
         Stdio::Handles {
             stdin,
             stdout,
@@ -162,7 +201,7 @@ pub fn spawn(spec: &Spawn<'_>) -> io::Result<Child> {
             (Stream::Null, None) => ptr::null_mut(),
         }
     };
-    let std_sources = match spec.stdio {
+    let std_sources = match stdio {
         Stdio::Handles {
             stdin,
             stdout,
@@ -193,7 +232,7 @@ pub fn spawn(spec: &Spawn<'_>) -> io::Result<Child> {
             .map_or(ptr::null_mut(), |index| list[index])
     };
 
-    let pseudo_console = match spec.stdio {
+    let pseudo_console = match stdio {
         Stdio::PseudoConsole(console) => Some(console.raw()),
         Stdio::Handles { .. } => None,
     };
@@ -531,5 +570,44 @@ impl Drop for AttributeList {
     fn drop(&mut self) {
         // SAFETY: the list was initialised in `new` and is not used after this.
         unsafe { DeleteProcThreadAttributeList(self.as_mut_ptr()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `INVALID_HANDLE_VALUE`, which is also this process's pseudo-handle,
+    /// is `NUL` as a standard stream and refused as an extra handle, so a
+    /// child never gets a handle to this process.
+    #[test]
+    fn invalid_handles_are_never_duplicated() -> io::Result<()> {
+        // SAFETY: nothing closes or uses the value; `spawn` only compares it.
+        let invalid = unsafe { BorrowedHandle::borrow_raw(INVALID_HANDLE_VALUE) };
+        let program = crate::file::system_directory()?.join("cmd.exe");
+        let extra = [invalid];
+        let mut spec = Spawn {
+            program: &program,
+            command_line: OsStr::new(r#"cmd.exe /d /c "echo hidden""#),
+            environment: None,
+            cwd: None,
+            stdio: Stdio::Handles {
+                stdin: Stream::Handle(invalid),
+                stdout: Stream::Handle(invalid),
+                stderr: Stream::Null,
+            },
+            inherit: &extra,
+            job: None,
+            flags: CreationFlags {
+                no_window: true,
+                ..CreationFlags::default()
+            },
+        };
+        let refused = spawn(&spec).expect_err("refused");
+        assert_eq!(refused.kind(), io::ErrorKind::InvalidInput, "{refused}");
+        spec.inherit = &[];
+        let child = spawn(&spec)?;
+        assert_eq!(child.wait_timeout(Duration::from_secs(20))?, Some(0));
+        Ok(())
     }
 }

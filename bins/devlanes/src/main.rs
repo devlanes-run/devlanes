@@ -8,7 +8,7 @@ mod choose;
 mod commands;
 mod completion;
 #[cfg(windows)]
-mod console;
+use devlanes_console_windows as console;
 mod daemon;
 mod driver;
 #[cfg(windows)]
@@ -143,14 +143,13 @@ fn main() -> ExitCode {
     ExitCode::from(code)
 }
 
-/// Gives the CLI the console Windows gave it before the binary's manifest
-/// asked for none (`consoleAllocationPolicy`, there for the logon start): a
-/// new console window when it starts without a parent console, as from
-/// Explorer or a GUI program. Terminals, pipes and hidden consoles keep what
-/// they pass down. Without a console, every program the CLI starts would open
-/// a window of its own.
+/// Gives the CLI a console without a window when it starts without one: the
+/// binary's manifest asks for none (`consoleAllocationPolicy`, there for the
+/// logon start), and without a console every program the CLI starts would
+/// open a window of its own. Standard handles the parent passed (pipes or
+/// `NUL` from a detached parent) stay as they were. Terminals and hidden
+/// consoles are kept.
 #[cfg(windows)]
 fn cli_console() {
-    use devlanes_sys_windows::console;
-    let _ = console::alloc_console(console::AllocMode::Default);
+    let _ = devlanes_sys_windows::console::alloc_hidden_console();
 }

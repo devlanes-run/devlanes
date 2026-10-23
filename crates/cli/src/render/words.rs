@@ -1,6 +1,7 @@
 //! Wording for daemon error codes and `why` reason codes. The daemon only sends
 //! codes with data; every sentence and hint lives here.
 
+use devlanes_core::paths::names_a_path;
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
@@ -44,7 +45,7 @@ fn logs_hint(data: &Value) -> Option<Hint> {
 pub(crate) fn spawn_cause(data: &Value) -> String {
     let program = text(data, "program");
     match text(data, "reason").as_str() {
-        "not_found" if explicit_program(&program) => format!("{program}: no such file"),
+        "not_found" if names_a_path(&program) => format!("{program}: no such file"),
         "not_found" => format!("{program}: command not found on PATH"),
         "not_executable" => format!("{program} is not executable"),
         "cwd_missing" => format!("working directory {} does not exist", text(data, "cwd")),
@@ -61,26 +62,13 @@ pub(crate) fn spawn_cause(data: &Value) -> String {
     }
 }
 
-/// Whether the program was named by path rather than looked up on PATH.
-#[cfg(unix)]
-fn explicit_program(program: &str) -> bool {
-    program.contains('/')
-}
-
-/// Whether the program was named by path rather than looked up on PATH:
-/// Windows paths also use `\` and drive letters (`C:tool`).
-#[cfg(windows)]
-fn explicit_program(program: &str) -> bool {
-    program.contains(['/', '\\']) || program.as_bytes().get(1) == Some(&b':')
-}
-
 /// The fix for a spawn the program, not the unit, broke: the lane's PATH for a
 /// program not found there, `chmod +x` for one that cannot run.
 pub(crate) fn spawn_hint(data: &Value) -> Option<Hint> {
     let unit = text(data, "unit");
     let lane = text(data, "lane");
     match text(data, "reason").as_str() {
-        "not_found" if !explicit_program(&text(data, "program")) && !unit.is_empty() => {
+        "not_found" if !names_a_path(&text(data, "program")) && !unit.is_empty() => {
             let mut args = vec!["env", "show", unit.as_str()];
             if !lane.is_empty() {
                 args.extend(["--lane", lane.as_str()]);

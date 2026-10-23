@@ -423,9 +423,10 @@ struct Dacl {
     unjudged: bool,
 }
 
-/// Whether `owner` may own an object that only `user` should control: the
-/// user, or an account that already controls every object on the machine
-/// (Administrators, SYSTEM).
+/// Whether `owner` may own a directory or file that only `user` should
+/// control: the user, or an account that already controls every object on
+/// the machine (Administrators, SYSTEM). Not for the daemon's pipe, whose
+/// server always sets the user as owner, so clients require exactly that.
 pub fn trusted_owner(owner: &Sid, user: &Sid) -> bool {
     owner == user || *owner == Sid::administrators() || *owner == Sid::local_system()
 }

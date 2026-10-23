@@ -15,6 +15,8 @@ use std::{
     },
 };
 
+pub use devlanes_core::paths::user_home;
+
 use crate::{Error, Result};
 
 /// Persistent state belongs to one home; sockets may use a private runtime directory.
@@ -120,19 +122,6 @@ fn home_directory(devlanes_home: Option<OsString>, home: Option<OsString>) -> Re
         (_, Some(home)) if !home.is_empty() => Ok(PathBuf::from(home).join(".devlanes")),
         _ => Err(Error::MissingHome),
     }
-}
-
-/// The user's home directory from `HOME`.
-#[cfg(unix)]
-pub fn user_home() -> Option<PathBuf> {
-    env::var_os("HOME").map(PathBuf::from)
-}
-
-/// The user's profile directory. `std::env::home_dir` ignores `HOME` on Windows,
-/// which Git Bash sets to a POSIX-style path.
-#[cfg(windows)]
-pub fn user_home() -> Option<PathBuf> {
-    env::home_dir()
 }
 
 /// The daemon's pipe for `home`. Pipe names are machine-wide, so the name

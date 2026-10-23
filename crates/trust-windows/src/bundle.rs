@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::io;
 
 use base64::Engine as _;
-use devlanes_sys_windows::cert::{Access, CertStore, StoreCertificate, Thumbprint, View};
+use devlanes_sys_windows::cert::{Access, CertStore, Listing, StoreCertificate, Thumbprint, View};
 use sha1::{Digest as _, Sha1};
 
 use crate::{DISALLOWED, ROOT};
@@ -31,7 +31,16 @@ pub struct BundleRoots {
 pub fn bundle_roots(own: &[u8]) -> BundleRoots {
     let mut problems = Vec::new();
     let store = match read(ROOT) {
-        Ok(store) => store,
+        Ok(listing) => {
+            if let Some(first) = listing.unreadable.first() {
+                problems.push(format!(
+                    r"left {} certificates of Cert:\CurrentUser\{ROOT} out of bundle.pem because their usage could not be read: {}",
+                    listing.unreadable.len(),
+                    first.error
+                ));
+            }
+            store_roots(listing)
+        }
         Err(error) => {
             problems.push(format!(
                 r"cannot read Cert:\CurrentUser\{ROOT}, so bundle.pem has Mozilla's roots only: {error}"
@@ -40,7 +49,7 @@ pub fn bundle_roots(own: &[u8]) -> BundleRoots {
         }
     };
     let disallowed = match read(DISALLOWED) {
-        Ok(store) => store.into_iter().map(|entry| entry.thumbprint).collect(),
+        Ok(listing) => thumbprints(&listing),
         Err(error) => {
             problems.push(format!(
                 r"cannot read Cert:\CurrentUser\{DISALLOWED}, so distrusted roots are not left out of bundle.pem: {error}"
@@ -59,12 +68,45 @@ pub fn bundle_roots(own: &[u8]) -> BundleRoots {
 
 /// Every certificate of the logical CurrentUser store `name`; a store that
 /// does not exist is empty.
-fn read(name: &str) -> io::Result<Vec<StoreCertificate>> {
+fn read(name: &str) -> io::Result<Listing> {
     match CertStore::open(name, View::Logical, Access::Read) {
         Ok(store) => store.certificates(),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Listing::default()),
         Err(error) => Err(error),
     }
+}
+
+/// The `Root` listing as store entries. Certificates whose usage could not be
+/// read count as refused, so they stay out of the bundle even when Mozilla's
+/// set has them, as Windows would not use them either.
+fn store_roots(listing: Listing) -> Vec<StoreCertificate> {
+    let refused = listing
+        .unreadable
+        .into_iter()
+        .map(|entry| StoreCertificate {
+            thumbprint: Sha1::digest(&entry.der).into(),
+            der: entry.der,
+            server_auth: false,
+            time_valid: false,
+        });
+    listing.certificates.into_iter().chain(refused).collect()
+}
+
+/// Thumbprints of every certificate of `listing`. For the ones Windows could
+/// not read the thumbprint comes from the encoding, so no distrusted root
+/// slips into the bundle.
+fn thumbprints(listing: &Listing) -> HashSet<Thumbprint> {
+    listing
+        .certificates
+        .iter()
+        .map(|entry| entry.thumbprint)
+        .chain(
+            listing
+                .unreadable
+                .iter()
+                .map(|entry| Sha1::digest(&entry.der).into()),
+        )
+        .collect()
 }
 
 /// `builtin` and the usable `store` roots as PEM, each once, without `own`,
@@ -111,6 +153,8 @@ fn pem_certificate(der: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use devlanes_sys_windows::cert::Unreadable;
+
     use super::*;
 
     /// A store entry for `der`.
@@ -164,6 +208,34 @@ mod tests {
             .map(|der| pem_certificate(der))
             .collect();
         assert_eq!(pem, expected);
+    }
+
+    /// A certificate Windows could not read stays out of the bundle when it
+    /// is a root, even one Mozilla has, and is still distrusted when it is
+    /// in `Disallowed`; the readable roots stay in.
+    #[test]
+    fn unreadable_certificates_are_left_out() {
+        let cert = |n: u8| vec![0x30, 0x03, 0x02, 0x01, n];
+        let (kept, unjudged, distrusted) = (cert(1), cert(2), cert(3));
+        let unreadable = |der: &[u8]| Unreadable {
+            der: der.to_vec(),
+            error: io::Error::other("bad usage"),
+        };
+        let root = Listing {
+            certificates: vec![entry(&kept, true, true), entry(&distrusted, true, true)],
+            unreadable: vec![unreadable(&unjudged)],
+        };
+        let disallowed = Listing {
+            certificates: Vec::new(),
+            unreadable: vec![unreadable(&distrusted)],
+        };
+        let pem = union_roots(
+            [unjudged.clone()],
+            &store_roots(root),
+            &thumbprints(&disallowed),
+            &[],
+        );
+        assert_eq!(pem, pem_certificate(&kept));
     }
 
     /// PEM blocks wrap at 64 characters and round-trip through the parser

@@ -80,7 +80,7 @@ fn user_home(env: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 /// MSYS tools may set to somewhere else.
 #[cfg(windows)]
 fn user_home(_env: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
-    std::env::home_dir()
+    devlanes_core::paths::user_home()
 }
 
 fn read_current_context(path: &Path) -> Result<Option<String>, Error> {

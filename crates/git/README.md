@@ -30,7 +30,6 @@ async fn lanes(cwd: &Path) -> Result<(), Error> {
 - `list` and `parse_porcelain`: the worktree list from `git worktree list --porcelain -z`.
 - `add`: `git worktree add` for a new or existing branch, after `git check-ref-format` accepts its name.
 - `watch`: a channel that receives the full worktree list again after each change.
-- `windows_shell` (Windows only): Git for Windows' `usr\bin\sh.exe` for the `git` on `PATH`, found through `git --exec-path` or where `git.exe` sits; it runs `run:` strings and `ready.cmd` on Windows. `shell_env` sets its MSYS variables and appends its `usr\bin` to `PATH`, `shell_command_line` and `quote_msys` quote its arguments.
 
 ## Config example
 

@@ -106,7 +106,9 @@ fn reserved_ranges(dir: &Path) -> &'static [(u16, u16)] {
                 ])
                 .stdin(Stdio::null());
             match crate::run_bounded(command, Duration::from_secs(20)) {
-                Ok(output) if output.success() => ranges.extend(parse_ranges(&output.stdout)),
+                Ok(output) if output.success() => {
+                    ranges.extend(devlanes_ports_windows::parse(&output.stdout));
+                }
                 _ => return ranges,
             }
         }
@@ -115,21 +117,9 @@ fn reserved_ranges(dir: &Path) -> &'static [(u16, u16)] {
     })
 }
 
-/// The `start end` pairs of `netsh` output (or of the saved copy, which uses the
-/// same row format); headers and other lines do not start with two numbers.
-fn parse_ranges(text: &str) -> Vec<(u16, u16)> {
-    text.lines()
-        .filter_map(|line| {
-            let mut fields = line.split_whitespace();
-            let start = fields.next()?.parse().ok()?;
-            let end = fields.next()?.parse().ok()?;
-            Some((start, end))
-        })
-        .collect()
-}
-
 /// The ranges saved at `path` when it was written less than [`RANGES_FRESH`]
-/// ago; `None` when missing, stale or unreadable.
+/// ago; `None` when missing, stale or unreadable. The copy uses `netsh`'s row
+/// format, so the same parser reads it.
 fn read_saved(path: &Path) -> Option<Vec<(u16, u16)>> {
     let age = std::fs::metadata(path)
         .ok()?
@@ -140,7 +130,9 @@ fn read_saved(path: &Path) -> Option<Vec<(u16, u16)>> {
     if age >= RANGES_FRESH {
         return None;
     }
-    Some(parse_ranges(&std::fs::read_to_string(path).ok()?))
+    Some(devlanes_ports_windows::parse(
+        &std::fs::read_to_string(path).ok()?,
+    ))
 }
 
 /// Saves `ranges` at `path` through a file of this process renamed into place,
@@ -223,13 +215,15 @@ pub(crate) fn fixture_listeners(first: u16, last: u16) -> Vec<i32> {
 mod tests {
     use super::*;
 
-    /// Numeric rows count, with or without the administered-range marker;
-    /// headers and separators do not.
+    /// The saved copy's `start end` rows read back as written.
     #[test]
-    fn parses_reserved_ranges() {
-        let text = "\nProtocol tcp Port Exclusion Ranges\n\nStart Port    End Port\n\
-                    ----------    --------\n     27339       27438\n     50000       50059     *\n\n\
-                    * - Administered port exclusions.\n";
-        assert_eq!(parse_ranges(text), [(27339, 27438), (50000, 50059)]);
+    fn saved_ranges_round_trip() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("reserved-ranges.txt");
+        save(&path, &[(27339, 27438), (50000, 50059)]);
+        assert_eq!(
+            read_saved(&path),
+            Some(vec![(27339, 27438), (50000, 50059)])
+        );
     }
 }

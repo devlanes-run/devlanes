@@ -408,7 +408,7 @@ pub fn unsafe_directory(path: &Path) -> RpcError {
 /// junction), `owner` (another account's; `owner` is its SID),
 /// `not_a_directory`, `unreadable`, or `acl` when other accounts (`acl`, their
 /// SIDs) can reach an own directory the daemon could not tighten because it
-/// holds entries. Only `acl` has a `fix`, the two `icacls` steps.
+/// holds entries. Only `acl` has a `fix`, the three `icacls` steps.
 #[cfg(windows)]
 pub fn unsafe_directory(path: &Path) -> RpcError {
     let mut data = json!({
@@ -456,18 +456,12 @@ pub fn privacy_problem(path: &Path) -> std::io::Result<Option<Value>> {
     }))
 }
 
-/// The `icacls` steps that make an own directory private: drop its explicit
-/// grants (`/grant:r` only replaces this user's own), replace its access list
-/// with full access for this user only, then let everything inside inherit
-/// that instead of keeping its own grants. One recursive grant would leave the
-/// entries' explicit grants in place. `None` when this user's SID cannot be read.
+/// The `icacls` steps that make the own directory `path` private, as
+/// [`devlanes_pki::icacls_fix`] writes them; `None` when this user's SID
+/// cannot be read.
 #[cfg(windows)]
 fn icacls_fix(path: &Path) -> Option<String> {
-    let user = devlanes_sys_windows::token::current_user().ok()?;
-    let dir = path.display();
-    Some(format!(
-        r#"icacls "{dir}" /reset && icacls "{dir}" /inheritance:r /grant:r "*{user}:(OI)(CI)F" && icacls "{dir}\*" /reset /T /C"#
-    ))
+    devlanes_pki::icacls_fix(path, true)
 }
 
 #[async_trait]
@@ -1183,7 +1177,7 @@ mod tests {
         assert_eq!(
             error.data["fix"],
             format!(
-                r#"icacls "{dir}" /reset && icacls "{dir}" /inheritance:r /grant:r "*{user}:(OI)(CI)F" && icacls "{dir}\*" /reset /T /C"#,
+                r#"icacls "{dir}" /reset; icacls "{dir}" /inheritance:r /grant:r "*{user}:(OI)(CI)F"; icacls "{dir}\*" /reset /T /C"#,
                 dir = home.display()
             )
         );

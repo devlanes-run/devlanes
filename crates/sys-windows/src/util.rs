@@ -37,9 +37,15 @@ pub(crate) fn raw(handle: &impl AsRawHandle) -> HANDLE {
     handle.as_raw_handle()
 }
 
-/// An error for a failed `HRESULT`. HRESULTs are not Win32 error codes, so
-/// they never go through `io::Error::from_raw_os_error`.
+/// An error for a failed `HRESULT`. One that wraps a Win32 code
+/// (`HRESULT_FROM_WIN32`, facility 7: `0x8007xxxx`) becomes that code, so
+/// callers can still tell `NotFound` or `PermissionDenied`; any other HRESULT
+/// is not a Win32 code and never goes through `io::Error::from_raw_os_error`.
 pub(crate) fn hresult_error(result: HRESULT) -> io::Error {
+    let code = result.cast_unsigned();
+    if code & 0xFFFF_0000 == 0x8007_0000 {
+        return win32_error(code & 0xFFFF);
+    }
     io::Error::other(format!("HRESULT {result:#x}"))
 }
 
@@ -55,4 +61,20 @@ pub(crate) fn until_nul(field: &[u16]) -> &[u16] {
 /// The error `code` (a Win32 error) as an `io::Error`.
 pub(crate) fn win32_error(code: u32) -> io::Error {
     io::Error::from_raw_os_error(code.cast_signed())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Wrapped Win32 codes keep their kind; other HRESULTs stay opaque.
+    #[test]
+    fn hresults_of_win32_codes_keep_their_kind() {
+        let kind = |code: u32| hresult_error(code.cast_signed()).kind();
+        assert_eq!(kind(0x8007_0002), io::ErrorKind::NotFound);
+        assert_eq!(kind(0x8007_0005), io::ErrorKind::PermissionDenied);
+        let other = hresult_error(0x8009_2004_u32.cast_signed());
+        assert_eq!(other.raw_os_error(), None);
+        assert_eq!(other.to_string(), "HRESULT 0x80092004");
+    }
 }

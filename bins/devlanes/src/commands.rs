@@ -428,6 +428,26 @@ const DAEMON_EXIT_WAIT: Duration = Duration::from_secs(300);
 /// after stopping everything); without a pid, until its socket stops answering.
 async fn wait_for_daemon_exit(paths: &Paths, pid: Option<i32>) -> Result<(), RpcError> {
     let deadline = tokio::time::Instant::now() + DAEMON_EXIT_WAIT;
+    // The PID is pinned to the start time read now, while the old daemon still
+    // stops its units, so a process that reuses the PID later never counts as
+    // the daemon. Start times need only query access, which an elevated
+    // daemon grants too. The pipe is only the fallback when that fails: it
+    // closes when the shutdown begins, before the lock is released.
+    #[cfg(windows)]
+    let identity = match pid.and_then(|pid| u32::try_from(pid).ok()) {
+        Some(pid) => {
+            let started =
+                tokio::task::spawn_blocking(move || devlanes_sys_windows::proc::start_time(pid))
+                    .await;
+            match started {
+                Ok(Ok(Some(started))) => Some((pid, started)),
+                // No process has the PID any more.
+                Ok(Ok(None)) => return Ok(()),
+                Ok(Err(_)) | Err(_) => None,
+            }
+        }
+        None => None,
+    };
     loop {
         #[cfg(unix)]
         let gone = match pid.and_then(rustix::process::Pid::from_raw) {
@@ -437,20 +457,14 @@ async fn wait_for_daemon_exit(paths: &Paths, pid: Option<i32>) -> Result<(), Rpc
                 .is_err_and(|error| error.is_not_running()),
         };
         #[cfg(windows)]
-        let gone = match pid.and_then(|pid| u32::try_from(pid).ok()) {
-            Some(pid) => {
-                let waited = tokio::task::spawn_blocking(move || {
-                    devlanes_sys_windows::proc::wait_exit(pid, Duration::from_millis(100))
+        let gone = match identity {
+            Some((pid, started)) => {
+                let alive = tokio::task::spawn_blocking(move || {
+                    devlanes_sys_windows::proc::matches(pid, started)
                 })
                 .await;
-                match waited {
-                    Ok(Ok(gone)) => gone,
-                    // An elevated daemon may refuse to be waited on; its pipe
-                    // still tells when it is gone.
-                    _ => Client::connect_any(paths)
-                        .await
-                        .is_err_and(|error| error.is_not_running()),
-                }
+                // A failed query keeps waiting; the deadline still bounds it.
+                matches!(alive, Ok(Ok(false)))
             }
             None => Client::connect_any(paths)
                 .await

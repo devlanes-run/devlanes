@@ -1,6 +1,16 @@
 //! The Windows console for prompts and `attach`: where Unix opens `/dev/tty`,
 //! switches termios modes and listens for SIGWINCH, Windows reads `CONIN$`
 //! with console modes and polls the window size.
+//!
+//! ```no_run
+//! let answer = devlanes_console_windows::read_tty("Remove lane 2? [y/N]", "confirm");
+//! let confirmed = answer.is_some_and(|line| line.trim().eq_ignore_ascii_case("y"));
+//! # let _ = confirmed;
+//! ```
+
+// Unix reads `/dev/tty` with termios in the binary itself.
+#![cfg(windows)]
+#![deny(unsafe_code)]
 
 use std::io;
 
@@ -309,6 +319,13 @@ impl Resizes {
                 return Some(());
             }
         }
+    }
+}
+
+impl Default for Resizes {
+    /// Same as [`Resizes::new`].
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -329,7 +329,7 @@ mod tests {
         assert!(
             full["fix"]
                 .as_str()
-                .is_some_and(|fix| fix.starts_with("icacls ")),
+                .is_some_and(|fix| fix.starts_with("icacls ") && !fix.contains("&&")),
             "{full}"
         );
         let private = temp.path().join("p");

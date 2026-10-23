@@ -21,6 +21,7 @@ use windows_sys::Win32::Foundation::{
     ERROR_NOT_FOUND, ERROR_OPERATION_ABORTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
     SetLastError,
 };
+use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_UNKNOWN, GetFileType};
 use windows_sys::Win32::System::Console::{
     self as win, AttachConsole, CTRL_BREAK_EVENT, CTRL_C_EVENT, FreeConsole,
     GenerateConsoleCtrlEvent, GetConsoleCP, GetConsoleMode, GetConsoleProcessList,
@@ -276,6 +277,44 @@ pub fn alloc_console(mode: AllocMode) -> io::Result<Allocated> {
     }
 }
 
+/// Gives this process a console without a window ([`AllocMode::NoWindow`])
+/// when it has none, keeping the standard handles its parent passed. A
+/// program started without a console but with redirected streams (pipes or
+/// `NUL` from a detached parent) keeps using them: `AllocConsole` is
+/// documented to point every standard handle at the new console, so the
+/// ones that were valid before are put back (24H2 was seen keeping pipes
+/// anyway). Console programs it starts share that console, so none of them
+/// opens a window. A process with a console keeps it and its handles.
+pub fn alloc_hidden_console() -> io::Result<Allocated> {
+    if has_console() {
+        return Ok(Allocated::Existing);
+    }
+    let slots = [STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE];
+    // SAFETY: reads the standard handles without taking ownership.
+    let passed = slots.map(|slot| unsafe { GetStdHandle(slot) });
+    let allocated = alloc_console(AllocMode::NoWindow)?;
+    for (slot, handle) in slots.into_iter().zip(passed) {
+        // SAFETY: the slot gets back the value it held before the allocation;
+        // the standard handle table keeps owning it.
+        if usable(handle) && unsafe { SetStdHandle(slot, handle) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(allocated)
+}
+
+/// Whether `handle` names an open file, pipe or character device (`NUL`),
+/// so it is worth keeping as a standard handle; null, `INVALID_HANDLE_VALUE`
+/// and values that name nothing are not.
+fn usable(handle: HANDLE) -> bool {
+    if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+        return false;
+    }
+    // SAFETY: only queries the handle; a value that names nothing gives
+    // FILE_TYPE_UNKNOWN.
+    (unsafe { GetFileType(handle) }) != FILE_TYPE_UNKNOWN
+}
+
 /// Whether this process is attached to a console.
 pub fn has_console() -> bool {
     // SAFETY: plain query; it returns 0 without a console.
@@ -456,13 +495,21 @@ pub fn keyboard() -> Keyboard {
     {
         return Keyboard::Mintty;
     }
+    if has_window() {
+        Keyboard::Console
+    } else {
+        Keyboard::Unreachable
+    }
+}
+
+/// Whether this process's console has a window, its own or a pseudo
+/// console's (Windows Terminal, VS Code): someone may type Ctrl-C into it.
+/// False without a console and for one created without a window
+/// (`CREATE_NO_WINDOW`, or [`AllocMode::NoWindow`]).
+pub fn has_window() -> bool {
     // SAFETY: no arguments; returns null without a console or for one created
     // without a window.
-    if unsafe { GetConsoleWindow() }.is_null() {
-        Keyboard::Unreachable
-    } else {
-        Keyboard::Console
-    }
+    !unsafe { GetConsoleWindow() }.is_null()
 }
 
 /// Points standard output at `NUL` and closes the original handle, so the

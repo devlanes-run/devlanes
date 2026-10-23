@@ -134,7 +134,7 @@ hostnames:
 devlanes certs trust --resolver
 ```
 
-adds a Name Resolution Policy Table (NRPT) rule, `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\devlanes-test`, that sends `.test` lookups to the daemon's DNS server on `127.53.0.1:53`. Windows asks for administrator approval once, and the rule applies at once, with no restart. `devlanes certs untrust --resolver` removes every devlanes rule. Because the approval prompt needs your desktop, agents, CI and SSH sessions get `terminal_required`. When Group Policy sets NRPT rules, Windows ignores local ones, so `--resolver` refuses and `doctor` says why; it also refuses when another program's rule covers the TLD.
+adds a Name Resolution Policy Table (NRPT) rule, `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\devlanes-test`, that sends `.test` lookups to the daemon's DNS server on `127.53.0.1:53`. Windows asks for administrator approval once, and the rule applies at once, with no restart. `devlanes certs untrust --resolver` removes every devlanes rule. Because the approval prompt needs your desktop, a non-interactive session such as an agent, CI or SSH gets `terminal_required`, unless it already runs elevated. When Group Policy sets NRPT rules, Windows ignores local ones, so `--resolver` refuses and `doctor` says why; it also refuses when another program's rule covers the TLD.
 
 ## Starting at logon
 

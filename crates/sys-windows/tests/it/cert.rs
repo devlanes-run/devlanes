@@ -51,7 +51,7 @@ fn scratch_store_round_trip() -> io::Result<()> {
     assert_eq!(other.len(), 1);
     assert!(logical.contains(&found[0])?);
 
-    let listed = logical.certificates()?;
+    let listed = logical.certificates()?.certificates;
     assert_eq!(listed.len(), 2);
     let entry = listed
         .iter()
@@ -90,7 +90,7 @@ fn listing_reports_usage_and_validity() -> io::Result<()> {
     for der in [&client_only, &server, &expired] {
         store.add_der(der).expect("add");
     }
-    let listed = store.certificates()?;
+    let listed = store.certificates()?.certificates;
     let facts = |der: &Vec<u8>| {
         let entry = listed
             .iter()
@@ -101,6 +101,45 @@ fn listing_reports_usage_and_validity() -> io::Result<()> {
     assert_eq!(facts(&client_only), (false, true));
     assert_eq!(facts(&server), (true, true));
     assert_eq!(facts(&expired), (true, false));
+    Ok(())
+}
+
+/// A certificate whose usage extension does not decode never fails the
+/// listing: the rest of the store is listed, and it is listed too, read or
+/// unreadable (crypt32 tolerates this one today).
+#[test]
+fn a_malformed_usage_does_not_fail_the_listing() -> io::Result<()> {
+    let scratch = ScratchStore::new();
+    let store = CertStore::open(scratch.name(), View::UserRegistry, Access::Write)?;
+    let good = certificate("good");
+    // Extended key usage (2.5.29.37) whose sequence ends inside its first
+    // object identifier.
+    let broken = certificate_with("broken usage", |params| {
+        params
+            .custom_extensions
+            .push(rcgen::CustomExtension::from_oid_content(
+                &[2, 5, 29, 37],
+                vec![0x30, 0x03, 0x06, 0x01],
+            ));
+    });
+    for der in [&good, &broken] {
+        store.add_der(der).expect("add");
+    }
+    let listing = store.certificates()?;
+    assert!(
+        listing.certificates.iter().any(|entry| entry.der == good),
+        "{listing:?}"
+    );
+    let mut every: Vec<&[u8]> = listing
+        .certificates
+        .iter()
+        .map(|entry| entry.der.as_slice())
+        .chain(listing.unreadable.iter().map(|entry| entry.der.as_slice()))
+        .collect();
+    every.sort_unstable();
+    let mut added = [good.as_slice(), broken.as_slice()];
+    added.sort_unstable();
+    assert_eq!(every, added);
     Ok(())
 }
 
@@ -166,6 +205,7 @@ fn user_root_includes_machine_roots() -> io::Result<()> {
     let thumbprints = |store: &CertStore| -> io::Result<Vec<Thumbprint>> {
         Ok(store
             .certificates()?
+            .certificates
             .into_iter()
             .map(|entry| entry.thumbprint)
             .collect())

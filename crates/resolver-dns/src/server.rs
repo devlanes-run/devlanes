@@ -85,6 +85,24 @@ pub struct DnsServer {
     zone: Arc<Zone>,
 }
 
+/// Whether binding the TCP twin of an ephemeral UDP port failed in a way
+/// another port fixes.
+#[cfg(unix)]
+fn retry_twin(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::AddrInUse
+}
+
+/// Whether binding the TCP twin of an ephemeral UDP port failed in a way
+/// another port fixes. Windows hands out UDP ports without regard to the TCP
+/// ranges Hyper-V and WSL reserve, where TCP binds fail with access denied.
+#[cfg(windows)]
+fn retry_twin(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+    )
+}
+
 impl DnsServer {
     /// Binds UDP and TCP on `listen`.
     ///
@@ -107,8 +125,9 @@ impl DnsServer {
             let addr = udp.local_addr().map_err(|e| bind_error(listen, e))?;
             match TcpListener::bind(addr).await {
                 Ok(tcp) => return Ok(Self::new(udp, tcp, zone)),
-                // The UDP port's TCP twin is taken; another ephemeral port will do.
-                Err(error) if error.kind() == io::ErrorKind::AddrInUse => last = error,
+                // The UDP port's TCP twin is taken, or on Windows inside a
+                // reserved TCP range (WSAEACCES); another ephemeral port will do.
+                Err(error) if retry_twin(&error) => last = error,
                 Err(error) => return Err(bind_error(addr, error)),
             }
         }

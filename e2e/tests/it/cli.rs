@@ -321,7 +321,6 @@ impl FakeDaemon {
     /// Serves the pipe the client derives from the lab's home; `daemon status`
     /// reports its name without starting a daemon.
     fn serve(lab: &Lab, protocol: u32, managed_processes: usize) -> Result<Self> {
-        use tokio::net::windows::named_pipe::ServerOptions;
         let status = lab.devlanes(lab.repo(), &["daemon", "status", "--json"])?;
         let name = crate::need(status.json()?["socket"].as_str(), "pipe name")?.to_owned();
         let hello = serde_json::json!({
@@ -339,13 +338,15 @@ impl FakeDaemon {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
+        // The daemon's descriptor, so the pipe is owned by this user even on an
+        // elevated runner, where a default one would be owned by Administrators
+        // and fail the client's owner check.
+        let pipes = devlanes_sys_windows::pipe::PipeFactory::current_user(&name)?;
         // The first instance exists before this returns, so the client never finds
         // the pipe missing and spawns a real daemon.
         let first = {
             let _context = runtime.enter();
-            ServerOptions::new()
-                .first_pipe_instance(true)
-                .create(&name)?
+            pipes.create(true)?
         };
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
@@ -361,7 +362,7 @@ impl FakeDaemon {
                     };
                     // The next instance exists before this one goes away, for the
                     // same reason as the first.
-                    let Ok(next) = ServerOptions::new().create(&name) else {
+                    let Ok(next) = pipes.create(false) else {
                         break;
                     };
                     if connected.is_ok() {

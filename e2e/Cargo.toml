@@ -19,8 +19,10 @@ thiserror.workspace = true
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }
 
-# Process table, verified termination and listeners; Unix uses `ps`, `lsof` and signals.
+# Process table, verified termination, listeners and reserved port ranges; Unix uses
+# `ps`, `lsof` and signals.
 [target.'cfg(windows)'.dependencies]
+devlanes-ports-windows = { path = "../crates/ports-windows" }
 devlanes-sys = { path = "../crates/sys" }
 devlanes-sys-windows = { path = "../crates/sys-windows" }
 

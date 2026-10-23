@@ -86,7 +86,11 @@ pub struct ConsoleHelper {
 }
 
 impl ConsoleHelper {
-    /// This executable as its own helper: `<exe> __console-ctrl`.
+    /// This executable as its own helper: `<exe> __console-ctrl`. The daemon
+    /// reads the path once at start, so after `install.ps1` swaps the binary
+    /// under a running daemon, the newer devlanes at that path is the helper.
+    /// The `__console-ctrl <pid> <c|break>` form and the exit codes must
+    /// therefore stay readable by older and newer daemons alike.
     pub fn current_exe() -> std::io::Result<Self> {
         Ok(Self {
             program: std::env::current_exe()?,

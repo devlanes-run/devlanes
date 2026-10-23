@@ -100,6 +100,24 @@ pub struct StoreCertificate {
     pub time_valid: bool,
 }
 
+/// What [`CertStore::certificates`] found.
+#[derive(Debug, Default)]
+pub struct Listing {
+    /// The certificates whose facts were read.
+    pub certificates: Vec<StoreCertificate>,
+    /// The certificates whose facts could not be read.
+    pub unreadable: Vec<Unreadable>,
+}
+
+/// A certificate of a store whose thumbprint or usage could not be read.
+#[derive(Debug)]
+pub struct Unreadable {
+    /// The DER encoding, which a store always has.
+    pub der: Vec<u8>,
+    /// Why its facts could not be read.
+    pub error: io::Error,
+}
+
 /// An open certificate store, closed on drop.
 #[derive(Debug)]
 pub struct CertStore {
@@ -208,25 +226,27 @@ impl CertStore {
         Ok(found)
     }
 
-    /// Every certificate in the store.
-    pub fn certificates(&self) -> io::Result<Vec<StoreCertificate>> {
-        let mut certificates = Vec::new();
+    /// Every certificate in the store. One whose facts cannot be read (a
+    /// malformed usage extension, say) is listed in
+    /// [`Listing::unreadable`] instead of failing the whole listing; only a
+    /// failed enumeration is an error.
+    pub fn certificates(&self) -> io::Result<Listing> {
+        let mut listing = Listing::default();
         let mut previous: *const CERT_CONTEXT = ptr::null();
         loop {
             // SAFETY: the store is open; `previous` is null or the context the
             // last call returned, which this call frees.
             let next = unsafe { CertEnumCertificatesInStore(self.handle, previous) };
             if next.is_null() {
-                return end_of_search().map(|()| certificates);
+                return end_of_search().map(|()| listing);
             }
             previous = next;
             match describe(next) {
-                Ok(certificate) => certificates.push(certificate),
-                Err(error) => {
-                    // SAFETY: `next` is live and was not handed to another call.
-                    unsafe { CertFreeCertificateContext(next) };
-                    return Err(error);
-                }
+                Ok(certificate) => listing.certificates.push(certificate),
+                Err(error) => listing.unreadable.push(Unreadable {
+                    der: encoded(next),
+                    error,
+                }),
             }
         }
     }
@@ -295,22 +315,25 @@ impl Drop for CertStore {
 
 /// Copies `context`'s encoding and the facts [`StoreCertificate`] holds.
 fn describe(context: *const CERT_CONTEXT) -> io::Result<StoreCertificate> {
-    // SAFETY: `context` is a live context, so its encoded bytes are readable
-    // for `cbCertEncoded` bytes and `pCertInfo` points at its parsed fields.
-    let (der, time_valid) = unsafe {
-        let context = &*context;
-        let der = std::slice::from_raw_parts(context.pbCertEncoded, context.cbCertEncoded as usize)
-            .to_vec();
-        // A null time means now.
-        let valid = CertVerifyTimeValidity(ptr::null(), context.pCertInfo) == 0;
-        (der, valid)
-    };
+    // SAFETY: `context` is a live context, so `pCertInfo` points at its
+    // parsed fields; a null time means now.
+    let time_valid = unsafe { CertVerifyTimeValidity(ptr::null(), (*context).pCertInfo) } == 0;
     Ok(StoreCertificate {
-        der,
+        der: encoded(context),
         thumbprint: sha1_property(context)?,
         server_auth: server_auth(context)?,
         time_valid,
     })
+}
+
+/// A copy of `context`'s DER encoding.
+fn encoded(context: *const CERT_CONTEXT) -> Vec<u8> {
+    // SAFETY: `context` is a live context, so its encoded bytes are readable
+    // for `cbCertEncoded` bytes.
+    unsafe {
+        let context = &*context;
+        std::slice::from_raw_parts(context.pbCertEncoded, context.cbCertEncoded as usize).to_vec()
+    }
 }
 
 /// Whether `context` may be used for server authentication, read the way
@@ -390,7 +413,8 @@ fn last_error() -> io::Error {
 }
 
 /// `code` as an error: crypt32 sets HRESULTs (high bit set) as well as Win32
-/// codes, and only the latter are OS error numbers.
+/// codes. An HRESULT that wraps a Win32 code (`0x8007xxxx`) becomes that code,
+/// so a missing store still reads as `NotFound`.
 fn error_from(code: u32) -> io::Error {
     if code & 0x8000_0000 != 0 {
         hresult_error(code.cast_signed())

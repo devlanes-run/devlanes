@@ -43,10 +43,11 @@ devlanes-tunnel = { path = "../../crates/tunnel" }
 rustix = { version = "1", features = ["process", "termios"] }
 
 [target.'cfg(windows)'.dependencies]
-devlanes-git = { path = "../../crates/git" }
+devlanes-console-windows = { path = "../../crates/console-windows" }
 devlanes-logon-windows = { path = "../../crates/logon-windows" }
 devlanes-resolver-nrpt = { path = "../../crates/resolver-nrpt" }
 devlanes-runner-windows = { path = "../../crates/runner-windows" }
+devlanes-shell-windows = { path = "../../crates/shell-windows" }
 devlanes-sys-windows = { path = "../../crates/sys-windows" }
 devlanes-trust-windows = { path = "../../crates/trust-windows" }
 

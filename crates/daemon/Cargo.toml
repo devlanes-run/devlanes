@@ -48,6 +48,8 @@ fs2 = "0.4"
 rustix = { version = "1", features = ["process", "fs", "stdio"] }
 
 [target.'cfg(windows)'.dependencies]
+devlanes-ports-windows = { path = "../ports-windows" }
+devlanes-shell-windows = { path = "../shell-windows" }
 devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]

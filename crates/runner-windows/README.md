@@ -9,7 +9,7 @@ use devlanes_core::{LaunchSpec, StopPolicy, TerminalSize, Unit};
 use devlanes_runner_windows::WindowsRunner;
 
 let unit = WindowsRunner::default()
-    .with_shell(devlanes_git::windows_shell().await)
+    .with_shell(devlanes_shell_windows::windows_shell().await)
     .spawn_unit(LaunchSpec {
         program: "/bin/sh".into(),
         args: vec!["-c".into(), "npm run dev".into()],

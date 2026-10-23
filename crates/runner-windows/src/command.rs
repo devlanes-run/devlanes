@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
-use devlanes_git::quote_msys;
+use devlanes_shell_windows::quote_msys;
 
 /// Extensions `CreateProcessW` can start, in the default `PATHEXT` order. Other
 /// `PATHEXT` entries (`.JS`, `.PS1`, ...) need a host program and are skipped.
@@ -144,7 +144,7 @@ fn resolve(
     }
     let extensions = extensions(env);
     let has_extension = runnable_extension(file_name(program));
-    if is_explicit(program) {
+    if devlanes_core::paths::names_a_path(program) {
         let path = from_cwd(cwd, program);
         return candidates(path.clone(), has_extension, &extensions)
             .find(|candidate| exists(candidate))
@@ -243,12 +243,6 @@ fn var<'a>(env: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
                 .map(|(_, value)| value)
         })
         .map(String::as_str)
-}
-
-/// Whether `program` names a file instead of a command looked up on `PATH`:
-/// either separator, or a drive prefix.
-fn is_explicit(program: &str) -> bool {
-    program.contains(['/', '\\']) || has_drive(program)
 }
 
 /// Whether `path` starts with a drive letter and colon.
@@ -481,7 +475,7 @@ mod tests {
     }
 
     #[test]
-    /// MSYS quoting (`devlanes_git::quote_msys`) applies to argv0 and every
+    /// MSYS quoting (`devlanes_shell_windows::quote_msys`) applies to argv0 and every
     /// argument of a shell unit.
     fn msys_quoting() {
         let sh = PathBuf::from(r"C:\Git\usr\bin\sh.exe");

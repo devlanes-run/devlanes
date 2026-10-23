@@ -3,6 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
+use devlanes_core::paths::names_a_path;
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
@@ -62,7 +63,7 @@ pub(crate) fn classify(attempt: &Attempt, error: &devlanes_core::Error) -> RpcEr
         data["cwd"] = json!(attempt.cwd);
         return RpcError::new("spawn_failed", data, 1);
     }
-    let explicit = is_explicit(&attempt.program);
+    let explicit = names_a_path(&attempt.program);
     let dirs: Vec<String> = if explicit {
         Vec::new()
     } else {
@@ -152,7 +153,7 @@ fn describe(data: &Value) -> String {
     let text = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or_default();
     let program = text("program");
     match text("reason") {
-        "not_found" if is_explicit(program) => format!("{program}: no such file"),
+        "not_found" if names_a_path(program) => format!("{program}: no such file"),
         "not_found" => {
             let dirs: Vec<&str> = data
                 .get("path_searched")
@@ -188,20 +189,6 @@ const PATH_SEPARATOR: &str = ":";
 /// What separates `PATH` entries.
 #[cfg(windows)]
 const PATH_SEPARATOR: &str = ";";
-
-/// Whether `program` names a file rather than a command looked up on `PATH`.
-#[cfg(unix)]
-fn is_explicit(program: &str) -> bool {
-    program.contains('/')
-}
-
-/// Whether `program` names a file rather than a command looked up on `PATH`:
-/// either separator, or a drive prefix (`C:tool`), as the runner decides.
-#[cfg(windows)]
-fn is_explicit(program: &str) -> bool {
-    program.contains(['/', '\\'])
-        || matches!(program.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic())
-}
 
 /// The non-empty entries of `path`.
 #[cfg(unix)]

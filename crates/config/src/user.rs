@@ -224,7 +224,7 @@ impl UserLanesConfig {
         let Some(dir) = self.data_dir.as_deref() else {
             return home.join(DEFAULT_DATA_DIR);
         };
-        match (below_home(dir), user_home()) {
+        match (below_home(dir), devlanes_core::paths::user_home()) {
             (Some(rest), Some(user_home)) => user_home.join(rest),
             _ => std::path::PathBuf::from(dir),
         }
@@ -252,19 +252,6 @@ fn below_home(dir: &str) -> Option<&str> {
 #[cfg(windows)]
 fn below_home(dir: &str) -> Option<&str> {
     dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\"))
-}
-
-/// The user's home that `~` stands for: `HOME`.
-#[cfg(unix)]
-fn user_home() -> Option<std::path::PathBuf> {
-    std::env::var_os("HOME").map(std::path::PathBuf::from)
-}
-
-/// The user's home that `~` stands for: the profile directory, since `HOME`
-/// is usually unset on Windows or a POSIX path set by Git Bash.
-#[cfg(windows)]
-fn user_home() -> Option<std::path::PathBuf> {
-    std::env::home_dir()
 }
 
 /// Release checks: the daemon reads the latest release's version once a day and
@@ -691,6 +678,12 @@ pub struct ProxyConfig {
     #[schemars(extend("examples" = [false,true]))]
     pub lan: bool,
 }
+
+/// The port the HTTPS proxy binds when [`ProxyConfig::https_port`] is taken or not allowed.
+pub const HTTPS_FALLBACK_PORT: u16 = 8443;
+
+/// The port the HTTP proxy binds when [`ProxyConfig::http_port`] is taken or not allowed.
+pub const HTTP_FALLBACK_PORT: u16 = 8080;
 
 impl Default for ProxyConfig {
     /// Prefer standard ports; runtime binding handles permission-related fallbacks.

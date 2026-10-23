@@ -4,8 +4,8 @@ use std::os::windows::io::AsHandle;
 use std::sync::mpsc;
 
 use devlanes_sys_windows::console::{
-    AllocMode, Allocated, Attached, CtrlEvent, Keyboard, alloc_console, console_processes,
-    keyboard, set_ctrl_c_ignored,
+    AllocMode, Allocated, Attached, CtrlEvent, Keyboard, alloc_console, alloc_hidden_console,
+    console_processes, has_window, keyboard, set_ctrl_c_ignored,
 };
 use devlanes_sys_windows::spawn::{
     self, CreationFlags, Environment, Spawn, Stdio, Stream, pipe, spawn,
@@ -199,6 +199,53 @@ fn alloc_console_gives_a_hidden_console() -> io::Result<()> {
             "{expected}: {output}"
         );
     }
+    Ok(())
+}
+
+/// Set in the process of [`alloc_hidden_entry`].
+const ALLOC_HIDDEN: &str = "DEVLANES_SYS_WINDOWS_TEST_ALLOC_HIDDEN";
+
+/// Not a test of its own: with [`ALLOC_HIDDEN`] set, this binary was started
+/// without a console and with stdout on a pipe. It gets a console without a
+/// window and says `kept` on stdout, or exits with the first failed check's
+/// number.
+#[test]
+fn alloc_hidden_entry() -> io::Result<()> {
+    if std::env::var_os(ALLOC_HIDDEN).is_none() {
+        return Ok(());
+    }
+    let checks = [
+        alloc_hidden_console().ok() == Some(Allocated::New),
+        !has_window(),
+        alloc_hidden_console().ok() == Some(Allocated::Existing),
+    ];
+    if let Some(failed) = checks.iter().position(|passed| !passed) {
+        std::process::exit(10 + i32::try_from(failed).unwrap_or(0));
+    }
+    let mut stdout = io::stdout();
+    writeln!(stdout, "kept")?;
+    stdout.flush()
+}
+
+/// A process started without a console and with stdout on a pipe, as from a
+/// detached parent, gets a console without a window and still writes to the
+/// pipe.
+#[test]
+fn alloc_hidden_console_keeps_redirected_streams() -> io::Result<()> {
+    let job = test_job()?;
+    let detached = CreationFlags {
+        detached_process: true,
+        ..CreationFlags::default()
+    };
+    let (child, output) = start(
+        "alloc_hidden_entry",
+        (ALLOC_HIDDEN, "1".into()),
+        &job,
+        detached,
+    )?;
+    let output = read_all(output)?;
+    assert_eq!(child.wait_timeout(PATIENCE)?, Some(0), "{output}");
+    assert!(output.lines().any(|line| line.trim() == "kept"), "{output}");
     Ok(())
 }
 

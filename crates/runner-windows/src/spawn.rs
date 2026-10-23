@@ -146,7 +146,7 @@ pub(crate) fn launch(
     let mut env = spec.env;
     let program = if through_shell {
         let shell = shell.ok_or(SpawnError::ShellMissing)?;
-        devlanes_git::shell_env(&mut env, shell);
+        devlanes_shell_windows::shell_env(&mut env, shell);
         shell.to_string_lossy().into_owned()
     } else {
         spec.program
@@ -259,7 +259,7 @@ pub(crate) fn launch(
 /// entries are dropped (a block cannot carry names starting with `=`), and
 /// names equal ignoring case keep the value of the one sorting last (Windows
 /// has one variable for both). Shell units get the shell's variables from
-/// [`devlanes_git::shell_env`] before this.
+/// [`devlanes_shell_windows::shell_env`] before this.
 pub(crate) fn child_env(env: BTreeMap<String, String>) -> BTreeMap<String, String> {
     let mut folded: BTreeMap<String, (String, String)> = BTreeMap::new();
     for (name, value) in env {
@@ -304,7 +304,7 @@ mod tests {
         );
         assert!(Environment::new(&native).is_ok());
         let mut shell = child_env(env);
-        devlanes_git::shell_env(&mut shell, Path::new(r"C:\Git\usr\bin\sh.exe"));
+        devlanes_shell_windows::shell_env(&mut shell, Path::new(r"C:\Git\usr\bin\sh.exe"));
         let shell = child_env(shell);
         assert_eq!(shell.get("MSYS_NO_PATHCONV").map(String::as_str), Some("1"));
         assert_eq!(

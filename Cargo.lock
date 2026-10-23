@@ -930,11 +930,11 @@ dependencies = [
  "devlanes-cli",
  "devlanes-client",
  "devlanes-config",
+ "devlanes-console-windows",
  "devlanes-core",
  "devlanes-daemon",
  "devlanes-env-direnv",
  "devlanes-env-mise",
- "devlanes-git",
  "devlanes-infra-compose",
  "devlanes-infra-docker",
  "devlanes-ipc",
@@ -968,6 +968,7 @@ dependencies = [
  "devlanes-runner-pty",
  "devlanes-runner-windows",
  "devlanes-secrets-fnox",
+ "devlanes-shell-windows",
  "devlanes-start-gate",
  "devlanes-state",
  "devlanes-sys",
@@ -1018,6 +1019,7 @@ name = "devlanes-client"
 version = "0.3.0"
 dependencies = [
  "bytes",
+ "devlanes-core",
  "devlanes-ipc",
  "devlanes-proto",
  "devlanes-sys-windows",
@@ -1059,6 +1061,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-console-windows"
+version = "0.3.0"
+dependencies = [
+ "crossterm",
+ "devlanes-sys-windows",
+ "tokio",
+]
+
+[[package]]
 name = "devlanes-core"
 version = "0.3.0"
 dependencies = [
@@ -1086,12 +1097,14 @@ dependencies = [
  "devlanes-ipc",
  "devlanes-logs",
  "devlanes-metrics",
+ "devlanes-ports-windows",
  "devlanes-proto",
  "devlanes-proxy",
  "devlanes-resolve",
  "devlanes-resolver-dns",
  "devlanes-resolver-hosts",
  "devlanes-runner-pty",
+ "devlanes-shell-windows",
  "devlanes-start-gate",
  "devlanes-state",
  "devlanes-sync",
@@ -1122,6 +1135,7 @@ dependencies = [
 name = "devlanes-e2e"
 version = "0.3.0"
 dependencies = [
+ "devlanes-ports-windows",
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-testing",
@@ -1198,6 +1212,7 @@ name = "devlanes-infra-docker"
 version = "0.3.0"
 dependencies = [
  "bollard",
+ "devlanes-core",
  "futures-util",
  "serde",
  "serde_json",
@@ -1376,6 +1391,14 @@ dependencies = [
  "async-trait",
  "devlanes-core",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "devlanes-ports-windows"
+version = "0.3.0"
+dependencies = [
+ "devlanes-sys-windows",
  "tokio",
 ]
 
@@ -1630,7 +1653,7 @@ dependencies = [
  "async-trait",
  "bytes",
  "devlanes-core",
- "devlanes-git",
+ "devlanes-shell-windows",
  "devlanes-sys",
  "devlanes-sys-windows",
  "tempfile",
@@ -1649,6 +1672,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "devlanes-shell-windows"
+version = "0.3.0"
+dependencies = [
  "tokio",
 ]
 
