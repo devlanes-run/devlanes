@@ -45,7 +45,7 @@ fn request(action: Action) -> devlanes_proto::Request {
         | Action::RpcThenOfferStart(r)
         | Action::Attach(r)
         | Action::Open(r)
-        | Action::ExportEnv(r)
+        | Action::ExportEnv { request: r, .. }
         | Action::Shell(r) => r,
         _ => panic!("expected request action"),
     }
@@ -764,22 +764,96 @@ fn shell_exports_and_hints_are_injection_safe() {
         ("EMPTY".into(), "".into()),
         ("MESSAGE".into(), "it's $(touch /bad)".into()),
     ]);
-    insta::assert_snapshot!(export_environment(&values).script, @r#"
+    insta::assert_snapshot!(export_environment(&values, ExportShell::Posix).script, @r#"
     export EMPTY=''
     export MESSAGE='it'"'"'s $(touch /bad)'
     "#);
     // A name a POSIX shell cannot take is skipped, the rest still exported.
-    let exported = export_environment(&BTreeMap::from([
-        ("X;bad".into(), "y".into()),
-        ("NEXT-PUBLIC".into(), "z".into()),
-        ("OK".into(), "1".into()),
-    ]));
+    let exported = export_environment(
+        &BTreeMap::from([
+            ("X;bad".into(), "y".into()),
+            ("NEXT-PUBLIC".into(), "z".into()),
+            ("OK".into(), "1".into()),
+        ]),
+        ExportShell::Posix,
+    );
     assert_eq!(exported.script, "export OK=1\n");
     assert_eq!(exported.skipped, ["NEXT-PUBLIC", "X;bad"]);
     assert_eq!(
         Hint::logs("acme@2", "api-*", 200).0,
         "devlanes logs 'acme@2:api-*' --tail 200"
     );
+}
+
+#[test]
+fn powershell_exports_are_ascii_literals_or_base64() {
+    let values = BTreeMap::from([
+        ("EMPTY".into(), "".into()),
+        ("QUOTES".into(), "it's ''$(Write-Output bad)'' `n".into()),
+        ("PORT".into(), "3000".into()),
+        // Printable ASCII only: control characters and anything else go to Base64.
+        ("LINES".into(), "a\nb".into()),
+        ("TAB".into(), "a\tb".into()),
+        ("SMART".into(), "a\u{2019}; calc".into()),
+        ("JAPAN".into(), "日本".into()),
+        // Names `$env:NAME` cannot spell go through .NET.
+        ("NEXT-PUBLIC".into(), "z".into()),
+        ("1ST".into(), "x".into()),
+        ("A}B".into(), "x".into()),
+        ("CAFÉ".into(), "x".into()),
+        // Names and values Windows cannot hold are skipped.
+        ("A=B".into(), "x".into()),
+        ("NUL".into(), "a\0b".into()),
+    ]);
+    let exported = export_environment(&values, ExportShell::Pwsh);
+    insta::assert_snapshot!(exported.script, @r"
+    [Environment]::SetEnvironmentVariable('1ST', 'x')
+    [Environment]::SetEnvironmentVariable('A}B', 'x')
+    [Environment]::SetEnvironmentVariable([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Q0FGw4k=')), 'x')
+    $env:EMPTY = ''
+    $env:JAPAN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5pel5pys'))
+    $env:LINES = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('YQpi'))
+    [Environment]::SetEnvironmentVariable('NEXT-PUBLIC', 'z')
+    $env:PORT = '3000'
+    $env:QUOTES = 'it''s ''''$(Write-Output bad)'''' `n'
+    $env:SMART = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('YeKAmTsgY2FsYw=='))
+    $env:TAB = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('YQli'))
+    ");
+    assert!(exported.script.is_ascii());
+    assert_eq!(exported.skipped, ["A=B", "NUL"]);
+    // POSIX still skips every name `export` rejects.
+    assert_eq!(
+        export_environment(&values, ExportShell::Posix).skipped,
+        ["1ST", "A=B", "A}B", "CAFÉ", "NEXT-PUBLIC", "NUL"]
+    );
+}
+
+#[test]
+fn env_export_takes_a_shell_defaulting_to_posix() {
+    for (args, expected) in [
+        (
+            &["devlanes", "env", "export", "api"][..],
+            ExportShell::Posix,
+        ),
+        (
+            &["devlanes", "env", "export", "api", "--shell", "posix"][..],
+            ExportShell::Posix,
+        ),
+        (
+            &["devlanes", "env", "export", "--shell", "pwsh"][..],
+            ExportShell::Pwsh,
+        ),
+    ] {
+        let cli = Cli::try_parse_from(args).expect("parses");
+        match action(&cli, &runtime(&cli, OutputMode::Plain)) {
+            Action::ExportEnv { request, shell } => {
+                assert_eq!(shell, expected, "{args:?}");
+                assert_eq!(request.method, Method::Env);
+            }
+            _ => panic!("expected an env export action for {args:?}"),
+        }
+    }
+    assert!(Cli::try_parse_from(["devlanes", "env", "export", "--shell", "fish"]).is_err());
 }
 
 #[test]
@@ -1342,6 +1416,8 @@ mod codes;
 mod diagnostics;
 mod help;
 mod progress;
+#[cfg(windows)]
+mod pwsh_export;
 mod reference_docs;
 mod render;
 mod start_ui;
