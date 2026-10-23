@@ -2,6 +2,7 @@
 //! Windows in place of `/bin/sh`, and how it is started.
 //!
 //! ```no_run
+//! # #[cfg(windows)]
 //! # async fn demo() {
 //! use std::collections::BTreeMap;
 //!
