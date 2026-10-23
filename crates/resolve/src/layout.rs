@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use serde_json::{Value, json};
 
 use crate::{
-    LaneFacts, LaneLayout, ResolveError, ResolveInput, RouteSpec, ServiceLayout,
+    LANE_DATA_ENV, LaneFacts, LaneLayout, ResolveError, ResolveInput, RouteSpec, ServiceLayout,
     model::services_namespace,
     ports::{
         DEFAULT_PORT, PortOverride, port_override, port_unit, service_port_names, static_replicas,
@@ -94,6 +94,7 @@ fn base_namespaces(project: &str, facts: &LaneFacts, port: Option<u16>) -> (Valu
         "name": facts.name,
         "label": facts.label,
         "path": facts.path.display().to_string(),
+        "data_path": facts.data_path.display().to_string(),
         "domain": default_domain(project, facts.index),
     });
     if let (Some(port), Some(map)) = (port, lane.as_object_mut()) {
@@ -294,6 +295,10 @@ pub(crate) fn build<E: Extensions>(
         ("DEVLANES_PROJECT".to_owned(), config.project.clone()),
         ("DEVLANES_LANE".to_owned(), facts.index.to_string()),
         ("DEVLANES_LANE_NAME".to_owned(), facts.name.clone()),
+        (
+            LANE_DATA_ENV.to_owned(),
+            facts.data_path.display().to_string(),
+        ),
     ]);
     // Services without hosts get their internal URL so tests always find a base URL.
     for layout in services.values().filter(|s| s.replica == 1) {

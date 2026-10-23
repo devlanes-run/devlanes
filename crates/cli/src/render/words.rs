@@ -804,7 +804,15 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         "launch_check_failed" => (with_message("the start was refused".into()), None),
         "prepared_file_outside_lane" => (
             format!(
-                "a prepared file would be written outside the lane's worktree: {}",
+                "a prepared file would be written outside the lane's worktree and data folder: {}",
+                field(data, "path")
+            ),
+            None,
+        ),
+        "lane_data_unavailable" => (
+            format!(
+                "{} ({}); check its permissions or set lanes.data_dir in config.yaml",
+                message.unwrap_or_else(|| "cannot create the lane data folder".into()),
                 field(data, "path")
             ),
             None,

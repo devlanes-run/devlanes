@@ -141,6 +141,7 @@ mod tests {
             lane_index: 1,
             lane_name: "lane1",
             lane_path: Path::new("/lanes/acme-1"),
+            lane_data_path: Path::new("/data/acme/2"),
             primary_path: Path::new("/lanes/acme"),
             platform: Some("node"),
             preset,

@@ -20,6 +20,9 @@ use crate::{
     registry::{lane_context, read_dotenv, store_error},
 };
 
+/// Folder under the lane's data folder that holds the generated Compose override.
+pub(crate) const COMPOSE_DIR: &str = "compose";
+
 /// Shapes resolution failures as machine codes with data.
 pub(crate) fn resolve_error(error: &ResolveError) -> RpcError {
     let (code, data, exit) = match error {
@@ -208,6 +211,8 @@ impl Inner {
             overrides.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         let facts = self.facts(project, lane)?;
+        // Every launch (service, task, hook, `exec`) is planned here, and may write to it.
+        self.ensure_lane_data(project, lane).await?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let dotenv = read_dotenv(lane_dir, primary_dir).await;
         let lanes_main = if index == Some(0) {
@@ -307,6 +312,8 @@ impl Inner {
             )
         };
         let facts = self.facts(project, lane)?;
+        // Before infra: Docker creates a missing bind-mount source itself (as root on Linux).
+        self.ensure_lane_data(project, lane).await?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let dotenv = read_dotenv(lane_dir.clone(), primary_dir.clone()).await;
         let client: EnvMap = env.map(|e| (*e).clone()).unwrap_or_default();
@@ -465,12 +472,7 @@ impl Inner {
             block: (allocation.block.start, allocation.block.size),
             shared_block: shared.map(|s| (s.block.start, s.block.size)),
             ports,
-            state_dir: self
-                .opts
-                .home
-                .join("infra")
-                .join(project.name())
-                .join(format!("lane{index}")),
+            state_dir: facts.data_path.join(COMPOSE_DIR),
         })
     }
 }

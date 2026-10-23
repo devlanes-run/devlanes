@@ -97,7 +97,7 @@ Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. Undefined names
 | Namespace | Contents |
 | --- | --- |
 | `project` | `name`, `primary_path` (the primary worktree, for files only it has) |
-| `lane` | `index`, `name`, `label`, `path`, `domain`, `port` (block start), plus `lanes.vars` |
+| `lane` | `index`, `name`, `label`, `path`, `data_path` (the lane's own folder outside the worktree), `domain`, `port` (block start), plus `lanes.vars` |
 | `self`, `services.<name>` | `name`, `port`, `ports.<name>`, `url`, `public_url`, `hosts` |
 | `infra.<container>` | `port` (primary published host port), `ports.<name or container port>` |
 | `env` | the shell that ran devlanes, then fnox secrets, then the lane's `.env` |
@@ -105,7 +105,7 @@ Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. Undefined names
 | `lanes.main.services.<name>` | services of lane 0 |
 | `projects.<project>.services.<name>` | services of another devlanes project |
 
-Layers, lowest first: the client's environment, contributors (mise, direnv, Node, Python), secrets, devlanes' variables (`PORT`, `HOST`, `DEVLANES_PROJECT`, `DEVLANES_LANE`, `DEVLANES_SERVICE`, `DEVLANES_PUBLIC_URL`), `global_env`, the service's `env`, the profile's `env`, `--env` on the command line.
+Layers, lowest first: the client's environment, contributors (mise, direnv, Node, Python), secrets, devlanes' variables (`PORT`, `HOST`, `DEVLANES_PROJECT`, `DEVLANES_LANE`, `DEVLANES_LANE_DATA`, `DEVLANES_SERVICE`, `DEVLANES_PUBLIC_URL`), `global_env`, the service's `env`, the profile's `env`, `--env` on the command line.
 
 `.env` is never injected into processes; it only feeds `${{ env.X }}`. Name what a process needs (`DB_PASSWORD: ${{ env.DB_PASSWORD }}`) or let the app load its own dotenv. mise `[env]` and an allowed `.envrc` are applied automatically, so do not copy them. Secrets belong in fnox (`fnox: { profile: dev }`, unlocked with `devlanes secrets unlock`), never as literals.
 
@@ -120,6 +120,8 @@ lanes:
     db_name: acme_${{ lane.name }}
     redis_db: ${{ lane.index }}
 ```
+
+`lane.data_path` (also `DEVLANES_LANE_DATA`) is a folder only this lane uses, at `~/.devlanes/data/<project>/<lane id>`: devlanes creates it with the lane and `lane clean` deletes it. Put anything a lane writes while it runs there (SQLite files, `wrangler dev --persist-to`, generated configs, bind mounts), never at a fixed path in the worktree: several lanes can run from one folder (`devlanes lane new --name`) and would overwrite each other's files. Leave its `wrangler-registry`, `tauri` and `compose` folders to devlanes.
 
 `vars` are per-lane values read as `lane.<name>`: database names, vhosts, buckets, Redis DB numbers. A var named `domain` replaces the default domain and `port` fixes the block start; set them only when the default is wrong. `new_worktrees` (`register`, `setup`, `start`) and `removed_worktrees` (`stop`, `clean`) default to `register` and `stop`; leave them out unless changing them.
 
@@ -225,10 +227,10 @@ Templates resolve after local overrides. Mappings (`env`, `ready`, `stop`, prese
 | --- | --- | --- |
 | `vite` | `--port <port> --strictPort --host 127.0.0.1` | `vite: { args }` |
 | `next` | `--port <port> --hostname 127.0.0.1` | `next: { args }` |
-| `wrangler` | `--port`, `--inspector-port` (a named `inspector` port), `--var` per var, a per-lane `WRANGLER_REGISTRY_PATH` | `wrangler: { vars, args, isolate_registry }` |
-| `tauri` | a per-lane, per-replica identifier and dev URL | `tauri: { identifier, dev_url, product_name, before_dev_command }` |
+| `wrangler` | `--port`, `--inspector-port` (a named `inspector` port), `--var` per var, `WRANGLER_REGISTRY_PATH` in the lane data folder | `wrangler: { vars, args, isolate_registry }` |
+| `tauri` | a per-lane, per-replica identifier and dev URL, through an overlay in the lane data folder | `tauri: { identifier, dev_url, product_name, before_dev_command }` |
 
-With `run_script`, a preset's flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script that already passes `--port` or `--inspector-port`. Without a preset, pass the flags yourself with `${{ self.port }}`. Do not set `WRANGLER_REGISTRY_PATH`: devlanes sets it per lane for every unit of a project with a wrangler config.
+With `run_script`, a preset's flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script that already passes `--port` or `--inspector-port`. Without a preset, pass the flags yourself with `${{ self.port }}`. Do not set `WRANGLER_REGISTRY_PATH`: devlanes sets it per lane for every unit of a project with a wrangler config. Wrangler's local state (`.wrangler/`) sits in the worktree, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
 
 ## Sync
 
@@ -244,7 +246,7 @@ For build output another program loads from a fixed path, such as an unpacked br
 
 `devlanes.local.yaml` next to `devlanes.yaml` holds personal changes and stays out of Git. It merges by key before templates, for example `services: { web: { autostart: false } }`.
 
-Machine settings live in `~/.devlanes/config.yaml` (or `$DEVLANES_HOME/config.yaml`): `ports.range`, `proxy` ports and LAN access, `startup` (how many services start at once), `tls` (devlanes or mkcert CA, trust stores), `hostnames`, `terminal`, log and history retention, `updates.check`. They never go in the project file.
+Machine settings live in `~/.devlanes/config.yaml` (or `$DEVLANES_HOME/config.yaml`): `ports.range`, `lanes.data_dir` (root of the lane data folders), `proxy` ports and LAN access, `startup` (how many services start at once), `tls` (devlanes or mkcert CA, trust stores), `hostnames`, `terminal`, log and history retention, `updates.check`. They never go in the project file.
 
 ## Checklist
 

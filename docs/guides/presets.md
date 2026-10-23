@@ -6,7 +6,7 @@ A preset appends the flags a framework needs to listen on the lane's port, and n
 | --- | --- | --- | --- |
 | `vite` | `--port <port> --strictPort --host 127.0.0.1` | | `vite.args` |
 | `next` | `--port <port> --hostname 127.0.0.1` | | `next.args` |
-| `wrangler` | `--port <port> --inspector-port <ports.inspector>`, `--var K:V` per var | `WRANGLER_REGISTRY_PATH` per lane | `wrangler.vars`, `wrangler.args`, `wrangler.isolate_registry` |
+| `wrangler` | `--port <port> --inspector-port <ports.inspector>`, `--var K:V` per var | `WRANGLER_REGISTRY_PATH` in the lane data folder | `wrangler.vars`, `wrangler.args`, `wrangler.isolate_registry` |
 | `tauri` | `--config <overlay.json>` | `DEVLANES_TAURI_CONFIG` | `tauri.identifier`, `tauri.dev_url`, `tauri.product_name`, `tauri.before_dev_command` |
 
 With `run_script` the flags go after the script name, placed per package manager (see [run and run_script](run-scripts.md#packagejson)). The script's last command must be the framework binary: `"dev": "vite"` works, `"dev": "vite && echo done"` does not. With a plain `run`, the flags are appended to the command text, with a `--` inserted only for `npm run`.
@@ -64,11 +64,21 @@ lanes:
 
 - `inspector` is allocated automatically for every wrangler service; `--inspector-port` gets it. Route a hostname to it with `hosts: [{ host: "inspect.${{ lane.domain }}", port: inspector }]`.
 - `vars` become `--var KEY:VALUE`, which override the `vars` in `wrangler.toml`. Numbers and booleans are stringified.
-- Each lane gets its own dev registry (`<worktree>/.devlanes/wrangler-registry`), so service bindings between workers of one lane resolve to that lane's workers. `isolate_registry: false` turns that off. The same variable is set for every unit of a project that contains a `wrangler.toml|json|jsonc`, so a plain `node` worker in the same repo talks to the right registry too.
+- Each lane gets its own dev registry, `wrangler-registry` in the [lane data folder](ports-and-env.md#lane-data-folder) (`WRANGLER_REGISTRY_PATH=${{ lane.data_path }}/wrangler-registry`), so service bindings between workers of one lane resolve to that lane's workers, also when two lanes run from one folder. `isolate_registry: false` turns that off. The same variable is set for every unit of a project that contains a `wrangler.toml|json|jsonc`, so a plain `node` worker in the same repo talks to the right registry too. Do not set it yourself.
 - A `dev` script that already passes `--port` or `--inspector-port` is refused with the fix in the message. Move the default into `wrangler.toml` (`dev.port`, `dev.inspector_port`) and let the flag override it.
 - workerd does not resolve `*.localhost` itself. `lanes.hosts_file: always` writes the lane's exact hostnames to `/etc/hosts` (after `devlanes certs trust --hosts`), so worker-to-worker `fetch` by hostname works. Wildcards cannot go in `/etc/hosts`; use service bindings or the registry for those.
 
-Durable Objects, D1, KV and R2 local state live under `.wrangler/` in the worker's directory, which is per worktree and therefore per lane.
+Durable Objects, D1, KV and R2 local state live under `.wrangler/` in the worker's directory. That is per worktree, so lanes in separate worktrees keep separate state, but lanes of one folder (`devlanes lane new --name`) share it. The same goes for any config file a dev script generates into the worker's directory: two lanes overwrite each other's copy, and a running `wrangler dev` that watches it reloads with the other lane's ports. Write both to the lane data folder instead:
+
+```yaml
+templates:
+  worker:
+    preset: wrangler
+    wrangler:
+      args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"]
+```
+
+Scripts that generate a config can read the folder from `DEVLANES_LANE_DATA`.
 
 ## Tauri
 
@@ -90,7 +100,7 @@ services:
     ready: { tcp: cdp, timeout: 15m }
 ```
 
-The preset writes `<worktree>/.devlanes/tauri/<service>.<replica>.conf.json` and passes `--config`, which Tauri 2 merges over `tauri.conf.json`. Nothing in the repository is edited.
+The preset writes `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json` (see [lane data folder](ports-and-env.md#lane-data-folder)) and passes `--config`, which Tauri 2 merges over `tauri.conf.json`. Nothing in the repository is edited or created, and two lanes of one folder get separate overlays.
 
 - `identifier` is required and must differ per lane and replica, since it decides where the app stores its data and which running instance a deep link reaches. The example above keeps lane 0 on the production-like id. Two units with the same id are refused at start, across lanes too.
 - `dev_url` points Tauri at a frontend that devlanes already runs. Then set `before_dev_command: ""`, otherwise every replica starts its own frontend on the port from `tauri.conf.json`.

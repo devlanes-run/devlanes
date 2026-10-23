@@ -51,7 +51,7 @@ services:
 
 ## Behaviour
 
-Each replica's overlay goes to `<lane>/.devlanes/tauri/<service>.<replica>.conf.json`. The contributor returns it as a prepared file and the daemon writes it before spawning. It sets the top-level `identifier` and `productName` plus `build.devUrl` and `build.beforeDevCommand`, which Tauri merges over `tauri.conf.json`.
+Each replica's overlay goes to `<lane data>/tauri/<service>.<replica>.conf.json`, in the lane data folder (`${{ lane.data_path }}`) rather than the worktree, so lanes that run from one folder do not overwrite each other's overlay. The contributor returns it as a prepared file and the daemon writes it before spawning. It sets the top-level `identifier` and `productName` plus `build.devUrl` and `build.beforeDevCommand`, which Tauri merges over `tauri.conf.json`.
 
 ## License
 

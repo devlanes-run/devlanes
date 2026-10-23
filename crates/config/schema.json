@@ -1055,12 +1055,12 @@
           ]
         },
         "isolate_registry": {
-          "description": "Points `WRANGLER_REGISTRY_PATH` at `<lane worktree>/.devlanes/wrangler-registry`, so service bindings resolve to workers of the same lane instead of same-named workers in another lane. Set `false` to drop the variable for this service, which then uses Wrangler's shared default registry. Default: `true`.",
+          "description": "Points `WRANGLER_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane instead of same-named workers in another lane, also when two lanes run from one folder. Set `false` to drop the variable for this service, which then uses Wrangler's shared default registry. Default: `true`.",
           "examples": [
             true,
             false
           ],
-          "markdownDescription": "Points `WRANGLER_REGISTRY_PATH` at `<lane worktree>/.devlanes/wrangler-registry`, so service bindings resolve to workers of the same lane instead of same-named workers in another lane. Set `false` to drop the variable for this service, which then uses Wrangler's shared default registry. Default: `true`.",
+          "markdownDescription": "Points `WRANGLER_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane instead of same-named workers in another lane, also when two lanes run from one folder. Set `false` to drop the variable for this service, which then uses Wrangler's shared default registry. Default: `true`.",
           "type": [
             "boolean",
             "null"
@@ -1093,7 +1093,7 @@
     },
     "InjectedPresetOptions3": {
       "additionalProperties": false,
-      "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `<lane worktree>/.devlanes/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+      "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
       "examples": [
         {
           "before_dev_command": "",
@@ -1101,7 +1101,7 @@
           "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
         }
       ],
-      "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `<lane worktree>/.devlanes/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+      "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
       "properties": {
         "before_dev_command": {
           "description": "Replaces `build.beforeDevCommand`, the command Tauri runs before the app. Set it to `\"\"` when the frontend runs as its own devlanes service; otherwise every replica starts its own frontend on the port from `tauri.conf.json`. Default: the command in `tauri.conf.json`.",
@@ -2318,7 +2318,7 @@
         },
         "tauri": {
           "$ref": "#/$defs/InjectedPresetOptions3",
-          "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `<lane worktree>/.devlanes/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+          "description": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
           "examples": [
             {
               "before_dev_command": "",
@@ -2326,7 +2326,7 @@
               "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
             }
           ],
-          "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `<lane worktree>/.devlanes/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
+          "markdownDescription": "Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per lane and replica. The values go into a config overlay at `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.",
           "type": "object"
         },
         "vite": {

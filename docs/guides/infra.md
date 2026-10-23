@@ -39,7 +39,7 @@ A shared service that `depends_on` an excluded or per-lane service is refused wi
 
 ### Per-lane Compose services
 
-`per_lane` services run in their own Compose project, `<project>-lane<N>`, from the lane's worktree. devlanes writes an override file outside the repository that resets `container_name`, replaces `ports` with host ports from the lane's block (every container port the service declares gets one, published or not) and adds `dev.devlanes.*` labels. Named volumes are per project, so each lane has its own data; a volume with a fixed `name:` or `external: true` is shared and gets a warning. Shared dependencies are not started again (`--no-deps`); reach them by published port.
+`per_lane` services run in their own Compose project, `<project>-lane<N>`, from the lane's worktree. devlanes writes an override file to `compose/` in the [lane data folder](ports-and-env.md#lane-data-folder), outside the repository, that resets `container_name`, replaces `ports` with host ports from the lane's block (every container port the service declares gets one, published or not) and adds `dev.devlanes.*` labels. Named volumes are per project, so each lane has its own data; a volume with a fixed `name:` or `external: true` is shared and gets a warning. Shared dependencies are not started again (`--no-deps`); reach them by published port.
 
 In `setup`, `docker compose` without flags targets the shared project. The lane project's name is `$DEVLANES_COMPOSE_LANE_PROJECT`:
 
@@ -65,7 +65,7 @@ infra:
       env: { CERBOS_LOG_LEVEL: debug }
 ```
 
-Containers are named `devlanes-<project>-<name>` or `devlanes-<project>-lane<N>-<name>`, bound to `127.0.0.1`, and read as `${{ infra.cerbos.ports.http }}` (`infra.cerbos.port` is the first port). A bare volume name becomes a named volume per project or lane; `/abs` and `./rel` are bind mounts. A running container whose image, command, env, mounts and ports are unchanged is adopted; a changed one is recreated. Readiness is the image's healthcheck, else TCP on the first port, then `ready` if set. Plain containers join Docker's default network, not a Compose network, so address them by host port, not container name.
+Containers are named `devlanes-<project>-<name>` or `devlanes-<project>-lane<N>-<name>`, bound to `127.0.0.1`, and read as `${{ infra.cerbos.ports.http }}` (`infra.cerbos.port` is the first port). A bare volume name becomes a named volume per project or lane; `/abs` and `./rel` are bind mounts. For a per-lane bind mount that lanes of one folder do not share, use `"${{ lane.data_path }}/<name>:/data"`; devlanes creates the lane data folder before containers start. A running container whose image, command, env, mounts and ports are unchanged is adopted; a changed one is recreated. Readiness is the image's healthcheck, else TCP on the first port, then `ready` if set. Plain containers join Docker's default network, not a Compose network, so address them by host port, not container name.
 
 ## Setup and teardown
 

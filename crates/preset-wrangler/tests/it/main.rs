@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 const LANE: &str = "/lanes/acme-1";
+/// The lane's data folder, outside the worktree.
+const DATA: &str = "/data/acme/7";
 
 /// Inputs that vary between adapter tests.
 struct Fake {
@@ -55,6 +57,7 @@ impl Fake {
             lane_index: 1,
             lane_name: "lane1",
             lane_path: Path::new(LANE),
+            lane_data_path: Path::new(DATA),
             primary_path: Path::new("/lanes/acme"),
             platform: Some("node"),
             preset: self.preset,
@@ -123,7 +126,7 @@ async fn adapter_renders_flags_and_env() {
     insta::assert_snapshot!(draft.args.join(" "), @"--port 20010 --inspector-port 20011 --var DEBUG:true --var PUBLIC_BASE_URL:https://api.acme-1.localhost --var RETRIES:3 --env-file .dev.vars");
     assert_eq!(
         draft.env.get(REGISTRY_ENV).map(String::as_str),
-        Some("/lanes/acme-1/.devlanes/wrangler-registry")
+        Some("/data/acme/7/wrangler-registry")
     );
 }
 
@@ -193,7 +196,7 @@ fn rejects_hardcoded_port_from_package_json() {
     let error = wrangler::contribution(&wrangler::WranglerInput {
         port: 20010,
         ports: &ports,
-        lane_worktree: temp.path(),
+        lane_data: temp.path(),
         options: &wrangler::WranglerOptions::default(),
         script_body: Some(&plan.script_body),
     })
@@ -209,7 +212,7 @@ fn rejects_hardcoded_port_from_package_json() {
 /// Renders `<pm> run dev <preset args>` for every package manager and preset.
 #[test]
 fn preset_arg_rendering_matrix() {
-    let lane = Path::new(LANE);
+    let data = Path::new(DATA);
     let ports = BTreeMap::from([(INSPECTOR_PORT.to_owned(), 20011)]);
     let wrangler_options = wrangler::WranglerOptions {
         vars: BTreeMap::from([(
@@ -224,7 +227,7 @@ fn preset_arg_rendering_matrix() {
         dev_url: Some("http://127.0.0.1:20014".to_owned()),
         ..tauri::TauriOptions::default()
     };
-    let overlay = tauri::overlay_path(lane, "desktop", 1);
+    let overlay = tauri::overlay_path(data, "desktop", 1);
     let presets: Vec<(&str, Vec<String>)> = vec![
         (
             "vite",
@@ -239,7 +242,7 @@ fn preset_arg_rendering_matrix() {
             wrangler::contribution(&wrangler::WranglerInput {
                 port: 20010,
                 ports: &ports,
-                lane_worktree: lane,
+                lane_data: data,
                 options: &wrangler_options,
                 script_body: Some("wrangler dev"),
             })

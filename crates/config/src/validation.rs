@@ -659,7 +659,15 @@ fn service_name<'a, E: Extensions>(config: &'a ProjectConfig<E>, alias: &str) ->
 }
 
 /// Attributes of `lane` before `lanes.vars` or matrix keys are added.
-const LANE_ATTRS: &[&str] = &["index", "name", "label", "path", "domain", "port"];
+const LANE_ATTRS: &[&str] = &[
+    "index",
+    "name",
+    "label",
+    "path",
+    "data_path",
+    "domain",
+    "port",
+];
 /// Attributes of `project`.
 const PROJECT_ATTRS: &[&str] = &["name", "primary_path"];
 /// Attributes of `self`, `services.<name>` and `lanes.main.services.<name>`.

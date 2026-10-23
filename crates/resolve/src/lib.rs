@@ -23,7 +23,7 @@ mod select;
 mod util;
 
 pub use error::ResolveError;
-pub use facts::{LaneFacts, branch_label, lane_name};
+pub use facts::{LANE_DATA_ENV, LaneFacts, branch_label, lane_name};
 pub use layout::{fixed_block_start, https_url, lane_layout, tag_colors};
 pub use model::*;
 pub use plan::{container_ready, detect_platform, resolve_lane};

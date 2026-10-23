@@ -45,7 +45,7 @@ services:
       # isolate_registry: false    # default: true
 ```
 
-The preset adds `--port <self.port> --inspector-port <self.ports.inspector>`, then `--var KEY:VALUE` for each var in key order, then `args`. Vars go on the command line because `vars` in the Wrangler config override the process environment, while `--var` overrides the config. It also sets `WRANGLER_REGISTRY_PATH=<lane>/.devlanes/wrangler-registry`, so same-named workers in two lanes do not bind to each other. That variable is not in Wrangler's user docs; it is defined in cloudflare/workers-sdk.
+The preset adds `--port <self.port> --inspector-port <self.ports.inspector>`, then `--var KEY:VALUE` for each var in key order, then `args`. Vars go on the command line because `vars` in the Wrangler config override the process environment, while `--var` overrides the config. It also sets `WRANGLER_REGISTRY_PATH=<lane data>/wrangler-registry`, so same-named workers in two lanes do not bind to each other. The lane data folder (`ContribCx::lane_data_path`, `${{ lane.data_path }}`) is outside the worktree, so lanes that run from one folder get separate registries too. That variable is not in Wrangler's user docs; it is defined in cloudflare/workers-sdk.
 
 ## Behaviour
 

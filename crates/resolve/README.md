@@ -14,7 +14,14 @@ async fn start(
     config: &ProjectConfig,
     client_env: &BTreeMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let facts = LaneFacts::new("acme", "/work/acme", 1, "/work/acme-lanes/login", Some("feat/login".into()));
+    let facts = LaneFacts::new(
+        "acme",
+        "/work/acme",
+        1,
+        "/work/acme-lanes/login",
+        "/home/me/.devlanes/data/acme/7",
+        Some("feat/login".into()),
+    );
     let needs = port_needs(config, &[])?;
     let block = PortBlock::new(21_000, block_size(needs.min_block_size(), None)?)?;
     let offsets = allocate_offsets(&BTreeMap::new(), &needs.names, &needs.reserved, &[block])?;

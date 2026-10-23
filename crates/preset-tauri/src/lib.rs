@@ -29,7 +29,7 @@ pub const CONFIG_ENV: &str = "DEVLANES_TAURI_CONFIG";
 
 /// Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per
 /// lane and replica. The values go into a config overlay at
-/// `<lane worktree>/.devlanes/tauri/<service>.<replica>.conf.json`, passed with `--config` and
+/// `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json`, passed with `--config` and
 /// in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -147,10 +147,10 @@ pub fn required_ports() -> &'static [&'static str] {
     &[]
 }
 
-/// Returns the conventional overlay path for `service` replica `replica` in a lane.
-pub fn overlay_path(lane_worktree: &Path, service: &str, replica: u32) -> PathBuf {
-    lane_worktree
-        .join(".devlanes")
+/// Returns the overlay path for `service` replica `replica`: `tauri/` in the lane data
+/// folder, which no other lane shares, even one running from the same worktree.
+pub fn overlay_path(lane_data: &Path, service: &str, replica: u32) -> PathBuf {
+    lane_data
         .join("tauri")
         .join(format!("{service}.{replica}.conf.json"))
 }
@@ -305,7 +305,7 @@ impl Contributor for TauriPreset {
         }
         let options = parse_options(cx.preset_options)?;
         let replica = cx.replica.unwrap_or(1);
-        let path = overlay_path(cx.lane_path, cx.name, u32::from(replica));
+        let path = overlay_path(cx.lane_data_path, cx.name, u32::from(replica));
         let launch = contribution(&TauriInput {
             options: &options,
             overlay_path: &path,
@@ -373,6 +373,7 @@ mod tests {
             lane_index: 1,
             lane_name: "lane1",
             lane_path: Path::new("/lanes/acme-1"),
+            lane_data_path: Path::new("/data/acme/5"),
             primary_path: Path::new("/lanes/acme"),
             platform: Some("node"),
             preset: Some(NAME),
@@ -413,7 +414,7 @@ mod tests {
             let draft = apply_replica(&memo, Some(options), replica)
                 .await
                 .expect("apply");
-            let expected = format!("/lanes/acme-1/.devlanes/tauri/desktop.{replica}.conf.json");
+            let expected = format!("/data/acme/5/tauri/desktop.{replica}.conf.json");
             assert_eq!(draft.args, ["--config", expected.as_str()]);
             assert_eq!(draft.env.get(CONFIG_ENV), Some(&expected));
             let [file] = draft.files.as_slice() else {
@@ -508,16 +509,16 @@ mod tests {
     #[test]
     fn contribution_points_at_overlay() {
         let options = options("com.acme.app.dev.client1");
-        let path = overlay_path(Path::new("/lanes/acme"), "desktop", 1);
+        let path = overlay_path(Path::new("/data/acme/5"), "desktop", 1);
         let launch = contribution(&TauriInput {
             options: &options,
             overlay_path: &path,
         })
         .expect("valid options");
-        insta::assert_snapshot!(launch.contribution.args.join(" "), @"--config /lanes/acme/.devlanes/tauri/desktop.1.conf.json");
+        insta::assert_snapshot!(launch.contribution.args.join(" "), @"--config /data/acme/5/tauri/desktop.1.conf.json");
         assert_eq!(
             launch.contribution.env.get(CONFIG_ENV).map(String::as_str),
-            Some("/lanes/acme/.devlanes/tauri/desktop.1.conf.json")
+            Some("/data/acme/5/tauri/desktop.1.conf.json")
         );
     }
 

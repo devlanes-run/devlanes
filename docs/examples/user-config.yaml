@@ -13,6 +13,10 @@ hostnames:
 # Machine-wide pool that every lane's port block comes from.
 ports:
   range: 20000-32767
+# Root of the lane data folders (${{ lane.data_path }}, DEVLANES_LANE_DATA):
+# <data_dir>/<project>/<lane id>. Absolute or starting with ~/; default ~/.devlanes/data.
+lanes:
+  data_dir: ~/.devlanes/data
 tls:
   # Certificate authority: devlanes keeps its own under ~/.devlanes/ca; mkcert reuses mkcert's.
   ca: devlanes

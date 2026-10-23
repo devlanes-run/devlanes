@@ -32,6 +32,8 @@ pub struct UserConfig {
     /// Port range that every lane of every project takes its block of ports from, so
     /// lanes never collide. Defaults to `20000-32767`.
     pub ports: PortsConfig,
+    /// Where lane data folders (`lane.data_path`) live on this machine.
+    pub lanes: UserLanesConfig,
     /// Which certificate authority signs the proxy's HTTPS certificates (`ca`), and which
     /// stores `devlanes certs trust` installs it into (`trust`).
     pub tls: TlsConfig,
@@ -185,6 +187,50 @@ impl TuiGlyphs {
             Self::Auto => "auto",
             Self::Unicode => "unicode",
             Self::Ascii => "ascii",
+        }
+    }
+}
+
+/// Machine settings for lanes. Each lane gets its own data folder at
+/// `<data_dir>/<project>/<lane id>`, available as `${{ lane.data_path }}` and
+/// `DEVLANES_LANE_DATA`. devlanes creates it when the lane is created and before each
+/// start, and `devlanes lane clean` deletes it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[schemars(extend("examples" = [{"data_dir":"~/.devlanes/data"}]))]
+pub struct UserLanesConfig {
+    /// Folder that holds every lane's data folder, one subfolder per project; defaults to
+    /// `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start
+    /// with `~/`. The daemon reads it when it starts; lanes keep their folders where they
+    /// were made, so move existing ones by hand after changing it.
+    #[schemars(extend("examples" = ["~/.devlanes/data","/Volumes/fast/devlanes"]))]
+    pub data_dir: Option<String>,
+}
+
+/// Folder under the devlanes home that holds lane data folders by default.
+pub const DEFAULT_DATA_DIR: &str = "data";
+
+impl UserLanesConfig {
+    /// The folder holding lane data folders: `data_dir` with `~/` expanded from `HOME`,
+    /// or `<home>/data`, where `home` is the devlanes home.
+    pub fn data_root(&self, home: &Path) -> std::path::PathBuf {
+        let Some(dir) = self.data_dir.as_deref() else {
+            return home.join(DEFAULT_DATA_DIR);
+        };
+        match (dir.strip_prefix("~/"), std::env::var_os("HOME")) {
+            (Some(rest), Some(user_home)) => std::path::PathBuf::from(user_home).join(rest),
+            _ => std::path::PathBuf::from(dir),
+        }
+    }
+
+    /// Rejects relative folders, which would depend on the daemon's working directory.
+    fn validate(&self) -> Result<(), ConfigError> {
+        match self.data_dir.as_deref() {
+            None => Ok(()),
+            Some(dir) if dir.starts_with("~/") || Path::new(dir).is_absolute() => Ok(()),
+            Some(_) => Err(ConfigError::plain(
+                "lanes.data_dir: must be an absolute path or start with `~/`",
+            )),
         }
     }
 }
@@ -766,6 +812,7 @@ impl UserConfig {
             ));
         }
         self.startup.validate()?;
+        self.lanes.validate()?;
         Ok(())
     }
 

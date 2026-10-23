@@ -81,7 +81,7 @@ Layers, lowest first. A later layer wins on the same key.
 1. The environment of the shell that ran `devlanes start` (or `restart`, `run`, `exec`, `lane resume`). The daemon keeps it in memory for the lane and reuses it for restarts from the TUI; it is never written to disk. `devlanes daemon restart` starts what ran again with the environment of the shell that ran it; after a reboot or `daemon stop`, `devlanes lane resume` from a shell supplies it again.
 2. Contributors: mise, direnv, then the platform (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, …) and preset (`WRANGLER_REGISTRY_PATH`).
 3. Secrets from fnox.
-4. devlanes' own variables: `DEVLANES=1`, `DEVLANES_PROJECT`, `DEVLANES_LANE` (the index), `DEVLANES_LANE_NAME` (`main` or `lane<N>`), `DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`; for services also `PORT`, `HOST=127.0.0.1`, `DEVLANES_SERVICE`, `DEVLANES_PUBLIC_URL` (when the service has hosts) and `DEVLANES_ORIGINS`.
+4. devlanes' own variables: `DEVLANES=1`, `DEVLANES_PROJECT`, `DEVLANES_LANE` (the index), `DEVLANES_LANE_NAME` (`main` or `lane<N>`), `DEVLANES_LANE_DATA` (the [lane data folder](#lane-data-folder)), `DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`; for services also `PORT`, `HOST=127.0.0.1`, `DEVLANES_SERVICE`, `DEVLANES_PUBLIC_URL` (when the service has hosts) and `DEVLANES_ORIGINS`.
 5. `global_env`.
 6. The unit's own `env`.
 7. The profile's `env` (later `--profile` flags win).
@@ -102,7 +102,7 @@ Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is
 | Namespace | Contents |
 | --- | --- |
 | `project` | `name`, `primary_path` (the primary worktree, for files only it has) |
-| `lane` | `index`, `name`, `label` (branch with `/` as `-`), `path`, `domain`, `port` (block start), every `lanes.vars` key |
+| `lane` | `index`, `name`, `label` (branch with `/` as `-`), `path`, `data_path` (the [lane data folder](#lane-data-folder)), `domain`, `port` (block start), every `lanes.vars` key |
 | `self`, `services.<name>`, `lanes.main.services.<name>` | `name`, `port`, `ports.<name>`, `url`, `public_url`, `hosts` |
 | `infra.<container>` | `port`, `ports` |
 | `env` | the shell that ran devlanes, then fnox secrets, then the lane's `.env` |
@@ -147,3 +147,47 @@ Compose interpolation is separate: `infra.env` and the worktree's `.env` (passed
 ### Per-machine overrides
 
 `devlanes.local.yaml` next to `devlanes.yaml` (gitignored) merges per key over it: a service's `env` adds or replaces single variables, `autostart: false` turns a service off on this machine, a new service exists only here. Lists and scalars replace, mappings merge, and `run` replaces `run_script`.
+
+## Lane data folder
+
+Every lane has a folder of its own outside the worktree, for state and generated files that must not be shared with another lane: local database files, emulator state, generated configs, sockets. Expressions read it as `${{ lane.data_path }}` and every process gets it as `DEVLANES_LANE_DATA`.
+
+```yaml
+services:
+  api:
+    run_script: apps/api/package.json#dev
+    env:
+      SQLITE_PATH: ${{ lane.data_path }}/api/dev.db
+  worker:
+    preset: wrangler
+    run_script: workers/api/package.json#dev
+    wrangler:
+      args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"]
+infra:
+  containers:
+    minio:
+      image: minio/minio
+      command: [server, /data]
+      volumes: ["${{ lane.data_path }}/minio:/data"]
+      per_lane: true
+```
+
+It lives at `~/.devlanes/data/<project>/<lane id>`, where the lane id is a number the daemon gives the lane when it creates it. The id does not change when the lane's index does (a lane whose branch becomes the primary one takes index 0), so data stays with its lane. `lanes.data_dir` in `~/.devlanes/config.yaml` moves the root, for example to a faster disk:
+
+```yaml
+# ~/.devlanes/config.yaml
+lanes:
+  data_dir: /Volumes/fast/devlanes
+```
+
+devlanes creates the folder when the lane is created and again before each start, run and container start, so deleting it by hand is safe while the lane is stopped. `devlanes lane clean` deletes it after `lane.clean` tasks and teardown have run, and the project's folder goes with its last lane. A lane that comes back after a clean starts with an empty folder.
+
+A worktree is per lane only while each lane has its own worktree. `devlanes lane new --name` adds a lane to a folder that already has one, and those lanes share everything inside the worktree: `.wrangler/`, `node_modules/.vite`, build output and any file a script generates there. Use the data folder for anything a lane writes while it runs.
+
+devlanes keeps its own per-lane files here too, each in a folder named after the integration. Do not write into these yourself:
+
+| Folder | Written by |
+| --- | --- |
+| `wrangler-registry` | the wrangler preset and every unit of a project with a Wrangler config (`WRANGLER_REGISTRY_PATH`) |
+| `tauri` | the tauri preset's config overlays |
+| `compose` | the Compose override for `per_lane` services |

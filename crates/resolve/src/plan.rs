@@ -117,6 +117,10 @@ async fn plan_lane<E: Extensions>(
         ("DEVLANES_PROJECT".to_owned(), config.project.clone()),
         ("DEVLANES_LANE".to_owned(), input.facts.index.to_string()),
         ("DEVLANES_LANE_NAME".to_owned(), input.facts.name.clone()),
+        (
+            crate::LANE_DATA_ENV.to_owned(),
+            input.facts.data_path.display().to_string(),
+        ),
     ]);
     devlanes.extend(input.ca_env.iter().map(|(k, v)| (k.clone(), v.clone())));
 
@@ -632,6 +636,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             lane_index: facts.index,
             lane_name: &facts.name,
             lane_path,
+            lane_data_path: &facts.data_path,
             primary_path: &facts.primary_path,
             platform: platform.as_deref(),
             preset: spec.preset,

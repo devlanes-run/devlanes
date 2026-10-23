@@ -916,7 +916,8 @@ async fn platform_inference() {
     let config = parse(
         "project: demo\nservices:\n  web: { run: dev, cwd: web }\n  ml: { run: dev, cwd: ml }\n  bare: { run: dev }\n  forced: { run: dev, cwd: web, platform: python }\n",
     );
-    let facts = devlanes_resolve::LaneFacts::new("demo", dir.path(), 0, dir.path(), None);
+    let facts =
+        devlanes_resolve::LaneFacts::new("demo", dir.path(), 0, dir.path(), "/data/demo/1", None);
     let (block, offsets) = allocation(&config, 21_000, &[]);
     let contributors: [Arc<dyn Contributor>; 2] = [
         Arc::new(devlanes_platform_python::PythonContributor),
@@ -994,7 +995,8 @@ async fn detection_precedence() {
     let config = parse(
         "project: demo\nservices:\n  api: { run: dev, platform: rust }\n  free: { run: dev }\n",
     );
-    let facts = devlanes_resolve::LaneFacts::new("demo", dir.path(), 0, dir.path(), None);
+    let facts =
+        devlanes_resolve::LaneFacts::new("demo", dir.path(), 0, dir.path(), "/data/demo/1", None);
     let (block, offsets) = allocation(&config, 21_000, &[]);
     let contributors = [fake("claims", 50, "node", 99)];
     let mut input = ResolveInput::new(&config, &facts, block, &offsets);
@@ -1048,7 +1050,7 @@ services:
   forced-deno: { run: dev, platform: deno }
 "#,
     );
-    let facts = devlanes_resolve::LaneFacts::new("demo", root, 0, root, None);
+    let facts = devlanes_resolve::LaneFacts::new("demo", root, 0, root, "/data/demo/1", None);
     let contributors: [Arc<dyn Contributor>; 5] = [
         Arc::new(devlanes_platform_rust::RustContributor),
         Arc::new(devlanes_platform_deno::DenoContributor),

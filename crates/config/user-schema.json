@@ -929,6 +929,32 @@
         }
       },
       "type": "object"
+    },
+    "UserLanesConfig": {
+      "additionalProperties": false,
+      "description": "Machine settings for lanes. Each lane gets its own data folder at `<data_dir>/<project>/<lane id>`, available as `${{ lane.data_path }}` and `DEVLANES_LANE_DATA`. devlanes creates it when the lane is created and before each start, and `devlanes lane clean` deletes it.",
+      "examples": [
+        {
+          "data_dir": "~/.devlanes/data"
+        }
+      ],
+      "markdownDescription": "Machine settings for lanes. Each lane gets its own data folder at `<data_dir>/<project>/<lane id>`, available as `${{ lane.data_path }}` and `DEVLANES_LANE_DATA`. devlanes creates it when the lane is created and before each start, and `devlanes lane clean` deletes it.",
+      "properties": {
+        "data_dir": {
+          "default": null,
+          "description": "Folder that holds every lane's data folder, one subfolder per project; defaults to `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start with `~/`. The daemon reads it when it starts; lanes keep their folders where they were made, so move existing ones by hand after changing it.",
+          "examples": [
+            "~/.devlanes/data",
+            "/Volumes/fast/devlanes"
+          ],
+          "markdownDescription": "Folder that holds every lane's data folder, one subfolder per project; defaults to `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start with `~/`. The daemon reads it when it starts; lanes keep their folders where they were made, so move existing ones by hand after changing it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
     }
   },
   "$id": "https://devlanes.run/v1/user-schema.json",
@@ -986,6 +1012,19 @@
         }
       ],
       "markdownDescription": "How lane hostnames such as `api.acme-2.localhost` resolve to this machine: the strategy (`resolver`), its `tld`, and whether names also go into `/etc/hosts` (`hosts_file`). The defaults need no setup for browsers that resolve `*.localhost`."
+    },
+    "lanes": {
+      "$ref": "#/$defs/UserLanesConfig",
+      "default": {
+        "data_dir": null
+      },
+      "description": "Where lane data folders (`lane.data_path`) live on this machine.",
+      "examples": [
+        {
+          "data_dir": "~/.devlanes/data"
+        }
+      ],
+      "markdownDescription": "Where lane data folders (`lane.data_path`) live on this machine."
     },
     "logs": {
       "$ref": "#/$defs/LogsConfig",

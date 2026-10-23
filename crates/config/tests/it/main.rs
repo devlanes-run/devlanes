@@ -428,6 +428,33 @@ fn user_validation() {
     );
 }
 
+/// Lane data folders default to `data` in the devlanes home; a set folder must be
+/// absolute or start with `~/`.
+#[test]
+fn lane_data_root() {
+    let home = std::path::Path::new("/h/.devlanes");
+    let defaults = parse_user("{}").expect("defaults").lanes;
+    assert_eq!(defaults.data_root(home), home.join("data"));
+    let set = parse_user("lanes: { data_dir: /fast/devlanes }").expect("absolute");
+    assert_eq!(
+        set.lanes.data_root(home),
+        std::path::Path::new("/fast/devlanes")
+    );
+    let tilde = parse_user("lanes: { data_dir: ~/lane-data }").expect("tilde");
+    if let Some(user_home) = std::env::var_os("HOME") {
+        assert_eq!(
+            tilde.lanes.data_root(home),
+            std::path::PathBuf::from(user_home).join("lane-data")
+        );
+    }
+    let relative = parse_user("lanes: { data_dir: data }").expect_err("relative");
+    assert!(
+        relative.message.contains("lanes.data_dir"),
+        "{}",
+        relative.message
+    );
+}
+
 /// Startup pacing parses typed percentages and derives windows from the core count.
 #[test]
 fn startup_settings() {

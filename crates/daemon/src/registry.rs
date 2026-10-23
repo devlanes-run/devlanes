@@ -13,7 +13,7 @@ use devlanes_config::{
     ExpressionContext, NewWorktrees, OpaqueExtensions, ProjectConfig, RemovedWorktrees, Templated,
 };
 use devlanes_core::{
-    WorktreeId,
+    LaneId, WorktreeId,
     ports::{PortName, PortPool},
 };
 use devlanes_proto::{RpcError, events};
@@ -796,6 +796,10 @@ impl Inner {
             match self.allocate_lane(project, &lane, &[]).await {
                 Ok(_) => {
                     lane.st().unassigned = None;
+                    // A failure here comes back as an error at the lane's first start.
+                    if let Err(error) = self.ensure_lane_data(project, &lane).await {
+                        tracing::warn!(code = %error.code, data = %error.data, "lane data folder");
+                    }
                     assigned.push(lane);
                 }
                 Err(error) if error.code == "pool_exhausted" => {
@@ -1165,16 +1169,90 @@ impl Inner {
         let primary = self.primary_path(project);
         let name = project.name();
         let st = lane.st();
-        let index = st
-            .index()
+        let record = st
+            .record
+            .as_ref()
             .ok_or_else(|| RpcError::new("unassigned", json!({"reason": "unassigned"}), 1))?;
+        let data_path = self.lane_data_path(&name, record.id);
         Ok(LaneFacts::new(
             name,
             primary,
-            index,
+            record.index,
             st.path.clone(),
+            data_path,
             st.branch.clone(),
         ))
+    }
+
+    /// `<data root>/<project>`, holding the data folders of the project's lanes.
+    pub(crate) fn project_data_path(&self, project: &str) -> PathBuf {
+        self.opts
+            .user
+            .lanes
+            .data_root(&self.opts.home)
+            .join(project)
+    }
+
+    /// `<data root>/<project>/<lane id>` (`lane.data_path`). Keyed by the lane's record
+    /// id rather than its index: indexes move between lanes (a lane whose branch becomes
+    /// the primary one takes lane 0), and the data must stay with its lane. Lanes that
+    /// share one worktree have different records, so each gets its own folder.
+    pub(crate) fn lane_data_path(&self, project: &str, lane: LaneId) -> PathBuf {
+        self.project_data_path(project).join(lane.0.to_string())
+    }
+
+    /// Creates the lane's data folder. Called when the lane is assigned and again before
+    /// every start, so a folder deleted by hand comes back.
+    pub(crate) async fn ensure_lane_data(
+        &self,
+        project: &ProjectRt,
+        lane: &LaneRt,
+    ) -> Result<(), RpcError> {
+        let Some(id) = lane.st().record.as_ref().map(|record| record.id) else {
+            return Ok(());
+        };
+        let path = self.lane_data_path(&project.name(), id);
+        let result = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || std::fs::create_dir_all(&path)
+        })
+        .await
+        .map_err(std::io::Error::other)
+        .and_then(|created| created);
+        result.map_err(|error| {
+            RpcError::new(
+                "lane_data_unavailable",
+                json!({
+                    "path": path,
+                    "message": format!("cannot create the lane data folder: {error}"),
+                }),
+                1,
+            )
+        })
+    }
+
+    /// Deletes the lane's data folder (`lane clean`), then the project's folder once no
+    /// lane folder is left in it. A missing folder is not an error.
+    pub(crate) async fn remove_lane_data(&self, project: &str, lane: LaneId) {
+        let path = self.lane_data_path(project, lane);
+        let parent = self.project_data_path(project);
+        let result = tokio::task::spawn_blocking(move || {
+            match std::fs::remove_dir_all(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+            // Fails while other lanes' folders remain, which is the point.
+            let _ = std::fs::remove_dir(&parent);
+            Ok(())
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(project, lane = lane.0, %error, "cannot delete the lane data folder");
+            }
+            Err(error) => tracing::warn!(%error, "lane data folder task failed"),
+        }
     }
 
     /// `(lane config dir, primary config dir)`.
@@ -1851,6 +1929,7 @@ pub(crate) fn lane_context(
         "name": facts.name,
         "label": facts.label,
         "path": facts.path.display().to_string(),
+        "data_path": facts.data_path.display().to_string(),
         "domain": domain,
         "port": port,
     });

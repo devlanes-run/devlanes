@@ -27,8 +27,9 @@ pub const INSPECTOR_PORT: &str = "inspector";
 /// each other's service bindings through the shared global registry.
 pub const REGISTRY_ENV: &str = "WRANGLER_REGISTRY_PATH";
 
-/// Registry directory relative to the lane worktree, shared by the lane's workers.
-pub const REGISTRY_DIR: &str = ".devlanes/wrangler-registry";
+/// Registry directory in the lane data folder, shared by the lane's workers. Not in the
+/// worktree: lanes that run from one folder would share it there.
+pub const REGISTRY_DIR: &str = "wrangler-registry";
 
 /// Script flags that collide with the ones this preset adds. yargs also accepts
 /// the camelCase spelling of every dashed option.
@@ -61,9 +62,10 @@ pub struct WranglerOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [["--env-file",".dev.vars"]]))]
     pub args: Option<Vec<String>>,
-    /// Points `WRANGLER_REGISTRY_PATH` at `<lane worktree>/.devlanes/wrangler-registry`, so
-    /// service bindings resolve to workers of the same lane instead of same-named workers in
-    /// another lane. Set `false` to drop the variable for this service, which then uses
+    /// Points `WRANGLER_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder
+    /// (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane
+    /// instead of same-named workers in another lane, also when two lanes run from one
+    /// folder. Set `false` to drop the variable for this service, which then uses
     /// Wrangler's shared default registry. Default: `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [true,false]))]
@@ -124,7 +126,8 @@ pub struct WranglerInput<'a> {
     pub port: u16,
     /// `self.ports.<name>`; must contain [`INSPECTOR_PORT`].
     pub ports: &'a BTreeMap<String, u16>,
-    pub lane_worktree: &'a Path,
+    /// The lane data folder (`lane.data_path`); the registry goes below it.
+    pub lane_data: &'a Path,
     /// Options after expression evaluation.
     pub options: &'a WranglerOptions,
     /// Body of the `run_script` script, when the service uses one.
@@ -212,7 +215,7 @@ pub fn contribution(input: &WranglerInput<'_>) -> Result<Contribution, WranglerE
     args.extend(input.options.args.iter().flatten().cloned());
     let mut env = BTreeMap::new();
     if input.options.isolate_registry != Some(false) {
-        let registry = input.lane_worktree.join(REGISTRY_DIR);
+        let registry = input.lane_data.join(REGISTRY_DIR);
         env.insert(
             REGISTRY_ENV.to_owned(),
             registry.to_string_lossy().into_owned(),
@@ -289,7 +292,7 @@ impl Contributor for WranglerPreset {
         let contribution = contribution(&WranglerInput {
             port,
             ports: cx.ports,
-            lane_worktree: cx.lane_path,
+            lane_data: cx.lane_data_path,
             options: &options,
             script_body: cx.script.and_then(|script| script.body.as_deref()),
         })
@@ -331,7 +334,7 @@ mod tests {
         let result = contribution(&WranglerInput {
             port: 20010,
             ports: &ports,
-            lane_worktree: Path::new("/lanes/acme-1"),
+            lane_data: Path::new("/data/acme/7"),
             options: &options,
             script_body: Some("wrangler dev --persist-to .wrangler-state"),
         })
@@ -339,7 +342,7 @@ mod tests {
         insta::assert_snapshot!(result.args.join(" "), @"--port 20010 --inspector-port 20011 --var A:1 --var PUBLIC_BASE_URL:https://api.acme-1.localhost --env-file .dev.vars.stripe");
         assert_eq!(
             result.env.get(REGISTRY_ENV).map(String::as_str),
-            Some("/lanes/acme-1/.devlanes/wrangler-registry")
+            Some("/data/acme/7/wrangler-registry")
         );
     }
 
@@ -354,7 +357,7 @@ mod tests {
         let result = contribution(&WranglerInput {
             port: 1,
             ports: &ports,
-            lane_worktree: Path::new("/w"),
+            lane_data: Path::new("/d"),
             options: &options,
             script_body: None,
         })
@@ -369,7 +372,7 @@ mod tests {
         let error = contribution(&WranglerInput {
             port: 1,
             ports: &ports,
-            lane_worktree: Path::new("/w"),
+            lane_data: Path::new("/d"),
             options: &WranglerOptions::default(),
             script_body: None,
         });
@@ -392,7 +395,7 @@ mod tests {
         let error = contribution(&WranglerInput {
             port: 1,
             ports: &ports,
-            lane_worktree: Path::new("/w"),
+            lane_data: Path::new("/d"),
             options: &options,
             script_body: None,
         });
@@ -450,7 +453,7 @@ mod tests {
         let error = contribution(&WranglerInput {
             port: 1,
             ports: &ports,
-            lane_worktree: Path::new("/w"),
+            lane_data: Path::new("/d"),
             options: &WranglerOptions::default(),
             script_body: Some("wrangler dev --inspector-port 9229"),
         });

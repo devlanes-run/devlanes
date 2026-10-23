@@ -169,23 +169,24 @@ fn ready_word(spec: &ReadySpec) -> &'static str {
     }
 }
 
-/// Writes contributor files atomically. Paths must stay inside the lane worktree;
-/// the files must not contain secrets because they land on disk.
+/// Writes contributor files atomically. Paths must stay inside one of `roots` (the lane
+/// worktree, which relative paths are joined to, then the lane data folder); the files
+/// must not contain secrets because they land on disk.
 async fn write_files(
-    lane_path: std::path::PathBuf,
+    roots: &[std::path::PathBuf],
     files: Vec<PreparedFile>,
 ) -> Result<(), RpcError> {
     if files.is_empty() {
         return Ok(());
     }
+    let roots = roots.to_vec();
     tokio::task::spawn_blocking(move || {
         for file in files {
-            let path = if file.path.is_absolute() {
-                file.path.clone()
-            } else {
-                lane_path.join(&file.path)
+            let path = match roots.first() {
+                Some(worktree) if !file.path.is_absolute() => worktree.join(&file.path),
+                _ => file.path.clone(),
             };
-            if !path.starts_with(&lane_path)
+            if !roots.iter().any(|root| path.starts_with(root))
                 || path
                     .components()
                     .any(|c| c == std::path::Component::ParentDir)
@@ -1124,7 +1125,8 @@ impl Inner {
                 }
             }
         }
-        write_files(lane_path, request.files.clone()).await?;
+        let data_path = self.lane_data_path(&project.name(), record.id);
+        write_files(&[lane_path, data_path], request.files.clone()).await?;
         // The process exists before its run row does. A daemon crash between the
         // spawn and `record_unit_run` below leaves a process no later daemon knows
         // about: reconcile cannot list it as an orphan and nothing stops it. The
@@ -2797,6 +2799,8 @@ impl Inner {
                 .clean_lane(record.id)
                 .await
                 .map_err(store_error)?;
+            // Last, so a clean that fails earlier keeps the data its teardown may need.
+            self.remove_lane_data(&project.name(), record.id).await;
         }
         let path = lane.st().path.clone();
         self.secrets.forget(Some(&path));
