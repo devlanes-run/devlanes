@@ -1,5 +1,5 @@
 use crate::{
-    ConfigDuration, Env, Extensions, FnoxConfig, HostConfig, OpaqueExtensions, ReadyConfig, Run,
+    ConfigDuration, Env, Extensions, FnoxConfig, Hosts, OpaqueExtensions, ReadyConfig, Run,
     RunScript, SyncConfig, Templated,
 };
 use indexmap::IndexMap;
@@ -35,7 +35,7 @@ macro_rules! service_fields {
             $($(#[$meta])* pub $field: Option<$ty>,)*
             /// Service-specific environment overrides, above global_env.
             #[schemars(default)]
-            #[schemars(extend("examples" = [{"API_URL":"${{ svc.api.url }}"}]))]
+            #[schemars(extend("examples" = [{"API_URL":"${{ services.api.url }}"}]))]
             pub env: Env,
             #[schemars(skip)]
             /// Options under the selected preset's name, validated by that integration.
@@ -203,7 +203,7 @@ macro_rules! service_fields {
 
 service_fields! {
     /// Display name shown in the TUI and human output instead of the service key;
-    /// any text, spaces allowed. Commands, references and `svc.<key>` keep using the key.
+    /// any text, spaces allowed. Commands, references and `services.<key>` keep using the key.
     #[schemars(extend("examples" = ["Admin API","Storefront (web)"]))]
     name: String,
     /// Template name; resolved after devlanes.local.yaml is merged.
@@ -222,9 +222,9 @@ service_fields! {
     /// Registered framework preset; options use a sibling key with this name.
     #[schemars(extend("examples" = ["vite","next","wrangler","tauri"]))]
     preset: String,
-    /// HTTP hosts, wildcard hosts, and routes to named ports.
-    #[schemars(extend("examples" = [["api.${{ lane.domain }}"],[{"host":"inspect.${{ lane.domain }}","port":"inspector"}]]))]
-    hosts: Vec<HostConfig>,
+    /// HTTP hosts, wildcard hosts, and routes to named ports; one entry or a list.
+    #[schemars(extend("examples" = ["api.${{ lane.domain }}",["api.${{ lane.domain }}"],[{"host":"inspect.${{ lane.domain }}","port":"inspector"}]]))]
+    hosts: Hosts,
     /// Tags used by +tag profile selectors.
     #[schemars(extend("examples" = [["api","essential"],["worker"],["web"]]))]
     tags: Vec<String>,

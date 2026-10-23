@@ -1301,7 +1301,7 @@ impl Inner {
     }
 
     /// Recomputes layouts (ports, URLs, routes) for every assigned lane, lane 0
-    /// first so the others see `lanes.main.svc`. A lane another operation holds
+    /// first so the others see `lanes.main.services`. A lane another operation holds
     /// keeps its layout until that operation ends ([`Self::lane_access`]).
     pub(crate) async fn refresh_views(self: &Arc<Self>, project: &Arc<ProjectRt>) {
         self.refresh_with(project, None).await;
@@ -1324,7 +1324,7 @@ impl Inner {
                 .index()
                 .map_or(u32::MAX, |i| if i == 0 { 0 } else { i })
         });
-        let mut main_svc: Option<Value> = None;
+        let mut main_services: Option<Value> = None;
         for lane in lanes {
             let index = lane.st().index();
             if index.is_none() {
@@ -1337,7 +1337,7 @@ impl Inner {
             // deferred refresh replaces it once the start ended.
             if access == LaneAccess::Held {
                 if let Some(view) = lane.st().view.clone().filter(|_| index == Some(0)) {
-                    main_svc = Some(view.svc.clone());
+                    main_services = Some(view.services_namespace.clone());
                 }
                 continue;
             }
@@ -1356,15 +1356,17 @@ impl Inner {
             let kept = lane.st().view.clone().filter(|_| keep);
             if let Some(view) = kept {
                 if index == Some(0) {
-                    main_svc = Some(view.svc.clone());
+                    main_services = Some(view.services_namespace.clone());
                 }
                 continue;
             }
-            let view = self.compute_view(project, &lane, main_svc.as_ref()).await;
+            let view = self
+                .compute_view(project, &lane, main_services.as_ref())
+                .await;
             match view {
                 Ok(view) => {
                     if index == Some(0) {
-                        main_svc = Some(view.svc.clone());
+                        main_services = Some(view.services_namespace.clone());
                     }
                     let mut st = lane.st();
                     st.view = Some(Arc::new(view));
@@ -1474,7 +1476,7 @@ impl Inner {
             routes: layout.routes.clone(),
             infra_routes,
             lane_env: layout.lane_env().clone(),
-            svc: layout.svc_namespace(),
+            services_namespace: layout.services_namespace(),
         })
     }
 

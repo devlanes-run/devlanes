@@ -332,7 +332,7 @@ fn deferred_trust_targets_warn() {
 /// Locations follow keys that themselves contain dots.
 #[test]
 fn dotted_keys_are_located() {
-    let source = "project: demo\nglobal_env:\n  OTHER: x\n  A.B: '${{ svc.missing.url }}'\n";
+    let source = "project: demo\nglobal_env:\n  OTHER: x\n  A.B: '${{ services.missing.url }}'\n";
     assert_project_error(source, "A.B", "unknown service reference `missing`");
 }
 

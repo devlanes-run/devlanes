@@ -45,14 +45,14 @@ infra:
 global_env:
   ACME_CHANNEL: dev
   RUST_BACKTRACE: "1"
-  # svc.<name>.url is http://127.0.0.1:<port> of that service in this lane.
-  PUBLIC_BUILD_CHAT_API_URL: ${{ svc.chat.url }}
-  PUBLIC_BUILD_MESSAGES_API_URL: ${{ svc.messages.url }}
-  DIRECTORY_API_URL: ${{ svc.directory.url }}
-  AUTHZ_API_URL: ${{ svc.authz.url }}
-  BILLING_API_URL: ${{ svc.billing.url }}
-  SKILLS_API_URL: ${{ svc.skills.url }}
-  ACME_WEBHOOKS_BASE_URL: ${{ svc.webhooks.url }}
+  # services.<name>.url is http://127.0.0.1:<port> of that service in this lane.
+  PUBLIC_BUILD_CHAT_API_URL: ${{ services.chat.url }}
+  PUBLIC_BUILD_MESSAGES_API_URL: ${{ services.messages.url }}
+  DIRECTORY_API_URL: ${{ services.directory.url }}
+  AUTHZ_API_URL: ${{ services.authz.url }}
+  BILLING_API_URL: ${{ services.billing.url }}
+  SKILLS_API_URL: ${{ services.skills.url }}
+  ACME_WEBHOOKS_BASE_URL: ${{ services.webhooks.url }}
 
 # One-shot commands, run on demand with devlanes run or at a lane event.
 tasks:
@@ -117,7 +117,7 @@ services:
     extends: worker
     run_script: workers/messages/package.json#dev
     wrangler:
-      vars: { MEDIA_PUBLIC_ORIGIN: "${{ svc.media.url }}" }
+      vars: { MEDIA_PUBLIC_ORIGIN: "${{ services.media.url }}" }
 
   billing:
     extends: worker
@@ -155,7 +155,7 @@ services:
 
   payments-webhooks:
     platform: node
-    run: pnpm --filter @acme/billing-worker dev:payments -- --port ${{ svc.billing.port }}
+    run: pnpm --filter @acme/billing-worker dev:payments -- --port ${{ services.billing.port }}
     # Starts only when named explicitly.
     autostart: false
     tags: [backend]
@@ -190,7 +190,7 @@ services:
     tauri:
       # replica.index counts the service's instances from 1.
       identifier: invalid.example.desktop.dev${{ '' if lane.index == 0 else '.slot-' ~ lane.index }}.client-${{ replica.index }}
-      dev_url: ${{ svc.desktop_web.url }}
+      dev_url: ${{ services.desktop_web.url }}
       before_dev_command: ""
     # Instances of this service per lane.
     replicas: 1
@@ -200,7 +200,7 @@ services:
       CEF_REMOTE_DEBUGGING_PORT: ${{ self.ports.cdp }}
       DEEP_LINK_DEV_PORT: ${{ self.ports.deep_link }}
       ACME_DESKTOP_REUSE_SERVER: "1"
-      ACME_DESKTOP_REUSE_SERVER_URL: ${{ svc.desktop_web.url }}
+      ACME_DESKTOP_REUSE_SERVER_URL: ${{ services.desktop_web.url }}
     # Ready once the named port cdp accepts a TCP connection.
     ready: { tcp: cdp, timeout: 15m }
     tags: [desktop]
@@ -217,14 +217,14 @@ profiles:
     infra: false
     # Variables for the profile's services, above their own env.
     env:
-      # lanes.main.svc reads services of this project's lane 0.
-      PUBLIC_BUILD_CHAT_API_URL: ${{ lanes.main.svc.chat.url }}
-      PUBLIC_BUILD_MESSAGES_API_URL: ${{ lanes.main.svc.messages.url }}
-      DIRECTORY_API_URL: ${{ lanes.main.svc.directory.url }}
-      AUTHZ_API_URL: ${{ lanes.main.svc.authz.url }}
-      BILLING_API_URL: ${{ lanes.main.svc.billing.url }}
-      SKILLS_API_URL: ${{ lanes.main.svc.skills.url }}
-      ACME_WEBHOOKS_BASE_URL: ${{ lanes.main.svc.webhooks.url }}
+      # lanes.main.services reads services of this project's lane 0.
+      PUBLIC_BUILD_CHAT_API_URL: ${{ lanes.main.services.chat.url }}
+      PUBLIC_BUILD_MESSAGES_API_URL: ${{ lanes.main.services.messages.url }}
+      DIRECTORY_API_URL: ${{ lanes.main.services.directory.url }}
+      AUTHZ_API_URL: ${{ lanes.main.services.authz.url }}
+      BILLING_API_URL: ${{ lanes.main.services.billing.url }}
+      SKILLS_API_URL: ${{ lanes.main.services.skills.url }}
+      ACME_WEBHOOKS_BASE_URL: ${{ lanes.main.services.webhooks.url }}
   remote:
     include: [+watcher, +desktop]
     infra: false

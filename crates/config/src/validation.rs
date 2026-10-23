@@ -662,7 +662,7 @@ fn service_name<'a, E: Extensions>(config: &'a ProjectConfig<E>, alias: &str) ->
 const LANE_ATTRS: &[&str] = &["index", "name", "label", "path", "domain", "port"];
 /// Attributes of `project`.
 const PROJECT_ATTRS: &[&str] = &["name", "primary_path"];
-/// Attributes of `self`, `svc.<name>` and `lanes.main.svc.<name>`.
+/// Attributes of `self`, `services.<name>` and `lanes.main.services.<name>`.
 const SERVICE_ATTRS: &[&str] = &["name", "port", "ports", "url", "public_url", "hosts"];
 /// Attributes of `replica`.
 const REPLICA_ATTRS: &[&str] = &["index", "count"];
@@ -670,7 +670,7 @@ const REPLICA_ATTRS: &[&str] = &["index", "count"];
 const INFRA_ATTRS: &[&str] = &["port", "ports"];
 /// Expression roots; `env` and `projects` contents are only known at runtime.
 const ROOTS: &[&str] = &[
-    "project", "lane", "lanes", "self", "svc", "infra", "env", "projects", "replica",
+    "project", "lane", "lanes", "self", "services", "infra", "env", "projects", "replica",
 ];
 
 /// Reject `<namespace>.<attr>` when `attr` is not one of `known`, naming the closest one.
@@ -699,7 +699,7 @@ fn attribute<'a>(
     ))
 }
 
-/// Explain `svc.my-api.url`, which MiniJinja reads as `svc.my - api.url`.
+/// Explain `services.my-api.url`, which MiniJinja reads as `services.my - api.url`.
 fn dashed_name_hint(text: &str) -> Option<String> {
     let chain = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '.';
     let mut quote = None;
@@ -750,7 +750,7 @@ fn check_reference<E: Extensions>(
     let services = || config.services.keys().map(String::as_str);
     let service = |alias: &str, namespace: &str| {
         service_name(config, alias).ok_or_else(|| {
-            let scope = if namespace == "svc" {
+            let scope = if namespace == "services" {
                 String::new()
             } else {
                 format!(" in {namespace}")
@@ -769,12 +769,12 @@ fn check_reference<E: Extensions>(
         "project" => attribute(path, "project", at(1), PROJECT_ATTRS.iter().copied()),
         "self" => attribute(path, "self", at(1), SERVICE_ATTRS.iter().copied()),
         "replica" => attribute(path, "replica", at(1), REPLICA_ATTRS.iter().copied()),
-        "svc" => match at(1) {
+        "services" => match at(1) {
             Some(alias) => {
-                service(alias, "svc")?;
+                service(alias, "services")?;
                 attribute(
                     path,
-                    &format!("svc.{alias}"),
+                    &format!("services.{alias}"),
                     at(2),
                     SERVICE_ATTRS.iter().copied(),
                 )
@@ -783,13 +783,13 @@ fn check_reference<E: Extensions>(
         },
         "lanes" => {
             attribute(path, "lanes", at(1), ["main"])?;
-            attribute(path, "lanes.main", at(2), ["svc"])?;
+            attribute(path, "lanes.main", at(2), ["services"])?;
             match at(3) {
                 Some(alias) => {
                     service(alias, "lanes.main")?;
                     attribute(
                         path,
-                        &format!("lanes.main.svc.{alias}"),
+                        &format!("lanes.main.services.{alias}"),
                         at(4),
                         SERVICE_ATTRS.iter().copied(),
                     )
@@ -862,7 +862,7 @@ fn expression_graph<E: Extensions>(
         }
     }
     // Only fields that determine a service's endpoint are graph nodes: env.PORT sets
-    // `svc.X.port` (and so `url`), hosts set `public_url`. Other fields only read endpoints, so
+    // `services.X.port` (and so `url`), hosts set `public_url`. Other fields only read endpoints, so
     // two services may reference each other's URLs, and a service its own.
     let mut graph: IndexMap<String, Vec<String>> = IndexMap::new();
     let mut origins = IndexMap::new();
@@ -870,11 +870,11 @@ fn expression_graph<E: Extensions>(
         graph.insert(format!("lane.{}", name.replace('-', "_")), Vec::new());
     }
     for name in config.services.keys() {
-        graph.insert(format!("svc.{name}.port"), Vec::new());
+        graph.insert(format!("services.{name}.port"), Vec::new());
         // Without hosts, public_url falls back to the local URL.
         graph.insert(
-            format!("svc.{name}.public_url"),
-            vec![format!("svc.{name}.port")],
+            format!("services.{name}.public_url"),
+            vec![format!("services.{name}.port")],
         );
     }
     for (path, text) in all {
@@ -892,9 +892,9 @@ fn expression_graph<E: Extensions>(
             current_service.and_then(|name| {
                 let field = &path[format!("services.{name}.").len()..];
                 if field == "env.PORT" {
-                    Some(format!("svc.{name}.port"))
+                    Some(format!("services.{name}.port"))
                 } else if field.starts_with("hosts.") {
-                    Some(format!("svc.{name}.public_url"))
+                    Some(format!("services.{name}.public_url"))
                 } else {
                     None
                 }
@@ -920,7 +920,7 @@ fn expression_graph<E: Extensions>(
                 ));
             }
             let target = match root {
-                "svc" => components
+                "services" => components
                     .next()
                     .and_then(|alias| service_name(config, alias)),
                 "self" => current_service,
@@ -929,16 +929,16 @@ fn expression_graph<E: Extensions>(
             if let Some(target) = target {
                 match components.next() {
                     Some("public_url") => {
-                        edges.insert(format!("svc.{target}.public_url"));
+                        edges.insert(format!("services.{target}.public_url"));
                     }
                     // Named ports are allocated, never computed.
                     Some("ports") => {}
                     Some("port" | "url") => {
-                        edges.insert(format!("svc.{target}.port"));
+                        edges.insert(format!("services.{target}.port"));
                     }
                     _ => {
-                        edges.insert(format!("svc.{target}.port"));
-                        edges.insert(format!("svc.{target}.public_url"));
+                        edges.insert(format!("services.{target}.port"));
+                        edges.insert(format!("services.{target}.public_url"));
                     }
                 }
             }

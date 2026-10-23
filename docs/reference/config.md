@@ -19,7 +19,7 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 
 | Path | Type | Description | Example |
 | --- | --- | --- | --- |
-| `global_env` | map of scalar (templated) | Environment overrides for tasks and services, after derived DEVLANES values. | `{"API_URL":"${{ svc.api.url }}"}` |
+| `global_env` | map of scalar (templated) | Environment overrides for tasks and services, after derived DEVLANES values. | `{"API_URL":"${{ services.api.url }}"}` |
 
 ### infra
 
@@ -46,7 +46,11 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | `infra.env` | map of scalar (templated) | Variables for Compose interpolation, separate from process global_env. | `{"ACME_DB_PORT":15432}` |
 | `infra.exclude` | list of string | Compose services never started by devlanes. | `["caddy"]` |
 | `infra.hidden` | list of string | Containers whose ports must not be mirrored to remote clients. | `["postgres"]` |
-| `infra.hosts` | map of list of string (templated) or object | Container name to HTTP proxy route declarations. | `{"s3mock":["s3.${{ lane.domain }}"]}` |
+| `infra.hosts` | map of string (templated) or object or list of string (templated) or object | Container name to HTTP proxy routes; each takes one entry or a list. | `{"s3mock":"s3.${{ lane.domain }}"}` |
+| `infra.hosts.<name>.fallback` | boolean (templated) | Use this route only when no other hostname matches; defaults to false. | `true` |
+| `infra.hosts.<name>.host` | string (templated) | Exact hostname or `*.` wildcard pattern, evaluated for the current lane. Labels hold letters, digits and inner hyphens; case and a trailing dot are ignored. | `api.${{ lane.domain }}` |
+| `infra.hosts.<name>.host_header` | `preserve` or `upstream` | Preserve the browser's Host header by default, or rewrite it for the upstream. | `preserve` |
+| `infra.hosts.<name>.port` | string | Named port to route to; uses the unit's primary port when omitted. | `inspector` |
 | `infra.hosts.<name>[].fallback` | boolean (templated) | Use this route only when no other hostname matches; defaults to false. | `true` |
 | `infra.hosts.<name>[].host` | string (templated) | Exact hostname or `*.` wildcard pattern, evaluated for the current lane. Labels hold letters, digits and inner hyphens; case and a trailing dot are ignored. | `api.${{ lane.domain }}` |
 | `infra.hosts.<name>[].host_header` | `preserve` or `upstream` | Preserve the browser's Host header by default, or rewrite it for the upstream. | `preserve` |
@@ -114,17 +118,21 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | `services` | map of object | Long-running processes started together after infrastructure and before-service tasks. | `{"api":{"hosts":["api.${{ lane.domain }}"],"run_script":"apps/api/package.json#dev"}}` |
 | `services.<name>.autostart` | boolean (templated) | Start by default unless explicitly selected; defaults to true. | `true` |
 | `services.<name>.cwd` | string (templated) | Working directory relative to the lane worktree. | `apps/api` |
-| `services.<name>.env` | map of scalar (templated) | Service-specific environment overrides, above global_env. | `{"API_URL":"${{ svc.api.url }}"}` |
+| `services.<name>.env` | map of scalar (templated) | Service-specific environment overrides, above global_env. | `{"API_URL":"${{ services.api.url }}"}` |
 | `services.<name>.extends` | string | Template name; resolved after devlanes.local.yaml is merged. | `fastify-api` |
 | `services.<name>.fnox` | object | Override the project fnox profile for this service. | `{"profile":"dev"}` |
 | `services.<name>.fnox.profile` | string (templated) | Secrets profile passed to fnox; uses fnox's default profile when omitted. | `dev` |
 | `services.<name>.hidden` | boolean (templated) | Prevent remote port mirroring; defaults to false. | `false` |
-| `services.<name>.hosts` | list of string (templated) or object | HTTP hosts, wildcard hosts, and routes to named ports. | `["api.${{ lane.domain }}"]` |
+| `services.<name>.hosts` | string (templated) or object or list of string (templated) or object | HTTP hosts, wildcard hosts, and routes to named ports; one entry or a list. | `api.${{ lane.domain }}` |
+| `services.<name>.hosts.fallback` | boolean (templated) | Use this route only when no other hostname matches; defaults to false. | `true` |
+| `services.<name>.hosts.host` | string (templated) | Exact hostname or `*.` wildcard pattern, evaluated for the current lane. Labels hold letters, digits and inner hyphens; case and a trailing dot are ignored. | `api.${{ lane.domain }}` |
+| `services.<name>.hosts.host_header` | `preserve` or `upstream` | Preserve the browser's Host header by default, or rewrite it for the upstream. | `preserve` |
+| `services.<name>.hosts.port` | string | Named port to route to; uses the unit's primary port when omitted. | `inspector` |
 | `services.<name>.hosts[].fallback` | boolean (templated) | Use this route only when no other hostname matches; defaults to false. | `true` |
 | `services.<name>.hosts[].host` | string (templated) | Exact hostname or `*.` wildcard pattern, evaluated for the current lane. Labels hold letters, digits and inner hyphens; case and a trailing dot are ignored. | `api.${{ lane.domain }}` |
 | `services.<name>.hosts[].host_header` | `preserve` or `upstream` | Preserve the browser's Host header by default, or rewrite it for the upstream. | `preserve` |
 | `services.<name>.hosts[].port` | string | Named port to route to; uses the unit's primary port when omitted. | `inspector` |
-| `services.<name>.name` | string | Display name shown in the TUI and human output instead of the service key; any text, spaces allowed. Commands, references and `svc.<key>` keep using the key. | `Admin API` |
+| `services.<name>.name` | string | Display name shown in the TUI and human output instead of the service key; any text, spaces allowed. Commands, references and `services.<key>` keep using the key. | `Admin API` |
 | `services.<name>.next` | object | Options under the service's `next:` key. | `{"args":["--turbo"]}` |
 | `services.<name>.next.args` | list of string | Extra arguments appended after the preset's flags. | `["--turbo"]` |
 | `services.<name>.platform` | string | Platform: node, bun, deno, python or rust; detected from project files when omitted. | `node` |
@@ -152,9 +160,9 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | `services.<name>.sync[].ignore` | list of string | Glob patterns excluded from the copy and subsequent updates. | `["*.map"]` |
 | `services.<name>.sync[].to` | string (templated) | Destination on the client; defaults to a stable project/lane path under ~/devlanes/sync. | `~/devlanes/sync/acme/${{ lane.name }}/chrome-mv3` |
 | `services.<name>.tags` | list of string | Tags used by +tag profile selectors. | `["api","essential"]` |
-| `services.<name>.tauri` | object | Options under the service's `tauri:` key, after expression evaluation. | `{"before_dev_command":"","dev_url":"${{ svc.desktop_web.url }}","identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"}` |
+| `services.<name>.tauri` | object | Options under the service's `tauri:` key, after expression evaluation. | `{"before_dev_command":"","dev_url":"${{ services.desktop_web.url }}","identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"}` |
 | `services.<name>.tauri.before_dev_command` | string | `build.beforeDevCommand` override. Set it to an empty string when the frontend runs as its own devlanes service; otherwise every replica starts its own frontend on the port from `tauri.conf.json`. | `""` |
-| `services.<name>.tauri.dev_url` | string | `build.devUrl`, usually another service's `url`. | `${{ svc.desktop_web.url }}` |
+| `services.<name>.tauri.dev_url` | string | `build.devUrl`, usually another service's `url`. | `${{ services.desktop_web.url }}` |
 | `services.<name>.tauri.identifier` | string | Bundle identifier for this lane and replica. Required; it must differ per lane and replica, for example `com.acme.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}`. | `io.acme.app.lane${{ lane.index }}.client${{ replica.index }}` |
 | `services.<name>.tauri.product_name` | string | `productName` override, shown in the dock and window menus. | `Acme Dev` |
 | `services.<name>.vite` | object | Options under the service's `vite:` key. | `{"args":["--open"]}` |
@@ -180,7 +188,7 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | `tasks.<name>.after` | `services` | Delay a create/start hook until all selected services are ready. | `services` |
 | `tasks.<name>.confirm` | string (templated) | Confirmation text; noninteractive clients must explicitly approve. | `Reset ${{ lane.db_name }} and re-seed it?` |
 | `tasks.<name>.cwd` | string (templated) | Working directory relative to the lane's worktree. | `apps/api` |
-| `tasks.<name>.env` | map of scalar (templated) | Task-specific environment overrides. | `{"API_URL":"${{ svc.api.url }}"}` |
+| `tasks.<name>.env` | map of scalar (templated) | Task-specific environment overrides. | `{"API_URL":"${{ services.api.url }}"}` |
 | `tasks.<name>.fnox` | object | Task-specific fnox profile. | `{"profile":"dev"}` |
 | `tasks.<name>.fnox.profile` | string (templated) | Secrets profile passed to fnox; uses fnox's default profile when omitted. | `dev` |
 | `tasks.<name>.interactive` | boolean (templated) | Require an attached terminal; incompatible with lifecycle hooks. | `true` |
@@ -201,17 +209,21 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | `templates` | map of object | Reusable service settings, inherited with extends after local overrides are merged. | `{"fastify-api":{"platform":"node","ready":{"http":{"path":"/-/health"}},"tags":["api"]}}` |
 | `templates.<name>.autostart` | boolean (templated) | Start by default unless explicitly selected; defaults to true. | `true` |
 | `templates.<name>.cwd` | string (templated) | Working directory relative to the lane worktree. | `apps/api` |
-| `templates.<name>.env` | map of scalar (templated) | Service-specific environment overrides, above global_env. | `{"API_URL":"${{ svc.api.url }}"}` |
+| `templates.<name>.env` | map of scalar (templated) | Service-specific environment overrides, above global_env. | `{"API_URL":"${{ services.api.url }}"}` |
 | `templates.<name>.extends` | string | Template name; resolved after devlanes.local.yaml is merged. | `fastify-api` |
 | `templates.<name>.fnox` | object | Override the project fnox profile for this service. | `{"profile":"dev"}` |
 | `templates.<name>.fnox.profile` | string (templated) | Secrets profile passed to fnox; uses fnox's default profile when omitted. | `dev` |
 | `templates.<name>.hidden` | boolean (templated) | Prevent remote port mirroring; defaults to false. | `false` |
-| `templates.<name>.hosts` | list of string (templated) or object | HTTP hosts, wildcard hosts, and routes to named ports. | `["api.${{ lane.domain }}"]` |
+| `templates.<name>.hosts` | string (templated) or object or list of string (templated) or object | HTTP hosts, wildcard hosts, and routes to named ports; one entry or a list. | `api.${{ lane.domain }}` |
+| `templates.<name>.hosts.fallback` | boolean (templated) | Use this route only when no other hostname matches; defaults to false. | `true` |
+| `templates.<name>.hosts.host` | string (templated) | Exact hostname or `*.` wildcard pattern, evaluated for the current lane. Labels hold letters, digits and inner hyphens; case and a trailing dot are ignored. | `api.${{ lane.domain }}` |
+| `templates.<name>.hosts.host_header` | `preserve` or `upstream` | Preserve the browser's Host header by default, or rewrite it for the upstream. | `preserve` |
+| `templates.<name>.hosts.port` | string | Named port to route to; uses the unit's primary port when omitted. | `inspector` |
 | `templates.<name>.hosts[].fallback` | boolean (templated) | Use this route only when no other hostname matches; defaults to false. | `true` |
 | `templates.<name>.hosts[].host` | string (templated) | Exact hostname or `*.` wildcard pattern, evaluated for the current lane. Labels hold letters, digits and inner hyphens; case and a trailing dot are ignored. | `api.${{ lane.domain }}` |
 | `templates.<name>.hosts[].host_header` | `preserve` or `upstream` | Preserve the browser's Host header by default, or rewrite it for the upstream. | `preserve` |
 | `templates.<name>.hosts[].port` | string | Named port to route to; uses the unit's primary port when omitted. | `inspector` |
-| `templates.<name>.name` | string | Display name shown in the TUI and human output instead of the service key; any text, spaces allowed. Commands, references and `svc.<key>` keep using the key. | `Admin API` |
+| `templates.<name>.name` | string | Display name shown in the TUI and human output instead of the service key; any text, spaces allowed. Commands, references and `services.<key>` keep using the key. | `Admin API` |
 | `templates.<name>.next` | object | Options under the service's `next:` key. | `{"args":["--turbo"]}` |
 | `templates.<name>.next.args` | list of string | Extra arguments appended after the preset's flags. | `["--turbo"]` |
 | `templates.<name>.platform` | string | Platform: node, bun, deno, python or rust; detected from project files when omitted. | `node` |
@@ -239,9 +251,9 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | `templates.<name>.sync[].ignore` | list of string | Glob patterns excluded from the copy and subsequent updates. | `["*.map"]` |
 | `templates.<name>.sync[].to` | string (templated) | Destination on the client; defaults to a stable project/lane path under ~/devlanes/sync. | `~/devlanes/sync/acme/${{ lane.name }}/chrome-mv3` |
 | `templates.<name>.tags` | list of string | Tags used by +tag profile selectors. | `["api","essential"]` |
-| `templates.<name>.tauri` | object | Options under the service's `tauri:` key, after expression evaluation. | `{"before_dev_command":"","dev_url":"${{ svc.desktop_web.url }}","identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"}` |
+| `templates.<name>.tauri` | object | Options under the service's `tauri:` key, after expression evaluation. | `{"before_dev_command":"","dev_url":"${{ services.desktop_web.url }}","identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"}` |
 | `templates.<name>.tauri.before_dev_command` | string | `build.beforeDevCommand` override. Set it to an empty string when the frontend runs as its own devlanes service; otherwise every replica starts its own frontend on the port from `tauri.conf.json`. | `""` |
-| `templates.<name>.tauri.dev_url` | string | `build.devUrl`, usually another service's `url`. | `${{ svc.desktop_web.url }}` |
+| `templates.<name>.tauri.dev_url` | string | `build.devUrl`, usually another service's `url`. | `${{ services.desktop_web.url }}` |
 | `templates.<name>.tauri.identifier` | string | Bundle identifier for this lane and replica. Required; it must differ per lane and replica, for example `com.acme.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}`. | `io.acme.app.lane${{ lane.index }}.client${{ replica.index }}` |
 | `templates.<name>.tauri.product_name` | string | `productName` override, shown in the dock and window menus. | `Acme Dev` |
 | `templates.<name>.vite` | object | Options under the service's `vite:` key. | `{"args":["--open"]}` |

@@ -236,7 +236,7 @@ services:
     env:
       ACME_PAGES_WORKER_PORT: ${{ self.port }}
       # Port of another service in this lane; the dash in its name becomes an underscore.
-      ACME_PAGES_SERVER_PORT: ${{ svc.pages_server.port }}
+      ACME_PAGES_SERVER_PORT: ${{ services.pages_server.port }}
     hosts:
       - pages.${{ lane.domain }}
       - link.${{ lane.domain }}

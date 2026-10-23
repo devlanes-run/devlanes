@@ -983,7 +983,7 @@
   "$id": "https://devlanes.run/v1/user-schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Per-user machine settings, separate from project configuration.",
+  "description": "Run a dev environment per git worktree, side by side. Per-user settings in ~/.devlanes/config.yaml. https://devlanes.run",
   "examples": [
     {
       "hostnames": {
@@ -1198,6 +1198,6 @@
       ]
     }
   },
-  "title": "devlanes user config",
+  "title": "devlanes v0.2.0 user config",
   "type": "object"
 }

@@ -205,7 +205,7 @@ global_env:
   AMQP_URL: amqp://acme:acme@127.0.0.1:${{ infra.rabbitmq.port }}/${{ lane.vhost }}
 ```
 
-`container: rabbitmq` reruns the entry when the container was recreated, since vhosts live in its volume. Route the management UI through the proxy: `infra.hosts: { rabbitmq: ["rabbit.${{ lane.domain }}"] }` with the 15672 port published first, or with `port: "15672"`.
+`container: rabbitmq` reruns the entry when the container was recreated, since vhosts live in its volume. Route the management UI through the proxy: `infra.hosts: { rabbitmq: "rabbit.${{ lane.domain }}" }` with the 15672 port published first, or with `port: "15672"`.
 
 ### MinIO or another S3, one bucket per lane
 
@@ -214,7 +214,7 @@ lanes:
   vars: { bucket: "media-${{ lane.name }}" }
 infra:
   hosts:
-    minio: ["s3.${{ lane.domain }}"]              # presigned URLs the browser can open
+    minio: "s3.${{ lane.domain }}"                # presigned URLs the browser can open
   setup:
     bucket:
       run: [aws, --endpoint-url, "http://127.0.0.1:${{ infra.minio.port }}", s3, mb, "s3://${{ lane.bucket }}"]
@@ -245,7 +245,7 @@ services:
 infra:
   per_lane: [mailpit]
   hosts:
-    mailpit: ["mail.${{ lane.domain }}"]          # first published port, the web UI
+    mailpit: "mail.${{ lane.domain }}"            # first published port, the web UI
 global_env:
   SMTP_HOST: 127.0.0.1
   SMTP_PORT: ${{ infra.mailpit.ports['1025'] }}
@@ -265,7 +265,7 @@ infra:
       env: { JSON_CONFIG_PATH: /config.json }
       volumes: ["./infra/oidc.json:/config.json:ro"]
   hosts:
-    oidc: ["auth.${{ lane.domain }}"]
+    oidc: "auth.${{ lane.domain }}"
 global_env:
   OIDC_ISSUER: https://auth.${{ lane.domain }}/default
 ```

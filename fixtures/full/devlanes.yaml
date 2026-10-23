@@ -39,6 +39,6 @@ services:
     ready: { http: { path: /healthz } }
   web:
     run: [fixture-server, --log-line, web-ready]
-    env: { API_URL: "${{ svc.api.url }}" }
+    env: { API_URL: "${{ services.api.url }}" }
     hosts: ["${{ lane.domain }}"]
     ready: { http: { path: /healthz } }

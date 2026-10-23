@@ -18,8 +18,8 @@ services:
   web:
     preset: vite
     run_script: web/package.json#dev
-    env: { VITE_API_URL: "${{ svc.api.public_url }}" }
-    hosts: ["${{ lane.domain }}"]
+    env: { VITE_API_URL: "${{ services.api.public_url }}" }
+    hosts: "${{ lane.domain }}"
 ```
 
 `--strictPort` makes Vite exit instead of picking another port, which is what you want: a port hop would leave the proxy pointing at nothing. Vite accepts `.localhost` hostnames by default; with a custom TLD set `server.allowedHosts` in `vite.config.ts`. HMR works through the proxy because the client connects back to the page's own host over the same TLS connection; no `hmr.clientPort` is needed.
@@ -36,7 +36,7 @@ services:
     preset: next
     run_script: apps/web/package.json#dev
     next: { args: [--turbopack] }
-    hosts: ["${{ lane.domain }}"]
+    hosts: "${{ lane.domain }}"
     ready: { http: { path: /, timeout: 120s } }
 ```
 
@@ -57,7 +57,7 @@ services:
     wrangler:
       vars: { PUBLIC_BASE_URL: "${{ self.public_url }}" }
       args: [--env-file, .dev.vars]
-    hosts: ["api.${{ lane.domain }}"]
+    hosts: "api.${{ lane.domain }}"
 lanes:
   hosts_file: always
 ```
@@ -82,7 +82,7 @@ services:
     run_script: apps/desktop/package.json#dev
     tauri:
       identifier: com.acme.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}
-      dev_url: ${{ svc.desktop_web.url }}
+      dev_url: ${{ services.desktop_web.url }}
       before_dev_command: ""
     replicas: 2
     env:
@@ -103,10 +103,10 @@ The preset writes `<worktree>/.devlanes/tauri/<service>.<replica>.conf.json` and
 services:
   docs:
     run: pnpm -F @acme/docs exec rspress dev --host 127.0.0.1 --port ${{ self.port }}
-    hosts: ["docs.${{ lane.domain }}"]
+    hosts: "docs.${{ lane.domain }}"
   storybook:
     run_script: packages/ui/package.json#storybook   # "storybook": "storybook dev --ci -p $PORT"
-    hosts: ["storybook.${{ lane.domain }}"]
+    hosts: "storybook.${{ lane.domain }}"
 ```
 
 Any tool that takes a port flag or reads `PORT` works this way. Bind `127.0.0.1` when the tool lets you; the proxy dials loopback.

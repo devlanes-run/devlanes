@@ -35,7 +35,7 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     pub fnox: Option<FnoxConfig>,
     /// Environment overrides for tasks and services, after derived DEVLANES values.
     #[serde(default)]
-    #[schemars(extend("examples" = [{"API_URL":"${{ svc.api.url }}"}]))]
+    #[schemars(extend("examples" = [{"API_URL":"${{ services.api.url }}"}]))]
     pub global_env: Env,
     /// One-shot commands; lifecycle hooks execute in declaration order.
     #[serde(default)]
@@ -226,7 +226,7 @@ pub struct TaskConfig {
     pub cwd: Option<Templated<String>>,
     /// Task-specific environment overrides.
     #[serde(default)]
-    #[schemars(extend("examples" = [{"API_URL":"${{ svc.api.url }}"}]))]
+    #[schemars(extend("examples" = [{"API_URL":"${{ services.api.url }}"}]))]
     pub env: Env,
     /// Task-specific fnox profile.
     pub fnox: Option<FnoxConfig>,
@@ -352,6 +352,48 @@ pub enum HostConfig {
     /// Hostname with optional named port, fallback, and Host-header policy.
     #[schemars(extend("examples" = [{"host":"*.${{ lane.domain }}","fallback":true}]))]
     Route(HostRoute),
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("examples" = ["api.${{ lane.domain }}",["api.${{ lane.domain }}",{"host":"inspect.${{ lane.domain }}","port":"inspector"}]]))]
+/// One hostname or host route, or a list of them.
+pub enum Hosts {
+    /// A single hostname or host route mapping.
+    #[schemars(extend("examples" = ["api.${{ lane.domain }}"]))]
+    One(HostConfig),
+    /// Hostnames and host route mappings, in order.
+    #[schemars(extend("examples" = [["api.${{ lane.domain }}","admin.${{ lane.domain }}"]]))]
+    Many(Vec<HostConfig>),
+}
+
+impl std::ops::Deref for Hosts {
+    type Target = [HostConfig];
+
+    /// The entries as a list, whichever form was written.
+    fn deref(&self) -> &[HostConfig] {
+        match self {
+            Self::One(host) => std::slice::from_ref(host),
+            Self::Many(hosts) => hosts,
+        }
+    }
+}
+
+impl<'a> IntoIterator for &'a Hosts {
+    type Item = &'a HostConfig;
+    type IntoIter = std::slice::Iter<'a, HostConfig>;
+
+    /// Iterate the entries in order.
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl From<Vec<HostConfig>> for Hosts {
+    /// Wrap a list of entries.
+    fn from(hosts: Vec<HostConfig>) -> Self {
+        Self::Many(hosts)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -511,10 +553,10 @@ pub struct InfraConfig {
     #[serde(default)]
     #[schemars(extend("examples" = [{"ACME_DB_PORT":15432}]))]
     pub env: Env,
-    /// Container name to HTTP proxy route declarations.
+    /// Container name to HTTP proxy routes; each takes one entry or a list.
     #[serde(default)]
-    #[schemars(extend("examples" = [{"s3mock":["s3.${{ lane.domain }}"]}]))]
-    pub hosts: IndexMap<String, Vec<HostConfig>>,
+    #[schemars(extend("examples" = [{"s3mock":"s3.${{ lane.domain }}"}]))]
+    pub hosts: IndexMap<String, Hosts>,
     /// Containers whose ports must not be mirrored to remote clients.
     #[schemars(extend("examples" = [["postgres"]]))]
     pub hidden: Option<Vec<String>>,

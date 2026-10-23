@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-use devlanes_config::{HostConfig, Scalar, Templated};
+use devlanes_config::{HostConfig, Hosts, Scalar, Templated};
 use devlanes_core::{
     contrib::{Contributor, DetectCx, ScriptRunner, SecretsProvider, UnitKind},
     env::EnvLayer,
@@ -432,7 +432,7 @@ async fn public_https_port() {
         let api = &lane.services["api"];
         assert_eq!(api.public_url.as_deref(), Some(api_url.as_str()));
         assert_eq!(api.launch.env.values["DEVLANES_PUBLIC_URL"], api_url);
-        // svc.api.public_url feeds web's env through an expression.
+        // services.api.public_url feeds web's env through an expression.
         assert_eq!(
             lane.services["web"].launch.env.values["VITE_API_URL"],
             api_url
@@ -440,7 +440,7 @@ async fn public_https_port() {
         assert_eq!(lane.lane_env()["DEVLANES_PUBLIC_URL_API"], api_url);
         assert_eq!(lane.lane_env()["DEVLANES_PUBLIC_URL_WEB"], web_url);
         assert_eq!(
-            lane.svc_namespace()["api"]["public_url"],
+            lane.services_namespace()["api"]["public_url"],
             json!(api_url.as_str())
         );
         assert!(lane.origins.contains(&api_url) && lane.origins.contains(&web_url));
@@ -565,7 +565,7 @@ async fn projects_namespace_with_default() {
     let facts = facts("acme", 1, Some("feature"));
     let (block, offsets) = allocation(&config, 21_000, &[]);
     let infra = infra();
-    let projects = json!({"workflows": {"svc": {"referee": {"public_url": "https://referee.workflows-1.localhost"}}}});
+    let projects = json!({"workflows": {"services": {"referee": {"public_url": "https://referee.workflows-1.localhost"}}}});
     let client = BTreeMap::from([("SENTRY_DSN".to_owned(), "dsn".to_owned())]);
     let mut input = ResolveInput::new(&config, &facts, block, &offsets);
     input.infra = &infra;
@@ -578,7 +578,7 @@ async fn projects_namespace_with_default() {
 }
 
 #[tokio::test]
-/// `lanes.main.svc` comes from lane 0's layout; without it only affected units fail.
+/// `lanes.main.services` comes from lane 0's layout; without it only affected units fail.
 async fn lanes_main_namespace() {
     let config = parse(FULL);
     let infra = infra();
@@ -587,7 +587,7 @@ async fn lanes_main_namespace() {
     let mut main_input = ResolveInput::new(&config, &main_facts, block0, &offsets);
     main_input.infra = &infra;
     let main = lane_layout(&main_input).expect("lane 0 layout");
-    let namespace = main.svc_namespace();
+    let namespace = main.services_namespace();
     assert_eq!(
         namespace["crm-api"]["public_url"],
         json!("https://crm.acme.localhost")
@@ -821,12 +821,12 @@ async fn identity_cycles_are_rejected() {
     let mut config = parse(
         "project: demo\nservices:\n  a: { run: a, hosts: [a.localhost] }\n  b: { run: b, hosts: [b.localhost] }\n",
     );
-    config.services["a"].hosts = Some(vec![HostConfig::Name(Templated::Expression(
-        "a${{ svc.b.port }}.localhost".into(),
-    ))]);
-    config.services["b"].hosts = Some(vec![HostConfig::Name(Templated::Expression(
-        "b${{ svc.a.port }}.localhost".into(),
-    ))]);
+    config.services["a"].hosts = Some(Hosts::One(HostConfig::Name(Templated::Expression(
+        "a${{ services.b.port }}.localhost".into(),
+    ))));
+    config.services["b"].hosts = Some(Hosts::One(HostConfig::Name(Templated::Expression(
+        "b${{ services.a.port }}.localhost".into(),
+    ))));
     let facts = facts("demo", 1, None);
     let (block, offsets) = allocation(&config, 21_000, &[]);
     let error =
@@ -1196,7 +1196,7 @@ async fn only_plans_the_named_units() {
         format!("{:?}", part.teardown.get("database")),
         format!("{:?}", full.teardown.get("database"))
     );
-    assert_eq!(part.svc_namespace(), full.svc_namespace());
+    assert_eq!(part.services_namespace(), full.services_namespace());
     assert_eq!(part.lane_env(), full.lane_env());
     assert_eq!(scripts, ["db-deploy", "start"], "only migrate and seed");
 }

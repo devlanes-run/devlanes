@@ -39,7 +39,7 @@ In the daemon the block and offsets come from `devlanes-state`, and `ResolveInpu
 - `select_profiles`: services for one or more profiles and `start` selectors (names, globs, `+tag`); `select` is the single-profile form.
 - `profile_summaries`: profile names, include/exclude selectors and literal `infra: false`, for clients.
 - `tag_colors`: tag colors from the config's `tags:` map, for `devlanes_core::color::unit_color`.
-- `lane_layout`: ports, URLs, routes and `lane_env()` without contributors or secrets, for idle lanes and lane 0's `svc_namespace()`.
+- `lane_layout`: ports, URLs, routes and `lane_env()` without contributors or secrets, for idle lanes and lane 0's `services_namespace()`.
 - `resolve_lane`: the full `ResolvedLane` with a `Launch` per unit.
 - `fixed_block_start`: block start from `lanes.vars.port` or a matrix row.
 - `detect_platform`: the platform for a unit without `platform:`, from contributor claims (highest confidence, then higher priority, then smaller id). resolve has no built-in file rules.

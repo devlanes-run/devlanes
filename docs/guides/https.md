@@ -61,7 +61,7 @@ services:
       - { host: "legacy.${{ lane.domain }}", host_header: upstream } # send 127.0.0.1:<port> as Host
 infra:
   hosts:
-    minio: ["s3.${{ lane.domain }}"]                              # a container's published port
+    minio: "s3.${{ lane.domain }}"                                # a container's published port
 ```
 
 `lane.domain` is `acme.localhost` in lane 0 and `acme-<N>.localhost` elsewhere; keep every hostname under it or under a `lanes.vars` value built the same way, so lanes never share a name. That value must also end in `.localhost`, or in your `hostnames.tld` with the resolver strategy; anything else does not resolve to your machine. Matching is exact first, then wildcards (longest first), then fallbacks. A wildcard covers any depth below its parent but not the parent itself; list the apex too when you need it. A name claimed by two lanes goes to the one with running units and both get a `host_conflict` warning.

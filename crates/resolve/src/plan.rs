@@ -192,7 +192,7 @@ async fn plan_lane<E: Extensions>(
             }
         }
     }
-    let svc = ns.svc.clone();
+    let services_namespace = ns.services.clone();
     Ok(ResolvedLane {
         facts: input.facts.clone(),
         domain: layout.domain,
@@ -210,7 +210,7 @@ async fn plan_lane<E: Extensions>(
         errors,
         warnings: layout.warnings,
         lane_env: layout.lane_env,
-        svc,
+        services_namespace,
     })
 }
 

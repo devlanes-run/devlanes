@@ -335,6 +335,49 @@
       ],
       "type": "object"
     },
+    "Hosts": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HostConfig",
+          "description": "A single hostname or host route mapping.",
+          "examples": [
+            "api.${{ lane.domain }}"
+          ]
+        },
+        {
+          "description": "Hostnames and host route mappings, in order.",
+          "examples": [
+            [
+              "api.${{ lane.domain }}",
+              "admin.${{ lane.domain }}"
+            ]
+          ],
+          "items": {
+            "$ref": "#/$defs/HostConfig",
+            "description": "Hostname routed by the HTTP proxy, optionally with route settings.",
+            "examples": [
+              "api.${{ lane.domain }}",
+              {
+                "fallback": true,
+                "host": "*.${{ lane.domain }}"
+              }
+            ]
+          },
+          "type": "array"
+        }
+      ],
+      "description": "One hostname or host route, or a list of them.",
+      "examples": [
+        "api.${{ lane.domain }}",
+        [
+          "api.${{ lane.domain }}",
+          {
+            "host": "inspect.${{ lane.domain }}",
+            "port": "inspector"
+          }
+        ]
+      ]
+    },
     "HostsFile": {
       "description": "Whether project hostnames are also written to the system hosts file.",
       "examples": [
@@ -701,32 +744,24 @@
         },
         "hosts": {
           "additionalProperties": {
-            "description": "Container name to HTTP proxy route declarations.",
+            "$ref": "#/$defs/Hosts",
+            "description": "One hostname or host route, or a list of them.",
             "examples": [
+              "api.${{ lane.domain }}",
               [
-                "s3.${{ lane.domain }}"
-              ]
-            ],
-            "items": {
-              "$ref": "#/$defs/HostConfig",
-              "description": "Hostname routed by the HTTP proxy, optionally with route settings.",
-              "examples": [
                 "api.${{ lane.domain }}",
                 {
-                  "fallback": true,
-                  "host": "*.${{ lane.domain }}"
+                  "host": "inspect.${{ lane.domain }}",
+                  "port": "inspector"
                 }
               ]
-            },
-            "type": "array"
+            ]
           },
           "default": {},
-          "description": "Container name to HTTP proxy route declarations.",
+          "description": "Container name to HTTP proxy routes; each takes one entry or a list.",
           "examples": [
             {
-              "s3mock": [
-                "s3.${{ lane.domain }}"
-              ]
+              "s3mock": "s3.${{ lane.domain }}"
             }
           ],
           "type": "object"
@@ -981,7 +1016,7 @@
       "examples": [
         {
           "before_dev_command": "",
-          "dev_url": "${{ svc.desktop_web.url }}",
+          "dev_url": "${{ services.desktop_web.url }}",
           "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
         }
       ],
@@ -1000,7 +1035,7 @@
         "dev_url": {
           "description": "`build.devUrl`, usually another service's `url`.",
           "examples": [
-            "${{ svc.desktop_web.url }}"
+            "${{ services.desktop_web.url }}"
           ],
           "type": [
             "string",
@@ -1837,7 +1872,7 @@
           "description": "Service-specific environment overrides, above global_env.",
           "examples": [
             {
-              "API_URL": "${{ svc.api.url }}"
+              "API_URL": "${{ services.api.url }}"
             }
           ],
           "type": "object"
@@ -1884,8 +1919,17 @@
           ]
         },
         "hosts": {
-          "description": "HTTP hosts, wildcard hosts, and routes to named ports.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hosts"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "HTTP hosts, wildcard hosts, and routes to named ports; one entry or a list.",
           "examples": [
+            "api.${{ lane.domain }}",
             [
               "api.${{ lane.domain }}"
             ],
@@ -1895,25 +1939,10 @@
                 "port": "inspector"
               }
             ]
-          ],
-          "items": {
-            "$ref": "#/$defs/HostConfig",
-            "description": "Hostname routed by the HTTP proxy, optionally with route settings.",
-            "examples": [
-              "api.${{ lane.domain }}",
-              {
-                "fallback": true,
-                "host": "*.${{ lane.domain }}"
-              }
-            ]
-          },
-          "type": [
-            "array",
-            "null"
           ]
         },
         "name": {
-          "description": "Display name shown in the TUI and human output instead of the service key;\nany text, spaces allowed. Commands, references and `svc.<key>` keep using the key.",
+          "description": "Display name shown in the TUI and human output instead of the service key;\nany text, spaces allowed. Commands, references and `services.<key>` keep using the key.",
           "examples": [
             "Admin API",
             "Storefront (web)"
@@ -2139,7 +2168,7 @@
           "examples": [
             {
               "before_dev_command": "",
-              "dev_url": "${{ svc.desktop_web.url }}",
+              "dev_url": "${{ services.desktop_web.url }}",
               "identifier": "io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"
             }
           ],
@@ -2552,7 +2581,7 @@
           "description": "Task-specific environment overrides.",
           "examples": [
             {
-              "API_URL": "${{ svc.api.url }}"
+              "API_URL": "${{ services.api.url }}"
             }
           ],
           "type": "object"
@@ -2917,7 +2946,7 @@
   "$id": "https://devlanes.run/v1/schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Fully merged project configuration. Map order is declaration order.",
+  "description": "Run a dev environment per git worktree, side by side. https://devlanes.run",
   "examples": [
     {
       "project": "acme",
@@ -2957,7 +2986,7 @@
       "description": "Environment overrides for tasks and services, after derived DEVLANES values.",
       "examples": [
         {
-          "API_URL": "${{ svc.api.url }}"
+          "API_URL": "${{ services.api.url }}"
         }
       ],
       "type": "object"
@@ -3167,6 +3196,6 @@
       "type": "object"
     }
   },
-  "title": "devlanes",
+  "title": "devlanes v0.2.0",
   "type": "object"
 }

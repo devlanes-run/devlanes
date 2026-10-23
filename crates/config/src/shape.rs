@@ -6,7 +6,7 @@
 //! its source position.
 
 use crate::{
-    ComposeFiles, HostConfig, HostRoute, InfraCommand, InfraCommandOptions, ProfileConfig,
+    ComposeFiles, HostConfig, HostRoute, Hosts, InfraCommand, InfraCommandOptions, ProfileConfig,
     ProfileOptions, ReadyCheck, ReadyConfig, Run, RunScript, Scalar, ScriptSource, Started,
     TcpReady, Templated, TerminalConfig, TerminalSettings,
 };
@@ -98,6 +98,19 @@ shape!(HostConfig, "a hostname or a host route mapping",
         Ok(HostConfig::Name(templated(value)))
     }
     mapping!(HostConfig::Route, HostRoute);
+);
+
+shape!(Hosts, "a hostname, a host route mapping, or a list of them",
+    /// Parse a single hostname.
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<Hosts, E> {
+        Ok(Hosts::One(HostConfig::Name(templated(value))))
+    }
+    /// Parse a single route through the route's strict parser.
+    fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<Hosts, M::Error> {
+        HostRoute::deserialize(MapAccessDeserializer::new(map))
+            .map(|route| Hosts::One(HostConfig::Route(route)))
+    }
+    sequence!(Hosts::Many, Vec<HostConfig>);
 );
 
 shape!(ProfileConfig, "a selector list or a profile mapping",

@@ -22,7 +22,7 @@ Every unit also gets `DEVLANES_CA_CERT` (the CA) and `DEVLANES_CA_BUNDLE` (syste
 services:
   api:
     run_script: apps/api/package.json#dev
-    hosts: ["api.${{ lane.domain }}"]
+    hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /healthz } }
 ```
 
@@ -72,13 +72,13 @@ services:
     platform: python
     cwd: services/api
     run: uv run uvicorn acme.main:app --host 127.0.0.1 --port ${{ self.port }} --reload --proxy-headers
-    hosts: ["api.${{ lane.domain }}"]
+    hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /healthz, timeout: 60s } }
   admin:
     platform: python
     cwd: services/admin
     run: uv run python manage.py runserver 127.0.0.1:${{ self.port }}
-    hosts: ["admin.${{ lane.domain }}"]
+    hosts: "admin.${{ lane.domain }}"
 ```
 
 `uv run` and `poetry run` take care of the virtualenv; devlanes never activates one. `PYTHONUNBUFFERED=1` makes logs arrive immediately.
@@ -99,7 +99,7 @@ Behind the proxy the app sees `http://127.0.0.1:<port>` with `X-Forwarded-Proto:
 services:
   api:
     run_script: Cargo.toml#server         # cargo run --bin server, -p <member> in a workspace
-    hosts: ["api.${{ lane.domain }}"]
+    hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /healthz, timeout: 5m } }
   api-watch:
     run: cargo watch -x 'run --bin server' # or bacon run; pass --port if the binary needs it

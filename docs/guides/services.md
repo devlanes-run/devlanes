@@ -8,26 +8,26 @@ Configurations for the shapes most repositories have. Each one assumes the basic
 services:
   api:
     run_script: apps/api/package.json#dev
-    hosts: ["api.${{ lane.domain }}"]
+    hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /healthz } }
     env:
       COOKIE_DOMAIN: ${{ lane.domain }}      # the app reads DEVLANES_ORIGINS for its CORS allow-list
   web:
     preset: vite
     run_script: apps/web/package.json#dev
-    hosts: ["${{ lane.domain }}"]
-    env: { VITE_API_URL: "${{ svc.api.public_url }}" }
+    hosts: "${{ lane.domain }}"
+    env: { VITE_API_URL: "${{ services.api.public_url }}" }
 ```
 
 The browser talks to `https://acme-2.localhost` and `https://api.acme-2.localhost`; both share the site `acme-2.localhost`, so a cookie with `Domain=acme-2.localhost` and `SameSite=Lax` works across them and never leaks into lane 3. `DEVLANES_ORIGINS` is in every service's environment and lists the https origins of the lane, so the API's CORS allow-list can be `process.env.DEVLANES_ORIGINS.split(',')` instead of a hardcoded list. It is not reachable as `${{ env.DEVLANES_ORIGINS }}`, since `env.*` reads your shell, not devlanes' own variables.
 
-For server-to-server calls prefer `${{ svc.api.url }}` (`http://127.0.0.1:<port>`, no TLS, no proxy hop). Use `public_url` when the value ends up in a browser, an OAuth redirect or a webhook.
+For server-to-server calls prefer `${{ services.api.url }}` (`http://127.0.0.1:<port>`, no TLS, no proxy hop). Use `public_url` when the value ends up in a browser, an OAuth redirect or a webhook.
 
-A frontend that proxies `/api` to the backend itself (Vite `server.proxy`, Next rewrites) points at `${{ svc.api.url }}` and needs no CORS at all:
+A frontend that proxies `/api` to the backend itself (Vite `server.proxy`, Next rewrites) points at `${{ services.api.url }}` and needs no CORS at all:
 
 ```yaml
   web:
-    env: { API_PROXY_TARGET: "${{ svc.api.url }}" }
+    env: { API_PROXY_TARGET: "${{ services.api.url }}" }
 ```
 
 ## Workers and consumers
@@ -59,7 +59,7 @@ services:
   grpc-api:
     run: cargo run --bin grpc-api          # listens on PORT
   web-bff:
-    env: { GRPC_TARGET: "127.0.0.1:${{ svc.grpc_api.port }}" }
+    env: { GRPC_TARGET: "127.0.0.1:${{ services.grpc_api.port }}" }
 ```
 
 The same goes for databases, debuggers and anything that is not HTTP. On a connected box these ports are mirrored under the same number ([remote boxes](../remote.md#mirroring)).
@@ -78,7 +78,7 @@ services:
       - { host: "ws.${{ lane.domain }}", port: ws }
 ```
 
-Each `self.ports.<name>` allocates one more port, stable per lane. Route hostnames to them with `hosts[].port`. The admin UI and the public API of one process can live on two hostnames this way, and `devlanes url ls` lists all of them.
+`hosts` takes one hostname or route mapping, or a list of them: `hosts: "api.${{ lane.domain }}"` is the same as a one-item list. Each `self.ports.<name>` allocates one more port, stable per lane. Route hostnames to them with `hosts[].port`. The admin UI and the public API of one process can live on two hostnames this way, and `devlanes url ls` lists all of them.
 
 ## Wildcard hostnames
 
@@ -108,7 +108,7 @@ services:
     env: { WORKER_ID: "${{ replica.index }}" }
 ```
 
-Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `svc.worker.url` is replica 1. Named ports are allocated per replica too.
+Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `services.worker.url` is replica 1. Named ports are allocated per replica too.
 
 ## Services that start on demand
 
@@ -116,10 +116,10 @@ Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `
 services:
   storybook:
     run_script: packages/ui/package.json#storybook
-    hosts: ["storybook.${{ lane.domain }}"]
+    hosts: "storybook.${{ lane.domain }}"
     autostart: false
   stripe-listen:
-    run: stripe listen --forward-to ${{ svc.api.url }}/webhooks/stripe
+    run: stripe listen --forward-to ${{ services.api.url }}/webhooks/stripe
     autostart: false
 ```
 
@@ -133,11 +133,11 @@ profiles:
     include: [+web]
     infra: false
     env:
-      API_URL: ${{ lanes.main.svc.api.url }}
-      VITE_API_URL: ${{ lanes.main.svc.api.public_url }}
+      API_URL: ${{ lanes.main.services.api.url }}
+      VITE_API_URL: ${{ lanes.main.services.api.public_url }}
 ```
 
-`devlanes start --profile attach` in a feature worktree runs only the frontend and points it at lane 0's API, skipping containers and setup. `lanes.main.svc.*` resolves against lane 0 of the same project; `projects.<name>.svc.*` reaches another devlanes project that is running.
+`devlanes start --profile attach` in a feature worktree runs only the frontend and points it at lane 0's API, skipping containers and setup. `lanes.main.services.*` resolves against lane 0 of the same project; `projects.<name>.services.*` reaches another devlanes project that is running.
 
 ## Lifecycle tasks
 
@@ -169,8 +169,8 @@ templates:
     tags: [api]
     ready: { http: { path: /-/health } }
 services:
-  catalog:  { extends: fastify-api, run_script: apps/catalog/package.json#dev, hosts: ["catalog.${{ lane.domain }}"], tags: [api, essential] }
-  crm:      { extends: fastify-api, run_script: apps/crm/package.json#dev, hosts: ["crm.${{ lane.domain }}"], tags: [api, essential] }
+  catalog:  { extends: fastify-api, run_script: apps/catalog/package.json#dev, hosts: "catalog.${{ lane.domain }}", tags: [api, essential] }
+  crm:      { extends: fastify-api, run_script: apps/crm/package.json#dev, hosts: "crm.${{ lane.domain }}", tags: [api, essential] }
 profiles:
   default: [+essential]
   backend: [+api, +worker]

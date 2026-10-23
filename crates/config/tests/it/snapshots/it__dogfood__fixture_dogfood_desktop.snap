@@ -84,13 +84,13 @@ expression: config
   "global_env": {
     "ACME_CHANNEL": "dev",
     "RUST_BACKTRACE": "1",
-    "PUBLIC_BUILD_CHAT_API_URL": "${{ svc.chat.url }}",
-    "PUBLIC_BUILD_MESSAGES_API_URL": "${{ svc.messages.url }}",
-    "DIRECTORY_API_URL": "${{ svc.directory.url }}",
-    "AUTHZ_API_URL": "${{ svc.authz.url }}",
-    "BILLING_API_URL": "${{ svc.billing.url }}",
-    "SKILLS_API_URL": "${{ svc.skills.url }}",
-    "ACME_WEBHOOKS_BASE_URL": "${{ svc.webhooks.url }}"
+    "PUBLIC_BUILD_CHAT_API_URL": "${{ services.chat.url }}",
+    "PUBLIC_BUILD_MESSAGES_API_URL": "${{ services.messages.url }}",
+    "DIRECTORY_API_URL": "${{ services.directory.url }}",
+    "AUTHZ_API_URL": "${{ services.authz.url }}",
+    "BILLING_API_URL": "${{ services.billing.url }}",
+    "SKILLS_API_URL": "${{ services.skills.url }}",
+    "ACME_WEBHOOKS_BASE_URL": "${{ services.webhooks.url }}"
   },
   "tasks": {
     "sync-env": {
@@ -276,7 +276,7 @@ expression: config
       },
       "wrangler": {
         "vars": {
-          "MEDIA_PUBLIC_ORIGIN": "${{ svc.media.url }}"
+          "MEDIA_PUBLIC_ORIGIN": "${{ services.media.url }}"
         }
       }
     },
@@ -394,7 +394,7 @@ expression: config
       }
     },
     "payments-webhooks": {
-      "run": "pnpm --filter @acme/billing-worker dev:payments -- --port ${{ svc.billing.port }}",
+      "run": "pnpm --filter @acme/billing-worker dev:payments -- --port ${{ services.billing.port }}",
       "platform": "node",
       "tags": [
         "backend"
@@ -476,11 +476,11 @@ expression: config
         "CEF_REMOTE_DEBUGGING_PORT": "${{ self.ports.cdp }}",
         "DEEP_LINK_DEV_PORT": "${{ self.ports.deep_link }}",
         "ACME_DESKTOP_REUSE_SERVER": "1",
-        "ACME_DESKTOP_REUSE_SERVER_URL": "${{ svc.desktop_web.url }}"
+        "ACME_DESKTOP_REUSE_SERVER_URL": "${{ services.desktop_web.url }}"
       },
       "tauri": {
         "identifier": "invalid.example.desktop.dev${{ '' if lane.index == 0 else '.slot-' ~ lane.index }}.client-${{ replica.index }}",
-        "dev_url": "${{ svc.desktop_web.url }}",
+        "dev_url": "${{ services.desktop_web.url }}",
         "before_dev_command": ""
       }
     }
@@ -506,13 +506,13 @@ expression: config
       "exclude": null,
       "infra": false,
       "env": {
-        "PUBLIC_BUILD_CHAT_API_URL": "${{ lanes.main.svc.chat.url }}",
-        "PUBLIC_BUILD_MESSAGES_API_URL": "${{ lanes.main.svc.messages.url }}",
-        "DIRECTORY_API_URL": "${{ lanes.main.svc.directory.url }}",
-        "AUTHZ_API_URL": "${{ lanes.main.svc.authz.url }}",
-        "BILLING_API_URL": "${{ lanes.main.svc.billing.url }}",
-        "SKILLS_API_URL": "${{ lanes.main.svc.skills.url }}",
-        "ACME_WEBHOOKS_BASE_URL": "${{ lanes.main.svc.webhooks.url }}"
+        "PUBLIC_BUILD_CHAT_API_URL": "${{ lanes.main.services.chat.url }}",
+        "PUBLIC_BUILD_MESSAGES_API_URL": "${{ lanes.main.services.messages.url }}",
+        "DIRECTORY_API_URL": "${{ lanes.main.services.directory.url }}",
+        "AUTHZ_API_URL": "${{ lanes.main.services.authz.url }}",
+        "BILLING_API_URL": "${{ lanes.main.services.billing.url }}",
+        "SKILLS_API_URL": "${{ lanes.main.services.skills.url }}",
+        "ACME_WEBHOOKS_BASE_URL": "${{ lanes.main.services.webhooks.url }}"
       },
       "run_scripts": {}
     },

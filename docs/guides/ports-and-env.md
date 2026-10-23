@@ -21,7 +21,7 @@ services:
     run_script: web/package.json#dev
 ```
 
-The service gets `PORT` and `HOST=127.0.0.1` in its environment and must listen there. There is no port detection: devlanes dials `127.0.0.1:<port>` for `ready: tcp`, for the proxy and for `svc.<name>.url`. A service that listens somewhere else fails readiness after 60 s with the ports its process tree did bind, so the message tells you what it chose instead.
+The service gets `PORT` and `HOST=127.0.0.1` in its environment and must listen there. There is no port detection: devlanes dials `127.0.0.1:<port>` for `ready: tcp`, for the proxy and for `services.<name>.url`. A service that listens somewhere else fails readiness after 60 s with the ports its process tree did bind, so the message tells you what it chose instead.
 
 Three ways to override the port:
 
@@ -49,7 +49,7 @@ services:
     ready: { tcp: metrics }                                      # wait on a named port
 ```
 
-`hosts[].port` and `ready.tcp` also allocate the name they mention, and the wrangler preset allocates `inspector`. Another service reads them as `${{ svc.api.ports.metrics }}`, but only the owning service's own fields allocate; a reference from elsewhere to an unknown name fails at start as undefined. The primary port is named `default` in `hosts[].port` and `ready.tcp`.
+`hosts[].port` and `ready.tcp` also allocate the name they mention, and the wrangler preset allocates `inspector`. Another service reads them as `${{ services.api.ports.metrics }}`, but only the owning service's own fields allocate; a reference from elsewhere to an unknown name fails at start as undefined. The primary port is named `default` in `hosts[].port` and `ready.tcp`.
 
 Replicas each get their own ports: `${{ self.port }}` differs per replica, named ports too. `replicas` must be a literal number, since every lane allocates the same set.
 
@@ -57,14 +57,14 @@ Replicas each get their own ports: `${{ self.port }}` differs per replica, named
 
 | Expression | Value |
 | --- | --- |
-| `${{ svc.api.port }}` | the allocated port |
-| `${{ svc.api.url }}` | `http://127.0.0.1:<port>`, for server-to-server calls inside the lane |
-| `${{ svc.api.public_url }}` | `https://api.acme-2.localhost` (with `:8443` when the proxy fell back), for browsers and anything that must see the hostname |
-| `${{ svc.api.hosts }}` | the list of hostnames |
-| `${{ lanes.main.svc.api.url }}` | the same service in lane 0, for profiles that reuse one backend |
-| `${{ projects.billing.svc.api.public_url \| default('https://billing.staging.example.invalid') }}` | a service of another running devlanes project |
+| `${{ services.api.port }}` | the allocated port |
+| `${{ services.api.url }}` | `http://127.0.0.1:<port>`, for server-to-server calls inside the lane |
+| `${{ services.api.public_url }}` | `https://api.acme-2.localhost` (with `:8443` when the proxy fell back), for browsers and anything that must see the hostname |
+| `${{ services.api.hosts }}` | the list of hostnames |
+| `${{ lanes.main.services.api.url }}` | the same service in lane 0, for profiles that reuse one backend |
+| `${{ projects.billing.services.api.public_url \| default('https://billing.staging.example.invalid') }}` | a service of another running devlanes project |
 
-A dash in a name becomes an underscore: `svc.crm_api`, or `svc['crm-api']`. `public_url` does not exist for a service without hosts; filter it with `default` or use `url`.
+A dash in a name becomes an underscore: `services.crm_api`, or `services['crm-api']`. `public_url` does not exist for a service without hosts; filter it with `default` or use `url`.
 
 Two services may read each other's `url` and `public_url`. Only `env.PORT` and `hosts` take part in the cycle check.
 
@@ -91,7 +91,7 @@ Layers, lowest first. A later layer wins on the same key.
 
 `DEVLANES_ORIGINS` is the comma-separated list of every https origin in the lane plus `http://localhost:<port>` and `http://127.0.0.1:<port>` for each service. Feed it to the CORS and CSRF allow-lists of your APIs so lane 3's frontend may call lane 3's API.
 
-`DEVLANES_PUBLIC_URL_<SERVICE>` (uppercase, non-alphanumerics replaced by `_`) exists in the lane-level environment: `devlanes with`, `devlanes exec`, `env show` without a unit. Tests and scripts read their base URLs from it. Services themselves get only their own `DEVLANES_PUBLIC_URL`; use `${{ svc.x.public_url }}` in `env` for the others.
+`DEVLANES_PUBLIC_URL_<SERVICE>` (uppercase, non-alphanumerics replaced by `_`) exists in the lane-level environment: `devlanes with`, `devlanes exec`, `env show` without a unit. Tests and scripts read their base URLs from it. Services themselves get only their own `DEVLANES_PUBLIC_URL`; use `${{ services.x.public_url }}` in `env` for the others.
 
 Tasks and infra commands get layers 1 to 8 as well, minus the service-only variables, plus Compose variables (`COMPOSE_PROJECT_NAME`, `COMPOSE_FILE`, `COMPOSE_PROFILES`, `DEVLANES_COMPOSE_LANE_PROJECT`) that let `docker compose exec` reach the project's containers without flags.
 
@@ -103,11 +103,11 @@ Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is
 | --- | --- |
 | `project` | `name`, `primary_path` (the primary worktree, for files only it has) |
 | `lane` | `index`, `name`, `label` (branch with `/` as `-`), `path`, `domain`, `port` (block start), every `lanes.vars` key |
-| `self`, `svc.<name>`, `lanes.main.svc.<name>` | `name`, `port`, `ports.<name>`, `url`, `public_url`, `hosts` |
+| `self`, `services.<name>`, `lanes.main.services.<name>` | `name`, `port`, `ports.<name>`, `url`, `public_url`, `hosts` |
 | `infra.<container>` | `port`, `ports` |
 | `env` | the shell that ran devlanes, then fnox secrets, then the lane's `.env` |
 | `replica` | `index` (from 1), `count` |
-| `projects.<project>.svc.<name>` | a service of another running project |
+| `projects.<project>.services.<name>` | a service of another running project |
 
 `lanes.vars` compute per-lane values once and expose them as `lane.<name>`:
 
@@ -124,7 +124,7 @@ global_env:
 
 A var named `domain` replaces the default lane domain and `port` fixes where the block starts. `lanes.matrix` is the explicit alternative: entry N describes lane N.
 
-Not every field sees every namespace. `lanes.vars` see `project`, `lane` and `env` (no secrets). `infra.*` fields see `project`, `lane`, `infra` and `env`, but not `svc`. Tasks and infra commands have an empty `self` apart from `name`.
+Not every field sees every namespace. `lanes.vars` see `project`, `lane` and `env` (no secrets). `infra.*` fields see `project`, `lane`, `infra` and `env`, but not `services`. Tasks and infra commands have an empty `self` apart from `name`.
 
 ### .env files
 

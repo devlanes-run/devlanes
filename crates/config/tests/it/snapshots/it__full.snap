@@ -71,9 +71,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "ACME_DB_PORT": 15432
     },
     "hosts": {
-      "s3mock": [
-        "s3.${{ lane.domain }}"
-      ]
+      "s3mock": "s3.${{ lane.domain }}"
     },
     "hidden": [
       "postgres"
@@ -159,9 +157,9 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     "ACME_REDIS_URL": "redis://127.0.0.1:${{ infra.redis.port }}/${{ lane.redis_db }}",
     "ACME_AMQP_VHOST": "${{ lane.vhost }}",
     "ACME_MEDIA_BUCKET": "${{ lane.bucket }}",
-    "ACME_CRM_BASE_URL": "${{ svc.crm_api.public_url }}",
+    "ACME_CRM_BASE_URL": "${{ services.crm_api.public_url }}",
     "CERBOS_URL": "http://127.0.0.1:${{ infra.cerbos.ports.http }}",
-    "REFEREE_URL": "${{ projects.workflows.svc.referee.public_url | default('https://referee.staging.example.invalid') }}",
+    "REFEREE_URL": "${{ projects.workflows.services.referee.public_url | default('https://referee.staging.example.invalid') }}",
     "SENTRY_DSN": "${{ env.SENTRY_DSN | default('') }}"
   },
   "tasks": {
@@ -319,9 +317,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "extends": "fastify-api",
       "run": "pnpm --silent -F @acme/catalog dev",
       "platform": "node",
-      "hosts": [
-        "catalog.${{ lane.domain }}"
-      ],
+      "hosts": "catalog.${{ lane.domain }}",
       "tags": [
         "api",
         "essential"
@@ -343,9 +339,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "extends": "fastify-api",
       "run": "pnpm --silent -F @acme/crm dev",
       "platform": "node",
-      "hosts": [
-        "crm.${{ lane.domain }}"
-      ],
+      "hosts": "crm.${{ lane.domain }}",
       "tags": [
         "api",
         "essential"
@@ -369,9 +363,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "extends": "fastify-api",
       "run_script": "apps/admin-api/package.json#dev",
       "platform": "node",
-      "hosts": [
-        "admin-api.${{ lane.domain }}"
-      ],
+      "hosts": "admin-api.${{ lane.domain }}",
       "tags": [
         "api",
         "essential"
@@ -395,9 +387,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "extends": "fastify-api",
       "run": "pnpm --silent -F @acme/payments-api dev",
       "platform": "node",
-      "hosts": [
-        "payments-api.${{ lane.domain }}"
-      ],
+      "hosts": "payments-api.${{ lane.domain }}",
       "tags": [
         "api"
       ],
@@ -418,9 +408,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "sms-stub": {
       "run": "node infra/stubs/sms.mjs",
-      "hosts": [
-        "sms-stub.${{ lane.domain }}"
-      ],
+      "hosts": "sms-stub.${{ lane.domain }}",
       "hidden": true,
       "autostart": false,
       "env": {
@@ -431,9 +419,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "run": "pnpm --silent -F @acme/user-web dev",
       "platform": "node",
       "preset": "vite",
-      "hosts": [
-        "app.${{ lane.domain }}"
-      ],
+      "hosts": "app.${{ lane.domain }}",
       "tags": [
         "web",
         "essential"
@@ -442,9 +428,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     "docs": {
       "run": "pnpm --silent -F @acme/docs dev --port ${{ self.port }} --host 127.0.0.1",
       "platform": "node",
-      "hosts": [
-        "docs.${{ lane.domain }}"
-      ],
+      "hosts": "docs.${{ lane.domain }}",
       "tags": [
         "web"
       ]
@@ -501,7 +485,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
         "worker"
       ],
       "env": {
-        "ACME_PAGES_SERVER_URL": "${{ svc.pages_server.url }}"
+        "ACME_PAGES_SERVER_URL": "${{ services.pages_server.url }}"
       }
     },
     "pages-server": {
@@ -532,9 +516,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "run": "uv run uvicorn app:main --port ${{ self.port }} --reload",
       "cwd": "services/ai-gateway",
       "platform": "python",
-      "hosts": [
-        "ai.${{ lane.domain }}"
-      ],
+      "hosts": "ai.${{ lane.domain }}",
       "ready": {
         "tcp": null,
         "http": {
@@ -579,9 +561,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "ios-sim": {
       "run": "npx serve-sim --port ${{ self.port }}",
-      "hosts": [
-        "sim.${{ lane.domain }}"
-      ],
+      "hosts": "sim.${{ lane.domain }}",
       "tags": [
         "mobile"
       ],
@@ -598,7 +578,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "replicas": 2,
       "tauri": {
         "identifier": "io.example.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}",
-        "dev_url": "${{ svc.desktop_web.url }}"
+        "dev_url": "${{ services.desktop_web.url }}"
       }
     },
     "desktop-web": {
@@ -670,7 +650,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "exclude": null,
       "infra": false,
       "env": {
-        "ACME_CRM_BASE_URL": "${{ lanes.main.svc.crm_api.public_url }}"
+        "ACME_CRM_BASE_URL": "${{ lanes.main.services.crm_api.public_url }}"
       },
       "run_scripts": {}
     }

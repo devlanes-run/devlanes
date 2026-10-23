@@ -11,20 +11,20 @@ fn error(source: &str) -> String {
 /// Only env.PORT and hosts determine an endpoint, so reading URLs elsewhere is never a cycle.
 #[test]
 fn endpoint_cycles_only_through_port_and_hosts() {
-    let mutual = "project: demo\nservices:\n  api:\n    run: server\n    env: { WEB_URL: '${{ svc.web.public_url }}', SELF: '${{ svc.api.url }}' }\n    hosts: ['api.${{ lane.domain }}']\n  web:\n    run: server\n    env: { API_URL: '${{ svc.api.public_url }}' }\n    hosts: ['web.${{ lane.domain }}']\n";
+    let mutual = "project: demo\nservices:\n  api:\n    run: server\n    env: { WEB_URL: '${{ services.web.public_url }}', SELF: '${{ services.api.url }}' }\n    hosts: ['api.${{ lane.domain }}']\n  web:\n    run: server\n    env: { API_URL: '${{ services.api.public_url }}' }\n    hosts: ['web.${{ lane.domain }}']\n";
     parse_project(mutual, None).expect("services may read each other's URLs");
-    let own_port_in_host = "project: demo\nservices:\n  api:\n    run: server\n    hosts: ['api-${{ svc.api.port }}.localhost']\n";
+    let own_port_in_host = "project: demo\nservices:\n  api:\n    run: server\n    hosts: ['api-${{ services.api.port }}.localhost']\n";
     parse_project(own_port_in_host, None).expect("hosts do not determine the port");
-    for reference in ["svc.api_a.port", "svc['api-a'].url"] {
+    for reference in ["services.api_a.port", "services['api-a'].url"] {
         let source = format!(
-            "project: demo\nservices:\n  api-a:\n    run: server\n    env: {{ PORT: '${{{{ svc.api_b.port + 1 }}}}' }}\n  api-b:\n    run: server\n    env:\n      PORT: \"${{{{ {reference} }}}}\"\n"
+            "project: demo\nservices:\n  api-a:\n    run: server\n    env: {{ PORT: '${{{{ services.api_b.port + 1 }}}}' }}\n  api-b:\n    run: server\n    env:\n      PORT: \"${{{{ {reference} }}}}\"\n"
         );
         let message = error(&source);
         assert!(message.contains("cycle"), "{reference}: {message}");
         assert!(message.starts_with("services.api-"), "{message}");
     }
     let message = error(
-        "project: demo\nlanes:\n  vars:\n    host: 'x-${{ svc.api.public_url }}'\nservices:\n  api:\n    run: server\n    hosts: ['${{ lane.host }}']\n",
+        "project: demo\nlanes:\n  vars:\n    host: 'x-${{ services.api.public_url }}'\nservices:\n  api:\n    run: server\n    hosts: ['${{ lane.host }}']\n",
     );
     assert!(message.contains("cycle"), "{message}");
 }
@@ -48,7 +48,7 @@ fn matrix_cycles_are_rejected() {
 fn unknown_references_are_rejected() {
     for (source, expected) in [
         (
-            "project: demo\ntemplates:\n  unused:\n    env: { X: '${{ svc.missing.url }}' }\n",
+            "project: demo\ntemplates:\n  unused:\n    env: { X: '${{ services.missing.url }}' }\n",
             "templates.unused.env.X: unknown service reference `missing`",
         ),
         (
@@ -56,7 +56,7 @@ fn unknown_references_are_rejected() {
             "global_env.DB: unknown container `postgres`",
         ),
         (
-            "project: demo\nservices:\n  api: { run: server }\nprofiles:\n  remote:\n    include: [api]\n    env: { URL: '${{ lanes.main.svc.ap.url }}' }\n",
+            "project: demo\nservices:\n  api: { run: server }\nprofiles:\n  remote:\n    include: [api]\n    env: { URL: '${{ lanes.main.services.ap.url }}' }\n",
             "profiles.remote.env.URL: unknown service reference `ap` in lanes.main",
         ),
     ] {
@@ -95,9 +95,9 @@ fn unknown_attributes_are_rejected() {
             "did you mean `project.primary_path`?",
         ),
         (
-            "project: demo\nservices:\n  api: { run: server }\n  web:\n    run: server\n    env: { API: '${{ svc.api.pubilc_url }}' }\n",
+            "project: demo\nservices:\n  api: { run: server }\n  web:\n    run: server\n    env: { API: '${{ services.api.pubilc_url }}' }\n",
             "pubilc_url",
-            "`svc.api.pubilc_url` is not defined; did you mean `svc.api.public_url`?",
+            "`services.api.pubilc_url` is not defined; did you mean `services.api.public_url`?",
         ),
         (
             "project: demo\nservices:\n  api:\n    run: 'server ${{ self.prot }}'\n",
@@ -110,8 +110,8 @@ fn unknown_attributes_are_rejected() {
             "`replica.idx` is not defined",
         ),
         (
-            "project: demo\nservices:\n  api: { run: server }\n  web:\n    run: server\n    env: { API: '${{ svc.apl.url }}' }\n",
-            "svc.apl",
+            "project: demo\nservices:\n  api: { run: server }\n  web:\n    run: server\n    env: { API: '${{ services.apl.url }}' }\n",
+            "services.apl",
             "unknown service reference `apl`; did you mean `api`?",
         ),
         (
@@ -135,21 +135,21 @@ fn unknown_attributes_are_rejected() {
         assert_eq!(error.location.line, line, "{}", error.message);
     }
     parse_project(
-        "project: demo\nlanes:\n  matrix:\n    - { db-name: a }\n    - { db-name: b, extra: c }\nservices:\n  api:\n    run: 'server ${{ lane.db_name }} ${{ lane[''db-name''] }} ${{ lane.label }} ${{ lane.path }} ${{ replica.count }}'\n    hosts: ['${{ lane.domain }}']\n    env: { A: '${{ self.ports.debug }}', B: '${{ lanes.main.svc.api.public_url }}', C: '${{ env.ANY }}', D: '${{ projects.other.svc.x.url | default(\"\") }}' }\n",
+        "project: demo\nlanes:\n  matrix:\n    - { db-name: a }\n    - { db-name: b, extra: c }\nservices:\n  api:\n    run: 'server ${{ lane.db_name }} ${{ lane[''db-name''] }} ${{ lane.label }} ${{ lane.path }} ${{ replica.count }}'\n    hosts: ['${{ lane.domain }}']\n    env: { A: '${{ self.ports.debug }}', B: '${{ lanes.main.services.api.public_url }}', C: '${{ env.ANY }}', D: '${{ projects.other.services.x.url | default(\"\") }}' }\n",
         None,
     )
     .expect("known attributes");
 }
 
-/// `svc.my-api` is a subtraction in expressions; the error names the escape.
+/// `services.my-api` is a subtraction in expressions; the error names the escape.
 #[test]
 fn dashed_names_explain_the_subtraction() {
     let message = error(
-        "project: demo\nservices:\n  my-api: { run: server }\n  web:\n    run: server\n    env: { API: '${{ svc.my-api.url }}' }\n",
+        "project: demo\nservices:\n  my-api: { run: server }\n  web:\n    run: server\n    env: { API: '${{ services.my-api.url }}' }\n",
     );
     assert!(
         message.contains(
-            "`svc.my-api.url` reads as `svc.my - api.url`; write `svc['my-api'].url` or `svc.my_api.url`"
+            "`services.my-api.url` reads as `services.my - api.url`; write `services['my-api'].url` or `services.my_api.url`"
         ),
         "{message}"
     );

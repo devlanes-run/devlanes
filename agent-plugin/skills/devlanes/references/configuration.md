@@ -23,7 +23,7 @@ A service is a long-running process started with the lane. Exactly one of `run` 
 services:
   api:
     run_script: apps/api/package.json#dev     # the project's package manager runs the script
-    hosts: ["api.${{ lane.domain }}"]
+    hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /-/health } }
   worker:
     run: [node, worker.mjs]                   # a list is an argv, run without a shell
@@ -32,7 +32,7 @@ services:
   docs:
     run: >-                                   # a string runs with /bin/sh -c
       pnpm -F @acme/docs dev --port ${{ self.port }} --host 127.0.0.1
-    hosts: ["docs.${{ lane.domain }}"]
+    hosts: "docs.${{ lane.domain }}"
 ```
 
 - `run_script: <file>#<name>` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a bin), and runs in that file's directory. Prefer it to `run: pnpm -F pkg dev`: presets place their flags correctly and profiles can remap the script name.
@@ -71,7 +71,7 @@ Every lane gets a block of ports and every service one port from it: `PORT` in i
 - Never write `env: { PORT: "${{ self.port }}" }`. `self.port` is computed from `PORT`, devlanes rejects it as a cycle, and `PORT` already holds that value.
 - Never put `PORT` in `global_env`: it overrides every service's own port.
 - A second port: reference `${{ self.ports.debug }}` anywhere in the service and devlanes allocates a port named `debug`.
-- Other services: `${{ svc.api.port }}`, `${{ svc.api.url }}` (`http://127.0.0.1:<port>`), `${{ svc.api.public_url }}` (its `https://` hostname). Write dashes as underscores: `svc.crm_api`. `devlanes with` also gives commands `DEVLANES_PUBLIC_URL_<SERVICE>`.
+- Other services: `${{ services.api.port }}`, `${{ services.api.url }}` (`http://127.0.0.1:<port>`), `${{ services.api.public_url }}` (its `https://` hostname). Write dashes as underscores: `services.crm_api`. `devlanes with` also gives commands `DEVLANES_PUBLIC_URL_<SERVICE>`.
 
 ## Hostnames and HTTPS
 
@@ -98,12 +98,12 @@ Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. Undefined names
 | --- | --- |
 | `project` | `name`, `primary_path` (the primary worktree, for files only it has) |
 | `lane` | `index`, `name`, `label`, `path`, `domain`, `port` (block start), plus `lanes.vars` |
-| `self`, `svc.<name>` | `name`, `port`, `ports.<name>`, `url`, `public_url`, `hosts` |
+| `self`, `services.<name>` | `name`, `port`, `ports.<name>`, `url`, `public_url`, `hosts` |
 | `infra.<container>` | `port` (primary published host port), `ports.<name or container port>` |
 | `env` | the shell that ran devlanes, then fnox secrets, then the lane's `.env` |
 | `replica` | `index`, `count` |
-| `lanes.main.svc.<name>` | services of lane 0 |
-| `projects.<project>.svc.<name>` | services of another devlanes project |
+| `lanes.main.services.<name>` | services of lane 0 |
+| `projects.<project>.services.<name>` | services of another devlanes project |
 
 Layers, lowest first: the client's environment, contributors (mise, direnv, Node, Python), secrets, devlanes' variables (`PORT`, `HOST`, `DEVLANES_PROJECT`, `DEVLANES_LANE`, `DEVLANES_SERVICE`, `DEVLANES_PUBLIC_URL`), `global_env`, the service's `env`, the profile's `env`, `--env` on the command line.
 
@@ -133,7 +133,7 @@ infra:
   exclude: [caddy]                     # never started; the devlanes proxy replaces local reverse proxies
   per_lane: [mailpit]
   env: { ACME_DB_PORT: 15432 }         # Compose interpolation only; processes do not see it
-  hosts: { s3mock: ["s3.${{ lane.domain }}"] }
+  hosts: { s3mock: "s3.${{ lane.domain }}" }
   containers:                          # plain Docker containers without Compose
     cerbos:
       image: ghcr.io/cerbos/cerbos:0.40.0
@@ -212,7 +212,7 @@ services:
   crm:
     extends: api
     run_script: apps/crm/package.json#dev
-    hosts: ["crm.${{ lane.domain }}"]
+    hosts: "crm.${{ lane.domain }}"
 ```
 
 Templates resolve after local overrides. Mappings (`env`, `ready`, `stop`, preset options) merge by key; lists (`tags`, `hosts`) and scalars replace. Setting `run` or `run_script`, or one `ready` check, drops the inherited alternative.

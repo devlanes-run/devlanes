@@ -139,7 +139,7 @@ fn broken_diagnostics() {
         ),
         (
             "dash",
-            "project: demo\nservices:\n  crm-api: { run: server }\n  web:\n    run: server\n    env: { URL: '${{ svc.crm-api.url }}' }\n",
+            "project: demo\nservices:\n  crm-api: { run: server }\n  web:\n    run: server\n    env: { URL: '${{ services.crm-api.url }}' }\n",
         ),
         (
             "duration",
@@ -210,7 +210,7 @@ fn duration_size_and_templated_types() {
 fn expression_evaluation() {
     let ctx = ExpressionContext {
         lane: json!({"index":2,"port":20000}),
-        svc: json!({"crm-api":{"port":20001}}),
+        services: json!({"crm-api":{"port":20001}}),
         ..Default::default()
     };
     assert_eq!(
@@ -226,11 +226,11 @@ fn expression_evaluation() {
         json!("port=20000 ${SHELL_VAR}")
     );
     assert_eq!(
-        evaluate("${{ svc.crm_api.port }}", &ctx).expect("alias"),
+        evaluate("${{ services.crm_api.port }}", &ctx).expect("alias"),
         json!(20001)
     );
     assert_eq!(
-        evaluate("${{ svc['crm-api'].port }}", &ctx).expect("bracket"),
+        evaluate("${{ services['crm-api'].port }}", &ctx).expect("bracket"),
         json!(20001)
     );
     assert_eq!(
@@ -250,7 +250,7 @@ fn expression_evaluation() {
 fn cross_project_default() {
     assert_eq!(
         evaluate(
-            "${{ projects.absent.svc.api.public_url | default('https://example.test') }}",
+            "${{ projects.absent.services.api.public_url | default('https://example.test') }}",
             &ExpressionContext::default()
         )
         .expect("missing project fallback"),
@@ -258,18 +258,19 @@ fn cross_project_default() {
     );
     assert_eq!(
         evaluate(
-            "${{ projects['absent-project'].svc.api.public_url | default('fallback') }}",
+            "${{ projects['absent-project'].services.api.public_url | default('fallback') }}",
             &ExpressionContext::default()
         )
         .expect("missing dashed project"),
         json!("fallback")
     );
     let context = ExpressionContext {
-        projects: json!({"other-project":{"svc":{"api":{"url":"http://localhost:20000"}}}}),
+        projects: json!({"other-project":{"services":{"api":{"url":"http://localhost:20000"}}}}),
         ..Default::default()
     };
     assert_eq!(
-        evaluate("${{ projects.other_project.svc.api.url }}", &context).expect("project alias"),
+        evaluate("${{ projects.other_project.services.api.url }}", &context)
+            .expect("project alias"),
         json!("http://localhost:20000")
     );
 }
@@ -536,6 +537,51 @@ fn typed_runtime_evaluation() {
         evaluate_env(&env, &context).expect("outer env")["B"].to_string(),
         "outer-suffix"
     );
+}
+
+/// `hosts` takes one hostname or route as well as a list, and validates either form.
+#[test]
+fn single_host_shorthand() {
+    let config = parse_project(
+        "project: demo\nservices:\n  api: { run: server, hosts: 'api.${{ lane.domain }}' }\n  web: { run: server, hosts: { host: web.localhost, fallback: true } }\n  docs: { run: server, hosts: [docs.localhost, { host: '*.docs.localhost' }] }\n",
+        None,
+    )
+    .expect("config");
+    let hosts = |name: &str| config.services[name].hosts.clone().expect("hosts");
+    assert!(
+        matches!(&hosts("api")[..], [HostConfig::Name(Templated::Expression(text))] if text == "api.${{ lane.domain }}")
+    );
+    assert!(matches!(&hosts("web")[..], [HostConfig::Route(route)] if route.fallback.is_some()));
+    assert_eq!(hosts("docs").len(), 2);
+    let context = ExpressionContext {
+        lane: json!({"domain": "demo.localhost"}),
+        ..Default::default()
+    };
+    let api = evaluate_typed(&config.services["api"], &context).expect("typed service");
+    assert!(
+        matches!(&api.hosts.expect("hosts")[..], [HostConfig::Name(Templated::Literal(host))] if host == "api.demo.localhost")
+    );
+    assert!(
+        parse_project(
+            "project: demo\nservices:\n  api: { run: server, hosts: bad_host }\n",
+            None
+        )
+        .is_err()
+    );
+    assert!(
+        parse_project(
+            "project: demo\nservices:\n  api: { run: server, hosts: 3 }\n",
+            None
+        )
+        .is_err()
+    );
+    assert!(parse_project("project: demo\nservices:\n  api: { run: server, hosts: { host: a.localhost, prot: x } }\n", None).is_err());
+    let infra = parse_project(
+        "project: demo\ninfra:\n  containers:\n    s3: { image: s3mock, ports: { http: 9090 } }\n  hosts: { s3: s3.localhost }\n",
+        None,
+    )
+    .expect("infra config");
+    assert_eq!(infra.infra.hosts["s3"].len(), 1);
 }
 
 /// Outer env references do not create sibling cycles; fixed port capacity remains checked.

@@ -25,11 +25,11 @@ services:
   api:
     run_script: api/package.json#dev
     # HTTPS hostnames routed by the proxy; lane.domain is acme.localhost or acme-<N>.localhost.
-    hosts: ["api.${{ lane.domain }}"]
+    hosts: "api.${{ lane.domain }}"
   web:
     # Adds Vite's port and host flags to the command.
     preset: vite
     run_script: web/package.json#dev
     # Extra variables for this service; public_url is the API's https:// address in this lane.
-    env: { VITE_API_URL: "${{ svc.api.public_url }}" }
-    hosts: ["${{ lane.domain }}"]
+    env: { VITE_API_URL: "${{ services.api.public_url }}" }
+    hosts: "${{ lane.domain }}"

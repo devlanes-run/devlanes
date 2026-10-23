@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::{
     LaneFacts, LaneLayout, ResolveError, ResolveInput, RouteSpec, ServiceLayout,
-    model::svc_namespace,
+    model::services_namespace,
     ports::{
         DEFAULT_PORT, PortOverride, port_override, port_unit, service_port_names, static_replicas,
     },
@@ -22,7 +22,7 @@ pub(crate) struct Namespaces {
     pub project: Value,
     pub lane: Value,
     pub lanes: Value,
-    pub svc: Value,
+    pub services: Value,
     pub infra: Value,
     pub projects: Value,
 }
@@ -35,7 +35,7 @@ impl Namespaces {
             lane: self.lane.clone(),
             lanes: self.lanes.clone(),
             service: this,
-            svc: self.svc.clone(),
+            services: self.services.clone(),
             infra: self.infra.clone(),
             env: env.clone(),
             projects: self.projects.clone(),
@@ -163,7 +163,7 @@ struct Pending<'c, E: Extensions> {
     color: &'static str,
 }
 
-/// Builds the layout and the namespaces (with a complete `svc`) for launch planning.
+/// Builds the layout and the namespaces (with a complete `services`) for launch planning.
 pub(crate) fn build<E: Extensions>(
     input: &ResolveInput<'_, E>,
     env: &Value,
@@ -174,8 +174,8 @@ pub(crate) fn build<E: Extensions>(
     let mut ns = Namespaces {
         project,
         lane,
-        lanes: json!({"main": {"svc": input.lanes_main.cloned().unwrap_or_else(|| json!({}))}}),
-        svc: json!({}),
+        lanes: json!({"main": {"services": input.lanes_main.cloned().unwrap_or_else(|| json!({}))}}),
+        services: json!({}),
         infra: object_or_empty(input.infra),
         projects: object_or_empty(input.projects),
     };
@@ -233,8 +233,8 @@ pub(crate) fn build<E: Extensions>(
         for replica in 1..=entry.replicas {
             replicas.push(service_layout(input, &ns, env, &name, entry, replica)?);
         }
-        if let (Some(first), Some(svc)) = (replicas.first(), ns.svc.as_object_mut()) {
-            svc.insert(name.clone(), first.self_value());
+        if let (Some(first), Some(namespace)) = (replicas.first(), ns.services.as_object_mut()) {
+            namespace.insert(name.clone(), first.self_value());
         }
         layouts.insert(name, replicas);
     }
@@ -249,7 +249,7 @@ pub(crate) fn build<E: Extensions>(
         && facts.index == 0
         && let Some(main) = ns.lanes.get_mut("main")
     {
-        main["svc"] = svc_namespace(services.values());
+        main["services"] = services_namespace(services.values());
     }
 
     let mut routes: Vec<RouteSpec> = Vec::new();
@@ -528,7 +528,7 @@ fn identity_order<E: Extensions>(config: &ProjectConfig<E>) -> Result<Vec<String
                 .map_err(|e| ResolveError::expression(format!("services.{name}"), e))?;
             for reference in references {
                 let Some(alias) = reference
-                    .strip_prefix("svc.")
+                    .strip_prefix("services.")
                     .and_then(|r| r.split('.').next())
                 else {
                     continue;

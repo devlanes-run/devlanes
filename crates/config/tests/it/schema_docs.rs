@@ -95,12 +95,14 @@ fn walk(schema: &Value, path: &str, named: bool, root: &Value, failures: &mut Ve
 /// Every editor-visible field and definition has valid examples, descriptions, and no type title.
 #[test]
 fn editor_schema_metadata_is_complete() {
+    let project = format!("devlanes v{}", env!("CARGO_PKG_VERSION"));
+    let user = format!("{project} user config");
     for (title, schema) in [
-        ("devlanes", super::registered_schema()),
-        ("devlanes", devlanes_config::project_schema()),
-        ("devlanes user config", devlanes_config::user_schema()),
+        (&project, super::registered_schema()),
+        (&project, devlanes_config::project_schema()),
+        (&user, devlanes_config::user_schema()),
     ] {
-        assert_eq!(schema["title"], title);
+        assert_eq!(schema["title"], title.as_str());
         let mut failures = Vec::new();
         walk(&schema, "", true, &schema, &mut failures);
         assert!(failures.is_empty(), "{title}:\n{}", failures.join("\n"));

@@ -30,7 +30,7 @@ pub const CONFIG_ENV: &str = "DEVLANES_TAURI_CONFIG";
 /// Options under the service's `tauri:` key, after expression evaluation.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[schemars(extend("examples" = [{"identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}","dev_url":"${{ svc.desktop_web.url }}","before_dev_command":""}]))]
+#[schemars(extend("examples" = [{"identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}","dev_url":"${{ services.desktop_web.url }}","before_dev_command":""}]))]
 pub struct TauriOptions {
     /// Bundle identifier for this lane and replica. Required; it must differ per
     /// lane and replica, for example
@@ -44,7 +44,7 @@ pub struct TauriOptions {
     pub product_name: Option<String>,
     /// `build.devUrl`, usually another service's `url`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("examples" = ["${{ svc.desktop_web.url }}"]))]
+    #[schemars(extend("examples" = ["${{ services.desktop_web.url }}"]))]
     pub dev_url: Option<String>,
     /// `build.beforeDevCommand` override. Set it to an empty string when the
     /// frontend runs as its own devlanes service; otherwise every replica

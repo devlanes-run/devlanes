@@ -41,7 +41,7 @@ services:
       # replica.index counts the service's instances from 1.
       identifier: com.acme.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}
       # http://127.0.0.1:<port> of the frontend service in this lane.
-      dev_url: ${{ svc.desktop_web.url }}
+      dev_url: ${{ services.desktop_web.url }}
       # The frontend runs as its own service.
       before_dev_command: ""
       # product_name: Acme Dev

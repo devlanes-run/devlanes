@@ -11,7 +11,7 @@
 //! 3. [`resolve_lane`] with the block, offsets, infra endpoints and the client env.
 //!
 //! [`lane_layout`] is the synchronous subset (ports, URLs, routes) for idle lanes,
-//! routing tables and the `lanes.main.svc` namespace of lane 0.
+//! routing tables and the `lanes.main.services` namespace of lane 0.
 
 mod error;
 mod facts;
