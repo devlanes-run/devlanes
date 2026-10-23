@@ -2,6 +2,8 @@
 devlanes.local.yaml
 .devlanes/
 .DS_Store
+# feature worktrees (see AGENTS.md "Worktrees and delivery")
+/.worktrees/
 # insta leftovers from failed or unreviewed snapshot runs
 *.pending-snap
 *.snap.new
