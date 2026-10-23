@@ -595,8 +595,9 @@ pub struct TlsConfig {
     pub ca: CaKind,
     /// Stores `devlanes certs trust` installs the CA into and `certs untrust` removes it
     /// from; an empty list means `[system]`. On Linux, browsers do not read the system
-    /// store, so add `chrome` and `firefox` there; `devlanes doctor` shows each store's state.
-    #[schemars(extend("examples" = [["system","firefox"],["chrome"]]))]
+    /// store, so add `chrome` and `firefox` there; inside WSL add `windows` for browsers on
+    /// Windows. `devlanes doctor` shows each store's state.
+    #[schemars(extend("examples" = [["system","firefox"],["chrome"],["system","windows"]]))]
     pub trust: Vec<TrustTarget>,
 }
 
@@ -621,7 +622,7 @@ pub enum CaKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 /// Certificate store that `devlanes certs trust` installs the CA into.
-#[schemars(extend("examples" = ["system","firefox","chrome","ios-simulator","android-emulator"]))]
+#[schemars(extend("examples" = ["system","firefox","chrome","windows","ios-simulator","android-emulator"]))]
 pub enum TrustTarget {
     /// The OS store: the login keychain on macOS, read by Safari, Chrome, Edge and
     /// `/usr/bin/curl`; on Linux, the distribution's CA anchors, updated through sudo.
@@ -635,6 +636,12 @@ pub enum TrustTarget {
     /// same login keychain as `system` on macOS.
     #[schemars(extend("examples" = ["chrome"]))]
     Chrome,
+    /// The Windows user root store, read by Edge, Chrome and Firefox on Windows. For
+    /// devlanes inside WSL, whose browser usually runs on Windows: it runs Windows'
+    /// `certutil.exe` through interop, and Windows asks you to confirm each change.
+    /// Elsewhere `certs trust` reports it as unavailable.
+    #[schemars(extend("examples" = ["windows"]))]
+    Windows,
     /// Reserved for the iOS simulator; not supported yet, so it is dropped with a warning.
     #[schemars(extend("examples" = ["ios-simulator"]))]
     IosSimulator,

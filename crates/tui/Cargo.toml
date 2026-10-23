@@ -18,6 +18,8 @@ devlanes-cli = { path = "../cli" }
 # The options page reads the user config schema and edits config.yaml in place.
 devlanes-config = { path = "../config" }
 devlanes-proto = { path = "../proto" }
+# The `o` key opens URLs with the same opener as `devlanes url open`.
+devlanes-sys = { path = "../sys" }
 devlanes-term = { path = "../term" }
 futures-util.workspace = true
 # daemon.log timestamps shown in local time.

@@ -979,7 +979,7 @@ impl Inner {
             "codex_sandbox": std::env::var_os("CODEX_SANDBOX").is_some(),
             "app_sandbox": std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some(),
         });
-        Ok(json!({
+        let mut data = json!({
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
             "home": self.opts.home,
@@ -1003,7 +1003,12 @@ impl Inner {
             "user_config": self.user_config_doctor().await,
             // The CLI compares them with the service manager's stop window.
             "stop_timeouts": self.stop_timeouts(),
-        }))
+        });
+        // Inside WSL only: worktrees on Windows drives, where file watching misses edits.
+        if let Some(worktrees) = self.windows_drive_doctor().await {
+            data["windows_drive_worktrees"] = worktrees;
+        }
+        Ok(data)
     }
 
     /// `doctor`'s `stop_timeouts`: the longest stop timeout of each service of

@@ -27,7 +27,7 @@ What it does per OS, by the stores in `tls.trust` (default `[system]`):
 | macOS | login keychain, trusted as root for your user (GUI password dialog, no sudo); Safari, Chrome, Edge and `/usr/bin/curl` read it; Firefox 120+ too | same store as `system` | `certutil` into every Firefox profile; needs `brew install nss` |
 | Linux | anchor directory of your distro (`/usr/local/share/ca-certificates`, `/etc/pki/ca-trust/source/anchors`, …) then `update-ca-certificates` or `update-ca-trust`, through sudo | `~/.pki/nssdb` with `certutil`; Chrome, Chromium and Playwright's browsers read it | every profile under `~/.mozilla/firefox` (snap and flatpak paths too); needs `libnss3-tools` or `nss-tools` |
 
-On Linux the system store does not reach browsers, so set `tls.trust: [system, chrome, firefox]` in `~/.devlanes/config.yaml` there. `devlanes certs untrust` removes the CA from the same stores; `--keep-ca` with `--hosts` or `--resolver` removes only those extras.
+On Linux the system store does not reach browsers, so set `tls.trust: [system, chrome, firefox]` in `~/.devlanes/config.yaml` there. Inside WSL, where the browser usually runs on Windows, add `windows` for the Windows user root store ([WSL](wsl.md#trusting-the-ca-in-windows)). `devlanes certs untrust` removes the CA from the same stores; `--keep-ca` with `--hosts` or `--resolver` removes only those extras.
 
 `devlanes doctor` reports the CA path and, per store, whether it is trusted. The CA is constrained to `localhost`, `test`, `internal`, `home.arpa` and the TLD configured when it was created; a hostname outside those is reported by `doctor` as `outside the CA's names`.
 
