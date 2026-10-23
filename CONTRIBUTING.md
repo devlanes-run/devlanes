@@ -34,8 +34,10 @@ Changes to shell scripts or workflows also have a check, which CI runs in its `p
 shellcheck install.sh packaging/scripts/*.sh packaging/homebrew/render.sh packaging/npm/build.sh agent-plugin/scripts/*.sh e2e/ssh/run.sh
 actionlint
 sh packaging/scripts/check.sh                       # release scripts and install.sh against fake binaries
-sh agent-plugin/scripts/test-block-background.sh    # the Claude Code hook
+sh agent-plugin/scripts/test-block-background.sh    # the Claude Code hook for Bash
 ```
+
+The plugin's PowerShell hook is `devlanes __agent-hook --shell powershell`; its tests are in `crates/cli/tests/it/agent_hook.rs` and, on Windows, `bins/devlanes/tests/it/agent_hook.rs`.
 
 `install.ps1`, `package.ps1` and the npm launcher have a Windows check against a fake `devlanes.exe`, which CI runs in its `packaging-windows` job. It needs PSScriptAnalyzer (CI pins 1.25.0), both `powershell.exe` and `pwsh`, and `node`. It changes your user `PATH` while it runs and writes the old value back at the end:
 
