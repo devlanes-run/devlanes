@@ -1099,6 +1099,7 @@ dependencies = [
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-transport",
+ "devlanes-transport-ssh",
  "devlanes-tunnel",
  "dunce",
  "fs2",
@@ -1773,7 +1774,11 @@ name = "devlanes-transport-ssh"
 version = "0.3.0"
 dependencies = [
  "async-trait",
+ "devlanes-ipc",
+ "devlanes-sys-windows",
+ "devlanes-testing",
  "devlanes-transport",
+ "getrandom 0.3.4",
  "openssh",
  "serde",
  "serde_json",
@@ -1781,6 +1786,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
