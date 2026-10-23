@@ -1,5 +1,5 @@
 {
-  "description": "Blocks Bash commands that start dev servers in the background inside a devlanes project and points to devlanes exec",
+  "description": "Blocks Bash and PowerShell commands that start dev servers in the background inside a devlanes project and points to devlanes exec",
   "hooks": {
     "PreToolUse": [
       {
@@ -10,6 +10,17 @@
             "command": "sh",
             "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/block-background.sh"],
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "devlanes __agent-hook --shell powershell; exit 0",
+            "timeout": 10,
+            "onFailure": "continue"
           }
         ]
       }

@@ -44,6 +44,15 @@ fn main() -> ExitCode {
             std::env::args_os().skip(2),
         ));
     }
+    // The agent plugin's PowerShell hook, which only reads stdin and writes
+    // stdout. Windows only: the Bash hook covers macOS and Linux.
+    #[cfg(windows)]
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == devlanes_cli::agent_hook::ARG)
+    {
+        return ExitCode::from(devlanes_cli::agent_hook::run(std::env::args_os().skip(2)));
+    }
     // CompleteEnv must run before any thread exists; it exits when completing.
     completion::install();
     let cli = match Cli::try_parse() {
