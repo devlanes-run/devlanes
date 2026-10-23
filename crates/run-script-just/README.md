@@ -1,6 +1,6 @@
 # devlanes-run-script-just
 
-Runs `run_script: justfile#<recipe>` as `just <recipe>` in the justfile's directory. Lane resolution calls it through `JustRecipes`, a `devlanes-core` `ScriptRunner`.
+Runs `run_script: { file: justfile, name: <recipe> }` as `just <recipe>` in the justfile's directory. Lane resolution calls it through `JustRecipes`, a `devlanes-core` `ScriptRunner`.
 
 ## Usage
 
@@ -34,7 +34,7 @@ The composition root registers `Arc::new(JustRecipes)` as a script runner. `plan
 services:
   web:
     # Runs the dev recipe of the justfile with just.
-    run_script: justfile#dev
+    run_script: { file: justfile, name: dev }
     # Adds Vite's port and host flags, which need a variadic last parameter on the recipe.
     preset: vite
 ```

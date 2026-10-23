@@ -7,14 +7,14 @@ Configurations for the shapes most repositories have. Each one assumes the basic
 ```yaml
 services:
   api:
-    run_script: apps/api/package.json#dev
+    run_script: { file: apps/api/package.json, name: dev }
     hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /healthz } }
     env:
       COOKIE_DOMAIN: ${{ lane.domain }}      # the app reads DEVLANES_ORIGINS for its CORS allow-list
   web:
     preset: vite
-    run_script: apps/web/package.json#dev
+    run_script: { file: apps/web/package.json, name: dev }
     hosts: "${{ lane.domain }}"
     env: { VITE_API_URL: "${{ services.api.public_url }}" }
 ```
@@ -35,7 +35,7 @@ A frontend that proxies `/api` to the backend itself (Vite `server.proxy`, Next 
 ```yaml
 services:
   queue-worker:
-    run_script: apps/worker/package.json#dev
+    run_script: { file: apps/worker/package.json, name: dev }
     ready: { log: "consumer connected" }
     pty: false
     stop: { signal: SIGINT, timeout: 30s }
@@ -85,7 +85,7 @@ services:
 ```yaml
 services:
   tenants:
-    run_script: apps/tenants/package.json#dev
+    run_script: { file: apps/tenants/package.json, name: dev }
     hosts:
       - app.${{ lane.domain }}
       - "*.${{ lane.domain }}"
@@ -115,7 +115,7 @@ Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `
 ```yaml
 services:
   storybook:
-    run_script: packages/ui/package.json#storybook
+    run_script: { file: packages/ui/package.json, name: storybook }
     hosts: "storybook.${{ lane.domain }}"
     autostart: false
   stripe-listen:
@@ -144,10 +144,10 @@ profiles:
 ```yaml
 tasks:
   install:  { run: [pnpm, install, --frozen-lockfile], when: lane.create, timeout: 10m }
-  codegen:  { run_script: package.json#codegen, when: lane.create }
-  migrate:  { run_script: apps/api/package.json#db:migrate, when: lane.start }
-  build-libs: { run_script: package.json#build:libs, when: lane.start, profiles: [default, e2e] }
-  seed:     { run_script: tools/seed/package.json#start, when: lane.create, after: services, timeout: 15m }
+  codegen:  { run_script: { file: package.json, name: codegen }, when: lane.create }
+  migrate:  { run_script: { file: apps/api/package.json, name: db:migrate }, when: lane.start }
+  build-libs: { run_script: { file: package.json, name: build:libs }, when: lane.start, profiles: [default, e2e] }
+  seed:     { run_script: { file: tools/seed/package.json, name: start }, when: lane.create, after: services, timeout: 15m }
   reset-db:
     steps: [infra.teardown.database, infra.setup.database, migrate, seed]
     confirm: Drops ${{ lane.db_name }} and re-seeds it
@@ -169,8 +169,8 @@ templates:
     tags: [api]
     ready: { http: { path: /-/health } }
 services:
-  catalog:  { extends: fastify-api, run_script: apps/catalog/package.json#dev, hosts: "catalog.${{ lane.domain }}", tags: [api, essential] }
-  crm:      { extends: fastify-api, run_script: apps/crm/package.json#dev, hosts: "crm.${{ lane.domain }}", tags: [api, essential] }
+  catalog:  { extends: fastify-api, run_script: { file: apps/catalog/package.json, name: dev }, hosts: "catalog.${{ lane.domain }}", tags: [api, essential] }
+  crm:      { extends: fastify-api, run_script: { file: apps/crm/package.json, name: dev }, hosts: "crm.${{ lane.domain }}", tags: [api, essential] }
 profiles:
   default: [+essential]
   backend: [+api, +worker]

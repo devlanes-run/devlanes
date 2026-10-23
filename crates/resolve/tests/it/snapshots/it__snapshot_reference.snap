@@ -457,14 +457,19 @@ expression: lane_view(&lane)
       "literal_port": false,
       "sync": [],
       "launch": {
-        "program": "/bin/sh",
+        "program": "pnpm",
         "args": [
-          "-c",
-          "pnpm --silent -F @acme/user-web dev"
+          "run",
+          "dev"
         ],
-        "cwd": "/work/acme-lanes/lane-2",
+        "cwd": "/work/acme-lanes/lane-2/apps/user-web",
         "platform": "node",
-        "script": null,
+        "script": {
+          "source": "/work/acme-lanes/lane-2/apps/user-web/package.json",
+          "name": "dev",
+          "runner": "fake",
+          "cwd": "/work/acme-lanes/lane-2/apps/user-web"
+        },
         "contributors": [
           "fake-mise",
           "fake-node",
@@ -588,14 +593,19 @@ expression: lane_view(&lane)
       "literal_port": false,
       "sync": [],
       "launch": {
-        "program": "/bin/sh",
+        "program": "pnpm",
         "args": [
-          "-c",
-          "pnpm --silent -F @acme/api-gateway dev"
+          "run",
+          "dev"
         ],
-        "cwd": "/work/acme-lanes/lane-2",
+        "cwd": "/work/acme-lanes/lane-2/workers/api-gateway",
         "platform": "node",
-        "script": null,
+        "script": {
+          "source": "/work/acme-lanes/lane-2/workers/api-gateway/package.json",
+          "name": "dev",
+          "runner": "fake",
+          "cwd": "/work/acme-lanes/lane-2/workers/api-gateway"
+        },
         "contributors": [
           "fake-mise",
           "fake-node",
@@ -654,14 +664,19 @@ expression: lane_view(&lane)
       "literal_port": false,
       "sync": [],
       "launch": {
-        "program": "/bin/sh",
+        "program": "pnpm",
         "args": [
-          "-c",
-          "pnpm --silent -F @acme/pages-worker dev"
+          "run",
+          "dev"
         ],
-        "cwd": "/work/acme-lanes/lane-2",
+        "cwd": "/work/acme-lanes/lane-2/workers/pages",
         "platform": "node",
-        "script": null,
+        "script": {
+          "source": "/work/acme-lanes/lane-2/workers/pages/package.json",
+          "name": "dev",
+          "runner": "fake",
+          "cwd": "/work/acme-lanes/lane-2/workers/pages"
+        },
         "contributors": [
           "fake-mise",
           "fake-node",
@@ -1087,14 +1102,19 @@ expression: lane_view(&lane)
       "literal_port": false,
       "sync": [],
       "launch": {
-        "program": "/bin/sh",
+        "program": "pnpm",
         "args": [
-          "-c",
-          "pnpm --filter @acme/desktop dev"
+          "run",
+          "dev"
         ],
-        "cwd": "/work/acme-lanes/lane-2",
+        "cwd": "/work/acme-lanes/lane-2/apps/desktop",
         "platform": "node",
-        "script": null,
+        "script": {
+          "source": "/work/acme-lanes/lane-2/apps/desktop/package.json",
+          "name": "dev",
+          "runner": "fake",
+          "cwd": "/work/acme-lanes/lane-2/apps/desktop"
+        },
         "contributors": [
           "fake-mise",
           "fake-node",
@@ -1147,14 +1167,19 @@ expression: lane_view(&lane)
       "literal_port": false,
       "sync": [],
       "launch": {
-        "program": "/bin/sh",
+        "program": "pnpm",
         "args": [
-          "-c",
-          "pnpm --filter @acme/desktop dev"
+          "run",
+          "dev"
         ],
-        "cwd": "/work/acme-lanes/lane-2",
+        "cwd": "/work/acme-lanes/lane-2/apps/desktop",
         "platform": "node",
-        "script": null,
+        "script": {
+          "source": "/work/acme-lanes/lane-2/apps/desktop/package.json",
+          "name": "dev",
+          "runner": "fake",
+          "cwd": "/work/acme-lanes/lane-2/apps/desktop"
+        },
         "contributors": [
           "fake-mise",
           "fake-node",
@@ -1207,14 +1232,19 @@ expression: lane_view(&lane)
       "literal_port": false,
       "sync": [],
       "launch": {
-        "program": "/bin/sh",
+        "program": "pnpm",
         "args": [
-          "-c",
-          "pnpm --filter @acme/desktop-web dev"
+          "run",
+          "dev"
         ],
-        "cwd": "/work/acme-lanes/lane-2",
+        "cwd": "/work/acme-lanes/lane-2/apps/desktop-web",
         "platform": "node",
-        "script": null,
+        "script": {
+          "source": "/work/acme-lanes/lane-2/apps/desktop-web/package.json",
+          "name": "dev",
+          "runner": "fake",
+          "cwd": "/work/acme-lanes/lane-2/apps/desktop-web"
+        },
         "contributors": [
           "fake-mise",
           "fake-node",

@@ -25,7 +25,7 @@ services:
   web:
     # Adds Vite's port and host flags to the command.
     preset: vite
-    run_script: apps/web/package.json#dev
+    run_script: { file: apps/web/package.json, name: dev }
     # Options for the vite preset.
     vite:
       # Appended after the preset's flags.

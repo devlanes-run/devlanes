@@ -35,7 +35,7 @@ Profiles. A source's "start these by default" set becomes `profiles.default` (us
 | mprocs | devlanes |
 | --- | --- |
 | `procs.<name>: "cmd"` or `shell: cmd` | `run: cmd` (both use `sh -c`) |
-| `procs.<name>: [..]` or `cmd: [..]` | `run: [..]`; `[pnpm, -F, pkg, dev]` is better as `run_script: <pkg dir>/package.json#dev` |
+| `procs.<name>: [..]` or `cmd: [..]` | `run: [..]`; `[pnpm, -F, pkg, dev]` is better as `run_script: { file: <pkg dir>/package.json, name: dev }` |
 | proc name | unit key (lowercase, dashes) plus `name:` with the original label |
 | `cwd` (`<CONFIG_DIR>` prefix) | `cwd:` relative to the project |
 | `env` | `env:`; a `null` value cannot be expressed (devlanes cannot unset a variable) |
@@ -79,16 +79,16 @@ infra:
   compose: docker-compose.yml
 tasks:
   migrate-db:
-    run_script: packages/models/package.json#db-deploy
+    run_script: { file: packages/models/package.json, name: db-deploy }
     when: lane.start
 services:
   api-admin:
-    run_script: servers/admin/package.json#dev
+    run_script: { file: servers/admin/package.json, name: dev }
     hosts: "admin-api.${{ lane.domain }}"
     ready: { http: { path: /-/health } }
     tags: [api, essential]
   wrk-mailer:
-    run_script: workers/mailer/package.json#dev
+    run_script: { file: workers/mailer/package.json, name: dev }
     ready: { log: "mailer ready" }   # a line the worker prints once connected
     tags: [worker]
 profiles:
@@ -217,7 +217,7 @@ services:
     ready: { http: { path: /health } }
   web:
     preset: vite
-    run_script: web/package.json#dev
+    run_script: { file: web/package.json, name: dev }
     env: { API_URL: "${{ services.api.url }}" }
     hosts: "${{ lane.domain }}"
     ready: { tcp: true }
@@ -360,7 +360,7 @@ services:
     ready: { tcp: true }
   frontend:
     preset: vite
-    run_script: web/package.json#dev
+    run_script: { file: web/package.json, name: dev }
     hosts: "app.${{ lane.domain }}"
     ready: { tcp: true }
 ```
@@ -371,7 +371,7 @@ A root `package.json` script (usually `dev` or `start`) that runs `concurrently`
 
 | package.json | devlanes |
 | --- | --- |
-| concurrently `npm:` / `pnpm:` / `yarn:` / `bun:` / `node:` shortcut, with `*` and `(!x)` | a service per matching script, `run_script: package.json#<script>` |
+| concurrently `npm:` / `pnpm:` / `yarn:` / `bun:` / `node:` shortcut, with `*` and `(!x)` | a service per matching script, `run_script: { file: package.json, name: <script> }` |
 | concurrently `npm run <script>` (and the pnpm, yarn, bun forms) | `run_script:` |
 | concurrently other commands | `run:`; a package binary needs `pnpm exec`, `npx`, `yarn run` or `bun x`, because `node_modules/.bin` is on PATH only inside scripts |
 | concurrently `-n` / `--names` | unit keys |
@@ -400,14 +400,14 @@ services:
     hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /health } }
   web:
-    preset: vite
-    run: pnpm exec vite
+    # Not a script in package.json, so no preset: write the flags preset vite would add.
+    run: pnpm exec vite --port ${{ self.port }} --strictPort --host 127.0.0.1
     env: { VITE_API_URL: "${{ services.api.public_url }}" }
     hosts: "${{ lane.domain }}"
     ready: { tcp: true }
 ```
 
-`dev:api` keeps its literal port, so it runs as its own command with `${{ self.port }}`; a script that reads `PORT` stays `run_script: package.json#dev:api`.
+`dev:api` keeps its literal port, so it runs as its own command with `${{ self.port }}`; a script that reads `PORT` stays `run_script: { file: package.json, name: dev:api }`.
 
 ## mise tasks
 

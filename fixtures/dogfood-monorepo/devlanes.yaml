@@ -109,28 +109,28 @@ tasks:
     when: lane.create
   build-deps:
     # Runs a script from package.json with the project's package manager.
-    run_script: package.json#build-deps
+    run_script: { file: package.json, name: build-deps }
     # Run on every devlanes start.
     when: lane.start
     # Run automatically only when one of these profiles is active.
     profiles: [default, servers, everything, stage-web]
   migrate:
-    run_script: models/package.json#db-deploy
+    run_script: { file: models/package.json, name: db-deploy }
     when: lane.start
     profiles: [default, servers, everything, e2e]
   build:
-    run_script: package.json#build
+    run_script: { file: package.json, name: build }
     when: lane.start
     profiles: [e2e]
   seed:
-    run_script: tools/seed/package.json#start
+    run_script: { file: tools/seed/package.json, name: start }
     when: lane.create
     # Wait until the selected services are ready.
     after: services
     profiles: [default, everything]
     timeout: 15m
   seed-large:
-    run_script: tools/seed/package.json#start:large
+    run_script: { file: tools/seed/package.json, name: start:large }
     timeout: 1h
   paid-plans:
     # A list runs the program directly, without a shell.
@@ -139,7 +139,7 @@ tasks:
       COMPOSE_PROJECT_NAME: monorepo
       COMPOSE_FILE: ${{ project.primary_path }}/docker-compose.yml
   db-reset:
-    run_script: models/package.json#db-reset
+    run_script: { file: models/package.json, name: db-reset }
     # Asked before running; noninteractive callers must pass --yes.
     confirm: Drops and recreates ${{ lane.db_name }}
   reset:
@@ -151,7 +151,7 @@ tasks:
 services:
   core-api:
     extends: fastify-api
-    run_script: servers/core/package.json#dev
+    run_script: { file: servers/core/package.json, name: dev }
     # Extra variables for this service; self.port is the port devlanes allocated to it.
     env: { ACME_CORE_PORT: "${{ self.port }}" }
     # HTTPS hostnames routed by the proxy.
@@ -161,33 +161,33 @@ services:
 
   crm-api:
     extends: fastify-api
-    run_script: servers/crm/package.json#dev
+    run_script: { file: servers/crm/package.json, name: dev }
     env: { ACME_CRM_PORT: "${{ self.port }}" }
     hosts: ["crm.${{ lane.domain }}"]
     tags: [api, essential]
 
   messaging-api:
     extends: fastify-api
-    run_script: servers/messaging-api/package.json#dev
+    run_script: { file: servers/messaging-api/package.json, name: dev }
     env: { ACME_MESSAGING_API_PORT: "${{ self.port }}" }
     hosts: ["messaging.${{ lane.domain }}"]
 
   pages-server:
     extends: fastify-api
-    run_script: servers/pages-server/package.json#dev
+    run_script: { file: servers/pages-server/package.json, name: dev }
     env: { ACME_PAGES_SERVER_PORT: "${{ self.port }}" }
     hosts: ["pages-server.${{ lane.domain }}"]
 
   messaging-worker:
     platform: node
-    run_script: servers/messaging-worker/package.json#dev
+    run_script: { file: servers/messaging-worker/package.json, name: dev }
     # Ready once this line appears in the output.
     ready: { log: Connected to Redis }
     tags: [queue]
 
   app-web:
     extends: vite-web
-    run_script: web/app/package.json#dev
+    run_script: { file: web/app/package.json, name: dev }
     env: { ACME_APP_PORT: "${{ self.port }}" }
     hosts: ["app.${{ lane.domain }}"]
     ready: { http: { path: / } }
@@ -195,7 +195,7 @@ services:
 
   members-portal:
     extends: vite-web
-    run_script: web/members-portal/package.json#dev
+    run_script: { file: web/members-portal/package.json, name: dev }
     env: { ACME_MEMBERS_PORTAL_PORT: "${{ self.port }}" }
     hosts:
       - members-portal.${{ lane.domain }}
@@ -205,7 +205,7 @@ services:
 
   admin-web:
     extends: vite-web
-    run_script: pages/admin/package.json#dev
+    run_script: { file: pages/admin/package.json, name: dev }
     env:
       ACME_ADMIN_PORT: ${{ self.port }}
       # Naming a port under self.ports allocates one more port for the service.
@@ -221,7 +221,7 @@ services:
 
   api-gateway:
     extends: wrangler-worker
-    run_script: workers/api-gateway/package.json#dev
+    run_script: { file: workers/api-gateway/package.json, name: dev }
     env: { ACME_API_GATEWAY_PORT: "${{ self.port }}" }
     hosts:
       - api.${{ lane.domain }}
@@ -232,7 +232,7 @@ services:
 
   pages-worker:
     extends: wrangler-worker
-    run_script: workers/pages/package.json#dev
+    run_script: { file: workers/pages/package.json, name: dev }
     env:
       ACME_PAGES_WORKER_PORT: ${{ self.port }}
       # Port of another service in this lane; the dash in its name becomes an underscore.
@@ -247,7 +247,7 @@ services:
 
   mcp-worker:
     extends: wrangler-worker
-    run_script: workers/mcp/package.json#dev
+    run_script: { file: workers/mcp/package.json, name: dev }
     env: { ACME_MCP_PORT: "${{ self.port }}" }
     hosts: ["mcp.${{ lane.domain }}"]
     # Ready as soon as the process starts.
@@ -255,13 +255,13 @@ services:
 
   sms-worker:
     extends: wrangler-worker
-    run_script: workers/sms/package.json#dev
+    run_script: { file: workers/sms/package.json, name: dev }
     hosts: ["sms-worker.${{ lane.domain }}"]
     tags: [worker, messaging]
 
   sms-stub:
     platform: node
-    run_script: servers/sms-stub/package.json#dev
+    run_script: { file: servers/sms-stub/package.json, name: dev }
     env: { ACME_SMS_STUB_PORT: "${{ self.port }}" }
     hosts: ["sms-stub.${{ lane.domain }}"]
     ready: { http: { path: /health } }

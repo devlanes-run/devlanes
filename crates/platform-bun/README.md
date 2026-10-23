@@ -18,7 +18,7 @@ let bun: Arc<dyn Contributor> = Arc::new(BunContributor);
 ```yaml
 services:
   api:
-    run_script: apps/api/package.json#dev   # bun.lock at the repo root: platform inferred
+    run_script: { file: apps/api/package.json, name: dev }   # bun.lock at the repo root: platform inferred
   edge:
     platform: bun
     run: bun run src/edge.ts

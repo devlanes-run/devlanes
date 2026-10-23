@@ -318,7 +318,8 @@ impl Contributor for TauriPreset {
             .map_err(|e| Error::Integration(format!("cannot render the tauri overlay: {e}")))?;
         contents.push(b'\n');
         draft.files.push(PreparedFile { path, contents });
-        devlanes_run_script_npm::forward_args(draft, launch.contribution.args);
+        // Presets require `run_script`; its runner places the arguments for the tool.
+        draft.args.extend(launch.contribution.args);
         draft.env.extend(launch.contribution.env);
         Ok(())
     }

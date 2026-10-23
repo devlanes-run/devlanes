@@ -87,6 +87,8 @@ infra:
 
 `setup` entries run once per lane, after its containers are healthy, and are recorded as done; later starts skip them. They run concurrently, so an entry must not depend on another one. A failure (without `ignore_errors`) stops the start and names the entry. `teardown` runs on `devlanes lane clean`, in order, and never on `stop`. Tasks can reuse entries as steps: `steps: [infra.teardown.database, infra.setup.database, migrate, seed]`.
 
+Entries take only `run`, written out in full (`docker compose exec ...`, `curl ...`), so the command in the config is the command that runs. A script from `package.json` or a justfile belongs in a task, which can call setup entries as steps.
+
 Creating the namespace is `setup` (once); migrating it is a task with `when: lane.start` (every start, idempotent by the migration tool). Seeding is a task with `when: lane.create` and `after: services` when it goes through the API.
 
 ## Lifecycle
@@ -128,7 +130,7 @@ infra:
 global_env:
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/${{ lane.db_name }}
 tasks:
-  migrate: { run_script: package.json#db:migrate, when: lane.start }
+  migrate: { run_script: { file: package.json, name: db:migrate }, when: lane.start }
 ```
 
 Extensions or roles the app expects go into the same `setup` entry (`psql -c "CREATE EXTENSION ..."`) or into the migration.

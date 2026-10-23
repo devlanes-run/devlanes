@@ -109,7 +109,8 @@ impl Contributor for NextPreset {
             .port
             .ok_or_else(|| Error::InvalidInput(format!("preset {NAME} needs a service port")))?;
         let contribution = contribution(port, &options);
-        devlanes_run_script_npm::forward_args(draft, contribution.args);
+        // Presets require `run_script`; its runner places the arguments for the tool.
+        draft.args.extend(contribution.args);
         draft.env.extend(contribution.env);
         Ok(())
     }
@@ -183,10 +184,7 @@ mod tests {
         .await
         .expect("apply");
         assert_eq!(plain.args.join(" "), "--port 20013 --hostname 127.0.0.1");
-        let npm = apply(Some(NAME), None, argv(&["npm", "run", "dev"]))
-            .await
-            .expect("apply");
-        assert_eq!(npm.args.first().map(String::as_str), Some("--"));
+        // The script runner adds any separator its package manager needs.
         let script = apply(
             Some(NAME),
             None,

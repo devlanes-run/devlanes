@@ -144,11 +144,32 @@ fn command(
         return Err(fail(path, "run cannot be empty"));
     }
     if let Some(script) = script {
-        script
-            .source_and_name()
-            .map_err(|e| fail(path, e.message))?;
+        script.file_and_name().map_err(|e| fail(path, e.message))?;
     }
     Ok(())
+}
+
+/// Reject `preset` with `run` on a merged service; `template` names the inherited source.
+fn preset_script(
+    path: &str,
+    preset: Option<&str>,
+    has_run: bool,
+    template: Option<&str>,
+) -> Result<(), ConfigError> {
+    // A preset appends flags to the launch; on hand-written shell text (pipes, chains,
+    // wrappers) they could land on the wrong command, so presets only wrap a script.
+    let Some(preset) = preset.filter(|_| has_run) else {
+        return Ok(());
+    };
+    let inherited = template
+        .map(|name| format!(" (`preset` or `run` may come from template `{name}`)"))
+        .unwrap_or_default();
+    Err(fail(
+        &format!("{path}.run"),
+        format!(
+            "`preset: {preset}` needs run_script, such as `run_script: {{ file: apps/web/package.json, name: dev }}`, so the preset can place its flags; to keep this command, remove `preset` and add the preset's flags to `run` yourself (docs/guides/presets.md lists them){inherited}"
+        ),
+    ))
 }
 
 /// Ensure readiness is a single mechanism rather than an ambiguous combination.
@@ -290,6 +311,12 @@ fn validate_inner<E: Extensions>(
             return Err(fail(&path, "service requires run or run_script"));
         }
         command(&path, &service.run, &service.run_script, false)?;
+        preset_script(
+            &path,
+            service.preset.as_deref(),
+            service.run.is_some(),
+            service.extends.as_deref(),
+        )?;
         if let Some(ready) = &service.ready {
             readiness(&format!("{path}.ready"), ready)?;
         }
@@ -505,7 +532,10 @@ fn validate_inner<E: Extensions>(
             let path = format!("infra.{phase}.{name}");
             match entry {
                 InfraCommand::Object(options) => {
-                    command(&path, &options.run, &options.run_script, false)?;
+                    if options.run.is_none() {
+                        return Err(fail(&path, "infra command requires run"));
+                    }
+                    command(&path, &options.run, &None, false)?;
                     if let Some(name) = &options.container
                         && can_validate_infra
                         && !known.contains(name)

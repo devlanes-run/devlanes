@@ -281,7 +281,7 @@ fn structural_validation() {
     for (yaml, expected) in [
         ("project: invalid@name", "project: expected"),
         (
-            "project: demo\nservices: { api: { run: a, run_script: 'package.json#b' } }",
+            "project: demo\nservices: { api: { run: a, run_script: { file: package.json, name: b } } }",
             "services.api: exactly one of run, run_script",
         ),
         (
@@ -506,7 +506,7 @@ fn startup_settings() {
 fn local_error_location() {
     let error = parse_project(
         "project: demo\nservices:\n  api: { run: server }\n",
-        Some("services:\n  api:\n    run: other\n    run_script: package.json#dev\n"),
+        Some("services:\n  api:\n    run: other\n    run_script: { file: package.json, name: dev }\n"),
     )
     .expect_err("conflicting command");
     assert_eq!(error.location.file, "devlanes.local.yaml");
@@ -769,7 +769,7 @@ impl Extensions for TestExtensions {
 /// Extension registration controls parsing and schema without core/integration dependencies.
 #[test]
 fn custom_extension_seam() {
-    let source = "project: demo\nservices:\n  api:\n    run: server\n    custom: { flag: true }\n    preset: custom\n";
+    let source = "project: demo\nservices:\n  api:\n    run_script: { file: package.json, name: dev }\n    custom: { flag: true }\n    preset: custom\n";
     let config = parse_project_with::<TestExtensions>(source, None).expect("custom preset");
     assert_eq!(
         config.services["api"].preset_options["custom"].flag,
@@ -785,10 +785,10 @@ fn custom_extension_seam() {
     assert!(parse_project(source, None).is_ok());
 }
 
-/// Profile remapping applies once to service script names and preserves both source syntaxes.
+/// Profile remapping applies once to service script names and keeps the file.
 #[test]
 fn profile_script_remapping() {
-    let source = "project: demo\ntasks:\n  build: { run: pnpm build, when: lane.start, profiles: [e2e] }\nservices:\n  api: { run_script: 'apps/api/package.json#dev' }\nprofiles:\n  e2e:\n    include: [api]\n    run_scripts: { dev: start, start: production }\n    env: { NODE_ENV: production }\n";
+    let source = "project: demo\ntasks:\n  build: { run: pnpm build, when: lane.start, profiles: [e2e] }\nservices:\n  api: { run_script: { file: apps/api/package.json, name: dev } }\nprofiles:\n  e2e:\n    include: [api]\n    run_scripts: { dev: start, start: production }\n    env: { NODE_ENV: production }\n";
     let local = "profiles:\n  e2e:\n    run_scripts: { watch: serve }\n";
     let config = parse_project(source, Some(local)).expect("e2e profile");
     let ProfileConfig::Object(profile) = &config.profiles["e2e"] else {
@@ -800,22 +800,21 @@ fn profile_script_remapping() {
     let script = config.services["api"].run_script.as_ref().expect("script");
     assert_eq!(
         script
-            .source_and_name_for_profile(Some(profile))
+            .file_and_name_for_profile(Some(profile))
             .expect("remapped"),
         ("apps/api/package.json", "start")
     );
     assert_eq!(
-        script.source_and_name_for_profile(None).expect("unmapped"),
+        script.file_and_name_for_profile(None).expect("unmapped"),
         ("apps/api/package.json", "dev")
     );
-    let object = RunScript::Object(ScriptSource {
-        source: "Makefile".into(),
+    let make = RunScript {
+        file: "Makefile".into(),
         name: "dev".into(),
-    });
+    };
     assert_eq!(
-        object
-            .source_and_name_for_profile(Some(profile))
-            .expect("object remapped"),
+        make.file_and_name_for_profile(Some(profile))
+            .expect("make remapped"),
         ("Makefile", "start")
     );
     assert_eq!(config.tasks["build"].when, Some(TaskWhen::Start));
@@ -837,7 +836,7 @@ fn profile_script_remapping() {
 /// Integration-owned fields survive loading, merging, and evaluation as JSON objects.
 #[test]
 fn opaque_preset_options_and_registry_validation() {
-    let source = "project: demo\nservices:\n  worker:\n    preset: wrangler\n    run: server\n    wrangler:\n      isolate_registry: false\n      vars: { COUNT: '${{ lane.index }}' }\n  desktop:\n    preset: tauri\n    run: server\n    tauri: { product_name: Demo, before_dev_command: '' }\n  web:\n    preset: vite\n    run: server\n    vite: { args: [--open] }\n  next:\n    preset: next\n    run: server\n    next: { args: [--turbo] }\n";
+    let source = "project: demo\nservices:\n  worker:\n    preset: wrangler\n    run_script: { file: package.json, name: dev }\n    wrangler:\n      isolate_registry: false\n      vars: { COUNT: '${{ lane.index }}' }\n  desktop:\n    preset: tauri\n    run_script: { file: package.json, name: dev }\n    tauri: { product_name: Demo, before_dev_command: '' }\n  web:\n    preset: vite\n    run_script: { file: package.json, name: dev }\n    vite: { args: [--open] }\n  next:\n    preset: next\n    run_script: { file: package.json, name: dev }\n    next: { args: [--turbo] }\n";
     let config = parse_project(source, None).expect("opaque options");
     assert_eq!(
         config.services["worker"].preset_options["wrangler"]["isolate_registry"],
@@ -861,7 +860,7 @@ fn opaque_preset_options_and_registry_validation() {
     .expect("evaluated JSON");
     assert_eq!(options["vars"]["COUNT"], 3);
 
-    let custom = parse_project("project: demo\ntemplates:\n  base:\n    preset: custom\n    custom: { nested: { keep: true, replace: old }, args: [old] }\nservices:\n  api:\n    extends: base\n    run: server\n    custom: { nested: { replace: new }, args: [] }\n",None).expect("unregistered preset before integration validation");
+    let custom = parse_project("project: demo\ntemplates:\n  base:\n    preset: custom\n    custom: { nested: { keep: true, replace: old }, args: [old] }\nservices:\n  api:\n    extends: base\n    run_script: { file: package.json, name: dev }\n    custom: { nested: { replace: new }, args: [] }\n",None).expect("unregistered preset before integration validation");
     assert_eq!(
         custom.services["api"].preset_options["custom"],
         json!({"nested":{"keep":true,"replace":"new"},"args":[]})
@@ -873,7 +872,7 @@ fn opaque_preset_options_and_registry_validation() {
             .starts_with("services.api.preset: unregistered preset `custom`")
     );
     let invalid = parse_project(
-        "project: demo\nservices:\n  api: { preset: vite, run: server, vite: { unknown: true } }\n",
+        "project: demo\nservices:\n  api: { preset: vite, run_script: { file: package.json, name: dev }, vite: { unknown: true } }\n",
         None,
     )
     .expect("options deferred");
@@ -883,7 +882,7 @@ fn opaque_preset_options_and_registry_validation() {
     assert!(error.message.contains("unknown"));
 
     let absent = parse_project(
-        "project: demo\nservices:\n  api: { preset: custom, run: server }\n",
+        "project: demo\nservices:\n  api: { preset: custom, run_script: { file: package.json, name: dev } }\n",
         None,
     )
     .expect("no options");
@@ -900,17 +899,17 @@ fn opaque_preset_options_and_registry_validation() {
 fn preset_block_diagnostics() {
     for value in ["42", "[]", "null", "text"] {
         let source = format!(
-            "project: demo\nservices:\n  api:\n    preset: custom\n    run: server\n    custom: {value}\n"
+            "project: demo\nservices:\n  api:\n    preset: custom\n    run_script: {{ file: package.json, name: dev }}\n    custom: {value}\n"
         );
         let error = parse_project(&source, None).expect_err("options must be mapping");
         assert!(error.message.contains("map"));
         assert_eq!(error.location.line, 6);
     }
-    let source = "project: demo\nservices:\n  api:\n    preset: vite\n    run: server\n    next: { args: [] }\n";
+    let source = "project: demo\nservices:\n  api:\n    preset: vite\n    run_script: { file: package.json, name: dev }\n    next: { args: [] }\n";
     let error = parse_project(source, None).expect_err("mismatched preset key");
     assert!(error.message.contains("services.api.next"));
     assert_eq!(error.location.line, 6);
-    let source = "project: demo\nservices:\n  api:\n    custom: { nested: true }\n    run: server\n    preset: custom\n";
+    let source = "project: demo\nservices:\n  api:\n    custom: { nested: true }\n    run_script: { file: package.json, name: dev }\n    preset: custom\n";
     assert!(
         parse_project(source, None).is_ok(),
         "key order must not matter"

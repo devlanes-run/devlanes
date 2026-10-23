@@ -111,7 +111,8 @@ impl Contributor for VitePreset {
             .port
             .ok_or_else(|| Error::InvalidInput(format!("preset {NAME} needs a service port")))?;
         let contribution = contribution(port, &options);
-        devlanes_run_script_npm::forward_args(draft, contribution.args);
+        // Presets require `run_script`; its runner places the arguments for the tool.
+        draft.args.extend(contribution.args);
         draft.env.extend(contribution.env);
         Ok(())
     }
@@ -183,16 +184,20 @@ mod tests {
             plain.args.join(" "),
             "--port 20012 --strictPort --host 127.0.0.1"
         );
-        let npm = apply(
+        // The script runner adds any separator its package manager needs.
+        let script = apply(
             Some(NAME),
             Some(serde_json::json!({"args": ["--open"]})),
-            shell("npm run dev"),
+            DraftCommand::Script {
+                source: "package.json".into(),
+                name: "dev".into(),
+            },
         )
         .await
         .expect("apply");
         assert_eq!(
-            npm.args.join(" "),
-            "-- --port 20012 --strictPort --host 127.0.0.1 --open"
+            script.args.join(" "),
+            "--port 20012 --strictPort --host 127.0.0.1 --open"
         );
         let error = apply(
             Some(NAME),

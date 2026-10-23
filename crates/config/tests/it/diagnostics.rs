@@ -159,9 +159,19 @@ fn alternative_forms_keep_struct_errors() {
             "unknown key `ignore_error`; did you mean `ignore_errors`?",
         ),
         (
-            "project: demo\nservices:\n  api:\n    run_script: { source: package.json, nmae: dev }\n",
+            "project: demo\nservices:\n  api:\n    run_script: { file: package.json, nmae: dev }\n",
             "nmae",
             "unknown key `nmae`; did you mean `name`?",
+        ),
+        (
+            "project: demo\nservices:\n  api:\n    run_script: { source: package.json, name: dev }\n",
+            "source",
+            "unknown field `source`, expected one of file, name",
+        ),
+        (
+            "project: demo\nservices:\n  api:\n    run_script: apps/api/package.json#dev\n",
+            "run_script",
+            "run_script takes a mapping with file and name, such as `{ file: apps/api/package.json, name: dev }`",
         ),
         (
             "project: demo\nglobal_env:\n  FOO: null\n",
@@ -270,7 +280,7 @@ fn preset_hint_only_for_mappings() {
 /// Integration errors about a preset option point at that option's line.
 #[test]
 fn preset_option_errors_are_located() {
-    let source = "project: demo\nservices:\n  web:\n    preset: vite\n    run: server\n    vite:\n      argz: []\n";
+    let source = "project: demo\nservices:\n  web:\n    preset: vite\n    run_script: { file: package.json, name: dev }\n    vite:\n      argz: []\n";
     let config = parse_project(source, None).expect("options deferred");
     let error = validate_with_presets(&config, &super::registered_validator)
         .expect_err("unknown vite option");
@@ -428,7 +438,7 @@ fn template_and_preset_names_suggest() {
         "unknown template `bsae`; did you mean `base`?",
     );
     let error = parse_project_with::<super::TestExtensions>(
-        "project: demo\nservices:\n  api:\n    run: server\n    preset: custm\n",
+        "project: demo\nservices:\n  api:\n    run_script: { file: package.json, name: dev }\n    preset: custm\n",
         None,
     )
     .expect_err("typed registry");
@@ -440,7 +450,7 @@ fn template_and_preset_names_suggest() {
         error.message
     );
     assert_eq!(error.location.line, 5);
-    let source = "project: demo\nservices:\n  api:\n    run: server\n    preset: vitee\n";
+    let source = "project: demo\nservices:\n  api:\n    run_script: { file: package.json, name: dev }\n    preset: vitee\n";
     let config = parse_project(source, None).expect("opaque presets load");
     let reject = |name: &str, _: Option<&serde_json::Value>| -> Result<(), String> {
         Err(format!("unknown preset `{name}`"))
@@ -491,4 +501,47 @@ fn missing_compose_file_is_an_error() {
     assert_eq!(error.location.line, 3);
     std::fs::write(dir.path().join("compose.dev.yaml"), "services: {}\n").expect("compose");
     assert!(check(dir.path()).expect("both present").warnings.is_empty());
+}
+
+/// A preset only wraps `run_script`; with `run` the error points at `run`, also when a
+/// template brings the preset.
+#[test]
+fn preset_with_run_is_refused() {
+    let hint = "`preset: vite` needs run_script, such as `run_script: { file: apps/web/package.json, name: dev }`, so the preset can place its flags; to keep this command, remove `preset` and add the preset's flags to `run` yourself";
+    assert_project_error(
+        "project: demo\nservices:\n  web:\n    preset: vite\n    run: pnpm exec vite\n",
+        "run:",
+        &format!("services.web.run: {hint}"),
+    );
+    assert_project_error(
+        "project: demo\ntemplates:\n  web: { preset: vite }\nservices:\n  app:\n    extends: web\n    run: pnpm exec vite\n",
+        "run:",
+        "(`preset` or `run` may come from template `web`)",
+    );
+    // A local `run` replaces the inherited script and so trips the rule too.
+    let error = parse_project(
+        "project: demo\nservices:\n  web:\n    preset: vite\n    run_script: { file: web/package.json, name: dev }\n",
+        Some("services:\n  web:\n    run: pnpm exec vite\n"),
+    )
+    .expect_err("local run");
+    assert!(
+        error.message.starts_with("services.web.run: "),
+        "{}",
+        error.message
+    );
+}
+
+/// Infra commands take only `run`, written out in full.
+#[test]
+fn infra_commands_take_only_run() {
+    assert_project_error(
+        "project: demo\ninfra:\n  setup:\n    seed:\n      run_script: { file: Makefile, name: seed }\n",
+        "run_script",
+        "unknown key `run_script`; did you mean `run`?",
+    );
+    assert_project_error(
+        "project: demo\ninfra:\n  teardown:\n    drop:\n      ignore_errors: true\n",
+        "ignore_errors",
+        "infra.teardown.drop: infra command requires run",
+    );
 }

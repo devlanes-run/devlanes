@@ -34,7 +34,7 @@ services:
   api:
     # Adds wrangler's port and inspector-port flags to the command.
     preset: wrangler
-    run_script: apps/api/package.json#dev
+    run_script: { file: apps/api/package.json, name: dev }
     # Options for the wrangler preset.
     wrangler:
       # Passed as --var KEY:VALUE; self.public_url is this service's https:// address.

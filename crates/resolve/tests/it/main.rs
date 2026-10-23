@@ -254,8 +254,8 @@ fn selection() {
 const PROFILES: &str = r#"
 project: demo
 services:
-  api: { run_script: package.json#dev, tags: [api] }
-  tester: { run_script: package.json#test }
+  api: { run_script: { file: package.json, name: dev }, tags: [api] }
+  tester: { run_script: { file: package.json, name: test } }
   web: { run: web, tags: [web] }
 tasks:
   only-a: { run: a, when: lane.start, profiles: [a] }
@@ -471,7 +471,7 @@ tags:
 services:
   catalog: { run: a, tags: [essential, api] }
   backend: { run: b, tags: [api] }
-  web: { run: w, preset: vite }
+  web: { run_script: { file: web/package.json, name: dev }, preset: vite }
   thing: { run: t }
   stub-sms: { run: s, replicas: 2 }
 tasks:
@@ -484,9 +484,10 @@ tasks:
     );
     let facts = facts("demo", 1, None);
     let (block, offsets) = allocation(&config, 21_000, &[]);
-    let lane = resolve_lane(ResolveInput::new(&config, &facts, block, &offsets))
-        .await
-        .expect("resolves");
+    let runners: [Arc<dyn ScriptRunner>; 1] = [Arc::new(FakeRunner::new())];
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.script_runners = &runners;
+    let lane = resolve_lane(input).await.expect("resolves");
     let color = |unit: &str| lane.services[unit].color.as_str();
     assert_eq!(color("catalog"), "bright-yellow");
     assert_eq!(color("backend"), "blue");
@@ -595,10 +596,13 @@ async fn lanes_main_namespace() {
 
     let lane_facts = facts("acme", 1, Some("desktop-fix"));
     let block1 = PortBlock::new(22_000, block0.size).expect("block");
+    // `desktop` uses run_script, which needs a runner to plan.
+    let runners: [Arc<dyn ScriptRunner>; 1] = [Arc::new(FakeRunner::new())];
     let mut input = ResolveInput::new(&config, &lane_facts, block1, &offsets);
     input.infra = &infra;
     input.profile = Some("attach");
     input.lanes_main = Some(&namespace);
+    input.script_runners = &runners;
     let lane = resolve_lane(input).await.expect("resolves");
     assert!(!lane.infra_enabled);
     assert_eq!(
@@ -609,6 +613,7 @@ async fn lanes_main_namespace() {
     let mut input = ResolveInput::new(&config, &lane_facts, block1, &offsets);
     input.infra = &infra;
     input.profile = Some("attach");
+    input.script_runners = &runners;
     let lane = resolve_lane(input)
         .await
         .expect("lane-level resolution still works");
@@ -621,6 +626,7 @@ async fn lanes_main_namespace() {
     let mut input = ResolveInput::new(&config, &main_facts, block0, &offsets);
     input.infra = &infra;
     input.profile = Some("attach");
+    input.script_runners = &runners;
     let lane = resolve_lane(input).await.expect("resolves");
     assert_eq!(
         lane.services["desktop.2"].launch.env.values["ACME_CRM_BASE_URL"],
@@ -685,21 +691,15 @@ async fn public_url_variables() {
 }
 
 #[tokio::test]
-/// Contributor args go after a shell command and through the script runner.
+/// Contributor args reach the command through the script runner.
 async fn contributor_args_reach_commands() {
     let config = parse(
         r#"
 project: demo
 services:
-  shell:
-    preset: vite
-    run: pnpm dev
   script:
     preset: vite
-    run_script: web/package.json#dev
-  argv:
-    preset: vite
-    run: [vite, "--mode", "dev x"]
+    run_script: { file: web/package.json, name: dev }
 "#,
     );
     let facts = facts("demo", 1, None);
@@ -717,22 +717,6 @@ services:
     input.script_runners = &runners;
     let lane = resolve_lane(input).await.expect("resolves");
     let port = |unit: &str| lane.services[unit].port.to_string();
-    assert_eq!(
-        lane.services["shell"].launch.args,
-        [
-            "-c".to_owned(),
-            format!("pnpm dev --port {}", port("shell"))
-        ]
-    );
-    assert_eq!(
-        lane.services["argv"].launch.args,
-        [
-            "--mode".to_owned(),
-            "dev x".into(),
-            "--port".into(),
-            port("argv")
-        ]
-    );
     assert_eq!(
         lane.services["script"].launch.args,
         [
@@ -1039,8 +1023,8 @@ project: demo
 services:
   plain: { run: dev, cwd: plain }
   bunlock: { run: dev, cwd: bunlock }
-  bunscript: { run_script: bunlock/package.json#dev }
-  nodescript: { run_script: plain/package.json#dev }
+  bunscript: { run_script: { file: bunlock/package.json, name: dev } }
+  nodescript: { run_script: { file: plain/package.json, name: dev } }
   pinned: { run: dev, cwd: pinned }
   denoapp: { run: dev, cwd: denoapp }
   crate: { run: cargo run, cwd: crate }

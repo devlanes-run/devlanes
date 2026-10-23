@@ -25,7 +25,7 @@ services:
   site:
     # Adds Next's port and hostname flags to the command.
     preset: next
-    run_script: apps/site/package.json#dev
+    run_script: { file: apps/site/package.json, name: dev }
     # Options for the next preset.
     next:
       # Appended after the preset's flags.

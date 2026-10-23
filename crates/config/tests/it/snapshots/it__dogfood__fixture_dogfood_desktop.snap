@@ -95,7 +95,10 @@ expression: config
   "tasks": {
     "sync-env": {
       "run": null,
-      "run_script": "package.json#sync:env",
+      "run_script": {
+        "file": "package.json",
+        "name": "sync:env"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -110,7 +113,10 @@ expression: config
     },
     "sidecar-build": {
       "run": null,
-      "run_script": "package.json#sidecar:build",
+      "run_script": {
+        "file": "package.json",
+        "name": "sidecar:build"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -131,7 +137,10 @@ expression: config
     },
     "build-deps": {
       "run": null,
-      "run_script": "package.json#build:deps",
+      "run_script": {
+        "file": "package.json",
+        "name": "build:deps"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -206,7 +215,10 @@ expression: config
     },
     "seed": {
       "run": null,
-      "run_script": "package.json#db:seed",
+      "run_script": {
+        "file": "package.json",
+        "name": "db:seed"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -240,7 +252,10 @@ expression: config
   "services": {
     "chat": {
       "extends": "worker",
-      "run_script": "workers/chat/package.json#dev",
+      "run_script": {
+        "file": "workers/chat/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -261,7 +276,10 @@ expression: config
     },
     "messages": {
       "extends": "worker",
-      "run_script": "workers/messages/package.json#dev",
+      "run_script": {
+        "file": "workers/messages/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -282,7 +300,10 @@ expression: config
     },
     "billing": {
       "extends": "worker",
-      "run_script": "workers/billing/package.json#dev",
+      "run_script": {
+        "file": "workers/billing/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -303,7 +324,10 @@ expression: config
     },
     "authz": {
       "extends": "worker",
-      "run_script": "platform/authz/worker/package.json#dev",
+      "run_script": {
+        "file": "platform/authz/worker/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -325,7 +349,10 @@ expression: config
     },
     "directory": {
       "extends": "worker",
-      "run_script": "workers/directory/package.json#dev",
+      "run_script": {
+        "file": "workers/directory/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -341,7 +368,10 @@ expression: config
     },
     "skills": {
       "extends": "worker",
-      "run_script": "workers/skills/package.json#dev",
+      "run_script": {
+        "file": "workers/skills/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -363,7 +393,10 @@ expression: config
     },
     "webhooks": {
       "extends": "worker",
-      "run_script": "workers/webhooks/package.json#dev",
+      "run_script": {
+        "file": "workers/webhooks/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -379,7 +412,10 @@ expression: config
     },
     "media": {
       "extends": "worker",
-      "run_script": "workers/media/package.json#dev",
+      "run_script": {
+        "file": "workers/media/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "tags": [
@@ -411,14 +447,20 @@ expression: config
     },
     "desktop-package": {
       "extends": "watcher",
-      "run_script": "apps/desktop/package.json#build:watch",
+      "run_script": {
+        "file": "apps/desktop/package.json",
+        "name": "build:watch"
+      },
       "platform": "node",
       "tags": [
         "watcher"
       ]
     },
     "docs": {
-      "run_script": "apps/docs/package.json#dev",
+      "run_script": {
+        "file": "apps/docs/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "tags": [
         "watcher"
@@ -427,7 +469,7 @@ expression: config
         "tcp": null,
         "http": {
           "path": "/",
-          "status": null,
+          "status": 302,
           "timeout": null
         },
         "log": null,
@@ -448,7 +490,7 @@ expression: config
         "tcp": null,
         "http": {
           "path": "/",
-          "status": null,
+          "status": 302,
           "timeout": "180000ms"
         },
         "log": null,
@@ -457,7 +499,10 @@ expression: config
       }
     },
     "desktop": {
-      "run_script": "apps/desktop/package.json#dev",
+      "run_script": {
+        "file": "apps/desktop/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "tauri",
       "tags": [

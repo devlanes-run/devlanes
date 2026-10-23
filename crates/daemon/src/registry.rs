@@ -2043,7 +2043,7 @@ mod tests {
     /// An unregistered preset is refused with the closest registered name.
     fn unknown_preset_names_the_closest() {
         let config = devlanes_config::parse_project_with::<OpaqueExtensions>(
-            "project: demo\nservices:\n  web: { run: serve, preset: vtie }\n",
+            "project: demo\nservices:\n  web: { run_script: { file: package.json, name: dev }, preset: vtie }\n",
             None,
         )
         .expect("parses");

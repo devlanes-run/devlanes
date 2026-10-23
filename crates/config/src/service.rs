@@ -39,7 +39,7 @@ macro_rules! service_fields {
         /// `run` or `run_script`, directly or through `extends`.
         #[derive(Debug, Clone, JsonSchema)]
         #[schemars(bound = "E: Extensions", deny_unknown_fields)]
-        #[schemars(extend("examples" = [{"run_script":"apps/api/package.json#dev","hosts":["api.${{ lane.domain }}"],"tags":["api"]}]))]
+        #[schemars(extend("examples" = [{"run_script":{"file":"apps/api/package.json","name":"dev"},"hosts":"api.${{ lane.domain }}","tags":["api"]}]))]
         pub struct ServiceConfig<E: Extensions = OpaqueExtensions> {
             $($(#[$meta])* pub $field: Option<$ty>,)*
             /// Environment variables for this service's process. They override `global_env` and
@@ -78,7 +78,7 @@ macro_rules! service_fields {
 
         impl<E: Extensions> PartialService<E> {
             /// Apply a local override or an `extends` child. Mappings (`ready`, `stop`, `fnox`,
-            /// `{ source, name }` scripts, `env`, preset options) merge per key; lists and
+            /// `run_script`, `env`, preset options) merge per key; lists and
             /// scalars replace. `run` and `run_script` are alternatives, so setting one clears
             /// the other. Merged values keep the overlay's source position for diagnostics.
             pub(crate) fn merge(&mut self, mut overlay: Self) {
@@ -220,8 +220,8 @@ service_fields! {
     #[schemars(extend("examples" = ["Admin API","Storefront (web)"]))]
     name: String,
     /// Template under `templates` whose settings this service inherits; its own settings
-    /// apply on top. Mappings (`env`, `ready`, `stop`, `fnox`, preset options, `run_script`
-    /// as `{ source, name }`) merge by key, lists (`tags`, `hosts`, `sync`) and single values
+    /// apply on top. Mappings (`env`, `ready`, `stop`, `fnox`, preset options, `run_script`)
+    /// merge by key, lists (`tags`, `hosts`, `sync`) and single values
     /// replace. Setting `run` or `run_script` drops the inherited one, and one `ready` probe
     /// (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other
     /// templates and are resolved after devlanes.local.yaml is merged.
@@ -229,14 +229,18 @@ service_fields! {
     extends: String,
     /// Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and
     /// multi-line scripts work; a list is an argv run directly without a shell. It starts in
-    /// the lane's worktree root unless `cwd` is set. Exactly one of `run` and `run_script` is
-    /// required after templates are applied.
+    /// the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so
+    /// it cannot be combined with `preset`; prefer `run_script` when the command is a script
+    /// in a project file. Exactly one of `run` and `run_script` is required after templates
+    /// are applied.
     run: Run,
-    /// Script to run from a project file, as `<file>#<name>` or `{ source, name }`, such as
-    /// `apps/api/package.json#dev`. devlanes picks the runner from the file (`package.json`,
-    /// `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`) and runs it in that
-    /// file's directory; a profile's `run_scripts` can swap the script name. Exactly one of
-    /// `run` and `run_script` is required after templates are applied.
+    /// Script to run from a project file, as `{ file, name }`, such as
+    /// `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file
+    /// name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`,
+    /// `Cargo.toml`), runs the script in that file's directory and checks that it exists
+    /// before starting. Presets need it to place their flags, and a profile's `run_scripts`
+    /// can swap the script name. Exactly one of `run` and `run_script` is required after
+    /// templates are applied.
     run_script: RunScript,
     /// Directory `run` starts in, relative to the lane's worktree; defaults to the worktree
     /// root. Platform detection also looks here. Ignored with `run_script`, which runs in the
@@ -251,8 +255,9 @@ service_fields! {
     platform: String,
     /// Framework integration that adds the flags and variables a dev server needs to run in
     /// a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do
-    /// not pass them yourself. Its options go under a sibling key with the preset's name,
-    /// for example `vite: { args: [--open] }`.
+    /// not pass them yourself. Requires `run_script`; with a hand-written `run`, drop the
+    /// preset and pass its flags yourself. Its options go under a sibling key with the
+    /// preset's name, for example `vite: { args: [--open] }`.
     #[schemars(extend("examples" = ["vite","next","wrangler","tauri"]))]
     preset: String,
     /// Hostnames the devlanes HTTPS proxy routes to this service, so `https://<host>` reaches

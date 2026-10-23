@@ -345,7 +345,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let script = match &service.run_script {
             Some(script) => {
                 let (source, name) = script
-                    .source_and_name_for_profile(self.remap)
+                    .file_and_name_for_profile(self.remap)
                     .map_err(|e| ResolveError::expression(format!("{path}.run_script"), e))?;
                 Some((source.to_owned(), name.to_owned()))
             }
@@ -430,7 +430,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             let script = match &task.run_script {
                 Some(script) => {
                     let (source, name) = script
-                        .source_and_name()
+                        .file_and_name()
                         .map_err(|e| ResolveError::expression(format!("{path}.run_script"), e))?;
                     Some((source.to_owned(), name.to_owned()))
                 }
@@ -494,25 +494,12 @@ impl<E: Extensions> Planner<'_, '_, E> {
     ) -> Result<ResolvedCommand, ResolveError> {
         let path = format!("infra.{phase}.{name}");
         let empty = Env::default();
-        let (run, script, options) = match entry {
-            InfraCommand::Command(run) => (Some(run), None, None),
-            InfraCommand::Object(options) => (
-                options.run.as_ref(),
-                options.run_script.as_ref(),
-                Some(options.as_ref()),
-            ),
+        let (run, options) = match entry {
+            InfraCommand::Command(run) => (Some(run), None),
+            InfraCommand::Object(options) => (options.run.as_ref(), Some(options.as_ref())),
         };
         let secrets = self.unit_secrets(None).await?;
         let context = self.context(&secrets, json!({"name": name}), json!({}));
-        let script = match script {
-            Some(script) => {
-                let (source, name) = script
-                    .source_and_name()
-                    .map_err(|e| ResolveError::expression(format!("{path}.run_script"), e))?;
-                Some((source.to_owned(), name.to_owned()))
-            }
-            None => None,
-        };
         let launch = self
             .launch(
                 LaunchInput {
@@ -521,7 +508,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
                     name,
                     unit: &path,
                     run,
-                    script,
+                    script: None,
                     cwd: options.and_then(|o| o.cwd.as_ref()),
                     env: options.map_or(&empty, |o| &o.env),
                     platform: None,

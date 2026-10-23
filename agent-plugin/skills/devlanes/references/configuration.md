@@ -22,7 +22,7 @@ A service is a long-running process started with the lane. Exactly one of `run` 
 ```yaml
 services:
   api:
-    run_script: apps/api/package.json#dev     # the project's package manager runs the script
+    run_script: { file: apps/api/package.json, name: dev }     # the project's package manager runs the script
     hosts: "api.${{ lane.domain }}"
     ready: { http: { path: /-/health } }
   worker:
@@ -35,7 +35,8 @@ services:
     hosts: "docs.${{ lane.domain }}"
 ```
 
-- `run_script: <file>#<name>` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a bin), and runs in that file's directory. Prefer it to `run: pnpm -F pkg dev`: presets place their flags correctly and profiles can remap the script name.
+- `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a bin), and runs in that file's directory. The `file#name` string form is refused. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: the script is checked before start, profiles can remap its name, and presets require it (`preset` with `run` is refused; drop the preset and write its flags into `run` instead).
+- `infra.setup` and `infra.teardown` entries take only `run`.
 - A multi-line `run` string is a shell script. Without `cwd`, `run` starts at the lane's worktree root.
 - `autostart: false` keeps a service out of a plain `devlanes start` when no `default` profile exists; naming the service or its tag still starts it.
 - `replicas: N` runs N instances (`replica.index` counts from 1), each with its own port.
@@ -169,8 +170,8 @@ One-shot commands with `run`, `run_script` or `steps`, plus `cwd`, `env`, `timeo
 ```yaml
 tasks:
   install:  { run: [pnpm, install, --frozen-lockfile], when: lane.create, timeout: 10m }
-  migrate:  { run_script: package.json#db-deploy, when: lane.start }
-  seed:     { run_script: packages/seed/package.json#start, when: lane.create, after: services }
+  migrate:  { run_script: { file: package.json, name: db-deploy }, when: lane.start }
+  seed:     { run_script: { file: packages/seed/package.json, name: start }, when: lane.create, after: services }
   reset-db:
     steps: [infra.teardown.database, infra.setup.database, migrate, seed]
     confirm: Drops ${{ lane.db_name }} and re-seeds it
@@ -213,7 +214,7 @@ templates:
 services:
   crm:
     extends: api
-    run_script: apps/crm/package.json#dev
+    run_script: { file: apps/crm/package.json, name: dev }
     hosts: "crm.${{ lane.domain }}"
 ```
 

@@ -7,8 +7,8 @@
 
 use crate::{
     ComposeFiles, HostConfig, HostRoute, Hosts, InfraCommand, InfraCommandOptions, ProfileConfig,
-    ProfileOptions, ReadyCheck, ReadyConfig, Run, RunScript, Scalar, ScriptSource, Started,
-    TcpReady, Templated, TerminalConfig, TerminalSettings,
+    ProfileOptions, ReadyCheck, ReadyConfig, Run, RunScript, Scalar, Started, TcpReady, Templated,
+    TerminalConfig, TerminalSettings,
 };
 use serde::{
     Deserialize, Deserializer,
@@ -87,9 +87,45 @@ shape!(Run, "a shell command string or an argument list",
     sequence!(Run::Argv, Vec<Templated<String>>);
 );
 
-shape!(RunScript, "`file#name` or a mapping with source and name",
-    text!(RunScript::Short);
-    mapping!(RunScript::Object, ScriptSource);
+/// The keys of a `run_script` mapping; either may be left out to keep an inherited value.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunScriptKeys {
+    #[serde(default)]
+    file: String,
+    #[serde(default)]
+    name: String,
+}
+
+impl From<RunScriptKeys> for RunScript {
+    /// Keep both keys as written; missing ones stay empty until merging.
+    fn from(keys: RunScriptKeys) -> Self {
+        Self {
+            file: keys.file,
+            name: keys.name,
+        }
+    }
+}
+
+/// The error for a string `run_script`, showing the mapping it would be.
+fn run_script_text<E: de::Error>(value: &str) -> E {
+    let example = match value.rsplit_once('#') {
+        Some((file, name)) if !file.is_empty() && !name.is_empty() => {
+            format!("{{ file: {file}, name: {name} }}")
+        }
+        _ => "{ file: apps/api/package.json, name: dev }".to_owned(),
+    };
+    E::custom(format!(
+        "run_script takes a mapping with file and name, such as `{example}`"
+    ))
+}
+
+shape!(RunScript, "a mapping with file and name",
+    /// Refuse a string; `file#name` is not accepted.
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<RunScript, E> {
+        Err(run_script_text(value))
+    }
+    mapping!(RunScript::from, RunScriptKeys);
 );
 
 shape!(HostConfig, "a hostname or a host route mapping",

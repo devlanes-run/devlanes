@@ -179,7 +179,7 @@ fn literal_port_must_be_a_port() {
 /// Fixed blocks count registered preset ports and bracketed `lane['port']` offsets.
 #[test]
 fn block_size_counts_preset_ports_and_offsets() {
-    let source = "project: demo\nlanes: { block_size: 2 }\nservices:\n  api: { run: server, preset: custom }\n";
+    let source = "project: demo\nlanes: { block_size: 2 }\nservices:\n  api: { run_script: { file: package.json, name: dev }, preset: custom }\n";
     let config = parse_project(source, None).expect("no registry, no preset ports");
     let accept = |_: &str, _: Option<&serde_json::Value>| Ok(());
     validate_with_presets(&config, &accept).expect("without preset ports");

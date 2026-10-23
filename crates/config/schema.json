@@ -507,7 +507,7 @@
           "markdownDescription": ""
         }
       ],
-      "description": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` or `run_script` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`.",
+      "description": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`.",
       "examples": [
         "docker compose exec -T postgres createdb acme_${{ lane.name }}",
         {
@@ -520,7 +520,7 @@
           ]
         }
       ],
-      "markdownDescription": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` or `run_script` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`."
+      "markdownDescription": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`."
     },
     "InfraCommandOptions": {
       "additionalProperties": false,
@@ -613,7 +613,7 @@
               "type": "null"
             }
           ],
-          "description": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Use either `run` or `run_script`.",
+          "description": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Write the command you mean, such as `docker compose exec -T postgres ...`; devlanes runs it as written. Required.",
           "examples": [
             "pnpm dev",
             [
@@ -623,29 +623,7 @@
               "${{ self.port }}"
             ]
           ],
-          "markdownDescription": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Use either `run` or `run_script`."
-        },
-        "run_script": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RunScript",
-              "description": "",
-              "examples": [],
-              "markdownDescription": ""
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Script to run, written `<file>#<name>` or `{ source, name }`, with that file's tool. Use either `run` or `run_script`.",
-          "examples": [
-            "apps/api/package.json#dev",
-            {
-              "name": "fixtures",
-              "source": "justfile"
-            }
-          ],
-          "markdownDescription": "Script to run, written `<file>#<name>` or `{ source, name }`, with that file's tool. Use either `run` or `run_script`."
+          "markdownDescription": "Command to run: a string runs through `/bin/sh -c`, a list runs the program directly. Write the command you mean, such as `docker compose exec -T postgres ...`; devlanes runs it as written. Required."
         },
         "timeout": {
           "anyOf": [
@@ -886,7 +864,7 @@
         "setup": {
           "additionalProperties": {
             "$ref": "#/$defs/InfraCommand",
-            "description": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` or `run_script` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`.",
+            "description": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`.",
             "examples": [
               "docker compose exec -T postgres createdb acme_${{ lane.name }}",
               {
@@ -899,7 +877,7 @@
                 ]
               }
             ],
-            "markdownDescription": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` or `run_script` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`."
+            "markdownDescription": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`."
           },
           "default": {},
           "description": "Named commands that prepare each lane's data, such as creating its database in a shared Postgres. They run once per lane after the containers are ready, all at the same time, and are recorded as done so later starts skip them; a failure stops the start unless the entry sets `ignore_errors`.",
@@ -914,7 +892,7 @@
         "teardown": {
           "additionalProperties": {
             "$ref": "#/$defs/InfraCommand",
-            "description": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` or `run_script` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`.",
+            "description": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`.",
             "examples": [
               "docker compose exec -T postgres createdb acme_${{ lane.name }}",
               {
@@ -927,7 +905,7 @@
                 ]
               }
             ],
-            "markdownDescription": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` or `run_script` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`."
+            "markdownDescription": "Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string or list, or a mapping with `run` and options such as `container`, `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or `infra.teardown.<name>`."
           },
           "default": {},
           "description": "Named commands that remove a lane's data when the lane is cleaned (`devlanes lane clean`), one after another; never on stop. A failure is reported and the cleanup goes on.",
@@ -1524,23 +1502,23 @@
         },
         "run_scripts": {
           "additionalProperties": {
-            "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs `<file>#start` wherever `<file>#dev` is configured. The file stays the same, and each name is swapped once, not chained.",
+            "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
             "examples": [
               "start"
             ],
-            "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs `<file>#start` wherever `<file>#dev` is configured. The file stays the same, and each name is swapped once, not chained.",
+            "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
             "minLength": 1,
             "pattern": "\\S",
             "type": "string"
           },
           "default": {},
-          "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs `<file>#start` wherever `<file>#dev` is configured. The file stays the same, and each name is swapped once, not chained.",
+          "description": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
           "examples": [
             {
               "dev": "start"
             }
           ],
-          "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs `<file>#start` wherever `<file>#dev` is configured. The file stays the same, and each name is swapped once, not chained.",
+          "markdownDescription": "Swap script names for services that use `run_script`: `{ dev: start }` runs the `start` script wherever a service's `run_script` names `dev`. The file stays the same, and each name is swapped once, not chained.",
           "propertyNames": {
             "minLength": 1,
             "pattern": "\\S",
@@ -1755,26 +1733,44 @@
       "markdownDescription": "Command as shell text, run through `/bin/sh -c`, or as a list of program and arguments run without a shell."
     },
     "RunScript": {
-      "anyOf": [
+      "description": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry) and Cargo.toml (a binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
+      "examples": [
         {
-          "type": "string"
+          "file": "apps/api/package.json",
+          "name": "dev"
         },
         {
-          "$ref": "#/$defs/ScriptSource",
-          "description": "",
-          "examples": [],
-          "markdownDescription": ""
+          "file": "justfile",
+          "name": "fixtures"
         }
       ],
-      "description": "Script from a package.json, Makefile, justfile or other supported file, written `<file>#<name>` or `{ source, name }`.",
-      "examples": [
-        "apps/api/package.json#dev",
-        {
-          "name": "fixtures",
-          "source": "justfile"
+      "markdownDescription": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry) and Cargo.toml (a binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
+      "properties": {
+        "file": {
+          "description": "File that defines the script, relative to the worktree, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
+          "examples": [
+            "apps/api/package.json",
+            "Makefile",
+            "justfile"
+          ],
+          "markdownDescription": "File that defines the script, relative to the worktree, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Script, target, recipe, task or binary name in that file. Required unless an override or `extends` child keeps the inherited name.",
+          "examples": [
+            "dev",
+            "fixtures"
+          ],
+          "markdownDescription": "Script, target, recipe, task or binary name in that file. Required unless an override or `extends` child keeps the inherited name.",
+          "type": "string"
         }
+      },
+      "required": [
+        "file",
+        "name"
       ],
-      "markdownDescription": "Script from a package.json, Makefile, justfile or other supported file, written `<file>#<name>` or `{ source, name }`."
+      "type": "object"
     },
     "Scalar": {
       "anyOf": [
@@ -1800,41 +1796,6 @@
         true
       ],
       "markdownDescription": "A text, number or boolean value. Process environments receive it as text, such as `true` or `20000`."
-    },
-    "ScriptSource": {
-      "additionalProperties": false,
-      "description": "Script file and name as separate keys. In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
-      "examples": [
-        {
-          "name": "fixtures",
-          "source": "justfile"
-        }
-      ],
-      "markdownDescription": "Script file and name as separate keys. In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
-      "properties": {
-        "name": {
-          "default": "",
-          "description": "Script, target or recipe name in that file. Required unless an override or `extends` child keeps the inherited name.",
-          "examples": [
-            "dev",
-            "fixtures"
-          ],
-          "markdownDescription": "Script, target or recipe name in that file. Required unless an override or `extends` child keeps the inherited name.",
-          "type": "string"
-        },
-        "source": {
-          "default": "",
-          "description": "File that defines the script, relative to the worktree: package.json, Makefile, justfile, deno.json, pyproject.toml or Cargo.toml. Required unless an override or `extends` child keeps the inherited file.",
-          "examples": [
-            "apps/api/package.json",
-            "Makefile",
-            "justfile"
-          ],
-          "markdownDescription": "File that defines the script, relative to the worktree: package.json, Makefile, justfile, deno.json, pyproject.toml or Cargo.toml. Required unless an override or `extends` child keeps the inherited file.",
-          "type": "string"
-        }
-      },
-      "type": "object"
     },
     "ServiceConfig": {
       "additionalProperties": false,
@@ -1919,10 +1880,11 @@
       "description": "A long-running process started with the lane, such as a dev server or a worker. Each service gets its own port from the lane's block (`PORT`, `${{ self.port }}`); devlanes stops it with the lane and never restarts it when it exits. A service needs `run` or `run_script`, directly or through `extends`.",
       "examples": [
         {
-          "hosts": [
-            "api.${{ lane.domain }}"
-          ],
-          "run_script": "apps/api/package.json#dev",
+          "hosts": "api.${{ lane.domain }}",
+          "run_script": {
+            "file": "apps/api/package.json",
+            "name": "dev"
+          },
           "tags": [
             "api"
           ]
@@ -1987,11 +1949,11 @@
           "type": "object"
         },
         "extends": {
-          "description": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, `fnox`, preset options, `run_script` as `{ source, name }`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after devlanes.local.yaml is merged.",
+          "description": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, `fnox`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after devlanes.local.yaml is merged.",
           "examples": [
             "fastify-api"
           ],
-          "markdownDescription": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, `fnox`, preset options, `run_script` as `{ source, name }`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after devlanes.local.yaml is merged.",
+          "markdownDescription": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, `fnox`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after devlanes.local.yaml is merged.",
           "type": [
             "string",
             "null"
@@ -2104,7 +2066,7 @@
           ]
         },
         "preset": {
-          "description": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do not pass them yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
+          "description": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do not pass them yourself. Requires `run_script`; with a hand-written `run`, drop the preset and pass its flags yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
           "enum": [
             "vite",
             "next",
@@ -2117,7 +2079,7 @@
             "wrangler",
             "tauri"
           ],
-          "markdownDescription": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do not pass them yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
+          "markdownDescription": "Framework integration that adds the flags and variables a dev server needs to run in a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do not pass them yourself. Requires `run_script`; with a hand-written `run`, drop the preset and pass its flags yourself. Its options go under a sibling key with the preset's name, for example `vite: { args: [--open] }`.",
           "type": [
             "string",
             "null"
@@ -2199,7 +2161,7 @@
               "type": "null"
             }
           ],
-          "description": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. Exactly one of `run` and `run_script` is required after templates are applied.",
+          "description": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied.",
           "examples": [
             "pnpm dev",
             [
@@ -2209,7 +2171,7 @@
               "${{ self.port }}"
             ]
           ],
-          "markdownDescription": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. Exactly one of `run` and `run_script` is required after templates are applied."
+          "markdownDescription": "Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and multi-line scripts work; a list is an argv run directly without a shell. It starts in the lane's worktree root unless `cwd` is set. devlanes runs it exactly as written, so it cannot be combined with `preset`; prefer `run_script` when the command is a script in a project file. Exactly one of `run` and `run_script` is required after templates are applied."
         },
         "run_script": {
           "anyOf": [
@@ -2223,15 +2185,18 @@
               "type": "null"
             }
           ],
-          "description": "Script to run from a project file, as `<file>#<name>` or `{ source, name }`, such as `apps/api/package.json#dev`. devlanes picks the runner from the file (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`) and runs it in that file's directory; a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied.",
+          "description": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied.",
           "examples": [
-            "apps/api/package.json#dev",
             {
-              "name": "fixtures",
-              "source": "justfile"
+              "file": "apps/api/package.json",
+              "name": "dev"
+            },
+            {
+              "file": "justfile",
+              "name": "fixtures"
             }
           ],
-          "markdownDescription": "Script to run from a project file, as `<file>#<name>` or `{ source, name }`, such as `apps/api/package.json#dev`. devlanes picks the runner from the file (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`) and runs it in that file's directory; a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied."
+          "markdownDescription": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: dev }`. devlanes picks the tool from the file name (`package.json`, `Makefile`, `justfile`, `deno.json`, `pyproject.toml`, `Cargo.toml`), runs the script in that file's directory and checks that it exists before starting. Presets need it to place their flags, and a profile's `run_scripts` can swap the script name. Exactly one of `run` and `run_script` is required after templates are applied."
         },
         "stop": {
           "anyOf": [
@@ -2637,7 +2602,10 @@
       "description": "A one-shot command, run by hand with `devlanes run <name>` or automatically at a lane event set with `when`. Anything that ends by itself belongs here, not in `services`, where an exit counts as a failure.",
       "examples": [
         {
-          "run_script": "apps/api/package.json#migrate",
+          "run_script": {
+            "file": "apps/api/package.json",
+            "name": "migrate"
+          },
           "when": "lane.start"
         }
       ],
@@ -2833,15 +2801,18 @@
               "type": "null"
             }
           ],
-          "description": "Script to run from a package.json, Makefile, justfile, deno.json, pyproject.toml or Cargo.toml, written `<file>#<name>` or `{ source, name }`. It runs with that file's tool (the project's package manager for package.json) in the file's directory. Use exactly one of `run`, `run_script` or `steps`.",
+          "description": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: migrate }`. It runs with that file's tool (the project's package manager for package.json) in the file's directory, and a missing script fails before anything starts. Prefer it to `run` for scripts that live in a file. Use exactly one of `run`, `run_script` or `steps`.",
           "examples": [
-            "apps/api/package.json#dev",
             {
-              "name": "fixtures",
-              "source": "justfile"
+              "file": "apps/api/package.json",
+              "name": "dev"
+            },
+            {
+              "file": "justfile",
+              "name": "fixtures"
             }
           ],
-          "markdownDescription": "Script to run from a package.json, Makefile, justfile, deno.json, pyproject.toml or Cargo.toml, written `<file>#<name>` or `{ source, name }`. It runs with that file's tool (the project's package manager for package.json) in the file's directory. Use exactly one of `run`, `run_script` or `steps`."
+          "markdownDescription": "Script to run from a project file, as `{ file, name }`, such as `{ file: apps/api/package.json, name: migrate }`. It runs with that file's tool (the project's package manager for package.json) in the file's directory, and a missing script fails before anything starts. Prefer it to `run` for scripts that live in a file. Use exactly one of `run`, `run_script` or `steps`."
         },
         "steps": {
           "description": "Run these tasks and `infra.setup.<name>` or `infra.teardown.<name>` entries in order, stopping at the first failure, for jobs such as resetting a database. Each step runs whatever its own `when` says, and setup entries run again even when already done. Use instead of `run` or `run_script`.",
@@ -3075,7 +3046,10 @@
       "project": "acme",
       "services": {
         "api": {
-          "run_script": "apps/api/package.json#dev"
+          "run_script": {
+            "file": "apps/api/package.json",
+            "name": "dev"
+          }
         }
       }
     }
@@ -3225,10 +3199,11 @@
         "description": "A long-running process started with the lane, such as a dev server or a worker. Each service gets its own port from the lane's block (`PORT`, `${{ self.port }}`); devlanes stops it with the lane and never restarts it when it exits. A service needs `run` or `run_script`, directly or through `extends`.",
         "examples": [
           {
-            "hosts": [
-              "api.${{ lane.domain }}"
-            ],
-            "run_script": "apps/api/package.json#dev",
+            "hosts": "api.${{ lane.domain }}",
+            "run_script": {
+              "file": "apps/api/package.json",
+              "name": "dev"
+            },
             "tags": [
               "api"
             ]
@@ -3241,10 +3216,11 @@
       "examples": [
         {
           "api": {
-            "hosts": [
-              "api.${{ lane.domain }}"
-            ],
-            "run_script": "apps/api/package.json#dev"
+            "hosts": "api.${{ lane.domain }}",
+            "run_script": {
+              "file": "apps/api/package.json",
+              "name": "dev"
+            }
           }
         }
       ],
@@ -3282,7 +3258,10 @@
         "description": "A one-shot command, run by hand with `devlanes run <name>` or automatically at a lane event set with `when`. Anything that ends by itself belongs here, not in `services`, where an exit counts as a failure.",
         "examples": [
           {
-            "run_script": "apps/api/package.json#migrate",
+            "run_script": {
+              "file": "apps/api/package.json",
+              "name": "migrate"
+            },
             "when": "lane.start"
           }
         ],
@@ -3293,7 +3272,10 @@
       "examples": [
         {
           "migrate": {
-            "run_script": "apps/api/package.json#migrate",
+            "run_script": {
+              "file": "apps/api/package.json",
+              "name": "migrate"
+            },
             "when": "lane.start"
           }
         }
@@ -3307,10 +3289,11 @@
         "description": "A long-running process started with the lane, such as a dev server or a worker. Each service gets its own port from the lane's block (`PORT`, `${{ self.port }}`); devlanes stops it with the lane and never restarts it when it exits. A service needs `run` or `run_script`, directly or through `extends`.",
         "examples": [
           {
-            "hosts": [
-              "api.${{ lane.domain }}"
-            ],
-            "run_script": "apps/api/package.json#dev",
+            "hosts": "api.${{ lane.domain }}",
+            "run_script": {
+              "file": "apps/api/package.json",
+              "name": "dev"
+            },
             "tags": [
               "api"
             ]

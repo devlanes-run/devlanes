@@ -197,7 +197,7 @@ fn command_options(command: InfraCommand) -> InfraCommandOptions {
     }
 }
 
-/// Merge named infra commands per key; shorthand counts as `run`, which clears `run_script`.
+/// Merge named infra commands per key; shorthand counts as `run`.
 fn merge_command(base: &mut InfraCommand, overlay: InfraCommand) {
     if matches!(
         (&*base, &overlay),
@@ -210,18 +210,7 @@ fn merge_command(base: &mut InfraCommand, overlay: InfraCommand) {
         base,
         InfraCommand::Object(Box::default()),
     ));
-    let mut overlay = command_options(overlay);
-    if overlay.run.is_some() {
-        merged.run_script = None;
-    }
-    if overlay.run_script.is_some() {
-        merged.run = None;
-    }
-    merge_option(
-        &mut merged.run_script,
-        overlay.run_script.take(),
-        merge_script,
-    );
+    let overlay = command_options(overlay);
     replace!(merged, overlay, run, container, ignore_errors, cwd, timeout);
     merged.env.extend(overlay.env);
     *base = InfraCommand::Object(Box::new(merged));
@@ -316,18 +305,13 @@ pub(crate) fn merge_ready(base: &mut crate::ReadyConfig, overlay: crate::ReadyCo
     }
 }
 
-/// Merge `{ source, name }` per key; the `file#name` shorthand replaces the whole selection.
+/// Merge `{ file, name }` per key; a key the overlay leaves out keeps the base value.
 pub(crate) fn merge_script(base: &mut crate::RunScript, overlay: crate::RunScript) {
-    match (base, overlay) {
-        (crate::RunScript::Object(base), crate::RunScript::Object(overlay)) => {
-            if !overlay.source.is_empty() {
-                base.source = overlay.source;
-            }
-            if !overlay.name.is_empty() {
-                base.name = overlay.name;
-            }
-        }
-        (base, overlay) => *base = overlay,
+    if !overlay.file.is_empty() {
+        base.file = overlay.file;
+    }
+    if !overlay.name.is_empty() {
+        base.name = overlay.name;
     }
 }
 

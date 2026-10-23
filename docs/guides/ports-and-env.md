@@ -18,7 +18,7 @@ services:
     run: rspress dev --port ${{ self.port }} --host 127.0.0.1
   web:
     preset: vite                  # adds --port for you
-    run_script: web/package.json#dev
+    run_script: { file: web/package.json, name: dev }
 ```
 
 The service gets `PORT` and `HOST=127.0.0.1` in its environment and must listen there. There is no port detection: devlanes dials `127.0.0.1:<port>` for `ready: tcp`, for the proxy and for `services.<name>.url`. A service that listens somewhere else fails readiness after 60 s with the ports its process tree did bind, so the message tells you what it chose instead.
@@ -155,12 +155,12 @@ Every lane has a folder of its own outside the worktree, for state and generated
 ```yaml
 services:
   api:
-    run_script: apps/api/package.json#dev
+    run_script: { file: apps/api/package.json, name: dev }
     env:
       SQLITE_PATH: ${{ lane.data_path }}/api/dev.db
   worker:
     preset: wrangler
-    run_script: workers/api/package.json#dev
+    run_script: { file: workers/api/package.json, name: dev }
     wrangler:
       args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"]
 infra:

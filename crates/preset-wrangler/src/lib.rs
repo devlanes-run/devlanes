@@ -297,7 +297,8 @@ impl Contributor for WranglerPreset {
             script_body: cx.script.and_then(|script| script.body.as_deref()),
         })
         .map_err(|e| Error::InvalidInput(e.to_string()))?;
-        devlanes_run_script_npm::forward_args(draft, contribution.args);
+        // Presets require `run_script`; its runner places the arguments for the tool.
+        draft.args.extend(contribution.args);
         if options.isolate_registry == Some(false) {
             // The cloudflare platform contributor (priority 60) may already
             // have set the lane registry; opting out must undo that too.

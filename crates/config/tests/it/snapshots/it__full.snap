@@ -99,7 +99,6 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "database": "psql \"postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/postgres\" -c \"CREATE DATABASE ${{ lane.db_name }}\"",
       "vhost": {
         "run": "docker compose exec -T rabbitmq rabbitmqctl add_vhost ${{ lane.vhost }}",
-        "run_script": null,
         "container": "rabbitmq",
         "ignore_errors": true,
         "cwd": null,
@@ -115,7 +114,6 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
           "mb",
           "s3://${{ lane.bucket }}"
         ],
-        "run_script": null,
         "container": null,
         "ignore_errors": null,
         "cwd": null,
@@ -138,7 +136,6 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
           "s3://${{ lane.bucket }}",
           "--force"
         ],
-        "run_script": null,
         "container": null,
         "ignore_errors": true,
         "cwd": null,
@@ -180,7 +177,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "migrate": {
       "run": null,
-      "run_script": "package.json#db-deploy",
+      "run_script": {
+        "file": "package.json",
+        "name": "db-deploy"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -198,7 +198,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "seed": {
       "run": null,
-      "run_script": "packages/seed/package.json#start",
+      "run_script": {
+        "file": "packages/seed/package.json",
+        "name": "start"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -250,7 +253,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "typegen": {
       "run": null,
-      "run_script": "packages/api-types/package.json#generate",
+      "run_script": {
+        "file": "packages/api-types/package.json",
+        "name": "generate"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -265,7 +271,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "certs": {
       "run": null,
-      "run_script": "Makefile#certs",
+      "run_script": {
+        "file": "Makefile",
+        "name": "certs"
+      },
       "cwd": null,
       "env": {},
       "fnox": null,
@@ -281,7 +290,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     "fixtures": {
       "run": null,
       "run_script": {
-        "source": "justfile",
+        "file": "justfile",
         "name": "fixtures"
       },
       "cwd": null,
@@ -361,7 +370,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "admin-api": {
       "extends": "fastify-api",
-      "run_script": "apps/admin-api/package.json#dev",
+      "run_script": {
+        "file": "apps/admin-api/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "hosts": "admin-api.${{ lane.domain }}",
       "tags": [
@@ -416,7 +428,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       }
     },
     "user-web": {
-      "run": "pnpm --silent -F @acme/user-web dev",
+      "run_script": {
+        "file": "apps/user-web/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "vite",
       "hosts": "app.${{ lane.domain }}",
@@ -435,7 +450,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "api-gateway": {
       "extends": "wrangler-worker",
-      "run": "pnpm --silent -F @acme/api-gateway dev",
+      "run_script": {
+        "file": "workers/api-gateway/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "hosts": [
@@ -474,7 +492,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     },
     "pages-worker": {
       "extends": "wrangler-worker",
-      "run": "pnpm --silent -F @acme/pages-worker dev",
+      "run_script": {
+        "file": "workers/pages/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "wrangler",
       "hosts": [
@@ -544,7 +565,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       }
     },
     "extension": {
-      "run_script": "apps/extension/package.json#dev",
+      "run_script": {
+        "file": "apps/extension/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "tags": [
         "extension"
@@ -568,7 +592,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "autostart": false
     },
     "desktop": {
-      "run": "pnpm --filter @acme/desktop dev",
+      "run_script": {
+        "file": "apps/desktop/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "tauri",
       "tags": [
@@ -582,7 +609,10 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       }
     },
     "desktop-web": {
-      "run": "pnpm --filter @acme/desktop-web dev",
+      "run_script": {
+        "file": "apps/desktop-web/package.json",
+        "name": "dev"
+      },
       "platform": "node",
       "preset": "vite",
       "tags": [

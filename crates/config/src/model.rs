@@ -9,7 +9,7 @@ pub type Env = IndexMap<String, Templated<Scalar>>;
 /// Git worktree. Each worktree is a lane with its own ports, hostnames and data.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, bound = "E: Extensions")]
-#[schemars(extend("examples" = [{"project":"acme","services":{"api":{"run_script":"apps/api/package.json#dev"}}}]))]
+#[schemars(extend("examples" = [{"project":"acme","services":{"api":{"run_script":{"file":"apps/api/package.json","name":"dev"}}}}]))]
 pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// Source documents retained in memory for diagnostics after integration validation.
     #[serde(skip)]
@@ -64,13 +64,13 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// `devlanes run <name>` or automatically at a lane event set with `when`. Tasks of the
     /// same event run in declaration order.
     #[serde(default)]
-    #[schemars(extend("examples" = [{"migrate":{"run_script":"apps/api/package.json#migrate","when":"lane.start"}}]))]
+    #[schemars(extend("examples" = [{"migrate":{"run_script":{"file":"apps/api/package.json","name":"migrate"},"when":"lane.start"}}]))]
     pub tasks: IndexMap<String, TaskConfig>,
     /// Long-running processes of each lane, started together after infrastructure, setup
     /// and `lane.start` tasks. Each service gets its own port as `PORT` and, with `hosts`,
     /// HTTPS hostnames. A service that exits shows as failed and is not restarted.
     #[serde(default)]
-    #[schemars(extend("examples" = [{"api":{"run_script":"apps/api/package.json#dev","hosts":["api.${{ lane.domain }}"]}}]))]
+    #[schemars(extend("examples" = [{"api":{"run_script":{"file":"apps/api/package.json","name":"dev"},"hosts":"api.${{ lane.domain }}"}}]))]
     pub services: IndexMap<String, ServiceConfig<E>>,
     /// Named selections of services for `devlanes start --profile <name>`; `default` is
     /// used when no profile is given. A profile is a list of names, globs and `+tag`
@@ -200,61 +200,44 @@ pub enum Run {
     Argv(Vec<Templated<String>>),
 }
 
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(untagged)]
-#[schemars(extend("examples" = ["apps/api/package.json#dev",{"source":"justfile","name":"fixtures"}]))]
-/// Script from a package.json, Makefile, justfile or other supported file, written
-/// `<file>#<name>` or `{ source, name }`.
-pub enum RunScript {
-    /// File path, `#`, then the script name.
-    #[schemars(extend("examples" = ["apps/api/package.json#dev"]))]
-    Short(String),
-    /// File and script name as separate keys.
-    #[schemars(extend("examples" = [{"source":"justfile","name":"fixtures"}]))]
-    Object(ScriptSource),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-#[schemars(extend("examples" = [{"source":"justfile","name":"fixtures"}]))]
-/// Script file and name as separate keys. In `devlanes.local.yaml` or a service that
-/// `extends` a template, either key can be left out to keep the inherited one.
-pub struct ScriptSource {
-    /// File that defines the script, relative to the worktree: package.json, Makefile,
-    /// justfile, deno.json, pyproject.toml or Cargo.toml. Required unless an override or
-    /// `extends` child keeps the inherited file.
+#[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+#[schemars(extend("examples" = [{"file":"apps/api/package.json","name":"dev"},{"file":"justfile","name":"fixtures"}]))]
+/// Script from a project file, as a mapping with `file` and `name`. devlanes picks the
+/// tool from the file name: package.json (the project's package manager), Makefile or
+/// `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry) and Cargo.toml (a
+/// binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can
+/// be left out to keep the inherited one.
+pub struct RunScript {
+    /// File that defines the script, relative to the worktree, such as
+    /// `apps/api/package.json`. The script runs in this file's directory. Required unless
+    /// an override or `extends` child keeps the inherited file.
     #[schemars(extend("examples" = ["apps/api/package.json","Makefile","justfile"]))]
-    #[serde(default)]
-    pub source: String,
+    pub file: String,
     #[schemars(extend("examples" = ["dev","fixtures"]))]
-    /// Script, target or recipe name in that file. Required unless an override or
-    /// `extends` child keeps the inherited name.
-    #[serde(default)]
+    /// Script, target, recipe, task or binary name in that file. Required unless an
+    /// override or `extends` child keeps the inherited name.
     pub name: String,
 }
 
 impl RunScript {
-    /// Resolve either syntax into a file and script name, rejecting malformed shorthand.
-    pub fn source_and_name(&self) -> Result<(&str, &str), crate::ConfigError> {
-        let parts = match self {
-            Self::Short(value) => value.rsplit_once('#'),
-            Self::Object(value) => Some((value.source.as_str(), value.name.as_str())),
-        };
-        parts
-            .filter(|(source, name)| !source.is_empty() && !name.is_empty())
-            .ok_or_else(|| {
-                crate::ConfigError::plain("run_script requires `<file>#<name>` or { source, name }")
-            })
+    /// The file and script name, failing when either is missing after merging.
+    pub fn file_and_name(&self) -> Result<(&str, &str), crate::ConfigError> {
+        if self.file.is_empty() || self.name.is_empty() {
+            return Err(crate::ConfigError::plain(
+                "run_script needs both `file` and `name`, such as `{ file: apps/api/package.json, name: dev }`",
+            ));
+        }
+        Ok((&self.file, &self.name))
     }
 
-    /// Remap only the script name for a selected profile, preserving its source file.
-    pub fn source_and_name_for_profile<'a>(
+    /// The file and script name with the name swapped by a profile's `run_scripts`.
+    pub fn file_and_name_for_profile<'a>(
         &'a self,
         profile: Option<&'a ProfileOptions>,
     ) -> Result<(&'a str, &'a str), crate::ConfigError> {
-        let (source, name) = self.source_and_name()?;
+        let (file, name) = self.file_and_name()?;
         Ok((
-            source,
+            file,
             profile.map_or(name, |profile| profile.remap_script(name)),
         ))
     }
@@ -273,7 +256,7 @@ pub struct FnoxConfig {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[schemars(extend("examples" = [{"run_script":"apps/api/package.json#migrate","when":"lane.start"}]))]
+#[schemars(extend("examples" = [{"run_script":{"file":"apps/api/package.json","name":"migrate"},"when":"lane.start"}]))]
 /// A one-shot command, run by hand with `devlanes run <name>` or automatically at a lane
 /// event set with `when`. Anything that ends by itself belongs here, not in `services`,
 /// where an exit counts as a failure.
@@ -282,10 +265,11 @@ pub struct TaskConfig {
     /// work), a list runs the program directly with those arguments. Use exactly one of
     /// `run`, `run_script` or `steps`.
     pub run: Option<Run>,
-    /// Script to run from a package.json, Makefile, justfile, deno.json, pyproject.toml or
-    /// Cargo.toml, written `<file>#<name>` or `{ source, name }`. It runs with that file's
-    /// tool (the project's package manager for package.json) in the file's directory. Use
-    /// exactly one of `run`, `run_script` or `steps`.
+    /// Script to run from a project file, as `{ file, name }`, such as
+    /// `{ file: apps/api/package.json, name: migrate }`. It runs with that file's tool (the
+    /// project's package manager for package.json) in the file's directory, and a missing
+    /// script fails before anything starts. Prefer it to `run` for scripts that live in a
+    /// file. Use exactly one of `run`, `run_script` or `steps`.
     pub run_script: Option<RunScript>,
     /// Working directory, relative to the lane's worktree. Without it, `run` starts at the
     /// worktree root and `run_script` in the script file's directory.
@@ -410,9 +394,9 @@ pub struct ProfileOptions {
     #[serde(default)]
     #[schemars(extend("examples" = [{"NODE_ENV":"production"}]))]
     pub env: Env,
-    /// Swap script names for services that use `run_script`: `{ dev: start }` runs
-    /// `<file>#start` wherever `<file>#dev` is configured. The file stays the same, and
-    /// each name is swapped once, not chained.
+    /// Swap script names for services that use `run_script`: `{ dev: start }` runs the
+    /// `start` script wherever a service's `run_script` names `dev`. The file stays the
+    /// same, and each name is swapped once, not chained.
     #[serde(default)]
     #[schemars(schema_with = "script_remaps_schema", extend("examples" = [{"dev":"start"}]))]
     pub run_scripts: IndexMap<String, String>,
@@ -767,11 +751,11 @@ pub struct ContainerConfig {
 #[serde(untagged)]
 #[schemars(extend("examples" = ["docker compose exec -T postgres createdb acme_${{ lane.name }}",{"run":["aws","s3","mb","s3://${{ lane.bucket }}"],"ignore_errors":true}]))]
 /// Command that prepares (`setup`) or removes (`teardown`) a lane's data: a command string
-/// or list, or a mapping with `run` or `run_script` and options such as `container`,
-/// `ignore_errors` and `timeout`. Task `steps` can run it as `infra.setup.<name>` or
+/// or list, or a mapping with `run` and options such as `container`, `ignore_errors` and
+/// `timeout`. Task `steps` can run it as `infra.setup.<name>` or
 /// `infra.teardown.<name>`.
 pub enum InfraCommand {
-    /// Command or script with options.
+    /// Command with options.
     #[schemars(extend("examples" = [{"run":"docker compose exec -T rabbitmq rabbitmqctl add_vhost ${{ lane.vhost }}","ignore_errors":true}]))]
     Object(Box<InfraCommandOptions>),
     /// Command string or list without options.
@@ -785,11 +769,9 @@ pub enum InfraCommand {
 /// Setup or teardown command with options.
 pub struct InfraCommandOptions {
     /// Command to run: a string runs through `/bin/sh -c`, a list runs the program
-    /// directly. Use either `run` or `run_script`.
+    /// directly. Write the command you mean, such as `docker compose exec -T postgres ...`;
+    /// devlanes runs it as written. Required.
     pub run: Option<Run>,
-    /// Script to run, written `<file>#<name>` or `{ source, name }`, with that file's tool.
-    /// Use either `run` or `run_script`.
-    pub run_script: Option<RunScript>,
     #[schemars(extend("examples" = ["rabbitmq"]))]
     /// Run this setup entry again whenever the named container has restarted since it last
     /// ran, for data that lives in the container and may be gone, such as a RabbitMQ vhost.

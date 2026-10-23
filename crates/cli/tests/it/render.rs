@@ -404,11 +404,11 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::TaskList,
             json!({
                 "items": [
-                    {"name": "migrate", "when": "lane.start", "after": null, "profiles": null, "steps": null, "confirm": false, "interactive": false, "run_script": {"source": "package.json", "name": "db:migrate"}},
+                    {"name": "migrate", "when": "lane.start", "after": null, "profiles": null, "steps": null, "confirm": false, "interactive": false, "run_script": {"file": "package.json", "name": "db:migrate"}},
                     {"name": "seed", "when": "lane.create", "after": "services", "profiles": ["dev"], "steps": null, "confirm": true, "interactive": false, "run_script": null},
                     {"name": "reset", "when": null, "after": null, "profiles": null, "steps": ["drop", "migrate"], "confirm": false, "interactive": false, "run_script": null},
                 ],
-                "sources": [{"source": "package.json", "runner": "npm"}],
+                "sources": [{"file": "package.json", "runner": "npm"}],
                 "truncated": false, "next_cursor": null,
             }),
         ),

@@ -161,9 +161,13 @@ async fn adapter_scope_and_options() {
     let draft = opt_out.apply().await.expect("apply");
     assert!(!draft.env.contains_key(REGISTRY_ENV));
 
-    let npm = Fake::new(DraftCommand::Shell("npm run dev".to_owned()));
-    let draft = npm.apply().await.expect("apply");
-    assert_eq!(draft.args.first().map(String::as_str), Some("--"));
+    // The script runner adds any separator its package manager needs.
+    let script = Fake::new(DraftCommand::Script {
+        source: "package.json".into(),
+        name: "dev".into(),
+    });
+    let draft = script.apply().await.expect("apply");
+    assert_eq!(draft.args.first().map(String::as_str), Some("--port"));
 }
 
 /// The exported schema accepts scalar var values.
