@@ -930,7 +930,6 @@ dependencies = [
  "devlanes-cli",
  "devlanes-client",
  "devlanes-config",
- "devlanes-console-windows",
  "devlanes-core",
  "devlanes-daemon",
  "devlanes-env-direnv",
@@ -938,7 +937,6 @@ dependencies = [
  "devlanes-infra-compose",
  "devlanes-infra-docker",
  "devlanes-ipc",
- "devlanes-logon-windows",
  "devlanes-metrics",
  "devlanes-metrics-docker",
  "devlanes-metrics-linux",
@@ -1061,15 +1059,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "devlanes-console-windows"
-version = "0.3.0"
-dependencies = [
- "crossterm",
- "devlanes-sys-windows",
- "tokio",
-]
-
-[[package]]
 name = "devlanes-core"
 version = "0.3.0"
 dependencies = [
@@ -1097,7 +1086,6 @@ dependencies = [
  "devlanes-ipc",
  "devlanes-logs",
  "devlanes-metrics",
- "devlanes-ports-windows",
  "devlanes-proto",
  "devlanes-proxy",
  "devlanes-resolve",
@@ -1135,7 +1123,6 @@ dependencies = [
 name = "devlanes-e2e"
 version = "0.3.0"
 dependencies = [
- "devlanes-ports-windows",
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-testing",
@@ -1236,13 +1223,6 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
-]
-
-[[package]]
-name = "devlanes-logon-windows"
-version = "0.3.0"
-dependencies = [
- "devlanes-sys-windows",
 ]
 
 [[package]]
@@ -1391,14 +1371,6 @@ dependencies = [
  "async-trait",
  "devlanes-core",
  "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "devlanes-ports-windows"
-version = "0.3.0"
-dependencies = [
- "devlanes-sys-windows",
  "tokio",
 ]
 

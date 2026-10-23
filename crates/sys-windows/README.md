@@ -52,7 +52,7 @@ Every call blocks. Async callers use `spawn_blocking`, except for the `pipe` mod
 - `spawn`: `spawn` (one `CreateProcessW` with handle list, job list or pseudo console), `Environment`, `pipe`.
 - `console`: `Attached` for the console-control helper, `alloc_console` (`AllocConsoleWithOptions`), `enable_vt_output`, `keyboard` (console, mintty or none), `raw_vt_input`, `hidden_input`, `read_console_utf16`, `release_stdout`.
 - `window`: `close_windows` for verified processes, `watch_session_end` for logoff and shutdown, `visible_windows` for tests that check no window appears.
-- `conpty`, `usage`, `registry` (HKCU values; typed reads and subkey lists of HKLM too), `shell::open_url`, `shell::run_elevated` (UAC prompt, waits for the exit code), `file` (identity, retrying rename and removal, `system_directory`).
+- `conpty`, `usage`, `registry` (HKCU values; typed reads and subkey lists of HKLM too), `shell_execute::open_url`, `shell_execute::run_elevated` (UAC prompt, waits for the exit code), `file` (identity, retrying rename and removal, `system_directory`).
 - `cert`: `CertStore` over the user's certificate stores (logical view read-only, changes through the user's registry store), `interactive_desktop`; the `test-support` feature adds `ScratchStore`, a throwaway store deleted on drop.
 - `net`: `set_exclusive_address_use` and `exclusive_address_use` (`SO_EXCLUSIVEADDRUSE`).
 

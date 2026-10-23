@@ -1152,7 +1152,7 @@ async fn open_url(url: &str) -> Result<(), RpcError> {
     }
     let failed = |message: String| RpcError::new("open_failed", json!({"message": message}), 1);
     let url = url.to_owned();
-    tokio::task::spawn_blocking(move || devlanes_sys_windows::shell::open_url(&url))
+    tokio::task::spawn_blocking(move || devlanes_sys_windows::shell_execute::open_url(&url))
         .await
         .map_err(|error| failed(error.to_string()))?
         .map_err(|error| failed(error.to_string()))

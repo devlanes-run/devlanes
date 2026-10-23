@@ -1,6 +1,6 @@
 # devlanes-shell-windows
 
-Finds Git for Windows' `sh.exe`, which runs `run:` strings and `ready.cmd` on Windows in place of `/bin/sh`, and builds its environment and command line. The binary looks the shell up once at daemon start; `devlanes-runner-windows` and the daemon's readiness checks start it. On other platforms the crate is empty.
+Finds Git for Windows' `sh.exe`, which runs `run:` strings and `ready.cmd` on Windows in place of `/bin/sh`, and builds its environment and command line. The binary looks the shell up once at daemon start; `devlanes-runner-windows` and the daemon's readiness checks start it. It is a crate of its own because both of those need it and neither may depend on the other. On other platforms the crate is empty.
 
 ## Usage
 

@@ -15,6 +15,10 @@ use devlanes_proto::RpcError;
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+// The logon start through the HKCU Run key; macOS and Linux use launchd and systemd.
+#[cfg(windows)]
+mod logon;
+
 /// Rotates once at startup; a dev daemon log never needs more than one old file.
 const LOG_ROTATE_BYTES: u64 = 10 * 1024 * 1024;
 
@@ -604,9 +608,9 @@ const LOGON_NOUN: &str = "logon Run entry";
 /// Runs a registry call of the logon start off the async threads.
 #[cfg(windows)]
 async fn logon<T: Send + 'static>(
-    work: impl FnOnce(&devlanes_logon_windows::Logon) -> std::io::Result<T> + Send + 'static,
+    work: impl FnOnce(&logon::Logon) -> std::io::Result<T> + Send + 'static,
 ) -> Result<T, RpcError> {
-    tokio::task::spawn_blocking(move || work(&devlanes_logon_windows::Logon::user()))
+    tokio::task::spawn_blocking(move || work(&logon::Logon::user()))
         .await
         .map_err(|error| io(std::io::Error::other(error)))?
         .map_err(io)
@@ -647,9 +651,9 @@ pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
         logon(move |logon| Ok((logon.install(&exe)?, logon.location()))).await?;
     let _ = runtime;
     let verb = match installed.change {
-        devlanes_logon_windows::Change::UpToDate => "up to date",
-        devlanes_logon_windows::Change::Updated => "updated",
-        devlanes_logon_windows::Change::Installed => "installed",
+        logon::Change::UpToDate => "up to date",
+        logon::Change::Updated => "updated",
+        logon::Change::Installed => "installed",
     };
     println!("{LOGON_NOUN} {verb}: {location}; the daemon starts at each logon");
     if installed.re_enabled {
@@ -671,7 +675,7 @@ pub async fn service_report() -> serde_json::Value {
         return serde_json::Value::Null;
     };
     let current = exe
-        .and_then(|exe| devlanes_logon_windows::command(&exe).ok())
+        .and_then(|exe| logon::command(&exe).ok())
         .is_some_and(|command| status.command.as_deref() == Some(command.as_str()));
     json!({
         "manager": LOGON_NOUN,
@@ -974,7 +978,7 @@ mod tests {
         assert!(shutdown.is_cancelled() && interrupt.is_cancelled());
     }
 
-    // launchd and systemd only; devlanes-logon-windows tests the Run entry.
+    // launchd and systemd only; `daemon/logon.rs` tests the Run entry.
     #[cfg(unix)]
     #[test]
     /// Both definitions set the stop window and read it back; definitions from
@@ -1022,7 +1026,7 @@ mod tests {
         assert_eq!(Manager::Systemd.window("TimeoutStopSec=infinity\n"), None);
     }
 
-    // launchd and systemd only; devlanes-logon-windows tests the Run entry.
+    // launchd and systemd only; `daemon/logon.rs` tests the Run entry.
     #[cfg(unix)]
     #[test]
     /// launchd reloads a changed plist of a loaded job (bootout, then a retried

@@ -107,7 +107,7 @@ fn reserved_ranges(dir: &Path) -> &'static [(u16, u16)] {
                 .stdin(Stdio::null());
             match crate::run_bounded(command, Duration::from_secs(20)) {
                 Ok(output) if output.success() => {
-                    ranges.extend(devlanes_ports_windows::parse(&output.stdout));
+                    ranges.extend(parse(&output.stdout));
                 }
                 _ => return ranges,
             }
@@ -130,9 +130,22 @@ fn read_saved(path: &Path) -> Option<Vec<(u16, u16)>> {
     if age >= RANGES_FRESH {
         return None;
     }
-    Some(devlanes_ports_windows::parse(
-        &std::fs::read_to_string(path).ok()?,
-    ))
+    Some(parse(&std::fs::read_to_string(path).ok()?))
+}
+
+/// The `(start, end)` rows of `netsh interface <family> show excludedportrange
+/// protocol=tcp` output. Headers are translated on localized Windows, so only
+/// lines starting with two port numbers count. The daemon's `reserved_ports`
+/// has the same parser; the harness does not depend on the daemon.
+fn parse(text: &str) -> Vec<(u16, u16)> {
+    text.lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let start: u16 = fields.next()?.parse().ok()?;
+            let end: u16 = fields.next()?.parse().ok()?;
+            (start <= end).then_some((start, end))
+        })
+        .collect()
 }
 
 /// Saves `ranges` at `path` through a file of this process renamed into place,

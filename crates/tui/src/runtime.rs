@@ -934,7 +934,7 @@ fn open_url(url: &str) -> io::Result<()> {
 /// with the default browser.
 #[cfg(windows)]
 fn open_url(url: &str) -> io::Result<()> {
-    devlanes_sys_windows::shell::open_url(url)
+    devlanes_sys_windows::shell_execute::open_url(url)
 }
 
 #[cfg(all(test, windows))]

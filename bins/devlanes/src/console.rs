@@ -2,15 +2,9 @@
 //! switches termios modes and listens for SIGWINCH, Windows reads `CONIN$`
 //! with console modes and polls the window size.
 //!
-//! ```no_run
-//! let answer = devlanes_console_windows::read_tty("Remove lane 2? [y/N]", "confirm");
-//! let confirmed = answer.is_some_and(|line| line.trim().eq_ignore_ascii_case("y"));
-//! # let _ = confirmed;
-//! ```
-
-// Unix reads `/dev/tty` with termios in the binary itself.
-#![cfg(windows)]
-#![deny(unsafe_code)]
+//! Git Bash's mintty passes no typed keys to Windows programs. There a prompt
+//! is shown on stderr and anything but a notice is refused, and `attach`
+//! refuses to start; Windows Terminal, a console window or `winpty` work.
 
 use std::io;
 

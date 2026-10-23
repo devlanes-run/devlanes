@@ -7,8 +7,9 @@ mod bundle;
 mod choose;
 mod commands;
 mod completion;
+// Unix prompts and attach use `/dev/tty` and termios in `commands.rs` and `attach.rs`.
 #[cfg(windows)]
-use devlanes_console_windows as console;
+mod console;
 mod daemon;
 mod driver;
 #[cfg(windows)]

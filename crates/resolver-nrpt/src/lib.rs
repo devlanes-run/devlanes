@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 
 use devlanes_resolver_dns::Zone;
 use devlanes_sys_windows::registry::{self, Hive, RegValue};
-use devlanes_sys_windows::shell::{self, ElevateError};
+use devlanes_sys_windows::shell_execute::{self, ElevateError};
 
 /// Where the DNS client reads local NRPT rules, under `HKEY_LOCAL_MACHINE`.
 pub const RULES_KEY: &str =
@@ -413,16 +413,16 @@ impl Nrpt {
             .join("reg.exe");
         let path = dir.join(format!(".nrpt-{}.reg", std::process::id()));
         let imported = import_with(&path, &encode(change.file()), |file| {
-            shell::run_elevated(&reg, &[OsStr::new("import"), file.as_os_str()]).map_err(|error| {
-                match error {
+            shell_execute::run_elevated(&reg, &[OsStr::new("import"), file.as_os_str()]).map_err(
+                |error| match error {
                     ElevateError::Cancelled => NrptError::Cancelled,
                     ElevateError::NoDesktop => NrptError::NoDesktop,
                     ElevateError::Io(source) => NrptError::Io {
                         context: format!("running {} as administrator", reg.display()),
                         source,
                     },
-                }
-            })
+                },
+            )
         });
         // A leftover file holds only this change, inside the private home.
         let _ = std::fs::remove_file(&path);
