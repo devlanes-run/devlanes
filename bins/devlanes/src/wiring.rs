@@ -2054,20 +2054,24 @@ mod tests {
     /// on defaults.
     async fn invalid_user_config_refuses_to_start() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let user = load_user_config(tmp.path())
-            .await
-            .expect("no file, defaults");
+        // Temp folders are short on Linux (`/tmp/.tmpXXXX`); a long home makes the
+        // line longer than the old 126-byte cut on every platform.
+        let home = tmp
+            .path()
+            .join("a-devlanes-home-long-enough-to-pass-the-old-readiness-cut");
+        std::fs::create_dir(&home).expect("home");
+        let user = load_user_config(&home).await.expect("no file, defaults");
         assert_eq!(
             user.proxy.https_port,
             devlanes_config::UserConfig::default().proxy.https_port
         );
-        let path = tmp.path().join("config.yaml");
+        let path = home.join("config.yaml");
         std::fs::write(
             &path,
             "proxy:\n  http_port: [not, a, port]\n  https_port: 9443\n",
         )
         .expect("config");
-        let message = load_user_config(tmp.path())
+        let message = load_user_config(&home)
             .await
             .expect_err("invalid config refused")
             .to_string();
@@ -2081,7 +2085,7 @@ mod tests {
         );
         // What the spawning client turns the line into.
         let error = devlanes_client::user_config_startup_error(&message).expect("parsed line");
-        let paths = Paths::new(tmp.path()).expect("paths");
+        let paths = Paths::new(&home).expect("paths");
         let strict = crate::user_config::load(&paths)
             .await
             .expect_err("strict load refuses it too");
