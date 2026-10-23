@@ -172,6 +172,10 @@ Some terminals end every process they started when they close. `doctor` warns wh
 
 cargo binstall, `cargo install` and npm cannot replace a running `devlanes.exe`. Run `devlanes daemon stop` first, which stops every unit, then the upgrade command. The update notice and `doctor` print the command for the way you installed.
 
+## Coding agents
+
+Claude Code on Windows often runs commands through its PowerShell tool. The [agent plugin](../../agent-plugin/README.md#powershell-on-windows) has a hook for that tool, which runs `devlanes __agent-hook` and rejects backgrounded dev servers (`pnpm dev &`, `Start-Process`, `Start-Job`, `cmd /c start`) the way the Bash hook does. It needs `devlanes` on Claude Code's `PATH` and passes every call when it is missing.
+
 ## Limitations
 
 - Each unit runs in a job object it cannot leave. A program that insists on starting a child outside its job fails with access denied there.
