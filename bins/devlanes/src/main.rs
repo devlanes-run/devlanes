@@ -17,6 +17,7 @@ mod output;
 mod progress;
 mod remote;
 mod start_ui;
+mod terminal;
 mod user_config;
 mod verbose;
 mod wiring;
@@ -50,7 +51,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let runtime = match Runtime::resolve(&cli, Signals::detect()) {
+    let mut runtime = match Runtime::resolve(&cli, Signals::detect()) {
         Ok(runtime) => runtime,
         Err(error) => return output::local_error(&error.to_string(), error.exit_code()),
     };
@@ -61,6 +62,8 @@ fn main() -> ExitCode {
     if matches!(action, Action::DaemonRun) {
         return daemon::run();
     }
+    // Links, marks, titles and the like; read once, before any output.
+    runtime.terminal = terminal::detect(&runtime);
     // Not for the daemon, which logs to its file and inherits DEVLANES_VERBOSE,
     // nor for the TUI, whose screen stderr lines would garble.
     let verbose = if matches!(action, Action::Ui | Action::StartUi { .. }) {
