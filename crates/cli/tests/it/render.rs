@@ -692,9 +692,10 @@ fn doctor_words_the_windows_facts() {
     );
 }
 
-/// Windows reserved port ranges overlapping `ports.range`, a proxy port or a
-/// mirrored port are warnings naming the `netsh` command; none is one ok
-/// line, and an unreadable `netsh` a warning.
+/// A lane port, proxy port or mirrored port in a Windows reserved port range is
+/// a warning naming the `netsh` command. A range inside `ports.range` alone is
+/// an ok line, since new lanes skip it, as is no overlap at all; an unreadable
+/// `netsh` is a warning.
 #[test]
 fn doctor_words_reserved_port_ranges() {
     let command = "netsh int ipv4 show excludedportrange protocol=tcp";
@@ -706,6 +707,7 @@ fn doctor_words_reserved_port_ranges() {
             "ranges": [{"start": 27339, "end": 27339}, {"start": 8440, "end": 8449}],
             "pool": {"start": 20000, "end": 32767},
             "pool_overlaps": [{"start": 27339, "end": 27339}],
+            "lanes": [{"lane": "acme@1", "ports": [27339]}],
             "proxy": [{"listener": "https", "port": 8443, "fallback": true}],
             "mirrored": [27339],
             "error": null,
@@ -715,19 +717,36 @@ fn doctor_words_reserved_port_ranges() {
     let text = render_text(Method::Doctor, &data);
     assert!(text.contains("--- plain (exit 0)"), "{text}");
     assert!(
-        text.contains("ports.range 20000-32767 overlaps Windows reserved port ranges (27339)"),
+        text.contains("acme@1 has port 27339 in a Windows reserved port range"),
         "{text}"
     );
+    assert!(text.contains("devlanes lane clean acme@1"), "{text}");
     assert!(
         text.contains("the https proxy fallback port 8443 is in a Windows reserved port range"),
         "{text}"
     );
     assert!(text.contains("mirrored port 27339"), "{text}");
     assert!(text.contains(command), "{text}");
+    assert!(!text.contains("new lanes skip"), "{text}");
+
+    data["reserved_ports"] = json!({
+        "ranges": [{"start": 27339, "end": 27339}], "pool": {"start": 20000, "end": 32767},
+        "pool_overlaps": [{"start": 27339, "end": 27339}], "lanes": [], "proxy": [],
+        "mirrored": [], "error": null, "command": command,
+    });
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains(
+            "ok ports: new lanes skip the Windows reserved ports in ports.range 20000-32767 (27339)"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("warn ports"), "{text}");
 
     data["reserved_ports"] = json!({
         "ranges": [{"start": 49745, "end": 49844}], "pool": {"start": 20000, "end": 32767},
-        "pool_overlaps": [], "proxy": [], "mirrored": [], "error": null, "command": command,
+        "pool_overlaps": [], "lanes": [], "proxy": [], "mirrored": [], "error": null,
+        "command": command,
     });
     let text = render_text(Method::Doctor, &data);
     assert!(

@@ -23,7 +23,7 @@ cargo binstall downloads the same release build:
 cargo binstall --git https://github.com/devlanes-run/devlanes devlanes
 ```
 
-The npm packages for Windows are not published yet, so `npm install -g devlanes` does not work on Windows. Homebrew has no Windows build. Building from source (`cargo install --locked --git https://github.com/devlanes-run/devlanes devlanes`) needs the Visual Studio Build Tools. There is no `devlanes-hosts` helper on Windows.
+`npm install -g devlanes` installs the same build. Homebrew has no Windows build. Building from source (`cargo install --locked --git https://github.com/devlanes-run/devlanes devlanes`) needs the Visual Studio Build Tools. There is no `devlanes-hosts` helper on Windows.
 
 Run `devlanes doctor` once after installing. The home is `%USERPROFILE%\.devlanes` (`DEVLANES_HOME` overrides it; `HOME`, which Git Bash sets, is ignored). It must be private: only your account, SYSTEM and Administrators may have access, and `doctor` prints the `icacls` commands that fix a home others can reach. The daemon listens on a named pipe, `\\.\pipe\devlanes-<hash>`, that only your account can open; there is no `daemon.sock`.
 
@@ -95,7 +95,7 @@ Hyper-V, WSL and Docker Desktop reserve TCP port ranges, and nothing can bind in
 netsh int ipv4 show excludedportrange protocol=tcp
 ```
 
-New lane port blocks skip these ranges. The ranges can change after a reboot or when one of those programs starts, and lanes placed before then cannot bind there, so `devlanes doctor` warns when `ports.range`, the proxy ports or ports mirrored from a box overlap one. Move `ports.range` in `~\.devlanes\config.yaml` clear of them if that happens.
+New lane port blocks skip these ranges, so the default `ports.range` works whatever they are. The ranges can change after a reboot or when one of those programs starts, and a lane that got its ports before then cannot bind the ones that are now reserved. `devlanes doctor` warns when that happens to a lane, a proxy port or a port mirrored from a box; `devlanes lane clean` on that lane gives it new ports on its next start.
 
 The proxy needs no privilege for ports 443 and 80, and listens on loopback only. Port 80 is often held by http.sys (PID 4, System; `netsh http show servicestate` lists who registered it); the proxy then falls back to 8080 as it does on Linux, and the fallback message names that command.
 

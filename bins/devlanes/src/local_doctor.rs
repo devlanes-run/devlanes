@@ -79,7 +79,7 @@ async fn reserved_ports(config: &Path) -> Value {
         return Value::Null;
     };
     let reading = devlanes_daemon::reserved_ports::RESERVED.get().await;
-    devlanes_daemon::reserved_ports::report(&reading, pool, proxy, &Default::default())
+    devlanes_daemon::reserved_ports::report(&reading, pool, &[], proxy, &Default::default())
 }
 
 /// `{path, private, mode?}` for the devlanes home: the client refuses another

@@ -21,9 +21,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Windows support is in progress, so a Windows failure neither fails the tag nor
-    # cancels the other test jobs.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -116,10 +113,7 @@ jobs:
           path: dist/
           if-no-files-found: error
 
-  # Windows support is in progress, so a failure here neither fails the tag nor holds
-  # back the release; the release then ships without the .zip archives.
   build-windows:
-    continue-on-error: true
     strategy:
       fail-fast: true
       matrix:
@@ -205,10 +199,7 @@ jobs:
           fi
 
   release:
-    # build-windows is listed only so its archives are uploaded before the download
-    # below; its result is not checked.
     needs: [test, build, build-windows, npm-preflight]
-    if: ${{ !cancelled() && needs.test.result == 'success' && needs.build.result == 'success' && needs.npm-preflight.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -223,7 +214,6 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The pattern also takes the Windows archives when build-windows uploaded them.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
@@ -246,8 +236,7 @@ jobs:
           cp crates/config/schema.json crates/config/user-schema.json dist/
           cp install.sh install.ps1 dist/
       # Verify with: gh attestation verify devlanes-VERSION-TARGET.tar.gz --repo devlanes-run/devlanes
-      # (or the .zip for Windows). SHA256SUMS lists exactly the archives that were
-      # built, so a release without the Windows archives attests the rest.
+      # (or the .zip for Windows).
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -263,12 +252,7 @@ jobs:
           if-no-files-found: error
       - name: Upload to a draft release
         run: |
-          set -- dist/*.tar.gz
-          # The Windows archives are absent when build-windows failed.
-          for zip in dist/*.zip; do
-            if [ -f "$zip" ]; then set -- "$@" "$zip"; fi
-          done
-          set -- "$@" dist/SHA256SUMS dist/release-manifest.json dist/schema.json dist/user-schema.json dist/install.sh dist/install.ps1
+          set -- dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/release-manifest.json dist/schema.json dist/user-schema.json dist/install.sh dist/install.ps1
           if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null); then
             # A rerun may refill a draft, but published assets are never replaced.
             if [ "$draft" != true ]; then
@@ -283,11 +267,8 @@ jobs:
               --title "devlanes $VERSION" --generate-notes "$@"
           fi
 
-  # The default success() condition also looks at indirect needs such as
-  # build-windows, so the jobs after release check their direct needs instead.
   publish:
     needs: release
-    if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -300,7 +281,7 @@ jobs:
 
   website:
     needs: [release, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.release.outputs.prerelease == 'false' }}
+    if: needs.release.outputs.prerelease == 'false'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -314,7 +295,7 @@ jobs:
 
   homebrew-verify:
     needs: [release, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' && needs.release.outputs.prerelease == 'false' }}
+    if: needs.release.outputs.prerelease == 'false'
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -338,7 +319,6 @@ jobs:
 
   homebrew-publish:
     needs: [release, homebrew-verify]
-    if: ${{ !cancelled() && needs.homebrew-verify.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -393,7 +373,6 @@ jobs:
 
   npm:
     needs: [release, publish]
-    if: ${{ !cancelled() && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Trusted publishing: npm exchanges the job's OIDC token for a publish token, so

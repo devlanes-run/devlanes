@@ -1154,9 +1154,10 @@ pub(crate) fn doctor_failed(data: &Value, runtime: &crate::Runtime) -> bool {
 }
 
 /// Windows' reserved TCP port ranges (`reserved_ports`: `{ranges, pool,
-/// pool_overlaps, proxy, mirrored, error, command}`), which no program can
-/// bind: a warning for each overlap with `ports.range`, a proxy port or a
-/// mirrored port. Only Windows reports the fact.
+/// pool_overlaps, lanes, proxy, mirrored, error, command}`), which no program
+/// can bind. New lanes skip them, so an overlap with `ports.range` is only
+/// noted; a lane port, proxy port or mirrored port inside one is a warning.
+/// Only Windows reports the fact.
 fn reserved_port_checks(reserved: &Value) -> Vec<Check> {
     if !reserved.is_object() {
         return Vec::new();
@@ -1187,22 +1188,21 @@ fn reserved_port_checks(reserved: &Value) -> Vec<Check> {
         );
         return checks;
     }
-    let overlaps = ranges("pool_overlaps");
-    if !overlaps.is_empty() {
-        let pool = &reserved["pool"];
+    for entry in list(reserved, "lanes") {
+        let ports: Vec<String> = list(entry, "ports").iter().map(display_value).collect();
+        let lane = text(entry, "lane");
         checks.push(
             Check::new(
                 "ports",
                 Outcome::Skip,
                 format!(
-                    "ports.range {}-{} overlaps Windows reserved port ranges ({}); new lanes skip them, lanes placed there before cannot bind",
-                    display_value(&pool["start"]),
-                    display_value(&pool["end"]),
-                    overlaps.join(", ")
+                    "{lane} has {} {} in a Windows reserved port range, which cannot be bound",
+                    if ports.len() == 1 { "port" } else { "ports" },
+                    ports.join(", ")
                 ),
             )
             .fix(format!(
-                "{command} lists them; choose a ports.range outside them in ~/.devlanes/config.yaml"
+                "devlanes lane clean {lane} (runs its teardown and deletes its data folder) gives it new ports on its next start; {command} lists the ranges"
             )),
         );
     }
@@ -1259,11 +1259,19 @@ fn reserved_port_checks(reserved: &Value) -> Vec<Check> {
         );
     }
     if checks.is_empty() {
-        checks.push(Check::new(
-            "ports",
-            Outcome::Ok,
-            "no Windows reserved port range overlaps ports.range or the proxy ports",
-        ));
+        let overlaps = ranges("pool_overlaps");
+        let message = if overlaps.is_empty() {
+            "no Windows reserved port range overlaps ports.range or the proxy ports".to_owned()
+        } else {
+            let pool = &reserved["pool"];
+            format!(
+                "new lanes skip the Windows reserved ports in ports.range {}-{} ({})",
+                display_value(&pool["start"]),
+                display_value(&pool["end"]),
+                overlaps.join(", ")
+            )
+        };
+        checks.push(Check::new("ports", Outcome::Ok, message));
     }
     checks
 }

@@ -24,8 +24,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Windows support is in progress, so its failures do not fail the workflow yet.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     # Windows compiles and links about twice as slowly, and the large sync test
     # alone takes four minutes on NTFS.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 60 || 30 }}
@@ -82,8 +80,6 @@ jobs:
   # devlanes.exe, so no Rust build is needed.
   packaging-windows:
     runs-on: windows-latest
-    # Windows support is in progress, so its failures do not fail the workflow yet.
-    continue-on-error: true
     timeout-minutes: 15
     defaults:
       run:
@@ -99,8 +95,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    # Windows support is in progress, so its failures do not fail the workflow yet.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     # Windows builds take longer.
     timeout-minutes: ${{ matrix.os == 'windows-latest' && 45 || 30 }}
     steps:

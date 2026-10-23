@@ -1221,7 +1221,28 @@ struct ContainerInfra {
 /// The daemon variables the `docker` CLI needs: where to find binaries and its
 /// config, which engine to talk to, locale and proxies. A daemon started by hand
 /// may carry a full shell environment; none of the rest reaches Compose.
+/// Windows names match in any case (the variable is `Path` there).
 fn compose_base_env(vars: impl Iterator<Item = (String, String)>) -> BTreeMap<String, String> {
+    /// The docker CLI finds Docker Desktop's plugins, Compose among them, under
+    /// `ProgramFiles`, and its config and contexts under `USERPROFILE`; Winsock
+    /// needs `SystemRoot`.
+    #[cfg(windows)]
+    const PLATFORM: &[&str] = &[
+        "PATHEXT",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "PROGRAMDATA",
+        "PROGRAMFILES",
+        "TEMP",
+        "TMP",
+        "USERNAME",
+    ];
+    #[cfg(not(windows))]
+    const PLATFORM: &[&str] = &[];
     const NAMES: &[&str] = &[
         "PATH",
         "HOME",
@@ -1239,8 +1260,19 @@ fn compose_base_env(vars: impl Iterator<Item = (String, String)>) -> BTreeMap<St
         "no_proxy",
     ];
     const PREFIXES: &[&str] = &["LC_", "XDG_", "DOCKER_"];
+    let same = |a: &str, b: &str| {
+        if cfg!(windows) {
+            a.eq_ignore_ascii_case(b)
+        } else {
+            a == b
+        }
+    };
     vars.filter(|(name, _)| {
-        NAMES.contains(&name.as_str()) || PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+        NAMES.iter().chain(PLATFORM).any(|known| same(name, known))
+            || PREFIXES.iter().any(|prefix| {
+                name.get(..prefix.len())
+                    .is_some_and(|start| same(start, prefix))
+            })
     })
     .collect()
 }
@@ -2117,6 +2149,33 @@ mod tests {
         assert_eq!(
             kept,
             ["DOCKER_CONFIG", "DOCKER_HOST", "HOME", "LC_ALL", "PATH"]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// Windows spells the names in any case, and the docker CLI needs
+    /// `ProgramFiles` to find Docker Desktop's Compose plugin.
+    fn compose_base_env_keeps_windows_variables() {
+        let vars = [
+            ("Path", r"C:\Windows\system32"),
+            ("ProgramFiles", r"C:\Program Files"),
+            ("USERPROFILE", r"C:\Users\acme"),
+            ("SystemRoot", r"C:\Windows"),
+            ("Docker_Host", "npipe:////./pipe/docker_engine"),
+            ("GITHUB_TOKEN", "secret"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()));
+        let kept: Vec<String> = compose_base_env(vars.into_iter()).into_keys().collect();
+        assert_eq!(
+            kept,
+            [
+                "Docker_Host",
+                "Path",
+                "ProgramFiles",
+                "SystemRoot",
+                "USERPROFILE"
+            ]
         );
     }
 

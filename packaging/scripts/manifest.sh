@@ -53,14 +53,12 @@ for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu
 done
 
 # The Windows archives are listed in SHA256SUMS only: SSH bootstrap installs onto
-# Linux and macOS boxes, so the manifest names the .tar.gz archives alone. Windows
-# support is in progress and its build must not hold back a release, so a missing
-# .zip is skipped with a warning.
+# Linux and macOS boxes, so the manifest names the .tar.gz archives alone.
 for target in x86_64-pc-windows-msvc aarch64-pc-windows-msvc; do
 	name=devlanes-$version-$target.zip
 	if [ ! -f "$dist/$name" ]; then
-		echo "warning: missing $dist/$name, not listed in SHA256SUMS" >&2
-		continue
+		echo "missing $dist/$name" >&2
+		exit 1
 	fi
 	printf '%s  %s\n' "$(sha256 "$dist/$name")" "$name" >>"$sums"
 done

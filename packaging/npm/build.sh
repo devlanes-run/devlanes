@@ -31,12 +31,6 @@ for spec in \
 	IFS=: read -r target os cpu label <<EOF
 $spec
 EOF
-	# A platform package is built only once the launcher lists it, so the win32
-	# packages start shipping when they are added to optionalDependencies (after
-	# they exist on the registry; see packaging/README.md).
-	if ! grep -q "\"@devlanes/$os-$cpu\"" "$here/devlanes/package.json"; then
-		continue
-	fi
 	archive=$dist/devlanes-$version-$target.tar.gz
 	if [ "$os" = win32 ]; then archive=$dist/devlanes-$version-$target.zip; fi
 	if [ ! -f "$archive" ]; then

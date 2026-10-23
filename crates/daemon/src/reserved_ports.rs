@@ -1,8 +1,8 @@
 //! The TCP port ranges Windows keeps out of reach: Hyper-V, WSL, Docker
 //! Desktop and administrators reserve them, and binding inside one fails with
 //! access denied. The port allocator keeps new blocks clear of them, and
-//! `doctor` (the daemon's and the CLI's own) reports which of them overlap
-//! `ports.range`, the proxy ports and mirrored ports.
+//! `doctor` (the daemon's and the CLI's own) reports which of them hold lane
+//! ports assigned before the range appeared, the proxy ports or mirrored ports.
 
 use std::collections::BTreeSet;
 use std::process::Stdio;
@@ -174,15 +174,18 @@ const PROXY_FALLBACKS: [(&str, u16); 2] = [
     ("https", devlanes_config::HTTPS_FALLBACK_PORT),
 ];
 
-/// `doctor`'s `reserved_ports`: `{ranges, pool, pool_overlaps, proxy,
+/// `doctor`'s `reserved_ports`: `{ranges, pool, pool_overlaps, lanes, proxy,
 /// mirrored, error?, command}`, or `{error, command}` when no family could be
 /// read. `pool` is the inclusive `ports.range` (`None` when invalid, which the
-/// user config check reports); `pool_overlaps` are the ranges overlapping it;
+/// user config check reports); `pool_overlaps` are the ranges overlapping it,
+/// which new blocks skip; `lanes` the lanes whose assigned ports fell into a
+/// range since (`[{lane, ports}]`, from `assigned`: lane reference to ports);
 /// `proxy` the proxy ports inside a range, configured or fallback
 /// (`[{listener, port, fallback}]`); `mirrored` the mirrored ports inside one.
 pub fn report(
     reading: &Reading,
     pool: Option<(u16, u16)>,
+    assigned: &[(String, BTreeSet<u16>)],
     proxy: [(&'static str, u16); 2],
     mirrored: &BTreeSet<u16>,
 ) -> Value {
@@ -201,6 +204,17 @@ pub fn report(
                 .collect()
         })
         .unwrap_or_default();
+    let lanes: Vec<Value> = assigned
+        .iter()
+        .filter_map(|(lane, ports)| {
+            let blocked: Vec<u16> = ports
+                .iter()
+                .copied()
+                .filter(|port| reading.reserves(*port))
+                .collect();
+            (!blocked.is_empty()).then(|| json!({"lane": lane, "ports": blocked}))
+        })
+        .collect();
     let mut proxy_ports: Vec<(&str, u16, bool)> = Vec::new();
     for (listener, port) in proxy {
         proxy_ports.push((listener, port, false));
@@ -227,6 +241,7 @@ pub fn report(
         "ranges": reading.ranges.iter().map(range).collect::<Vec<_>>(),
         "pool": pool.map(|pool| range(&pool)),
         "pool_overlaps": pool_overlaps,
+        "lanes": lanes,
         "proxy": proxy,
         "mirrored": mirrored,
         "error": error,
@@ -305,20 +320,28 @@ mod tests {
         }
     }
 
-    /// Ranges touching either end of the pool overlap it; only mirrored and
-    /// proxy ports inside a range are reported, fallbacks included.
+    /// Ranges touching either end of the pool overlap it; only lane, mirrored
+    /// and proxy ports inside a range are reported, fallbacks included.
     #[test]
     fn report_lists_overlaps() {
         let reading = read_ok(vec![(80, 80), (8440, 8449), (27339, 27339), (32767, 33000)]);
         let report = report(
             &reading,
             Some((20000, 32767)),
+            &[
+                ("acme@0".into(), BTreeSet::from([20000, 20001])),
+                ("acme@1".into(), BTreeSet::from([27338, 27339])),
+            ],
             [("http", 80), ("https", 443)],
             &BTreeSet::from([27339, 27340]),
         );
         assert_eq!(
             report["pool_overlaps"],
             json!([{"start": 27339, "end": 27339}, {"start": 32767, "end": 33000}])
+        );
+        assert_eq!(
+            report["lanes"],
+            json!([{"lane": "acme@1", "ports": [27339]}])
         );
         assert_eq!(report["mirrored"], json!([27339]));
         assert_eq!(
@@ -335,6 +358,7 @@ mod tests {
         let report = super::report(
             &reading,
             None,
+            &[],
             [("http", 8080), ("https", 8443)],
             &BTreeSet::new(),
         );
@@ -357,6 +381,7 @@ mod tests {
         let report = report(
             &partial,
             Some((20000, 20005)),
+            &[],
             [("http", 80), ("https", 443)],
             &BTreeSet::new(),
         );
@@ -373,6 +398,7 @@ mod tests {
             super::report(
                 &failed,
                 None,
+                &[],
                 [("http", 80), ("https", 443)],
                 &BTreeSet::new()
             ),

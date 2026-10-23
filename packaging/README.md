@@ -34,7 +34,7 @@ The workflow then runs these jobs:
 
 | Job | Does |
 |---|---|
-| `test` | Runs the workspace tests on Linux, macOS and Windows, in parallel with `build`. Windows support is in progress, so a Windows failure does not fail the tag |
+| `test` | Runs the workspace tests on Linux, macOS and Windows, in parallel with `build` |
 | `build` | Builds `devlanes` and `devlanes-hosts` for each macOS and Linux target, fails if the committed config schemas differ from the generated ones, and packs the archive |
 | `build-windows` | Builds `devlanes.exe` for each Windows target, checks the schemas, runs `devlanes.exe --version`, fails if the executable imports the Visual C++ runtime (`dumpbin /dependents`), and packs the zip with `package.ps1` |
 | `npm-preflight` | Fails when the `devlanes` package or one of its `optionalDependencies` does not exist on the npm registry, before any draft release exists |
@@ -77,7 +77,7 @@ gh attestation verify devlanes-0.1.0-x86_64-pc-windows-msvc.zip --repo devlanes-
 
 The `npm` job has no npm secret. Each package (`devlanes` and the `@devlanes/*` platform packages) trusts `devlanes-run/devlanes`, workflow `release.yml`, no environment, so npm exchanges the job's OIDC token for a short-lived publish token and adds provenance. Renaming `release.yml` breaks publishing until each package's trusted publisher names the new file. The `0.0.0` versions of the `@devlanes/*` packages are empty placeholders; the launcher pins its optional dependencies to its own version, so nothing installs them.
 
-A trusted publisher can only be configured on a package that exists, so a new platform package is created by hand once: publish a `0.0.0` placeholder as its owner, then add the trusted publisher above. `@devlanes/win32-x64` and `@devlanes/win32-arm64` are not listed yet: create them this way, then add both to `optionalDependencies` in `packaging/npm/devlanes/package.json`, and `build.sh` starts building them. `npm-preflight` stops a tag before a draft release is created when any listed package is missing from the registry.
+A trusted publisher can only be configured on a package that exists, so a new platform package is created by hand once: publish a `0.0.0` placeholder as its owner, then add the trusted publisher above, before the first release that lists it in `optionalDependencies`. `npm-preflight` stops a tag before a draft release is created when any listed package is missing from the registry.
 
 ## Release manifest
 
@@ -135,7 +135,7 @@ It reads the same `DEVLANES_VERSION`, `DEVLANES_INSTALL_DIR` and `DEVLANES_INSTA
 
 ## npm
 
-The `devlanes` package follows the esbuild layout. Its `bin` entry is `bin/devlanes`, a Node launcher, and it lists one optional dependency per platform: `@devlanes/darwin-arm64`, `@devlanes/darwin-x64`, `@devlanes/linux-arm64`, `@devlanes/linux-x64`, and later `@devlanes/win32-arm64` and `@devlanes/win32-x64`. Each platform package declares `os` and `cpu` (and `libc: glibc` on Linux), so npm installs only the matching one. The Windows packages hold `bin/devlanes.exe` only.
+The `devlanes` package follows the esbuild layout. Its `bin` entry is `bin/devlanes`, a Node launcher, and it lists one optional dependency per platform: `@devlanes/darwin-arm64`, `@devlanes/darwin-x64`, `@devlanes/linux-arm64`, `@devlanes/linux-x64`, `@devlanes/win32-arm64`, `@devlanes/win32-x64`. Each platform package declares `os` and `cpu` (and `libc: glibc` on Linux), so npm installs only the matching one. The Windows packages hold `bin/devlanes.exe` only.
 
 The postinstall script `install.js` resolves the platform package from the `devlanes` package directory (which also finds it through pnpm's symlinks) and puts its `devlanes-hosts` and `devlanes` into `devlanes/bin/`, replacing the launcher. Each file is hard-linked (copied when that fails) to a temporary name in `bin/`, must report `<name> <package version>` (`devlanes --version`, `devlanes-hosts version`), and is then renamed over the target, so a reinstall or update never leaves a half-written file and never writes into a file pnpm shares with its store. npm, pnpm and Bun then run the binary directly. `devlanes-hosts` has to move too: the package manager's bin link resolves to `devlanes/bin/devlanes`, and `certs trust --hosts` looks for the helper next to the running executable and next to its resolved path, neither of which is the platform package. A symlink into the platform package would also resolve, but its relative target depends on the package manager's layout.
 

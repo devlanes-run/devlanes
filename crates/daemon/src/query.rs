@@ -1013,15 +1013,34 @@ impl Inner {
     }
 
     /// `doctor`'s `reserved_ports`: the Windows reserved port ranges checked
-    /// against `ports.range`, the proxy ports and the mirrored ports. Read
-    /// through the shared cache, since the TUI polls `doctor`.
+    /// against `ports.range`, the lanes' assigned ports, the proxy ports and
+    /// the mirrored ports. Read through the shared cache, since the TUI polls
+    /// `doctor`.
     #[cfg(windows)]
     async fn reserved_ports_doctor(&self) -> Value {
         let reading = crate::reserved_ports::RESERVED.get().await;
         let user = &self.opts.user;
+        let assigned: Vec<(String, std::collections::BTreeSet<u16>)> = self
+            .all_lanes()
+            .into_iter()
+            .filter_map(|(project, lane)| {
+                let st = lane.st();
+                let allocation = st.allocation.as_ref()?;
+                let block = allocation.block;
+                let ports = allocation
+                    .offsets
+                    .values()
+                    .chain(&allocation.reserved)
+                    .filter(|offset| **offset < block.size)
+                    .filter_map(|offset| block.start.checked_add(*offset))
+                    .collect();
+                Some((st.reference(&project.name()), ports))
+            })
+            .collect();
         crate::reserved_ports::report(
             &reading,
             user.ports.bounds().ok(),
+            &assigned,
             [
                 ("http", user.proxy.http_port),
                 ("https", user.proxy.https_port),
