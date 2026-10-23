@@ -29,6 +29,19 @@ fn endpoint_cycles_only_through_port_and_hosts() {
     assert!(message.contains("cycle"), "{message}");
 }
 
+/// A single-entry `hosts` determines `public_url` like a list entry does.
+#[test]
+fn single_host_public_url_cycles_are_rejected() {
+    for source in [
+        "project: demo\nservices:\n  a:\n    run: server\n    hosts: 'a.${{ services.b.public_url }}'\n  b:\n    run: server\n    hosts: 'b.${{ services.a.public_url }}'\n",
+        "project: demo\nservices:\n  a:\n    run: server\n    hosts: 'a.${{ self.public_url }}'\n",
+    ] {
+        let message = error(source);
+        assert!(message.contains("cycle"), "{source}: {message}");
+        assert!(message.starts_with("services.a.hosts"), "{message}");
+    }
+}
+
 /// Matrix rows are lane vars and get the same cycle check, located at the row.
 #[test]
 fn matrix_cycles_are_rejected() {
@@ -123,6 +136,16 @@ fn unknown_attributes_are_rejected() {
             "project: demo\nglobal_env:\n  X: '${{ lnae.name }}'\n",
             "lnae",
             "unknown expression context `lnae`; did you mean `lane`?",
+        ),
+        (
+            "project: demo\nglobal_env:\n  X: '${{ svc.api.url }}'\n",
+            "svc",
+            "unknown expression context `svc`; did you mean `services`?",
+        ),
+        (
+            "project: demo\nglobal_env:\n  X: '${{ projects.other.svc.api.url }}'\n",
+            "svc",
+            "`projects.other.svc` is not defined; did you mean `projects.other.services`?",
         ),
     ] {
         let error = parse_project(source, None).expect_err(source);
@@ -264,6 +287,9 @@ fn schema_patterns_and_preset_agreement() {
         json!({"services":{"api":{"replicas":2}}}),
         json!({"services":{"api":{"preset":"vite","vite":{"args":[]}}}}),
         json!({"services":{"api":{"extends":"web","vite":{"args":[]}}}}),
+        // An override or `extends` child may set one `run_script` key and keep the other.
+        json!({"services":{"api":{"run_script":{"name":"dev"}}}}),
+        json!({"templates":{"web":{"run_script":{"file":"package.json"}}}}),
     ] {
         assert!(project.is_valid(&value), "rejected {value}");
     }
@@ -272,6 +298,7 @@ fn schema_patterns_and_preset_agreement() {
         json!({"services":{"api":{"replicas":"two"}}}),
         json!({"services":{"api":{"replicas":"${{ lane.index }}"}}}),
         json!({"services":{"api":{"preset":"next","vite":{"args":[]}}}}),
+        json!({"services":{"api":{"run_script":{"source":"package.json","name":"dev"}}}}),
     ] {
         assert!(!project.is_valid(&value), "accepted {value}");
     }

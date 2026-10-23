@@ -22,8 +22,11 @@ services:
     hosts: "api.${{ lane.domain }}"
   web:
     preset: vite
-    run_script: { file: web/package.json, name: dev }
-    env: { VITE_API_URL: "${{ services.api.public_url }}" }
+    run_script:
+      file: web/package.json
+      name: dev
+    env:
+      VITE_API_URL: "${{ services.api.public_url }}"
     hosts: "${{ lane.domain }}"
 ```
 

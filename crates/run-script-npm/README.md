@@ -35,7 +35,9 @@ The composition root registers `Arc::new(NpmScripts)` as a script runner. `plan`
 services:
   api:
     # Runs the dev script of apps/api/package.json with the project's package manager.
-    run_script: { file: apps/api/package.json, name: dev }
+    run_script:
+      file: apps/api/package.json
+      name: dev
 ```
 
 With `"packageManager": "pnpm@10.4.1"` this runs `pnpm run dev` in `apps/api`; with npm it is `npm run dev`, and preset flags follow a `--`.

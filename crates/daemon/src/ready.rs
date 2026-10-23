@@ -5,7 +5,10 @@ use std::{
     collections::BTreeMap,
     io::Write,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicU16, Ordering},
+    },
     time::Duration,
 };
 
@@ -106,7 +109,8 @@ where
         timeout_ms = limit.as_millis() as u64,
         "readiness check"
     );
-    let probe = probe_until_ready(host, &check, deadline);
+    let last = LastStatus::default();
+    let probe = probe_until_ready(host, &check, deadline, &last);
     let exited = host.wait_exit();
     tokio::select! {
         result = probe => match result {
@@ -116,6 +120,9 @@ where
                 if let Readiness::Tcp { port } | Readiness::Http { port, .. } = &check {
                     data["expected_port"] = json!(port);
                     data["listening"] = json!(listening().await);
+                }
+                if let Readiness::Http { status, .. } = &check {
+                    last.describe(&mut data, *status);
                 }
                 host.set_state(UnitState::Failed(Some(RpcError::new("ready_timeout", data, 1))));
             }
@@ -136,20 +143,21 @@ fn describe(check: &Readiness) -> &'static str {
     }
 }
 
-/// Returns `Err` only on timeout or an invalid check definition.
+/// Returns `Err` only on timeout or an invalid check definition. An http probe
+/// records each status it receives in `last`.
 async fn probe_until_ready(
     host: &UnitHost,
     check: &Readiness,
     deadline: Instant,
+    last: &LastStatus,
 ) -> Result<(), ()> {
     match check {
         Readiness::Started => Ok(()),
         Readiness::Tcp { port } => poll(deadline, || async move { tcp_open(*port).await }).await,
         Readiness::Http { port, path, status } => {
-            poll(
-                deadline,
-                || async move { http_ok(*port, path, *status).await },
-            )
+            poll(deadline, || async move {
+                http_ok(*port, path, *status, last).await
+            })
             .await
         }
         Readiness::Cmd { command, cwd, env } => {
@@ -343,6 +351,7 @@ where
         timeout_ms = ready.timeout.as_millis() as u64,
         "waiting until the container is ready"
     );
+    let last = LastStatus::default();
     let (kind, passed) = match &ready.check {
         ContainerCheck::Tcp { port } => {
             let port = host_port(port)?;
@@ -350,7 +359,8 @@ where
         }
         ContainerCheck::Http { port, path, status } => {
             let port = host_port(port)?;
-            let probe = || http_ok(port, path, *status);
+            let last = &last;
+            let probe = || http_ok(port, path, *status, last);
             ("http", poll(deadline, probe).await)
         }
         ContainerCheck::Log { pattern } => {
@@ -372,16 +382,42 @@ where
         }
     };
     passed.map_err(|()| {
-        RpcError::new(
-            "container_not_ready",
-            json!({
-                "container": name,
-                "check": kind,
-                "timeout_ms": ready.timeout.as_millis(),
-            }),
-            1,
-        )
+        let mut data = json!({
+            "container": name,
+            "check": kind,
+            "timeout_ms": ready.timeout.as_millis(),
+        });
+        if let ContainerCheck::Http { status, .. } = &ready.check {
+            last.describe(&mut data, *status);
+        }
+        RpcError::new("container_not_ready", data, 1)
     })
+}
+
+/// The last HTTP status an http probe received, so a timeout can say what the
+/// service answered instead of only that it never passed. 0 means no answer yet.
+#[derive(Default)]
+struct LastStatus(AtomicU16);
+
+impl LastStatus {
+    /// Remembers `code` as the latest answer.
+    fn record(&self, code: u16) {
+        self.0.store(code, Ordering::Relaxed);
+    }
+
+    /// The latest answer, if any request got a status line.
+    fn get(&self) -> Option<u16> {
+        Some(self.0.load(Ordering::Relaxed)).filter(|code| *code != 0)
+    }
+
+    /// Adds `expected_status` (null when unset) and, once anything answered,
+    /// `last_status` to timeout data.
+    fn describe(&self, data: &mut serde_json::Value, expected: Option<u16>) {
+        data["expected_status"] = json!(expected);
+        if let Some(code) = self.get() {
+            data["last_status"] = json!(code);
+        }
+    }
 }
 
 /// Retries a probe until it succeeds or the deadline passes.
@@ -436,8 +472,9 @@ pub async fn tcp_open(port: u16) -> bool {
 }
 
 /// Minimal HTTP/1.1 probe; avoids a client dependency for one status line. Passes on
-/// exactly `expected`, or on any 2xx status when `expected` is unset.
-async fn http_ok(port: u16, path: &str, expected: Option<u16>) -> bool {
+/// exactly `expected`, or on any 2xx status when `expected` is unset. Records any
+/// status it receives in `last`.
+async fn http_ok(port: u16, path: &str, expected: Option<u16>, last: &LastStatus) -> bool {
     let Some(mut stream) = connect(port).await else {
         return false;
     };
@@ -455,12 +492,15 @@ async fn http_ok(port: u16, path: &str, expected: Option<u16>) -> bool {
         .ok()
         .and_then(|text| text.split_whitespace().nth(1))
         .and_then(|code| code.parse::<u16>().ok());
-    match (status, expected) {
-        (Some(code), Some(want)) => code == want,
+    let Some(code) = status else {
+        return false;
+    };
+    last.record(code);
+    match expected {
+        Some(want) => code == want,
         // Redirects are not followed, so a 3xx (often a login page) or a 404 from a
         // half-started router must not count as healthy.
-        (Some(code), None) => (200..300).contains(&code),
-        (None, _) => false,
+        None => (200..300).contains(&code),
     }
 }
 
@@ -479,20 +519,19 @@ mod tests {
                 let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\n\r\n").await;
             }
         });
+        let last = LastStatus::default();
         assert!(tcp_open(port).await);
-        assert!(http_ok(port, "/", None).await);
-        assert!(http_ok(port, "/", Some(204)).await);
-        assert!(!http_ok(port, "/", Some(200)).await);
+        assert!(http_ok(port, "/", None, &last).await);
+        assert!(http_ok(port, "/", Some(204), &last).await);
+        assert!(!http_ok(port, "/", Some(200), &last).await);
         Ok(())
     }
 
-    /// Without `status` only 2xx passes; with it, only that exact code does.
-    #[tokio::test]
-    async fn http_probe_needs_2xx_unless_a_status_is_set() -> Result<(), Box<dyn std::error::Error>>
-    {
+    /// Serves HTTP on a local port, answering each request with the status its
+    /// path names, such as `/404`.
+    async fn status_server() -> std::io::Result<u16> {
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
         let port = listener.local_addr()?.port();
-        // The path is the status code to answer with, such as `/404`.
         tokio::spawn(async move {
             while let Ok((mut stream, _)) = listener.accept().await {
                 let mut buffer = [0_u8; 512];
@@ -508,14 +547,67 @@ mod tests {
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
-        assert!(http_ok(port, "/200", None).await);
-        assert!(http_ok(port, "/299", None).await);
-        assert!(!http_ok(port, "/302", None).await);
-        assert!(!http_ok(port, "/404", None).await);
-        assert!(!http_ok(port, "/500", None).await);
-        assert!(http_ok(port, "/404", Some(404)).await);
-        assert!(http_ok(port, "/302", Some(302)).await);
-        assert!(!http_ok(port, "/200", Some(204)).await);
+        Ok(port)
+    }
+
+    /// Without `status` only 2xx passes; with it, only that exact code does.
+    #[tokio::test]
+    async fn http_probe_needs_2xx_unless_a_status_is_set() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let port = status_server().await?;
+        let last = LastStatus::default();
+        assert!(http_ok(port, "/200", None, &last).await);
+        assert!(http_ok(port, "/299", None, &last).await);
+        assert!(!http_ok(port, "/302", None, &last).await);
+        assert!(!http_ok(port, "/404", None, &last).await);
+        assert!(!http_ok(port, "/500", None, &last).await);
+        assert!(http_ok(port, "/404", Some(404), &last).await);
+        assert!(http_ok(port, "/302", Some(302), &last).await);
+        assert!(!http_ok(port, "/200", Some(204), &last).await);
+        Ok(())
+    }
+
+    /// A probe remembers the last status it received, and a closed port leaves it
+    /// untouched.
+    #[tokio::test]
+    async fn http_probe_records_the_last_status() -> Result<(), Box<dyn std::error::Error>> {
+        let port = status_server().await?;
+        let last = LastStatus::default();
+        assert_eq!(last.get(), None);
+        assert!(!http_ok(port, "/302", None, &last).await);
+        assert_eq!(last.get(), Some(302));
+        let closed = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let closed_port = closed.local_addr()?.port();
+        drop(closed);
+        assert!(!http_ok(closed_port, "/", None, &last).await);
+        assert_eq!(last.get(), Some(302));
+        Ok(())
+    }
+
+    /// A container http check that times out says what the service last answered
+    /// and whether a status was configured.
+    #[tokio::test]
+    async fn container_http_timeout_reports_the_last_status()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let port = status_server().await?;
+        let ready = devlanes_resolve::ContainerReady {
+            check: devlanes_resolve::ContainerCheck::Http {
+                port: None,
+                path: "/302".into(),
+                status: None,
+            },
+            timeout: Duration::from_millis(400),
+        };
+        let ports = [("http".to_owned(), port)];
+        let env = BTreeMap::new();
+        let check = container_ready("web", &ready, &ports, &env, || async { Vec::new() });
+        let Err(error) = timeout(Duration::from_secs(10), check).await? else {
+            return Err("a 302 must not pass a check without `status`".into());
+        };
+        assert_eq!(error.code, "container_not_ready");
+        assert_eq!(error.data["check"], "http");
+        assert_eq!(error.data["last_status"], 302);
+        assert!(error.data["expected_status"].is_null());
         Ok(())
     }
 

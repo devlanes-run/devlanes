@@ -19,7 +19,9 @@ let contributors: Vec<Arc<dyn Contributor>> =
 ```yaml
 services:
   web:
-    run_script: { file: web/package.json, name: dev }   # platform inferred: node
+    run_script:  # platform inferred: node
+      file: web/package.json
+      name: dev
   worker:
     platform: node
     run: node worker.mjs

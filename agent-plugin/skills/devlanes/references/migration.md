@@ -79,17 +79,26 @@ infra:
   compose: docker-compose.yml
 tasks:
   migrate-db:
-    run_script: { file: packages/models/package.json, name: db-deploy }
+    run_script:
+      file: packages/models/package.json
+      name: db-deploy
     when: lane.start
 services:
   api-admin:
-    run_script: { file: servers/admin/package.json, name: dev }
+    run_script:
+      file: servers/admin/package.json
+      name: dev
     hosts: "admin-api.${{ lane.domain }}"
-    ready: { http: { path: /-/health } }
+    ready:
+      http:
+        path: /-/health
     tags: [api, essential]
   wrk-mailer:
-    run_script: { file: workers/mailer/package.json, name: dev }
-    ready: { log: "mailer ready" }   # a line the worker prints once connected
+    run_script:
+      file: workers/mailer/package.json
+      name: dev
+    ready:
+      log: "mailer ready"  # a line the worker prints once connected
     tags: [worker]
 profiles:
   default: [+essential]
@@ -127,7 +136,8 @@ Before:
 tasks:
   db:
     cmd: ["postgres", "-D", ".data/db"]
-    ready: {log: "ready to accept connections"}
+    ready:
+      log: "ready to accept connections"
   migrate:
     type: job
     cmd: ["./migrate.sh"]
@@ -135,7 +145,8 @@ tasks:
   api:
     cmd: ["cargo", "run", "-p", "api"]
     deps: [db, migrate]
-    ready: {http: "http://localhost:3000/health"}
+    ready:
+      http: "http://localhost:3000/health"
     autostart: true
 ```
 
@@ -153,7 +164,9 @@ services:
   api:
     run: cargo run -p api -- --port ${{ self.port }}   # the app must listen on the port it is given
     hosts: "api.${{ lane.domain }}"
-    ready: { http: { path: /health } }
+    ready:
+      http:
+        path: /health
 ```
 
 ## process-compose
@@ -191,10 +204,15 @@ processes:
     command: go run ./cmd/api --port 8080
     working_dir: ./services/api
     depends_on:
-      migrate: { condition: process_completed_successfully }
+      migrate:
+        condition: process_completed_successfully
     readiness_probe:
-      http_get: { host: 127.0.0.1, port: 8080, path: /health }
-    availability: { restart: on_failure }
+      http_get:
+        host: 127.0.0.1
+        port: 8080
+        path: /health
+    availability:
+      restart: on_failure
   web:
     command: npm run dev -- --port 5173
     working_dir: web
@@ -214,13 +232,19 @@ services:
     run: go run ./cmd/api --port ${{ self.port }}
     cwd: services/api
     hosts: "api.${{ lane.domain }}"
-    ready: { http: { path: /health } }
+    ready:
+      http:
+        path: /health
   web:
     preset: vite
-    run_script: { file: web/package.json, name: dev }
-    env: { API_URL: "${{ services.api.url }}" }
+    run_script:
+      file: web/package.json
+      name: dev
+    env:
+      API_URL: "${{ services.api.url }}"
     hosts: "${{ lane.domain }}"
-    ready: { tcp: true }
+    ready:
+      tcp: true
 ```
 
 ## Procfile (foreman, overmind, hivemind, honcho)
@@ -259,13 +283,17 @@ services:
   web:
     run: bin/rails server -p $PORT -b 127.0.0.1
     hosts: "${{ lane.domain }}"
-    ready: { http: { path: /up } }
+    ready:
+      http:
+        path: /up
   css:
     run: bin/rails tailwindcss:watch
-    ready: { log: "Done in" }
+    ready:
+      log: "Done in"
   worker:
     run: bundle exec sidekiq
-    ready: { log: "Booted Rails" }
+    ready:
+      log: "Booted Rails"
     tags: [worker]
 ```
 
@@ -304,14 +332,19 @@ project: acme
 services:
   api:
     run: node ./api/server.js --port ${{ self.port }}
-    env: { NODE_ENV: development }
+    env:
+      NODE_ENV: development
     replicas: 2
-    stop: { signal: SIGINT, timeout: 3s }
-    ready: { tcp: true }
+    stop:
+      signal: SIGINT
+      timeout: 3s
+    ready:
+      tcp: true
 profiles:
   production:
     include: [api]
-    env: { NODE_ENV: production }
+    env:
+      NODE_ENV: production
 ```
 
 ## tmuxinator and tmuxp
@@ -357,12 +390,16 @@ services:
   server:
     run: bundle exec rails s -p ${{ self.port }} -b 127.0.0.1
     hosts: "${{ lane.domain }}"
-    ready: { tcp: true }
+    ready:
+      tcp: true
   frontend:
     preset: vite
-    run_script: { file: web/package.json, name: dev }
+    run_script:
+      file: web/package.json
+      name: dev
     hosts: "app.${{ lane.domain }}"
-    ready: { tcp: true }
+    ready:
+      tcp: true
 ```
 
 ## package.json with concurrently or npm-run-all
@@ -398,13 +435,17 @@ services:
   api:
     run: pnpm exec tsx watch src/server.ts --port ${{ self.port }}
     hosts: "api.${{ lane.domain }}"
-    ready: { http: { path: /health } }
+    ready:
+      http:
+        path: /health
   web:
     # Not a script in package.json, so no preset: write the flags preset vite would add.
     run: pnpm exec vite --port ${{ self.port }} --strictPort --host 127.0.0.1
-    env: { VITE_API_URL: "${{ services.api.public_url }}" }
+    env:
+      VITE_API_URL: "${{ services.api.public_url }}"
     hosts: "${{ lane.domain }}"
-    ready: { tcp: true }
+    ready:
+      tcp: true
 ```
 
 `dev:api` keeps its literal port, so it runs as its own command with `${{ self.port }}`; a script that reads `PORT` stays `run_script: { file: package.json, name: dev:api }`.

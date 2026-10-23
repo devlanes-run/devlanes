@@ -34,7 +34,9 @@ The composition root registers `Arc::new(PythonScripts)` as a script runner. `pl
 services:
   api:
     # Runs the serve script of pyproject.toml with uv or poetry.
-    run_script: { file: pyproject.toml, name: serve }
+    run_script:
+      file: pyproject.toml
+      name: serve
 ```
 
 With `serve = "acme.server:main"` under `[project.scripts]` and a `uv.lock`, this runs `uv run serve`; with a `poetry.lock` instead it runs `poetry run serve`.

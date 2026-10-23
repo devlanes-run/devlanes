@@ -3,7 +3,7 @@ use devlanes_config::{
 };
 use globset::Glob;
 
-use crate::{ResolveError, ResolvedLane};
+use crate::ResolveError;
 
 /// Services to start and the profiles that apply to them.
 #[derive(Debug, Clone)]
@@ -18,19 +18,21 @@ pub struct Selection {
     /// Object-form options of the profiles, merged (see [`select_profiles`]).
     pub profile_options: Option<ProfileOptions>,
     /// Entries of `services` kept only because their `autostart` is an expression,
-    /// which needs the lane to evaluate. [`Selection::apply_autostart`] drops the ones
-    /// that evaluate to false.
+    /// which needs the lane to evaluate. [`retain_autostart`] drops the ones that
+    /// evaluate to false.
     pub autostart_pending: Vec<String>,
 }
 
-impl Selection {
-    /// Drops the [`Self::autostart_pending`] services whose `autostart` evaluated to
-    /// false in `lane`. A service that failed to plan stays, so the start reports it.
-    pub fn apply_autostart(&mut self, lane: &ResolvedLane) {
-        let pending = std::mem::take(&mut self.autostart_pending);
-        self.services
-            .retain(|name| !pending.contains(name) || lane.autostart(name) != Some(false));
-    }
+/// Drops the `pending` entries of `services` (see [`Selection::autostart_pending`])
+/// whose evaluated `autostart` is false. `autostart` answers per service as
+/// [`crate::ResolvedLane::autostart`] does: true when any replica's is, `None` when none
+/// planned. A service without an answer stays, so the start reports its failure.
+pub fn retain_autostart(
+    services: &mut Vec<String>,
+    pending: &[String],
+    autostart: impl Fn(&str) -> Option<bool>,
+) {
+    services.retain(|name| !pending.contains(name) || autostart(name) != Some(false));
 }
 
 /// One profile as clients list it (TUI picker, `devlanes profiles`).
@@ -182,8 +184,8 @@ pub fn select<E: Extensions>(
 /// - Without profiles, `default` is used when defined; otherwise every
 ///   `autostart` service starts.
 /// - Where `autostart` matters and is an expression, the service is kept and
-///   listed in `autostart_pending`; [`Selection::apply_autostart`] settles it once
-///   the lane is resolved.
+///   listed in `autostart_pending`; [`retain_autostart`] settles it once the lane
+///   is resolved.
 ///
 /// `profile_options` merges the profiles: `env` and `run_scripts` in the order
 /// given (later wins); `infra: false` only when every profile says so literally.
@@ -305,7 +307,7 @@ fn profile_selects<E: Extensions>(
 }
 
 /// `autostart`, defaulting to true. An expression needs the lane, so the service
-/// stays pending until [`Selection::apply_autostart`].
+/// stays pending until [`retain_autostart`].
 fn autostart(value: &Option<Templated<bool>>) -> Keep {
     match value {
         None | Some(Templated::Literal(true)) => Keep::Yes,

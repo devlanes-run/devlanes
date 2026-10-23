@@ -18,7 +18,9 @@ services:
     run: rspress dev --port ${{ self.port }} --host 127.0.0.1
   web:
     preset: vite                  # adds --port for you
-    run_script: { file: web/package.json, name: dev }
+    run_script:
+      file: web/package.json
+      name: dev
 ```
 
 The service gets `PORT` and `HOST=127.0.0.1` in its environment and must listen there. There is no port detection: devlanes dials `127.0.0.1:<port>` for `ready: tcp`, for the proxy and for `services.<name>.url`. A service that listens somewhere else fails readiness after 60 s with the ports its process tree did bind, so the message tells you what it chose instead.
@@ -26,8 +28,10 @@ The service gets `PORT` and `HOST=127.0.0.1` in its environment and must listen 
 Three ways to override the port:
 
 ```yaml
-env: { PORT: "${{ lane.port + 5 }}" }   # a fixed offset in the lane's block; the offset is reserved
-env: { PORT: 3998 }                     # the same literal port in every lane; only one lane can run it
+env:
+  PORT: "${{ lane.port + 5 }}"   # a fixed offset in the lane's block; the offset is reserved
+env:
+  PORT: 3998                     # the same literal port in every lane; only one lane can run it
 ```
 
 Never write `env: { PORT: "${{ self.port }}" }` (`self.port` is computed from `PORT`; it is rejected as a cycle) and never put `PORT` in `global_env`, which would give every service the same port.
@@ -42,11 +46,14 @@ Mention `self.ports.<name>` anywhere in the service and a second port named `<na
 services:
   api:
     run: node --inspect=127.0.0.1:${{ self.ports.inspect }} server.mjs
-    env: { METRICS_PORT: "${{ self.ports.metrics }}" }
+    env:
+      METRICS_PORT: "${{ self.ports.metrics }}"
     hosts:
       - api.${{ lane.domain }}
-      - { host: "metrics.${{ lane.domain }}", port: metrics }   # route a hostname to a named port
-    ready: { tcp: metrics }                                      # wait on a named port
+      - host: "metrics.${{ lane.domain }}"
+        port: metrics          # route a hostname to a named port
+    ready:
+      tcp: metrics             # wait on a named port
 ```
 
 `hosts[].port` and `ready.tcp` also allocate the name they mention, and the wrangler preset allocates `inspector`. Another service reads them as `${{ services.api.ports.metrics }}`, but only the owning service's own fields allocate; a reference from elsewhere to an unknown name fails at start as undefined. The primary port is named `default` in `hosts[].port` and `ready.tcp`.
@@ -155,12 +162,16 @@ Every lane has a folder of its own outside the worktree, for state and generated
 ```yaml
 services:
   api:
-    run_script: { file: apps/api/package.json, name: dev }
+    run_script:
+      file: apps/api/package.json
+      name: dev
     env:
       SQLITE_PATH: ${{ lane.data_path }}/api/dev.db
   worker:
     preset: wrangler
-    run_script: { file: workers/api/package.json, name: dev }
+    run_script:
+      file: workers/api/package.json
+      name: dev
     wrangler:
       args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"]
 infra:

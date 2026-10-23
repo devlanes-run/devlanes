@@ -963,12 +963,12 @@
       "properties": {
         "data_dir": {
           "default": null,
-          "description": "Folder that holds every lane's data folder, one subfolder per project; defaults to `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start with `~/`. The daemon reads it when it starts; lanes keep their folders where they were made, so move existing ones by hand after changing it.",
+          "description": "Folder that holds every lane's data folder, one subfolder per project; defaults to `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start with `~/`. The daemon reads it when it starts. After a change and a daemon restart, lanes use new, empty folders under the new root; move the old folders there by hand to keep their data.",
           "examples": [
             "~/.devlanes/data",
             "/Volumes/fast/devlanes"
           ],
-          "markdownDescription": "Folder that holds every lane's data folder, one subfolder per project; defaults to `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start with `~/`. The daemon reads it when it starts; lanes keep their folders where they were made, so move existing ones by hand after changing it.",
+          "markdownDescription": "Folder that holds every lane's data folder, one subfolder per project; defaults to `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start with `~/`. The daemon reads it when it starts. After a change and a daemon restart, lanes use new, empty folders under the new root; move the old folders there by hand to keep their data.",
           "type": [
             "string",
             "null"

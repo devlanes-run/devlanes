@@ -902,7 +902,13 @@ fn check_reference<E: Extensions>(
             }
             Ok(())
         }
-        "env" | "projects" => Ok(()),
+        "env" => Ok(()),
+        // Other projects' names and services are only known at runtime, but each one exposes
+        // only `services`, so a 0.2 spelling such as `projects.<name>.svc` is caught here.
+        "projects" => match at(1) {
+            Some(name) => attribute(path, &format!("projects.{name}"), at(2), ["services"]),
+            None => Ok(()),
+        },
         root => {
             let hint = match crate::loader::closest(root, ROOTS.iter().copied()) {
                 Some(name) => format!("did you mean `{name}`?"),
@@ -960,7 +966,7 @@ fn expression_graph<E: Extensions>(
                 let field = &path[format!("services.{name}.").len()..];
                 if field == "env.PORT" {
                     Some(format!("services.{name}.port"))
-                } else if field.starts_with("hosts.") {
+                } else if field == "hosts" || field.starts_with("hosts.") {
                     Some(format!("services.{name}.public_url"))
                 } else {
                     None

@@ -510,10 +510,15 @@ fn unknown_key_hint(key: &str, expected: &str) -> Option<String> {
         .trim_start()
         .trim_start_matches("expected ")
         .trim_start_matches("one of ");
-    expected
+    let names = expected
         .split(", ")
         .map(|name| name.trim().trim_matches('`'))
-        .filter(|name| !name.is_empty() && !name.contains(' '))
+        .filter(|name| !name.is_empty() && !name.contains(' '));
+    // 0.2 named the `run_script` file `source`, too far from `file` for the typo match.
+    if key == "source" && names.clone().eq(["file", "name"]) {
+        return Some("unknown key `source`; `source` is now `file`".into());
+    }
+    names
         .max_by(|a, b| strsim::jaro_winkler(key, a).total_cmp(&strsim::jaro_winkler(key, b)))
         .filter(|name| strsim::jaro_winkler(key, name) > 0.75)
         .map(|name| format!("unknown key `{key}`; did you mean `{name}`?"))

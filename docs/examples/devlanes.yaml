@@ -7,8 +7,11 @@ project: acme
 
 # Optional color overrides; a unit uses the first of its tags listed here. Other tag names remain valid.
 tags:
-  api: { color: cyan, description: HTTP APIs }
-  worker: { color: bright-magenta }
+  api:
+    color: cyan
+    description: HTTP APIs
+  worker:
+    color: bright-magenta
 
 # Reusable service settings; a service inherits one with extends.
 templates:
@@ -17,7 +20,9 @@ templates:
     platform: node
     tags: [api]
     # Ready once GET /-/health on the service's port answers.
-    ready: { http: { path: /-/health } }
+    ready:
+      http:
+        path: /-/health
   wrangler-worker:
     platform: node
     # Adds the framework's port and host flags to the command.
@@ -53,8 +58,18 @@ lanes:
     # port: ${{ 40000 + lane.index * 100 }}
   # Alternative to vars; entry N is lane N:
   # matrix:
-  #   - { port: 10000, domain: acme.localhost, db_name: acme, redis_db: 0, vhost: acme, bucket: media }
-  #   - { port: 11000, domain: test1.localhost, db_name: test1, redis_db: 1, vhost: test1, bucket: media-test1 }
+  #   - port: 10000
+  #     domain: acme.localhost
+  #     db_name: acme
+  #     redis_db: 0
+  #     vhost: acme
+  #     bucket: media
+  #   - port: 11000
+  #     domain: test1.localhost
+  #     db_name: test1
+  #     redis_db: 1
+  #     vhost: test1
+  #     bucket: media-test1
 
 # Containers, and the commands that prepare and remove each lane's data in them.
 infra:
@@ -81,7 +96,9 @@ infra:
       command: [server, --config=/policies/config.yaml]
       volumes: ["./infra/cerbos:/policies:ro"]
       # Container ports by name; the host side is read as infra.cerbos.ports.http.
-      ports: { http: 3592, grpc: 3593 }
+      ports:
+        http: 3592
+        grpc: 3593
       # One container per lane instead of one shared by all lanes.
       per_lane: true
   # Commands run once per lane after its containers are healthy.
@@ -140,13 +157,17 @@ tasks:
     when: lane.create
   migrate:
     # Runs a script from package.json with the project's package manager.
-    run_script: { file: package.json, name: db-deploy }
+    run_script:
+      file: package.json
+      name: db-deploy
     # Run on every devlanes start.
     when: lane.start
     # Run automatically only when one of these profiles is active.
     profiles: [default, backend]
   seed:
-    run_script: { file: packages/seed/package.json, name: start }
+    run_script:
+      file: packages/seed/package.json
+      name: start
     when: lane.create
     # Wait until the selected services are ready.
     after: services
@@ -161,10 +182,14 @@ tasks:
     # Asked before running; noninteractive callers must pass --yes.
     confirm: Drops ${{ lane.db_name }} and re-seeds it
   typegen:
-    run_script: { file: packages/api-types/package.json, name: generate }
+    run_script:
+      file: packages/api-types/package.json
+      name: generate
     # Alternative: run: [pnpm, -F, "@acme/api-types", generate]
   certs:
-    run_script: { file: Makefile, name: certs }
+    run_script:
+      file: Makefile
+      name: certs
   fixtures:
     run_script:
       file: justfile
@@ -196,22 +221,27 @@ services:
     tags: [api, essential]
   admin-api:
     extends: fastify-api
-    run_script: { file: apps/admin-api/package.json, name: dev }
+    run_script:
+      file: apps/admin-api/package.json
+      name: dev
     # This service's own fnox profile instead of the project's.
-    fnox: { profile: admin-api }
+    fnox:
+      profile: admin-api
     hosts: "admin-api.${{ lane.domain }}"
     tags: [api, essential]
   payments-api:
     extends: fastify-api
     run: pnpm --silent -F @acme/payments-api dev
     # Setting PORT replaces the allocated port; here a fixed offset into the lane's block.
-    env: { PORT: "${{ lane.port + 5 }}" }
+    env:
+      PORT: "${{ lane.port + 5 }}"
     hosts: "payments-api.${{ lane.domain }}"
     tags: [api]
   sms-stub:
     run: node infra/stubs/sms.mjs
     # A literal PORT is the same in every lane.
-    env: { PORT: 3998 }
+    env:
+      PORT: 3998
     hosts: "sms-stub.${{ lane.domain }}"
     # Not mirrored to machines connected with devlanes remote connect.
     hidden: true
@@ -221,7 +251,9 @@ services:
     platform: node
     preset: vite
     # Presets need run_script: the preset's flags go after the script for the package manager.
-    run_script: { file: apps/user-web/package.json, name: dev }
+    run_script:
+      file: apps/user-web/package.json
+      name: dev
     hosts: "app.${{ lane.domain }}"
     tags: [web, essential]
   docs:
@@ -234,7 +266,9 @@ services:
     tags: [web]
   api-gateway:
     extends: wrangler-worker
-    run_script: { file: workers/api-gateway/package.json, name: dev }
+    run_script:
+      file: workers/api-gateway/package.json
+      name: dev
     # Options for the wrangler preset.
     wrangler:
       vars:
@@ -253,7 +287,9 @@ services:
         host_header: upstream
   pages-worker:
     extends: wrangler-worker
-    run_script: { file: workers/pages/package.json, name: dev }
+    run_script:
+      file: workers/pages/package.json
+      name: dev
     env:
       # http://127.0.0.1:<port> of another service in this lane.
       ACME_PAGES_SERVER_URL: ${{ services.pages_server.url }}
@@ -265,11 +301,14 @@ services:
     platform: node
     run: pnpm --silent -F @acme/queue-worker dev
     # Ready once this line appears in the output.
-    ready: { log: Connected to Redis }
+    ready:
+      log: Connected to Redis
     # Plain pipes instead of a terminal.
     pty: false
     # Signal sent on stop, and how long to wait before killing the process tree.
-    stop: { signal: SIGINT, timeout: 15s }
+    stop:
+      signal: SIGINT
+      timeout: 15s
     tags: [worker, essential]
   ai-gateway:
     platform: python
@@ -278,11 +317,19 @@ services:
     cwd: services/ai-gateway
     hosts: "ai.${{ lane.domain }}"
     # When devlanes considers the service started; without ready, a port check if it has hosts, else at once.
-    ready: { http: { path: /healthz, status: 200, timeout: 60s } }
-    # ready: { tcp: true }
-    # ready: { tcp: inspector }
-    # ready: { log: "Application startup complete" }
-    # ready: { cmd: "curl -fsS http://127.0.0.1:${{ self.port }}/healthz" }
+    ready:
+      http:
+        path: /healthz
+        status: 200
+        timeout: 60s
+    # ready:
+    #   tcp: true
+    # ready:
+    #   tcp: inspector
+    # ready:
+    #   log: "Application startup complete"
+    # ready:
+    #   cmd: "curl -fsS http://127.0.0.1:${{ self.port }}/healthz"
     # ready: started
   realtime:
     platform: node
@@ -290,10 +337,13 @@ services:
     env:
       # Naming a port under self.ports allocates one more port for the service.
       DEBUG_PORT: ${{ self.ports.debug }}
-    ready: { tcp: true }
+    ready:
+      tcp: true
   extension:
     platform: node
-    run_script: { file: apps/extension/package.json, name: dev }
+    run_script:
+      file: apps/extension/package.json
+      name: dev
     # Folders copied to a stable path, locally or on a connected machine.
     sync:
       - from: apps/extension/.output/chrome-mv3
@@ -312,7 +362,9 @@ services:
       # replica.index counts the service's instances from 1.
       identifier: io.example.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}
       dev_url: ${{ services.desktop_web.url }}
-    run_script: { file: apps/desktop/package.json, name: dev }
+    run_script:
+      file: apps/desktop/package.json
+      name: dev
     # Instances of this service per lane.
     replicas: 2
     autostart: false
@@ -320,7 +372,9 @@ services:
   desktop-web:
     platform: node
     preset: vite
-    run_script: { file: apps/desktop-web/package.json, name: dev }
+    run_script:
+      file: apps/desktop-web/package.json
+      name: dev
     tags: [desktop]
 
 # Which services devlanes start --profile X starts; default applies when no profile is given.
@@ -343,7 +397,8 @@ profiles:
       ACME_USE_STAGE_APIS: "1"
   e2e:                                  # production-like run: devlanes with --profile e2e -- pnpm test:e2e
     include: [+api, +web]
-    run_scripts: { dev: start }         # services using run_script ...#dev run ...#start instead
+    run_scripts:                        # services whose run_script names dev run start instead
+      dev: start
     env:
       NODE_ENV: production
   attach:

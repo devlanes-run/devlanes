@@ -32,7 +32,9 @@ The composition root registers `Arc::new(DenoTasks)` as a script runner. `plan` 
 services:
   api:
     # Runs the dev task of deno.json with deno task.
-    run_script: { file: deno.json, name: dev }
+    run_script:
+      file: deno.json
+      name: dev
 ```
 
 This runs `deno task dev` next to `deno.json`, with preset flags appended as `deno task dev --port <port>`.

@@ -1,8 +1,10 @@
 //! The user config (`config.yaml` in the devlanes home) as CLI commands read it.
 //! A missing file means every default. Commands whose effect depends on its
-//! settings (certificate trust, the OS resolver file) refuse an invalid file with
-//! a `config_error`; doctor reads it the way the daemon does; display settings
-//! (TUI look, the tab's progress bar) keep every valid key after a warning.
+//! settings (certificate trust, the OS resolver file, the lane data folder of
+//! `daemon reset-state`) refuse an invalid file with a `config_error`, and so
+//! does the daemon, which then does not start (`daemon restart` checks first);
+//! doctor reads it leniently and lists every problem; display settings (TUI
+//! look, the tab's progress bar) keep every valid key after a warning.
 
 use std::{
     path::{Path, PathBuf},
@@ -31,7 +33,7 @@ pub async fn load(paths: &Paths) -> Result<UserConfig, RpcError> {
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?
 }
 
-/// The user config as the daemon reads it: a problem drops only the key it is
+/// The user config with every valid key kept: a problem drops only the key it is
 /// about. For reports such as doctor, which list the problems themselves.
 pub async fn lenient(paths: &Paths) -> UserConfig {
     let path = file(paths);
@@ -41,8 +43,8 @@ pub async fn lenient(paths: &Paths) -> UserConfig {
 }
 
 /// The user config for settings that only change how output looks or whether
-/// the TUI opens. Read once per process like the daemon reads it, so one bad key
-/// does not reset the others; its problems go to stderr once as warnings.
+/// the TUI opens. Read once per process, leniently, so one bad key does not reset
+/// the others; its problems go to stderr once as warnings.
 /// Blocking on the first call.
 pub fn display(paths: &Paths) -> &'static UserConfig {
     static DISPLAY: OnceLock<UserConfig> = OnceLock::new();
@@ -88,6 +90,16 @@ fn lenient_file(path: &Path) -> (UserConfig, Vec<ConfigError>) {
         return (UserConfig::default(), Vec::new());
     }
     devlanes_config::load_user_lenient(path)
+}
+
+/// The daemon's startup failure for an invalid user config, one line that
+/// `devlanes_client::user_config_startup_error` turns back into this `config_error`.
+pub fn startup_reason(error: &ConfigError) -> String {
+    format!(
+        "{}: {}",
+        devlanes_client::USER_CONFIG_INVALID,
+        config_error(error).data
+    )
 }
 
 /// A user config problem in the daemon's `config_error` shape, so every client

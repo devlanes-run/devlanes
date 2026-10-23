@@ -19,8 +19,11 @@ A preset needs `run_script`. The flags go after the script name, placed per pack
 services:
   web:
     preset: vite
-    run_script: { file: web/package.json, name: dev }
-    env: { VITE_API_URL: "${{ services.api.public_url }}" }
+    run_script:
+      file: web/package.json
+      name: dev
+    env:
+      VITE_API_URL: "${{ services.api.public_url }}"
     hosts: "${{ lane.domain }}"
 ```
 
@@ -42,10 +45,16 @@ The preset adds `--port <self.port> --strictPort --host 127.0.0.1`, then `vite.a
 services:
   web:
     preset: next
-    run_script: { file: apps/web/package.json, name: dev }
-    next: { args: [--turbopack] }
+    run_script:
+      file: apps/web/package.json
+      name: dev
+    next:
+      args: [--turbopack]
     hosts: "${{ lane.domain }}"
-    ready: { http: { path: /, timeout: 120s } }
+    ready:
+      http:
+        path: /
+        timeout: 120s
 ```
 
 Next 15.3 and later warn about dev requests from an origin other than the one it listens on and may block them; set `allowedDevOrigins: ["*.localhost"]` in `next.config.js` when that happens. Server-side `fetch` to other lane services trusts the CA through `NODE_EXTRA_CA_CERTS`.
@@ -63,13 +72,19 @@ templates:
   worker:
     platform: node
     preset: wrangler
-    ready: { http: { path: /-/health, timeout: 90s } }
+    ready:
+      http:
+        path: /-/health
+        timeout: 90s
 services:
   api-gateway:
     extends: worker
-    run_script: { file: workers/api-gateway/package.json, name: dev }
+    run_script:
+      file: workers/api-gateway/package.json
+      name: dev
     wrangler:
-      vars: { PUBLIC_BASE_URL: "${{ self.public_url }}" }
+      vars:
+        PUBLIC_BASE_URL: "${{ self.public_url }}"
       args: [--env-file, .dev.vars]
     hosts: "api.${{ lane.domain }}"
 lanes:
@@ -118,10 +133,14 @@ Referencing `self.ports.inspector` allocates the port, and `WRANGLER_REGISTRY_PA
 services:
   desktop-web:
     preset: vite
-    run_script: { file: apps/desktop/package.json, name: dev:web }
+    run_script:
+      file: apps/desktop/package.json
+      name: dev:web
   desktop:
     preset: tauri
-    run_script: { file: apps/desktop/package.json, name: dev }
+    run_script:
+      file: apps/desktop/package.json
+      name: dev
     tauri:
       identifier: com.acme.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}
       dev_url: ${{ services.desktop_web.url }}
@@ -129,14 +148,16 @@ services:
     replicas: 2
     env:
       CDP_PORT: ${{ self.ports.cdp }}
-    ready: { tcp: cdp, timeout: 15m }
+    ready:
+      tcp: cdp
+      timeout: 15m
 ```
 
 The preset writes `${{ lane.data_path }}/tauri/<service>.<replica>.conf.json` (see [lane data folder](ports-and-env.md#lane-data-folder)) and passes `--config`, which Tauri 2 merges over `tauri.conf.json`. Nothing in the repository is edited or created, and two lanes of one folder get separate overlays.
 
 - `identifier` is required and must differ per lane and replica, since it decides where the app stores its data and which running instance a deep link reaches. The example above keeps lane 0 on the production-like id. Two units with the same id are refused at start, across lanes too.
 - `dev_url` points Tauri at a frontend that devlanes already runs. Then set `before_dev_command: ""`, otherwise every replica starts its own frontend on the port from `tauri.conf.json`.
-- `replicas` opens several windows of the same app in one lane; `replica.index` starts at 1. Named ports are per service, so with replicas every instance shares them. Use separate services when each instance needs its own debugger port.
+- `replicas` opens several windows of the same app in one lane; `replica.index` starts at 1. Each replica gets its own named ports, so `${{ self.ports.cdp }}` differs per instance.
 - Wrappers that do not forward arguments can read `DEVLANES_TAURI_CONFIG` instead.
 
 Everything the preset does:
@@ -161,7 +182,9 @@ services:
     run: pnpm -F @acme/docs exec rspress dev --host 127.0.0.1 --port ${{ self.port }}
     hosts: "docs.${{ lane.domain }}"
   storybook:
-    run_script: { file: packages/ui/package.json, name: storybook }   # "storybook": "storybook dev --ci -p $PORT"
+    run_script:
+      file: packages/ui/package.json
+      name: storybook  # "storybook": "storybook dev --ci -p $PORT"
     hosts: "storybook.${{ lane.domain }}"
 ```
 

@@ -107,10 +107,9 @@ pub fn project_schema_with_presets(presets: &[(&str, schemars::Schema)]) -> serd
             }
             rebase_schema_refs(&mut options, &reference);
             defs.insert(key, options);
-            properties.insert(
-                (*name).to_owned(),
-                serde_json::json!({"type":"object","$ref":reference}),
-            );
+            // A plain `$ref`: a constraint beside it makes yaml-language-server wrap the
+            // property in `allOf`, which shows the definition's examples a second time.
+            properties.insert((*name).to_owned(), serde_json::json!({"$ref": reference}));
         }
         // An options key only works with its own preset. The preset may come from a template,
         // so the rule constrains `preset` when present instead of requiring it.

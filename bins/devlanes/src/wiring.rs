@@ -183,22 +183,16 @@ async fn hosts_file(
 
 /// `~/.devlanes/config.yaml`, or defaults when the file is absent. An invalid file stops
 /// the daemon from starting: running with silently defaulted settings (another CA, other
-/// ports) surprises more than an error naming the line to fix.
+/// ports) surprises more than an error naming the line to fix. The error is one
+/// `USER_CONFIG_INVALID:` line, which the spawning CLI turns back into a `config_error`.
 async fn load_user_config(home: &Path) -> anyhow::Result<devlanes_config::UserConfig> {
     let path = home.join("config.yaml");
     tokio::task::spawn_blocking(move || {
         if !path.exists() {
             return Ok(devlanes_config::UserConfig::default());
         }
-        devlanes_config::load_user(&path).map_err(|error| {
-            anyhow::anyhow!(
-                "{} is invalid at line {}, column {}: {}; fix it and run the command again",
-                path.display(),
-                error.location.line,
-                error.location.column,
-                error.message
-            )
-        })
+        devlanes_config::load_user(&path)
+            .map_err(|error| anyhow::anyhow!(crate::user_config::startup_reason(&error)))
     })
     .await?
 }
@@ -2039,13 +2033,18 @@ mod tests {
             first.contains("devlanes daemon reset-state --yes"),
             "{message}"
         );
-        assert!(first.len() < 127, "fits the readiness line");
+        assert!(
+            (first.len() as u64) < devlanes_client::READY_LINE_LIMIT,
+            "fits the readiness line"
+        );
         assert!(message.contains(&db.display().to_string()));
     }
 
     #[tokio::test]
     /// A missing user config means defaults; an invalid one stops the daemon with
-    /// the file and line to fix instead of running on defaults.
+    /// one coded line that the spawning CLI turns into the same `config_error` a
+    /// strict load gives (file, line, column, whole message), instead of running
+    /// on defaults.
     async fn invalid_user_config_refuses_to_start() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let user = load_user_config(tmp.path())
@@ -2065,11 +2064,27 @@ mod tests {
             .await
             .expect_err("invalid config refused")
             .to_string();
-        assert!(message.contains(&path.display().to_string()), "{message}");
-        assert!(message.contains("line 2"), "{message}");
+        assert!(message.starts_with("USER_CONFIG_INVALID: "), "{message}");
+        assert!(!message.contains('\n'), "one readiness line: {message}");
+        // Longer than the old 126-byte cut, still whole within the client's bound.
+        assert!(message.len() > 126, "{message}");
         assert!(
-            !message.contains('\n'),
-            "fits the readiness line: {message}"
+            (message.len() as u64) < devlanes_client::READY_LINE_LIMIT,
+            "{message}"
+        );
+        // What the spawning client turns the line into.
+        let error = devlanes_client::user_config_startup_error(&message).expect("parsed line");
+        let paths = Paths::new(tmp.path()).expect("paths");
+        let strict = crate::user_config::load(&paths)
+            .await
+            .expect_err("strict load refuses it too");
+        assert_eq!(error, strict, "{message}");
+        assert_eq!((error.code.as_str(), error.exit_code), ("config_error", 1));
+        assert_eq!(error.data["file"], path.display().to_string());
+        assert_eq!(error.data["line"], 2);
+        assert!(
+            error.data["column"].as_u64().is_some_and(|c| c > 0),
+            "{error:?}"
         );
     }
 
@@ -2111,7 +2126,9 @@ mod tests {
 
     #[tokio::test]
     /// The offline reset refuses while a daemon holds the lock, then moves the
-    /// legacy database and its sidecars aside (never deleting) so a fresh store opens.
+    /// legacy database and its sidecars aside (never deleting) so a fresh store
+    /// opens, and the project data folders with them, leaving whatever else the
+    /// data folder holds.
     async fn offline_reset_moves_a_legacy_database_aside() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let home = tmp.path().join("home");
@@ -2130,16 +2147,26 @@ mod tests {
         // Written after the failed open, which discards an invalid WAL.
         std::fs::write(home.join("state.db-wal"), b"wal").expect("wal");
         assert_eq!(crate::daemon::state_files(&db).len(), 2);
+        // `lanes.data_dir` may name a folder that also holds other things.
+        let data = tmp.path().join("lanes");
+        for folder in ["acme/1", "acme/3", "photos/beach", "empty"] {
+            std::fs::create_dir_all(data.join(folder)).expect("folder");
+        }
+        std::fs::write(data.join("acme/1/dump.sql"), "rows").expect("lane file");
+        std::fs::write(data.join("notes.txt"), "notes").expect("file");
 
         let daemon = devlanes_daemon::lock_singleton(&home).expect("daemon lock");
-        let refused = crate::daemon::move_state_aside(&home, &db, "20261021T150405Z")
+        let refused = crate::daemon::move_state_aside(&home, &db, &data, "20261021T150405Z")
             .expect_err("a running daemon keeps its state");
         assert_eq!(refused.code, "daemon_running");
         assert!(db.exists(), "nothing moved");
+        assert!(data.join("acme/1").exists(), "nothing moved");
         drop(daemon);
 
-        let moved = crate::daemon::move_state_aside(&home, &db, "20261021T150405Z").expect("moved");
+        let moved =
+            crate::daemon::move_state_aside(&home, &db, &data, "20261021T150405Z").expect("moved");
         let aside = home.join("state.db.legacy-20261021T150405Z");
+        let data_aside = data.join(".legacy-20261021T150405Z");
         assert_eq!(
             moved,
             [
@@ -2148,14 +2175,23 @@ mod tests {
                     home.join("state.db-wal"),
                     home.join("state.db.legacy-20261021T150405Z-wal")
                 ),
+                (data.join("acme"), data_aside.join("acme")),
             ]
         );
         assert_eq!(std::fs::read(&aside).expect("kept"), legacy);
         assert!(crate::daemon::state_files(&db).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(data_aside.join("acme/1/dump.sql")).expect("kept"),
+            "rows"
+        );
+        assert!(data_aside.join("acme/3").is_dir());
+        for kept in ["photos/beach", "empty", "notes.txt"] {
+            assert!(data.join(kept).exists(), "{kept} stays");
+        }
 
         // A second reset in the same second must not overwrite the first.
         std::fs::write(&db, &legacy).expect("db again");
-        let clash = crate::daemon::move_state_aside(&home, &db, "20261021T150405Z")
+        let clash = crate::daemon::move_state_aside(&home, &db, &data, "20261021T150405Z")
             .expect_err("target exists");
         assert!(db.exists() && aside.exists());
         assert!(

@@ -33,7 +33,9 @@ services:
   desktop:
     # Gives each lane and replica its own Tauri identifier and dev URL.
     preset: tauri
-    run_script: { file: apps/desktop/package.json, name: dev }
+    run_script:
+      file: apps/desktop/package.json
+      name: dev
     # Instances of this service per lane.
     replicas: 2
     # Options for the tauri preset.

@@ -37,7 +37,9 @@ devlanes never edits a `run` command, so it cannot be combined with `preset`: `d
 ```yaml
 services:
   api:
-    run_script: { file: apps/api/package.json, name: dev }
+    run_script:
+      file: apps/api/package.json
+      name: dev
 tasks:
   fixtures:
     run_script:
@@ -120,7 +122,8 @@ Console scripts are entry points, so `run_script` fits a `serve = "acme.server:m
 profiles:
   e2e:
     include: [+api, +web]
-    run_scripts: { dev: start }
+    run_scripts:
+      dev: start
 ```
 
 Every service whose `run_script` names `dev` runs `start` from the same file instead. The map is a single lookup (no chaining) and applies to services only; tasks keep their names. With several `--profile` flags, the later profile wins per key. A remapped name that does not exist fails at start with the runner's missing-script error.
@@ -133,7 +136,8 @@ Every service whose `run_script` names `dev` runs `start` from the same file ins
 # devlanes.local.yaml
 services:
   api:
-    run_script: { name: dev:debug }   # keeps the inherited file
+    run_script:  # keeps the inherited file
+      name: dev:debug
 ```
 
 Setting `run` clears an inherited `run_script` and the reverse; for tasks, `steps` clears both.

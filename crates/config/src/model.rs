@@ -33,11 +33,11 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     pub tags: IndexMap<String, crate::TagConfig>,
     /// Named service settings that services reuse with `extends: <template>`. The service
     /// inherits every setting of the template and its own settings win: mappings (`env`,
-    /// `ready`, `stop`, `fnox`, preset options) merge by key, while lists (`tags`, `hosts`) and
-    /// single values replace. Setting `run` or `run_script` drops the inherited other one, and
-    /// setting one `ready` check (`tcp`, `http`, `log`, `cmd`) drops the inherited check.
-    /// Templates may extend other templates, are never started themselves, and are applied
-    /// after `devlanes.local.yaml` is merged.
+    /// `ready`, `stop`, `fnox`, preset options, `run_script`) merge by key, lists (`tags`,
+    /// `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the
+    /// inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the
+    /// inherited probe. Templates may extend other templates, are never started themselves,
+    /// and are applied after `devlanes.local.yaml` is merged.
     #[serde(default)]
     #[schemars(extend("examples" = [{"fastify-api":{"platform":"node","tags":["api"],"ready":{"http":{"path":"/-/health"}}}}]))]
     pub templates: IndexMap<String, ServiceConfig<E>>,
@@ -201,6 +201,7 @@ pub enum Run {
 }
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
+#[schemars(deny_unknown_fields, transform = optional_script_keys)]
 #[schemars(extend("examples" = [{"file":"apps/api/package.json","name":"dev"},{"file":"justfile","name":"fixtures"}]))]
 /// Script from a project file, as a mapping with `file` and `name`. devlanes picks the
 /// tool from the file name: package.json (the project's package manager), Makefile or
@@ -217,6 +218,12 @@ pub struct RunScript {
     /// Script, target, recipe, task or binary name in that file. Required unless an
     /// override or `extends` child keeps the inherited name.
     pub name: String,
+}
+
+/// Match the parser, which lets an override or `extends` child leave out either key;
+/// `RunScript::file_and_name` requires both once merged.
+fn optional_script_keys(schema: &mut schemars::Schema) {
+    schema.remove("required");
 }
 
 impl RunScript {
@@ -271,8 +278,8 @@ pub struct TaskConfig {
     /// script fails before anything starts. Prefer it to `run` for scripts that live in a
     /// file. Use exactly one of `run`, `run_script` or `steps`.
     pub run_script: Option<RunScript>,
-    /// Working directory, relative to the lane's worktree. Without it, `run` starts at the
-    /// worktree root and `run_script` in the script file's directory.
+    /// Working directory for `run`, relative to the lane's worktree; defaults to the worktree
+    /// root. Cannot be combined with `run_script`, which runs in the script file's directory.
     #[schemars(extend("examples" = ["apps/api"]))]
     pub cwd: Option<Templated<String>>,
     /// Variables for this task only, above `global_env`.
@@ -594,15 +601,16 @@ pub enum TcpReady {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"path":"/healthz","status":200,"timeout":"60s"}]))]
-/// HTTP readiness probe against the unit's main port. Passes on a 2xx answer, or on
-/// exactly `status` when it is set.
+/// HTTP readiness probe against the unit's main port. Passes on a 2xx answer when `status`
+/// is unset, or on exactly `status` when it is set. Redirects are not followed.
 pub struct HttpReady {
     /// Path requested with GET, such as `/healthz`; defaults to `/`.
     #[schemars(extend("examples" = ["/healthz","/-/health"]))]
     pub path: Option<Templated<String>>,
     #[schemars(extend("examples" = [200]))]
     /// Status code that counts as ready, between 100 and 599; only that exact code passes.
-    /// When unset, any status from 200 to 299 counts, so a 404 or a redirect keeps waiting.
+    /// When unset, any status from 200 to 299 counts, so a 404 or a redirect keeps waiting
+    /// (redirects are not followed).
     /// Set it to accept another code, such as `302` for a route that redirects to a login.
     pub status: Option<Templated<u16>>,
     /// How long the HTTP check may take to pass, replacing the check's `timeout`; defaults
@@ -782,7 +790,7 @@ pub struct InfraCommandOptions {
     /// Count a failed or timed-out command as done instead of failing the start, for
     /// commands whose "already exists" error is fine. Defaults to false.
     pub ignore_errors: Option<Templated<bool>>,
-    /// Working directory, relative to the lane's worktree.
+    /// Working directory, relative to the lane's worktree; defaults to the worktree root.
     #[schemars(extend("examples" = ["infra"]))]
     pub cwd: Option<Templated<String>>,
     #[serde(default)]

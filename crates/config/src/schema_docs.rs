@@ -141,8 +141,10 @@ fn enumerate_constants(object: &mut Map<String, Value>) {
 }
 
 /// Resolve annotations through references and union wrappers without inventing example values.
+/// The empty placeholders `for_hover` puts on `$ref` branches are skipped, so a second pass
+/// does not copy them onto a field that has no text of its own.
 fn annotation(node: &Value, root: &Value, key: &str, seen: &mut Vec<String>) -> Option<Value> {
-    if let Some(value) = node.get(key) {
+    if let Some(value) = node.get(key).filter(|value| !is_placeholder(value)) {
         return Some(value.clone());
     }
     if let Some(reference) = node.get("$ref").and_then(Value::as_str)
@@ -177,6 +179,15 @@ fn annotation(node: &Value, root: &Value, key: &str, seen: &mut Vec<String>) -> 
         }
     }
     (!examples.is_empty()).then_some(Value::Array(examples))
+}
+
+/// An empty description or examples list, as `for_hover` leaves on `$ref` branches.
+fn is_placeholder(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.is_empty(),
+        Value::Array(values) => values.is_empty(),
+        _ => false,
+    }
 }
 
 /// Visit schema keywords only; examples and defaults contain instance data, not schemas.

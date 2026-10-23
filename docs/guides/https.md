@@ -56,12 +56,15 @@ services:
   api:
     hosts:
       - api.${{ lane.domain }}
-      - { host: "*.${{ lane.domain }}", fallback: true }          # used only when no other route matches
-      - { host: "inspect.${{ lane.domain }}", port: inspector }   # route to a named port
-      - { host: "legacy.${{ lane.domain }}", host_header: upstream } # send 127.0.0.1:<port> as Host
+      - host: "*.${{ lane.domain }}"
+        fallback: true               # used only when no other route matches
+      - host: "inspect.${{ lane.domain }}"
+        port: inspector              # route to a named port
+      - host: "legacy.${{ lane.domain }}"
+        host_header: upstream        # send 127.0.0.1:<port> as Host
 infra:
   hosts:
-    minio: "s3.${{ lane.domain }}"                                # a container's published port
+    minio: "s3.${{ lane.domain }}"   # a container's published port
 ```
 
 `lane.domain` is `acme.localhost` in lane 0 and `acme-<N>.localhost` elsewhere; keep every hostname under it or under a `lanes.vars` value built the same way, so lanes never share a name. That value must also end in `.localhost`, or in your `hostnames.tld` with the resolver strategy; anything else does not resolve to your machine. Matching is exact first, then wildcards (longest first), then fallbacks. A wildcard covers any depth below its parent but not the parent itself; list the apex too when you need it. A name claimed by two lanes goes to the one with running units and both get a `host_conflict` warning.
@@ -82,14 +85,16 @@ installs a small root-owned helper (`/usr/local/libexec/devlanes-hosts`) with a 
 
 ```yaml
 # ~/.devlanes/config.yaml
-hostnames: { resolver: resolver, tld: test }
+hostnames:
+  resolver: resolver
+  tld: test
 ```
 
 ```sh
 devlanes certs trust --resolver
 ```
 
-switches lane domains to `acme.test` and `acme-2.test`, answered by a DNS server the daemon runs on `127.0.0.1:15353`. `--resolver` writes `/etc/resolver/test` on macOS, or a systemd-resolved delegate on Linux (systemd 258 or newer; older versions could only add the server globally, so `--resolver` refuses them). The OS sends only that TLD there, and every other lookup keeps your existing DNS (VPN, corporate DNS, Pi-hole). The server answers every name under the TLD, so wildcard hostnames resolve for every program that uses the system resolver; on macOS `dig` and `nslookup` bypass it. The TLD must be `test`, `internal`, `home.arpa` or a name under one of them. The CA is constrained to the TLD it was created with; switching later needs the recreate command `doctor` prints. `.dev` is a real TLD with HSTS preloaded and `.local` is mDNS; neither is accepted.
+switches lane domains to `acme.test` and `acme-2.test`, answered by a DNS server the daemon runs on `127.0.0.1:15353`. `--resolver` writes `/etc/resolver/test` on macOS, or a systemd-resolved delegate on Linux (systemd 258 or newer; older versions could only add the server globally, so `--resolver` refuses them). The OS sends only that TLD there, and every other lookup keeps your existing DNS (VPN, corporate DNS, Pi-hole). The server answers every name under the TLD, so wildcard hostnames resolve for every program that uses the system resolver; on macOS `dig` and `nslookup` bypass it. The TLD must be `test`, `internal`, `home.arpa` or a name under one of them (or a name under `localhost`). The CA is constrained to the TLD it was created with; switching later needs the recreate command `doctor` prints. `.dev` is a real TLD with HSTS preloaded and `.local` is mDNS; neither is accepted.
 
 ## Ports 443 and 80
 

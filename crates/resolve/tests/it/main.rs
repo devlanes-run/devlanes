@@ -17,7 +17,7 @@ use devlanes_core::{
 };
 use devlanes_resolve::{
     ReadySpec, ResolveError, ResolveInput, detect_platform, lane_layout, port_needs,
-    profile_summaries, resolve_lane, select, select_profiles,
+    profile_summaries, resolve_lane, retain_autostart, select, select_profiles,
 };
 use serde_json::json;
 use support::*;
@@ -265,23 +265,35 @@ async fn autostart_expressions_follow_the_lane() {
             let mut selection = select(&config, None, &[]).expect("default");
             assert_eq!(selection.services, ["api", "worker"]);
             assert_eq!(selection.autostart_pending, ["worker"]);
-            selection.apply_autostart(&lane);
+            retain_autostart(
+                &mut selection.services,
+                &selection.autostart_pending,
+                |name| lane.autostart(name),
+            );
             assert_eq!(selection.services, expected, "lane {index}");
-            assert!(selection.autostart_pending.is_empty());
         }
     }
     let config = parse(&profiled);
     let lane = plain(&profiled, 1).await;
     let mut named = select(&config, Some("named"), &[]).expect("named");
     assert!(named.autostart_pending.is_empty());
-    named.apply_autostart(&lane);
+    retain_autostart(&mut named.services, &named.autostart_pending, |name| {
+        lane.autostart(name)
+    });
     assert_eq!(named.services, ["worker"]);
     for selector in ["worker", "w*", "t*"] {
         let mut chosen = select(&config, None, &[selector.to_owned()]).expect("selector");
         assert!(chosen.autostart_pending.is_empty(), "{selector}");
-        chosen.apply_autostart(&lane);
+        retain_autostart(&mut chosen.services, &chosen.autostart_pending, |name| {
+            lane.autostart(name)
+        });
         assert_eq!(chosen.services.len(), 1, "{selector}");
     }
+    // A pending service that did not plan has no answer and stays, so the start
+    // reports its failure.
+    let mut services = vec!["api".to_owned(), "worker".to_owned()];
+    retain_autostart(&mut services, &["worker".to_owned()], |_| None);
+    assert_eq!(services, ["api", "worker"]);
 }
 
 /// Config with overlapping profiles for the multi-profile tests.

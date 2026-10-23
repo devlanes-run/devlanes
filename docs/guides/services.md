@@ -7,27 +7,37 @@ Configurations for the shapes most repositories have. Each one assumes the basic
 ```yaml
 services:
   api:
-    run_script: { file: apps/api/package.json, name: dev }
+    run_script:
+      file: apps/api/package.json
+      name: dev
     hosts: "api.${{ lane.domain }}"
-    ready: { http: { path: /healthz } }
+    ready:
+      http:
+        path: /healthz
     env:
       COOKIE_DOMAIN: ${{ lane.domain }}      # the app reads DEVLANES_ORIGINS for its CORS allow-list
   web:
     preset: vite
-    run_script: { file: apps/web/package.json, name: dev }
+    run_script:
+      file: apps/web/package.json
+      name: dev
     hosts: "${{ lane.domain }}"
-    env: { VITE_API_URL: "${{ services.api.public_url }}" }
+    env:
+      VITE_API_URL: "${{ services.api.public_url }}"
 ```
 
 The browser talks to `https://acme-2.localhost` and `https://api.acme-2.localhost`; both share the site `acme-2.localhost`, so a cookie with `Domain=acme-2.localhost` and `SameSite=Lax` works across them and never leaks into lane 3. `DEVLANES_ORIGINS` is in every service's environment and lists the https origins of the lane, so the API's CORS allow-list can be `process.env.DEVLANES_ORIGINS.split(',')` instead of a hardcoded list. It is not reachable as `${{ env.DEVLANES_ORIGINS }}`, since `env.*` reads your shell, not devlanes' own variables.
 
 For server-to-server calls prefer `${{ services.api.url }}` (`http://127.0.0.1:<port>`, no TLS, no proxy hop). Use `public_url` when the value ends up in a browser, an OAuth redirect or a webhook.
 
+The `http` check on `api` passes on any 2xx answer; with `status` set, only that code passes. Redirects are not followed, so a route that redirects to a login needs `status: 302`.
+
 A frontend that proxies `/api` to the backend itself (Vite `server.proxy`, Next rewrites) points at `${{ services.api.url }}` and needs no CORS at all:
 
 ```yaml
   web:
-    env: { API_PROXY_TARGET: "${{ services.api.url }}" }
+    env:
+      API_PROXY_TARGET: "${{ services.api.url }}"
 ```
 
 ## Workers and consumers
@@ -35,10 +45,15 @@ A frontend that proxies `/api` to the backend itself (Vite `server.proxy`, Next 
 ```yaml
 services:
   queue-worker:
-    run_script: { file: apps/worker/package.json, name: dev }
-    ready: { log: "consumer connected" }
+    run_script:
+      file: apps/worker/package.json
+      name: dev
+    ready:
+      log: "consumer connected"
     pty: false
-    stop: { signal: SIGINT, timeout: 30s }
+    stop:
+      signal: SIGINT
+      timeout: 30s
     tags: [worker]
 ```
 
@@ -59,7 +74,8 @@ services:
   grpc-api:
     run: cargo run --bin grpc-api          # listens on PORT
   web-bff:
-    env: { GRPC_TARGET: "127.0.0.1:${{ services.grpc_api.port }}" }
+    env:
+      GRPC_TARGET: "127.0.0.1:${{ services.grpc_api.port }}"
 ```
 
 The same goes for databases, debuggers and anything that is not HTTP. On a connected box these ports are mirrored under the same number ([remote boxes](../remote.md#mirroring)).
@@ -75,7 +91,8 @@ services:
       INSPECT: 127.0.0.1:${{ self.ports.inspect }}
     hosts:
       - rt.${{ lane.domain }}
-      - { host: "ws.${{ lane.domain }}", port: ws }
+      - host: "ws.${{ lane.domain }}"
+        port: ws
 ```
 
 `hosts` takes one hostname or route mapping, or a list of them: `hosts: "api.${{ lane.domain }}"` is the same as a one-item list. Each `self.ports.<name>` allocates one more port, stable per lane. Route hostnames to them with `hosts[].port`. The admin UI and the public API of one process can live on two hostnames this way, and `devlanes url ls` lists all of them.
@@ -85,13 +102,16 @@ services:
 ```yaml
 services:
   tenants:
-    run_script: { file: apps/tenants/package.json, name: dev }
+    run_script:
+      file: apps/tenants/package.json
+      name: dev
     hosts:
       - app.${{ lane.domain }}
       - "*.${{ lane.domain }}"
   gateway:
     hosts:
-      - { host: "*.${{ lane.domain }}", fallback: true }   # only when nothing else matched
+      - host: "*.${{ lane.domain }}"
+        fallback: true  # only when nothing else matched
 ```
 
 Exact hostnames win over wildcards; a `fallback` wildcard loses to every other route. `*.acme-2.localhost` covers `foo.acme-2.localhost` and `a.b.acme-2.localhost`, not `acme-2.localhost` itself. For a second-level product domain use a lane var: `pages_domain: ${{ 'pages' if lane.index == 0 else 'pages-' ~ lane.index }}.localhost` and `"*.${{ lane.pages_domain }}"`. The var must end in `.localhost`, or in your `hostnames.tld` with the resolver strategy.
@@ -105,7 +125,8 @@ services:
   worker:
     run: node worker.mjs
     replicas: 3
-    env: { WORKER_ID: "${{ replica.index }}" }
+    env:
+      WORKER_ID: "${{ replica.index }}"
 ```
 
 Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `services.worker.url` is replica 1. Named ports are allocated per replica too.
@@ -115,7 +136,9 @@ Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `
 ```yaml
 services:
   storybook:
-    run_script: { file: packages/ui/package.json, name: storybook }
+    run_script:
+      file: packages/ui/package.json
+      name: storybook
     hosts: "storybook.${{ lane.domain }}"
     autostart: false
   stripe-listen:
@@ -123,7 +146,7 @@ services:
     autostart: false
 ```
 
-`devlanes start storybook` or the TUI starts them; globs in profiles skip them, names and tags include them. The proxy answers their hostnames with a page that names the start command while they are idle.
+`devlanes start storybook` or the TUI starts them; globs in profiles skip them, names and tags include them. The proxy answers their hostnames with a page that names the start command while they are idle. `autostart` also takes an expression, such as `${{ lane.index == 0 }}`, evaluated per lane.
 
 ## One lane's frontend against another lane's backend
 
@@ -143,15 +166,39 @@ profiles:
 
 ```yaml
 tasks:
-  install:  { run: [pnpm, install, --frozen-lockfile], when: lane.create, timeout: 10m }
-  codegen:  { run_script: { file: package.json, name: codegen }, when: lane.create }
-  migrate:  { run_script: { file: apps/api/package.json, name: db:migrate }, when: lane.start }
-  build-libs: { run_script: { file: package.json, name: build:libs }, when: lane.start, profiles: [default, e2e] }
-  seed:     { run_script: { file: tools/seed/package.json, name: start }, when: lane.create, after: services, timeout: 15m }
+  install:
+    run: [pnpm, install, --frozen-lockfile]
+    when: lane.create
+    timeout: 10m
+  codegen:
+    run_script:
+      file: package.json
+      name: codegen
+    when: lane.create
+  migrate:
+    run_script:
+      file: apps/api/package.json
+      name: db:migrate
+    when: lane.start
+  build-libs:
+    run_script:
+      file: package.json
+      name: build:libs
+    when: lane.start
+    profiles: [default, e2e]
+  seed:
+    run_script:
+      file: tools/seed/package.json
+      name: start
+    when: lane.create
+    after: services
+    timeout: 15m
   reset-db:
     steps: [infra.teardown.database, infra.setup.database, migrate, seed]
     confirm: Drops ${{ lane.db_name }} and re-seeds it
-  prisma-login: { run: pnpm prisma login, interactive: true }
+  prisma-login:
+    run: pnpm prisma login
+    interactive: true
 ```
 
 Start order: infra, setup, `lane.create` tasks (until they succeed once per lane), `lane.start` tasks (every start, in file order), services together, `after: services` tasks. A failed task before services fails the start and prints its log tail. `devlanes run reset-db` runs a task by hand; `devlanes run --list` shows them. Tasks with `confirm` need `--yes` without a terminal, and `interactive` tasks get your terminal and never run from a hook.
@@ -162,20 +209,42 @@ New worktrees have no `node_modules`, so `install` with `when: lane.create` is w
 
 ```yaml
 tags:
-  api: { color: cyan }
+  api:
+    color: cyan
 templates:
   fastify-api:
     platform: node
     tags: [api]
-    ready: { http: { path: /-/health } }
+    ready:
+      http:
+        path: /-/health
 services:
-  catalog:  { extends: fastify-api, run_script: { file: apps/catalog/package.json, name: dev }, hosts: "catalog.${{ lane.domain }}", tags: [api, essential] }
-  crm:      { extends: fastify-api, run_script: { file: apps/crm/package.json, name: dev }, hosts: "crm.${{ lane.domain }}", tags: [api, essential] }
+  catalog:
+    extends: fastify-api
+    run_script:
+      file: apps/catalog/package.json
+      name: dev
+    hosts: "catalog.${{ lane.domain }}"
+    tags: [api, essential]
+  crm:
+    extends: fastify-api
+    run_script:
+      file: apps/crm/package.json
+      name: dev
+    hosts: "crm.${{ lane.domain }}"
+    tags: [api, essential]
 profiles:
   default: [+essential]
   backend: [+api, +worker]
-  everything: { include: ["*"], exclude: [+desktop] }
-  e2e: { include: [+api, +web], run_scripts: { dev: start }, env: { NODE_ENV: production } }
+  everything:
+    include: ["*"]
+    exclude: [+desktop]
+  e2e:
+    include: [+api, +web]
+    run_scripts:
+      dev: start
+    env:
+      NODE_ENV: production
 ```
 
 A unit's colour comes from its first tag with a `color` under `tags`, else its first category tag (`api`, `web`, `worker`, `db`), so put the category tag first and selection tags after. Profiles select by name, glob or `+tag`; with a `default` profile, a plain `devlanes start` starts exactly that selection. `--profile` repeats and the union is started.
@@ -201,7 +270,9 @@ devlanes with --profile e2e --logs-dir devlanes-logs -- pnpm test:e2e
 - run: devlanes with --profile e2e --logs-dir devlanes-logs -- pnpm test:e2e
 - if: failure()
   uses: actions/upload-artifact@v4
-  with: { name: devlanes-logs, path: devlanes-logs }
+  with:
+    name: devlanes-logs
+    path: devlanes-logs
 ```
 
 A CI checkout is lane 0 with no worktrees. On Linux runners, add `chrome` to `tls.trust` so Playwright's browsers trust the CA, and expect the proxy on 8443 unless the runner may bind 443.

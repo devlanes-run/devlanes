@@ -166,7 +166,12 @@ fn alternative_forms_keep_struct_errors() {
         (
             "project: demo\nservices:\n  api:\n    run_script: { source: package.json, name: dev }\n",
             "source",
-            "unknown field `source`, expected one of file, name",
+            "unknown key `source`; `source` is now `file`",
+        ),
+        (
+            "project: demo\ntasks:\n  migrate:\n    run_script:\n      source: package.json\n      name: migrate\n",
+            "source",
+            "unknown key `source`; `source` is now `file`",
         ),
         (
             "project: demo\nservices:\n  api:\n    run_script: apps/api/package.json#dev\n",

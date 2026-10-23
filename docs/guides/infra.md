@@ -15,7 +15,8 @@ infra:
   exclude: [caddy]                      # never started; the devlanes proxy replaces local reverse proxies
   per_lane: [mailpit]                   # one copy per lane
   profiles: [development]               # Compose profiles to enable
-  env: { ACME_DB_PORT: 15432 }          # Compose interpolation only
+  env:                                  # Compose interpolation only
+    ACME_DB_PORT: 15432
   hidden: [postgres]                    # not mirrored to machines connected with remote connect
 ```
 
@@ -59,10 +60,16 @@ infra:
       image: ghcr.io/cerbos/cerbos:0.40.0
       command: [server, --config=/policies/config.yaml]
       volumes: ["./infra/cerbos:/policies:ro"]     # relative to the worktree
-      ports: { http: 3592, grpc: 3593 }            # container ports by name; host side allocated
+      ports:                                       # container ports by name; host side allocated
+        http: 3592
+        grpc: 3593
       per_lane: true
-      ready: { http: { path: /_cerbos/health, timeout: 45s } }
-      env: { CERBOS_LOG_LEVEL: debug }
+      ready:
+        http:
+          path: /_cerbos/health
+          timeout: 45s
+      env:
+        CERBOS_LOG_LEVEL: debug
 ```
 
 Containers are named `devlanes-<project>-<name>` or `devlanes-<project>-lane<N>-<name>`, bound to `127.0.0.1`, and read as `${{ infra.cerbos.ports.http }}` (`infra.cerbos.port` is the first port). A bare volume name becomes a named volume per project or lane; `/abs` and `./rel` are bind mounts. For a per-lane bind mount that lanes of one folder do not share, use `"${{ lane.data_path }}/<name>:/data"`; devlanes creates the lane data folder before containers start. A running container whose image, command, env, mounts and ports are unchanged is adopted; a changed one is recreated. Readiness is the image's healthcheck, else TCP on the first port, then `ready` if set. Plain containers join Docker's default network, not a Compose network, so address them by host port, not container name.
@@ -110,17 +117,23 @@ Each recipe shows the Compose service, the devlanes side, and how a process gets
 services:
   postgres:
     image: postgres:16
-    environment: { POSTGRES_PASSWORD: postgres }
+    environment:
+      POSTGRES_PASSWORD: postgres
     ports: ["127.0.0.1::5432"]
     volumes: [pgdata:/var/lib/postgresql/data]
-    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 2s, retries: 30 }
-volumes: { pgdata: }
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      retries: 30
+volumes:
+  pgdata:
 ```
 
 ```yaml
 # devlanes.yaml
 lanes:
-  vars: { db_name: "acme_${{ lane.name }}" }
+  vars:
+    db_name: "acme_${{ lane.name }}"
 infra:
   compose: docker-compose.yml
   setup:
@@ -130,7 +143,11 @@ infra:
 global_env:
   DATABASE_URL: postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/${{ lane.db_name }}
 tasks:
-  migrate: { run_script: { file: package.json, name: db:migrate }, when: lane.start }
+  migrate:
+    run_script:
+      file: package.json
+      name: db:migrate
+    when: lane.start
 ```
 
 Extensions or roles the app expects go into the same `setup` entry (`psql -c "CREATE EXTENSION ..."`) or into the migration.
@@ -158,10 +175,14 @@ Each lane's Postgres gets a port from the lane's block and its own `pgdata` volu
 services:
   mysql:
     image: mysql:8
-    environment: { MYSQL_ROOT_PASSWORD: root }
+    environment:
+      MYSQL_ROOT_PASSWORD: root
     ports: ["127.0.0.1::3306"]
     volumes: [mysqldata:/var/lib/mysql]
-    healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"], interval: 2s, retries: 30 }
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-proot"]
+      interval: 2s
+      retries: 30
 ```
 
 ```yaml
@@ -178,7 +199,8 @@ global_env:
 
 ```yaml
 lanes:
-  vars: { redis_db: "${{ lane.index }}" }
+  vars:
+    redis_db: "${{ lane.index }}"
 infra:
   compose: docker-compose.yml
   teardown:
@@ -193,7 +215,8 @@ Redis has 16 databases by default; raise `databases` in its config for more lane
 
 ```yaml
 lanes:
-  vars: { vhost: "${{ 'acme' if lane.index == 0 else 'acme_' ~ lane.name }}" }
+  vars:
+    vhost: "${{ 'acme' if lane.index == 0 else 'acme_' ~ lane.name }}"
 infra:
   setup:
     vhost:
@@ -202,7 +225,9 @@ infra:
         docker compose exec -T rabbitmq rabbitmqctl set_permissions -p ${{ lane.vhost }} acme '.*' '.*' '.*'
       container: rabbitmq
   teardown:
-    vhost: { run: "docker compose exec -T rabbitmq rabbitmqctl delete_vhost ${{ lane.vhost }}", ignore_errors: true }
+    vhost:
+      run: "docker compose exec -T rabbitmq rabbitmqctl delete_vhost ${{ lane.vhost }}"
+      ignore_errors: true
 global_env:
   AMQP_URL: amqp://acme:acme@127.0.0.1:${{ infra.rabbitmq.port }}/${{ lane.vhost }}
 ```
@@ -213,7 +238,8 @@ global_env:
 
 ```yaml
 lanes:
-  vars: { bucket: "media-${{ lane.name }}" }
+  vars:
+    bucket: "media-${{ lane.name }}"
 infra:
   hosts:
     minio: "s3.${{ lane.domain }}"                # presigned URLs the browser can open
@@ -262,9 +288,11 @@ infra:
   containers:
     oidc:
       image: ghcr.io/navikt/mock-oauth2-server:2.1.10
-      ports: { http: 8080 }
+      ports:
+        http: 8080
       per_lane: true
-      env: { JSON_CONFIG_PATH: /config.json }
+      env:
+        JSON_CONFIG_PATH: /config.json
       volumes: ["./infra/oidc.json:/config.json:ro"]
   hosts:
     oidc: "auth.${{ lane.domain }}"

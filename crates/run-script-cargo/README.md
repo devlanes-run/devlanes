@@ -32,7 +32,9 @@ The composition root registers `Arc::new(CargoBins)` as a script runner. `plan` 
 services:
   api:
     # Runs the server binary with cargo run.
-    run_script: { file: Cargo.toml, name: server }
+    run_script:
+      file: Cargo.toml
+      name: server
 ```
 
 At a virtual workspace root this runs `cargo run -p <member> --bin server` for the member that builds `server`; at a member's own `Cargo.toml` it runs `cargo run --bin server` in that directory.

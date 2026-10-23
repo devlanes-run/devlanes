@@ -31,7 +31,9 @@ The composition root registers `Arc::new(MakeTargets)` as a script runner. `plan
 tasks:
   certs:
     # Runs the certs target of infra/Makefile with make.
-    run_script: { file: infra/Makefile, name: certs }
+    run_script:
+      file: infra/Makefile
+      name: certs
 ```
 
 `devlanes run certs` then runs `make certs` in `infra/`. Services with a preset cannot use a Makefile target, because make cannot pass the preset's flags.

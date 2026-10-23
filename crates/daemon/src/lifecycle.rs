@@ -556,8 +556,8 @@ impl LanePhase for ResolvePhase {
                 cx.infra_enabled &= resolved.infra_enabled;
                 // A failed plan keeps its service, so the services phase reports it.
                 let pending = std::mem::take(&mut cx.autostart_pending);
-                cx.services.retain(|name| {
-                    !pending.contains(name) || resolved.autostart(name) != Some(false)
+                devlanes_resolve::retain_autostart(&mut cx.services, &pending, |name| {
+                    resolved.autostart(name)
                 });
                 // From here a stop can name the tasks and setup entries this start
                 // may run, also between their spawn and their record on the lane.
@@ -3037,25 +3037,21 @@ impl Inner {
     pub(crate) fn profile_services(lane: &LaneRt) -> Option<(Vec<String>, BTreeSet<String>)> {
         let st = lane.st();
         let config = st.config.loaded()?;
-        let selection = devlanes_resolve::select_profiles(config, &st.profiles, &[]).ok()?;
-        let autostart_off = |name: &String| {
-            selection.autostart_pending.contains(name)
-                && st.view.as_ref().is_some_and(|view| {
+        let mut selection = devlanes_resolve::select_profiles(config, &st.profiles, &[]).ok()?;
+        devlanes_resolve::retain_autostart(
+            &mut selection.services,
+            &selection.autostart_pending,
+            |name| {
+                st.view.as_ref().and_then(|view| {
                     view.services
                         .iter()
-                        .filter(|s| &s.name == name)
+                        .filter(|s| s.name == name)
                         .map(|s| s.autostart)
                         .reduce(|any, next| any || next)
-                        == Some(false)
                 })
-        };
-        let services = selection
-            .services
-            .iter()
-            .filter(|name| !autostart_off(name))
-            .cloned()
-            .collect();
-        Some((selection.profiles, services))
+            },
+        );
+        Some((selection.profiles, selection.services.into_iter().collect()))
     }
 
     /// Runs the `ready` checks of the lane's plain containers concurrently; the

@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{num::NonZeroU32, path::Path, time::Duration};
 
 /// Finished unit/task history lifetime, duplicated from the state crate to avoid a dependency.
-/// The binary's retention-default test keeps these independent definitions aligned.
+/// The binary's `config_and_state_retention_defaults_match` test keeps these independent
+/// definitions aligned.
 pub const DEFAULT_RUN_HISTORY_RETENTION: Duration = Duration::from_secs(7 * 86_400);
 /// Monitor history lifetime, duplicated from the state crate and checked by the binary test.
 pub const DEFAULT_METRICS_RETENTION: Duration = Duration::from_secs(7 * 86_400);
@@ -16,7 +17,8 @@ pub const DEFAULT_MAX_SIZE_BYTES: u64 = 512 * 1024 * 1024;
 /// Settings for this machine, shared by every project, read from `config.yaml` in the
 /// devlanes home (`~/.devlanes`, or `$DEVLANES_HOME`). The daemon reads the file when it
 /// starts, so most changes need `devlanes daemon restart`; `tui` and `terminal` apply to
-/// the next command.
+/// the next command. An unknown key or invalid value stops the daemon from starting, with
+/// the file and line to fix; `devlanes doctor` checks the file without restarting.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"hostnames":{"resolver":"localhost"},"ports":{"range":"20000-32767"},"terminal":{"progress":"auto"}}]))]
@@ -201,8 +203,9 @@ impl TuiGlyphs {
 pub struct UserLanesConfig {
     /// Folder that holds every lane's data folder, one subfolder per project; defaults to
     /// `data` in the devlanes home (`~/.devlanes/data`). Must be an absolute path or start
-    /// with `~/`. The daemon reads it when it starts; lanes keep their folders where they
-    /// were made, so move existing ones by hand after changing it.
+    /// with `~/`. The daemon reads it when it starts. After a change and a daemon restart,
+    /// lanes use new, empty folders under the new root; move the old folders there by hand
+    /// to keep their data.
     #[schemars(extend("examples" = ["~/.devlanes/data","/Volumes/fast/devlanes"]))]
     pub data_dir: Option<String>,
 }
