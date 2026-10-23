@@ -20,7 +20,7 @@ Release archives, checksums, the SSH bootstrap manifest, the Homebrew formula an
 | npm | `npm install -g devlanes` |
 | cargo binstall | `cargo binstall --git https://github.com/devlanes-run/devlanes devlanes` |
 | Script | `curl -fsSL https://devlanes.run/install.sh \| sh` |
-| Script (Windows, PowerShell) | `irm https://github.com/devlanes-run/devlanes/releases/latest/download/install.ps1 \| iex` |
+| Script (Windows, PowerShell) | `irm https://devlanes.run/install.ps1 \| iex` |
 | Source | `cargo install --locked --git https://github.com/devlanes-run/devlanes devlanes devlanes-hosts-helper` (Windows: `devlanes` only) |
 
 Every channel except the source build installs the release archives. Homebrew has no Windows build.
@@ -40,7 +40,7 @@ The workflow then runs these jobs:
 | `npm-preflight` | Fails when the `devlanes` package or one of its `optionalDependencies` does not exist on the npm registry, before any draft release exists |
 | `release` | Writes `SHA256SUMS`, `release-manifest.json` and the formula, copies `schema.json`, `user-schema.json`, `install.sh` and `install.ps1`, attests the archives' build provenance, and uploads everything to a draft release. A rerun refills the draft and refuses to touch a published release |
 | `publish` | Publishes the draft |
-| `website` | Stable versions only. Triggers a rebuild of `devlanes-run/website`, which copies `install.sh`, `schema.json` and `user-schema.json` from the latest stable release to `https://devlanes.run/install.sh`, `https://devlanes.run/v1/schema.json` and `https://devlanes.run/v1/user-schema.json` |
+| `website` | Stable versions only. Triggers a rebuild of `devlanes-run/website`, which copies `install.sh`, `install.ps1`, `schema.json` and `user-schema.json` from the latest stable release to `https://devlanes.run/install.sh`, `https://devlanes.run/install.ps1`, `https://devlanes.run/v1/schema.json` and `https://devlanes.run/v1/user-schema.json` |
 | `homebrew-verify` | Stable versions only. Installs the rendered formula on macOS from the published release, then runs `brew audit` and `brew test` |
 | `homebrew-publish` | Commits `Formula/devlanes.rb` to `devlanes-run/homebrew-tap`. It keeps the tap's formula when that one belongs to a newer version |
 | `npm` | Builds the npm packages from the archives and publishes the platform packages, then `devlanes`. Stable versions go to the `latest` dist-tag, prereleases to `next`. Versions already on the registry are skipped |
@@ -128,7 +128,7 @@ cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.1
 `install.ps1` is the Windows counterpart, for Windows PowerShell 5.1 and PowerShell 7:
 
 ```powershell
-irm https://github.com/devlanes-run/devlanes/releases/latest/download/install.ps1 | iex
+irm https://devlanes.run/install.ps1 | iex
 ```
 
 It reads the same `DEVLANES_VERSION`, `DEVLANES_INSTALL_DIR` and `DEVLANES_INSTALL_BASE_URL` variables (set with `$env:NAME = 'value'` before the command, since `irm | iex` passes no arguments); `DEVLANES_INSTALL_SUDO` has no Windows meaning. It refuses Windows builds below 26100 (`CurrentBuildNumber` in the registry), picks the target from the machine's architecture (the registry's machine `PROCESSOR_ARCHITECTURE`, so x64 PowerShell emulated on an arm64 machine still gets the arm64 build), checks the zip against `SHA256SUMS` and its exact entries, and installs `devlanes.exe` to `DEVLANES_INSTALL_DIR` (default `%LOCALAPPDATA%\Programs\devlanes`). The new file is extracted next to the old one first; a `devlanes.exe` that is running (usually the daemon) is renamed to `devlanes.exe.old-TIMESTAMP` and keeps running, since Windows allows renaming but not replacing a running executable. The script never stops the daemon; `devlanes daemon restart` switches to the new version, and `devlanes doctor` (or the next install) deletes old copies that nothing runs any more. Unlike `install.sh` it puts the directory first in the user `PATH`, keeping the value's registry type (`REG_EXPAND_SZ` entries such as `%USERPROFILE%\bin` keep working), and notifies running programs with `WM_SETTINGCHANGE`; the current session's `PATH` gains it too. The body runs in its own script block, so `irm | iex` leaves no variables or functions in the caller's session, and failures throw instead of calling `exit`, which would close the window. Only HTTPS is accepted, plus `file://` when `DEVLANES_INSTALL_BASE_URL` is set. Every release attaches the script, and `releases/latest/download/install.ps1` serves the latest stable release's copy.

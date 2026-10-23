@@ -223,9 +223,9 @@ mod os {
 
     use super::InstallMethod;
 
-    /// `install.ps1` of the latest stable release; every release attaches it.
-    const INSTALL_SCRIPT: &str =
-        "https://github.com/devlanes-run/devlanes/releases/latest/download/install.ps1";
+    /// `install.ps1` of the latest stable release, served by the website like
+    /// `install.sh`.
+    const INSTALL_SCRIPT: &str = "https://devlanes.run/install.ps1";
     /// The install script's name in doctor.
     pub(super) const SCRIPT: &str = "install.ps1";
     /// The packages `cargo install` builds; `devlanes-hosts-helper` is Unix-only.
@@ -636,7 +636,7 @@ mod tests {
         assert_eq!(
             InstallMethod::Script(PathBuf::from(r"C:\Users\o'neil\Programs\devlanes"))
                 .upgrade_command("0.4.0"),
-            "in PowerShell: $env:DEVLANES_INSTALL_DIR='C:\\Users\\o''neil\\Programs\\devlanes'; irm https://github.com/devlanes-run/devlanes/releases/latest/download/install.ps1 | iex"
+            "in PowerShell: $env:DEVLANES_INSTALL_DIR='C:\\Users\\o''neil\\Programs\\devlanes'; irm https://devlanes.run/install.ps1 | iex"
         );
     }
 

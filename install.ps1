@@ -1,7 +1,7 @@
 # Installs devlanes for Windows from a GitHub release after checking the archive
 # against the release's SHA256SUMS.
 #
-#   irm https://github.com/devlanes-run/devlanes/releases/latest/download/install.ps1 | iex
+#   irm https://devlanes.run/install.ps1 | iex
 #
 # `irm | iex` passes no arguments, so the settings are environment variables, set
 # before that command, with the same names install.sh reads:

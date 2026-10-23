@@ -1269,8 +1269,7 @@ mod tests {
                 idle_after: Some(Duration::from_millis(20)),
             });
             let running = tokio::spawn(server.run(handler.clone(), || Ok(())));
-            let mut connection =
-                Connection::new(UnixStream::connect(&socket).await.expect("connect"));
+            let mut connection = Connection::new(connect(&socket).await);
             connection
                 .send(Frame::Control(Control::Hello(Hello::current(0))))
                 .await

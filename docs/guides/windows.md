@@ -12,7 +12,7 @@ devlanes runs natively on Windows 11 24H2 (build 26100) or later, on x64 and arm
 In PowerShell:
 
 ```powershell
-irm https://github.com/devlanes-run/devlanes/releases/latest/download/install.ps1 | iex
+irm https://devlanes.run/install.ps1 | iex
 ```
 
 The script checks the archive against the release's `SHA256SUMS`, installs `devlanes.exe` to `%LOCALAPPDATA%\Programs\devlanes` and puts that directory first in your user `PATH`; terminals opened afterwards find `devlanes`. `irm | iex` takes no arguments, so settings are environment variables set before the command: `$env:DEVLANES_VERSION = 'X.Y.Z'` pins a release and `$env:DEVLANES_INSTALL_DIR = 'D:\tools\devlanes'` picks another directory. The script works in Windows PowerShell 5.1 and PowerShell 7.
