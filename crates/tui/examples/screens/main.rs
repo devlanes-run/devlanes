@@ -175,7 +175,7 @@ impl Fake {
                 lines: data::daemon_log(),
                 position: LogPosition {
                     offset: 4_096,
-                    file: (1, 1),
+                    ..LogPosition::default()
                 },
                 reset: true,
             }))],

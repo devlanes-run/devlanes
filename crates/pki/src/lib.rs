@@ -43,12 +43,70 @@ pub enum Error {
     Tls(#[from] rustls::Error),
     #[error("CA directory contains an incomplete certificate/key pair")]
     IncompleteCa,
+    #[cfg(unix)]
     #[error("CA key or directory must be a regular non-symlink path with private permissions")]
     InsecurePath,
+    /// A CA directory or key file that others could read or swap; `fix` is a
+    /// command that makes it private, when one is known. Access lists are hard
+    /// to read by hand, so Windows names the path, the problem and the fix.
+    #[cfg(windows)]
+    #[error("CA path {} is not private: {problem}{}", .path.display(), fix_suffix(.fix))]
+    InsecurePath {
+        path: std::path::PathBuf,
+        problem: PathProblem,
+        fix: Option<String>,
+    },
     #[error("CA certificate is invalid, expired, or lacks signing authority")]
     InvalidCa,
     #[error("certificate SAN list must contain valid DNS names")]
     InvalidNames,
+}
+
+/// `; fix: <command>` for [`Error::InsecurePath`]'s message, or nothing.
+#[cfg(windows)]
+fn fix_suffix(fix: &Option<String>) -> String {
+    fix.as_ref()
+        .map(|fix| format!("; fix: {fix}"))
+        .unwrap_or_default()
+}
+
+/// Why a CA path is not private.
+#[cfg(windows)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathProblem {
+    /// A symlink, junction or other reparse point, which could point anywhere.
+    Link,
+    /// Something other than a directory where the CA directory should be.
+    NotADirectory,
+    /// Something other than a regular file where a key or lock file should be.
+    NotAFile,
+    /// The file has this many names, so it can be reached or swapped elsewhere.
+    HardLinks(u32),
+    /// Another account owns it.
+    Owner,
+    /// Other accounts can open it, as `Name (SID)` or a bare SID; empty when
+    /// its access list cannot be judged.
+    Accounts(Vec<String>),
+}
+
+#[cfg(windows)]
+impl std::fmt::Display for PathProblem {
+    /// A clause for [`Error::InsecurePath`]'s message.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Link => f.write_str("it is a symlink or junction"),
+            Self::NotADirectory => f.write_str("it is not a directory"),
+            Self::NotAFile => f.write_str("it is not a regular file"),
+            Self::HardLinks(links) => write!(f, "it has {links} hard links"),
+            Self::Owner => f.write_str("another account owns it"),
+            Self::Accounts(accounts) if accounts.is_empty() => {
+                f.write_str("its access list grants access that cannot be judged")
+            }
+            Self::Accounts(accounts) => {
+                write!(f, "other accounts can open it: {}", accounts.join(", "))
+            }
+        }
+    }
 }
 
 /// Owns an ECDSA signing key without exposing it through Debug or accessors.
@@ -417,6 +475,7 @@ fn subject(common_name: Option<&str>, unit: &str) -> DistinguishedName {
 }
 
 /// `user@host` of the creating account, so CAs from several machines can be told apart.
+#[cfg(unix)]
 fn machine_label() -> String {
     let user = ["USER", "LOGNAME"]
         .into_iter()
@@ -427,38 +486,124 @@ fn machine_label() -> String {
     format!("{user}@{}", uname.nodename().to_string_lossy())
 }
 
-/// Existing directories are checked, never silently chmodded.
+/// `user@host` of the creating account, so CAs from several machines can be
+/// told apart. Windows sets `USERNAME` and `COMPUTERNAME` for every logon;
+/// `USER` is what Git Bash and other Unix-like shells may set instead.
+#[cfg(windows)]
+fn machine_label() -> String {
+    let var = |keys: &[&str]| {
+        keys.iter()
+            .filter_map(|key| std::env::var(key).ok())
+            .find(|value| !value.is_empty())
+            .unwrap_or_else(|| "unknown".to_owned())
+    };
+    format!("{}@{}", var(&["USERNAME", "USER"]), var(&["COMPUTERNAME"]))
+}
+
+/// Creates the directory only the owner can enter. Existing directories are
+/// checked, never silently chmodded.
+#[cfg(unix)]
 fn create_private_directory(path: &Path) -> Result<(), Error> {
-    let mut builder = fs::DirBuilder::new();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    match builder.create(path) {
+    use std::os::unix::fs::DirBuilderExt;
+    match fs::DirBuilder::new().mode(0o700).create(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => check_private(path, true),
         Err(error) => Err(error.into()),
     }
 }
 
+/// Creates the directory with an access list for this user, SYSTEM and
+/// Administrators, which the key and certificate inherit. An existing one must
+/// already be private, a real directory and this user's; its access list is
+/// never changed here.
+#[cfg(windows)]
+fn create_private_directory(path: &Path) -> Result<(), Error> {
+    match devlanes_sys::windows::security::ensure_private_dir(path, false)? {
+        Ok(_) => Ok(()),
+        Err(problem) => Err(insecure_directory(path, problem)),
+    }
+}
+
 /// Rejects symlinks and group/world access before secret material is opened.
+#[cfg(unix)]
 fn check_private(path: &Path, directory: bool) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink()
         || (directory && !metadata.is_dir())
         || (!directory && !metadata.is_file())
+        || metadata.permissions().mode() & 0o077 != 0
     {
         return Err(Error::InsecurePath);
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            return Err(Error::InsecurePath);
-        }
-    }
     Ok(())
+}
+
+/// Rejects a directory that is a reparse point (symlinks and junctions, which
+/// could point anywhere), is another account's or that others can open; for a
+/// file, its directory first (the directory's fix also resets the files inside),
+/// then the file itself the same way plus extra hard links, which an explicit
+/// grant or a second name in another directory would expose.
+#[cfg(windows)]
+fn check_private(path: &Path, directory: bool) -> Result<(), Error> {
+    use devlanes_sys::windows::security::{FileProblem, check_private_dir, check_private_file};
+    let parent = if directory { Some(path) } else { path.parent() };
+    // A bare file name sits in the working directory.
+    let parent = match parent {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    if let Err(problem) = check_private_dir(parent)? {
+        return Err(insecure_directory(parent, problem));
+    }
+    if directory {
+        return Ok(());
+    }
+    let (problem, fix) = match check_private_file(path)? {
+        Ok(()) => return Ok(()),
+        Err(FileProblem::NotAFile) => (PathProblem::NotAFile, None),
+        Err(FileProblem::ReparsePoint) => (PathProblem::Link, None),
+        Err(FileProblem::HardLinks(links)) => (PathProblem::HardLinks(links), None),
+        Err(FileProblem::Owner) => (PathProblem::Owner, None),
+        // The directory is private by now, so inheriting from it is enough.
+        Err(FileProblem::Acl(others)) => (
+            accounts(&others),
+            Some(devlanes_sys::windows::security::private_file_fix(path)),
+        ),
+    };
+    Err(Error::InsecurePath {
+        path: path.to_owned(),
+        problem,
+        fix,
+    })
+}
+
+/// [`Error::InsecurePath`] for a CA directory, with the `icacls` commands the
+/// daemon's home check also gives when other accounts can open it.
+#[cfg(windows)]
+fn insecure_directory(path: &Path, problem: devlanes_sys::windows::security::DirProblem) -> Error {
+    use devlanes_sys::windows::security::{DirProblem, private_dir_fix};
+    let (problem, fix) = match problem {
+        DirProblem::NotADirectory => (PathProblem::NotADirectory, None),
+        DirProblem::ReparsePoint => (PathProblem::Link, None),
+        DirProblem::Owner => (PathProblem::Owner, None),
+        DirProblem::Acl(others) => (accounts(&others), private_dir_fix(path, &others).ok()),
+    };
+    Error::InsecurePath {
+        path: path.to_owned(),
+        problem,
+        fix,
+    }
+}
+
+/// [`PathProblem::Accounts`] with readable names for well-known groups.
+#[cfg(windows)]
+fn accounts(sids: &[String]) -> PathProblem {
+    PathProblem::Accounts(
+        sids.iter()
+            .map(|sid| devlanes_sys::windows::security::account_label(sid))
+            .collect(),
+    )
 }
 
 /// Builds the permitted subtrees for a new CA, adding a normalized TLD when it is not covered.
@@ -487,11 +632,23 @@ fn write_private(path: &Path, bytes: &[u8], replace: bool) -> Result<(), Error> 
     let mut file = tempfile::NamedTempFile::new_in(parent)?;
     file.write_all(bytes)?;
     file.as_file().sync_all()?;
-    if replace {
-        file.persist(path).map_err(|error| error.error)?;
-    } else {
-        file.persist_noclobber(path).map_err(|error| error.error)?;
-    }
+    // On Windows a scanner reading the fresh temp file, or a tool reading the
+    // old key, briefly blocks the rename; a failed persist hands the temp back.
+    let mut temp = Some(file.into_temp_path());
+    devlanes_sys::retrying(|| {
+        let current = temp
+            .take()
+            .ok_or_else(|| io::Error::other("temporary file already persisted"))?;
+        let persisted = if replace {
+            current.persist(path)
+        } else {
+            current.persist_noclobber(path)
+        };
+        persisted.map_err(|error| {
+            temp = Some(error.path);
+            error.error
+        })
+    })?;
     Ok(())
 }
 

@@ -1,0 +1,271 @@
+//! `devlanes __agent-hook` as the agent plugin runs it: JSON on stdin, a JSON
+//! deny on stdout and exit 0 to block, `DEVLANES_BLOCK_BACKGROUND=0` to turn it
+//! off; and the plugin's command line, which must exit 0 in every shell an
+//! agent runs it with, also when an older devlanes on `PATH` exits 2.
+
+use std::{
+    io::{Read, Write},
+    path::Path,
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
+
+/// Runs `command` with `payload` on stdin and returns its exit status, stdout
+/// and stderr. The child is killed if it outlives the deadline.
+fn run_with_stdin(mut command: Command, payload: &str) -> (Option<i32>, String, String) {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().expect("start the hook");
+    let mut stdin = child.stdin.take().expect("stdin");
+    // With no devlanes or an old one nothing reads stdin, and a shell that
+    // exits before the write leaves a broken pipe. Whether the hook read its
+    // input does not matter to the agent; the exit status and output do.
+    match stdin.write_all(payload.as_bytes()) {
+        Err(error) if error.kind() != std::io::ErrorKind::BrokenPipe => {
+            panic!("write payload: {error}")
+        }
+        _ => {}
+    }
+    drop(stdin);
+    // Read on threads so a full pipe cannot stall the child.
+    let mut stdout = child.stdout.take().expect("stdout");
+    let mut stderr = child.stderr.take().expect("stderr");
+    let out = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+    let err = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stderr.read_to_string(&mut text);
+        text
+    });
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("wait") {
+            break status;
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the hook did not exit within 60 s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    (
+        status.code(),
+        out.join().expect("stdout reader"),
+        err.join().expect("stderr reader"),
+    )
+}
+
+/// Runs the hook on `payload` and returns its exit status, stdout and stderr.
+fn run_hook(payload: &str, home: &Path, opt_out: bool) -> (Option<i32>, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_devlanes"));
+    command
+        .arg("__agent-hook")
+        .env("DEVLANES_HOME", home)
+        .env_remove("DEVLANES_BLOCK_BACKGROUND");
+    if opt_out {
+        command.env("DEVLANES_BLOCK_BACKGROUND", "0");
+    }
+    run_with_stdin(command, payload)
+}
+
+/// Asserts that `stdout` is the deny both agents read, with the block message.
+fn assert_denied(stdout: &str, context: &str) {
+    let answer: serde_json::Value = serde_json::from_str(stdout.trim())
+        .unwrap_or_else(|error| panic!("{context}: not JSON ({error}): {stdout}"));
+    let output = &answer["hookSpecificOutput"];
+    assert_eq!(output["hookEventName"], "PreToolUse", "{context}");
+    assert_eq!(output["permissionDecision"], "deny", "{context}");
+    assert!(
+        output["permissionDecisionReason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("devlanes exec --name NAME")),
+        "{context}: {stdout}"
+    );
+}
+
+#[test]
+fn agent_hook_blocks_through_the_binary_and_can_be_turned_off() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    std::fs::write(dir.path().join("devlanes.yaml"), "project: acme\n").expect("config");
+    let home = dir.path().join("home");
+    for tool in ["Bash", "PowerShell"] {
+        let payload = serde_json::json!({
+            "cwd": dir.path(),
+            "tool_name": tool,
+            "tool_input": {"command": "pnpm dev &"},
+        })
+        .to_string();
+        let (code, stdout, stderr) = run_hook(&payload, &home, false);
+        assert_eq!(code, Some(0), "{tool}: {stderr}");
+        assert_denied(&stdout, tool);
+        assert_eq!(
+            run_hook(&payload, &home, true),
+            (Some(0), String::new(), String::new())
+        );
+    }
+    let allowed = serde_json::json!({
+        "cwd": dir.path(),
+        "tool_name": "Bash",
+        "tool_input": {"command": "pnpm dev"},
+    })
+    .to_string();
+    assert_eq!(
+        run_hook(&allowed, &home, false),
+        (Some(0), String::new(), String::new())
+    );
+    assert!(!home.exists(), "the hook must not create a devlanes home");
+}
+
+/// The `command` of the plugin's one hook, read from `agent-plugin/hooks/hooks.json`.
+fn plugin_command() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent-plugin/hooks/hooks.json");
+    let hooks: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("hooks.json"))
+            .expect("hooks.json is JSON");
+    hooks["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("a command hook")
+        .to_owned()
+}
+
+/// A directory with a fake `devlanes` that answers `__agent-hook` the way
+/// releases up to 0.2.0 do: a usage error on stderr and exit 2.
+fn old_devlanes() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("temp dir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = dir.path().join("devlanes");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho \"error: unrecognized subcommand '$1'\" >&2\nexit 2\n",
+        )
+        .expect("fake devlanes");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("make it executable");
+    }
+    #[cfg(windows)]
+    std::fs::write(
+        dir.path().join("devlanes.cmd"),
+        "@echo error: unrecognized subcommand '%1' 1>&2\r\n@exit /b 2\r\n",
+    )
+    .expect("fake devlanes");
+    dir
+}
+
+/// `PATH` with `first` in front of the current one.
+fn path_with(first: &Path) -> std::ffi::OsString {
+    let rest = std::env::var_os("PATH").unwrap_or_default();
+    std::env::join_paths(std::iter::once(first.to_path_buf()).chain(std::env::split_paths(&rest)))
+        .expect("PATH")
+}
+
+/// Git Bash, found the way Claude Code looks for it: next to the `git.exe` on
+/// `PATH`, as `<Git>\bin\bash.exe`. `bash.exe` in `System32` is WSL's and is
+/// never used.
+#[cfg(windows)]
+fn git_bash() -> Option<std::path::PathBuf> {
+    let git = std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join("git.exe"))
+        .find(|path| path.is_file())?;
+    git.ancestors().skip(1).find_map(|dir| {
+        let bash = dir.join("bin").join("bash.exe");
+        (bash.is_file() && dir.join("usr").join("bin").is_dir()).then_some(bash)
+    })
+}
+
+/// The shells the agents run a shell-form hook with on this OS, each running
+/// `line`: `sh -c` (Claude Code) on Unix; on Windows `cmd.exe /C "<line>"`
+/// (Codex, with its quoting), Windows PowerShell 5.1 (Claude Code without Git
+/// Bash) and, when installed, Git Bash (Claude Code). Absolute paths, because
+/// the tests change `PATH`.
+fn shells(line: &str) -> Vec<(String, Command)> {
+    let mut shells = Vec::new();
+    #[cfg(unix)]
+    {
+        let mut sh = Command::new("/bin/sh");
+        sh.args(["-c", line]);
+        shells.push(("sh -c".to_owned(), sh));
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let system = std::path::PathBuf::from(
+            std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into()),
+        )
+        .join("System32");
+        let mut cmd = Command::new(system.join("cmd.exe"));
+        cmd.arg("/C").raw_arg(format!("\"{line}\""));
+        shells.push(("cmd.exe /C".to_owned(), cmd));
+        let mut powershell = Command::new(system.join("WindowsPowerShell/v1.0/powershell.exe"));
+        powershell.args(["-NoProfile", "-NonInteractive", "-Command", line]);
+        shells.push(("powershell -Command".to_owned(), powershell));
+        // Git Bash runs `devlanes.exe` but not the old `devlanes.cmd`, so the
+        // old case behaves like the missing one there.
+        if let Some(bash) = git_bash() {
+            let mut bash = Command::new(bash);
+            bash.args(["-c", line]);
+            shells.push(("Git Bash -c".to_owned(), bash));
+        }
+    }
+    shells
+}
+
+/// The plugin's command exits 0 in every shell [`shells`] finds, blocks
+/// through the current binary, and lets everything through when an older
+/// devlanes or none is on `PATH` (that devlanes would otherwise block every
+/// call with its exit 2). Prints the shells it ran.
+#[test]
+fn plugin_command_masks_old_and_missing_devlanes_in_every_shell() {
+    let line = plugin_command();
+    println!(
+        "shells: {}",
+        shells(&line)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let project = tempfile::tempdir().expect("temp dir");
+    std::fs::write(project.path().join("devlanes.yaml"), "project: acme\n").expect("config");
+    let home = project.path().join("home");
+    let payload = serde_json::json!({
+        "cwd": project.path(),
+        "tool_name": "Bash",
+        "tool_input": {"command": "pnpm dev &"},
+    })
+    .to_string();
+    let current = Path::new(env!("CARGO_BIN_EXE_devlanes")).parent();
+    let old = old_devlanes();
+    let none = tempfile::tempdir().expect("temp dir");
+    // The old and missing cases get no other `PATH` entry: on Windows cargo
+    // puts the build directory, with the current `devlanes.exe`, on `PATH`,
+    // where Git Bash would find it past the old `devlanes.cmd`.
+    for (devlanes, path) in [
+        ("current", path_with(current.expect("binary directory"))),
+        ("old", old.path().as_os_str().to_owned()),
+        ("missing", none.path().as_os_str().to_owned()),
+    ] {
+        for (shell, mut command) in shells(&line) {
+            command
+                .current_dir(project.path())
+                .env("PATH", &path)
+                .env("DEVLANES_HOME", &home)
+                .env_remove("DEVLANES_BLOCK_BACKGROUND");
+            let context = format!("{devlanes} devlanes, {shell}");
+            let (code, stdout, stderr) = run_with_stdin(command, &payload);
+            assert_eq!(code, Some(0), "{context}: {stderr}");
+            if devlanes == "current" {
+                assert_denied(&stdout, &context);
+            } else {
+                assert_eq!(stdout.trim(), "", "{context}");
+            }
+        }
+    }
+}

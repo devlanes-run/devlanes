@@ -47,14 +47,35 @@ fn wait_for_exit(lab: &Lab, daemon: i32) -> Result<()> {
 /// SIGTERM to the daemon stops the service (process gone, port closed) and
 /// closes its run, so the next daemon finds the lane idle with no orphan; the
 /// stop task does not run.
+#[cfg(unix)]
 #[test]
 fn sigterm_stops_units_without_lane_stop_tasks() -> Result<()> {
+    signal_stops_units_without_lane_stop_tasks(|daemon| {
+        let target = need(rustix::process::Pid::from_raw(daemon), "daemon pid")?;
+        rustix::process::kill_process(target, rustix::process::Signal::TERM)
+            .map_err(|error| devlanes_e2e::Error::Io(error.into()))
+    })
+}
+
+/// Logoff (the session-end messages Windows sends the daemon's hidden window)
+/// is the Windows signal: the same as SIGTERM.
+#[cfg(windows)]
+#[test]
+fn logoff_stops_units_without_lane_stop_tasks() -> Result<()> {
+    use devlanes_sys::windows::session::{SessionEnd, simulate_for};
+    signal_stops_units_without_lane_stop_tasks(|daemon| {
+        let daemon = need(u32::try_from(daemon).ok(), "daemon pid")?;
+        simulate_for(daemon, SessionEnd::Logoff, Duration::from_secs(20))?;
+        Ok(())
+    })
+}
+
+/// Sends the daemon a signal with `send` and checks the shutdown that follows.
+fn signal_stops_units_without_lane_stop_tasks(send: impl FnOnce(i32) -> Result<()>) -> Result<()> {
     let lab = Lab::with_config(CONFIG, BUDGET)?;
     let (api, port) = start(&lab)?;
     let daemon = need(lab.daemon_pid()?, "daemon pid")?;
-    let target = need(rustix::process::Pid::from_raw(daemon), "daemon pid")?;
-    rustix::process::kill_process(target, rustix::process::Signal::TERM)
-        .map_err(|error| devlanes_e2e::Error::Io(error.into()))?;
+    send(daemon)?;
     wait_for_exit(&lab, daemon)?;
     assert!(!alive(api), "api (pid {api}) still runs");
     assert!(!listening(port), "port {port} still open");

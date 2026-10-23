@@ -20,7 +20,9 @@ use async_trait::async_trait;
 use devlanes_core::{
     Error,
     contrib::{ContribCx, Contributor, LaunchDraft},
+    env,
 };
+use devlanes_sys::NoWindow;
 
 /// The file direnv loads.
 pub const ENVRC: &str = ".envrc";
@@ -112,6 +114,7 @@ impl DirenvContributor {
         }
         let mut command = tokio::process::Command::new(&self.program);
         command
+            .no_window()
             .args(["export", "json"])
             .current_dir(lane)
             .env_clear()
@@ -197,13 +200,14 @@ impl Contributor for DirenvContributor {
         };
         match outcome.as_ref() {
             Outcome::Diff(diff) => {
+                // Through the `env` helpers so names match ignoring case on Windows.
                 for key in &diff.unset {
-                    draft.env.remove(key);
+                    env::remove(&mut draft.env, key);
                     draft.remove.insert(key.clone());
                 }
-                draft
-                    .env
-                    .extend(diff.set.iter().map(|(k, v)| (k.clone(), v.clone())));
+                for (key, value) in &diff.set {
+                    env::insert(&mut draft.env, key.clone(), value.clone());
+                }
             }
             Outcome::Note(note) => draft.notes.push(note.clone()),
             Outcome::Skip => {}

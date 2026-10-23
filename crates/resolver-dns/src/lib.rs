@@ -2,8 +2,9 @@
 //!
 //! The daemon answers A and AAAA queries for names under the configured TLD with
 //! `127.0.0.1` and `::1` and refuses everything else. The OS forwards only that TLD
-//! here through `/etc/resolver/<tld>` (macOS) or systemd-resolved (Linux); this
-//! crate generates those files, and the CLI writes them with sudo.
+//! here through `/etc/resolver/<tld>` (macOS), systemd-resolved (Linux) or an NRPT
+//! rule (Windows, the `nrpt` module); this crate generates those files and PowerShell
+//! scripts, and the CLI applies them with sudo or through the UAC prompt.
 //!
 //! The responder is hand-written instead of using `hickory-server`. It needs one
 //! synthesized zone with two fixed answers, which takes a few hundred lines of
@@ -13,6 +14,8 @@
 //! NOTIMP or REFUSED, so clients fail fast instead of timing out.
 
 mod files;
+#[cfg(windows)]
+pub mod nrpt;
 mod server;
 mod wire;
 mod zone;
@@ -38,8 +41,9 @@ pub enum DnsError {
         /// Why it was rejected.
         reason: &'static str,
     },
-    /// UDP or TCP could not bind.
-    #[error("cannot bind the DNS server on {addr}: {source}")]
+    /// UDP or TCP could not bind. On Windows the message adds where to look
+    /// when another program holds port 53.
+    #[error("cannot bind the DNS server on {addr}: {source}{}", server::bind_hint(.addr, .source))]
     Bind {
         /// Requested address.
         addr: SocketAddr,
@@ -56,5 +60,12 @@ pub enum DnsError {
     SystemdTooOld {
         /// Detected systemd version.
         version: u32,
+    },
+    /// PowerShell printed NRPT rules in a shape [`nrpt::NrptRules::parse`] cannot read.
+    #[cfg(windows)]
+    #[error("cannot read the NRPT rules from PowerShell: {reason}")]
+    NrptOutput {
+        /// What was wrong with the output.
+        reason: String,
     },
 }

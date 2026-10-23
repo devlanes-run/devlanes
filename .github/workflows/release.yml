@@ -19,8 +19,9 @@ jobs:
     strategy:
       fail-fast: true
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    # Windows compiles kache from git on a cold cache (see the kache action).
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,7 +41,14 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: nextest
+      # Built once here and passed as DEVLANES_FAKE_TOOL, so no test process runs cargo.
+      - run: cargo build -p devlanes-testing --bin fake-tool --locked
       - run: cargo nextest run --workspace --all-features --locked
+        env:
+          # GitHub's Windows runners only run as administrator, which the daemon
+          # refuses outside tests. Ignored on other OSes.
+          DEVLANES_ALLOW_ELEVATED: "1"
+          DEVLANES_FAKE_TOOL: ${{ github.workspace }}/target/debug/fake-tool${{ runner.os == 'Windows' && '.exe' || '' }}
       - name: kache stats
         if: ${{ !cancelled() }}
         run: |
@@ -67,8 +75,21 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-22.04-arm
             native: true
+          # Windows builds are signed and packed by the windows job.
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            native: true
+          # GitHub's arm64 Windows runner, free for public repositories; its image
+          # has the LLVM that ring needs for aarch64-pc-windows-msvc.
+          - target: aarch64-pc-windows-msvc
+            os: windows-11-arm
+            native: true
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    # Git Bash on Windows, so every step runs the same script on all runners.
+    defaults:
+      run:
+        shell: bash
     env:
       TARGET: ${{ matrix.target }}
       # kache passes every compile straight to rustc here: shipped binaries are always
@@ -96,25 +117,129 @@ jobs:
         # The tag marks official builds in the daemon handshake and doctor; others say local.
         env:
           DEVLANES_BUILD_ID: ${{ github.ref_name }}
-        run: cargo build --release --locked --target "$TARGET" -p devlanes -p devlanes-hosts-helper
-      # build.rs regenerates the served schemas; a difference means they were committed stale.
+        run: |
+          # Windows ships the logon launcher and the hosts service; devlanes-hosts is Unix-only.
+          if [ "$RUNNER_OS" = Windows ]; then
+            set -- -p devlanes -p devlanes-logon-launcher -p devlanes-hosts-service
+          else
+            set -- -p devlanes -p devlanes-hosts-helper
+          fi
+          cargo build --release --locked --target "$TARGET" "$@"
+      # build.rs regenerates the served schemas; a difference means they were committed
+      # stale. .gitattributes checks them out with LF on Windows too, as build.rs writes them.
       - name: Check the committed schemas
         run: git diff --exit-code crates/config/schema.json crates/config/user-schema.json
       - name: Smoke test
-        if: matrix.native
+        if: matrix.native && runner.os != 'Windows'
         run: |
           "target/$TARGET/release/devlanes" --version | grep -Fx "devlanes $VERSION"
           "target/$TARGET/release/devlanes-hosts" version | grep -F "build=release"
+      - name: Smoke test (Windows)
+        if: matrix.native && runner.os == 'Windows'
+        run: |
+          "target/$TARGET/release/devlanes.exe" --version | grep -Fx "devlanes $VERSION"
+          "target/$TARGET/release/devlanes-hosts-service.exe" --version | grep -F "build=release"
       - name: Package
+        if: runner.os != 'Windows'
         run: sh packaging/scripts/package.sh "$VERSION" "$TARGET" dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: runner.os != 'Windows'
         with:
           name: dist-${{ matrix.target }}
           path: dist/
           if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: runner.os == 'Windows'
+        with:
+          name: bin-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/devlanes.exe
+            target/${{ matrix.target }}/release/devlanesw.exe
+            target/${{ matrix.target }}/release/devlanes-hosts-service.exe
+          if-no-files-found: error
+
+  # Signs the executables of both Windows targets and packs their zip archives. One
+  # x64 runner does both: the signing action does not run on arm64 Windows, and the
+  # archives must contain the signed files (the npm packages copy them from there).
+  windows:
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    # The OIDC subject becomes repo:devlanes-run/devlanes:environment:signing, one fixed
+    # value for Azure's federated credential (a tag subject would change every release).
+    environment: signing
+    permissions:
+      contents: read
+      # azure/login exchanges the job's OIDC token for Azure credentials.
+      id-token: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      # Signing runs only once the owner has set up Azure Artifact Signing; releases
+      # without it still build, unsigned. Secret and variable names: packaging/README.md.
+      SIGN: ${{ secrets.AZURE_CLIENT_ID != '' && secrets.AZURE_TENANT_ID != '' && vars.AZURE_SIGNING_ENDPOINT != '' && vars.AZURE_SIGNING_ACCOUNT != '' && vars.AZURE_SIGNING_PROFILE != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: bin-*
+          path: bin
+      - name: Azure login
+        if: env.SIGN == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+      - name: Sign the executables
+        if: env.SIGN == 'true'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\bin
+          files-folder-filter: exe
+          files-folder-recurse: true
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Check the signatures
+        if: env.SIGN == 'true'
+        run: |
+          $files = @(Get-ChildItem bin -Recurse -Filter *.exe)
+          if ($files.Count -ne 6) { throw "expected 6 executables, found $($files.Count)" }
+          foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file.FullName
+            if ($signature.Status -ne 'Valid') {
+              throw "$($file.FullName): $($signature.Status): $($signature.StatusMessage)"
+            }
+            Write-Output "$($file.Directory.Name)/$($file.Name): $($signature.SignerCertificate.Subject)"
+          }
+      - name: Note unsigned executables
+        if: env.SIGN != 'true'
+        run: Write-Output "::warning::The Windows executables are unsigned; Azure Artifact Signing is not configured"
+      - name: Package
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          foreach ($target in 'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc') {
+            ./packaging/scripts/package.ps1 -Version $version -Target $target -OutDir dist -BinDir "bin/bin-$target"
+          }
+      - name: Smoke test the x64 archive
+        run: |
+          $version = $env:GITHUB_REF_NAME.Substring(1)
+          Expand-Archive "dist/devlanes-$version-x86_64-pc-windows-msvc.zip" smoke
+          $line = & "smoke/devlanes-$version-x86_64-pc-windows-msvc/devlanes.exe" --version
+          if ($line -cne "devlanes $version") { throw "unexpected version line: $line" }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-windows
+          path: dist/
+          if-no-files-found: error
 
   release:
-    needs: [test, build]
+    needs: [test, build, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -149,12 +274,14 @@ jobs:
             "https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
           jq -e '.artifacts | length == 4' dist/release-manifest.json
           cp crates/config/schema.json crates/config/user-schema.json dist/
-          cp install.sh dist/
+          cp install.sh install.ps1 dist/
       # Verify with: gh attestation verify devlanes-VERSION-TARGET.tar.gz --repo devlanes-run/devlanes
       - name: Attest build provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
-          subject-path: dist/*.tar.gz
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
       - name: Homebrew formula
         run: |
           mkdir -p formula
@@ -166,7 +293,7 @@ jobs:
           if-no-files-found: error
       - name: Upload to a draft release
         run: |
-          set -- dist/*.tar.gz dist/SHA256SUMS dist/release-manifest.json dist/schema.json dist/user-schema.json dist/install.sh
+          set -- dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/release-manifest.json dist/schema.json dist/user-schema.json dist/install.sh dist/install.ps1
           if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null); then
             # A rerun may refill a draft, but published assets are never replaced.
             if [ "$draft" != true ]; then

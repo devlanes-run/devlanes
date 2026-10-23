@@ -5,7 +5,12 @@ use serde::Deserialize;
 use crate::Error;
 
 /// The engine Docker uses without `DOCKER_HOST` or a context.
+#[cfg(unix)]
 pub const DEFAULT_HOST: &str = "unix:///var/run/docker.sock";
+/// The engine Docker uses without `DOCKER_HOST` or a context: Docker Desktop's
+/// named pipe, which bollard reaches through its `npipe://` support.
+#[cfg(windows)]
+pub const DEFAULT_HOST: &str = "npipe:////./pipe/docker_engine";
 
 #[derive(Deserialize)]
 struct CliConfig {
@@ -41,10 +46,16 @@ pub fn resolve_host(
     if let Some(host) = env("DOCKER_HOST").filter(|host| !host.is_empty()) {
         return Ok(host);
     }
+    let explicit = env("DOCKER_CONTEXT").filter(|context| !context.is_empty());
     let Some(config_dir) = config_dir else {
-        return Ok(DEFAULT_HOST.to_owned());
+        // A named context cannot be looked up without a config directory; falling
+        // back to the default engine would silently talk to the wrong one.
+        return match explicit.filter(|context| context != "default") {
+            Some(context) => Err(Error::UnknownContext(context)),
+            None => Ok(DEFAULT_HOST.to_owned()),
+        };
     };
-    let context = match env("DOCKER_CONTEXT").filter(|context| !context.is_empty()) {
+    let context = match explicit {
         Some(context) => Some(context),
         None => read_current_context(&config_dir.join("config.json"))?,
     };
@@ -55,12 +66,21 @@ pub fn resolve_host(
         .ok_or(Error::UnknownContext(context))
 }
 
-/// The CLI config directory: `DOCKER_CONFIG`, else `$HOME/.docker`.
+/// The variable holding the user's home, where the Docker CLI keeps `.docker`.
+#[cfg(unix)]
+const HOME_VAR: &str = "HOME";
+/// The variable holding the user's home, where the Docker CLI keeps `.docker`;
+/// Windows shells may not set `HOME`, and Docker Desktop ignores it.
+#[cfg(windows)]
+const HOME_VAR: &str = "USERPROFILE";
+
+/// The CLI config directory: `DOCKER_CONFIG`, else `.docker` in the user's home
+/// (`$HOME` on Unix, `%USERPROFILE%` on Windows).
 pub fn config_dir(env: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     env("DOCKER_CONFIG")
         .filter(|dir| !dir.is_empty())
         .map(PathBuf::from)
-        .or_else(|| env("HOME").map(|home| PathBuf::from(home).join(".docker")))
+        .or_else(|| env(HOME_VAR).map(|home| PathBuf::from(home).join(".docker")))
 }
 
 fn read_current_context(path: &Path) -> Result<Option<String>, Error> {
@@ -125,6 +145,12 @@ mod tests {
         for (digest, name, host) in [
             ("aa", "orbstack", "unix:///home/u/.orbstack/run/docker.sock"),
             ("bb", "colima", "unix:///home/u/.colima/default/docker.sock"),
+            // Docker Desktop on Windows writes this context and selects it.
+            (
+                "cc",
+                "desktop-linux",
+                "npipe:////./pipe/dockerDesktopLinuxEngine",
+            ),
         ] {
             let meta = dir.path().join("contexts/meta").join(digest);
             std::fs::create_dir_all(&meta).expect("mkdir");
@@ -176,6 +202,37 @@ mod tests {
     }
 
     #[test]
+    fn desktop_linux_context_uses_its_pipe() {
+        let dir = docker_config();
+        let host = resolve_host(
+            env(&[("DOCKER_CONTEXT", "desktop-linux")]),
+            Some(dir.path()),
+        );
+        assert_eq!(
+            host.ok().as_deref(),
+            Some("npipe:////./pipe/dockerDesktopLinuxEngine")
+        );
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"auths":{},"currentContext":"desktop-linux"}"#,
+        )
+        .expect("write config");
+        let host = resolve_host(env(&[]), Some(dir.path()));
+        assert_eq!(
+            host.ok().as_deref(),
+            Some("npipe:////./pipe/dockerDesktopLinuxEngine")
+        );
+    }
+
+    #[test]
+    fn named_context_without_config_dir_is_unknown() {
+        let host = resolve_host(env(&[("DOCKER_CONTEXT", "desktop-linux")]), None);
+        assert!(matches!(host, Err(Error::UnknownContext(name)) if name == "desktop-linux"));
+        let host = resolve_host(env(&[("DOCKER_CONTEXT", "default")]), None);
+        assert_eq!(host.ok().as_deref(), Some(DEFAULT_HOST));
+    }
+
+    #[test]
     fn missing_config_uses_default_socket() {
         let dir = tempfile::tempdir().expect("tempdir");
         assert_eq!(
@@ -191,12 +248,12 @@ mod tests {
     #[test]
     fn config_dir_precedence() {
         assert_eq!(
-            config_dir(env(&[("DOCKER_CONFIG", "/c"), ("HOME", "/h")])),
+            config_dir(env(&[("DOCKER_CONFIG", "/c"), (HOME_VAR, "/h")])),
             Some(PathBuf::from("/c"))
         );
         assert_eq!(
-            config_dir(env(&[("HOME", "/h")])),
-            Some(PathBuf::from("/h/.docker"))
+            config_dir(env(&[(HOME_VAR, "/h")])),
+            Some(Path::new("/h").join(".docker"))
         );
         assert_eq!(config_dir(env(&[])), None);
     }

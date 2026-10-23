@@ -4,7 +4,7 @@ use devlanes_config::{
     ExpressionContext, Extensions, HostConfig, HostHeader, ProjectConfig, Scalar, ServiceConfig,
     Templated,
 };
-use devlanes_core::{color::unit_color, ports::PortName};
+use devlanes_core::{color::unit_color, env, ports::PortName};
 use indexmap::IndexMap;
 use serde_json::{Value, json};
 
@@ -50,7 +50,11 @@ impl Namespaces {
 }
 
 /// `${{ env.X }}` lookup order is client env, then secrets, then `.env`, so the
-/// map is built lowest first.
+/// map is built lowest first. On Windows a higher source replaces a differently
+/// spelled name (the client's `Path` over a `.env` `PATH`) under the first
+/// spelling, and every name is also reachable in upper case, so the
+/// `${{ env.PATH }}` a config shared with Unix writes finds the client's `Path`.
+/// Expressions look keys up exactly, so other spellings (`env.path`) miss.
 pub(crate) fn env_namespace(
     client: &BTreeMap<String, String>,
     secrets: Option<&BTreeMap<String, String>>,
@@ -59,8 +63,16 @@ pub(crate) fn env_namespace(
     let mut map = serde_json::Map::new();
     for source in [Some(dotenv), secrets, Some(client)].into_iter().flatten() {
         for (key, value) in source {
-            map.insert(key.clone(), value.clone().into());
+            let key = env::other_spelling(map.keys(), key).unwrap_or(key).clone();
+            map.insert(key, value.clone().into());
         }
+    }
+    let aliases: Vec<(String, Value)> = map
+        .iter()
+        .filter_map(|(key, value)| Some((env::upper_alias(key)?, value.clone())))
+        .collect();
+    for (alias, value) in aliases {
+        map.entry(alias).or_insert(value);
     }
     Value::Object(map)
 }
@@ -376,7 +388,9 @@ fn service_layout<E: Extensions>(
         PortOverride::None => (lookup(DEFAULT_PORT)?, false),
         PortOverride::Expression => {
             let context = ns.context(env, partial.clone(), replica_ns.clone());
-            let value = entry.service.env["PORT"]
+            let template = devlanes_config::env_value(&entry.service.env, "PORT")
+                .ok_or_else(|| ResolveError::invalid(format!("{path}.env.PORT"), "is not set"))?;
+            let value = template
                 .evaluate(&context)
                 .map_err(|e| ResolveError::expression(format!("{path}.env.PORT"), e))?;
             let port = match &value {
@@ -519,7 +533,8 @@ fn identity_order<E: Extensions>(config: &ProjectConfig<E>) -> Result<Vec<String
             })?;
             expression_strings(&value, &mut texts);
         }
-        if let Some(Templated::Expression(text)) = service.env.get("PORT") {
+        if let Some(Templated::Expression(text)) = devlanes_config::env_value(&service.env, "PORT")
+        {
             texts.push(text.clone());
         }
         let mut edges = BTreeSet::new();

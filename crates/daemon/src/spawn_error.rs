@@ -45,7 +45,7 @@ pub(crate) fn classify(attempt: &Attempt, error: &devlanes_core::Error) -> RpcEr
         data["cwd"] = json!(attempt.cwd);
         return RpcError::new("spawn_failed", data, 1);
     }
-    let explicit = attempt.program.contains('/');
+    let explicit = os::is_explicit(&attempt.program);
     let dirs: Vec<String> = if explicit {
         Vec::new()
     } else {
@@ -53,7 +53,7 @@ pub(crate) fn classify(attempt: &Attempt, error: &devlanes_core::Error) -> RpcEr
             .path
             .as_deref()
             .unwrap_or_default()
-            .split(':')
+            .split(os::PATH_SEPARATOR)
             .filter(|dir| !dir.is_empty())
             .map(str::to_owned)
             .collect()
@@ -132,7 +132,7 @@ fn describe(data: &Value) -> String {
     let text = |key: &str| data.get(key).and_then(Value::as_str).unwrap_or_default();
     let program = text("program");
     match text("reason") {
-        "not_found" if program.contains('/') => format!("{program}: no such file"),
+        "not_found" if os::is_explicit(program) => format!("{program}: no such file"),
         "not_found" => {
             let dirs: Vec<&str> = data
                 .get("path_searched")
@@ -148,7 +148,7 @@ fn describe(data: &Value) -> String {
                 if dirs.is_empty() {
                     "PATH is empty".to_owned()
                 } else {
-                    dirs.join(":")
+                    dirs.join(os::PATH_SEPARATOR)
                 }
             )
         }
@@ -161,7 +161,53 @@ fn describe(data: &Value) -> String {
     }
 }
 
+/// How the host spells `PATH` lists and program paths.
+#[cfg(unix)]
+mod os {
+    /// Separator between `PATH` entries.
+    pub(super) const PATH_SEPARATOR: &str = ":";
+
+    /// Whether `program` names a file instead of a command looked up on `PATH`.
+    pub(super) fn is_explicit(program: &str) -> bool {
+        program.contains('/')
+    }
+}
+
+/// How the host spells `PATH` lists and program paths.
+#[cfg(windows)]
+mod os {
+    /// Separator between `PATH` entries.
+    pub(super) const PATH_SEPARATOR: &str = ";";
+
+    /// Whether `program` names a file instead of a command looked up on `PATH`:
+    /// either separator, or a drive prefix (`C:tool` is relative to drive C).
+    pub(super) fn is_explicit(program: &str) -> bool {
+        program.contains(['/', '\\'])
+            || matches!(program.as_bytes(), [letter, b':', ..] if letter.is_ascii_alphabetic())
+    }
+}
+
 /// Symbolic name of the exec errors a spawn can report; the number otherwise.
+#[cfg(windows)]
+fn errno_name(code: i32) -> String {
+    let name = match code {
+        2 => "ERROR_FILE_NOT_FOUND",
+        3 => "ERROR_PATH_NOT_FOUND",
+        5 => "ERROR_ACCESS_DENIED",
+        8 => "ERROR_NOT_ENOUGH_MEMORY",
+        87 => "ERROR_INVALID_PARAMETER",
+        123 => "ERROR_INVALID_NAME",
+        193 => "ERROR_BAD_EXE_FORMAT",
+        206 => "ERROR_FILENAME_EXCED_RANGE",
+        267 => "ERROR_DIRECTORY",
+        740 => "ERROR_ELEVATION_REQUIRED",
+        _ => return format!("error {code}"),
+    };
+    name.to_owned()
+}
+
+/// Symbolic name of the exec errors a spawn can report; the number otherwise.
+#[cfg(unix)]
 fn errno_name(errno: i32) -> String {
     let errno = rustix::io::Errno::from_raw_os_error(errno);
     let name = [
@@ -216,24 +262,45 @@ mod tests {
     /// A program missing from PATH names the program and the directories searched.
     fn missing_program_lists_the_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let attempt = attempt(
-            "fixture-server",
-            dir.path(),
-            "/nonexistent/a:/nonexistent/b",
-        );
+        let searched: Vec<String> = ["a", "b"]
+            .map(|name| dir.path().join(name).display().to_string())
+            .into();
+        let joined = searched.join(os::PATH_SEPARATOR);
+        // Not `fixture-server`: Windows also searches the test binary's directory.
+        let attempt = attempt("devlanes-missing-tool", dir.path(), &joined);
         let error = classify(&attempt, &spawned(&attempt));
         assert_eq!(error.code, "spawn_failed");
         assert_eq!(error.data["reason"], "not_found");
-        assert_eq!(error.data["program"], "fixture-server");
+        assert_eq!(error.data["program"], "devlanes-missing-tool");
+        // On Windows std searches PATH itself and reports a miss as a plain
+        // `NotFound` without an OS code, so there is no errno to name.
+        #[cfg(unix)]
         assert_eq!(error.data["errno"], "ENOENT");
-        assert_eq!(
-            error.data["path_searched"],
-            json!(["/nonexistent/a", "/nonexistent/b"])
-        );
+        assert_eq!(error.data["path_searched"], json!(searched));
         assert_eq!(
             log_line(&error),
-            "[devlanes] could not start: fixture-server: command not found on PATH (/nonexistent/a:/nonexistent/b)"
+            format!(
+                "[devlanes] could not start: devlanes-missing-tool: command not found on PATH ({joined})"
+            )
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// Backslashes and drive prefixes make a program explicit on Windows.
+    fn windows_explicit_programs() {
+        for program in [
+            r".\tool",
+            r"bin\tool",
+            "./tool",
+            r"C:\tools\tool.exe",
+            "c:tool",
+        ] {
+            assert!(os::is_explicit(program), "{program}");
+        }
+        for program in ["tool", "tool.exe", "npm.cmd"] {
+            assert!(!os::is_explicit(program), "{program}");
+        }
     }
 
     #[test]
@@ -241,7 +308,7 @@ mod tests {
     fn long_path_is_truncated() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path: Vec<String> = (0..20).map(|n| format!("/nonexistent/{n}")).collect();
-        let attempt = attempt("missing-tool", dir.path(), &path.join(":"));
+        let attempt = attempt("missing-tool", dir.path(), &path.join(os::PATH_SEPARATOR));
         let error = classify(&attempt, &spawned(&attempt));
         assert_eq!(
             error.data["path_searched"].as_array().map(Vec::len),
@@ -250,6 +317,7 @@ mod tests {
         assert_eq!(error.data["path_more"], 8);
     }
 
+    #[cfg(unix)]
     #[test]
     /// A file without the execute bit is reported as not executable.
     fn non_executable_program() {
@@ -289,6 +357,7 @@ mod tests {
         assert!(log_line(&error).contains("does not exist"));
     }
 
+    #[cfg(unix)]
     #[test]
     /// Other errors keep their message and gain the program and errno name.
     fn other_errors_keep_the_message() {

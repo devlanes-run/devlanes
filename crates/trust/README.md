@@ -1,6 +1,6 @@
 # devlanes-trust
 
-The `TrustStore` trait and shared types for installing the devlanes CA into OS and browser trust stores. `devlanes-trust-macos` and `devlanes-trust-linux` implement it, and the CLI calls it for `devlanes certs trust` and `devlanes certs untrust`. The NSS store used by Firefox and Chromium on both platforms is also here.
+The `TrustStore` trait and shared types for installing the devlanes CA into OS and browser trust stores. `devlanes-trust-macos`, `devlanes-trust-linux` and `devlanes-trust-windows` implement it, and the CLI calls it for `devlanes certs trust` and `devlanes certs untrust`. The NSS store used by Firefox and Chromium on macOS and Linux is also here.
 
 ## Usage
 
@@ -10,6 +10,9 @@ use devlanes_trust::{CaCertificate, TrustError, TrustStatus, TrustStore};
 async fn trust(store: &dyn TrustStore, ca_pem: &str) -> Result<TrustStatus, TrustError> {
     let ca = CaCertificate::from_pem(ca_pem, "devlanes development CA")?;
     println!("installing into {}", store.describe());
+    if let Some(approval) = store.pending_approval(&ca, true).await {
+        println!("{approval}");
+    }
     store.install(&ca).await?;
     store.status(&ca).await
 }
@@ -17,14 +20,15 @@ async fn trust(store: &dyn TrustStore, ca_pem: &str) -> Result<TrustStatus, Trus
 
 ## API
 
-- `TrustStore`: `install`, `uninstall` and `status` for one store. Repeating an install or removing an absent CA succeeds without changes.
-- `TrustTarget`: the `tls.trust` names (`system`, `firefox`, `chrome`, `ios-simulator`, `android-emulator`).
-- `TrustStatus`: `Installed`, `Missing` or `Unknown { reason }`.
+- `TrustStore`: `install`, `uninstall` and `status` for one store. Repeating an install or removing an absent CA succeeds without changes. `location`, `approval` and `pending_approval` add text for the CLI: where the CA goes and the dialog to expect (in general, and for the change about to run). Stores with the same `id` are one store, which the CLI changes once.
+- `TrustTarget`: the `tls.trust` names (`system`, `firefox`, `chrome`, `windows`, `ios-simulator`, `android-emulator`). `windows` is the Windows user root store: reached through interop from WSL, the same store as `system` on Windows, `Unavailable` elsewhere.
+- `TrustStatus`: `Installed`, `Missing`, `Distrusted { reason }` (installed but overridden by a deny list) or `Unknown { reason }`.
 - `CaCertificate`: the public CA plus the name stores file it under. It keeps only the first certificate of the PEM, so a key in the input never reaches a store. `is_name_constrained` tells an older, unconstrained devlanes CA apart.
-- `find_system_program`: absolute path of a root-run tool from the system directories, never `PATH`.
-- `CommandExecutor` and `SystemExecutor`: every external command goes through this trait. The `fake` feature adds `fake::FakeExecutor`, which records argv for tests.
-- `nss::NssStore`: Firefox profiles or a shared NSS database, changed through `certutil`.
-- `TrustError`: typed failures, including `Unsupported`, `ToolMissing { hint }` and `InteractionRequired`.
+- `find_system_program` (Unix): absolute path of a root-run tool from the system directories, never `PATH`.
+- `CommandExecutor` and `SystemExecutor` (Unix): every external command goes through this trait. The `fake` feature adds `fake::FakeExecutor`, which records argv for tests.
+- `windows_root`: the wording the Windows store and the WSL `windows` store share for the user root store and its dialogs.
+- `nss::NssStore` (Unix): Firefox profiles or a shared NSS database, changed through `certutil`.
+- `TrustError`: typed failures, including `Unsupported`, `Unavailable { reason }` (a target this machine cannot reach), `ToolMissing { hint }`, `InteractionRequired`, `Cancelled` and `StillTrusted`.
 
 ## Config example
 
@@ -35,11 +39,11 @@ tls:
   trust: [system, firefox, chrome]
 ```
 
-Without `tls.trust`, `devlanes certs trust` uses only the `system` store.
+Without `tls.trust`, `devlanes certs trust` uses only the `system` store, and inside WSL with interop `system` and `windows`.
 
 ## Behaviour
 
-Trust changes run in the CLI process because they prompt for a password. The daemon never calls a `TrustStore`.
+Trust changes run in the CLI process because they prompt for a password or a confirmation. The daemon never calls a `TrustStore`.
 
 `ios-simulator` and `android-emulator` are not supported in v1 and always return `TrustError::Unsupported`.
 

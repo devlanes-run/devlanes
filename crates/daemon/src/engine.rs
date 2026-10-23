@@ -217,13 +217,14 @@ impl Handler for Engine {
     }
 }
 
-/// Resolves symlinks (macOS `/tmp`) so cwd matches the paths git reports.
+/// Resolves symlinks (macOS `/tmp`) so cwd matches the paths git reports. dunce
+/// keeps Windows paths in the `C:\...` form Git and stored lane paths use.
 async fn canonical(path: &Path) -> PathBuf {
     if path.as_os_str().is_empty() {
         return PathBuf::new();
     }
     let owned = path.to_path_buf();
-    tokio::task::spawn_blocking(move || std::fs::canonicalize(&owned).unwrap_or(owned))
+    tokio::task::spawn_blocking(move || dunce::canonicalize(&owned).unwrap_or(owned))
         .await
         .unwrap_or_else(|_| path.to_path_buf())
 }
@@ -475,8 +476,7 @@ impl Inner {
             home: context
                 .env
                 .as_ref()
-                .and_then(|env| env.get("HOME"))
-                .map(PathBuf::from),
+                .and_then(devlanes_core::paths::client_home),
         };
         let found = match devlanes_core::refs::resolve_lane(&parsed, &candidates, &resolve) {
             Ok(found) => found,
@@ -749,11 +749,46 @@ impl Engine {
 }
 
 /// Requests counted as attempts to use the client environment (decision 7).
+/// The askpass variables of an ssh run stay out, so no unit inherits them from
+/// a client started under that run.
 pub(crate) fn carries_env(context: &Context) -> Option<Arc<crate::model::EnvMap>> {
-    context.env.as_ref().map(|env| Arc::new(env.clone()))
+    context.env.as_ref().map(|env| {
+        let mut env = env.clone();
+        for name in devlanes_proto::remote::ASKPASS_ENV {
+            devlanes_core::env::remove(&mut env, name);
+        }
+        Arc::new(env)
+    })
 }
 
 /// Sets the daemon-wide flag once; true for the first caller.
 pub(crate) fn once(flag: &AtomicBool) -> bool {
     !flag.swap(true, Ordering::SeqCst)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A client environment reaches units without ssh's askpass variables.
+    #[test]
+    fn client_environments_lose_the_askpass_variables() {
+        let context = Context {
+            env: Some(
+                [
+                    ("PATH", "/usr/bin"),
+                    ("DEVLANES_ASKPASS", "1"),
+                    ("DEVLANES_ASKPASS_SOCKET", "/tmp/dl/run/ssh/a.sock"),
+                    ("DEVLANES_HOME", "/tmp/dl"),
+                ]
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .into(),
+            ),
+            ..Context::default()
+        };
+        let env = carries_env(&context).unwrap_or_default();
+        let names: Vec<&str> = env.keys().map(String::as_str).collect();
+        assert_eq!(names, ["DEVLANES_HOME", "PATH"]);
+        assert!(carries_env(&Context::default()).is_none());
+    }
 }

@@ -12,7 +12,20 @@ use tokio_util::sync::CancellationToken;
 use crate::{DnsError, Zone, answer};
 
 /// Default port: unprivileged, so the daemon never needs root to serve DNS.
+#[cfg(unix)]
 pub const DEFAULT_PORT: u16 = 15353;
+
+/// Default port: NRPT rules name DNS servers by address only, so the server must
+/// answer on 53. Windows has no privileged ports, so this needs no admin.
+#[cfg(windows)]
+pub const DEFAULT_PORT: u16 = 53;
+
+/// The Windows listen address: a loopback address of its own, because
+/// `127.0.0.1:53` and `0.0.0.0:53` are often held already (Internet Connection
+/// Sharing, Docker, WSL), and an exact-address bind coexists with those
+/// wildcard binds. Windows routes all of `127.0.0.0/8` to loopback.
+#[cfg(windows)]
+const WINDOWS_LISTEN_IP: Ipv4Addr = Ipv4Addr::new(127, 53, 0, 1);
 
 /// Large enough for any query a stub resolver sends, EDNS options included.
 const UDP_BUFFER: usize = 4096;
@@ -29,9 +42,16 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 /// Attempts to find a free port for both UDP and TCP when binding port 0.
 const EPHEMERAL_ATTEMPTS: usize = 16;
 
-/// `127.0.0.1:15353`.
+/// `127.0.0.1:15353`, the address the OS resolver file names.
+#[cfg(unix)]
 pub fn default_listen() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), DEFAULT_PORT)
+}
+
+/// `127.53.0.1:53`, the address the NRPT rule names.
+#[cfg(windows)]
+pub fn default_listen() -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(WINDOWS_LISTEN_IP), DEFAULT_PORT)
 }
 
 /// A bound DNS server over UDP and TCP on the same port.
@@ -42,12 +62,110 @@ pub struct DnsServer {
     zone: Arc<Zone>,
 }
 
+/// Whether a failed TCP bind on the UDP port's number should try another
+/// ephemeral port: the TCP twin is taken.
+#[cfg(not(windows))]
+fn retry_ephemeral(kind: io::ErrorKind) -> bool {
+    kind == io::ErrorKind::AddrInUse
+}
+
+/// Whether a failed TCP bind on the UDP port's number should try another
+/// ephemeral port: the TCP twin is taken, or it lies inside a TCP range that
+/// Hyper-V or WSL reserved, which Windows reports as access denied.
+#[cfg(windows)]
+fn retry_ephemeral(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+    )
+}
+
+/// The UDP socket of ephemeral attempt `attempt`, on the port the OS picks.
+#[cfg(not(windows))]
+async fn ephemeral_udp(
+    listen: SocketAddr,
+    _attempt: usize,
+    _last: &mut io::Error,
+) -> Result<Option<UdpSocket>, DnsError> {
+    UdpSocket::bind(listen)
+        .await
+        .map(Some)
+        .map_err(|source| DnsError::Bind {
+            addr: listen,
+            source,
+        })
+}
+
+/// The UDP socket of ephemeral attempt `attempt`, or `None` when its port is
+/// taken (the error goes to `last`). Windows hands out UDP ports in sequence,
+/// so after one lands in a reserved TCP block the next ones would too: retries
+/// pick random ports instead.
+#[cfg(windows)]
+async fn ephemeral_udp(
+    listen: SocketAddr,
+    attempt: usize,
+    last: &mut io::Error,
+) -> Result<Option<UdpSocket>, DnsError> {
+    let mut candidate = listen;
+    if attempt > 0 {
+        candidate.set_port(random_dynamic_port());
+    }
+    match UdpSocket::bind(candidate).await {
+        Ok(udp) => Ok(Some(udp)),
+        Err(error) if attempt > 0 && retry_ephemeral(error.kind()) => {
+            *last = error;
+            Ok(None)
+        }
+        Err(source) => Err(DnsError::Bind {
+            addr: candidate,
+            source,
+        }),
+    }
+}
+
+/// A random port in the IANA dynamic range (49152-65535).
+#[cfg(windows)]
+fn random_dynamic_port() -> u16 {
+    use std::hash::BuildHasher as _;
+    const FIRST: u16 = 49152;
+    let span = u64::from(u16::MAX - FIRST) + 1;
+    // Every `RandomState` has keys of its own, so the hash of a constant is random.
+    let offset = std::hash::RandomState::new().hash_one(0_u8) % span;
+    FIRST + u16::try_from(offset).unwrap_or(0)
+}
+
+/// Nothing to add to a bind error outside Windows.
+#[cfg(not(windows))]
+pub(crate) fn bind_hint(_addr: &SocketAddr, _source: &io::Error) -> &'static str {
+    ""
+}
+
+/// Where to look when port 53 cannot be bound: a socket on `0.0.0.0:53` with
+/// `SO_EXCLUSIVEADDRUSE` makes Windows refuse every other address on the port
+/// with `WSAEACCES`, and one on this exact address reports it in use.
+#[cfg(windows)]
+pub(crate) fn bind_hint(addr: &SocketAddr, source: &io::Error) -> &'static str {
+    let held = matches!(
+        source.kind(),
+        io::ErrorKind::PermissionDenied | io::ErrorKind::AddrInUse
+    );
+    if addr.port() == 53 && held {
+        "; another program holds port 53 on this address or on all addresses (see Get-NetUDPEndpoint -LocalPort 53 and Get-NetTCPConnection -LocalPort 53)"
+    } else {
+        ""
+    }
+}
+
 impl DnsServer {
     /// Binds UDP and TCP on `listen`.
     ///
     /// Port 0 picks one ephemeral port free for both protocols, which tests use.
     pub async fn bind(listen: SocketAddr, zone: Zone) -> Result<Self, DnsError> {
         let bind_error = |addr, source| DnsError::Bind { addr, source };
+        // No SO_EXCLUSIVEADDRUSE on Windows: on our address it would make a
+        // later wildcard bind of the port fail (Internet Connection Sharing
+        // binding 0.0.0.0:53 after the daemon started), and Windows already
+        // refuses other accounts a bind of this exact address and port.
         if listen.port() != 0 {
             let udp = UdpSocket::bind(listen)
                 .await
@@ -58,15 +176,15 @@ impl DnsServer {
             return Ok(Self::new(udp, tcp, zone));
         }
         let mut last = io::Error::new(io::ErrorKind::AddrInUse, "no shared free port");
-        for _ in 0..EPHEMERAL_ATTEMPTS {
-            let udp = UdpSocket::bind(listen)
-                .await
-                .map_err(|e| bind_error(listen, e))?;
+        for attempt in 0..EPHEMERAL_ATTEMPTS {
+            let Some(udp) = ephemeral_udp(listen, attempt, &mut last).await? else {
+                continue;
+            };
             let addr = udp.local_addr().map_err(|e| bind_error(listen, e))?;
             match TcpListener::bind(addr).await {
                 Ok(tcp) => return Ok(Self::new(udp, tcp, zone)),
                 // The UDP port's TCP twin is taken; another ephemeral port will do.
-                Err(error) if error.kind() == io::ErrorKind::AddrInUse => last = error,
+                Err(error) if retry_ephemeral(error.kind()) => last = error,
                 Err(error) => return Err(bind_error(addr, error)),
             }
         }
@@ -173,5 +291,83 @@ async fn serve_tcp(mut stream: TcpStream, zone: &Zone) -> io::Result<()> {
         tokio::time::timeout(TCP_IDLE_TIMEOUT, stream.write_all(&framed))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "dns client stopped reading"))??;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Access denied means a reserved range only on Windows; elsewhere it is a
+    /// real error that a retry would hide.
+    #[test]
+    fn ephemeral_retries_follow_the_os() {
+        assert!(retry_ephemeral(io::ErrorKind::AddrInUse));
+        assert!(!retry_ephemeral(io::ErrorKind::AddrNotAvailable));
+        #[cfg(windows)]
+        assert!(retry_ephemeral(io::ErrorKind::PermissionDenied));
+        #[cfg(not(windows))]
+        assert!(!retry_ephemeral(io::ErrorKind::PermissionDenied));
+    }
+
+    /// Retries spread over the dynamic range instead of following the OS's
+    /// sequential pick into the same reserved block.
+    #[cfg(windows)]
+    #[test]
+    fn retry_ports_are_dynamic_and_spread() {
+        let ports: std::collections::BTreeSet<u16> = (1..EPHEMERAL_ATTEMPTS)
+            .map(|_| random_dynamic_port())
+            .collect();
+        assert!(ports.iter().all(|port| *port >= 49152));
+        assert!(ports.len() > EPHEMERAL_ATTEMPTS / 2, "{ports:?}");
+    }
+
+    /// A held port 53 on Windows says where to look; other failures, ports and
+    /// OSes keep the plain message.
+    #[test]
+    fn bind_errors_name_the_port_53_holder_on_windows() {
+        let message = |port: u16, kind: io::ErrorKind| {
+            DnsError::Bind {
+                addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 53, 0, 1)), port),
+                source: io::Error::from(kind),
+            }
+            .to_string()
+        };
+        let hint = "Get-NetUDPEndpoint -LocalPort 53";
+        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::AddrInUse] {
+            assert_eq!(message(53, kind).contains(hint), cfg!(windows), "{kind:?}");
+            assert!(!message(5353, kind).contains(hint));
+        }
+        assert!(!message(53, io::ErrorKind::AddrNotAvailable).contains(hint));
+        assert!(
+            message(53, io::ErrorKind::AddrInUse)
+                .starts_with("cannot bind the DNS server on 127.53.0.1:53: ")
+        );
+    }
+
+    /// Unix resolver files name a port; NRPT rules cannot, so Windows uses 53 on
+    /// an address of its own.
+    #[test]
+    fn default_listen_follows_the_os() {
+        #[cfg(unix)]
+        assert_eq!(default_listen(), "127.0.0.1:15353".parse().expect("addr"));
+        #[cfg(windows)]
+        assert_eq!(default_listen(), "127.53.0.1:53".parse().expect("addr"));
+        assert!(default_listen().ip().is_loopback());
+    }
+
+    /// The Windows address binds UDP and TCP without admin rights, next to
+    /// whatever holds `0.0.0.0:53` (Internet Connection Sharing on many machines).
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn the_windows_address_binds_without_admin() {
+        match DnsServer::bind(default_listen(), Zone::new("test").expect("zone")).await {
+            Ok(server) => assert_eq!(server.local_addr().expect("addr"), default_listen()),
+            // A devlanes daemon with the resolver strategy holds it on this machine.
+            Err(DnsError::Bind { source, .. }) if source.kind() == io::ErrorKind::AddrInUse => {
+                eprintln!("skipped: {source}");
+            }
+            Err(error) => panic!("binding {}: {error}", default_listen()),
+        }
     }
 }

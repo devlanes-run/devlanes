@@ -50,7 +50,7 @@ ports:
 ## Behaviour
 
 - The daemon is a headless API: results are structured data with machine codes and data (`not_found`, `needs_env`, `port_in_use`); wording, hints and output modes belong to the clients.
-- Processes stop only on an explicit request: `stop`, `lane clean`, `daemon stop` or reset-state. A failed unit stays failed; nothing restarts it. Daemon shutdown stops units and leaves containers running; `daemon.shutdown` (`ShutdownReason::Explicit`) runs the `lane.stop` tasks of lanes with live units first and answers with what it stopped and ran, and a signal (`ShutdownReason::Signal`) skips the tasks.
+- Processes stop only on an explicit request: `stop`, `lane clean`, `daemon stop` or reset-state. A failed unit stays failed; nothing restarts it. Daemon shutdown stops units and leaves containers running; `daemon.shutdown` (`ShutdownReason::Explicit`) runs the `lane.stop` tasks of lanes with live units first and answers with what it stopped and ran, and a signal (`ShutdownReason::Signal`) skips the tasks. On Windows, Ctrl-C or Ctrl-Break of a daemon run in a console, and logoff or shutdown, are `ShutdownReason::Signal` too.
 - Client environments, `secrets unlock` values and secret-provider output stay in memory. After a daemon restart, lanes that should run report `needs_env` until a `start` or `lane resume` from a shell.
 - At startup, unfinished `unit_runs` whose recorded PID still has the recorded start time stay running and show as `orphaned`; `stop`, `restart`, `lane clean` and reset-state terminate them, checking each identity first. Containers are re-adopted by label and never stopped.
 - While a service unit runs, each `services.<name>.sync` entry is mirrored into its `to` folder (`local_sync.rs`, using `devlanes-sync`); `sync.status` lists them with `kind: local`.
@@ -60,6 +60,13 @@ ports:
 - While a phase runs, `lane.phase` events with `state: progress` say what it waits on (`phase_progress.rs`): during infra, each container's state from `InfraProvider::progress`, polled once a second and sent only when it changes; during setup and tasks, the entry or task running with its index and count.
 
 Lane discovery and port blocks are in `registry.rs`, the start pipeline and stop/restart/clean in `lifecycle.rs`, method handlers in `control.rs` and `query.rs`, startup reconciliation in `reconcile.rs`. Integration tests with fake runner, infra and process table are in `tests/it/`.
+
+## Windows
+
+- The endpoint is a named pipe, `\\.\pipe\devlanes-<hash of the home>`, so each home gets its own daemon; the lock and peer check work as with the Unix socket.
+- The daemon refuses to run elevated (as administrator): every unit would inherit administrator rights, and an unelevated CLI could not inspect the daemon's process. `DEVLANES_ALLOW_ELEVATED=1` lifts this for CI runners that only run elevated.
+- State directories are created with an access list for the user, SYSTEM and Administrators only, the Windows counterpart of mode 0700. A directory the user owns whose access list lets other accounts in is tightened to that list at startup.
+- `run:` strings and `ready.cmd` probes run with Git for Windows' `sh.exe`, found once at startup from the `git.exe` on the daemon's `PATH` (or `git --exec-path`), with MSYS path conversion off. Without it they fall back to `cmd.exe`: `config check` and each such launch say so, and multi-line text fails its unit. After installing Git for Windows, run `devlanes daemon restart`.
 
 ## License
 

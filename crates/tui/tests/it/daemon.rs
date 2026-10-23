@@ -64,7 +64,7 @@ async fn daemon_app(width: u16, height: u16) -> Result<App, Box<dyn std::error::
         lines: log_lines(),
         position: LogPosition {
             offset: 900,
-            file: (1, 2),
+            file: Default::default(),
         },
         reset: true,
     })));
@@ -106,7 +106,7 @@ async fn daemon_log_pauses_when_scrolled_and_follows_again() -> TestResult {
         lines: vec!["2026-10-21T09:15:00.000Z  INFO devlanes_daemon: new entry".into()],
         position: LogPosition {
             offset: 950,
-            file: (1, 2),
+            file: Default::default(),
         },
         reset: false,
     })));
@@ -125,7 +125,7 @@ async fn daemon_log_pauses_when_scrolled_and_follows_again() -> TestResult {
         lines: vec!["2026-10-21T09:16:00.000Z  INFO devlanes_daemon: newer entry".into()],
         position: LogPosition {
             offset: 950,
-            file: (1, 2),
+            file: Default::default(),
         },
         reset: false,
     })));
@@ -158,7 +158,7 @@ async fn the_log_filters_by_level_and_text_and_folds_repeats() -> TestResult {
         lines: vec![repeat],
         position: LogPosition {
             offset: 950,
-            file: (1, 2),
+            file: Default::default(),
         },
         reset: false,
     })));

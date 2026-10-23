@@ -105,9 +105,11 @@ fn missing_target_is_an_error() {
         &[("Makefile", ".PHONY: certs\nbuild:\n\ttrue\n")],
     );
     let error = plan(&request(temp.path(), "Makefile", "certs", &[])).expect_err("missing target");
+    // The message shows the host's absolute path; only the shape is checked.
     let message = error
         .to_string()
-        .replace(&temp.path().display().to_string(), "<lane>");
+        .replace(&temp.path().display().to_string(), "<lane>")
+        .replace('\\', "/");
     insta::assert_snapshot!(message, @"`<lane>/Makefile` has no target `certs` (targets: build)");
 }
 

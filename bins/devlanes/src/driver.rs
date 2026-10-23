@@ -14,10 +14,7 @@ use devlanes_proto::{
     RpcError, Selection, StartResult, UnitPeak,
 };
 use serde_json::{Value, json};
-use tokio::{
-    signal::unix::{SignalKind, signal},
-    sync::mpsc,
-};
+use tokio::sync::mpsc;
 
 /// Byte budget of the first `logs --all` page per unit; small, so one response for
 /// many units stays far below the frame limit. Longer logs continue per unit.
@@ -48,9 +45,35 @@ pub struct Signals(mpsc::UnboundedReceiver<Stop>);
 
 impl Signals {
     /// Replaces the default dispositions for the rest of the process.
+    #[cfg(unix)]
     pub fn install() -> std::io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
         let mut interrupt = signal(SignalKind::interrupt())?;
         let mut terminate = signal(SignalKind::terminate())?;
+        let (sender, receiver) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                let received = tokio::select! {
+                    Some(()) = interrupt.recv() => Stop::Interrupt,
+                    Some(()) = terminate.recv() => Stop::Terminate,
+                    else => break,
+                };
+                if sender.send(received).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Self(receiver))
+    }
+
+    /// Replaces the default console handling for the rest of the process. Ctrl-C
+    /// maps to [`Stop::Interrupt`] and Ctrl-Break, the closest thing to SIGTERM a
+    /// console delivers, to [`Stop::Terminate`].
+    #[cfg(windows)]
+    pub fn install() -> std::io::Result<Self> {
+        use tokio::signal::windows::{ctrl_break, ctrl_c};
+        let mut interrupt = ctrl_c()?;
+        let mut terminate = ctrl_break()?;
         let (sender, receiver) = mpsc::unbounded_channel();
         tokio::spawn(async move {
             loop {
@@ -218,7 +241,7 @@ pub fn interrupted_ownership(
             .find(|summary| summary.reference == lane || summary.branch.as_deref() == Some(lane)),
         None => after
             .iter()
-            .filter(|summary| cwd.starts_with(&summary.path))
+            .filter(|summary| devlanes_core::paths::path_starts_with(cwd, &summary.path))
             .max_by_key(|summary| summary.path.as_os_str().len()),
     }?;
     let previous = before
@@ -258,9 +281,154 @@ fn interrupted(stop: Stop) -> RpcError {
 
 /// Whether this process is in the terminal's foreground process group, so a Ctrl-C
 /// on the terminal already reached the child (it shares the group).
+#[cfg(unix)]
 fn terminal_foreground() -> bool {
     rustix::termios::tcgetpgrp(std::io::stdin())
         .is_ok_and(|group| group == rustix::process::getpgrp())
+}
+
+/// Passes a stop on to the `with` command (`pid` as spawned).
+#[cfg(unix)]
+fn forward_stop(pid: Option<u32>, stop: Stop) {
+    let Some(pid) = pid
+        .and_then(|pid| i32::try_from(pid).ok())
+        .and_then(rustix::process::Pid::from_raw)
+    else {
+        return;
+    };
+    let signal = match stop {
+        // In the terminal's foreground group the child got the terminal's
+        // SIGINT already; a second one would hit it twice.
+        Stop::Interrupt if terminal_foreground() => return,
+        Stop::Interrupt => rustix::process::Signal::INT,
+        // A terminal never sends SIGTERM; CI cancellation sends it to us only.
+        Stop::Terminate => rustix::process::Signal::TERM,
+    };
+    let _ = rustix::process::kill_process(pid, signal);
+}
+
+/// The `with` command before its environment and directory are set. std looks
+/// `program` up on the `PATH` in `env` itself.
+#[cfg(unix)]
+async fn with_command(
+    program: &str,
+    args: &[String],
+    _env: &BTreeMap<String, String>,
+    _cwd: &Path,
+) -> Result<tokio::process::Command, RpcError> {
+    let mut command = tokio::process::Command::new(program);
+    command.args(args);
+    Ok(command)
+}
+
+/// Most `PATH` entries a `with` command's `not_found` error lists in
+/// `path_searched`, as the daemon's `spawn_failed` does; `path_more` counts the
+/// rest.
+#[cfg(windows)]
+const PATH_SHOWN: usize = 12;
+
+/// The `with` command before its environment and directory are set. std would
+/// only try `program.exe`, so the program is resolved with `PATHEXT` against the
+/// `PATH` in `env` (finding `npm.cmd`), and batch files run through `cmd.exe`
+/// with std's argument escaping. A program that is not found fails with 127,
+/// an unusable command line (an argument a batch file cannot take, a NUL) with
+/// 2.
+#[cfg(windows)]
+async fn with_command(
+    program: &str,
+    args: &[String],
+    env: &BTreeMap<String, String>,
+    cwd: &Path,
+) -> Result<tokio::process::Command, RpcError> {
+    use devlanes_runner_windows::command::CommandError;
+    let spawn_failed = |message: String| {
+        RpcError::new(
+            "spawn_failed",
+            json!({"message": message, "program": program}),
+            127,
+        )
+    };
+    let owned = (
+        std::ffi::OsString::from(program),
+        args.iter()
+            .map(std::ffi::OsString::from)
+            .collect::<Vec<_>>(),
+        env.clone(),
+        cwd.to_owned(),
+    );
+    // Resolution checks candidate files, so it stays off the executor threads.
+    let built = tokio::task::spawn_blocking(move || {
+        let (program, args, env, cwd) = owned;
+        devlanes_runner_windows::command::build(&program, &args, &env, &cwd)
+    })
+    .await
+    .map_err(|error| spawn_failed(error.to_string()))?
+    .map_err(|error| match &error {
+        // Shaped like the daemon's `spawn_failed` for units, and 127 like a shell.
+        CommandError::NotFound { searched, .. } => {
+            let mut failed = spawn_failed(error.to_string());
+            failed.data["reason"] = json!("not_found");
+            failed.data["path_searched"] =
+                json!(searched.iter().take(PATH_SHOWN).collect::<Vec<_>>());
+            if searched.len() > PATH_SHOWN {
+                failed.data["path_more"] = json!(searched.len() - PATH_SHOWN);
+            }
+            failed
+        }
+        // The command line itself is unusable, which no PATH or install fixes.
+        CommandError::ArgumentNotSafeForBatch(_)
+        | CommandError::ContainsNul(_)
+        | CommandError::NotUnicode(_)
+        | CommandError::InvalidProgram(_) => RpcError::new(
+            "invalid_input",
+            json!({"message": error.to_string(), "program": program}),
+            2,
+        ),
+    })?;
+    let mut command = tokio::process::Command::new(&built.application);
+    if !built.arguments().is_empty() {
+        command.raw_arg(built.arguments());
+    }
+    Ok(command)
+}
+
+/// Nothing to pass on: the `with` command shares this console, so Ctrl-C and
+/// Ctrl-Break already reached it.
+#[cfg(windows)]
+fn forward_stop(_pid: Option<u32>, _stop: Stop) {}
+
+/// The `with` command's exit: its code, or the signal that killed it.
+#[cfg(unix)]
+fn command_exit(status: std::process::ExitStatus) -> CommandExit {
+    use std::os::unix::process::ExitStatusExt;
+    match (status.code(), status.signal()) {
+        (Some(code), _) => CommandExit::Code(u8::try_from(code).unwrap_or(1)),
+        (None, Some(signal)) => CommandExit::Signal(u8::try_from(signal).unwrap_or(1)),
+        (None, None) => CommandExit::Code(1),
+    }
+}
+
+/// `STATUS_CONTROL_C_EXIT` as an exit code: the process ended on Ctrl-C.
+#[cfg(windows)]
+const STATUS_CONTROL_C_EXIT: i32 = 0xC000_013A_u32.cast_signed();
+
+/// The `with` command's exit code. A Ctrl-C exit reads like SIGINT on Unix, so
+/// `with` reports and exits the same way on both. Codes above 255, such as an
+/// NTSTATUS from a crash, become 1; the raw code goes to the debug log.
+#[cfg(windows)]
+fn command_exit(status: std::process::ExitStatus) -> CommandExit {
+    match status.code() {
+        Some(STATUS_CONTROL_C_EXIT) => CommandExit::Signal(Stop::Interrupt.number()),
+        Some(code) => CommandExit::Code(u8::try_from(code).unwrap_or_else(|_| {
+            tracing::debug!(
+                code,
+                hex = %format_args!("{:#010x}", code.cast_unsigned()),
+                "with: exit code does not fit 0-255; reporting 1"
+            );
+            1
+        })),
+        None => CommandExit::Code(1),
+    }
 }
 
 /// Transport errors become exit code 4 (daemon unreachable), RPC errors keep their own.
@@ -316,6 +484,7 @@ pub fn startup_code(reason: &str) -> Option<(String, String)> {
 /// user's), `not_a_directory`, `unreadable`, or `mode` when tightening an own
 /// directory to 0700 failed; only `mode` has a `fix` (`chmod 700 <path>`), since
 /// the others need a person to decide. `owner` is the owning uid.
+#[cfg(unix)]
 pub fn unsafe_directory(path: &Path) -> RpcError {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let metadata = std::fs::symlink_metadata(path).ok();
@@ -342,6 +511,46 @@ pub fn unsafe_directory(path: &Path) -> RpcError {
         ));
     }
     RpcError::new("unsafe_home", data, 4)
+}
+
+/// `unsafe_home` (exit 4): a state directory devlanes refuses, `{message, path,
+/// problem, fix?}`. `problem` is `symlink` (also junctions), `owner` (another
+/// account's, for example Administrators after an elevated run),
+/// `not_a_directory`, `unreadable`, or `acl` when other accounts have access and
+/// tightening it failed. Only `acl` has a `fix`, an `icacls` command keeping this
+/// user, SYSTEM and Administrators; the others need a person to decide.
+#[cfg(windows)]
+pub fn unsafe_directory(path: &Path) -> RpcError {
+    use devlanes_sys::windows::security::{DirProblem, check_private_dir};
+    let (problem, others) = match check_private_dir(path) {
+        Err(_) => ("unreadable", Vec::new()),
+        Ok(Err(DirProblem::ReparsePoint)) => ("symlink", Vec::new()),
+        Ok(Err(DirProblem::NotADirectory)) => ("not_a_directory", Vec::new()),
+        Ok(Err(DirProblem::Owner)) => ("owner", Vec::new()),
+        Ok(Err(DirProblem::Acl(others))) => ("acl", others),
+        // A directory that checks out now was refused for its access list.
+        Ok(Ok(())) => ("acl", Vec::new()),
+    };
+    let mut data = json!({
+        "message": format!("unsafe devlanes home: {}", path.display()),
+        "path": path,
+        "problem": problem,
+    });
+    if problem == "acl"
+        && let Some(fix) = acl_fix(path, &others)
+    {
+        data["fix"] = json!(fix);
+    }
+    RpcError::new("unsafe_home", data, 4)
+}
+
+/// The `icacls` commands that make `path` and everything in it private to this
+/// user, SYSTEM and Administrators (see
+/// [`devlanes_sys::windows::security::private_dir_fix`]); `None` when this user's
+/// SID cannot be read.
+#[cfg(windows)]
+pub(crate) fn acl_fix(path: &Path, others: &[String]) -> Option<String> {
+    devlanes_sys::windows::security::private_dir_fix(path, others).ok()
 }
 
 #[async_trait]
@@ -593,8 +802,8 @@ impl WithDriver for ClientDriver {
                 2,
             ));
         };
-        let mut child = tokio::process::Command::new(program)
-            .args(args)
+        let mut command = with_command(program, args, env, cwd).await?;
+        let mut child = command
             .env_clear()
             .envs(env)
             .current_dir(cwd)
@@ -606,15 +815,7 @@ impl WithDriver for ClientDriver {
                     127,
                 )
             })?;
-        let pid = child
-            .id()
-            .and_then(|pid| i32::try_from(pid).ok())
-            .and_then(rustix::process::Pid::from_raw);
-        let forward = |signal| {
-            if let Some(pid) = pid {
-                let _ = rustix::process::kill_process(pid, signal);
-            }
-        };
+        let pid = child.id();
         loop {
             let received = async {
                 match self.signals.as_mut() {
@@ -625,21 +826,9 @@ impl WithDriver for ClientDriver {
             tokio::select! {
                 status = child.wait() => {
                     let status = status.map_err(|error| RpcError::new("wait_failed", json!({"message": error.to_string()}), 1))?;
-                    use std::os::unix::process::ExitStatusExt;
-                    return Ok(match (status.code(), status.signal()) {
-                        (Some(code), _) => CommandExit::Code(u8::try_from(code).unwrap_or(1)),
-                        (None, Some(signal)) => CommandExit::Signal(u8::try_from(signal).unwrap_or(1)),
-                        (None, None) => CommandExit::Code(1),
-                    });
+                    return Ok(command_exit(status));
                 }
-                Some(stop) = received => match stop {
-                    // In the terminal's foreground group the child got the terminal's
-                    // SIGINT already; a second one would hit it twice.
-                    Stop::Interrupt if terminal_foreground() => {}
-                    Stop::Interrupt => forward(rustix::process::Signal::INT),
-                    // A terminal never sends SIGTERM; CI cancellation sends it to us only.
-                    Stop::Terminate => forward(rustix::process::Signal::TERM),
-                },
+                Some(stop) = received => forward_stop(pid, stop),
             }
         }
     }
@@ -648,6 +837,7 @@ impl WithDriver for ClientDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     /// A lane summary with `(unit, state)` pairs.
@@ -710,6 +900,8 @@ mod tests {
 
     /// A fake daemon on `paths.socket`: answers hello, then hands every request of
     /// each accepted connection to `answer`; `None` drops that connection.
+    // Windows has no local listener until named pipes land.
+    #[cfg(unix)]
     fn fake_daemon(
         paths: &Paths,
         connections: usize,
@@ -752,6 +944,7 @@ mod tests {
     }
 
     /// Paths with the socket inside `home`, away from the runner's XDG_RUNTIME_DIR.
+    #[cfg(unix)]
     fn test_paths(home: &Path) -> Paths {
         let mut paths = Paths::new(home).expect("paths");
         paths.socket = paths.run.join("daemon.sock");
@@ -760,12 +953,14 @@ mod tests {
     }
 
     /// One log line of `unit`.
+    #[cfg(unix)]
     fn line(unit: &str, seq: u64) -> Value {
         json!({"unit": unit, "seq": seq, "timestamp_ms": seq, "text": format!("line {seq}"), "level": null})
     }
 
     /// `with --logs-dir` gets every line: a truncated unit continues page by page
     /// with its cursor until the daemon has no more.
+    #[cfg(unix)]
     #[tokio::test]
     async fn logs_page_each_truncated_unit_to_the_end() {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -815,6 +1010,7 @@ mod tests {
 
     /// A connection that broke (say, on an oversized frame) does not cost the
     /// teardown: stop reconnects once, without spawning a daemon.
+    #[cfg(unix)]
     #[tokio::test]
     async fn stop_reconnects_after_a_broken_connection() {
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -886,6 +1082,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     /// `unsafe_home` carries path, mode and owner; an own home whose tightening
     /// failed carries `chmod 700 <dir>` as its fix, a symlinked one no command,
@@ -908,5 +1105,101 @@ mod tests {
         let error = rpc_error(ClientError::UnsafeDirectory(link));
         assert_eq!(error.data["problem"], "symlink");
         assert!(error.data.get("fix").is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// Each refusal is named; only an access list problem comes with an icacls fix.
+    fn unsafe_directory_names_the_problem() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let error = |path: &Path| {
+            let error = rpc_error(ClientError::UnsafeDirectory(path.to_owned()));
+            assert_eq!(error.code, "unsafe_home");
+            assert_eq!(error.exit_code, 4);
+            assert!(error.data.get("mode").is_none());
+            error.data
+        };
+        let file = tmp.path().join("file");
+        std::fs::write(&file, b"").expect("file");
+        assert_eq!(error(&file)["problem"], "not_a_directory");
+        assert!(error(&file).get("fix").is_none());
+        assert_eq!(error(&tmp.path().join("missing"))["problem"], "unreadable");
+        let open_dir = tmp.path().join("open");
+        std::fs::create_dir(&open_dir).expect("dir");
+        // Everyone, read access.
+        let granted = std::process::Command::new("icacls")
+            .arg(&open_dir)
+            .args(["/grant", "*S-1-1-0:(OI)(CI)R"])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("icacls runs");
+        assert!(granted.success());
+        let open = error(&open_dir);
+        assert_eq!(open["problem"], "acl");
+        let fix = open["fix"].as_str().expect("fix");
+        assert!(
+            fix.starts_with("icacls \"") && fix.contains("/inheritance:r"),
+            "{fix}"
+        );
+        assert!(
+            fix.contains(r#"/remove:g "*S-1-1-0", then icacls"#),
+            "{fix}"
+        );
+        assert!(fix.ends_with(r#"\*" /reset /T /C"#), "{fix}");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// A command ended by Ctrl-C exits like one killed by SIGINT on Unix.
+    fn ctrl_c_exit_reads_as_sigint() {
+        use std::os::windows::process::ExitStatusExt;
+        let exit = |code: u32| command_exit(std::process::ExitStatus::from_raw(code));
+        assert!(matches!(exit(0xC000_013A), CommandExit::Signal(2)));
+        assert!(matches!(exit(0), CommandExit::Code(0)));
+        assert!(matches!(exit(3), CommandExit::Code(3)));
+        assert!(matches!(exit(300), CommandExit::Code(1)));
+        assert!(matches!(exit(0xC000_0005), CommandExit::Code(1)));
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    /// A missing program fails like the daemon's unit spawns (127, `not_found`,
+    /// the PATH searched); an unusable command line is invalid input (2).
+    async fn with_command_errors() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = BTreeMap::from([("PATH".to_owned(), dir.path().display().to_string())]);
+        let missing = with_command("devlanes-no-such-program", &[], &env, dir.path())
+            .await
+            .expect_err("not found");
+        assert_eq!(
+            (missing.code.as_str(), missing.exit_code),
+            ("spawn_failed", 127)
+        );
+        assert_eq!(missing.data["reason"], "not_found");
+        assert_eq!(missing.data["program"], "devlanes-no-such-program");
+        assert_eq!(missing.data["path_searched"], json!([dir.path()]));
+        let crowded = (0..20)
+            .map(|n| dir.path().join(n.to_string()).display().to_string())
+            .collect::<Vec<_>>()
+            .join(";");
+        let env = BTreeMap::from([("PATH".to_owned(), crowded)]);
+        let missing = with_command("devlanes-no-such-program", &[], &env, dir.path())
+            .await
+            .expect_err("not found");
+        assert_eq!(
+            missing.data["path_searched"].as_array().map(Vec::len),
+            Some(PATH_SHOWN)
+        );
+        assert_eq!(missing.data["path_more"], 20 - PATH_SHOWN);
+        for (program, args) in [("", vec![]), ("tool", vec!["a\0b".to_owned()])] {
+            let invalid = with_command(program, &args, &env, dir.path())
+                .await
+                .expect_err("invalid");
+            assert_eq!(
+                (invalid.code.as_str(), invalid.exit_code),
+                ("invalid_input", 2),
+                "{program:?} {args:?}"
+            );
+        }
     }
 }

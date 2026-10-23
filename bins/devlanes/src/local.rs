@@ -1,10 +1,12 @@
 //! Actions that must run in the user's terminal, never in the daemon: CA trust, the
-//! hosts helper and the OS resolver file (they prompt for a password) and
+//! hosts helper and the OS resolver file or NRPT rule (they prompt for a password
+//! or administrator approval) and
 //! `secrets unlock` (fnox asks for the vault there).
 
+#[cfg(unix)]
+use std::net::SocketAddr;
 use std::{
     collections::BTreeSet,
-    net::SocketAddr,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -13,11 +15,17 @@ use std::{
 use devlanes_cli::{Action, Rendered, Runtime};
 use devlanes_client::{Client, Paths};
 use devlanes_proto::{Context, Method, RpcError};
+#[cfg(unix)]
 use devlanes_resolver_dns::ResolverFile;
+#[cfg(unix)]
 use devlanes_resolver_hosts::CommandSpec;
+use devlanes_sys::NoWindow;
 use devlanes_trust::{CaCertificate, TrustStatus, TrustStore, TrustTarget};
 use serde_json::{Value, json};
 
+// Windows routes the TLD with an NRPT rule instead of a resolver file.
+#[cfg(windows)]
+use crate::resolver_nrpt::apply as resolver_install;
 use crate::{driver::rpc_error, output::emit};
 
 /// Name shown in keychains and NSS databases.
@@ -125,6 +133,7 @@ pub(crate) async fn certificate(
     let pem = tokio::task::spawn_blocking(move || -> Result<Option<String>, String> {
         if mkcert {
             let output = std::process::Command::new("mkcert")
+                .no_window()
                 .arg("-CAROOT")
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -199,9 +208,21 @@ pub(crate) fn mkcert_selected(paths: &Paths) -> bool {
     matches!(config.tls.ca, devlanes_config::CaKind::Mkcert)
 }
 
-/// Configured trust targets, defaulting to the system store; mobile targets are refused.
-fn targets(paths: &Paths) -> Vec<TrustTarget> {
-    let config = devlanes_config::load_user(paths.home.join("config.yaml")).unwrap_or_default();
+/// Configured trust targets, defaulting to [`default_targets`]; mobile targets
+/// are refused. Reads the config and detects WSL off the async threads; the
+/// detection is cached, so [`store`] reuses it without blocking.
+async fn targets(paths: &Paths) -> Vec<TrustTarget> {
+    let config = paths.home.join("config.yaml");
+    tokio::task::spawn_blocking(move || configured_targets(&config))
+        .await
+        .unwrap_or_else(|_| default_targets(false))
+}
+
+/// [`targets`], blocking.
+fn configured_targets(config: &Path) -> Vec<TrustTarget> {
+    // Detected first in every case, so the cache is warm for `store`.
+    let windows_reachable = windows_store_reachable();
+    let config = devlanes_config::load_user(config).unwrap_or_default();
     let configured: Vec<TrustTarget> = config
         .tls
         .trust
@@ -214,15 +235,44 @@ fn targets(paths: &Paths) -> Vec<TrustTarget> {
         })
         .collect();
     if configured.is_empty() {
-        vec![TrustTarget::System]
+        default_targets(windows_reachable)
     } else {
         configured
     }
 }
 
+/// The targets of an unset `tls.trust`: the system store, plus the Windows user
+/// store when this Linux is a WSL distro that can run Windows' `certutil.exe`,
+/// because a browser on Windows is the usual client of a daemon in the distro.
+/// Without interop or a mounted System32 that store is out of reach, and
+/// `doctor` says why.
+fn default_targets(windows_reachable: bool) -> Vec<TrustTarget> {
+    if windows_reachable {
+        vec![TrustTarget::System, TrustTarget::Windows]
+    } else {
+        vec![TrustTarget::System]
+    }
+}
+
+/// Whether the `windows` target can work here: WSL with interop on and the
+/// Windows system drive mounted. Blocking on the first call (WSL detection).
+#[cfg(target_os = "linux")]
+fn windows_store_reachable() -> bool {
+    devlanes_trust_linux::WindowsInterop::detect().is_ok()
+}
+
+/// Outside Linux the Windows store is never an extra target: on Windows it is
+/// the system store.
+#[cfg(not(target_os = "linux"))]
+fn windows_store_reachable() -> bool {
+    false
+}
+
 /// The OS decides the store implementation at compile time. `own_ca` lets the
-/// macOS keychain also remove older devlanes CAs by label; mkcert's CA is not ours.
-/// On Linux, sudo may ask for a password only when this invocation may prompt.
+/// macOS keychain and the Windows root store also remove older devlanes CAs by
+/// name on uninstall; mkcert's CA is not ours. On Linux, sudo may ask for a
+/// password only when this invocation may prompt; the macOS and Windows dialogs
+/// appear on the desktop either way.
 fn store(
     target: TrustTarget,
     own_ca: bool,
@@ -239,7 +289,7 @@ fn store(
         };
         trust.store(target)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     {
         use devlanes_trust_linux::{LinuxTrust, Privilege};
         let _ = own_ca;
@@ -250,19 +300,60 @@ fn store(
             },
             root => root,
         };
-        let home = std::env::var_os("HOME").map(PathBuf::from).ok_or_else(|| {
+        let home = devlanes_client::user_home().ok_or_else(|| {
             devlanes_trust::TrustError::io(
                 "finding the home directory",
                 std::io::Error::new(std::io::ErrorKind::NotFound, "HOME is not set"),
             )
         })?;
-        LinuxTrust::new(Arc::new(devlanes_trust::SystemExecutor), home, privilege).store(target)
+        LinuxTrust::new(Arc::new(devlanes_trust::SystemExecutor), home, privilege)
+            .with_windows(devlanes_trust_linux::WindowsInterop::detect())
+            .store(target)
+    }
+    #[cfg(windows)]
+    {
+        let _ = can_prompt;
+        let trust = devlanes_trust_windows::WindowsTrust::from_env();
+        let trust = if own_ca {
+            trust.with_ca_subject(devlanes_trust_windows::DEVLANES_CA_SUBJECT)
+        } else {
+            trust
+        };
+        trust.store(target)
+    }
+}
+
+/// What a store adds to its status: where the CA goes and the dialog a change
+/// shows (see [`TrustStore`]).
+#[derive(Debug, Default)]
+struct StoreNotes {
+    location: Option<String>,
+    approval: Option<String>,
+}
+
+impl StoreNotes {
+    /// Reads the notes of `store`.
+    fn of(store: &dyn TrustStore) -> Self {
+        Self {
+            location: store.location(),
+            approval: store.approval(),
+        }
+    }
+
+    /// `target`, followed by the location when there is one:
+    /// `system (Windows user root store)`.
+    fn name(&self, target: TrustTarget) -> String {
+        match &self.location {
+            Some(location) => format!("{target} ({location})"),
+            None => target.to_string(),
+        }
     }
 }
 
 /// Whether each configured trust store trusts the CA, for `doctor`:
-/// `[{store, state: trusted|untrusted|unknown, reason?}]`, `null` without a CA.
-/// Read-only and never prompts: a store that would need a password is `unknown`.
+/// `[{store, state: trusted|untrusted|distrusted|unknown, reason?, location?, approval?}]`,
+/// `null` without a CA. Read-only and never prompts: a store that would need a
+/// password is `unknown`.
 pub(crate) async fn trust_report() -> Value {
     let Ok(paths) = Paths::discover() else {
         return Value::Null;
@@ -273,19 +364,20 @@ pub(crate) async fn trust_report() -> Value {
     };
     let mut done = BTreeSet::new();
     let mut report = Vec::new();
-    for target in targets(&paths) {
+    for target in targets(&paths).await {
         let status = async {
             target.ensure_supported()?;
             let store: Arc<dyn TrustStore> = Arc::from(store(target, !mkcert, false)?);
             if !done.insert(store.id()) {
                 return Ok(None);
             }
-            store.status(&certificate).await.map(Some)
+            let status = store.status(&certificate).await?;
+            Ok::<_, devlanes_trust::TrustError>(Some((status, StoreNotes::of(store.as_ref()))))
         }
         .await;
         report.push(match status {
             Ok(None) => continue,
-            Ok(Some(status)) => trust_entry(target, &status),
+            Ok(Some((status, notes))) => trust_entry(target, &status, &notes),
             Err(error) => {
                 json!({"store": target.as_str(), "state": "unknown", "reason": error.to_string()})
             }
@@ -295,14 +387,72 @@ pub(crate) async fn trust_report() -> Value {
 }
 
 /// One store's line of [`trust_report`].
-fn trust_entry(target: TrustTarget, status: &TrustStatus) -> Value {
-    match status {
+fn trust_entry(target: TrustTarget, status: &TrustStatus, notes: &StoreNotes) -> Value {
+    let mut entry = match status {
         TrustStatus::Installed => json!({"store": target.as_str(), "state": "trusted"}),
         TrustStatus::Missing => json!({"store": target.as_str(), "state": "untrusted"}),
+        TrustStatus::Distrusted { reason } => {
+            json!({"store": target.as_str(), "state": "distrusted", "reason": reason})
+        }
         TrustStatus::Unknown { reason } => {
             json!({"store": target.as_str(), "state": "unknown", "reason": reason})
         }
+    };
+    for (key, note) in [("location", &notes.location), ("approval", &notes.approval)] {
+        if let Some(note) = note {
+            entry[key] = json!(note);
+        }
     }
+    entry
+}
+
+/// A target's status after `certs trust` or `untrust`, or why it failed.
+type TrustResult = Result<(TrustStatus, StoreNotes), devlanes_trust::TrustError>;
+
+/// A configured target and its store, or why there is none.
+type TargetStore = (
+    TrustTarget,
+    Result<Box<dyn TrustStore>, devlanes_trust::TrustError>,
+);
+
+/// Installs or removes `ca` in `stores`, in order, and reads each one's status.
+///
+/// Stores sharing an id (System and Chrome in the macOS login keychain, every
+/// browser target in the Windows user root store) are changed once and get one
+/// result. `announce` gets the dialog a change is about to show.
+async fn apply_trust(
+    stores: Vec<TargetStore>,
+    ca: &CaCertificate,
+    install: bool,
+    mut announce: impl FnMut(String),
+) -> Vec<(TrustTarget, TrustResult)> {
+    let mut done = BTreeSet::new();
+    let mut results = Vec::new();
+    for (target, store) in stores {
+        let result = async {
+            let store = store?;
+            if !done.insert(store.id()) {
+                return Ok(None);
+            }
+            if let Some(approval) = store.pending_approval(ca, install).await {
+                announce(approval);
+            }
+            if install {
+                store.install(ca).await?;
+            } else {
+                store.uninstall(ca).await?;
+            }
+            let status = store.status(ca).await?;
+            Ok::<_, devlanes_trust::TrustError>(Some((status, StoreNotes::of(store.as_ref()))))
+        }
+        .await;
+        match result {
+            Ok(None) => {}
+            Ok(Some(done)) => results.push((target, Ok(done))),
+            Err(error) => results.push((target, Err(error))),
+        }
+    }
+    results
 }
 
 /// Installs or removes the CA in every configured store; one failure doesn't skip the rest.
@@ -334,41 +484,53 @@ async fn trust(runtime: &Runtime, install: bool) -> Result<u8, RpcError> {
         ));
         return Ok(0);
     };
-    let mut done = BTreeSet::new();
+    let stores = targets(&paths)
+        .await
+        .into_iter()
+        .map(|target| {
+            let store = target
+                .ensure_supported()
+                .and_then(|()| store(target, !mkcert, runtime.can_prompt()));
+            (target, store)
+        })
+        .collect();
+    // Said before the change, which waits on the dialog.
+    let announce = |approval: String| {
+        if !runtime.quiet {
+            emit(&Rendered {
+                stderr: format!("{approval}\n"),
+                ..Rendered::default()
+            });
+        }
+    };
     let mut failed = false;
     let mut lines = String::new();
-    for target in targets(&paths) {
-        let result = async {
-            target.ensure_supported()?;
-            let store: Arc<dyn TrustStore> =
-                Arc::from(store(target, !mkcert, runtime.can_prompt())?);
-            // System and Chrome share the macOS login keychain; touch it once.
-            if !done.insert(store.id()) {
-                return Ok(None);
-            }
-            if install {
-                store.install(&certificate).await?;
-            } else {
-                store.uninstall(&certificate).await?;
-            }
-            store.status(&certificate).await.map(Some)
-        }
-        .await;
+    let mut hints = String::new();
+    for (target, result) in apply_trust(stores, &certificate, install, announce).await {
         match result {
-            Ok(None) => {}
-            Ok(Some(status)) => {
-                let word = match status {
+            Ok((status, notes)) => {
+                let word = match &status {
                     TrustStatus::Installed => "trusted",
                     TrustStatus::Missing => "untrusted",
+                    TrustStatus::Distrusted { reason } => {
+                        hints.push_str(&format!("warning: {target} distrusts the CA: {reason}\n"));
+                        "distrusted"
+                    }
                     TrustStatus::Unknown { .. } => "unknown",
                 };
-                lines.push_str(&format!("{word} {target}\n"));
+                lines.push_str(&format!("{word} {}\n", notes.name(target)));
             }
             Err(error) => {
                 failed = true;
                 lines.push_str(&format!("failed {target}: {error}\n"));
             }
         }
+    }
+    if !hints.is_empty() {
+        emit(&Rendered {
+            stderr: hints,
+            ..Rendered::default()
+        });
     }
     // mkcert roots are never constrained and not ours to replace.
     if install
@@ -397,6 +559,7 @@ async fn trust(runtime: &Runtime, install: bool) -> Result<u8, RpcError> {
 
 /// The OS resolver file that sends `tld` lookups to the daemon's DNS server at
 /// `server`. Blocking: on Linux it asks `systemctl` for the systemd version.
+#[cfg(unix)]
 pub fn resolver_file(tld: &str, server: SocketAddr) -> Result<ResolverFile, String> {
     let zone = devlanes_resolver_dns::Zone::new(tld).map_err(|error| error.to_string())?;
     #[cfg(target_os = "macos")]
@@ -420,7 +583,7 @@ pub fn resolver_file(tld: &str, server: SocketAddr) -> Result<ResolverFile, Stri
 }
 
 /// The version from `systemctl --version`'s first line, `systemd 255 (255.4-1)`.
-#[cfg(any(not(target_os = "macos"), test))]
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
 fn systemd_version(output: &str) -> Option<u32> {
     let mut words = output.lines().next()?.split_whitespace();
     (words.next()? == "systemd").then_some(())?;
@@ -428,6 +591,7 @@ fn systemd_version(output: &str) -> Option<u32> {
 }
 
 /// Absolute path of a root-run program from the system directories, never `PATH`.
+#[cfg(unix)]
 fn system_program(name: &str) -> Result<String, RpcError> {
     devlanes_trust::find_system_program(&devlanes_trust::SystemExecutor, name)
         .map(|path| path.display().to_string())
@@ -442,11 +606,13 @@ fn system_program(name: &str) -> Result<String, RpcError> {
 
 /// Where `certs trust --resolver` records the file it wrote, so `untrust` removes
 /// that file even after `hostnames.tld` changes.
+#[cfg(unix)]
 fn resolver_record(paths: &Paths) -> PathBuf {
     paths.home.join("resolver-file")
 }
 
 /// What occupies a resolver file path now.
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Occupant {
     Absent,
@@ -457,6 +623,7 @@ enum Occupant {
 }
 
 /// Reads `path` to see whose file it is. Blocking.
+#[cfg(unix)]
 fn occupant(path: &Path) -> Result<Occupant, String> {
     match std::fs::read_to_string(path) {
         Ok(contents) if devlanes_resolver_dns::is_managed(&contents) => Ok(Occupant::Devlanes),
@@ -468,6 +635,7 @@ fn occupant(path: &Path) -> Result<Occupant, String> {
 }
 
 /// Files to remove and the file to write for one `--resolver` run.
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
 struct ResolverPlan {
     remove: Vec<ResolverFile>,
@@ -477,6 +645,7 @@ struct ResolverPlan {
 /// Decides what `--resolver` changes. `configured` is the file for the current
 /// `hostnames.tld`, `recorded` the file the last install wrote. Only files that
 /// start with the devlanes marker are overwritten or removed.
+#[cfg(unix)]
 fn resolver_plan(
     install: bool,
     configured: Option<ResolverFile>,
@@ -526,7 +695,7 @@ fn resolver_plan(
 }
 
 /// The error for `--resolver` without the strategy configured or a recorded install.
-fn not_configured() -> RpcError {
+pub(crate) fn not_configured() -> RpcError {
     RpcError::new(
         "resolver_not_configured",
         json!({"message": "set hostnames.resolver: resolver and hostnames.tld in the user config first"}),
@@ -534,19 +703,26 @@ fn not_configured() -> RpcError {
     )
 }
 
+/// `hostnames.tld` from the user config when `hostnames.resolver` selects the
+/// resolver strategy, unvalidated.
+pub(crate) fn resolver_tld(paths: &Paths) -> Option<String> {
+    let config = devlanes_config::load_user(paths.home.join("config.yaml")).unwrap_or_default();
+    let hostnames = config.hostnames;
+    (hostnames.resolver == devlanes_config::Resolver::Resolver)
+        .then_some(hostnames.tld)
+        .flatten()
+        .filter(|tld| !tld.is_empty())
+}
+
 /// `certs trust --resolver` writes the OS resolver file for `hostnames.tld` with
 /// sudo; `certs untrust --resolver` removes the file the last install recorded.
 /// Either way the OS is told to reload. Files without the devlanes marker are
 /// never touched.
+#[cfg(unix)]
 async fn resolver_install(runtime: &Runtime, install: bool) -> Result<u8, RpcError> {
     let paths = Paths::discover()
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
-    let config = devlanes_config::load_user(paths.home.join("config.yaml")).unwrap_or_default();
-    let hostnames = config.hostnames;
-    let tld = (hostnames.resolver == devlanes_config::Resolver::Resolver)
-        .then_some(hostnames.tld)
-        .flatten()
-        .filter(|tld| !tld.is_empty());
+    let tld = resolver_tld(&paths);
     // The daemon listens on the default address; there is no setting for it.
     let server = devlanes_resolver_dns::default_listen();
     let record = resolver_record(&paths);
@@ -739,10 +915,27 @@ mod tests {
     use super::*;
 
     #[test]
+    /// An unset `tls.trust` adds the Windows store only where it is reachable,
+    /// which is never outside Linux.
+    fn default_targets_add_windows_when_reachable() {
+        assert_eq!(default_targets(false), [TrustTarget::System]);
+        assert_eq!(
+            default_targets(true),
+            [TrustTarget::System, TrustTarget::Windows]
+        );
+        #[cfg(not(target_os = "linux"))]
+        assert!(!windows_store_reachable());
+    }
+
+    #[test]
     /// Doctor's trust entries name the store and its state.
     fn trust_entries_name_store_and_state() {
         assert_eq!(
-            trust_entry(TrustTarget::System, &TrustStatus::Missing),
+            trust_entry(
+                TrustTarget::System,
+                &TrustStatus::Missing,
+                &StoreNotes::default()
+            ),
             json!({"store": "system", "state": "untrusted"})
         );
         assert_eq!(
@@ -750,10 +943,194 @@ mod tests {
                 TrustTarget::Firefox,
                 &TrustStatus::Unknown {
                     reason: "certutil is missing".into()
-                }
+                },
+                &StoreNotes::default()
             ),
             json!({"store": "firefox", "state": "unknown", "reason": "certutil is missing"})
         );
+        assert_eq!(
+            trust_entry(
+                TrustTarget::System,
+                &TrustStatus::Distrusted {
+                    reason: "Disallowed holds it".into()
+                },
+                &StoreNotes::default()
+            ),
+            json!({"store": "system", "state": "distrusted", "reason": "Disallowed holds it"})
+        );
+    }
+
+    #[test]
+    /// Stores that say where the CA goes (the Windows user root store) add it to
+    /// the entry and the status line, with the dialog.
+    fn trust_entries_carry_store_notes() {
+        let notes = StoreNotes {
+            location: Some("Windows user root store".into()),
+            approval: Some("choose Yes".into()),
+        };
+        assert_eq!(
+            trust_entry(TrustTarget::Firefox, &TrustStatus::Installed, &notes),
+            json!({
+                "store": "firefox",
+                "state": "trusted",
+                "location": "Windows user root store",
+                "approval": "choose Yes",
+            })
+        );
+        assert_eq!(
+            notes.name(TrustTarget::System),
+            "system (Windows user root store)"
+        );
+        assert_eq!(StoreNotes::default().name(TrustTarget::System), "system");
+    }
+
+    /// A store that logs its calls, for [`apply_trust`].
+    struct Recorder {
+        target: TrustTarget,
+        id: &'static str,
+        decline: bool,
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Recorder {
+        /// Logs `call` and fails like a declined Windows dialog when asked to.
+        fn record(&self, call: &str) -> Result<(), devlanes_trust::TrustError> {
+            self.log
+                .lock()
+                .expect("log")
+                .push(format!("{} {call}", self.target));
+            if self.decline && call != "status" {
+                return Err(devlanes_trust::TrustError::Cancelled {
+                    detail: "declined".into(),
+                });
+            }
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TrustStore for Recorder {
+        fn target(&self) -> TrustTarget {
+            self.target
+        }
+
+        fn id(&self) -> &'static str {
+            self.id
+        }
+
+        fn describe(&self) -> String {
+            self.id.into()
+        }
+
+        async fn pending_approval(&self, _: &CaCertificate, install: bool) -> Option<String> {
+            Some(format!("approve {} install={install}", self.target))
+        }
+
+        async fn install(&self, _: &CaCertificate) -> Result<(), devlanes_trust::TrustError> {
+            self.record("install")
+        }
+
+        async fn uninstall(&self, _: &CaCertificate) -> Result<(), devlanes_trust::TrustError> {
+            self.record("uninstall")
+        }
+
+        async fn status(
+            &self,
+            _: &CaCertificate,
+        ) -> Result<TrustStatus, devlanes_trust::TrustError> {
+            self.record("status").map(|()| TrustStatus::Missing)
+        }
+    }
+
+    /// A fresh devlanes CA.
+    fn test_ca() -> CaCertificate {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca =
+            devlanes_pki::CertificateAuthority::load_or_create(&dir.path().join("ca")).expect("ca");
+        CaCertificate::from_pem(ca.certificate_pem(), CA_NAME).expect("parse")
+    }
+
+    /// Runs [`apply_trust`] over `stores` (target, id, declines) and returns the
+    /// calls, the announced dialogs and the per-target outcome.
+    async fn run_apply(
+        stores: &[(TrustTarget, &'static str, bool)],
+        install: bool,
+    ) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut stores: Vec<TargetStore> = stores
+            .iter()
+            .map(|&(target, id, decline)| {
+                let store: Box<dyn TrustStore> = Box::new(Recorder {
+                    target,
+                    id,
+                    decline,
+                    log: Arc::clone(&log),
+                });
+                (target, Ok(store))
+            })
+            .collect();
+        stores.push((
+            TrustTarget::IosSimulator,
+            Err(devlanes_trust::TrustError::Unsupported {
+                target: TrustTarget::IosSimulator,
+            }),
+        ));
+        let mut announced = Vec::new();
+        let results = apply_trust(stores, &test_ca(), install, |text| announced.push(text)).await;
+        let outcomes = results
+            .into_iter()
+            .map(|(target, result)| match result {
+                Ok((status, _)) => format!("{target} {status:?}"),
+                Err(error) => format!("{target} failed: {error}"),
+            })
+            .collect();
+        let calls = log.lock().expect("log").clone();
+        (calls, announced, outcomes)
+    }
+
+    #[tokio::test]
+    /// Targets sharing a store (every browser target on Windows) change it once:
+    /// a declined dialog is shown and reported once.
+    async fn shared_store_changes_once() {
+        let stores = [
+            (TrustTarget::System, "root", true),
+            (TrustTarget::Chrome, "root", true),
+            (TrustTarget::Firefox, "root", true),
+        ];
+        for install in [true, false] {
+            let change = if install { "install" } else { "uninstall" };
+            let (calls, announced, outcomes) = run_apply(&stores, install).await;
+            assert_eq!(calls, [format!("system {change}")]);
+            assert_eq!(announced, [format!("approve system install={install}")]);
+            assert_eq!(
+                outcomes,
+                [
+                    "system failed: declined",
+                    "ios-simulator failed: ios-simulator certificate trust is not supported yet",
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    /// Separate stores (NSS profiles on Unix) are each changed.
+    async fn separate_stores_each_change() {
+        let stores = [
+            (TrustTarget::System, "keychain", false),
+            (TrustTarget::Firefox, "nss", false),
+        ];
+        let (calls, announced, outcomes) = run_apply(&stores, true).await;
+        assert_eq!(
+            calls,
+            [
+                "system install",
+                "system status",
+                "firefox install",
+                "firefox status"
+            ]
+        );
+        assert_eq!(announced.len(), 2);
+        assert_eq!(outcomes[..2], ["system Missing", "firefox Missing"]);
     }
 
     #[test]
@@ -785,6 +1162,7 @@ mod tests {
     }
 
     /// An `Output` with exit `code` and `stdout`.
+    #[cfg(unix)]
     fn output(code: i32, stdout: &str) -> std::process::Output {
         use std::os::unix::process::ExitStatusExt;
         std::process::Output {
@@ -795,6 +1173,7 @@ mod tests {
     }
 
     /// A CA without name constraints, as devlanes created before it added them.
+    #[cfg(unix)]
     const UNCONSTRAINED_CA: &str = "-----BEGIN CERTIFICATE-----
 MIICPTCCAeSgAwIBAgIJAJaVCy5tlb5jMAoGCCqGSM49BAMCMB8xHTAbBgNVBAMM
 FG9sZCBkZXZsYW5lcyB0ZXN0IENBMCAXDTI2MTAyMTE0NTI1MloYDzIxMjYwOTI3
@@ -812,6 +1191,8 @@ oA==
 -----END CERTIFICATE-----
 ";
 
+    // The recreate hint is a Unix command line with a Unix path.
+    #[cfg(unix)]
     #[test]
     /// An old unconstrained CA gets recreate instructions; a new one does not.
     fn unconstrained_ca_is_reported() {
@@ -853,6 +1234,8 @@ oA==
         }
     }
 
+    // Unix exit statuses and absolute paths.
+    #[cfg(unix)]
     #[test]
     /// CAROOT needs a successful exit and a non-empty absolute path.
     fn mkcert_caroot_is_validated() {
@@ -868,6 +1251,7 @@ oA==
     }
 
     /// A resolver file at `path` (contents are irrelevant to planning).
+    #[cfg(unix)]
     fn file(path: &str) -> ResolverFile {
         ResolverFile {
             path: PathBuf::from(path),
@@ -877,6 +1261,7 @@ oA==
     }
 
     /// Occupants by path for planning tests.
+    #[cfg(unix)]
     fn occupants(
         entries: &'static [(&'static str, Occupant)],
     ) -> impl Fn(&Path) -> Result<Occupant, String> {
@@ -888,6 +1273,8 @@ oA==
         }
     }
 
+    // Resolver files are Unix only; `crate::resolver_nrpt` has the Windows tests.
+    #[cfg(unix)]
     #[test]
     /// Valet's or puma-dev's `/etc/resolver/test` is neither overwritten nor removed.
     fn foreign_resolver_files_are_refused() {
@@ -900,6 +1287,7 @@ oA==
         assert_eq!(error.code, "resolver_file_foreign");
     }
 
+    #[cfg(unix)]
     #[test]
     /// Install writes the configured file and drops the recorded one after a TLD
     /// change; untrust removes the recorded file, not the configured one.
@@ -961,6 +1349,7 @@ oA==
         );
     }
 
+    #[cfg(unix)]
     #[test]
     /// Only marker-first files count as devlanes'.
     fn occupant_reads_the_marker() {

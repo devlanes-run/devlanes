@@ -13,16 +13,19 @@ use devlanes_core::{
     ExitOutcome, LaunchSpec, OutputChunk, ProcessIdentity, StopPolicy, TerminalSize, Unit,
     contrib::{CA_BUNDLE_ENV, CA_CERT_ENV, Contributor, ScriptRunner},
 };
+use devlanes_daemon::integrations::{
+    ConnectOptions, ExitDetails, RemoteConnector, RemotePrompt, RemotePrompter,
+};
 use devlanes_daemon::{
     Engine, EngineOptions, Handler,
     integrations::{
-        ConnectOptions, ExitDetails, InfraContainer, InfraError, InfraEvent, InfraPortNeed,
-        InfraProvider, InfraSpec, InfraUp, Integrations, LaunchCheck, ManagedUnit, PlannedUnit,
-        PortInspector, PortScope, PresetEntry, RemoteConnector, RemotePrompt, RemotePrompter,
-        RouteEntry, RouteSink, RouteStatus, SysProcesses, UnitRunner, unavailable,
+        InfraContainer, InfraError, InfraEvent, InfraPortNeed, InfraProvider, InfraSpec, InfraUp,
+        Integrations, LaunchCheck, ManagedUnit, PlannedUnit, PortInspector, PortScope, PresetEntry,
+        RouteEntry, RouteSink, RouteStatus, UnitRunner, unavailable,
     },
 };
 use devlanes_proto::RpcError;
+use devlanes_sys::NoWindow;
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -45,6 +48,8 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         theme: Some(tui.theme.as_str().to_owned()),
         glyphs: Some(tui.glyphs.as_str().to_owned()),
         on_quit: Some(tui.on_quit.as_str().to_owned()),
+        // `None` on Windows: the logon entry gives the daemon no stop window to
+        // compare stop timeouts with (see `service_report`).
         service: Some(crate::daemon::service_report().await).filter(|report| !report.is_null()),
         // The process's environment, zone and directory.
         env: None,
@@ -98,17 +103,16 @@ pub async fn engine(
     let ca_permitted = ca.as_ref().and_then(|ca| ca.permitted_dns_names());
     let routes = Arc::new(proxy(&user, ca, shutdown.clone()).await);
     let infra = Arc::new(ContainerInfra::new().await);
-    let mut integ = Integrations::with_runner(Arc::new(PtyUnits(
-        devlanes_runner_pty::PtyRunner::default(),
-    )));
+    let mut integ = Integrations::with_runner(unit_runner()?);
     integ.contributors = contributors();
     integ.script_runners = script_runners();
     integ.secrets = Some(Arc::new(devlanes_secrets_fnox::FnoxProvider::default()));
+    integ.metrics = metrics_sources(infra.docker.as_ref());
     integ.infra = infra;
     integ.routes = routes;
-    integ.metrics = metrics_sources();
     integ.ports = Arc::new(SysPorts);
-    integ.processes = Arc::new(SysProcesses);
+    integ.processes = crate::orphans::process_table()?;
+    integ.shell = devlanes_daemon::integrations::detect_shell().await;
     integ.ca_env = ca_env;
     integ.ca_status = ca_status;
     integ.ca_permitted = ca_permitted;
@@ -139,6 +143,7 @@ const HOSTS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The `/etc/hosts` fallback over `sudo -n` and the installed helper. Only names
 /// under `.localhost` are written when the configured TLD is one the helper refuses.
+#[cfg(unix)]
 async fn hosts_file(
     policy: devlanes_resolver_hosts::HostsFilePolicy,
     tld: Option<String>,
@@ -183,6 +188,56 @@ async fn hosts_file(
         },
     ))
 }
+
+/// The hosts file fallback through the `devlanes-hosts` Windows service. It
+/// counts as installed when anything answers its pipe other than "no such pipe",
+/// as the helper counts as installed when its file exists; a refusal or an old
+/// protocol is then reported by the first update.
+#[cfg(windows)]
+async fn hosts_file(
+    policy: devlanes_resolver_hosts::HostsFilePolicy,
+    tld: Option<String>,
+    probe: Option<tokio::task::JoinHandle<devlanes_resolver_hosts::LocalhostResolution>>,
+) -> Option<devlanes_daemon::hosts::HostsFile> {
+    use devlanes_resolver_hosts::pipe::PipeHostsClient;
+    use devlanes_resolver_hosts::{HostsClient, LocalhostResolution};
+    let resolution = match probe {
+        // A panicked probe proves nothing about the resolver; treat it like a failure.
+        Some(probe) => Some(probe.await.unwrap_or(LocalhostResolution::Fails)),
+        None => None,
+    };
+    tracing::info!(mode = %policy.user_mode(), ?resolution, "hosts file policy");
+    let pipe = PipeHostsClient::system();
+    let (client, tld_error) = match HostsClient::service(pipe.clone(), tld.as_deref()) {
+        Ok(client) => (client, None),
+        Err(error) => match HostsClient::service(pipe, None) {
+            Ok(client) => (client, Some(error)),
+            Err(error) => {
+                tracing::warn!(%error, "hosts file fallback unavailable");
+                return None;
+            }
+        },
+    };
+    let check = client.clone().with_timeout(HOSTS_SERVICE_CHECK_TIMEOUT);
+    let installed = !matches!(check.version().await, Err(error) if error.is_missing());
+    Some(devlanes_daemon::hosts::HostsFile::spawn(
+        client,
+        devlanes_daemon::hosts::HostsOptions {
+            policy,
+            resolution,
+            installed,
+            tld_error,
+            sync: devlanes_resolver_hosts::SyncConfig::default(),
+            // Shipped together: the service next to this binary has this version.
+            expected_version: env!("CARGO_PKG_VERSION").into(),
+        },
+    ))
+}
+
+/// Bound on the startup question to the hosts service; it answers in
+/// milliseconds when it runs.
+#[cfg(windows)]
+const HOSTS_SERVICE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `~/.devlanes/config.yaml`, or defaults when absent or invalid (logged).
 async fn load_user_config(home: &Path) -> (devlanes_config::UserConfig, Vec<Value>) {
@@ -288,7 +343,10 @@ fn pressure_source() -> Option<Arc<dyn devlanes_core::gate::PressureSource>> {
     #[cfg(target_os = "linux")]
     let source: Option<Arc<dyn devlanes_core::gate::PressureSource>> =
         Some(Arc::new(devlanes_metrics_linux::LinuxPressure::new()));
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(windows)]
+    let source: Option<Arc<dyn devlanes_core::gate::PressureSource>> =
+        Some(Arc::new(devlanes_metrics_windows::WindowsPressure::new()));
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     let source = None;
     source
 }
@@ -333,8 +391,12 @@ fn start_gate(
     }
 }
 
-/// Process collectors for this OS plus Docker container stats.
-fn metrics_sources() -> Vec<Arc<dyn devlanes_metrics::MetricsSource>> {
+/// Process collectors for this OS plus Docker container stats. Container stats share
+/// the infra client, so they reach the engine `DOCKER_HOST` or the Docker context
+/// selects; without that client there is no engine to sample.
+fn metrics_sources(
+    docker: Option<&devlanes_infra_docker::DockerInfra>,
+) -> Vec<Arc<dyn devlanes_metrics::MetricsSource>> {
     let mut sources: Vec<Arc<dyn devlanes_metrics::MetricsSource>> = Vec::new();
     #[cfg(target_os = "macos")]
     match devlanes_metrics_macos::MacosSource::new() {
@@ -343,9 +405,13 @@ fn metrics_sources() -> Vec<Arc<dyn devlanes_metrics::MetricsSource>> {
     }
     #[cfg(target_os = "linux")]
     sources.push(Arc::new(devlanes_metrics_linux::LinuxSource::new()));
-    match devlanes_metrics_docker::DockerSource::connect() {
-        Ok(source) => sources.push(Arc::new(source)),
-        Err(error) => tracing::debug!(%error, "container metrics unavailable"),
+    #[cfg(windows)]
+    sources.push(Arc::new(devlanes_metrics_windows::WindowsSource::new()));
+    match docker {
+        Some(docker) => sources.push(Arc::new(devlanes_metrics_docker::DockerSource::new(
+            docker.client().clone(),
+        ))),
+        None => tracing::debug!("container metrics unavailable: no Docker client"),
     }
     sources
 }
@@ -364,9 +430,10 @@ async fn open_store(db: &Path) -> anyhow::Result<devlanes_state::Store> {
     }
 }
 
-/// Checks the file `devlanes certs trust --resolver` writes.
+/// Checks the file (the NRPT rule on Windows) `devlanes certs trust --resolver` writes.
 struct OsResolverFiles;
 
+#[cfg(unix)]
 impl devlanes_daemon::integrations::ResolverFiles for OsResolverFiles {
     /// `{path, installed, matches}`; `matches` is false when the file routes the TLD
     /// elsewhere (another port, a stale install), `{error}` when the OS has no form.
@@ -382,6 +449,16 @@ impl devlanes_daemon::integrations::ResolverFiles for OsResolverFiles {
             }
             Err(error) => json!({"error": error}),
         }
+    }
+}
+
+#[cfg(windows)]
+impl devlanes_daemon::integrations::ResolverFiles for OsResolverFiles {
+    /// The NRPT rule's facts from `resolver_nrpt::status`: `foreign` when
+    /// another program's rule routes the namespace, `group_policy` when Group
+    /// Policy rules make Windows ignore local ones.
+    fn status(&self, tld: &str, server: std::net::SocketAddr) -> Value {
+        crate::resolver_nrpt::status(tld, server)
     }
 }
 
@@ -425,6 +502,7 @@ async fn certificate_authority_with(
         devlanes_config::CaKind::Devlanes => None,
         devlanes_config::CaKind::Mkcert => {
             let output = tokio::process::Command::new(mkcert)
+                .no_window()
                 .arg("-CAROOT")
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -468,24 +546,10 @@ async fn certificate_authority_with(
             ),
         };
         if !directory.exists() {
-            use std::os::unix::fs::DirBuilderExt;
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&directory)?;
+            create_private_dir(&directory)?;
         }
-        let system = [
-            "/etc/ssl/cert.pem",
-            "/etc/ssl/certs/ca-certificates.crt",
-            "/etc/pki/tls/certs/ca-bundle.crt",
-        ]
-        .iter()
-        .find_map(|path| std::fs::read_to_string(path).ok())
-        .unwrap_or_default();
-        let bundle = directory.join("bundle.pem");
-        let temp = directory.join(".bundle.pem.tmp");
-        std::fs::write(&temp, ca.combined_bundle(&system))?;
-        std::fs::rename(&temp, &bundle)?;
+        let system = system_roots(ca.certificate_der().as_ref());
+        let bundle = write_bundle(&directory, &ca.combined_bundle(&system))?;
         Ok::<_, devlanes_pki::Error>((ca, cert, bundle))
     })
     .await;
@@ -517,6 +581,178 @@ async fn certificate_authority_with(
     }
 }
 
+/// Writes `contents` to `bundle.pem` in `directory` through a temporary file renamed
+/// into place, and returns the bundle's path. Blocking.
+///
+/// When the rename fails and an older bundle exists, that bundle is kept with a
+/// warning: units only read it at start, so a stale bundle beats turning HTTPS off.
+/// On Windows this happens while a program holds the old file open without delete
+/// sharing (most do); on Unix a rename over an open file succeeds.
+fn write_bundle(directory: &Path, contents: &str) -> std::io::Result<PathBuf> {
+    let bundle = directory.join("bundle.pem");
+    let temp = directory.join(".bundle.pem.tmp");
+    std::fs::write(&temp, contents)?;
+    if let Err(error) = std::fs::rename(&temp, &bundle) {
+        // The temporary file is rewritten next time, so a failed cleanup is harmless.
+        let _ = std::fs::remove_file(&temp);
+        if !bundle.is_file() {
+            return Err(error);
+        }
+        tracing::warn!(%error, path = %bundle.display(), "cannot replace bundle.pem; keeping the previous one");
+    }
+    Ok(bundle)
+}
+
+/// The system's PEM roots for `bundle.pem`, from the first bundle file the OS
+/// ships; empty when there is none. Blocking.
+#[cfg(unix)]
+fn system_roots(_own: &[u8]) -> String {
+    [
+        "/etc/ssl/cert.pem",
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+    ]
+    .iter()
+    .find_map(|path| std::fs::read_to_string(path).ok())
+    .unwrap_or_default()
+}
+
+/// The system's roots for `bundle.pem` as PEM: Mozilla's public roots (built in)
+/// plus the current user's `Root` store, which also lists the machine's roots and
+/// so carries enterprise and custom roots. Blocking.
+///
+/// Windows fetches most public roots on first use (automatic root update), so the
+/// store alone lacks many of the roots Python's certifi has, and units pointed at
+/// `bundle.pem` through `SSL_CERT_FILE` would lose them. Store roots are filtered
+/// like rustls-native-certs 0.8 does (valid now, usable for server
+/// authentication); a root the store lists but fails that filter (purposes
+/// disabled, expired) is left out even when Mozilla's set has it, and so is any
+/// certificate in the user's `Disallowed` store. A store that cannot be opened
+/// leaves the other source. Roots carrying a "disallowed after" date
+/// (`CERT_DISALLOWED_FILETIME_PROP_ID`) are not detected: schannel has no reader
+/// for that property.
+#[cfg(windows)]
+fn system_roots(own: &[u8]) -> String {
+    use schannel::cert_context::{HashAlgorithm, ValidUses};
+    /// The server authentication extended key usage.
+    const SERVER_AUTH: &str = "1.3.6.1.5.5.7.3.1";
+    let open = |name: &str| {
+        schannel::cert_store::CertStoreBuilder::new()
+            .read_only()
+            .open_current_user(name)
+    };
+    let store = match open("Root") {
+        Ok(store) => store
+            .certs()
+            .map(|cert| {
+                let server_auth = match cert.valid_uses() {
+                    Ok(ValidUses::All) => true,
+                    Ok(ValidUses::Oids(oids)) => oids.iter().any(|oid| oid == SERVER_AUTH),
+                    Err(_) => false,
+                };
+                let usable = server_auth && cert.is_time_valid().unwrap_or(false);
+                (cert.to_der().to_vec(), usable)
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "cannot read the Windows root store; bundle.pem has Mozilla's roots only");
+            Vec::new()
+        }
+    };
+    let disallowed: std::collections::HashSet<Vec<u8>> = match open("Disallowed") {
+        Ok(store) => store
+            .certs()
+            .filter_map(|cert| cert.fingerprint(HashAlgorithm::sha1()).ok())
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, "cannot read the Windows Disallowed store; distrusted roots are not filtered");
+            std::collections::HashSet::new()
+        }
+    };
+    // A certificate that cannot be hashed cannot be checked, so it is left out.
+    let distrusted = |der: &[u8]| {
+        schannel::cert_context::CertContext::new(der)
+            .and_then(|cert| cert.fingerprint(HashAlgorithm::sha1()))
+            .ok()
+            .is_none_or(|sha1| disallowed.contains(&sha1))
+    };
+    let builtin = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+        .iter()
+        .map(|cert| cert.to_vec());
+    union_roots(builtin, store, distrusted, own)
+}
+
+/// The bundle's roots as PEM: `builtin` and the usable `store` roots (DER, usable
+/// flag), each once, without `own`, store roots that are not usable and anything
+/// `distrusted` accepts.
+#[cfg(windows)]
+fn union_roots(
+    builtin: impl IntoIterator<Item = Vec<u8>>,
+    store: Vec<(Vec<u8>, bool)>,
+    distrusted: impl Fn(&[u8]) -> bool,
+    own: &[u8],
+) -> String {
+    let refused: std::collections::HashSet<&[u8]> = store
+        .iter()
+        .filter(|(_, usable)| !usable)
+        .map(|(der, _)| der.as_slice())
+        .collect();
+    let candidates: Vec<Vec<u8>> = builtin
+        .into_iter()
+        .chain(
+            store
+                .iter()
+                .filter(|(_, usable)| *usable)
+                .map(|(der, _)| der.clone()),
+        )
+        .filter(|der| !refused.contains(der.as_slice()) && !distrusted(der))
+        .collect();
+    roots_pem(candidates, own)
+}
+
+/// `roots` as PEM blocks, each certificate once and without `own`.
+#[cfg(windows)]
+fn roots_pem(roots: impl IntoIterator<Item = Vec<u8>>, own: &[u8]) -> String {
+    let mut seen = std::collections::HashSet::from([own.to_vec()]);
+    roots
+        .into_iter()
+        .filter(|der| seen.insert(der.clone()))
+        .map(|der| pem_certificate(&der))
+        .collect()
+}
+
+/// One `CERTIFICATE` PEM block with 64-character lines (RFC 7468).
+#[cfg(windows)]
+fn pem_certificate(der: &[u8]) -> String {
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    // Base64 is ASCII, so byte chunks are whole characters.
+    for line in encoded.as_bytes().chunks(64) {
+        pem.push_str(&String::from_utf8_lossy(line));
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    pem
+}
+
+/// Creates the CA directory readable by the owner only.
+#[cfg(unix)]
+fn create_private_dir(directory: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(directory)
+}
+
+/// Creates the CA directory. It inherits the private access list the daemon gives
+/// the devlanes home before it loads the CA.
+#[cfg(windows)]
+fn create_private_dir(directory: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(directory)
+}
+
 /// Binds the proxy (HTTP with fallback 8080, HTTPS with fallback 8443 when a CA
 /// exists) and returns the routing sink. Bind failures are reported, not fatal.
 async fn proxy(
@@ -527,7 +763,11 @@ async fn proxy(
     let lan = user.proxy.lan;
     let mut status = serde_json::Map::new();
     let https = match &ca {
-        Some(_) => match devlanes_proxy::bind_listeners(user.proxy.https_port, 8443, lan) {
+        Some(_) => match devlanes_proxy::bind_listeners(
+            user.proxy.https_port,
+            devlanes_config::ProxyConfig::HTTPS_FALLBACK_PORT,
+            lan,
+        ) {
             Ok(listeners) => Some(listeners),
             Err(error) => {
                 status.insert(
@@ -572,7 +812,11 @@ async fn proxy(
             }
         }
     }
-    match devlanes_proxy::bind_listeners(user.proxy.http_port, 8080, lan) {
+    match devlanes_proxy::bind_listeners(
+        user.proxy.http_port,
+        devlanes_config::ProxyConfig::HTTP_FALLBACK_PORT,
+        lan,
+    ) {
         Ok(listeners) => {
             status.insert(
                 "http".into(),
@@ -724,14 +968,15 @@ fn listener_status(bound: &Value, health: &[devlanes_proxy::ListenerHealth]) -> 
 
 /// `connect` over system OpenSSH, with ssh's prompts relayed to the attached CLI.
 struct SshConnector {
-    /// `$DEVLANES_HOME`; control sockets live in its `run/ssh`.
+    /// `$DEVLANES_HOME`; Unix control sockets live in its `run/ssh`.
     home: PathBuf,
     /// This binary, which ssh runs as `askpass`; without it ssh runs in batch mode.
     exe: Option<PathBuf>,
 }
 
 impl RemoteConnector for SshConnector {
-    /// One SSH transport (and ControlMaster) per box.
+    /// One SSH transport per box: a ControlMaster on Unix, one ssh process per
+    /// session on Windows.
     fn transport(
         &self,
         host: &str,
@@ -786,17 +1031,41 @@ impl devlanes_transport_ssh::PromptRelay for PromptBridge {
     }
 }
 
-/// The PTY runner with identity and socket inspection.
-struct PtyUnits(devlanes_runner_pty::PtyRunner);
+/// The unit runner the daemon spawns services and tasks with.
+#[cfg(unix)]
+fn unit_runner() -> anyhow::Result<Arc<dyn UnitRunner>> {
+    Ok(Arc::new(OsUnits(OsRunner::default())))
+}
+
+/// The unit runner the daemon spawns services and tasks with. Graceful stops
+/// send console control events through this binary as a helper
+/// (`devlanes __console-ctrl`).
+#[cfg(windows)]
+fn unit_runner() -> anyhow::Result<Arc<dyn UnitRunner>> {
+    let helper = devlanes_runner_windows::ConsoleHelper::current_exe()?;
+    Ok(Arc::new(OsUnits(OsRunner::new(helper))))
+}
+
+/// The PTY runner: sessions, PTYs and signals.
+#[cfg(unix)]
+use devlanes_runner_pty::{PtyRunner as OsRunner, PtyUnit as OsUnit};
+/// The Windows runner: job objects and pipes.
+#[cfg(windows)]
+use devlanes_runner_windows::{WindowsRunner as OsRunner, WindowsUnit as OsUnit};
+
+/// The platform's unit runner with identity and socket inspection. Both runners
+/// offer the same methods, so the wrappers below are shared.
+struct OsUnits(OsRunner);
 
 #[async_trait]
-impl UnitRunner for PtyUnits {
-    /// Spawns in a PTY or pipes per the spec.
+impl UnitRunner for OsUnits {
+    /// Spawns per the spec.
     async fn spawn(&self, spec: LaunchSpec) -> Result<Arc<dyn ManagedUnit>, devlanes_core::Error> {
-        Ok(Arc::new(PtyManaged(self.0.spawn_unit(spec).await?)))
+        Ok(Arc::new(OsManaged(self.0.spawn_unit(spec).await?)))
     }
 
-    /// Tasks keep daemons they started in their own session running after they exit.
+    /// Tasks keep daemons they started outside their session (Unix) or console
+    /// (Windows) running after they exit.
     async fn spawn_task(
         &self,
         spec: LaunchSpec,
@@ -804,16 +1073,16 @@ impl UnitRunner for PtyUnits {
         let runner = self
             .0
             .clone()
-            .with_exit_sweep(devlanes_runner_pty::ExitSweep::KeepDaemonized);
-        Ok(Arc::new(PtyManaged(runner.spawn_unit(spec).await?)))
+            .with_exit_sweep(devlanes_core::ExitSweep::KeepDaemonized);
+        Ok(Arc::new(OsManaged(runner.spawn_unit(spec).await?)))
     }
 }
 
-/// [`devlanes_runner_pty::PtyUnit`] as a daemon unit.
-struct PtyManaged(Arc<devlanes_runner_pty::PtyUnit>);
+/// The platform runner's unit as a daemon unit.
+struct OsManaged(Arc<OsUnit>);
 
 #[async_trait]
-impl Unit for PtyManaged {
+impl Unit for OsManaged {
     /// Delegates.
     async fn input(&self, bytes: bytes::Bytes) -> Result<(), devlanes_core::Error> {
         self.0.input(bytes).await
@@ -838,10 +1107,14 @@ impl Unit for PtyManaged {
     async fn subjects(&self) -> Result<Vec<ProcessIdentity>, devlanes_core::Error> {
         self.0.subjects().await
     }
+    /// Delegates.
+    fn renders_screen(&self) -> bool {
+        self.0.renders_screen()
+    }
 }
 
 #[async_trait]
-impl ManagedUnit for PtyManaged {
+impl ManagedUnit for OsManaged {
     /// Leader identity recorded at spawn.
     fn identity(&self) -> Option<ProcessIdentity> {
         Some(self.0.identity())
@@ -902,6 +1175,37 @@ impl PortInspector for SysPorts {
         .ok()
         .flatten()
     }
+
+    /// Scans listening sockets of all visible processes but this one.
+    async fn wildcard_holder(&self, port: u16) -> Option<u32> {
+        tokio::task::spawn_blocking(move || {
+            let pids: Vec<u32> = devlanes_sys::processes()
+                .ok()?
+                .iter()
+                .map(|p| p.pid)
+                .collect();
+            let sockets = devlanes_sys::listening_tcp(&pids).ok()?;
+            wildcard_listener(&sockets, port, std::process::id())
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+}
+
+/// The first of `sockets` on `port` at a wildcard address, owned by a process other
+/// than `own`. Either family counts: a dual-stack `::` listener also takes IPv4.
+fn wildcard_listener(
+    sockets: &[devlanes_sys::ListeningSocket],
+    port: u16,
+    own: u32,
+) -> Option<u32> {
+    sockets
+        .iter()
+        .find(|socket| {
+            socket.addr.port() == port && socket.addr.ip().is_unspecified() && socket.pid != own
+        })
+        .map(|socket| socket.pid)
 }
 
 /// Refuses two tauri instances (any lane or replica) sharing a bundle identifier.
@@ -941,8 +1245,11 @@ struct ContainerInfra {
 
 /// The daemon variables the `docker` CLI needs: where to find binaries and its
 /// config, which engine to talk to, locale and proxies. A daemon started by hand
-/// may carry a full shell environment; none of the rest reaches Compose.
+/// may carry a full shell environment; none of the rest reaches Compose. Windows
+/// also keeps the variables Windows programs need to start (the daemon's own
+/// [`devlanes_client::PLATFORM_ENV`]) and matches names ignoring case (`Path`).
 fn compose_base_env(vars: impl Iterator<Item = (String, String)>) -> BTreeMap<String, String> {
+    use devlanes_client::{PLATFORM_ENV, env_name_eq, env_name_has_prefix};
     const NAMES: &[&str] = &[
         "PATH",
         "HOME",
@@ -961,7 +1268,13 @@ fn compose_base_env(vars: impl Iterator<Item = (String, String)>) -> BTreeMap<St
     ];
     const PREFIXES: &[&str] = &["LC_", "XDG_", "DOCKER_"];
     vars.filter(|(name, _)| {
-        NAMES.contains(&name.as_str()) || PREFIXES.iter().any(|prefix| name.starts_with(prefix))
+        NAMES
+            .iter()
+            .chain(PLATFORM_ENV)
+            .any(|wanted| env_name_eq(name, wanted))
+            || PREFIXES
+                .iter()
+                .any(|prefix| env_name_has_prefix(name, prefix))
     })
     .collect()
 }
@@ -1011,10 +1324,7 @@ fn docker_error(operation: &str) -> impl FnOnce(devlanes_infra_docker::Error) ->
     let command = format!("docker API: {operation}");
     move |error| {
         let text = error.to_string();
-        if matches!(error, devlanes_infra_docker::Error::Io(_))
-            || text.contains("connect")
-            || text.contains("No such file")
-        {
+        if error.is_unreachable() {
             return InfraError::new("docker_unavailable", text);
         }
         let (status, stderr) = match &error {
@@ -1821,6 +2131,20 @@ mod tests {
     }
 
     #[test]
+    /// An engine nobody serves is `docker_unavailable`, not a failed call.
+    fn unreachable_engine_is_unavailable() {
+        let refused = docker_error("list containers of acme")(devlanes_infra_docker::Error::Io(
+            std::io::ErrorKind::ConnectionRefused.into(),
+        ));
+        assert_eq!(refused.code, "docker_unavailable");
+        let missing =
+            docker_error("list containers of acme")(devlanes_infra_docker::Error::Docker(
+                bollard::errors::Error::SocketNotFoundError("/var/run/docker.sock".into()),
+            ));
+        assert_eq!(missing.code, "docker_unavailable");
+    }
+
+    #[test]
     /// Compose sees the docker CLI's variables and none of the shell's others.
     fn compose_base_env_keeps_docker_variables_only() {
         let vars = [
@@ -1838,6 +2162,35 @@ mod tests {
         assert_eq!(
             kept,
             ["DOCKER_CONFIG", "DOCKER_HOST", "HOME", "LC_ALL", "PATH"]
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// Windows keeps `Path` and the variables Windows programs need, matching
+    /// names ignoring case.
+    fn compose_base_env_keeps_windows_variables() {
+        let vars = [
+            ("Path", r"C:\Windows"),
+            ("SystemRoot", r"C:\Windows"),
+            ("ComSpec", r"C:\Windows\System32\cmd.exe"),
+            ("USERPROFILE", r"C:\Users\acme"),
+            ("LocalAppData", r"C:\Users\acme\AppData\Local"),
+            ("Docker_Host", "npipe:////./pipe/docker_engine"),
+            ("GITHUB_TOKEN", "secret"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()));
+        let kept: Vec<String> = compose_base_env(vars.into_iter()).into_keys().collect();
+        assert_eq!(
+            kept,
+            [
+                "ComSpec",
+                "Docker_Host",
+                "LocalAppData",
+                "Path",
+                "SystemRoot",
+                "USERPROFILE"
+            ]
         );
     }
 
@@ -1898,6 +2251,7 @@ mod tests {
     }
 
     /// A fake `mkcert` that prints `caroot` for `-CAROOT`.
+    #[cfg(unix)]
     fn fake_mkcert(dir: &Path, caroot: &Path) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
         let program = dir.join("mkcert");
@@ -1910,6 +2264,8 @@ mod tests {
         program
     }
 
+    // Windows needs a fake mkcert that is not a shell script.
+    #[cfg(unix)]
     #[tokio::test]
     /// With `tls.ca: mkcert` the daemon loads mkcert's root, points the cert env at
     /// it and still writes the bundle under `$DEVLANES_HOME/ca`.
@@ -1985,7 +2341,14 @@ mod tests {
                 .as_str()
                 .is_some_and(|m| m.contains("tls.ca"))
         );
+        // Windows needs a fake mkcert that is not a shell script.
+        #[cfg(unix)]
+        unusable_mkcert_caroot_is_reported(&tmp).await;
+    }
 
+    /// A CAROOT that is empty or relative leaves HTTPS off with the matching error.
+    #[cfg(unix)]
+    async fn unusable_mkcert_caroot_is_reported(tmp: &tempfile::TempDir) {
         // An empty CAROOT is an invalid CA, not a missing program.
         let empty = tmp.path().join("empty");
         std::fs::create_dir(&empty).expect("empty");
@@ -2011,6 +2374,198 @@ mod tests {
                 .is_some_and(|m| m.contains("relative")),
             "{status}"
         );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    /// On Windows bundle.pem holds Mozilla's roots and the root store's
+    /// certificates, a well-known public root among them, plus the devlanes root
+    /// exactly once, and every block parses as a PEM certificate.
+    async fn windows_bundle_has_system_roots_and_the_devlanes_root() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("home");
+        std::fs::create_dir(&home).expect("home");
+        let (env, status, ca) = certificate_authority_with(
+            &home,
+            devlanes_config::CaKind::Devlanes,
+            Path::new("mkcert"),
+            None,
+        )
+        .await;
+        let ca = ca.expect("devlanes CA");
+        assert_eq!(status["present"], true, "{status}");
+        let bundle = std::fs::read_to_string(&env[CA_BUNDLE_ENV]).expect("bundle");
+        let blocks: Vec<&str> = bundle
+            .split_inclusive("-----END CERTIFICATE-----\n")
+            .filter(|block| !block.trim().is_empty())
+            .collect();
+        // Mozilla's set alone has well over a hundred roots; the Windows store
+        // often lists fewer than that until roots are fetched on use.
+        assert!(
+            blocks.len() > webpki_root_certs::TLS_SERVER_ROOT_CERTS.len() / 2,
+            "only {} certificates",
+            blocks.len()
+        );
+        let ders: Vec<Vec<u8>> = blocks
+            .iter()
+            .map(|block| {
+                devlanes_trust::CaCertificate::from_pem(block, "root")
+                    .expect("PEM certificate")
+                    .der()
+                    .to_vec()
+            })
+            .collect();
+        let own = ca.certificate_der();
+        assert_eq!(
+            ders.iter()
+                .filter(|der| der.as_slice() == own.as_ref())
+                .count(),
+            1
+        );
+        // Subject names are plain ASCII inside the DER.
+        let known = [
+            "DigiCert",
+            "ISRG Root",
+            "GlobalSign",
+            "USERTrust",
+            "Microsoft",
+        ];
+        assert!(
+            ders.iter().any(|der| known.iter().any(|name| der
+                .windows(name.len())
+                .any(|bytes| bytes == name.as_bytes()))),
+            "no well-known root among {} certificates",
+            ders.len()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// The store lists the devlanes root once `certs trust` added it, and a root
+    /// can sit in both the user's and the machine's store: each ends up in the
+    /// bundle once, the devlanes root only where `combined_bundle` appends it.
+    fn windows_roots_skip_duplicates_and_the_devlanes_root() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ca =
+            devlanes_pki::CertificateAuthority::load_or_create(&tmp.path().join("ca")).expect("ca");
+        let own = ca.certificate_der().to_vec();
+        let other = vec![0x30, 0x03, 0x02, 0x01, 0x01];
+        let pem = roots_pem([other.clone(), own.clone(), other.clone()], &own);
+        assert_eq!(pem, pem_certificate(&other));
+        let parsed =
+            devlanes_trust::CaCertificate::from_pem(&pem_certificate(&own), "root").expect("pem");
+        assert_eq!(parsed.der(), own.as_slice());
+        assert_eq!(parsed.pem(), pem_certificate(&own));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// The bundle is the union of Mozilla's roots and the usable store roots, minus
+    /// store roots Windows refuses (also when Mozilla has them) and distrusted ones.
+    fn windows_roots_union_mozilla_and_the_store() {
+        let cert = |n: u8| vec![0x30, 0x03, 0x02, 0x01, n];
+        let (mozilla, both, disabled, enterprise, expired, distrusted, own) = (
+            cert(1),
+            cert(2),
+            cert(3),
+            cert(4),
+            cert(5),
+            cert(6),
+            cert(7),
+        );
+        let pem = union_roots(
+            [
+                mozilla.clone(),
+                both.clone(),
+                disabled.clone(),
+                distrusted.clone(),
+            ],
+            vec![
+                (both.clone(), true),
+                (disabled.clone(), false),
+                (enterprise.clone(), true),
+                (expired.clone(), false),
+                (distrusted.clone(), true),
+                (own.clone(), true),
+            ],
+            |der| der == distrusted.as_slice(),
+            &own,
+        );
+        let expected: String = [mozilla, both, enterprise]
+            .iter()
+            .map(|der| pem_certificate(der))
+            .collect();
+        assert_eq!(pem, expected);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// Mozilla's set reaches the bundle through the real filter: the Disallowed
+    /// store does not hold ISRG Root X1, so it is never left out.
+    fn windows_system_roots_include_mozilla_roots() {
+        let pem = system_roots(&[]);
+        let isrg = webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .find(|cert| {
+                let name = b"ISRG Root X1";
+                cert.windows(name.len()).any(|bytes| bytes == name)
+            })
+            .expect("ISRG Root X1 in Mozilla's set");
+        assert!(pem.contains(&pem_certificate(isrg)));
+    }
+
+    #[test]
+    /// A mirror is shadowed only by another process's wildcard listener on the
+    /// same port, in either family; loopback listeners and the daemon's own are not.
+    fn wildcard_listener_is_another_process_on_the_same_port() {
+        let socket = |pid: u32, addr: &str| devlanes_sys::ListeningSocket {
+            pid,
+            addr: addr.parse().expect("address"),
+        };
+        let own = 10;
+        let sockets = [
+            socket(own, "0.0.0.0:5432"),
+            socket(20, "127.0.0.1:5432"),
+            socket(30, "0.0.0.0:6379"),
+            socket(40, "[::]:5432"),
+        ];
+        assert_eq!(wildcard_listener(&sockets, 5432, own), Some(40));
+        assert_eq!(wildcard_listener(&sockets, 6379, own), Some(30));
+        assert_eq!(wildcard_listener(&sockets[..2], 5432, own), None);
+        assert_eq!(wildcard_listener(&sockets, 8080, own), None);
+    }
+
+    #[test]
+    /// A bundle is written through a rename; one that cannot be replaced with no
+    /// older bundle to keep is an error.
+    fn bundle_is_written_or_reported() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bundle = write_bundle(tmp.path(), "one").expect("write");
+        assert_eq!(std::fs::read_to_string(&bundle).expect("read"), "one");
+        let blocked = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(blocked.path().join("bundle.pem/inside")).expect("dir");
+        assert!(write_bundle(blocked.path(), "two").is_err());
+        assert!(!blocked.path().join(".bundle.pem.tmp").exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    /// A bundle held open without delete sharing (what Python's `open` does) cannot
+    /// be replaced; the old one stays and the CA still loads.
+    fn windows_open_bundle_is_kept() {
+        use std::os::windows::fs::OpenOptionsExt;
+        /// `FILE_SHARE_READ`: readers may share, renames over the file may not.
+        const FILE_SHARE_READ: u32 = 1;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let bundle = write_bundle(tmp.path(), "old").expect("write");
+        let _held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&bundle)
+            .expect("open");
+        assert_eq!(write_bundle(tmp.path(), "new").expect("kept"), bundle);
+        assert_eq!(std::fs::read_to_string(&bundle).expect("read"), "old");
+        assert!(!tmp.path().join(".bundle.pem.tmp").exists());
     }
 
     /// An empty one-page SQLite database whose header carries `user_version`.
@@ -2121,6 +2676,7 @@ mod tests {
     async fn offline_reset_moves_a_legacy_database_aside() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let home = tmp.path().join("home");
+        #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
             // The daemon lock only accepts a private home, like $DEVLANES_HOME.
@@ -2129,6 +2685,8 @@ mod tests {
                 .create(&home)
                 .expect("home");
         }
+        #[cfg(windows)]
+        std::fs::create_dir(&home).expect("home");
         let db = home.join("state.db");
         let legacy = legacy_database(4);
         std::fs::write(&db, &legacy).expect("db");

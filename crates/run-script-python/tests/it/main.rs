@@ -86,11 +86,13 @@ fn runner_selection_table() {
                 }
                 line
             }
+            // Messages show the host's absolute path; only the shape is checked.
             Err(error) => format!(
                 "error: {}",
                 error
                     .to_string()
                     .replace(&temp.path().display().to_string(), "<lane>")
+                    .replace('\\', "/")
             ),
         };
         rendered.push_str(&format!("{label}: {line}\n"));
@@ -136,9 +138,11 @@ fn errors() {
         )],
     );
     let error = plan(&request(temp.path(), "pyproject.toml", "migrate", &[])).expect_err("missing");
+    // The message shows the host's absolute path; only the shape is checked.
     let message = error
         .to_string()
-        .replace(&temp.path().display().to_string(), "<lane>");
+        .replace(&temp.path().display().to_string(), "<lane>")
+        .replace('\\', "/");
     insta::assert_snapshot!(message, @"`<lane>/pyproject.toml` has no script `migrate` in [project.scripts] or [tool.poetry.scripts] (scripts: serve, worker)");
     assert!(matches!(
         plan(&request(temp.path(), "../pyproject.toml", "serve", &[])),

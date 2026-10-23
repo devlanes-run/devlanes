@@ -3,6 +3,8 @@
 //! Only `sql:` databases (`cert9.db`) are handled; NSS dropped the legacy `cert8.db`
 //! format years ago. The `sql:` backend tolerates a running browser, so Firefox
 //! does not need to be closed.
+//!
+//! Unix only: on Windows, Chrome, Edge and Firefox read the Windows store.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -161,17 +163,10 @@ impl NssStore {
     /// Creates the shared database so Chromium finds the CA on its first start.
     async fn create_shared(&self, certutil: &str, dir: &Path) -> Result<(), TrustError> {
         let owned = dir.to_owned();
-        tokio::task::spawn_blocking(move || {
-            use std::os::unix::fs::DirBuilderExt as _;
-            // Chromium creates this directory 0700; match it since it can hold client keys.
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(&owned)
-        })
-        .await
-        .map_err(|error| TrustError::io("creating the NSS database", io::Error::other(error)))?
-        .map_err(|error| TrustError::io(format!("creating {}", dir.display()), error))?;
+        tokio::task::spawn_blocking(move || create_private_dir(&owned))
+            .await
+            .map_err(|error| TrustError::io("creating the NSS database", io::Error::other(error)))?
+            .map_err(|error| TrustError::io(format!("creating {}", dir.display()), error))?;
         let command = CommandLine::new(certutil)
             .args(["-N", "-d"])
             .arg(sql_arg(dir)?)
@@ -179,6 +174,16 @@ impl NssStore {
         run_checked(self.executor.as_ref(), &command, &self.certutil.hint).await?;
         Ok(())
     }
+}
+
+/// Creates `dir` and its parents. Chromium creates the shared NSS directory
+/// 0700; match it since it can hold client keys.
+fn create_private_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt as _;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
 }
 
 #[async_trait]
@@ -283,7 +288,10 @@ impl TrustStore for NssStore {
                 TrustStatus::Installed => {}
                 // Missing is actionable (`devlanes certs trust` fixes it), so it wins over Unknown.
                 TrustStatus::Missing => return Ok(TrustStatus::Missing),
-                unknown @ TrustStatus::Unknown { .. } => combined = unknown,
+                // NSS databases report no distrust of their own; kept like Unknown.
+                other @ (TrustStatus::Unknown { .. } | TrustStatus::Distrusted { .. }) => {
+                    combined = other;
+                }
             }
         }
         Ok(combined)

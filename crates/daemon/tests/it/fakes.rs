@@ -27,7 +27,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use devlanes_core::{
     Error, ExitOutcome, LaunchSpec, OutputChunk, OutputStream, ProcessIdentity, StopPolicy,
-    TerminalSize, Unit,
+    StopSignal, TerminalSize, Unit,
 };
 use devlanes_daemon::integrations::{
     ExitDetails, InfraContainer, InfraError, InfraEvent, InfraPortNeed, InfraProvider, InfraSpec,
@@ -39,6 +39,20 @@ use tokio::sync::{broadcast, watch};
 
 /// Identities handed out by the fake runner; far above real PIDs.
 static NEXT_PID: AtomicU32 = AtomicU32::new(4_000_000);
+
+/// The exit signal a Unix runner reports for `signal` (Linux numbering; the
+/// tests only need a signal death).
+fn signal_number(signal: StopSignal) -> i32 {
+    match signal {
+        StopSignal::Hangup => 1,
+        StopSignal::Interrupt => 2,
+        StopSignal::Quit => 3,
+        StopSignal::Kill => 9,
+        StopSignal::User1 => 10,
+        StopSignal::User2 => 12,
+        StopSignal::Terminate => 15,
+    }
+}
 
 /// Records every spawned script in order.
 #[derive(Default, Clone)]
@@ -82,10 +96,18 @@ impl FakeRunner {
     }
 }
 
-/// Extracts the script from `/bin/sh -c <script>` or argv.
+/// Extracts the script from a run string under the default shell (`/bin/sh -c
+/// <script>` on Unix, `cmd.exe /d /s /c <script>` on Windows), from an
+/// explicit `/bin/sh -c <script>` argv on any OS, or from argv.
 fn script_of(spec: &LaunchSpec) -> String {
-    if spec.program == "/bin/sh" && spec.args.first().is_some_and(|a| a == "-c") {
-        return spec.args.get(1).cloned().unwrap_or_default();
+    use devlanes_core::shell::Shell;
+    for shell in [Shell::default(), Shell::posix()] {
+        if spec.program == shell.program
+            && let Some((script, leading)) = spec.args.split_last()
+            && leading == shell.args.as_slice()
+        {
+            return script.clone();
+        }
     }
     std::iter::once(spec.program.clone())
         .chain(spec.args.iter().cloned())
@@ -370,7 +392,7 @@ impl Unit for FakeUnit {
         self.stop.send_replace(true);
         self.end(ExitOutcome {
             code: None,
-            signal: Some(policy.signal),
+            signal: Some(signal_number(policy.signal)),
         });
         Ok(())
     }

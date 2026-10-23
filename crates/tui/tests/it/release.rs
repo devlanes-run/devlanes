@@ -37,12 +37,15 @@ async fn newer_release_shows_until_dismissed() -> TestResult {
         method: InstallMethod::Homebrew,
         dismissed: Vec::new(),
     });
+    // On Windows the advice starts with `devlanes daemon stop`.
+    let advice = InstallMethod::Homebrew.upgrade_advice("99.0.0");
+    assert!(
+        advice.ends_with("brew upgrade devlanes-run/tap/devlanes"),
+        "{advice}"
+    );
     let (notice, text) = app.release_badge().ok_or("no notice")?;
     assert_eq!(notice, "update:99.0.0");
-    assert_eq!(
-        text,
-        "99.0.0 available: brew upgrade devlanes-run/tap/devlanes"
-    );
+    assert_eq!(text, format!("99.0.0 available: {advice}"));
     // The top bar marks the daemon button; the daemon page says what to run.
     let screen = draw(&app)?.backend().to_string();
     let top = screen.lines().next().unwrap_or_default();
@@ -58,8 +61,16 @@ async fn newer_release_shows_until_dismissed() -> TestResult {
         page.contains("warn update  99.0.0 available · u hides it"),
         "{page}"
     );
+    // On Windows the longer advice wraps inside the checks box, so the words
+    // are compared without the borders and padding between lines.
+    let words = |text: &str| {
+        text.split_whitespace()
+            .filter(|word| !word.chars().all(|c| matches!(c, '│' | '"')))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     assert!(
-        page.contains("fix: brew upgrade devlanes-run/tap/devlanes"),
+        words(&page).contains(&words(&format!("fix: {advice}"))),
         "{page}"
     );
 

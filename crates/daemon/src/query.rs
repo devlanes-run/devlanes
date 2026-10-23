@@ -272,9 +272,9 @@ impl Inner {
                 let dir = self
                     .opts
                     .logs
-                    .join(project.name())
+                    .join(devlanes_core::paths::disk_name(&project.name()))
                     .join(index.to_string())
-                    .join(unit.replace('/', "_"));
+                    .join(devlanes_core::paths::disk_name(unit));
                 query_log_dir(dir, unit.to_owned(), query).await
             }
         }
@@ -910,7 +910,9 @@ impl Inner {
                 json!({"lane": reference, "unit": name, "items": items, "truncated": false, "next_cursor": null}),
             );
         }
-        Ok(json!({"lane": reference, "unit": name, "env": env.values}))
+        // What the user's shell takes over (`env`, `--export`, `shell`): without
+        // the variables only devlanes' own shell needs.
+        Ok(json!({"lane": reference, "unit": name, "env": env.exportable()}))
     }
 
     /// `url`: the public URL of a service (internal URL without hosts).
@@ -979,7 +981,7 @@ impl Inner {
             "codex_sandbox": std::env::var_os("CODEX_SANDBOX").is_some(),
             "app_sandbox": std::env::var_os("APP_SANDBOX_CONTAINER_ID").is_some(),
         });
-        Ok(json!({
+        let mut data = json!({
             "version": env!("CARGO_PKG_VERSION"),
             "pid": std::process::id(),
             "home": self.opts.home,
@@ -1003,7 +1005,30 @@ impl Inner {
             "user_config": self.user_config_doctor().await,
             // The CLI compares them with the service manager's stop window.
             "stop_timeouts": self.stop_timeouts(),
-        }))
+        });
+        // Inside WSL only: worktrees on Windows drives, where file watching misses edits.
+        let drives = self.windows_drive_doctor().await;
+        if !drives.is_null() {
+            data["windows_drive_worktrees"] = drives;
+        }
+        self.excluded_ports_doctor(&mut data).await;
+        Ok(data)
+    }
+
+    /// Nothing reserves port ranges on Unix the way Windows does.
+    #[cfg(unix)]
+    async fn excluded_ports_doctor(&self, _data: &mut Value) {}
+
+    /// `doctor`'s `excluded_ports`: the port ranges Windows reserves (read at most
+    /// once a minute), judged against the port pool in effect, the proxy ports and
+    /// the ports of connected boxes.
+    #[cfg(windows)]
+    async fn excluded_ports_doctor(&self, data: &mut Value) {
+        let pool = self.pool().ok().map(|pool| (pool.start, pool.end));
+        let mirrored = self.remote.advertised_ports();
+        let reading = crate::excluded_ports::RESERVED.get().await;
+        data["excluded_ports"] =
+            crate::excluded_ports::report(&reading, pool, &mirrored, &self.opts.user.proxy);
     }
 
     /// `doctor`'s `stop_timeouts`: the longest stop timeout of each service of

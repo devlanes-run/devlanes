@@ -1,25 +1,34 @@
 //! Operating-system process queries for supervision, reconciliation and diagnostics.
 //!
 //! Platform code is selected at compile time: procfs on Linux, libproc and `lsof`
-//! on macOS. Every query is blocking; async callers should use `spawn_blocking`.
+//! on macOS, Win32 on Windows. Every query is blocking; async callers should use
+//! `spawn_blocking`.
 //!
 //! ```
+//! # #[cfg(unix)] {
 //! let me = devlanes_sys::identity(std::process::id())?.expect("own process is visible");
 //! assert!(devlanes_sys::matches(&me)?);
+//! # }
 //! # Ok::<(), devlanes_sys::Error>(())
 //! ```
 
-// Unsafe code is limited to the macOS FFI modules; each block documents its invariants.
+// Unsafe code is limited to the macOS and Windows FFI modules; each block documents
+// its invariants.
 #![deny(unsafe_code)]
 #![warn(clippy::undocumented_unsafe_blocks)]
 
 use std::net::SocketAddr;
 
 pub use devlanes_core::ProcessIdentity;
+#[cfg(unix)]
 pub use rustix::process::Signal;
 
+mod command;
+mod file;
 mod rlimit;
+mod snapshot;
 mod tree;
+mod wsl;
 
 #[cfg(any(target_os = "linux", test))]
 mod procfs;
@@ -36,6 +45,14 @@ mod os;
 #[path = "macos.rs"]
 mod os;
 
+/// Safe wrappers over Win32 security, pipe, process and job calls, for the
+/// endpoint, daemon and runner crates, so those need no `unsafe`.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+pub mod windows;
+#[cfg(windows)]
+use windows as os;
+
 /// Safe wrappers over macOS libproc, mach and sysctl calls for the metrics and
 /// pressure collectors, so those crates need no `unsafe`.
 #[cfg(target_os = "macos")]
@@ -43,8 +60,26 @@ mod os;
 #[path = "darwin.rs"]
 pub mod macos;
 
+pub use command::NoWindow;
+pub use file::{
+    FileIdentity, file_identity, path_identity, remove_file_retrying, rename_retrying, retrying,
+};
 pub use rlimit::{NofileLimit, child_nofile_limit, raise_nofile_limit};
+pub use snapshot::{scans_started, shared_processes};
 pub use tree::{DescendantTracker, session_members, session_members_known};
+pub use wsl::{DriveMount, WindowsDrives, WslInfo};
+
+/// The WSL distro this process runs in, detected on the first call and cached;
+/// `None` outside WSL and on macOS and Windows. The first call blocks briefly.
+pub fn wsl() -> Option<&'static WslInfo> {
+    wsl::wsl()
+}
+
+/// The Windows drives mounted into this WSL distro, read from the mount table
+/// now; empty outside WSL. Blocking.
+pub fn windows_drives() -> WindowsDrives {
+    wsl::windows_drives()
+}
 
 /// Failures reading process tables or invoking diagnostic tools.
 #[derive(Debug, thiserror::Error)]
@@ -61,13 +96,18 @@ pub enum Error {
     /// A diagnostic helper command was unavailable or failed.
     #[error("{tool} failed: {detail}")]
     Tool { tool: &'static str, detail: String },
+    /// The query has no implementation on this platform yet.
+    #[error("{0} is not supported on this platform")]
+    Unsupported(&'static str),
 }
 
 impl From<Error> for devlanes_core::Error {
-    /// Keeps I/O failures typed and reports other process-table failures as integration errors.
+    /// Keeps I/O and unsupported failures typed and reports other process-table
+    /// failures as integration errors.
     fn from(error: Error) -> Self {
         match error {
             Error::Io(error) => Self::Io(error),
+            Error::Unsupported(what) => Self::Unsupported(what.to_owned()),
             other => Self::Integration(other.to_string()),
         }
     }
@@ -78,10 +118,14 @@ impl From<Error> for devlanes_core::Error {
 pub struct ProcessInfo {
     pub pid: u32,
     pub ppid: u32,
-    pub pgid: u32,
-    /// Absent when the platform refused to report the session.
+    /// Unix process group; `None` on Windows, which has none, and when the
+    /// platform did not report it.
+    pub pgid: Option<u32>,
+    /// Absent when the platform refused to report the session, and on Windows.
     pub sid: Option<u32>,
-    pub uid: u32,
+    /// Unix real user ID; `None` on Windows, which identifies users by SID, and
+    /// when the platform did not report it.
+    pub uid: Option<u32>,
     pub start_time: u64,
     /// Exited but not yet reaped by its parent; signals have no effect.
     pub zombie: bool,
@@ -89,14 +133,28 @@ pub struct ProcessInfo {
 }
 
 impl ProcessInfo {
-    /// Returns the identity used for PID-reuse-safe signalling; an unknown session is 0.
+    /// Returns the identity used for PID-reuse-safe signalling, with the group
+    /// token `ProcessIdentity::sid` documents: the session (0 when unknown) on
+    /// Unix, the process's own PID on Windows.
     pub fn identity(&self) -> ProcessIdentity {
         ProcessIdentity {
             pid: self.pid,
-            sid: self.sid.unwrap_or(0),
+            sid: group_of(self),
             start_time: self.start_time,
         }
     }
+}
+
+/// The session, 0 when unknown.
+#[cfg(unix)]
+fn group_of(process: &ProcessInfo) -> u32 {
+    process.sid.unwrap_or(0)
+}
+
+/// No process group survives a daemon crash, so each process is its own.
+#[cfg(windows)]
+fn group_of(process: &ProcessInfo) -> u32 {
+    process.pid
 }
 
 /// A TCP socket in the LISTEN state owned by one of the queried processes.
@@ -169,6 +227,7 @@ pub fn matches(identity: &ProcessIdentity) -> Result<bool, Error> {
 ///
 /// Reconciliation uses this so a recycled PID is never killed. The check and the
 /// signal are not atomic, but reuse within that window requires PID wraparound.
+#[cfg(unix)]
 pub fn signal_verified(identity: &ProcessIdentity, signal: Signal) -> Result<SignalOutcome, Error> {
     let Some(info) = process(identity.pid)? else {
         return Ok(SignalOutcome::Gone);
@@ -204,12 +263,14 @@ pub fn listening_tcp(pids: &[u32]) -> Result<Vec<ListeningSocket>, Error> {
 }
 
 /// Session ID of `pid`, or `None` once it exited or the kernel refused to say.
+#[cfg(unix)]
 pub fn session(pid: u32) -> Option<u32> {
     let sid = rustix::process::getsid(Some(raw_pid(pid)?)).ok()?;
     u32::try_from(sid.as_raw_nonzero().get()).ok()
 }
 
 /// Real user ID of this process; other users' processes are never a unit's.
+#[cfg(unix)]
 pub fn current_uid() -> u32 {
     rustix::process::getuid().as_raw()
 }
@@ -226,6 +287,7 @@ pub enum OpenFile {
 
 /// Identifies what `fd` refers to, for a later [`holders`] lookup. Only character
 /// devices and pipes are supported.
+#[cfg(unix)]
 pub fn open_file(fd: std::os::fd::BorrowedFd<'_>) -> Result<OpenFile, Error> {
     os::open_file(fd)
 }
@@ -240,6 +302,7 @@ pub fn open_file(fd: std::os::fd::BorrowedFd<'_>) -> Result<OpenFile, Error> {
 /// returned can still hold the parent's close-on-exec descriptors until the kernel
 /// finishes its exec, and is then reported as a holder. Blocking; the cost
 /// grows with the descriptors of every candidate, so pass a filtered set.
+#[cfg(unix)]
 pub fn holders(target: OpenFile, pids: &[u32]) -> Result<Vec<u32>, Error> {
     let mut found = Vec::new();
     for &pid in pids {
@@ -251,6 +314,7 @@ pub fn holders(target: OpenFile, pids: &[u32]) -> Result<Vec<u32>, Error> {
 }
 
 /// Converts a kernel PID; 0 and values beyond `pid_t` are not addressable processes.
+#[cfg(unix)]
 fn raw_pid(pid: u32) -> Option<rustix::process::Pid> {
     rustix::process::Pid::from_raw(i32::try_from(pid).ok()?)
 }

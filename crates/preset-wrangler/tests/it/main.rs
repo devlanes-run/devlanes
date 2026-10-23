@@ -121,9 +121,10 @@ async fn adapter_renders_flags_and_env() {
     fake.script_body = Some("wrangler dev --persist-to .state");
     let draft = fake.apply().await.expect("apply");
     insta::assert_snapshot!(draft.args.join(" "), @"--port 20010 --inspector-port 20011 --var DEBUG:true --var PUBLIC_BASE_URL:https://api.acme-1.localhost --var RETRIES:3 --env-file .dev.vars");
+    // Compared as paths: Windows joins with `\`, and both separators match.
     assert_eq!(
-        draft.env.get(REGISTRY_ENV).map(String::as_str),
-        Some("/lanes/acme-1/.devlanes/wrangler-registry")
+        draft.env.get(REGISTRY_ENV).map(Path::new),
+        Some(Path::new("/lanes/acme-1/.devlanes/wrangler-registry"))
     );
 }
 
@@ -208,6 +209,10 @@ fn rejects_hardcoded_port_from_package_json() {
 
 /// Renders `<pm> run dev <preset args>` for every package manager and preset.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "the snapshot shows the Tauri overlay path with Unix `/` separators"
+)]
 fn preset_arg_rendering_matrix() {
     let lane = Path::new(LANE);
     let ports = BTreeMap::from([(INSPECTOR_PORT.to_owned(), 20011)]);

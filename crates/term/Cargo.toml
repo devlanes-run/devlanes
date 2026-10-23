@@ -1,6 +1,6 @@
 [package]
 name = "devlanes-term"
-description = "Terminal integrations for devlanes: the tab progress bar and its detection"
+description = "Terminal integrations for devlanes: the tab progress bar and its detection, and opening URLs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,8 +9,11 @@ publish.workspace = true
 
 [dependencies]
 devlanes-proto = { path = "../proto" }
+# WSL detection for the URL opener and `ShellExecuteExW` on Windows.
+devlanes-sys = { path = "../sys" }
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

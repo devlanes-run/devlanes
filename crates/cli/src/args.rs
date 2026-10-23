@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use devlanes_proto::{Context, ExecParams, LogQuery, Method, Request, Selection};
 use serde_json::json;
 
@@ -199,7 +199,7 @@ The daemon owns the process: logs, stop, attach and status work on it by its\n\
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Trust the devlanes CA and install the /etc/hosts helper
+    /// Trust the devlanes CA and install the hosts file writer
     Certs {
         #[command(subcommand)]
         command: CertsCommand,
@@ -447,10 +447,16 @@ pub enum EnvCommand {
         explain: bool,
     },
     /// Print export KEY=VALUE lines for eval in a shell
+    #[command(
+        after_help = "Examples:\n  eval \"$(devlanes env export api)\"\n  devlanes env export api --shell pwsh | Out-String | Invoke-Expression\n\nIn PowerShell, assigning an empty value removes the variable, so variables with empty values end up unset."
+    )]
     Export {
         /// Unit whose environment to export ([lane:]unit) [default: the lane's variables]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
+        /// Syntax of the printed assignments
+        #[arg(long, value_enum, default_value_t = ExportShell::Posix)]
+        shell: ExportShell,
     },
     /// Open a subshell with the lane's or one unit's environment
     Shell {
@@ -458,6 +464,19 @@ pub enum EnvCommand {
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
+}
+
+/// Shell syntax for `env export`. POSIX is the default on every OS, so scripts
+/// behave the same everywhere.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ExportShell {
+    /// `export NAME='value'`, for sh, bash, zsh and Git Bash
+    #[default]
+    #[value(alias = "sh")]
+    Posix,
+    /// `$env:NAME = 'value'`, for PowerShell; the script is ASCII, other text is decoded from Base64
+    #[value(alias = "powershell")]
+    Pwsh,
 }
 
 #[derive(Debug, Subcommand)]
@@ -482,21 +501,21 @@ pub enum UrlCommand {
 pub enum CertsCommand {
     /// Trust the devlanes CA in the system and browser stores
     Trust {
-        /// Also install the /etc/hosts helper for programs that cannot resolve *.localhost
+        /// Also install the hosts file writer (a sudo helper on macOS and Linux, a service on Windows) for programs that cannot resolve *.localhost
         #[arg(long)]
         hosts: bool,
         /// Also send lookups for hostnames.tld to the devlanes DNS server (/etc/resolver on
-        /// macOS, systemd-resolved on Linux)
+        /// macOS, systemd-resolved on Linux, an NRPT rule on Windows)
         #[arg(long)]
         resolver: bool,
     },
     /// Remove the devlanes CA from the trust stores
     #[command(group(clap::ArgGroup::new("removal").args(["hosts", "resolver"]).multiple(true)))]
     Untrust {
-        /// Also remove the /etc/hosts helper, its sudo rule and the devlanes block in /etc/hosts
+        /// Also remove the hosts file writer (its sudo rule, or the Windows service) and the devlanes block in the hosts file
         #[arg(long)]
         hosts: bool,
-        /// Also remove the OS resolver file for hostnames.tld
+        /// Also remove the OS resolver file for hostnames.tld (the NRPT rule on Windows)
         #[arg(long)]
         resolver: bool,
         /// Keep the CA trusted; with --hosts or --resolver, remove only those
@@ -621,9 +640,9 @@ pub enum DaemonCommand {
         #[arg(long, value_name = "N")]
         tail: Option<usize>,
     },
-    /// Install a login service so the daemon starts at login and outside agent sandboxes
+    /// Start the daemon at login (launchd agent, systemd user unit, or a Windows logon entry)
     Install,
-    /// Remove the login service; a running daemon keeps running
+    /// Stop starting the daemon at login; a running daemon keeps running
     Uninstall,
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
@@ -650,7 +669,10 @@ pub enum Action {
     },
     Attach(Request),
     Open(Request),
-    ExportEnv(Request),
+    ExportEnv {
+        request: Request,
+        shell: ExportShell,
+    },
     Shell(Request),
     Ui,
     Trust {
@@ -702,6 +724,8 @@ impl Cli {
     /// Captures cwd and captures environment only for process-starting methods.
     pub fn action(&self, runtime: &Runtime) -> Result<Action, Error> {
         self.action_with(runtime, std::env::current_dir()?, || {
+            // Names keep the spelling the OS reports (`Path` on Windows); the
+            // daemon matches them case-insensitively there when it layers env.
             std::env::vars_os()
                 .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
                 .collect()
@@ -917,7 +941,7 @@ impl Cli {
                 EnvCommand::Show { unit, explain } => {
                     (Method::Env, json!({"unit": unit, "explain": explain}))
                 }
-                EnvCommand::Export { unit } | EnvCommand::Shell { unit } => {
+                EnvCommand::Export { unit, .. } | EnvCommand::Shell { unit } => {
                     (Method::Env, json!({"unit": unit}))
                 }
             },
@@ -1054,8 +1078,11 @@ impl Cli {
                 command: UrlCommand::Open { .. },
             }) if runtime.mode != OutputMode::Agent => Action::Open(request),
             Some(Command::Env {
-                command: EnvCommand::Export { .. },
-            }) => Action::ExportEnv(request),
+                command: EnvCommand::Export { shell, .. },
+            }) => Action::ExportEnv {
+                request,
+                shell: *shell,
+            },
             Some(Command::Env {
                 command: EnvCommand::Shell { .. },
             }) => Action::Shell(request),

@@ -404,7 +404,12 @@ mod tests {
             let draft = apply_replica(&memo, Some(options), replica)
                 .await
                 .expect("apply");
-            let expected = format!("/lanes/acme-1/.devlanes/tauri/desktop.{replica}.conf.json");
+            let expected = Path::new("/lanes/acme-1")
+                .join(".devlanes")
+                .join("tauri")
+                .join(format!("desktop.{replica}.conf.json"))
+                .display()
+                .to_string();
             assert_eq!(draft.args, ["--config", expected.as_str()]);
             assert_eq!(draft.env.get(CONFIG_ENV), Some(&expected));
             let [file] = draft.files.as_slice() else {
@@ -505,11 +510,18 @@ mod tests {
             overlay_path: &path,
         })
         .expect("valid options");
-        insta::assert_snapshot!(launch.contribution.args.join(" "), @"--config /lanes/acme/.devlanes/tauri/desktop.1.conf.json");
+        // Built with the host separator, so the expectation is too.
+        let expected = Path::new("/lanes/acme")
+            .join(".devlanes")
+            .join("tauri")
+            .join("desktop.1.conf.json")
+            .display()
+            .to_string();
         assert_eq!(
-            launch.contribution.env.get(CONFIG_ENV).map(String::as_str),
-            Some("/lanes/acme/.devlanes/tauri/desktop.1.conf.json")
+            launch.contribution.args.join(" "),
+            format!("--config {expected}")
         );
+        assert_eq!(launch.contribution.env.get(CONFIG_ENV), Some(&expected));
     }
 
     /// Identifier problems are reported before anything starts.

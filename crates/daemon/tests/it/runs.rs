@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use devlanes_daemon::{
     Engine, EngineOptions, Handler,
-    integrations::{CoreRunner, Integrations},
+    integrations::{CoreRunner, Integrations, detect_shell},
 };
 use devlanes_ipc::Frame;
 use devlanes_proto::{LaneSummary, Method, Page};
@@ -94,9 +94,37 @@ async fn a_detached_run_over_a_running_one_is_refused() {
     .expect("timeout");
 }
 
+/// The runner the daemon uses on this OS.
+#[cfg(unix)]
+fn real_runner() -> devlanes_runner_pty::PtyRunner {
+    devlanes_runner_pty::PtyRunner::default()
+}
+
+/// The runner the daemon uses on this OS, with a console helper that does not
+/// exist: no console event can be sent, so a stop terminates at once unless a
+/// window of the unit takes `WM_CLOSE`.
+#[cfg(windows)]
+fn real_runner() -> devlanes_runner_windows::WindowsRunner {
+    devlanes_runner_windows::WindowsRunner::new(devlanes_runner_windows::ConsoleHelper {
+        program: std::env::temp_dir().join("devlanes-no-such-console-helper.exe"),
+        args: Vec::new(),
+    })
+}
+
+/// How soon after the `run` answer the task's first line must be on screen.
+#[cfg(unix)]
+const FIRST_OUTPUT: Duration = Duration::from_secs(1);
+
+/// How soon after the `run` answer the task's first line must be on screen.
+/// Git's `sh.exe` is a launcher that starts the MSYS2 shell, two process starts
+/// that took up to 0.9 s on a loaded machine. Output that waited for the exit
+/// would still come only after the 5 s sleep.
+#[cfg(windows)]
+const FIRST_OUTPUT: Duration = Duration::from_secs(2);
+
 #[tokio::test(flavor = "multi_thread")]
 /// With the real runner, a pipe task's first line is on the attach screen within
-/// a second of the `run` answer.
+/// [`FIRST_OUTPUT`] of the `run` answer.
 async fn a_pipe_task_shows_its_output_right_away() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -110,9 +138,9 @@ async fn a_pipe_task_shows_its_output_right_away() {
         let store = devlanes_state::Store::open(home.join("state.db"))
             .await
             .expect("store");
-        let integ = Integrations::with_runner(Arc::new(CoreRunner(
-            devlanes_runner_pty::PtyRunner::default(),
-        )));
+        let mut integ = Integrations::with_runner(Arc::new(CoreRunner(real_runner())));
+        // The `run:` string is POSIX; on Windows that needs Git's `sh.exe`.
+        integ.shell = detect_shell().await;
         let mut options = EngineOptions::new(&home, home.join("d.sock"));
         options.watch = false;
         let engine = Engine::new(options, store, integ, CancellationToken::new());
@@ -124,6 +152,13 @@ async fn a_pipe_task_shows_its_output_right_away() {
             params,
             context: cx(&main),
         };
+        // The first request for a cwd discovers its project through several `git`
+        // processes, which take seconds on a loaded Windows machine. The bounds
+        // below are about the run, so that happens before the clock starts.
+        engine
+            .handle(request(0, Method::Status, json!({})), session.clone())
+            .await
+            .expect("status");
         let asked = std::time::Instant::now();
         engine
             .handle(
@@ -150,7 +185,7 @@ async fn a_pipe_task_shows_its_output_right_away() {
             .await
             .expect("attach");
         let mut screen = String::new();
-        let shown = tokio::time::timeout(Duration::from_secs(1), async {
+        let shown = tokio::time::timeout(FIRST_OUTPUT, async {
             while let Some(frame) = frames.recv().await {
                 if let Frame::Bytes { data, .. } = frame {
                     screen.push_str(&String::from_utf8_lossy(&data));
@@ -163,7 +198,7 @@ async fn a_pipe_task_shows_its_output_right_away() {
         .await;
         assert!(
             shown.is_ok(),
-            "no output within 1 s of the answer: {screen:?}"
+            "no output within {FIRST_OUTPUT:?} of the answer: {screen:?}"
         );
         assert!(
             answered < Duration::from_secs(2),

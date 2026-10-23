@@ -9,6 +9,7 @@ use bytes::Bytes;
 use devlanes_core::{
     ExitOutcome, LaunchSpec, OutputChunk, ProcessIdentity, StopPolicy, TerminalSize, Unit,
     contrib::{Contributor, ScriptRunner, SecretsProvider},
+    shell::Shell,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -107,6 +108,10 @@ impl Unit for CoreUnit {
     /// Delegates to the wrapped unit.
     async fn subjects(&self) -> Result<Vec<ProcessIdentity>, devlanes_core::Error> {
         self.unit.subjects().await
+    }
+    /// Delegates to the wrapped unit.
+    fn renders_screen(&self) -> bool {
+        self.unit.renders_screen()
     }
 }
 
@@ -495,6 +500,14 @@ impl RouteSink for NoRoutes {
 pub trait PortInspector: Send + Sync {
     /// PID listening on `port`, if any can be identified.
     async fn holder(&self, port: u16) -> Option<u32>;
+
+    /// PID of another process (not this daemon) listening on `port` at a wildcard
+    /// address (`0.0.0.0` or `::`). Windows lets a loopback bind succeed over such
+    /// a listener and take its loopback connections, so remote mirrors look first.
+    /// None known by default.
+    async fn wildcard_holder(&self, _port: u16) -> Option<u32> {
+        None
+    }
 }
 
 /// Inspector that never identifies a holder.
@@ -532,6 +545,7 @@ impl ProcessTable for SysProcesses {
     }
 
     /// SIGTERM to the verified session, then SIGKILL to verified survivors.
+    #[cfg(unix)]
     async fn terminate(&self, identity: ProcessIdentity, grace: Duration) {
         let signal_all = move |signal: devlanes_sys::Signal| {
             let snapshot = devlanes_sys::processes().unwrap_or_default();
@@ -570,6 +584,41 @@ impl ProcessTable for SysProcesses {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
         let _ = tokio::task::spawn_blocking(move || signal_all(devlanes_sys::Signal::KILL)).await;
+    }
+
+    /// Terminates the recorded process if its identity still verifies, and the
+    /// descendants it has now: a crashed daemon's job objects cannot be reopened,
+    /// and children started after the last recording (or after the crash) were
+    /// never recorded, so they are found by parent in a fresh snapshot, the way
+    /// Unix sweeps a session. Each recorded member arrives here on its own (see
+    /// `track_escaped`). This is the hard part only: the composition root wraps
+    /// it with a phase that asks first (Ctrl-Break, `WM_CLOSE`) and honours
+    /// `grace`, since asking needs the runner's console-control helper.
+    #[cfg(windows)]
+    async fn terminate(&self, identity: ProcessIdentity, _grace: Duration) {
+        let ended = tokio::task::spawn_blocking(move || {
+            let snapshot = devlanes_sys::processes()?;
+            // Descendants are only adopted under a root that still verifies.
+            let mut tree = devlanes_sys::DescendantTracker::new(identity);
+            tree.update(&snapshot);
+            for process in tree.live() {
+                let member = process.identity();
+                if let Err(error) = devlanes_sys::windows::proc::terminate_verified(&member, 1) {
+                    tracing::warn!(%error, pid = member.pid, "terminating an orphan failed");
+                }
+            }
+            Ok::<_, devlanes_sys::Error>(())
+        })
+        .await;
+        match ended {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(%error, pid = identity.pid, "terminating an orphan failed")
+            }
+            Err(error) => {
+                tracing::warn!(%error, pid = identity.pid, "terminating an orphan failed")
+            }
+        }
     }
 }
 
@@ -640,13 +689,121 @@ pub struct Integrations {
     pub system_pressure: Option<Arc<dyn devlanes_core::gate::PressureSource>>,
     /// Checks the OS resolver file for the `resolver` hostname strategy.
     pub resolver_files: Option<Arc<dyn ResolverFiles>>,
+    /// Runs `run:` strings and `ready.cmd` probes. Defaults to
+    /// [`Shell::default`]; the composition root sets [`detect_shell`]'s result.
+    pub shell: Shell,
+}
+
+/// Finds the shell for `run:` strings once, at daemon startup. Unix always uses
+/// `/bin/sh` and looks nothing up.
+#[cfg(unix)]
+pub async fn detect_shell() -> Shell {
+    Shell::posix()
+}
+
+/// Finds the shell for `run:` strings once, at daemon startup: Git for Windows'
+/// `sh.exe`, else `cmd.exe`, which `config check` and launch notes warn about.
+/// It runs before the daemon answers, so the usual case starts no process: a
+/// `git.exe` on the daemon's `PATH` in a Git for Windows layout gives the
+/// install root. Only when that finds nothing does it ask `git --exec-path`,
+/// for at most [`EXEC_PATH_TIMEOUT`].
+#[cfg(windows)]
+pub async fn detect_shell() -> Shell {
+    let path = std::env::var_os("PATH");
+    let on_path = tokio::task::spawn_blocking(move || git_sh_on_path(path.as_deref()))
+        .await
+        .ok()
+        .flatten();
+    let found = match on_path {
+        Some(sh) => Some(sh),
+        None => git_sh_from_exec_path().await,
+    };
+    if let Some(sh) = found {
+        tracing::info!(shell = %sh.display(), "run strings use Git for Windows' sh");
+        return Shell::git_sh(&sh);
+    }
+    let fallback = Shell::default();
+    tracing::warn!(
+        shell = %fallback.program,
+        "Git for Windows' sh.exe was not found; run strings fall back to cmd.exe"
+    );
+    fallback
+}
+
+/// Upper bound for `git --exec-path`, well below the client's wait for a
+/// starting daemon, which also covers this detection.
+#[cfg(windows)]
+const EXEC_PATH_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The first `sh.exe` of a Git for Windows install whose `git.exe` is in a
+/// directory of `path`, in `PATH` order. Checks files only; blocking.
+#[cfg(windows)]
+fn git_sh_on_path(path: Option<&std::ffi::OsStr>) -> Option<std::path::PathBuf> {
+    std::env::split_paths(path?)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join("git.exe"))
+        .filter(|git| git.is_file())
+        .filter_map(|git| devlanes_core::shell::git_root_from_exe(&git))
+        .find_map(|root| first_file(&root))
+}
+
+/// The first `sh.exe` candidate under a Git for Windows `root` that exists.
+#[cfg(windows)]
+fn first_file(root: &std::path::Path) -> Option<std::path::PathBuf> {
+    devlanes_core::shell::git_sh_candidates(root)
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+}
+
+/// `sh.exe` from the install root `git --exec-path` reports, for a `git` the
+/// `PATH` scan did not recognise (a shim, a custom layout).
+#[cfg(windows)]
+async fn git_sh_from_exec_path() -> Option<std::path::PathBuf> {
+    use devlanes_sys::NoWindow;
+    use std::process::Stdio;
+    let output = tokio::process::Command::new("git")
+        .no_window()
+        .arg("--exec-path")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let exec_path = match tokio::time::timeout(EXEC_PATH_TIMEOUT, output).await {
+        // Git for Windows prints `C:/Program Files/Git/mingw64/libexec/git-core`.
+        Ok(Ok(output)) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .replace('/', "\\"),
+        Ok(Ok(output)) => {
+            tracing::debug!(status = %output.status, "git --exec-path failed");
+            return None;
+        }
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "cannot run git --exec-path");
+            return None;
+        }
+        Err(_) => {
+            tracing::debug!("git --exec-path timed out");
+            return None;
+        }
+    };
+    let Some(root) =
+        devlanes_core::shell::git_root_from_exec_path(std::path::Path::new(&exec_path))
+    else {
+        tracing::debug!(exec_path, "git --exec-path is not a Windows path");
+        return None;
+    };
+    tokio::task::spawn_blocking(move || first_file(&root))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Reports whether the OS forwards the devlanes TLD to the embedded DNS server.
 /// OS-specific file locations live in the implementation, not the engine.
 pub trait ResolverFiles: Send + Sync {
-    /// `{path, installed, matches}` for the file that routes `tld` to `server`.
-    /// Called on a blocking thread.
+    /// `{path, installed, matches}` for the file that routes `tld` to `server`
+    /// (`{namespace, installed, matches, ...}` for the Windows NRPT rule).
+    /// Called on a blocking thread inside the runtime.
     fn status(&self, tld: &str, server: std::net::SocketAddr) -> Value;
 }
 
@@ -746,6 +903,45 @@ impl Integrations {
             pressure: None,
             system_pressure: None,
             resolver_files: None,
+            shell: Shell::default(),
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// Creates an empty file and its directories.
+    fn touch(path: &std::path::Path) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("directories");
+        }
+        std::fs::write(path, b"").expect("file");
+    }
+
+    #[test]
+    /// The `PATH` scan finds `sh.exe` from a `git.exe` in a Git for Windows
+    /// layout, preferring the `bin` launcher, and skips other `git.exe` files.
+    fn path_scan_finds_git_sh_from_the_layout() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("Git");
+        let shim = dir.path().join("shims");
+        touch(&shim.join("git.exe"));
+        touch(&root.join("cmd").join("git.exe"));
+        touch(&root.join("usr").join("bin").join("sh.exe"));
+        let path = std::env::join_paths([shim.clone(), root.join("cmd")]).expect("PATH");
+        assert_eq!(
+            git_sh_on_path(Some(path.as_os_str())),
+            Some(root.join("usr").join("bin").join("sh.exe"))
+        );
+        touch(&root.join("bin").join("sh.exe"));
+        assert_eq!(
+            git_sh_on_path(Some(path.as_os_str())),
+            Some(root.join("bin").join("sh.exe"))
+        );
+        let only_shim = std::env::join_paths([shim]).expect("PATH");
+        assert_eq!(git_sh_on_path(Some(only_shim.as_os_str())), None);
+        assert_eq!(git_sh_on_path(None), None);
     }
 }

@@ -176,9 +176,10 @@ fn docker_info_fixture_gives_vm_capacity() {
     assert_eq!(DockerVmInfo::from_info(&SystemInfo::default()).cpus, 0);
 }
 
-#[tokio::test]
-async fn empty_request_makes_no_engine_calls() {
-    // A regular file passes bollard's existence check, but every request fails.
+/// A client whose every request fails: a regular file passes bollard's
+/// existence check for a socket. The returned directory must outlive the client.
+#[cfg(unix)]
+fn unreachable_engine() -> (bollard::Docker, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("docker.sock");
     std::fs::write(&path, b"").expect("placeholder");
@@ -188,6 +189,25 @@ async fn empty_request_makes_no_engine_calls() {
         bollard::API_DEFAULT_VERSION,
     )
     .expect("client");
+    (docker, dir)
+}
+
+/// A client whose every request fails: a named pipe nobody serves (bollard
+/// connects on the first request). Nothing on disk needs to outlive it.
+#[cfg(windows)]
+fn unreachable_engine() -> (bollard::Docker, ()) {
+    let pipe = format!(
+        r"npipe:////./pipe/devlanes-test-no-engine-{}",
+        std::process::id()
+    );
+    let docker = bollard::Docker::connect_with_named_pipe(&pipe, 1, bollard::API_DEFAULT_VERSION)
+        .expect("client");
+    (docker, ())
+}
+
+#[tokio::test]
+async fn empty_request_makes_no_engine_calls() {
+    let (docker, _placeholder) = unreachable_engine();
     let source = DockerSource::new(docker);
     assert!(
         source

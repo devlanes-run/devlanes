@@ -3,16 +3,23 @@
 //!
 //! The commands and their checks live in `devlanes_resolver_hosts::install`; this
 //! module picks the helper binary, decides whether sudo may prompt, and reports.
+//! Windows installs the `devlanes-hosts` service instead (`crate::hosts_service`).
 
+#[cfg(unix)]
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
 use async_trait::async_trait;
+#[cfg(unix)]
 use devlanes_cli::{Rendered, Runtime};
 use devlanes_client::{Client, Paths};
-use devlanes_proto::{Context, Method, RpcError};
+#[cfg(unix)]
+use devlanes_proto::RpcError;
+use devlanes_proto::{Context, Method};
+#[cfg(unix)]
 use devlanes_resolver_hosts::{
     CommandOutput, CommandSpec, Executor, FileKind, FsProbe, INSTALL_PATH, InstallError,
     SystemExecutor, SystemFs,
@@ -20,12 +27,18 @@ use devlanes_resolver_hosts::{
 };
 use serde_json::{Value, json};
 
+#[cfg(unix)]
 use crate::output::emit;
 
+#[cfg(windows)]
+pub use crate::hosts_service::{install, uninstall};
+
 /// Marker the helper writes first; its presence means a block exists.
+#[cfg(unix)]
 const BLOCK_BEGIN: &str = "# devlanes begin";
 
 /// Installs the helper and its sudo rule, then asks a running daemon to reapply.
+#[cfg(unix)]
 pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
     let source = helper_source(
         &SystemFs,
@@ -75,6 +88,7 @@ pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
 }
 
 /// Clears the block, removes the rule and the helper, and prints what could not be done.
+#[cfg(unix)]
 pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
     let had_helper = matches!(
         SystemFs.lstat(Path::new(INSTALL_PATH)),
@@ -106,6 +120,7 @@ pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
 
 /// The helper to install: `DEVLANES_HOSTS_HELPER` when set, else `devlanes-hosts`
 /// next to this binary (also next to the target of a symlinked `devlanes`).
+#[cfg(unix)]
 pub fn helper_source(
     fs: &dyn FsProbe,
     override_path: Option<OsString>,
@@ -126,7 +141,10 @@ pub fn helper_source(
 
 /// The executor for privileged steps. sudo may prompt in an interactive terminal;
 /// agents and CI get `sudo -n` on every step, and only when it already works.
-/// `command` is what the user should run from a terminal instead.
+/// `command` is what the user should run from a terminal instead. Windows
+/// elevates through the UAC prompt instead (`crate::hosts_service`,
+/// `crate::resolver_nrpt`).
+#[cfg(unix)]
 pub(crate) async fn privileged(
     runtime: &Runtime,
     command: &str,
@@ -154,8 +172,10 @@ pub(crate) async fn privileged(
 
 /// Runs every `sudo` as `sudo -n`, so a session that cannot answer a prompt fails
 /// instead of waiting on one when the sudo timestamp lapses mid-install.
+#[cfg(unix)]
 struct NonInteractive<E>(E);
 
+#[cfg(unix)]
 #[async_trait]
 impl<E: Executor> Executor for NonInteractive<E> {
     /// Adds `-n` to sudo commands and runs them with the inner executor.
@@ -165,6 +185,7 @@ impl<E: Executor> Executor for NonInteractive<E> {
 }
 
 /// `sudo X` (or `/usr/bin/sudo X`) becomes `sudo -n X`; other commands are unchanged.
+#[cfg(unix)]
 fn non_interactive(command: &CommandSpec) -> CommandSpec {
     let mut command = command.clone();
     let sudo = Path::new(&command.program)
@@ -177,6 +198,7 @@ fn non_interactive(command: &CommandSpec) -> CommandSpec {
 }
 
 /// Maps installer failures to the CLI's error shape, keeping their stable codes.
+#[cfg(unix)]
 fn install_error(error: InstallError) -> RpcError {
     let exit = match error {
         InstallError::Unsupported => 2,
@@ -186,6 +208,7 @@ fn install_error(error: InstallError) -> RpcError {
 }
 
 /// Whether `/etc/hosts` (world-readable) still holds a devlanes block.
+#[cfg(unix)]
 async fn block_present() -> bool {
     tokio::fs::read_to_string("/etc/hosts")
         .await
@@ -194,7 +217,7 @@ async fn block_present() -> bool {
 
 /// Asks a running daemon to reapply now; a stopped daemon applies at its next start.
 /// Returns the daemon's `hosts` status after the attempt.
-async fn retry_daemon() -> Option<Value> {
+pub(crate) async fn retry_daemon() -> Option<Value> {
     let paths = Paths::discover().ok()?;
     let mut client = Client::connect(&paths).await.ok()?;
     let reply = client
@@ -204,7 +227,8 @@ async fn retry_daemon() -> Option<Value> {
     reply.get("hosts").filter(|hosts| !hosts.is_null()).cloned()
 }
 
-#[cfg(test)]
+// The sudo helper is Unix only; `crate::hosts_service` has the Windows tests.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
@@ -219,6 +243,8 @@ mod tests {
         (dir, exe)
     }
 
+    // `SystemFs` can't inspect files on Windows yet.
+    #[cfg(unix)]
     #[test]
     fn the_sibling_of_the_running_binary_is_installed() {
         let (dir, exe) = layout(true);
@@ -230,6 +256,8 @@ mod tests {
         assert_eq!(found, dir.path().join("devlanes-hosts"));
     }
 
+    // Creating symlinks on Windows needs developer mode or admin rights.
+    #[cfg(unix)]
     #[test]
     fn a_symlinked_binary_finds_the_helper_next_to_its_target() {
         let (dir, exe) = layout(true);
@@ -244,6 +272,8 @@ mod tests {
         );
     }
 
+    // `SystemFs` can't inspect files on Windows yet.
+    #[cfg(unix)]
     #[test]
     fn the_override_wins_and_is_not_second_guessed() {
         let (dir, exe) = layout(true);

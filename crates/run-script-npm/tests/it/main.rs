@@ -24,13 +24,15 @@ fn write_files(root: &Path, files: &[(&str, &str)]) {
     }
 }
 
-/// Renders a detection with paths relative to `root` for stable snapshots.
+/// Renders a detection with paths relative to `root` for stable snapshots,
+/// with `/` separators on every OS.
 fn describe(root: &Path, result: Result<Detection, NpmError>) -> String {
     let relative = |path: &Path| match path
         .strip_prefix(root)
         .unwrap_or(path)
         .display()
         .to_string()
+        .replace('\\', "/")
     {
         empty if empty.is_empty() => ".".to_owned(),
         other => other,
@@ -353,9 +355,11 @@ fn missing_script_lists_available() {
         extra_args: &[],
     })
     .expect_err("missing script");
+    // The message shows the host's absolute path; only the shape is checked.
     let message = error
         .to_string()
-        .replace(&temp.path().display().to_string(), "<lane>");
+        .replace(&temp.path().display().to_string(), "<lane>")
+        .replace('\\', "/");
     insta::assert_snapshot!(message, @"`<lane>/package.json` has no script `dev` (available: build, start)");
 }
 

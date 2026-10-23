@@ -13,7 +13,7 @@ use diesel_migrations::{MigrationHarness, embed_migrations};
 
 use devlanes_core::{
     Actor, ActorKind, ExitOutcome, ProcessIdentity, ProjectId,
-    ports::{PortName, PortPool},
+    ports::{PortBlock, PortName, PortPool},
 };
 use devlanes_state::{
     AllocationRequest, BlockOwner, DesiredState, Error, Lane, LaneInput, Project, ProjectInput,
@@ -72,6 +72,7 @@ fn request(owner: BlockOwner, count: usize) -> AllocationRequest {
             .collect(),
         reserved: BTreeSet::new(),
         avoid: BTreeSet::new(),
+        avoid_blocks: Vec::new(),
     }
 }
 
@@ -427,6 +428,28 @@ async fn avoided_ports_stay_outside_new_blocks() {
 }
 
 #[tokio::test]
+/// Reserved port ranges (Windows' excluded ranges) keep new pool blocks clear of
+/// them like avoided ports; a fixed start ignores them.
+async fn reserved_ranges_stay_outside_new_blocks() {
+    let store = Store::open(":memory:").await.expect("store");
+    let project = project(&store, "demo").await;
+    let a = lane(&store, project.id, 0).await;
+    let b = lane(&store, project.id, 1).await;
+    let mut first = request(BlockOwner::Lane(a.id), 2);
+    first.avoid_blocks = vec![
+        PortBlock::new(20_000, 100).expect("block"),
+        PortBlock::new(20_105, 1).expect("block"),
+    ];
+    let placed = store.allocate(first).await.expect("placed");
+    assert_eq!(placed.block.start, 20_106);
+    let mut fixed = request(BlockOwner::Lane(b.id), 1);
+    fixed.fixed_start = Some(20_000);
+    fixed.avoid_blocks = vec![PortBlock::new(20_000, 100).expect("block")];
+    let fixed = store.allocate(fixed).await.expect("fixed start wins");
+    assert_eq!(fixed.block.start, 20_000);
+}
+
+#[tokio::test]
 /// A restricted hole in the first fit must not mask an otherwise usable pool.
 async fn allocation_searches_past_restricted_port_holes() {
     let store = Store::open(":memory:").await.expect("store");
@@ -531,10 +554,25 @@ async fn unit_identity_actor_and_exit_roundtrip_without_environment_columns() {
     );
 }
 
+/// A path that is not valid UTF-8: a stray byte on Unix.
+#[cfg(unix)]
+fn non_utf8_path() -> PathBuf {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    PathBuf::from(OsString::from_vec(b"/test/non-utf8-\xff".to_vec()))
+}
+
+/// A path that is not valid UTF-8: an unpaired surrogate on Windows.
+#[cfg(windows)]
+fn non_utf8_path() -> PathBuf {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    let mut wide: Vec<u16> = r"C:\test\non-utf8-".encode_utf16().collect();
+    wide.push(0xD800);
+    PathBuf::from(OsString::from_wide(&wide))
+}
+
 #[tokio::test]
 /// Store constraints reject cross-project ownership and retain non-UTF-8 paths.
 async fn relational_constraints_and_lossless_paths() {
-    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("state.db");
     let store = Store::open(&path).await.expect("store");
@@ -555,7 +593,7 @@ async fn relational_constraints_and_lossless_paths() {
             .await
             .is_err()
     );
-    let non_utf8 = PathBuf::from(OsString::from_vec(b"/test/non-utf8-\xff".to_vec()));
+    let non_utf8 = non_utf8_path();
     let worktree = store
         .upsert_worktree(WorktreeInput {
             project_id: a.id,
@@ -764,7 +802,8 @@ async fn initial_migration_recovers_after_interrupted_ledger_write() {
 }
 
 #[tokio::test]
-/// Filenames cannot inject URI options; Linux additionally exercises non-UTF-8 bytes.
+/// Filenames cannot inject URI options; Linux additionally exercises non-UTF-8
+/// bytes, and Windows (which forbids `?` in names) uses spaces, `#` and `%`.
 async fn database_paths_preserve_bytes_and_uri_punctuation() {
     use std::ffi::OsString;
     #[cfg(target_os = "linux")]
@@ -772,8 +811,10 @@ async fn database_paths_preserve_bytes_and_uri_punctuation() {
     let dir = tempfile::tempdir().expect("dir");
     #[cfg(target_os = "linux")]
     let name = OsString::from_vec(b"state-\xff?mode=memory.db".to_vec());
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(unix, not(target_os = "linux")))]
     let name = OsString::from("state-é?mode=memory.db");
+    #[cfg(windows)]
+    let name = OsString::from("state é #%3Fmode=memory.db");
     let path = dir.path().join(name);
     let store = Store::open(&path).await.expect("literal database filename");
     let p = project(&store, "acme").await;

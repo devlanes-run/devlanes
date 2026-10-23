@@ -4,7 +4,7 @@
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
-use super::{compact_fields, display_value, list, text};
+use super::{INTERRUPTED, compact_fields, ctrl_c_exit, display_value, exited_with, list, text};
 use crate::Hint;
 
 /// A field as text, `unknown` when absent.
@@ -341,7 +341,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         ),
         "exited" => (
             match int(data, "code") {
-                Some(code) => format!("exited with code {code}"),
+                Some(code) => exited_with(code),
                 None => match int(data, "signal") {
                     Some(signal) => format!("killed by signal {signal}"),
                     None => "exited".into(),
@@ -467,6 +467,13 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             // Installed as a service, the daemon runs outside the sandbox.
             Some(Hint::command(["daemon", "install"])),
         ),
+        // `daemon install` inside a WSL distro that does not run systemd.
+        "wsl_systemd_off" => (
+            "systemd is not running in this WSL distro, and daemon install needs it".into(),
+            Some(Hint(
+                "set systemd=true under [boot] in /etc/wsl.conf, run wsl.exe --shutdown from Windows, reopen the distro, then devlanes daemon install".into(),
+            )),
+        ),
         "daemon_still_running" => (
             format!(
                 "the old daemon (pid {}) was still running after {}s",
@@ -480,12 +487,21 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 Some(message) => format!("daemon is unreachable: {}", super::clean(message)),
                 None => "daemon is unreachable".into(),
             },
-            Some(Hint::command(["daemon", "install"])),
+            // These messages already say what to do; installing a service would not help.
+            match text(data, "reason").as_str() {
+                "daemon_elevated" | "endpoint_taken" => None,
+                _ => Some(Hint::command(["daemon", "install"])),
+            },
         ),
         // The daemon's message already names the command; the hint carries it instead.
         "helper_version_mismatch" => (
             helper_mismatch(data.get("helper").unwrap_or(data)),
             Some(Hint::command(["certs", "trust", "--hosts"])),
+        ),
+        // Windows: the elevated installer's prompt got a No.
+        "elevation_cancelled" => (
+            "the administrator prompt was declined; nothing was changed".into(),
+            None,
         ),
         "helper_missing"
         | "sudo_denied"
@@ -493,7 +509,12 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         | "helper_source_missing"
         | "helper_source_rejected"
         | "sudo_rule_inactive"
-        | "hosts_unsafe_directory" => (
+        | "hosts_unsafe_directory"
+        | "service_missing"
+        | "service_denied"
+        | "service_untrusted"
+        | "service_source_missing"
+        | "service_source_rejected" => (
             data.get("message")
                 .and_then(Value::as_str)
                 .map(super::clean)
@@ -653,6 +674,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             let task = text(data, "task");
             (
                 match int(data, "exit_code") {
+                    Some(code) if ctrl_c_exit(code) => format!("task {task} was {INTERRUPTED}"),
                     Some(code) => format!("task {task} failed with exit code {code}"),
                     None => format!("task {task} failed"),
                 },
@@ -923,6 +945,10 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             "{host}: port {} is busy here, so it is not mirrored",
             field(data, "port")
         ),
+        "port_reserved" => format!(
+            "{host}: port {} is inside a port range Windows reserves, so it is not mirrored; set ports.range on the box clear of the ranges `netsh int ipv4 show excludedportrange protocol=tcp` lists",
+            field(data, "port")
+        ),
         other => match data.get("message").and_then(Value::as_str) {
             Some(message) => format!("{host}: {}", super::clean(message)),
             None => format!("{host}: {}", super::clean(other).replace('_', " ")),
@@ -943,7 +969,8 @@ pub(crate) fn has_wording(code: &str) -> bool {
 }
 
 /// `unsafe_home` (`{path, problem, owner?, mode?, fix?}`): the daemon refuses a
-/// state directory others could write; `mode` problems get `chmod 700`.
+/// state directory others could write; `mode` problems get `chmod 700`, `acl`
+/// problems (Windows) come with their own `fix`.
 fn unsafe_home(data: &Value) -> (String, Option<Hint>) {
     let path = field(data, "path");
     let why = match text(data, "problem").as_str() {
@@ -951,11 +978,12 @@ fn unsafe_home(data: &Value) -> (String, Option<Hint>) {
             Some(mode) => format!("mode {} lets other users in", display_value(mode)),
             None => "other users can access it".into(),
         },
+        "acl" => "its access list lets other accounts in".into(),
         "owner" => match data.get("owner").filter(|owner| !owner.is_null()) {
             Some(owner) => format!("it is owned by {}, not you", display_value(owner)),
             None => "another user owns it".into(),
         },
-        "symlink" => "it is a symlink".into(),
+        "symlink" => "it is a symlink or junction".into(),
         "not_a_directory" => "it is not a directory".into(),
         _ => text(data, "message"),
     };
@@ -1068,6 +1096,12 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             memory(data, "peak_memory_bytes"),
             memory(data, "available_memory_bytes")
         ),
+        // Inside WSL, `/mnt/<letter>` is the Windows drive `drive`.
+        "windows_drive" => format!(
+            "{} is on the Windows drive {}: file access is slow and file watching misses edits made from Windows; move the repository to the Linux filesystem (for example ~/src)",
+            field(data, "path"),
+            field(data, "drive")
+        ),
         other => match data.get("message").and_then(Value::as_str) {
             Some(message) => super::clean(message),
             None => super::clean(other).replace('_', " "),
@@ -1137,7 +1171,7 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
         ),
         "exited" => (
             match int(data, "code") {
-                Some(code) => format!("exited with code {code}"),
+                Some(code) => exited_with(code),
                 None => format!("killed by signal {}", field(data, "signal")),
             },
             Some(Hint::logs(lane, unit, 200)),
@@ -1148,6 +1182,7 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
                 int(data, "exit_code"),
                 data.get("signal").and_then(Value::as_i64),
             ) {
+                (Some(code), _) if ctrl_c_exit(code) => "Ctrl-C".into(),
                 (Some(code), _) => format!("exit code {code}"),
                 (None, Some(signal)) => format!("signal {signal}"),
                 _ => "no exit status".into(),
@@ -1179,13 +1214,25 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             format!("couldn't start: {}", spawn_cause(data)),
             Some(spawn_hint(data).unwrap_or_else(|| Hint::logs(lane, unit, 200))),
         ),
-        "helper_missing" | "sudo_denied" | "helper_outdated" | "helper_version_mismatch" => {
+        "helper_missing"
+        | "sudo_denied"
+        | "helper_outdated"
+        | "helper_version_mismatch"
+        | "service_missing"
+        | "service_denied"
+        | "service_untrusted" => {
             let hosts: Vec<String> = list(data, "hosts").iter().map(display_value).collect();
             let problem = match code {
                 "helper_missing" => "the /etc/hosts helper is not installed",
                 "sudo_denied" => "sudo will not run the /etc/hosts helper without a password",
                 "helper_version_mismatch" => {
                     "the installed /etc/hosts helper does not match this devlanes"
+                }
+                // Windows: the devlanes-hosts service writes the hosts file.
+                "service_missing" => "the devlanes hosts service is not installed or not running",
+                "service_denied" => "the devlanes hosts service serves another user, not this one",
+                "service_untrusted" => {
+                    "the hosts service's pipe is held by another program, not the devlanes service"
                 }
                 _ => "the installed /etc/hosts helper is outdated",
             };

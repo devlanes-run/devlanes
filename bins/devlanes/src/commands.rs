@@ -175,11 +175,11 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             });
             Ok(0)
         }
-        Action::ExportEnv(request) => {
+        Action::ExportEnv { request, shell } => {
             let data = call(request).await?;
             let env = serde_json::from_value(data.get("env").cloned().unwrap_or_default())
                 .unwrap_or_default();
-            let exported = export_environment(&env);
+            let exported = export_environment(&env, shell);
             // On stderr, so `eval "$(devlanes env export)"` still works.
             let stderr = exported
                 .skipped
@@ -208,7 +208,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
                 lane.into_iter()
                     .map(|(key, value)| (key.into(), value.into())),
             );
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| default_shell());
             let status = tokio::process::Command::new(shell)
                 .env_clear()
                 .envs(env)
@@ -297,6 +297,9 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
                 .map_err(rpc_error)?;
             if data.is_object() {
                 data["running"] = json!(true);
+                if let Some(autostart) = crate::daemon::autostart(&paths).await {
+                    data["autostart"] = autostart;
+                }
             }
             let items = if running.is_empty() {
                 Vec::new()
@@ -369,6 +372,19 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
     }
 }
 
+/// The shell `env shell` runs when `SHELL` is unset.
+#[cfg(unix)]
+fn default_shell() -> String {
+    "/bin/sh".into()
+}
+
+/// The shell `env shell` runs when `SHELL` is unset: the console's command
+/// interpreter.
+#[cfg(windows)]
+fn default_shell() -> String {
+    std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into())
+}
+
 /// Longest `daemon restart` waits for the old daemon, which first stops every unit
 /// with its stop policy.
 const DAEMON_EXIT_WAIT: Duration = Duration::from_secs(300);
@@ -378,13 +394,7 @@ const DAEMON_EXIT_WAIT: Duration = Duration::from_secs(300);
 async fn wait_for_daemon_exit(paths: &Paths, pid: Option<i32>) -> Result<(), RpcError> {
     let deadline = tokio::time::Instant::now() + DAEMON_EXIT_WAIT;
     loop {
-        let gone = match pid.and_then(rustix::process::Pid::from_raw) {
-            Some(pid) => rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH),
-            None => Client::connect_any(paths)
-                .await
-                .is_err_and(|error| error.is_not_running()),
-        };
-        if gone {
+        if daemon_gone(paths, pid).await {
             return Ok(());
         }
         if tokio::time::Instant::now() >= deadline {
@@ -396,6 +406,43 @@ async fn wait_for_daemon_exit(paths: &Paths, pid: Option<i32>) -> Result<(), Rpc
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+}
+
+/// Whether the old daemon `pid` has exited; without a pid, whether its socket
+/// stopped answering.
+#[cfg(unix)]
+async fn daemon_gone(paths: &Paths, pid: Option<i32>) -> bool {
+    match pid.and_then(rustix::process::Pid::from_raw) {
+        Some(pid) => rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH),
+        None => Client::connect_any(paths)
+            .await
+            .is_err_and(|error| error.is_not_running()),
+    }
+}
+
+/// Whether the old daemon `pid` has exited; without a pid, whether its pipe
+/// stopped answering. The pipe closes shortly before the process releases its
+/// lock, so the process is what a restart waits for.
+#[cfg(windows)]
+async fn daemon_gone(paths: &Paths, pid: Option<i32>) -> bool {
+    match pid.and_then(|pid| u32::try_from(pid).ok()) {
+        // A zero timeout only polls, so this does not block the executor.
+        Some(pid) => match devlanes_sys::windows::process::wait_exit(pid, Duration::ZERO) {
+            Ok(gone) => gone,
+            // Without a handle to the process (access denied, say), the pipe is
+            // the only sign left.
+            Err(_) => pipe_gone(paths).await,
+        },
+        None => pipe_gone(paths).await,
+    }
+}
+
+/// Whether the daemon pipe stopped answering.
+#[cfg(windows)]
+async fn pipe_gone(paths: &Paths) -> bool {
+    Client::connect_any(paths)
+        .await
+        .is_err_and(|error| error.is_not_running())
 }
 
 /// One-shot request returning the data, for actions that post-process it locally.
@@ -449,7 +496,8 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                 client
             }
             Err(error) if error.is_not_running() => {
-                let rendered = daemon_not_running(runtime, &paths);
+                let autostart = crate::daemon::autostart(&paths).await;
+                let rendered = daemon_not_running(runtime, &paths, autostart);
                 emit(&rendered);
                 return Ok(rendered.exit_code);
             }
@@ -461,6 +509,11 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
             Err(error) if error.is_not_running() => {
                 let mut data = crate::local_doctor::facts(&paths).await;
                 crate::notices::annotate_doctor(None, &mut data).await;
+                crate::local_doctor::annotate_terminal(&mut data);
+                crate::wsl_doctor::annotate(&mut data).await;
+                if let Some(autostart) = crate::daemon::autostart(&paths).await {
+                    data["autostart"] = autostart;
+                }
                 data["service"] = crate::daemon::service_report().await;
                 return render_result(runtime, Method::Doctor, &data, None);
             }
@@ -525,6 +578,11 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                         Outcome::Ok { mut data } => {
                             if method == Method::Doctor {
                                 crate::notices::annotate_doctor(Some(&mut client), &mut data).await;
+                                crate::local_doctor::annotate_terminal(&mut data);
+                                crate::wsl_doctor::annotate(&mut data).await;
+                                if let Some(autostart) = crate::daemon::autostart(&paths).await {
+                                    data["autostart"] = autostart;
+                                }
                                 // Trust stores belong to this user and machine, so the
                                 // CLI checks them, not the daemon.
                                 if data.get("ca").is_some_and(Value::is_object) {
@@ -538,6 +596,9 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                             // The counterpart of the not-running answer's `false`.
                             if method == Method::DaemonStatus && data.is_object() {
                                 data["running"] = json!(true);
+                                if let Some(autostart) = crate::daemon::autostart(&paths).await {
+                                    data["autostart"] = autostart;
+                                }
                             }
                             // The budget hid the end of a failed task's output: show its tail.
                             if let Some(stream) = &log_stream
@@ -660,14 +721,18 @@ async fn interrupted(
 }
 
 /// `daemon status` when no daemon answers: said so in the mode's form, exit 1.
-/// Nothing is started; the socket and home say where devlanes looked.
-fn daemon_not_running(runtime: &Runtime, paths: &Paths) -> Rendered {
+/// Nothing is started; the socket and home say where devlanes looked. JSON also
+/// carries `autostart` where the platform reports it (Windows).
+fn daemon_not_running(runtime: &Runtime, paths: &Paths, autostart: Option<Value>) -> Rendered {
     let socket = paths.socket.display().to_string();
     let stdout = match runtime.mode {
-        devlanes_cli::OutputMode::Json => format!(
-            "{}\n",
-            json!({"running": false, "socket": socket, "home": paths.home})
-        ),
+        devlanes_cli::OutputMode::Json => {
+            let mut data = json!({"running": false, "socket": socket, "home": paths.home});
+            if let Some(autostart) = autostart {
+                data["autostart"] = autostart;
+            }
+            format!("{data}\n")
+        }
         devlanes_cli::OutputMode::Agent => format!("stopped daemon socket={socket}\n"),
         _ => format!(
             "daemon is not running (socket {socket}); devlanes start or devlanes daemon restart starts it\n"
@@ -821,6 +886,7 @@ fn printable(text: &str) -> String {
 
 /// Shows `prompt` on `/dev/tty` and reads one line, without echo for secrets.
 /// Returns the line with its newline, so an empty answer stays distinct from cancel.
+#[cfg(unix)]
 fn read_tty(prompt: &str, kind: &str) -> Option<String> {
     use std::io::{BufRead, Write};
     let tty = std::fs::OpenOptions::new()
@@ -853,6 +919,120 @@ fn read_tty(prompt: &str, kind: &str) -> Option<String> {
         Ok(0) | Err(_) => None,
         Ok(_) => Some(format!("{}\n", line.trim_end_matches(['\r', '\n']))),
     }
+}
+
+/// Shows `prompt` on the console (`CONOUT$`) and reads one line from `CONIN$`,
+/// which works when stdin and stdout are redirected, without echo for secrets.
+/// Returns the line with its newline, so an empty answer stays distinct from
+/// cancel; `None` when no one can type into the console (see
+/// `devlanes_sys::windows::console::keyboard`), for a Ctrl-Z line (end of
+/// input, like Ctrl-D on Unix), or without an answer within the daemon's
+/// prompt timeout.
+#[cfg(windows)]
+fn read_tty(prompt: &str, kind: &str) -> Option<String> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::Duration;
+
+    use devlanes_sys::windows::console::{self, Keyboard, ModeGuard};
+    match console::keyboard() {
+        Keyboard::Console => {}
+        // Reading the console would wait forever, as it would on Unix without
+        // a terminal to open.
+        Keyboard::Unreachable => return None,
+        // Without this the prompt would wait on mintty's hidden console with no
+        // sign of why; its stderr is the window the user looks at.
+        Keyboard::Mintty => {
+            eprintln!("{prompt}");
+            if kind == "notify" {
+                return Some("\n".into());
+            }
+            eprintln!(
+                "devlanes: cancelled; mintty does not pass typed keys to Windows programs, so answer this from Windows Terminal or run devlanes through winpty"
+            );
+            return None;
+        }
+    }
+    let input = console::open_input().ok()?;
+    let output = console::open_output().ok()?;
+    if kind == "notify" {
+        console::write_output(&output, &format!("{prompt}\r\n")).ok()?;
+        return Some("\n".into());
+    }
+    console::write_output(&output, &format!("{prompt} ")).ok()?;
+    // Ctrl-C must cancel the prompt even when a parent started the CLI with the
+    // inherited "ignore Ctrl-C" flag set; Git Bash itself delivers Ctrl-C to its
+    // foreground program anyway. Cleared only here, so a background command
+    // keeps the flag and with it Git Bash's protection.
+    let _ = devlanes_sys::windows::process::accept_ctrl_c();
+    let secret = kind == "secret";
+    let (set, clear) = if secret {
+        (0, console::ECHO_INPUT)
+    } else {
+        (console::ECHO_INPUT, 0)
+    };
+    // A line-edited read even if a program left the console raw; the guard puts
+    // back whatever mode it had.
+    let mode = ModeGuard::change(
+        &input,
+        console::LINE_INPUT | console::PROCESSED_INPUT | set,
+        clear,
+    )
+    .ok()?;
+    let mut units = Vec::new();
+    let mut buffer = [0_u16; 512];
+    // A console with a hidden window (a program started hidden, a closed winpty)
+    // can have nobody typing into it, so the read is cancelled once the daemon
+    // has given up on the answer.
+    let timed_out = AtomicBool::new(false);
+    let (reading, finished) = mpsc::channel::<()>();
+    let read = std::thread::scope(|scope| {
+        let (input, timed_out) = (&input, &timed_out);
+        scope.spawn(move || {
+            if finished.recv_timeout(devlanes_proto::remote::PROMPT_TIMEOUT)
+                != Err(RecvTimeoutError::Timeout)
+            {
+                return;
+            }
+            timed_out.store(true, Ordering::SeqCst);
+            // Repeated: a cancel landing between two reads cancels nothing.
+            while finished.recv_timeout(Duration::from_millis(100))
+                == Err(RecvTimeoutError::Timeout)
+            {
+                let _ = console::cancel_io(input);
+            }
+        });
+        let read = loop {
+            if timed_out.load(Ordering::SeqCst) {
+                break None;
+            }
+            match console::read_input(input, &mut buffer) {
+                Ok(0) => break None,
+                Ok(read) => {
+                    units.extend_from_slice(&buffer[..read]);
+                    if units.contains(&u16::from(b'\n')) {
+                        break Some(String::from_utf16_lossy(&units));
+                    }
+                }
+                // Ctrl-C ends the read but, as on Unix, is not an answer: the caller's
+                // Ctrl-C handling (detach) ends the command, and the console's control
+                // handler has already put the mode back. A cancelled read can end
+                // the same way; the check above ends the loop then.
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(_) => break None,
+            }
+        };
+        drop(reading);
+        read
+    });
+    drop(mode);
+    if read.is_none() && timed_out.load(Ordering::SeqCst) {
+        let _ = console::write_output(&output, "\r\nno answer in time; cancelled\r\n");
+    } else if secret {
+        let _ = console::write_output(&output, "\r\n");
+    }
+    read.filter(|line| !line.starts_with('\u{1a}'))
+        .map(|line| format!("{}\n", line.trim_end_matches(['\r', '\n'])))
 }
 
 /// Renders the response data with the mode's reporter.
@@ -1019,6 +1199,23 @@ async fn open_url(url: &str) -> Result<(), RpcError> {
     if url.is_empty() {
         return Err(RpcError::new("no_url", Value::Null, 3));
     }
+    // On Windows and inside WSL the browser to open is the Windows one.
+    let owned = url.to_owned();
+    let windows =
+        tokio::task::spawn_blocking(move || devlanes_term::open_in_windows_browser(&owned))
+            .await
+            .map_err(|error| {
+                RpcError::new("open_failed", json!({"message": error.to_string()}), 1)
+            })?;
+    if let Some(opened) = windows {
+        return opened.map_err(|error| {
+            RpcError::new(
+                "open_failed",
+                json!({"message": error.to_string(), "url": url}),
+                1,
+            )
+        });
+    }
     let opener = if cfg!(target_os = "macos") {
         "open"
     } else {
@@ -1033,23 +1230,33 @@ async fn open_url(url: &str) -> Result<(), RpcError> {
 }
 
 /// Reads the daemon's own log file directly; works even when the daemon is wedged.
+/// A follow runs until Ctrl-C ends the process or stdout closes.
 async fn daemon_logs(follow: bool, tail: usize) -> Result<u8, RpcError> {
     let paths = paths()?;
     let path = paths.logs.join("daemon.log");
-    let mut args = vec!["-n".to_owned(), tail.to_string()];
-    if follow {
-        args.push("-F".into());
+    let printed = tokio::task::spawn_blocking(move || {
+        let mut stdout = std::io::stdout().lock();
+        crate::daemon_log::print(
+            &path,
+            tail,
+            follow,
+            crate::daemon_log::POLL,
+            &mut stdout,
+            || true,
+        )
+    })
+    .await
+    .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
+    match printed {
+        Ok(()) => Ok(0),
+        // `daemon logs -f | head` closing the pipe is a normal way to stop.
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => Ok(0),
+        Err(error) => Err(RpcError::new(
+            "io",
+            json!({"message": error.to_string()}),
+            1,
+        )),
     }
-    let status = tokio::process::Command::new("tail")
-        .args(&args)
-        .arg(&path)
-        .status()
-        .await
-        .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
-    Ok(status
-        .code()
-        .and_then(|code| u8::try_from(code).ok())
-        .unwrap_or(1))
 }
 
 /// Opens the TUI; it is just another client of the same daemon.
@@ -1074,29 +1281,40 @@ mod tests {
     fn daemon_not_running_in_every_mode() {
         let paths = Paths::new("/home/u/.devlanes").expect("paths");
         let socket = paths.socket.display().to_string();
+        // On Windows `/home/...` has no drive, so `Paths` makes it absolute
+        // against the cwd; Unix keeps it as given.
+        let home = paths.home.display().to_string();
+        #[cfg(unix)]
+        assert_eq!(home, "/home/u/.devlanes");
         let mode = |name: &str| {
             let cli = Cli::parse_from(["devlanes", "--output", name]);
             Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime")
         };
-        let json = daemon_not_running(&mode("json"), &paths);
+        let json = daemon_not_running(&mode("json"), &paths, None);
         assert_eq!(json.exit_code, 1);
         let value: Value = serde_json::from_str(&json.stdout).expect("json");
         assert_eq!(value["running"], false);
         assert_eq!(value["socket"], socket);
-        assert_eq!(value["home"], "/home/u/.devlanes");
+        assert_eq!(value["home"], home);
+        assert_eq!(value.get("autostart"), None);
+        let autostart = json!({"installed": false});
+        let json = daemon_not_running(&mode("json"), &paths, Some(autostart.clone()));
+        let value: Value = serde_json::from_str(&json.stdout).expect("json");
+        assert_eq!(value["autostart"], autostart);
         assert_eq!(
-            daemon_not_running(&mode("plain"), &paths).stdout,
+            daemon_not_running(&mode("plain"), &paths, None).stdout,
             format!(
                 "daemon is not running (socket {socket}); devlanes start or devlanes daemon restart starts it\n"
             )
         );
         assert_eq!(
-            daemon_not_running(&mode("agent"), &paths).stdout,
+            daemon_not_running(&mode("agent"), &paths, None).stdout,
             format!("stopped daemon socket={socket}\n")
         );
     }
 
     /// The restart wait ends once the old daemon's pid is gone.
+    #[cfg(unix)]
     #[tokio::test]
     async fn restart_waits_for_the_old_pid() {
         let mut child = std::process::Command::new("true").spawn().expect("spawn");

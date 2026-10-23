@@ -835,6 +835,7 @@ pub struct UnitPeak {
 /// never daemon requests, environments or secrets.
 pub mod remote {
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use serde::{Deserialize, Serialize};
 
@@ -842,10 +843,18 @@ pub mod remote {
     /// `{host, prompt, kind: secret|confirm|notify, stream_id}`. The CLI answers with
     /// one binary frame on `stream_id`; an empty frame cancels.
     pub const PROMPT_EVENT: &str = "remote.prompt";
+    /// How long the daemon waits for the answer to a [`PROMPT_EVENT`] before it
+    /// cancels the prompt; the CLI stops reading the console after as long.
+    pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
     /// `{host, state, ...}` whenever a connection changes state.
     pub const STATE_EVENT: &str = "remote.state";
     /// `{host, code, ...}` for mirroring problems such as a skipped lane or a busy port.
     pub const WARNING_EVENT: &str = "remote.warning";
+
+    /// Variables devlanes' ssh sets for one askpass run. Neither an
+    /// auto-spawned daemon nor a unit takes them from a client's environment:
+    /// a `devlanes` started under them would act as that run's askpass.
+    pub const ASKPASS_ENV: &[&str] = &["DEVLANES_ASKPASS", "DEVLANES_ASKPASS_SOCKET"];
 
     /// Largest synced file. The box skips (and reports) bigger ones before reading
     /// them, and the client refuses bigger file headers.
@@ -911,6 +920,11 @@ pub mod remote {
             lane: String,
             unit: String,
             index: usize,
+            /// The client keeps only a read-only attribute (Windows): the box
+            /// compares modes by write access alone. Left out when false, so
+            /// older boxes read the request unchanged.
+            #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+            read_only_modes: bool,
         },
     }
 
@@ -935,6 +949,24 @@ pub mod remote {
         #[serde(default)]
         pub ssh: Option<String>,
         pub since_ms: u64,
+    }
+}
+
+/// Exit codes the clients word instead of printing the number. They live here
+/// because both the CLI and the TUI read them and neither depends on the other.
+pub mod exit {
+    /// `STATUS_CONTROL_C_EXIT` (0xC000013A): the exit code of a Windows process
+    /// that Ctrl-C or Ctrl-Break ended, as the signed number units record.
+    pub const CTRL_C_EXIT: i64 = -1_073_741_510;
+
+    /// What a Ctrl-C exit reads as instead of its number.
+    pub const INTERRUPTED: &str = "interrupted (Ctrl-C)";
+
+    /// Whether `code` is a Windows Ctrl-C exit, signed or in its unsigned
+    /// spelling. Unix exit codes are 0 to 255 and never match.
+    pub fn ctrl_c_exit(code: impl Into<i64>) -> bool {
+        let code = code.into();
+        code == CTRL_C_EXIT || code == CTRL_C_EXIT + (1 << 32)
     }
 }
 
@@ -1022,6 +1054,15 @@ mod tests {
         assert_eq!(hello.managed_processes, 0);
         assert!(hello.features.is_empty());
         Ok(())
+    }
+
+    #[test]
+    fn ctrl_c_exit_matches_both_spellings_only() {
+        assert!(exit::ctrl_c_exit(-1_073_741_510_i32));
+        assert!(exit::ctrl_c_exit(0xC000_013A_u32));
+        for code in [0_i64, 1, 130, 255, -1] {
+            assert!(!exit::ctrl_c_exit(code), "{code}");
+        }
     }
 
     #[test]

@@ -26,6 +26,12 @@ pub fn run() -> ExitCode {
         return ExitCode::from(1);
     }
     let readiness = Readiness::from_env();
+    // Before `prepare`, so an elevated run creates nothing under the home.
+    if let Err(error) = devlanes_daemon::refuse_elevation() {
+        eprintln!("error: {error}");
+        let _ = readiness.failed(&error.to_string());
+        return ExitCode::from(1);
+    }
     let paths = match Paths::discover() {
         Ok(paths) => paths,
         Err(error) => {
@@ -50,6 +56,9 @@ pub fn run() -> ExitCode {
             return ExitCode::from(1);
         }
     };
+    // Set once the server runs; told below when the shutdown has finished.
+    let session_end = std::sync::OnceLock::new();
+    let session_slot = &session_end;
     let code = tokio.block_on(async move {
         let options = Options {
             home: paths.home.clone(),
@@ -92,6 +101,10 @@ pub fn run() -> ExitCode {
             "daemon started"
         );
         watch_signals(server.shutdown_token(), server.interrupt_token());
+        let _ = session_slot.set(SessionEnd::watch(
+            server.shutdown_token(),
+            server.interrupt_token(),
+        ));
         // Taken by whichever comes first: readiness, or a failed reconcile.
         let readiness = std::sync::Mutex::new(Some(readiness));
         let take = || readiness.lock().ok().and_then(|mut slot| slot.take());
@@ -111,10 +124,91 @@ pub fn run() -> ExitCode {
             }
         }
     });
+    // Units are stopped and state.db is closed once the server returns, so a
+    // waiting session-end answer may go now; the runtime shutdown below only
+    // waits for helper threads and must not eat into Windows' logoff budget.
+    if let Some(session_end) = session_end.get() {
+        session_end.finished();
+    }
     // Dropping the runtime waits for every spawn_blocking task (git, getaddrinfo, file
     // watchers), which can keep a stopped daemon alive indefinitely; bound the wait.
     tokio.shutdown_timeout(std::time::Duration::from_secs(5));
     ExitCode::from(code)
+}
+
+/// Logoff and shutdown on Windows: a detached daemon gets no console events,
+/// and one run in a console stops getting the logoff and shutdown ones once
+/// `user32.dll` is loaded, so a hidden window
+/// (`devlanes_sys::windows::session`) hears `WM_ENDSESSION`
+/// and shuts down as on a signal: units stop, no `lane.stop` tasks, and those
+/// of a `daemon stop` already running are interrupted. Windows ends the
+/// process soon after that message is answered, so the answer waits until the
+/// shutdown finished, at most [`SessionEnd::WAIT`].
+#[cfg(windows)]
+struct SessionEnd {
+    finished: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    /// Keeps the window and its thread alive.
+    _watch: Option<devlanes_sys::windows::session::SessionWatch>,
+}
+
+#[cfg(windows)]
+impl SessionEnd {
+    /// Longest the session-end answer waits for units to stop and state to
+    /// close; Windows may end the process on its own before that.
+    const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+    /// Starts the window; without one, logoff ends the daemon without a shutdown
+    /// and the next start reconciles.
+    fn watch(shutdown: CancellationToken, interrupt: CancellationToken) -> Self {
+        let finished =
+            std::sync::Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+        let waiting = std::sync::Arc::clone(&finished);
+        let watch = devlanes_sys::windows::session::watch(move |end| {
+            tracing::info!(reason = ?end, "the session ends; shutting down");
+            interrupt.cancel();
+            shutdown.cancel();
+            let (done, changed) = &*waiting;
+            let Ok(guard) = done.lock() else {
+                return;
+            };
+            let _ = changed.wait_timeout_while(guard, Self::WAIT, |done| !*done);
+        });
+        let watch = match watch {
+            Ok(watch) => Some(watch),
+            Err(error) => {
+                tracing::warn!(%error, "no session-end window; logoff ends the daemon without a shutdown");
+                None
+            }
+        };
+        Self {
+            finished,
+            _watch: watch,
+        }
+    }
+
+    /// Lets a waiting session-end answer return: units stopped, state closed.
+    fn finished(&self) {
+        let (done, changed) = &*self.finished;
+        if let Ok(mut done) = done.lock() {
+            *done = true;
+        }
+        changed.notify_all();
+    }
+}
+
+/// Logout reaches the Unix daemon as SIGTERM, which [`watch_signals`] handles.
+#[cfg(unix)]
+struct SessionEnd;
+
+#[cfg(unix)]
+impl SessionEnd {
+    /// Nothing to watch.
+    fn watch(_: CancellationToken, _: CancellationToken) -> Self {
+        Self
+    }
+
+    /// Nothing waits.
+    fn finished(&self) {}
 }
 
 /// SIGTERM and SIGINT (a service manager, logout, `kill`) shut the daemon down
@@ -122,6 +216,7 @@ pub fn run() -> ExitCode {
 /// are recorded, state.db closes. A signal during an explicit shutdown
 /// interrupts its `lane.stop` tasks (`interrupt`), so the units still stop
 /// before the service manager's SIGKILL.
+#[cfg(unix)]
 fn watch_signals(shutdown: CancellationToken, interrupt: CancellationToken) {
     use tokio::signal::unix::{SignalKind, signal};
     let (mut term, mut int) = match (
@@ -154,6 +249,46 @@ fn watch_signals(shutdown: CancellationToken, interrupt: CancellationToken) {
     });
 }
 
+/// Ctrl-C, Ctrl-Break and closing the console window shut down a daemon run by
+/// hand in a console the way SIGTERM does on Unix: no `lane.stop` tasks, and
+/// those of a `daemon stop` already running are interrupted. A detached daemon
+/// has no console and gets none of them; logoff reaches it through
+/// [`SessionEnd`].
+///
+/// After a close Windows ends the process once its handler returns or about
+/// 5 seconds have passed; tokio's handler never returns, so the shutdown gets
+/// those seconds.
+#[cfg(windows)]
+fn watch_signals(shutdown: CancellationToken, interrupt: CancellationToken) {
+    use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close};
+    let (mut int, mut brk, mut close) = match (ctrl_c(), ctrl_break(), ctrl_close()) {
+        (Ok(int), Ok(brk), Ok(close)) => (int, brk, close),
+        (Err(error), _, _) | (_, Err(error), _) | (_, _, Err(error)) => {
+            tracing::warn!(%error, "console handlers not installed; Ctrl-C ends the daemon without a shutdown");
+            return;
+        }
+    };
+    // Runs until the process exits: while these listeners exist, Ctrl-C no
+    // longer ends the process, so a later press must still be acted on here.
+    tokio::spawn(async move {
+        loop {
+            let name = tokio::select! {
+                Some(()) = int.recv() => "Ctrl-C",
+                Some(()) = brk.recv() => "Ctrl-Break",
+                Some(()) = close.recv() => "console closed",
+                else => return,
+            };
+            if shutdown.is_cancelled() {
+                tracing::info!(signal = name, "interrupting lane.stop tasks");
+            } else {
+                tracing::info!(signal = name, "shutting down");
+            }
+            interrupt.cancel();
+            shutdown.cancel();
+        }
+    });
+}
+
 /// The daemon never prints to stdout; everything goes to `logs/daemon.log`, at
 /// the level `DEVLANES_LOG` sets (RUST_LOG syntax, default `info`). Requests
 /// from `-v` clients also get their own records through the diagnostics layer,
@@ -162,7 +297,9 @@ fn init_logging(paths: &Paths) -> Option<tracing_appender::non_blocking::WorkerG
     use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
     let path = paths.logs.join("daemon.log");
     if std::fs::metadata(&path).is_ok_and(|meta| meta.len() > LOG_ROTATE_BYTES) {
-        let _ = std::fs::rename(&path, paths.logs.join("daemon.log.1"));
+        // Retried: on Windows a `daemon logs -f` from another tool, or a scanner,
+        // may hold either file for a moment.
+        let _ = devlanes_sys::rename_retrying(&path, &paths.logs.join("daemon.log.1"));
     }
     let opened = std::fs::OpenOptions::new()
         .create(true)
@@ -199,20 +336,27 @@ pub async fn ui(paths: &Paths) -> Result<u8, RpcError> {
 /// time, so a shutdown takes about the longest unit stop timeout (10s unless
 /// configured) plus a few seconds to record exits and close state.db; 60s
 /// covers stop timeouts up to about 55s.
+#[cfg(unix)]
 const STOP_WINDOW_S: u64 = 60;
 
 /// launchd's window for a job without `ExitTimeOut`. launchd.plist(5) calls it
 /// system-defined; `launchctl print` shows `exit timeout = 5` for such agents
 /// on macOS 26 (old manuals said 20s).
+#[cfg(unix)]
 const LAUNCHD_DEFAULT_WINDOW_S: u64 = 5;
 
 /// systemd's `DefaultTimeoutStopSec`, 90s in the user manager (systemd-system.conf(5)).
+#[cfg(unix)]
 const SYSTEMD_DEFAULT_WINDOW_S: u64 = 90;
 
 /// The launchd job label, also the plist's file name.
+#[cfg(unix)]
 const LAUNCHD_LABEL: &str = "run.devlanes.daemon";
 
-/// The per-user service manager: launchd on macOS, systemd elsewhere.
+/// The per-user service manager: launchd on macOS, systemd elsewhere. Windows
+/// has no service for the daemon; `daemon install` writes a logon entry
+/// instead (`logon`).
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Manager {
     Launchd,
@@ -220,6 +364,7 @@ enum Manager {
 }
 
 /// A service manager command of `daemon install`.
+#[cfg(unix)]
 #[derive(Debug, PartialEq, Eq)]
 struct Step {
     argv: Vec<String>,
@@ -229,6 +374,7 @@ struct Step {
     retry: bool,
 }
 
+#[cfg(unix)]
 impl Step {
     /// A command that must succeed the first time.
     fn new(argv: &[&str]) -> Self {
@@ -240,6 +386,7 @@ impl Step {
     }
 }
 
+#[cfg(unix)]
 impl Manager {
     /// This platform's manager.
     fn current() -> Self {
@@ -376,13 +523,13 @@ impl Manager {
 }
 
 /// The user's home directory, under which the service definition lives.
+#[cfg(unix)]
 fn user_home() -> Result<PathBuf, RpcError> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| RpcError::new("no_home", json!({}), 1))
+    devlanes_client::user_home().ok_or_else(|| RpcError::new("no_home", json!({}), 1))
 }
 
 /// Whether launchd has the devlanes job loaded in the user's GUI domain.
+#[cfg(unix)]
 async fn launchd_loaded(uid: u32) -> bool {
     tokio::process::Command::new("launchctl")
         .args(["print", &format!("gui/{uid}/{LAUNCHD_LABEL}")])
@@ -396,6 +543,7 @@ async fn launchd_loaded(uid: u32) -> bool {
 
 /// Runs one install step; a retried step tries again until the old job's stop
 /// window (and a margin) has passed.
+#[cfg(unix)]
 async fn run_step(step: &Step) -> Result<(), RpcError> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(STOP_WINDOW_S + 5);
     loop {
@@ -425,11 +573,25 @@ async fn run_step(step: &Step) -> Result<(), RpcError> {
 /// Installs a per-user service so the daemon starts outside agent sandboxes and
 /// at login. Running it again rewrites a definition that differs (another
 /// binary, an older one without a stop window) and has the manager reload it.
+#[cfg(unix)]
 pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
     let exe = std::env::current_exe().map_err(io)?;
     let paths = Paths::discover()
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
     let manager = Manager::current();
+    // WSL distros run without systemd unless wsl.conf turns it on; systemctl would
+    // fail later with a message about the bus, after the unit file was written.
+    // The first WSL detection stats the drive mounts, so it runs off the async
+    // threads.
+    if manager == Manager::Systemd
+        && tokio::task::spawn_blocking(|| {
+            devlanes_sys::wsl().is_some() && !Path::new("/run/systemd/system").is_dir()
+        })
+        .await
+        .unwrap_or(false)
+    {
+        return Err(RpcError::new("wsl_systemd_off", json!({}), 1));
+    }
     let path = manager.path(&user_home()?);
     let contents = manager.definition(&exe, &paths.home);
     let previous = tokio::fs::read_to_string(&path).await.ok();
@@ -470,6 +632,7 @@ pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
 /// `installed` when the definition sets it and `default` when the manager's
 /// default applies (nothing installed, or a definition from before devlanes set
 /// one).
+#[cfg(unix)]
 pub async fn service_report() -> serde_json::Value {
     let manager = Manager::current();
     let Ok(home) = user_home() else {
@@ -480,7 +643,16 @@ pub async fn service_report() -> serde_json::Value {
     service_facts(manager, &path, contents.as_deref())
 }
 
+/// `doctor`'s `service` on Windows: none. The logon entry (`autostart`) has no
+/// stop window to report; Windows waits for the daemon's logoff handling
+/// instead, which `SessionEnd` bounds.
+#[cfg(windows)]
+pub async fn service_report() -> serde_json::Value {
+    serde_json::Value::Null
+}
+
 /// [`service_report`] for a definition read from `path` (`None`: not installed).
+#[cfg(unix)]
 fn service_facts(manager: Manager, path: &Path, contents: Option<&str>) -> serde_json::Value {
     let set = contents.and_then(|contents| manager.window(contents));
     json!({
@@ -494,6 +666,7 @@ fn service_facts(manager: Manager, path: &Path, contents: Option<&str>) -> serde
 }
 
 /// Removes the per-user service definition (the running daemon keeps running).
+#[cfg(unix)]
 pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
     let manager = Manager::current();
     let path = manager.path(&user_home()?);
@@ -513,7 +686,340 @@ pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
     Ok(0)
 }
 
+/// Whether the daemon starts at login, for `daemon status` and `doctor`; `None`
+/// on Unix, where `doctor` reports the service file as `service`.
+#[cfg(unix)]
+pub async fn autostart(_paths: &Paths) -> Option<serde_json::Value> {
+    None
+}
+
+/// `daemon install` on Windows: a logon entry in the user's `Run` key that starts
+/// the daemon through `devlanesw.exe`, which has no console window, then the
+/// daemon itself if none runs, as the Unix services start at once.
+#[cfg(windows)]
+pub async fn install(_: &Runtime) -> Result<u8, RpcError> {
+    let paths = Paths::discover()
+        .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
+    let entry = logon::RunEntry::user();
+    let launcher = logon::launcher().map_err(io)?;
+    let shown = entry.to_string();
+    let home = paths.home.clone();
+    tokio::task::spawn_blocking(move || logon::install(&entry, &launcher, &home))
+        .await
+        .map_err(|error| io(std::io::Error::other(error)))??;
+    println!("installed {shown}");
+    // The client's own spawn rather than the launcher: it waits for the daemon's
+    // readiness and reports a failure here, where the launcher would only log it.
+    devlanes_client::Client::connect_or_spawn(&paths)
+        .await
+        .map_err(crate::driver::rpc_error)?;
+    Ok(0)
+}
+
+/// `daemon uninstall` on Windows: removes the logon entry (the running daemon
+/// keeps running).
+#[cfg(windows)]
+pub async fn uninstall(_: &Runtime) -> Result<u8, RpcError> {
+    let entry = logon::RunEntry::user();
+    let shown = entry.to_string();
+    tokio::task::spawn_blocking(move || logon::uninstall(&entry))
+        .await
+        .map_err(|error| io(std::io::Error::other(error)))?
+        .map_err(io)?;
+    println!("removed {shown}");
+    Ok(0)
+}
+
+/// Whether the daemon starts at logon: `{installed, entry, command?, current,
+/// disabled?}`. `current` is false when the entry names another devlanes or
+/// home, so `daemon install` would rewrite it; `disabled` is true when the user
+/// turned the entry off in Task Manager, so it does not run at logon although
+/// it exists, until `daemon install` turns it back on.
+#[cfg(windows)]
+pub async fn autostart(paths: &Paths) -> Option<serde_json::Value> {
+    let home = paths.home.clone();
+    tokio::task::spawn_blocking(move || {
+        let expected = logon::launcher()
+            .ok()
+            .and_then(|launcher| logon::command_line(&launcher, &home).ok());
+        logon::report(&logon::RunEntry::user(), expected.as_deref())
+    })
+    .await
+    .ok()
+}
+
+/// The Windows logon entry: a `REG_SZ` value in the user's `Run` key holding
+/// `"<dir>\devlanesw.exe" --home "<home>"`. One entry per user, like the Unix
+/// services, for the home `daemon install` ran with.
+#[cfg(windows)]
+mod logon {
+    use std::path::{Path, PathBuf};
+
+    use devlanes_proto::RpcError;
+    use devlanes_sys::windows::registry;
+    use serde_json::{Value, json};
+
+    /// The launcher's file name, next to `devlanes.exe`.
+    const LAUNCHER: &str = "devlanesw.exe";
+
+    /// A registry value under `HKEY_CURRENT_USER` and the key where Task
+    /// Manager records whether a value of that name is turned off; tests use
+    /// scratch keys so they never touch the real `Run` or `StartupApproved` keys.
+    #[derive(Debug, Clone)]
+    pub(super) struct RunEntry {
+        pub(super) key: String,
+        pub(super) name: String,
+        pub(super) approved_key: String,
+    }
+
+    impl RunEntry {
+        /// `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `devlanes`,
+        /// which Explorer runs at logon unless the value of the same name under
+        /// `Explorer\StartupApproved\Run` says it is disabled.
+        pub(super) fn user() -> Self {
+            Self {
+                key: r"Software\Microsoft\Windows\CurrentVersion\Run".into(),
+                name: "devlanes".into(),
+                approved_key:
+                    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run".into(),
+            }
+        }
+    }
+
+    /// Whether Task Manager's record for a `Run` value says it is turned off.
+    /// The record is `REG_BINARY`: a flag byte, padding, then the time it was
+    /// turned off. An even flag (0x02, 0x06) is enabled, an odd one (0x03,
+    /// 0x07) disabled; a missing record is enabled.
+    fn disabled_by(record: &[u8]) -> bool {
+        record.first().is_some_and(|flags| flags & 1 == 1)
+    }
+
+    impl std::fmt::Display for RunEntry {
+        /// `HKCU\<key>\<name>`, as `install` and `uninstall` print it.
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, r"HKCU\{}\{}", self.key, self.name)
+        }
+    }
+
+    /// `devlanesw.exe` (package `devlanes-logon-launcher`) next to this
+    /// executable; installing without it would leave an entry that starts
+    /// nothing.
+    pub(super) fn launcher() -> std::io::Result<PathBuf> {
+        let launcher = std::env::current_exe()?.with_file_name(LAUNCHER);
+        if launcher.is_file() {
+            Ok(launcher)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "{} is missing; reinstall devlanes so the launcher sits next to devlanes.exe (from source: cargo build -p devlanes-logon-launcher)",
+                    launcher.display()
+                ),
+            ))
+        }
+    }
+
+    /// `"<launcher>" --home "<home>"`, quoted so Windows splits it back into
+    /// exactly these arguments.
+    pub(super) fn command_line(launcher: &Path, home: &Path) -> Result<String, RpcError> {
+        Ok(format!("{} --home {}", quote(launcher)?, quote(home)?))
+    }
+
+    /// One argument in double quotes, with the backslash rules of the Microsoft
+    /// C runtime (and Rust's `args`): backslashes before a quote, or before the
+    /// closing quote (`C:\`), are doubled.
+    fn quote(path: &Path) -> Result<String, RpcError> {
+        let text = path.to_str().ok_or_else(|| {
+            RpcError::new(
+                "io",
+                json!({"message": format!("{} is not valid Unicode", path.display())}),
+                1,
+            )
+        })?;
+        let mut quoted = String::from('"');
+        let mut backslashes = 0;
+        for c in text.chars() {
+            match c {
+                '\\' => backslashes += 1,
+                // Windows paths cannot hold quotes; escaped all the same.
+                '"' => {
+                    quoted.push_str(&"\\".repeat(backslashes + 1));
+                    backslashes = 0;
+                }
+                _ => backslashes = 0,
+            }
+            quoted.push(c);
+        }
+        quoted.push_str(&"\\".repeat(backslashes));
+        quoted.push('"');
+        Ok(quoted)
+    }
+
+    /// Writes the entry for `launcher` and `home` and turns it back on if Task
+    /// Manager turned it off. Blocking.
+    ///
+    /// Deleting Task Manager's record is enough to turn it on: Explorer runs a
+    /// value without one, and nothing of devlanes stays behind in that key.
+    pub(super) fn install(entry: &RunEntry, launcher: &Path, home: &Path) -> Result<(), RpcError> {
+        let command = command_line(launcher, home)?;
+        let failed = |error: std::io::Error| {
+            RpcError::new(
+                "service_install_failed",
+                json!({"command": entry.to_string(), "message": error.to_string()}),
+                1,
+            )
+        };
+        registry::write_string(&entry.key, &entry.name, &command).map_err(failed)?;
+        registry::delete_value(&entry.approved_key, &entry.name).map_err(failed)?;
+        Ok(())
+    }
+
+    /// Removes the entry and Task Manager's record of it; missing ones are
+    /// fine. Blocking.
+    pub(super) fn uninstall(entry: &RunEntry) -> std::io::Result<()> {
+        registry::delete_value(&entry.key, &entry.name)?;
+        registry::delete_value(&entry.approved_key, &entry.name).map(drop)
+    }
+
+    /// `{installed, entry, command?, current, disabled?}` for `entry`; `current`
+    /// compares with `expected`, the command `install` would write now, and
+    /// `disabled` is null when Task Manager's record cannot be read. Blocking.
+    pub(super) fn report(entry: &RunEntry, expected: Option<&str>) -> Value {
+        match registry::read_string(&entry.key, &entry.name) {
+            Ok(Some(command)) => json!({
+                "installed": true,
+                "entry": entry.to_string(),
+                "command": command,
+                "current": expected.is_some_and(|expected| expected == command),
+                "disabled": match registry::read_binary(&entry.approved_key, &entry.name) {
+                    Ok(record) => Some(record.as_deref().is_some_and(disabled_by)),
+                    Err(_) => None,
+                },
+            }),
+            Ok(None) => json!({"installed": false, "entry": entry.to_string(), "current": false}),
+            Err(error) => json!({
+                "installed": null,
+                "entry": entry.to_string(),
+                "current": false,
+                "error": error.to_string(),
+            }),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A scratch key under `HKCU\Software` holding a `Run` and an
+        /// `Approved` key, deleted when dropped, so tests never touch the real
+        /// `Run` or `StartupApproved` keys.
+        struct Scratch {
+            root: String,
+            entry: RunEntry,
+        }
+
+        impl Scratch {
+            fn new() -> Self {
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|elapsed| elapsed.subsec_nanos())
+                    .unwrap_or_default();
+                let root = format!(r"Software\devlanes-test-{}-{nanos}", std::process::id());
+                Self {
+                    entry: RunEntry {
+                        key: format!(r"{root}\Run"),
+                        name: "devlanes".into(),
+                        approved_key: format!(r"{root}\Approved"),
+                    },
+                    root,
+                }
+            }
+        }
+
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = registry::delete_tree(&self.root);
+            }
+        }
+
+        /// Install writes the quoted command, the report sees it as current, a
+        /// different home is not current, and uninstall removes it (twice is fine).
+        #[test]
+        fn installs_reports_and_removes_the_entry() {
+            let scratch = Scratch::new();
+            let entry = &scratch.entry;
+            let launcher = Path::new(r"C:\Program Files\devlanes\devlanesw.exe");
+            let home = Path::new(r"C:\Users\a b\.devlanes");
+            let expected = command_line(launcher, home).expect("command");
+            assert_eq!(
+                expected,
+                r#""C:\Program Files\devlanes\devlanesw.exe" --home "C:\Users\a b\.devlanes""#
+            );
+            assert_eq!(report(entry, Some(&expected))["installed"], false);
+            install(entry, launcher, home).expect("install");
+            let installed = report(entry, Some(&expected));
+            assert_eq!(installed["installed"], true, "{installed}");
+            assert_eq!(installed["command"], expected.as_str());
+            assert_eq!(installed["current"], true);
+            assert_eq!(installed["disabled"], false);
+            let other = command_line(launcher, Path::new(r"C:\other")).expect("command");
+            assert_eq!(report(entry, Some(&other))["current"], false);
+            uninstall(entry).expect("uninstall");
+            uninstall(entry).expect("uninstall again");
+            assert_eq!(report(entry, Some(&expected))["installed"], false);
+        }
+
+        /// An entry Task Manager turned off is reported as disabled, one it
+        /// turned back on is not, and `install` turns it on again by removing
+        /// the record; `uninstall` removes the record too.
+        #[test]
+        fn task_manager_state_is_reported_and_install_reenables() {
+            let scratch = Scratch::new();
+            let entry = &scratch.entry;
+            let launcher = Path::new(r"C:\devlanes\devlanesw.exe");
+            let home = Path::new(r"C:\Users\u\.devlanes");
+            install(entry, launcher, home).expect("install");
+            // As Task Manager writes them: flag byte, padding, FILETIME.
+            let off = [3, 0, 0, 0, 0x2c, 0xf1, 0x65, 0x7f, 0x99, 0xed, 0xd9, 0x01];
+            let on = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+            for (record, disabled) in [(&off, true), (&on, false)] {
+                registry::write_binary(&entry.approved_key, &entry.name, record).expect("record");
+                assert_eq!(report(entry, None)["disabled"], disabled, "{record:?}");
+            }
+            assert!(disabled_by(&[7, 0]));
+            assert!(!disabled_by(&[6, 0]));
+            assert!(!disabled_by(&[]));
+            registry::write_binary(&entry.approved_key, &entry.name, &off).expect("record");
+            install(entry, launcher, home).expect("reinstall");
+            assert_eq!(
+                registry::read_binary(&entry.approved_key, &entry.name).expect("read"),
+                None
+            );
+            assert_eq!(report(entry, None)["disabled"], false);
+            registry::write_binary(&entry.approved_key, &entry.name, &off).expect("record");
+            uninstall(entry).expect("uninstall");
+            assert_eq!(
+                registry::read_binary(&entry.approved_key, &entry.name).expect("read"),
+                None
+            );
+        }
+
+        /// A drive root keeps its backslash: `"C:\\"` reads back as `C:\`, not as
+        /// an escaped quote.
+        #[test]
+        fn trailing_backslashes_survive_quoting() {
+            assert_eq!(quote(Path::new(r"C:\")).expect("quoted"), r#""C:\\""#);
+            assert_eq!(quote(Path::new(r"C:\x")).expect("quoted"), r#""C:\x""#);
+            assert_eq!(
+                quote(Path::new(r"C:\x\\")).expect("quoted"),
+                r#""C:\x\\\\""#
+            );
+        }
+    }
+}
+
 /// Minimal escaping for plist string values.
+#[cfg(unix)]
 fn xml_escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -592,7 +1098,8 @@ pub fn move_state_aside(
         ));
     }
     for (from, to) in &moves {
-        std::fs::rename(from, to).map_err(io)?;
+        // A SQLite browser or backup tool may still hold a file on Windows.
+        devlanes_sys::rename_retrying(from, to).map_err(io)?;
     }
     Ok(moves)
 }
@@ -627,6 +1134,7 @@ pub fn utc_stamp(seconds: u64) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[tokio::test]
     /// SIGTERM cancels the server's shutdown token, the path `daemon stop` takes.
     async fn sigterm_starts_the_graceful_shutdown() {
@@ -639,6 +1147,46 @@ mod tests {
             .expect("shutdown requested");
     }
 
+    /// Logoff starts the graceful shutdown as a signal does (interrupting
+    /// `lane.stop` tasks), and the answer to Windows waits until the daemon says
+    /// the shutdown finished.
+    #[cfg(windows)]
+    #[test]
+    fn session_end_shuts_down_and_waits() {
+        use std::time::{Duration, Instant};
+        let shutdown = CancellationToken::new();
+        let interrupt = CancellationToken::new();
+        let session = SessionEnd::watch(shutdown.clone(), interrupt.clone());
+        let window = session._watch.as_ref().expect("session window");
+        std::thread::scope(|scope| {
+            let answer = scope.spawn(|| {
+                window.simulate(
+                    devlanes_sys::windows::session::SessionEnd::Logoff,
+                    Duration::from_secs(20),
+                )
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !shutdown.is_cancelled() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            assert!(shutdown.is_cancelled(), "logoff did not start the shutdown");
+            assert!(
+                interrupt.is_cancelled(),
+                "logoff left lane.stop tasks running"
+            );
+            assert!(
+                !answer.is_finished(),
+                "answered before the shutdown finished"
+            );
+            session.finished();
+            answer
+                .join()
+                .expect("answer thread")
+                .expect("the window answered");
+        });
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     /// SIGTERM during an explicit shutdown interrupts its `lane.stop` tasks.
     async fn sigterm_during_a_shutdown_interrupts_its_tasks() {
@@ -653,6 +1201,7 @@ mod tests {
             .expect("tasks interrupted");
     }
 
+    #[cfg(unix)]
     #[test]
     /// Both definitions set the stop window and read it back; definitions from
     /// before it was set fall back to the manager's default.
@@ -699,6 +1248,7 @@ mod tests {
         assert_eq!(Manager::Systemd.window("TimeoutStopSec=infinity\n"), None);
     }
 
+    #[cfg(unix)]
     #[test]
     /// launchd reloads a changed plist of a loaded job (bootout, then a retried
     /// bootstrap), leaves an unchanged one alone and bootstraps a missing job;

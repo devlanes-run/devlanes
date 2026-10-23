@@ -103,7 +103,8 @@ fn renders_cargo_run() {
             .strip_prefix(temp.path())
             .expect("inside worktree")
             .display()
-            .to_string();
+            .to_string()
+            .replace('\\', "/");
         rendered.push_str(&format!(
             "{source}#{name}: cwd={cwd:?} package={} argv={}\n",
             plan.package,
@@ -124,11 +125,13 @@ fn renders_cargo_run() {
 fn errors() {
     let temp = tempfile::tempdir().expect("tempdir");
     fixture(temp.path());
+    // Messages show the host's absolute path; only the shape is checked.
     let message = |source: &str, name: &str| {
         plan(&request(temp.path(), source, name, &[]))
             .expect_err("error")
             .to_string()
             .replace(&temp.path().display().to_string(), "<lane>")
+            .replace('\\', "/")
     };
     insta::assert_snapshot!(
         [

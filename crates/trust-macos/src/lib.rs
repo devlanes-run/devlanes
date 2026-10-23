@@ -7,6 +7,9 @@
 //! [`TrustError::InteractionRequired`]. Chrome and Safari read these settings.
 //! Firefox 120 and later also imports user-added keychain roots, and the `firefox`
 //! target additionally writes each profile's NSS database when `certutil` exists.
+//!
+//! Empty on Windows. It builds on Linux so the argv tests run there too.
+#![cfg(unix)]
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -76,7 +79,8 @@ impl MacosTrust {
         Ok(Self::new(Arc::new(SystemExecutor), PathBuf::from(home)))
     }
 
-    /// The store for `target`; mobile targets are [`TrustError::Unsupported`].
+    /// The store for `target`; mobile targets are [`TrustError::Unsupported`],
+    /// and `windows` is [`TrustError::Unavailable`] on a Mac.
     pub fn store(&self, target: TrustTarget) -> Result<Box<dyn TrustStore>, TrustError> {
         match target {
             TrustTarget::System | TrustTarget::Chrome => {
@@ -96,6 +100,10 @@ impl MacosTrust {
                 },
                 certutil_lookup(),
             ))),
+            TrustTarget::Windows => Err(TrustError::Unavailable {
+                target,
+                reason: "it is the Windows certificate store, used from WSL or Windows".into(),
+            }),
             TrustTarget::IosSimulator | TrustTarget::AndroidEmulator => {
                 Err(TrustError::Unsupported { target })
             }

@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::Stdio;
 
 use async_trait::async_trait;
@@ -140,6 +141,7 @@ pub trait CommandExecutor: Send + Sync {
 }
 
 /// Root-owned directories searched for privileged programs, in order.
+#[cfg(unix)]
 pub const SYSTEM_PROGRAM_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/bin"];
 
 /// Absolute path of `name` in [`SYSTEM_PROGRAM_DIRS`].
@@ -147,6 +149,7 @@ pub const SYSTEM_PROGRAM_DIRS: [&str; 4] = ["/usr/sbin", "/usr/bin", "/sbin", "/
 /// Commands run through sudo or as root must not come from the user's `PATH`: a
 /// directory the user (or anything running as the user) can write would turn a
 /// trust change into arbitrary code running as root.
+#[cfg(unix)]
 pub fn find_system_program(executor: &dyn CommandExecutor, name: &str) -> Option<PathBuf> {
     SYSTEM_PROGRAM_DIRS
         .iter()
@@ -154,10 +157,13 @@ pub fn find_system_program(executor: &dyn CommandExecutor, name: &str) -> Option
         .find(|candidate| executor.is_executable(candidate))
 }
 
-/// Runs commands with `tokio::process`.
+/// Runs commands with `tokio::process`. Unix only: the Windows stores call the
+/// certificate store API instead of programs.
+#[cfg(unix)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SystemExecutor;
 
+#[cfg(unix)]
 #[async_trait]
 impl CommandExecutor for SystemExecutor {
     /// Spawns the program directly, without a shell.
@@ -196,6 +202,7 @@ impl CommandExecutor for SystemExecutor {
 }
 
 /// Whether `path` is a regular file with an execute bit.
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::metadata(path)
@@ -294,6 +301,7 @@ mod tests {
         assert_eq!(command.argv(), ["certutil", "-n", "devlanes CA", ""]);
     }
 
+    #[cfg(unix)]
     #[test]
     fn system_programs_never_come_from_path() {
         let fake = crate::fake::FakeExecutor::new(|_| Ok(CommandOutput::ok("")))
@@ -313,6 +321,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn missing_program_is_tool_missing() {
         let command = CommandLine::new("devlanes-definitely-missing-tool");
@@ -324,6 +333,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn system_executor_captures_output() {
         let command = CommandLine::new("sh").args(["-c", "echo out; echo err >&2; exit 3"]);

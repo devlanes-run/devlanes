@@ -11,13 +11,19 @@ publish.workspace = true
 bytes.workspace = true
 devlanes-ipc = { path = "../ipc" }
 devlanes-proto = { path = "../proto" }
+dunce.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+devlanes-sys = { path = "../sys" }
 
 [lints]
 workspace = true

@@ -6,7 +6,7 @@ use devlanes_proto::{Event, LogLine, Method, RpcError, events};
 use serde_json::Value;
 
 use super::{
-    Ctx, Outcome, bytes, cap_line, clean, compact_fields, display_value, duration, int,
+    Ctx, Outcome, bytes, cap_line, clean, compact_fields, display_value, duration, exit_field, int,
     leftover_notes_of, list, percent, plural, table, tail_lines, text, tree, words,
 };
 use crate::Hint;
@@ -171,7 +171,7 @@ pub(super) fn run(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
             cx.state(if failed { "failed" } else { "exited" })
         );
         if let Some(code) = int(data, "exit_code") {
-            line.push_str(&format!(" exit={code}"));
+            line.push_str(&exit_field(code, cx.agent()));
         }
         let mut lines = vec![line];
         for leftovers in list(data, "leftovers") {
@@ -449,7 +449,7 @@ pub(super) fn metrics(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 }
 
 /// One event as `name subject state`, for `events` and streams without progress lines.
-pub(crate) fn event_line(event: &Event) -> String {
+pub(crate) fn event_line(event: &Event, cx: &Ctx<'_>) -> String {
     let data = &event.data;
     let name = clean(&event.event);
     match event.event.as_str() {
@@ -480,7 +480,7 @@ pub(crate) fn event_line(event: &Event) -> String {
                 text(data, "state")
             );
             if let Some(code) = int(data, "exit_code") {
-                line.push_str(&format!(" exit={code}"));
+                line.push_str(&exit_field(code, cx.agent()));
             }
             line
         }
@@ -501,7 +501,7 @@ pub(crate) fn event_line(event: &Event) -> String {
 }
 
 /// `events` without `-f`: the recent events.
-pub(super) fn events_page(data: &Value) -> Vec<String> {
+pub(super) fn events_page(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let items = list(data, "items");
     if items.is_empty() {
         return vec!["no recent events".into()];
@@ -509,7 +509,7 @@ pub(super) fn events_page(data: &Value) -> Vec<String> {
     items
         .iter()
         .filter_map(|item| serde_json::from_value::<Event>(item.clone()).ok())
-        .map(|event| event_line(&event))
+        .map(|event| event_line(&event, cx))
         .collect()
 }
 
@@ -574,7 +574,7 @@ pub(super) fn task_line(data: &Value, cx: &Ctx<'_>) -> Option<String> {
             "{} {task}{}",
             cx.mark(Outcome::Fail),
             int(data, "exit_code")
-                .map(|code| format!(" exit={code}"))
+                .map(|code| exit_field(code, cx.agent()))
                 .unwrap_or_default()
         )),
         "skipped" => Some(cx.skipped(&task, data.get("reason").and_then(reason_text).as_deref())),
@@ -807,6 +807,7 @@ fn fact_checks(data: &Value) -> Vec<Check> {
         )
         .fix("devlanes start, or devlanes daemon restart")
     }];
+    checks.extend(autostart_check(&data["autostart"]));
     checks.extend(home_checks(&data["home_check"]));
     match (
         int(data, "schema_version"),
@@ -862,6 +863,9 @@ fn fact_checks(data: &Value) -> Vec<Check> {
         )
         .fix("devlanes daemon install, so the daemon starts outside the sandbox")
     });
+    checks.extend(windows_check(&data["windows"]));
+    checks.extend(terminal_checks(&data["terminal"], running));
+    checks.extend(wsl_checks(data));
     // Docker is the daemon's to ask; without one there is nothing to say.
     if data.get("infra").is_some() {
         checks.extend(docker_checks(data));
@@ -892,14 +896,140 @@ fn fact_checks(data: &Value) -> Vec<Check> {
             .fix("stop that process, or set proxy ports in ~/.devlanes/config.yaml"),
         );
     }
+    checks.extend(excluded_port_checks(&data["excluded_ports"]));
     checks.extend(service_checks(data));
     checks.extend(tls_and_hosts_checks(data, running));
     checks
 }
 
+/// Lists `[{start, end}]` port ranges as `27339, 49745-49844`.
+fn port_ranges(ranges: &[Value]) -> String {
+    ranges
+        .iter()
+        .map(|range| {
+            let (start, end) = (display_value(&range["start"]), display_value(&range["end"]));
+            if start == end {
+                start
+            } else {
+                format!("{start}-{end}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The TCP port ranges Windows reserves (`excluded_ports: {ranges, error?, pool,
+/// pool_overlaps, mirrored, proxy}` or `{error}` when nothing could be read,
+/// reported on Windows only): a lane, proxy or mirrored box port inside one cannot
+/// be bound. New lane port blocks skip them, but the ranges can change after a
+/// reboot.
+fn excluded_port_checks(excluded: &Value) -> Vec<Check> {
+    const LIST: &str = "netsh int ipv4 show excludedportrange protocol=tcp";
+    if !excluded.is_object() {
+        return Vec::new();
+    }
+    let mut checks = Vec::new();
+    if let Some(error) = excluded.get("error").and_then(Value::as_str) {
+        checks.push(
+            Check::new(
+                "ports",
+                Outcome::Skip,
+                format!(
+                    "cannot read the port ranges Windows reserves: {}",
+                    clean(error)
+                ),
+            )
+            .fix(format!("run {LIST} to see them")),
+        );
+    }
+    // Only an error: no family could be read, so there is nothing to judge.
+    if excluded.get("ranges").is_none() {
+        return checks;
+    }
+    let pool = &excluded["pool"];
+    if pool.is_object() {
+        let range = port_ranges(std::slice::from_ref(pool));
+        let overlaps = list(excluded, "pool_overlaps");
+        checks.push(if overlaps.is_empty() {
+            Check::new(
+                "ports",
+                Outcome::Ok,
+                format!("no port range Windows reserves overlaps ports.range {range}"),
+            )
+        } else {
+            Check::new(
+                "ports",
+                Outcome::Skip,
+                format!(
+                    "ports.range {range} overlaps ports Windows reserves ({}); new port blocks skip them, but the ranges can change after a reboot and a block given out earlier may now sit inside one",
+                    port_ranges(overlaps)
+                ),
+            )
+            .fix(format!(
+                "set ports.range in ~/.devlanes/config.yaml clear of them ({LIST} lists them; Hyper-V, WSL and Docker Desktop reserve them)"
+            ))
+        });
+    }
+    let proxy: Vec<String> = list(excluded, "proxy")
+        .iter()
+        .map(|entry| {
+            let listener = text(entry, "listener");
+            let role = if entry["fallback"].as_bool() == Some(true) {
+                format!("{} fallback", listener.to_uppercase())
+            } else {
+                format!("proxy.{listener}_port")
+            };
+            format!("{} ({role})", display_value(&entry["port"]))
+        })
+        .collect();
+    if !proxy.is_empty() {
+        checks.push(
+            Check::new(
+                "ports",
+                Outcome::Skip,
+                format!(
+                    "proxy ports inside port ranges Windows reserves: {}; the proxy cannot bind them",
+                    proxy.join(", ")
+                ),
+            )
+            .fix(format!(
+                "set proxy.http_port and proxy.https_port in ~/.devlanes/config.yaml to free ports outside them ({LIST} lists them)"
+            )),
+        );
+    }
+    let mirrored: Vec<String> = list(excluded, "mirrored")
+        .iter()
+        .map(display_value)
+        .collect();
+    if !mirrored.is_empty() {
+        checks.push(
+            Check::new(
+                "ports",
+                Outcome::Skip,
+                if mirrored.len() == 1 {
+                    format!(
+                        "box port {} is inside a port range Windows reserves; it cannot be mirrored here",
+                        mirrored.join(", ")
+                    )
+                } else {
+                    format!(
+                        "box ports {} are inside port ranges Windows reserves; they cannot be mirrored here",
+                        mirrored.join(", ")
+                    )
+                },
+            )
+            .fix(format!(
+                "set ports.range on the box clear of the reserved ranges, then restart its lanes ({LIST} lists them)"
+            )),
+        );
+    }
+    checks
+}
+
 /// The embedded DNS server of the `resolver` hostname strategy (`dns`:
-/// `{tld, listen, running, error, resolver_file}`), and whether the OS sends
-/// the TLD's lookups to it. Nothing without that strategy.
+/// `{tld, listen, running, error, resolver_file}`, or `nrpt_rule` in place of
+/// `resolver_file` on Windows), and whether the OS sends the TLD's lookups to
+/// it. Nothing without that strategy.
 fn dns_checks(dns: &Value) -> Vec<Check> {
     if !dns.is_object() {
         return Vec::new();
@@ -918,6 +1048,10 @@ fn dns_checks(dns: &Value) -> Vec<Check> {
             )
             .fix("free that address, then devlanes daemon restart"),
         ];
+    }
+    // A Windows daemon reports the NRPT rule that does the resolver file's job.
+    if dns["nrpt_rule"].is_object() {
+        return nrpt_checks(&dns["nrpt_rule"], &tld, &listen);
     }
     let file = &dns["resolver_file"];
     let path = text(file, "path");
@@ -952,6 +1086,85 @@ fn dns_checks(dns: &Value) -> Vec<Check> {
             "dns",
             Outcome::Ok,
             format!("DNS server for .{tld} on {listen}, resolver file {path}"),
+        )
+    };
+    vec![check]
+}
+
+/// [`dns_checks`] for the Windows NRPT rule (`nrpt_rule`: `{namespace, server,
+/// installed, matches, foreign, group_policy}` or `{namespace?, error}`), with
+/// the same verdicts as a resolver file plus what can override a local rule:
+/// another program's rule for the namespace and Group Policy NRPT rules.
+fn nrpt_checks(rule: &Value, tld: &str, listen: &str) -> Vec<Check> {
+    const RESOLVER: &str = "devlanes certs trust --resolver";
+    if let Some(error) = rule.get("error").and_then(Value::as_str) {
+        return vec![
+            Check::new(
+                "dns",
+                Outcome::Skip,
+                format!("cannot read the NRPT rules for .{tld}: {}", clean(error)),
+            )
+            .fix("run Get-DnsClientNrptRule in PowerShell to see them"),
+        ];
+    }
+    let namespace = text(rule, "namespace");
+    let server = text(rule, "server");
+    let flag = |key: &str| rule.get(key).and_then(Value::as_bool) == Some(true);
+    // An NRPT rule names a server's address, never its port.
+    let off_port_53 = listen
+        .parse::<std::net::SocketAddr>()
+        .is_ok_and(|listen| listen.port() != 53);
+    let check = if flag("foreign") {
+        Check::new(
+            "dns",
+            Outcome::Skip,
+            format!(
+                "an NRPT rule for {namespace} was not added by devlanes; it sends .{tld} lookups elsewhere"
+            ),
+        )
+        .fix("remove it yourself (Get-DnsClientNrptRule lists it) or choose another hostnames.tld")
+    } else if off_port_53 {
+        Check::new(
+            "dns",
+            Outcome::Skip,
+            format!(
+                ".{tld} lookups do not reach the devlanes DNS server: it listens on {listen}, and an NRPT rule can only reach port 53"
+            ),
+        )
+    } else if !flag("installed") {
+        Check::new(
+            "dns",
+            Outcome::Skip,
+            format!(
+                ".{tld} lookups do not reach the devlanes DNS server: no NRPT rule for {namespace}"
+            ),
+        )
+        .fix(RESOLVER)
+    } else if !flag("matches") {
+        Check::new(
+            "dns",
+            Outcome::Skip,
+            format!(
+                "the NRPT rule for {namespace} sends .{tld} lookups elsewhere, not to {listen}"
+            ),
+        )
+        .fix(RESOLVER)
+    } else if flag("group_policy") {
+        Check::new(
+            "dns",
+            Outcome::Skip,
+            format!(
+                "the NRPT rule for {namespace} is in place, but Windows ignores it while Group Policy NRPT rules exist"
+            ),
+        )
+        .fix(format!(
+            "ask the administrator to add {namespace} -> {server} to the Group Policy NRPT rules"
+        ))
+    } else {
+        Check::new(
+            "dns",
+            Outcome::Ok,
+            format!("DNS server for .{tld} on {listen}, NRPT rule {namespace}"),
         )
     };
     vec![check]
@@ -1072,7 +1285,7 @@ pub(crate) fn doctor_failed(data: &Value, runtime: &crate::Runtime) -> bool {
         .any(|check| check.outcome == Outcome::Fail)
 }
 
-/// `home_check` (`{path, exists, mode, problem}`) from the CLI's own checks.
+/// `home_check` (`{path, exists, mode, problem, fix?}`) from the CLI's own checks.
 fn home_checks(home: &Value) -> Vec<Check> {
     if !home.is_object() {
         return Vec::new();
@@ -1094,6 +1307,19 @@ fn home_checks(home: &Value) -> Vec<Check> {
             ),
         )
         .fix(format!("chmod 700 {}", crate::shell_quote(&path))),
+        Some("acl") => {
+            let check = Check::new(
+                "home",
+                Outcome::Skip,
+                format!(
+                    "{path} lets other accounts in; the daemon limits it to you, SYSTEM and Administrators when it starts"
+                ),
+            );
+            match home.get("fix").and_then(Value::as_str) {
+                Some(fix) => check.fix(clean(fix)),
+                None => check,
+            }
+        }
         Some(problem) => Check::new(
             "home",
             Outcome::Fail,
@@ -1101,7 +1327,7 @@ fn home_checks(home: &Value) -> Vec<Check> {
                 "devlanes refuses {path}: {}",
                 match problem {
                     "owner" => "another user owns it",
-                    "symlink" => "it is a symlink",
+                    "symlink" => "it is a symlink or junction",
                     "not_a_directory" => "it is not a directory",
                     _ => "it cannot be read",
                 }
@@ -1110,6 +1336,145 @@ fn home_checks(home: &Value) -> Vec<Check> {
         .fix("point DEVLANES_HOME at a directory you own, or fix that path by hand"),
     };
     vec![check]
+}
+
+/// The oldest Windows build devlanes supports: Windows 11 24H2.
+const MIN_WINDOWS_BUILD: u64 = 26_100;
+
+/// The Windows build (`windows: {build}`, reported on Windows), which fails
+/// below [`MIN_WINDOWS_BUILD`].
+fn windows_check(windows: &Value) -> Option<Check> {
+    let build = windows.get("build").and_then(Value::as_u64)?;
+    Some(if build >= MIN_WINDOWS_BUILD {
+        Check::new("windows", Outcome::Ok, format!("Windows build {build}"))
+    } else {
+        Check::new(
+            "windows",
+            Outcome::Fail,
+            format!(
+                "Windows build {build} is older than Windows 11 24H2 (build {MIN_WINDOWS_BUILD}), the oldest devlanes supports"
+            ),
+        )
+        .fix("update Windows to Windows 11 24H2 or later")
+    })
+}
+
+/// The shell running `doctor` (`terminal: {elevated, job}`, reported on
+/// Windows): an elevated shell cannot start the daemon, and a job that kills its
+/// processes on close, with no way out, stops a daemon started from it. Both only
+/// matter when this shell would start the daemon, so a `running` one turns the
+/// first into a note and silences the second.
+fn terminal_checks(terminal: &Value, running: bool) -> Vec<Check> {
+    let mut checks = Vec::new();
+    let allowed = terminal.get("elevation_allowed").and_then(Value::as_bool) == Some(true);
+    if terminal.get("elevated").and_then(Value::as_bool) == Some(true) {
+        // An elevated CLI can still talk to a daemon that runs unelevated.
+        checks.push(if allowed {
+            // CI runners that only run elevated set the override on purpose.
+            Check::new(
+                "terminal",
+                Outcome::Skip,
+                "this terminal runs as administrator, and DEVLANES_ALLOW_ELEVATED=1 lets the daemon and its units run elevated",
+            )
+        } else if running {
+            Check::new(
+                "terminal",
+                Outcome::Skip,
+                "this terminal runs as administrator; it cannot start the daemon",
+            )
+        } else {
+            Check::new(
+                "terminal",
+                Outcome::Fail,
+                "this terminal runs as administrator; the daemon refuses to run elevated",
+            )
+            .fix("run devlanes from a terminal that is not running as administrator")
+        });
+    }
+    let job = &terminal["job"];
+    let flag = |key: &str| job.get(key).and_then(Value::as_bool) == Some(true);
+    if !running && flag("kill_on_close") && !flag("breakaway_ok") {
+        // The terminal host owns the job, so another shell inside it does not help.
+        checks.push(
+            Check::new(
+                "terminal",
+                Outcome::Skip,
+                "this terminal stops every process it started when it closes, including a daemon started from it",
+            )
+            .fix("start the daemon from a terminal outside this one (for example Windows Terminal), then devlanes daemon restart"),
+        );
+    }
+    checks
+}
+
+/// What `wsl.exe --shutdown` from Windows applies, for fixes that edit WSL's files.
+const WSL_RESTART: &str = "then run wsl.exe --shutdown from Windows and reopen the distro";
+
+/// The WSL distro this CLI runs in (`wsl`, added by the CLI inside WSL only:
+/// `{distro, version, interop, systemd}`) and what it changes: interop off, no
+/// systemd for `daemon install`, a CA Windows browsers do not trust, and
+/// worktrees on Windows drives (`windows_drive_worktrees`, from the daemon).
+fn wsl_checks(data: &Value) -> Vec<Check> {
+    let wsl = &data["wsl"];
+    if !wsl.is_object() {
+        return Vec::new();
+    }
+    let flag = |key: &str| wsl.get(key).and_then(Value::as_bool);
+    let interop = flag("interop") == Some(true);
+    let name = match wsl.get("distro").and_then(Value::as_str) {
+        Some(distro) => format!("WSL {} ({})", display_value(&wsl["version"]), clean(distro)),
+        None => format!("WSL {}", display_value(&wsl["version"])),
+    };
+    let mut checks = vec![if interop {
+        Check::new("wsl", Outcome::Ok, format!("{name}, Windows interop on"))
+    } else {
+        Check::new(
+            "wsl",
+            Outcome::Skip,
+            format!("{name}, Windows interop off: devlanes cannot open URLs in Windows or trust the CA there"),
+        )
+        .fix(format!("set enabled=true under [interop] in /etc/wsl.conf, {WSL_RESTART}"))
+    }];
+    if flag("systemd") == Some(false) {
+        checks.push(
+            Check::new(
+                "wsl",
+                Outcome::Skip,
+                "systemd is not running in this distro, so devlanes daemon install cannot start the daemon with it",
+            )
+            .fix(format!("set systemd=true under [boot] in /etc/wsl.conf, {WSL_RESTART}")),
+        );
+    }
+    let ca = &data["ca"];
+    let windows_listed = list(ca, "trust")
+        .iter()
+        .any(|entry| text(entry, "store") == "windows");
+    if interop && ca.get("present").and_then(Value::as_bool) == Some(true) && !windows_listed {
+        checks.push(
+            Check::new(
+                "wsl",
+                Outcome::Skip,
+                "browsers on Windows do not trust the CA: tls.trust leaves out windows",
+            )
+            .fix("add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes certs trust"),
+        );
+    }
+    for worktree in list(data, "windows_drive_worktrees") {
+        checks.push(
+            Check::new(
+                "wsl",
+                Outcome::Skip,
+                format!(
+                    "{} is on the Windows drive {} ({}): file access is slow and file watching misses edits made from Windows",
+                    text(worktree, "lane"),
+                    text(worktree, "drive"),
+                    text(worktree, "path")
+                ),
+            )
+            .fix("move the repository to the Linux filesystem, for example ~/src"),
+        );
+    }
+    checks
 }
 
 /// Docker and Compose from the daemon's `infra` facts.
@@ -1183,15 +1548,39 @@ fn tls_and_hosts_checks(data: &Value, running: bool) -> Vec<Check> {
             Outcome::Ok,
             format!("CA at {}", display_value(&ca["path"])),
         ));
-        // `[{store, state, reason?}]`, added by the CLI from this user's stores.
+        // `[{store, state, reason?, location?, approval?, hint?}]`, added by the CLI
+        // from this user's stores. `location` names the store when the target does
+        // not (Windows), `approval` the dialog `certs trust` shows, named once even
+        // when several targets share the store.
+        let mut approvals = Vec::new();
         for entry in list(ca, "trust") {
-            let store = text(entry, "store");
+            let store = match entry.get("location").and_then(Value::as_str) {
+                Some(location) => format!("{} ({})", text(entry, "store"), clean(location)),
+                None => text(entry, "store"),
+            };
+            let note = |key: &str| entry.get(key).and_then(Value::as_str).map(clean);
             checks.push(match text(entry, "state").as_str() {
                 "trusted" => Check::new("tls", Outcome::Ok, format!("CA trusted by {store}")),
                 "untrusted" => {
-                    Check::new("tls", Outcome::Fail, format!("CA not trusted by {store}"))
-                        .fix("devlanes certs trust")
+                    let fix = match note("approval") {
+                        Some(approval) if !approvals.contains(&approval) => {
+                            let fix = format!("devlanes certs trust, then {approval}");
+                            approvals.push(approval);
+                            fix
+                        }
+                        _ => "devlanes certs trust".into(),
+                    };
+                    Check::new("tls", Outcome::Fail, format!("CA not trusted by {store}")).fix(fix)
                 }
+                // In the store but overridden by a deny list; `certs trust` cannot lift it.
+                "distrusted" => Check::new(
+                    "tls",
+                    Outcome::Fail,
+                    format!(
+                        "CA distrusted by {store}: {}",
+                        clean(&text(entry, "reason"))
+                    ),
+                ),
                 _ => Check::new(
                     "tls",
                     Outcome::Skip,
@@ -1399,6 +1788,37 @@ fn release_checks(release: &Value) -> Vec<Check> {
             how => format!("devlanes {version} ({build}), installed with {how}"),
         },
     )];
+    // `{removed, in_use}`: executables install.ps1 renamed while they ran.
+    let old = &release["old_copies"];
+    let removed = list(old, "removed");
+    if !removed.is_empty() {
+        checks.push(Check::new(
+            "release",
+            Outcome::Ok,
+            format!(
+                "deleted {} left by an upgrade",
+                plural(removed.len(), "old executable")
+            ),
+        ));
+    }
+    let in_use: Vec<String> = list(old, "in_use")
+        .iter()
+        .filter_map(Value::as_str)
+        .map(clean)
+        .collect();
+    if !in_use.is_empty() {
+        checks.push(
+            Check::new(
+                "release",
+                Outcome::Skip,
+                format!(
+                    "the previous version still runs from {}",
+                    in_use.join(", ")
+                ),
+            )
+            .fix("devlanes daemon restart when convenient (it stops services); doctor deletes the old files afterwards"),
+        );
+    }
     let daemon = text(release, "daemon_version");
     if !daemon.is_empty() && daemon != version {
         checks.push(
@@ -1518,7 +1938,14 @@ pub(super) fn config_check(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         display_value(&data["path"])
     )];
     for warning in list(data, "warnings") {
-        let message = match text(warning, "code").as_str() {
+        let code = text(warning, "code");
+        // The daemon's shell warnings name their path (and how many more) in
+        // the sentence itself.
+        if code == "shell_fallback" {
+            lines.push(format!("{} {}", cx.state("warn"), text(warning, "message")));
+            continue;
+        }
+        let message = match code.as_str() {
             "unknown_platform" => {
                 let data = &warning["data"];
                 let known: Vec<String> = list(data, "known").iter().map(display_value).collect();
@@ -1583,7 +2010,50 @@ pub(super) fn daemon_status(data: &Value) -> Vec<String> {
     if data.get("socket").is_some() {
         lines.push(format!("socket: {}", display_value(&data["socket"])));
     }
+    if let Some(check) = autostart_check(&data["autostart"]) {
+        lines.push(format!("logon: {}", check.text));
+    }
     lines
+}
+
+/// The logon entry (`autostart: {installed, entry, command?, current}`, reported
+/// on Windows), for `daemon status` and `doctor`. `None` without the facts.
+fn autostart_check(autostart: &Value) -> Option<Check> {
+    let entry = text(autostart, "entry");
+    let disabled = autostart.get("disabled").and_then(Value::as_bool) == Some(true);
+    let check = match autostart.get("installed").and_then(Value::as_bool) {
+        // Startup apps turned off in Task Manager or Settings keep their entry.
+        Some(true) if disabled => Check::new(
+            "daemon",
+            Outcome::Skip,
+            format!("the logon entry ({entry}) is turned off in Task Manager"),
+        )
+        .fix("devlanes daemon install"),
+        Some(true) if autostart.get("current").and_then(Value::as_bool) == Some(true) => {
+            Check::new("daemon", Outcome::Ok, format!("starts at logon ({entry})"))
+        }
+        Some(true) => Check::new(
+            "daemon",
+            Outcome::Skip,
+            format!(
+                "starts at logon with another devlanes or home: {}",
+                text(autostart, "command")
+            ),
+        )
+        .fix("devlanes daemon install"),
+        Some(false) => Check::new(
+            "daemon",
+            Outcome::Ok,
+            "does not start at logon (devlanes daemon install adds that)",
+        ),
+        None if autostart.is_object() => Check::new(
+            "daemon",
+            Outcome::Skip,
+            format!("cannot read {entry}: {}", text(autostart, "error")),
+        ),
+        None => return None,
+    };
+    Some(check)
 }
 
 /// `daemon stop`: the stopped units and the `lane.stop` tasks it ran, each
@@ -1610,6 +2080,7 @@ pub(super) fn daemon_shutdown(data: &Value) -> Vec<String> {
     for task in tasks {
         let outcome = match (int(task, "exit_code"), task["error"].get("code")) {
             (Some(0), _) => continue,
+            (Some(code), _) if super::ctrl_c_exit(code) => super::INTERRUPTED.to_owned(),
             (Some(code), _) => format!("exit {code}"),
             (None, Some(code)) => display_value(code),
             (None, None) => "interrupted".to_owned(),

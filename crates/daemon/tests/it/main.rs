@@ -17,6 +17,8 @@ mod metrics;
 mod orphans;
 mod pacing;
 mod profiles;
+// The PTY runner is Unix-only; Windows units run through `devlanes-runner-windows`.
+#[cfg(unix)]
 mod pty;
 mod remote;
 mod resolver;
@@ -60,21 +62,93 @@ pub struct Temp {
     pub path: PathBuf,
 }
 
-/// Creates a canonical temporary directory with a short path.
+/// Creates a canonical temporary directory with a short path in [`temp_parent`].
 pub fn temp() -> Temp {
+    let parent = temp_parent();
+    #[cfg(windows)]
+    sweep_stale(&parent);
     let dir = tempfile::Builder::new()
         .prefix("dle-")
-        .tempdir_in("/tmp")
+        .tempdir_in(parent)
         .expect("tempdir");
-    let path = dir.path().canonicalize().expect("canonical");
+    let path = dunce::canonicalize(dir.path()).expect("canonical");
     Temp { _dir: dir, path }
 }
 
-/// Runs git with test-local identity and no global config.
+/// The parent of every [`temp`] directory: `/tmp` on Unix, where the system one
+/// can be too long for a socket; on Windows `devlanes-daemon-it` in the
+/// canonical `%TEMP%` (CI's is an 8.3 short path), a directory of these tests'
+/// own so [`sweep_stale`] never deletes another program's files.
+fn temp_parent() -> PathBuf {
+    if cfg!(unix) {
+        return PathBuf::from("/tmp");
+    }
+    let temp = std::env::temp_dir();
+    let parent = dunce::canonicalize(&temp)
+        .unwrap_or(temp)
+        .join("devlanes-daemon-it");
+    std::fs::create_dir_all(&parent).expect("test parent dir");
+    parent
+}
+
+/// Removes `dle-*` directories in `parent` older than any test runs. Windows
+/// cannot delete open files, and an engine's background tasks (or the first
+/// engine a crash test leaves behind) keep `state.db` and logs open until the
+/// test process exits, so some directories outlive their test.
+#[cfg(windows)]
+fn sweep_stale(parent: &Path) {
+    const STALE: Duration = Duration::from_secs(15 * 60);
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let ours = entry.file_name().to_string_lossy().starts_with("dle-");
+        let old = entry
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age > STALE);
+        if ours && old {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+/// The daemon endpoint for a server whose home is `home`: the socket
+/// `run/d.sock` in it on Unix, a pipe named after the directory on Windows.
+pub fn endpoint(home: &Path) -> PathBuf {
+    if cfg!(windows) {
+        // Homes are canonical, so the parent they are stripped of must be too.
+        let name = home
+            .strip_prefix(temp_parent())
+            .unwrap_or(home)
+            .display()
+            .to_string()
+            .replace(['\\', '/', ':'], "-");
+        PathBuf::from(format!(r"\\.\pipe\devlanes-test-{name}"))
+    } else {
+        home.join("run/d.sock")
+    }
+}
+
+/// Runs git with test-local identity, no global config and no hooks.
 pub fn git(dir: &Path, args: &[&str]) -> String {
+    // An empty hooks directory and config file work on every OS, unlike `/dev/null`.
+    let hooks = tempfile::Builder::new()
+        .prefix("dle-hooks-")
+        .tempdir()
+        .expect("hooks dir");
+    let global_config = tempfile::Builder::new()
+        .prefix("dle-gitconfig-")
+        .tempfile()
+        .expect("empty git config")
+        .into_temp_path();
+    let mut hooks_path = std::ffi::OsString::from("core.hooksPath=");
+    hooks_path.push(hooks.path());
     let output = Command::new("git")
         .current_dir(dir)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_GLOBAL", &global_config)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .args([
             "-c",
@@ -83,9 +157,9 @@ pub fn git(dir: &Path, args: &[&str]) -> String {
             "user.email=test@example.invalid",
             "-c",
             "commit.gpgsign=false",
-            "-c",
-            "core.hooksPath=/dev/null",
         ])
+        .arg("-c")
+        .arg(hooks_path)
         .args(args)
         .output()
         .expect("git runs");
@@ -202,6 +276,7 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
 }
 
 /// A client environment with just enough to run.
+#[cfg(unix)]
 pub fn client_env() -> BTreeMap<String, String> {
     BTreeMap::from([
         ("PATH".into(), "/usr/bin:/bin".into()),
@@ -209,10 +284,25 @@ pub fn client_env() -> BTreeMap<String, String> {
     ])
 }
 
+/// A client environment with just enough to run: Windows programs need
+/// `SystemRoot`, and `PATH` is the test's own so real units find their tools.
+#[cfg(windows)]
+pub fn client_env() -> BTreeMap<String, String> {
+    let var = |name| std::env::var(name).unwrap_or_default();
+    BTreeMap::from([
+        ("PATH".into(), var("PATH")),
+        ("SystemRoot".into(), var("SystemRoot")),
+        (
+            "USERPROFILE".into(),
+            std::env::temp_dir().display().to_string(),
+        ),
+    ])
+}
+
 /// Request context for `cwd`, with env and a human actor. Inside a test's
-/// [`temp`] directory, `HOME` is that directory's `user-home`, so whatever a
-/// unit or a `~` path writes there (a service's `sync` folder) goes away with
-/// the test.
+/// [`temp`] directory, the home (`HOME`, `USERPROFILE` on Windows) is that
+/// directory's `user-home`, so whatever a unit or a `~` path writes there (a
+/// service's `sync` folder) goes away with the test.
 pub fn cx(cwd: &Path) -> Context {
     let mut env = client_env();
     if let Some(root) = cwd.ancestors().find(|dir| {
@@ -220,7 +310,10 @@ pub fn cx(cwd: &Path) -> Context {
             .and_then(|name| name.to_str())
             .is_some_and(|name| name.starts_with("dle-"))
     }) {
-        env.insert("HOME".into(), root.join("user-home").display().to_string());
+        env.insert(
+            devlanes_core::paths::HOME_VAR.into(),
+            root.join("user-home").display().to_string(),
+        );
     }
     Context {
         cwd: cwd.to_path_buf(),

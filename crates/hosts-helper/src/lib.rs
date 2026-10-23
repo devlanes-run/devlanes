@@ -8,13 +8,21 @@
 //! reasoning and the security model.
 //!
 //! The library half holds the pure logic ([`names`], [`block`]) and the file
-//! replacement ([`write`](mod@write)), so the daemon side (`devlanes-resolver-hosts`) can share
+//! replacement (`write`), so the daemon side (`devlanes-resolver-hosts`) can share
 //! the same validation and constants.
+//!
+//! The helper itself (`cli`, `flush`, `write`) is Unix only. `names`, `block`,
+//! [`protocol`] and the constants build everywhere: `devlanes-hosts-service` (the
+//! Windows hosts writer) and its daemon-side client share them.
 
 pub mod block;
+#[cfg(unix)]
 pub mod cli;
+#[cfg(unix)]
 pub mod flush;
 pub mod names;
+pub mod protocol;
+#[cfg(unix)]
 pub mod write;
 
 /// The file the helper edits.
@@ -41,6 +49,7 @@ pub const BUILD: &str = if cfg!(debug_assertions) {
 };
 
 /// Exit codes. 1 is never used, so under `sudo -n` it always means sudo itself refused.
+/// The Windows service answers with the same codes ([`protocol::Response::code`]).
 pub mod exit {
     /// Success.
     pub const OK: u8 = 0;

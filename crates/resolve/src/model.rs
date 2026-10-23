@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -12,6 +12,7 @@ use devlanes_core::{
     contrib::{Contributor, PreparedFile, ScriptInfo, ScriptRunner, SecretsProvider},
     env::Environment,
     ports::{PortBlock, PortName},
+    shell::Shell,
 };
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -22,6 +23,8 @@ use crate::{LaneFacts, ResolveError};
 pub const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(60);
 
 static EMPTY_ENV: BTreeMap<String, String> = BTreeMap::new();
+/// [`Shell::default`]: `/bin/sh` on Unix, `cmd.exe` on Windows.
+static DEFAULT_SHELL: LazyLock<Shell> = LazyLock::new(Shell::default);
 /// Stands for an empty namespace; layout code treats `null` as `{}`.
 static EMPTY_NAMESPACE: Value = Value::Null;
 
@@ -62,6 +65,9 @@ pub struct ResolveInput<'a, E: Extensions = OpaqueExtensions> {
     /// Port the proxy's HTTPS listener is bound to. Public URLs and origins add
     /// `:<port>` unless it is 443; `None` renders them without a port.
     pub public_https_port: Option<u16>,
+    /// Runs `run:` strings. Defaults to [`Shell::default`]; the daemon passes the
+    /// shell it found at startup (Git for Windows' `sh.exe` on Windows).
+    pub shell: &'a Shell,
     /// Plans only these units, by config path (`services.api`, `tasks.migrate`,
     /// `infra.setup.db`); `None` plans all of them. Layout and namespaces still
     /// cover every service, so what is planned comes out as in a full resolve.
@@ -99,6 +105,7 @@ impl<'a, E: Extensions> ResolveInput<'a, E> {
             script_runners: &[],
             ca_env: &EMPTY_ENV,
             public_https_port: None,
+            shell: &DEFAULT_SHELL,
             only: None,
         }
     }

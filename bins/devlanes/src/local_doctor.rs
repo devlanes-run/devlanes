@@ -11,12 +11,11 @@ use serde_json::{Value, json};
 /// the user config on disk, the CA and its trust, processes on the proxy ports,
 /// and the hosts helper's version when it is installed.
 pub async fn facts(paths: &Paths) -> Value {
-    let home = paths.home.clone();
-    let config_path = home.join("config.yaml");
-    let (user_config, proxy_ports) =
-        tokio::task::spawn_blocking(move || (user_config(&config_path), proxy_ports(&config_path)))
-            .await
-            .unwrap_or((Value::Null, Vec::new()));
+    let config_path = paths.home.join("config.yaml");
+    let (user, user_config) = tokio::task::spawn_blocking(move || user_config(&config_path))
+        .await
+        .unwrap_or_else(|_| (devlanes_config::UserConfig::default(), Value::Null));
+    let proxy_ports = proxy_ports(&user);
     let home_check = {
         let home = paths.home.clone();
         tokio::task::spawn_blocking(move || home_check(&home))
@@ -29,7 +28,7 @@ pub async fn facts(paths: &Paths) -> Value {
             .await
             .unwrap_or_default()
     };
-    json!({
+    let mut facts = json!({
         "running": false,
         "version": env!("CARGO_PKG_VERSION"),
         "home": paths.home,
@@ -44,11 +43,96 @@ pub async fn facts(paths: &Paths) -> Value {
         "user_config": user_config,
         "port_holders": port_holders,
         "hosts": hosts_helper().await,
-    })
+    });
+    annotate_excluded_ports(&mut facts, &user).await;
+    facts
+}
+
+/// Adds `excluded_ports` as the daemon's doctor reports it, judged against
+/// `ports.range` and the proxy ports in the user config on disk (the defaults
+/// without a file). No box is mirrored without a daemon.
+#[cfg(windows)]
+async fn annotate_excluded_ports(facts: &mut Value, user: &devlanes_config::UserConfig) {
+    use devlanes_daemon::excluded_ports;
+    let pool = user.ports.bounds().ok();
+    let reading = excluded_ports::read().await;
+    facts["excluded_ports"] = excluded_ports::report(
+        &reading,
+        pool,
+        &std::collections::BTreeSet::new(),
+        &user.proxy,
+    );
+}
+
+/// Windows alone reserves port ranges this way.
+#[cfg(unix)]
+async fn annotate_excluded_ports(_facts: &mut Value, _user: &devlanes_config::UserConfig) {}
+
+/// Adds `terminal: {elevated, elevation_allowed, job}` about the shell
+/// running this command: an elevated shell cannot start the daemon unless
+/// `DEVLANES_ALLOW_ELEVATED=1` allows it, and a job that kills its processes
+/// when the terminal closes takes a daemon started inside it along. Also adds
+/// `windows: {build}`, since older builds than Windows 11 24H2 are not
+/// supported.
+#[cfg(windows)]
+pub fn annotate_terminal(data: &mut Value) {
+    data["windows"] = json!({"build": devlanes_sys::windows::os_build()});
+    use devlanes_sys::windows::{
+        process::job_of_self,
+        token::{elevated, elevation_refused},
+    };
+    let job = job_of_self()
+        .ok()
+        .flatten()
+        .map(|job| json!({"kill_on_close": job.kill_on_close, "breakaway_ok": job.breakaway_ok}));
+    let elevated = elevated().ok();
+    // Elevated but not refused means the override is set.
+    let allowed = elevated == Some(true) && elevation_refused().ok() == Some(false);
+    data["terminal"] = json!({
+        "elevated": elevated,
+        "elevation_allowed": allowed,
+        "job": job,
+    });
+}
+
+/// Nothing to add on Unix: the daemon leaves the terminal's session itself.
+#[cfg(unix)]
+pub fn annotate_terminal(_data: &mut Value) {}
+
+/// `{path, exists, problem?}` for the devlanes home: the client refuses a symlink
+/// or junction and another account's home, and the daemon tightens an own home
+/// that other accounts can open (`problem: "acl"`, the Windows counterpart of
+/// `mode`).
+#[cfg(windows)]
+fn home_check(home: &Path) -> Value {
+    use devlanes_sys::windows::security::{DirProblem, check_private_dir};
+    match check_private_dir(home) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            json!({"path": home, "exists": false})
+        }
+        Err(error) => {
+            json!({"path": home, "exists": true, "problem": "unreadable", "message": error.to_string()})
+        }
+        Ok(verdict) => {
+            let problem = match &verdict {
+                Ok(()) => None,
+                Err(DirProblem::ReparsePoint) => Some("symlink"),
+                Err(DirProblem::NotADirectory) => Some("not_a_directory"),
+                Err(DirProblem::Owner) => Some("owner"),
+                Err(DirProblem::Acl(_)) => Some("acl"),
+            };
+            let fix = match &verdict {
+                Err(DirProblem::Acl(others)) => crate::driver::acl_fix(home, others),
+                _ => None,
+            };
+            json!({"path": home, "exists": true, "problem": problem, "fix": fix})
+        }
+    }
 }
 
 /// `{path, private, mode?}` for the devlanes home: the client refuses another
 /// user's or a symlinked home, and the daemon tightens an open one to 0700.
+#[cfg(unix)]
 fn home_check(home: &Path) -> Value {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     match std::fs::symlink_metadata(home) {
@@ -76,11 +160,15 @@ fn home_check(home: &Path) -> Value {
     }
 }
 
-/// The user config as the daemon's doctor reports it: `{path, valid, error,
-/// errors, warnings}`; a missing file is valid. Blocking.
-fn user_config(path: &Path) -> Value {
+/// The user config, parsed once (leniently; the defaults without a file), and its
+/// report as the daemon's doctor gives it: `{path, valid, error, errors,
+/// warnings}`; a missing file is valid. Blocking.
+fn user_config(path: &Path) -> (devlanes_config::UserConfig, Value) {
     if !path.exists() {
-        return json!({"path": path, "valid": true, "error": null, "errors": [], "warnings": []});
+        return (
+            devlanes_config::UserConfig::default(),
+            json!({"path": path, "valid": true, "error": null, "errors": [], "warnings": []}),
+        );
     }
     let (config, errors) = devlanes_config::load_user_lenient(path);
     let errors: Vec<Value> = errors
@@ -94,22 +182,18 @@ fn user_config(path: &Path) -> Value {
             })
         })
         .collect();
-    json!({
+    let report = json!({
         "path": path,
         "valid": errors.is_empty(),
         "error": errors.first(),
         "errors": errors,
         "warnings": config.warnings(),
-    })
+    });
+    (config, report)
 }
 
-/// `[(listener, port)]` the proxy will bind, from the user config. Blocking.
-fn proxy_ports(path: &Path) -> Vec<(&'static str, u16)> {
-    let config = if path.exists() {
-        devlanes_config::load_user_lenient(path).0
-    } else {
-        devlanes_config::UserConfig::default()
-    };
+/// `[(listener, port)]` the proxy will bind, from the user config.
+fn proxy_ports(config: &devlanes_config::UserConfig) -> Vec<(&'static str, u16)> {
     vec![
         ("http", config.proxy.http_port),
         ("https", config.proxy.https_port),
@@ -171,8 +255,29 @@ async fn ca(paths: &Paths) -> Value {
     ca
 }
 
+/// `{helper}` as in the daemon's hosts status, when the hosts service answers
+/// (or refuses) on its pipe; `null` when it is not installed.
+#[cfg(windows)]
+async fn hosts_helper() -> Value {
+    use devlanes_resolver_hosts::HostsClient;
+    use devlanes_resolver_hosts::pipe::PipeHostsClient;
+    let Ok(client) = HostsClient::service(PipeHostsClient::system(), None) else {
+        return Value::Null;
+    };
+    let version = client
+        .with_timeout(std::time::Duration::from_secs(5))
+        .version()
+        .await;
+    if matches!(&version, Err(error) if error.is_missing()) {
+        return Value::Null;
+    }
+    let check = devlanes_daemon::hosts::helper_check(&version, env!("CARGO_PKG_VERSION"));
+    json!({"helper": check})
+}
+
 /// `{helper}` as in the daemon's hosts status, when the /etc/hosts helper is
 /// installed; `null` otherwise (most machines never need it).
+#[cfg(unix)]
 async fn hosts_helper() -> Value {
     use devlanes_resolver_hosts::{
         FileKind, FsProbe, HostsClient, INSTALL_PATH, SystemExecutor, SystemFs,
@@ -199,12 +304,13 @@ async fn hosts_helper() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     /// A home others can read is a finding; a missing one is not (the first
     /// command creates it).
+    #[cfg(unix)]
     #[test]
     fn home_permissions() {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().expect("tempdir");
         let home = temp.path().join("h");
         assert_eq!(home_check(&home)["exists"], false);
@@ -220,15 +326,17 @@ mod tests {
     fn user_config_on_disk() {
         let temp = tempfile::tempdir().expect("tempdir");
         let path = temp.path().join("config.yaml");
-        assert_eq!(user_config(&path)["valid"], true);
+        let (missing, checked) = user_config(&path);
+        assert_eq!(checked["valid"], true);
+        assert_eq!(proxy_ports(&missing), [("http", 80), ("https", 443)]);
         std::fs::write(&path, "proxy:\n  http_port: nope\n").expect("config");
-        let checked = user_config(&path);
+        let (_, checked) = user_config(&path);
         assert_eq!(checked["valid"], false, "{checked}");
         assert!(checked["error"]["line"].is_u64(), "{checked}");
-        assert_eq!(
-            proxy_ports(&temp.path().join("missing.yaml")),
-            [("http", 80), ("https", 443)]
-        );
+        std::fs::write(&path, "proxy:\n  https_port: 9443\n").expect("config");
+        let (config, checked) = user_config(&path);
+        assert_eq!(checked["valid"], true, "{checked}");
+        assert_eq!(proxy_ports(&config), [("http", 80), ("https", 9443)]);
     }
 
     /// Facts about a fresh home: not running, nothing created.

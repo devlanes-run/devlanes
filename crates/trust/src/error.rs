@@ -12,6 +12,15 @@ pub enum TrustError {
         /// The rejected target.
         target: TrustTarget,
     },
+    /// The target exists, but not on this machine: `windows` outside WSL and
+    /// Windows, or under WSL with interop off.
+    #[error("{target} certificate trust is unavailable: {reason}")]
+    Unavailable {
+        /// The rejected target.
+        target: TrustTarget,
+        /// Why, with what would make it available.
+        reason: String,
+    },
     /// A `tls.trust` entry that names no known target.
     #[error("unknown trust target `{0}`")]
     UnknownTarget(String),
@@ -45,6 +54,19 @@ pub enum TrustError {
         /// What is missing, with a hint.
         detail: String,
     },
+    /// The user declined the OS confirmation dialog (the Windows root store warning).
+    #[error("{detail}")]
+    Cancelled {
+        /// What was declined and how to retry.
+        detail: String,
+    },
+    /// The CA was removed from the user's store but another store this user trusts
+    /// still holds it (the Windows machine root store).
+    #[error("the CA is still trusted through {through}, which only an administrator can change")]
+    StillTrusted {
+        /// The store that still holds the CA.
+        through: String,
+    },
     /// A command exited unsuccessfully.
     #[error("`{command}` failed with {}: {}", exit_code(*.code), stderr.trim())]
     CommandFailed {
@@ -54,6 +76,19 @@ pub enum TrustError {
         code: Option<i32>,
         /// Captured standard error.
         stderr: String,
+    },
+    /// A command did not finish in time, and the process devlanes started for
+    /// it was stopped. Under WSL that is only the Linux side of the interop
+    /// call: Windows' `certutil.exe` and the dialog it shows keep running, so
+    /// the change may still happen once someone answers.
+    #[error("`{command}` did not finish within {seconds} s; {hint}")]
+    TimedOut {
+        /// The command line.
+        command: String,
+        /// The limit it ran into.
+        seconds: u64,
+        /// What may be holding it up.
+        hint: String,
     },
     /// Local I/O around a command failed (temp files, reading stores).
     #[error("{context}: {source}")]

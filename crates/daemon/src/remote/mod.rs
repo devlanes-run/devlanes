@@ -26,7 +26,7 @@ use devlanes_proto::{
     Event, RpcError,
     remote::{self as wire, RemoteClient, SyncEntry},
 };
-use devlanes_sync::{HashCache, RelPath};
+use devlanes_sync::{CaseCollisions, HashCache, RelPath};
 use devlanes_transport::{ClientRegistry, Link, LinkState, Session as BoxSession, SessionOptions};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -45,8 +45,6 @@ use crate::{
 
 /// `connect --background` returns once connected, failed, or after this long.
 const CONNECT_WAIT: Duration = Duration::from_secs(150);
-/// Unanswered ssh prompts are cancelled after this long.
-const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a local spawn waits for box mirrors to release its ports.
 const RELEASE_WAIT: Duration = Duration::from_secs(3);
 
@@ -169,7 +167,8 @@ impl RemotePrompter for HostPrompter {
             tokio::select! {
                 reply = answer => reply.ok().flatten(),
                 () = disconnected.cancelled() => None,
-                () = tokio::time::sleep(PROMPT_TIMEOUT) => None,
+                // Unanswered ssh prompts are cancelled.
+                () = tokio::time::sleep(wire::PROMPT_TIMEOUT) => None,
             }
         } else {
             None
@@ -197,6 +196,9 @@ pub(crate) struct HostConn {
     syncs: Mutex<BTreeMap<String, Value>>,
     /// Destination hashes by sync key, reused while files keep size and mtime.
     hashes: Mutex<HashMap<String, HashCache>>,
+    /// Destination names by sync key, kept across reconnects so files are
+    /// reported under the box's spelling where Windows merged case variants.
+    names: Mutex<HashMap<String, CaseCollisions>>,
     /// Version and linger findings about the box, by code.
     warnings: Mutex<BTreeMap<&'static str, String>>,
 }
@@ -432,7 +434,8 @@ fn valid_host(host: &str) -> bool {
 /// `$DEVLANES_HOME/sync/<host>/<project>/<lane>/<leaf>` for a box sync entry.
 ///
 /// Every component is a single validated path name, so nothing the box sends can
-/// point the destination elsewhere; the box's own `to` is never used.
+/// point the destination elsewhere; the box's own `to` is never used. Each name
+/// is checked as sent, then stored as [`folder_name`] says.
 fn sync_destination(home: &Path, host: &str, entry: &SyncEntry) -> Result<PathBuf, String> {
     let host = host.replace('/', "_");
     let mut path = home.join("sync");
@@ -446,9 +449,23 @@ fn sync_destination(home: &Path, host: &str, entry: &SyncEntry) -> Result<PathBu
         if !valid {
             return Err(format!("the box sent an unusable {what} name {part:?}"));
         }
-        path.push(part);
+        path.push(folder_name(part));
     }
     Ok(path)
+}
+
+/// The folder a destination name is stored under: the name as it is.
+#[cfg(unix)]
+fn folder_name(part: &str) -> String {
+    part.to_owned()
+}
+
+/// The folder a destination name is stored under: its disk name, because
+/// Windows refuses some names Unix allows. `ssh://box:2222` and `[::1]` are
+/// valid hosts, and the box chose its own folder names.
+#[cfg(windows)]
+fn folder_name(part: &str) -> String {
+    devlanes_core::paths::disk_name(part)
 }
 
 impl Inner {
@@ -551,6 +568,7 @@ impl Inner {
             mirror_task: Mutex::new(None),
             syncs: Mutex::new(BTreeMap::new()),
             hashes: Mutex::new(HashMap::new()),
+            names: Mutex::new(HashMap::new()),
             warnings: Mutex::new(BTreeMap::new()),
         });
         tokio::spawn(watch_link(Arc::downgrade(self), conn.clone()));
@@ -899,6 +917,26 @@ mod tests {
                 "/home/u/.devlanes/sync/user@box_x/app/app@1/ext"
             ))
         );
+    }
+
+    /// Windows stores every name under its disk name: a port in an `ssh://`
+    /// host, a device name or a trailing dot from the box cannot reach the
+    /// file system as such.
+    #[cfg(windows)]
+    #[test]
+    fn windows_sync_destinations_use_disk_names() {
+        let home = Path::new(r"C:\u\.devlanes");
+        assert_eq!(
+            sync_destination(home, "ssh://box:2222", &entry("app", "app@1", "aux")),
+            Ok(PathBuf::from(
+                r"C:\u\.devlanes\sync\ssh___box_2222\app\app@1\aux+"
+            ))
+        );
+        assert_eq!(
+            sync_destination(home, "box", &entry("app", "app@1", "dist.")),
+            Ok(PathBuf::from(r"C:\u\.devlanes\sync\box\app\app@1\dist+"))
+        );
+        assert!(sync_destination(home, "..", &entry("app", "app@1", "ext")).is_err());
     }
 
     #[test]

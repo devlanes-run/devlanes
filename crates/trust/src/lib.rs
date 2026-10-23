@@ -1,19 +1,23 @@
 //! Contract for installing the devlanes CA into OS and browser trust stores.
 //!
 //! Trust changes run in the CLI process because they prompt (the macOS keychain
-//! dialog, a sudo password). The daemon never calls a [`TrustStore`].
+//! dialog, a sudo password, the Windows root store warning). The daemon never
+//! calls a [`TrustStore`].
 //!
-//! Platform crates (`devlanes-trust-macos`, `devlanes-trust-linux`) implement the
-//! stores. Every external command goes through a [`CommandExecutor`], so tests
-//! check argv without touching real stores. The NSS implementation used by
-//! Firefox and Chromium lives here because both platforms share it.
+//! Platform crates (`devlanes-trust-macos`, `devlanes-trust-linux`,
+//! `devlanes-trust-windows`) implement the stores. Every external command goes
+//! through a [`CommandExecutor`], so tests check argv without touching real stores.
+//! The NSS implementation used by Firefox and Chromium lives here because macOS
+//! and Linux share it; Windows browsers read the Windows store instead.
 
 mod cert;
 mod error;
 mod exec;
 #[cfg(any(test, feature = "fake"))]
 pub mod fake;
+#[cfg(unix)]
 pub mod nss;
+pub mod windows_root;
 
 use std::fmt;
 use std::str::FromStr;
@@ -22,22 +26,28 @@ use async_trait::async_trait;
 
 pub use cert::CaCertificate;
 pub use error::TrustError;
-pub use exec::{
-    CommandExecutor, CommandLine, CommandOutput, SYSTEM_PROGRAM_DIRS, SystemExecutor, TempPem,
-    find_system_program, path_arg, run, run_checked,
-};
+pub use exec::{CommandExecutor, CommandLine, CommandOutput, TempPem, path_arg, run, run_checked};
+#[cfg(unix)]
+pub use exec::{SYSTEM_PROGRAM_DIRS, SystemExecutor, find_system_program};
 
 /// A store a user can ask `devlanes certs trust` to install the CA into.
 ///
 /// Mirrors `tls.trust` in the user config; the composition root maps between the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum TrustTarget {
-    /// The OS store: the login keychain on macOS, the distribution CA bundle on Linux.
+    /// The OS store: the login keychain on macOS, the distribution CA bundle on
+    /// Linux, the current user's root store on Windows.
     System,
-    /// Every Firefox profile's NSS database.
+    /// Every Firefox profile's NSS database; on Windows the same store as
+    /// `System`, which Firefox imports.
     Firefox,
-    /// Chrome and Chromium: the keychain on macOS, `~/.pki/nssdb` on Linux.
+    /// Chrome and Chromium: the keychain on macOS, `~/.pki/nssdb` on Linux, the
+    /// system store on Windows (Edge too).
     Chrome,
+    /// The Windows user root store, for the Windows browsers: from WSL through
+    /// interop, on Windows the same store as `System`. Elsewhere
+    /// [`TrustError::Unavailable`].
+    Windows,
     /// Excluded from v1; always [`TrustError::Unsupported`].
     IosSimulator,
     /// Excluded from v1; always [`TrustError::Unsupported`].
@@ -46,10 +56,11 @@ pub enum TrustTarget {
 
 impl TrustTarget {
     /// Every target, in config order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::System,
         Self::Firefox,
         Self::Chrome,
+        Self::Windows,
         Self::IosSimulator,
         Self::AndroidEmulator,
     ];
@@ -60,6 +71,7 @@ impl TrustTarget {
             Self::System => "system",
             Self::Firefox => "firefox",
             Self::Chrome => "chrome",
+            Self::Windows => "windows",
             Self::IosSimulator => "ios-simulator",
             Self::AndroidEmulator => "android-emulator",
         }
@@ -106,6 +118,12 @@ pub enum TrustStatus {
     Installed,
     /// The CA is absent, untrusted, or a different certificate holds its name.
     Missing,
+    /// The CA is installed, but a deny list the store honours overrides it (the
+    /// Windows `Disallowed` store), so it is not trusted.
+    Distrusted {
+        /// Where the CA is denied and how to lift that.
+        reason: String,
+    },
     /// The store could not be inspected, for example because `certutil` is missing.
     Unknown {
         /// Why the status could not be determined.
@@ -130,6 +148,31 @@ pub trait TrustStore: Send + Sync {
 
     /// Human description of what the store changes, for prompts and `doctor`.
     fn describe(&self) -> String;
+
+    /// Short name of where the CA goes, shown next to the target in status lines
+    /// when the target name alone does not say it (`Windows user root store`).
+    /// `None` keeps the plain target name.
+    fn location(&self) -> Option<String> {
+        None
+    }
+
+    /// The confirmation the OS asks for while `install` or `uninstall` changes
+    /// this store, in a few words for `doctor`'s fix line (`choose Yes in the
+    /// Windows security warning`). `None` when nothing beyond the platform's usual
+    /// prompt appears.
+    fn approval(&self) -> Option<String> {
+        None
+    }
+
+    /// What to tell the user right before `install` (or `uninstall` when `install`
+    /// is false) runs: the dialog it is about to show. `None` when the call will
+    /// show none, for example because the CA is already trusted or there is
+    /// nothing to delete. Reads the store without prompting; defaults to
+    /// [`TrustStore::approval`].
+    async fn pending_approval(&self, ca: &CaCertificate, install: bool) -> Option<String> {
+        let _ = (ca, install);
+        self.approval()
+    }
 
     /// Adds the CA and marks it trusted for TLS servers.
     async fn install(&self, ca: &CaCertificate) -> Result<(), TrustError>;

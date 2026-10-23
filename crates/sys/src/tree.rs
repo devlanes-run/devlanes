@@ -92,6 +92,13 @@ impl DescendantTracker {
             .values()
             .map(|p| (p.pid, p.start_time))
             .collect();
+        // Snapshots can omit an exited leader whose PID is still held (Windows
+        // drops exited processes, macOS may drop zombies). Its PID cannot be
+        // reused meanwhile, so children it started just before exiting are still
+        // its own.
+        if !root_present && self.root_held {
+            pending.push((self.root.pid, self.root.start_time));
+        }
         while let Some((parent, parent_start)) = pending.pop() {
             for child in children.get(&parent).into_iter().flatten() {
                 // A child older than its supposed parent means the parent PID was recycled.
@@ -111,6 +118,18 @@ impl DescendantTracker {
     /// Iterates tracked processes that can still receive signals.
     pub fn live(&self) -> impl Iterator<Item = &ProcessInfo> {
         self.tracked.values().filter(|p| !p.zombie)
+    }
+
+    /// Tracks `process` as a member known by other means, such as Windows job
+    /// membership, which catches children of a parent that exited between two
+    /// snapshots. Its own descendants are then found by the next [`Self::update`].
+    /// A process older than the root cannot be one of its descendants.
+    pub fn adopt(&mut self, process: &ProcessInfo) {
+        if process.start_time >= self.root.start_time {
+            self.tracked
+                .entry(process.pid)
+                .or_insert_with(|| process.clone());
+        }
     }
 }
 
@@ -182,9 +201,9 @@ mod tests {
         ProcessInfo {
             pid,
             ppid,
-            pgid: pid,
+            pgid: Some(pid),
             sid: Some(sid),
-            uid: 501,
+            uid: Some(501),
             start_time,
             zombie: false,
             name: format!("p{pid}"),
@@ -217,6 +236,21 @@ mod tests {
         tracker.update(&[proc(1, 0, 1, 0), proc(102, 1, 102, 12)]);
         assert_eq!(pids(&tracker), [102]);
         assert_eq!(tracker.processes().next().map(|p| p.ppid), Some(1));
+    }
+
+    /// An adopted member is tracked with its descendants from the next update, even
+    /// though its parent was never seen; a process older than the root is not.
+    #[test]
+    fn adopted_members_bring_their_descendants() {
+        let mut tracker = DescendantTracker::new(root());
+        // 300's parent 150 exited before any snapshot saw it; 300 has no session.
+        let orphan = proc(300, 150, 300, 30);
+        tracker.update(&[proc(100, 1, 100, 10), orphan.clone()]);
+        assert_eq!(pids(&tracker), [100]);
+        tracker.adopt(&orphan);
+        tracker.adopt(&proc(50, 1, 50, 5));
+        tracker.update(&[proc(100, 1, 100, 10), orphan, proc(301, 300, 301, 31)]);
+        assert_eq!(pids(&tracker), [100, 300, 301]);
     }
 
     /// Session members join without a tracked parent; unrelated and recycled PIDs do not.
@@ -257,6 +291,21 @@ mod tests {
         tracker.hold_root(true);
         tracker.update(&[proc(301, 1, 100, 31)]);
         assert_eq!(pids(&tracker), [301]);
+    }
+
+    /// A held root missing from the snapshot still brings in children it started
+    /// before exiting; once released, its PID may be a stranger's.
+    #[test]
+    fn held_root_absent_from_the_snapshot_keeps_its_children() {
+        let mut tracker = DescendantTracker::new(root());
+        tracker.update(&[proc(100, 1, 100, 10)]);
+        tracker.hold_root(true);
+        tracker.update(&[proc(500, 100, 500, 12)]);
+        assert_eq!(pids(&tracker), [500]);
+        let mut released = DescendantTracker::new(root());
+        released.update(&[proc(100, 1, 100, 10)]);
+        released.update(&[proc(500, 100, 500, 12)]);
+        assert!(pids(&released).is_empty());
     }
 
     /// A recycled root PID is never adopted, and zombies are excluded from live members.

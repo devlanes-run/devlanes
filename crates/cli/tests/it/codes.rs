@@ -23,8 +23,10 @@ const INTERNAL: &[&str] = &[
     "stop_failed",
     // Hosts sync states in `doctor`, matched by the tuple pattern.
     "applied",
-    // Config check warning with its own renderer (`config_check`).
+    // Config check warnings rendered by `config_check` (its own wording, or the
+    // daemon's `message`).
     "unknown_platform",
+    "shell_fallback",
 ];
 
 /// `.rs` files under `dir`, recursively.
@@ -119,7 +121,14 @@ fn every_daemon_code_has_wording() {
         "daemon codes without CLI wording (add them to render/words.rs, or to INTERNAL here when only logs need them): {missing:?}"
     );
     // CLI-side codes and the ones the daemon is adding.
-    for code in ["start_failed", "no_url", "no_config", "unsafe_home"] {
+    // `port_reserved` is picked at runtime in the mirror, out of the scan's reach.
+    for code in [
+        "start_failed",
+        "no_url",
+        "no_config",
+        "unsafe_home",
+        "port_reserved",
+    ] {
         assert!(devlanes_cli::has_wording(code), "{code}");
     }
     // The allowlist only names codes the daemon still uses.

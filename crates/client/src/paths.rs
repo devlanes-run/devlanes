@@ -2,17 +2,21 @@
 
 use std::{
     env, fs,
+    path::{Path, PathBuf},
+};
+#[cfg(unix)]
+use std::{
     io::Write,
     os::unix::{
         ffi::OsStrExt,
         fs::{DirBuilderExt, MetadataExt},
     },
-    path::{Path, PathBuf},
 };
 
 use crate::{Error, Result};
 
 /// Persistent state belongs to one home; sockets may use a private runtime directory.
+/// On Windows `socket` holds the daemon's named-pipe name (`\\.\pipe\...`).
 #[derive(Clone, Debug)]
 pub struct Paths {
     pub home: PathBuf,
@@ -27,7 +31,7 @@ impl Paths {
     pub fn discover() -> Result<Self> {
         let home = match env::var_os("DEVLANES_HOME") {
             Some(home) if !home.is_empty() => PathBuf::from(home),
-            _ => PathBuf::from(env::var_os("HOME").ok_or(Error::MissingHome)?).join(".devlanes"),
+            _ => user_home().ok_or(Error::MissingHome)?.join(".devlanes"),
         };
         Self::new(home)
     }
@@ -46,27 +50,9 @@ impl Paths {
         if home.as_os_str().is_empty() {
             return Err(Error::MissingHome);
         }
-        let home = if home.is_absolute() {
-            home.to_owned()
-        } else {
-            env::current_dir()?.join(home)
-        };
+        let home = absolute_home(home)?;
         let run = home.join("run");
-        #[cfg(target_os = "linux")]
-        let mut socket = _runtime
-            .and_then(|runtime| runtime_socket(runtime, &home))
-            .unwrap_or_else(|| run.join("daemon.sock"));
-        #[cfg(not(target_os = "linux"))]
-        let mut socket = run.join("daemon.sock");
-        if socket.as_os_str().as_bytes().len() >= 104 {
-            // A stable home-specific name prevents isolated homes sharing a fallback daemon.
-            let name = format!("devlanes-{}", rustix::process::geteuid().as_raw());
-            let file = socket_name(&home);
-            socket = temporary.join(&name).join(&file);
-            if socket.as_os_str().as_bytes().len() >= 104 {
-                socket = Path::new("/tmp").join(name).join(file);
-            }
-        }
+        let socket = socket_path(&home, &run, _runtime, temporary);
         Ok(Self {
             db: home.join("state.db"),
             logs: home.join("logs"),
@@ -81,33 +67,163 @@ impl Paths {
         for directory in [&self.home, &self.run, &self.logs] {
             private_directory(directory)?;
         }
-        if self.socket.parent() != Some(self.run.as_path()) {
-            private_directory(self.socket.parent().ok_or(Error::InvalidSocketPath)?)?;
-            let mut pointer = tempfile::NamedTempFile::new_in(&self.run)?;
-            pointer.write_all(self.socket.as_os_str().as_bytes())?;
-            pointer.write_all(b"\n")?;
-            pointer
-                .persist(self.run.join("daemon.socket"))
-                .map_err(|error| error.error)?;
-        }
-        Ok(())
+        publish_socket(self)
     }
 }
 
+/// The user's home directory: `HOME` on Unix, the profile directory on Windows
+/// (`std::env::home_dir` there ignores `HOME`, which Git Bash sets to a POSIX path).
+pub fn user_home() -> Option<PathBuf> {
+    #[cfg(unix)]
+    let home = env::var_os("HOME").map(PathBuf::from);
+    #[cfg(windows)]
+    let home = env::home_dir();
+    home.filter(|home| !home.as_os_str().is_empty())
+}
+
+/// Picks the socket: the XDG runtime directory on Linux, else `run/daemon.sock`,
+/// moved to a temporary directory when the path exceeds macOS's 104-byte sun_path.
+#[cfg(unix)]
+fn socket_path(home: &Path, run: &Path, _runtime: Option<&Path>, temporary: &Path) -> PathBuf {
+    #[cfg(target_os = "linux")]
+    let mut socket = _runtime
+        .and_then(|runtime| runtime_socket(runtime, home))
+        .unwrap_or_else(|| run.join("daemon.sock"));
+    #[cfg(not(target_os = "linux"))]
+    let mut socket = run.join("daemon.sock");
+    if socket.as_os_str().as_bytes().len() >= 104 {
+        // A stable home-specific name prevents isolated homes sharing a fallback daemon.
+        let name = format!("devlanes-{}", rustix::process::geteuid().as_raw());
+        let file = socket_name(home);
+        socket = temporary.join(&name).join(&file);
+        if socket.as_os_str().as_bytes().len() >= 104 {
+            socket = Path::new("/tmp").join(name).join(file);
+        }
+    }
+    socket
+}
+
+/// A relative home resolved against the current directory.
+#[cfg(unix)]
+fn absolute_home(home: &Path) -> Result<PathBuf> {
+    Ok(if home.is_absolute() {
+        home.to_owned()
+    } else {
+        env::current_dir()?.join(home)
+    })
+}
+
+/// A relative home resolved the way Windows opens paths: `C:foo` against drive
+/// C's current directory and `\foo` against the current drive. Joining those onto
+/// the current directory would leave them relative, and the daemon, started in
+/// the home, would then resolve them to another place and another pipe.
+#[cfg(windows)]
+fn absolute_home(home: &Path) -> Result<PathBuf> {
+    Ok(std::path::absolute(home)?)
+}
+
+/// A named pipe per home, so isolated homes (tests, `DEVLANES_HOME`) never share a
+/// daemon. Every spelling of one home must give the same name, or a second client
+/// would spawn a daemon that loses the lock and then waits on a pipe nobody serves.
+///
+/// Pipe names are machine-wide and public, so another account could create this
+/// one first; the daemon then fails to bind (it asks for the first instance) and
+/// clients refuse a pipe served by another account.
+#[cfg(windows)]
+fn socket_path(home: &Path, _run: &Path, _runtime: Option<&Path>, _temporary: &Path) -> PathBuf {
+    PathBuf::from(format!(
+        r"\\.\pipe\devlanes-{:016x}",
+        home_hash(&pipe_key(home))
+    ))
+}
+
+/// The home in one spelling: its deepest existing ancestor canonical, the rest as
+/// given, without the verbatim prefix, with `\` separators and no trailing
+/// separator.
+///
+/// Canonicalizing only the existing part keeps the name stable while the home is
+/// created: the CLI computes it before `prepare()` makes the directory and the
+/// daemon after, and 8.3 names, `subst` drives or junctions in an ancestor would
+/// otherwise give the two different pipes.
+#[cfg(windows)]
+fn pipe_key(home: &Path) -> PathBuf {
+    let absolute = std::path::absolute(home).unwrap_or_else(|_| home.to_owned());
+    let mut missing = Vec::new();
+    let mut existing = absolute.as_path();
+    let resolved = loop {
+        if let Ok(canonical) = fs::canonicalize(existing) {
+            break missing
+                .iter()
+                .rev()
+                .fold(canonical, |path, part| path.join(part));
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name);
+                existing = parent;
+            }
+            _ => break absolute.clone(),
+        }
+    };
+    let text = resolved.to_string_lossy().replace('/', r"\");
+    let text = match text.strip_prefix(r"\\?\UNC\") {
+        Some(share) => format!(r"\\{share}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned(),
+    };
+    PathBuf::from(text.trim_end_matches('\\'))
+}
+
+/// Publishes a relocated socket's path in `run/daemon.socket` so tools can find it.
+#[cfg(unix)]
+fn publish_socket(paths: &Paths) -> Result<()> {
+    if paths.socket.parent() != Some(paths.run.as_path()) {
+        private_directory(paths.socket.parent().ok_or(Error::InvalidSocketPath)?)?;
+        let mut pointer = tempfile::NamedTempFile::new_in(&paths.run)?;
+        pointer.write_all(paths.socket.as_os_str().as_bytes())?;
+        pointer.write_all(b"\n")?;
+        pointer
+            .persist(paths.run.join("daemon.socket"))
+            .map_err(|error| error.error)?;
+    }
+    Ok(())
+}
+
+/// A pipe name follows from the home alone, so there is nothing to publish.
+#[cfg(windows)]
+fn publish_socket(_paths: &Paths) -> Result<()> {
+    Ok(())
+}
+
 /// Keeps isolated homes distinct in shared per-user runtime directories.
+#[cfg(unix)]
 fn socket_name(home: &Path) -> String {
-    let hash = home
-        .as_os_str()
-        .as_bytes()
-        .iter()
-        .fold(0xcbf29ce484222325_u64, |hash, byte| {
-            (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
-        });
-    format!("daemon-{hash:016x}.sock")
+    format!("daemon-{:016x}.sock", home_hash(home))
+}
+
+/// FNV-1a over the home path. Windows hashes the ASCII-lowercased UTF-16 form,
+/// because two spellings that differ only in case name the same directory there.
+fn home_hash(home: &Path) -> u64 {
+    #[cfg(unix)]
+    let bytes = home.as_os_str().as_bytes().to_vec();
+    #[cfg(windows)]
+    let bytes: Vec<u8> = {
+        use std::os::windows::ffi::OsStrExt;
+        home.as_os_str()
+            .encode_wide()
+            .map(|unit| match u8::try_from(unit) {
+                Ok(byte) => u16::from(byte.to_ascii_lowercase()),
+                Err(_) => unit,
+            })
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    };
+    bytes.iter().fold(0xcbf29ce484222325_u64, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
 }
 
 /// Invalid XDG directories are ignored without creating or repairing their contents.
-#[cfg(any(target_os = "linux", test))]
+#[cfg(all(unix, any(target_os = "linux", test)))]
 fn runtime_socket(runtime: &Path, home: &Path) -> Option<PathBuf> {
     if !runtime.is_absolute() {
         return None;
@@ -127,6 +243,7 @@ fn runtime_socket(runtime: &Path, home: &Path) -> Option<PathBuf> {
 /// Creates a missing state directory private and refuses a symlinked one, a
 /// non-directory or another user's directory. An own directory that others can
 /// read passes: the daemon tightens it to 0700 when it starts and logs that once.
+#[cfg(unix)]
 fn private_directory(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => {}
@@ -145,7 +262,111 @@ fn private_directory(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+/// Creates a missing state directory with a DACL for this user, SYSTEM and
+/// Administrators, and refuses a symlink or junction, a non-directory or another
+/// account's directory. An own directory that others can read passes: the daemon
+/// tightens it when it starts and logs that once.
+#[cfg(windows)]
+fn private_directory(path: &Path) -> Result<()> {
+    use devlanes_sys::windows::security::{DirProblem, ensure_private_dir};
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match ensure_private_dir(path, false)? {
+        Ok(_) | Err(DirProblem::Acl(_)) => Ok(()),
+        Err(_) => Err(Error::UnsafeDirectory(path.to_owned())),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// Each home gets its own pipe; case differences name the same home.
+    #[test]
+    fn pipe_names_follow_the_home() -> Result<()> {
+        let temporary = env::temp_dir();
+        let first = Paths::with_environment(Path::new(r"C:\Users\acme\one"), None, &temporary)?;
+        let second = Paths::with_environment(Path::new(r"C:\Users\acme\two"), None, &temporary)?;
+        let upper = Paths::with_environment(Path::new(r"C:\USERS\ACME\ONE"), None, &temporary)?;
+        assert!(
+            first
+                .socket
+                .to_string_lossy()
+                .starts_with(r"\\.\pipe\devlanes-")
+        );
+        assert_ne!(first.socket, second.socket);
+        assert_eq!(first.socket, upper.socket);
+        assert_eq!(first.run, Path::new(r"C:\Users\acme\one\run"));
+        for spelling in [
+            r"C:/Users/acme/one",
+            r"C:\Users\acme\one\",
+            r"\\?\C:\Users\acme\one",
+        ] {
+            let other = Paths::with_environment(Path::new(spelling), None, &temporary)?;
+            assert_eq!(other.socket, first.socket, "{spelling}");
+        }
+        Ok(())
+    }
+
+    /// A home reached through a junction keeps its pipe name once it is created,
+    /// as when the CLI hashes it before spawning the daemon and the daemon after.
+    #[test]
+    fn pipe_name_survives_creating_the_home() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let target = directory.path().join("target");
+        fs::create_dir(&target)?;
+        let link = directory.path().join("link");
+        let status = std::process::Command::new("cmd")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .stdout(std::process::Stdio::null())
+            .status()?;
+        assert!(status.success(), "mklink /J failed");
+        let home = link.join("home");
+        let before = Paths::with_environment(&home, None, directory.path())?;
+        fs::create_dir(&home)?;
+        let after = Paths::with_environment(&home, None, directory.path())?;
+        assert_eq!(before.socket, after.socket);
+        let direct = Paths::with_environment(&target.join("home"), None, directory.path())?;
+        assert_eq!(after.socket, direct.socket);
+        Ok(())
+    }
+
+    /// Commands racing to spawn the daemon prepare a new home at the same time,
+    /// as `start` in the background and `status` right after it do; none fails.
+    #[test]
+    fn concurrent_prepares_all_succeed() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        for round in 0..20 {
+            let paths = Paths::with_environment(
+                &directory.path().join(format!("home{round}")),
+                None,
+                directory.path(),
+            )?;
+            let barrier = std::sync::Barrier::new(8);
+            std::thread::scope(|scope| {
+                let racers: Vec<_> = (0..8)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            barrier.wait();
+                            paths.prepare()
+                        })
+                    })
+                    .collect();
+                racers
+                    .into_iter()
+                    .try_for_each(|racer| racer.join().expect("racer panicked"))
+            })?;
+            assert!(paths.logs.is_dir());
+            assert!(!paths.run.join("daemon.socket").exists());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;

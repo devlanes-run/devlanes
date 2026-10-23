@@ -15,12 +15,20 @@ axum = { version = "0.8", features = ["ws"] }
 clap.workspace = true
 futures-util.workspace = true
 humantime = "2"
-rustix = { version = "1", features = ["process"] }
+serde.workspace = true
 serde_json.workspace = true
 socket2 = "0.6"
 tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+# `fixture-server --print-console-width` reads the console through crossterm, so
+# this crate needs no Win32 FFI of its own (`devlanes-sys` depends on core).
+[target.'cfg(windows)'.dependencies]
+crossterm = { version = "0.29", default-features = false, features = ["windows"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.29"
@@ -28,3 +36,7 @@ tokio-tungstenite = "0.29"
 [[bin]]
 name = "fixture-server"
 path = "src/bin/fixture-server.rs"
+
+[[bin]]
+name = "fake-tool"
+path = "src/bin/fake-tool.rs"

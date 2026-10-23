@@ -14,7 +14,8 @@ use devlanes_config::{
 };
 use devlanes_core::{
     WorktreeId,
-    ports::{PortName, PortPool},
+    paths::{path_starts_with, same_path, strip_path_prefix},
+    ports::{PortBlock, PortName, PortPool},
 };
 use devlanes_proto::{RpcError, events};
 use devlanes_resolve::{LaneFacts, ResolveInput, lane_name};
@@ -315,6 +316,21 @@ fn literal<T: Clone + serde::de::DeserializeOwned>(value: &Option<Templated<T>>)
         .and_then(|value| value.evaluate(&ExpressionContext::default()).ok())
 }
 
+/// Port ranges new pool blocks keep clear of because the OS will not let a
+/// service bind there. Unix reserves none this way.
+#[cfg(unix)]
+async fn reserved_blocks() -> Vec<PortBlock> {
+    Vec::new()
+}
+
+/// Windows' excluded port ranges (Hyper-V, WSL, Docker Desktop), read at most
+/// once a minute. Ranges that could not be read are simply not avoided; doctor
+/// reports the error.
+#[cfg(windows)]
+async fn reserved_blocks() -> Vec<PortBlock> {
+    crate::excluded_ports::RESERVED.get().await.blocks()
+}
+
 impl Inner {
     /// Finds a registered project by a present worktree containing `cwd`, else
     /// loads the project whose `devlanes.yaml` is the nearest ancestor of `cwd`.
@@ -327,7 +343,7 @@ impl Inner {
         }
         for (project, lane) in self.all_lanes() {
             let st = lane.st();
-            if st.present && cwd.starts_with(&st.path) {
+            if st.present && path_starts_with(cwd, &st.path) {
                 return Ok(Some(project));
             }
         }
@@ -366,10 +382,7 @@ impl Inner {
             .map_err(|error| internal("git_failed", error))?;
         let (root, common_dir, primary_branch, relative, trees) = match &repository {
             Some(repo) => {
-                let relative = config_dir
-                    .strip_prefix(&repo.root)
-                    .map(Path::to_path_buf)
-                    .unwrap_or_default();
+                let relative = strip_path_prefix(&config_dir, &repo.root).unwrap_or_default();
                 let trees = repo.worktrees.iter().map(tree).collect();
                 (
                     repo.root.clone(),
@@ -399,7 +412,7 @@ impl Inner {
         let identity = common_dir.clone().unwrap_or_else(|| root.clone());
         let existing = self.all_projects().into_iter().find(|project| {
             let st = project.st();
-            st.common_dir.as_ref().unwrap_or(&st.root) == &identity
+            same_path(st.common_dir.as_ref().unwrap_or(&st.root), &identity)
         });
         if let Some(project) = existing {
             self.sync_worktrees(&project, trees).await?;
@@ -550,11 +563,22 @@ impl Inner {
             Ok(list) => list.iter().map(tree).collect(),
             // The registered root may itself be a removed worktree; ask another one.
             Err(_) => {
-                let alternative = project
+                let mut alternative = None;
+                for path in project
                     .lanes()
                     .into_iter()
                     .map(|lane| lane.st().path.clone())
-                    .find(|path| path.exists() && *path != root);
+                {
+                    // A directory without `.git` is a removed worktree too: on
+                    // Windows `git worktree remove` leaves directories that
+                    // running units use as their cwd.
+                    if !same_path(&path, &root)
+                        && devlanes_git::has_git_link(&path).await.unwrap_or(false)
+                    {
+                        alternative = Some(path);
+                        break;
+                    }
+                }
                 match alternative {
                     Some(path) => devlanes_git::list(&path, &common_dir)
                         .await
@@ -613,7 +637,7 @@ impl Inner {
             let (was_present, moved, rebranched) = {
                 let mut st = lane.st();
                 let was_present = st.present;
-                let moved = st.path != tree.path;
+                let moved = !same_path(&st.path, &tree.path);
                 let rebranched = st.branch != tree.branch;
                 st.path = tree.path.clone();
                 st.branch = tree.branch.clone();
@@ -1085,6 +1109,8 @@ impl Inner {
                     names,
                     reserved: needs.reserved.clone(),
                     avoid: self.remote.advertised_ports(),
+                    // A fixed start ignores them.
+                    avoid_blocks: Vec::new(),
                 })
                 .await;
             let mut st = lane.st();
@@ -1102,6 +1128,7 @@ impl Inner {
                 }
             });
         }
+        let reserved_ranges = reserved_blocks().await;
         let allocation = self
             .store
             .allocate(AllocationRequest {
@@ -1112,6 +1139,7 @@ impl Inner {
                 names,
                 reserved: needs.reserved.clone(),
                 avoid: self.remote.advertised_ports(),
+                avoid_blocks: reserved_ranges.clone(),
             })
             .await
             .map_err(store_error)?;
@@ -1137,6 +1165,7 @@ impl Inner {
                     names: shared,
                     reserved: BTreeSet::new(),
                     avoid: self.remote.advertised_ports(),
+                    avoid_blocks: reserved_ranges,
                 })
                 .await
                 .map_err(store_error)?;
@@ -1636,7 +1665,9 @@ impl Inner {
         let mut best: Option<(usize, bool, Arc<LaneRt>)> = None;
         for lane in project.lanes() {
             let st = lane.st();
-            if st.present && cwd.starts_with(&st.path) {
+            // Case-insensitive on Windows, where a shell may report the
+            // worktree's path with another casing than Git does.
+            if st.present && devlanes_core::paths::path_starts_with(cwd, &st.path) {
                 let rank = (st.path.components().count(), st.alias().is_none());
                 if best
                     .as_ref()

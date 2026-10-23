@@ -4,14 +4,14 @@
 //! [`crate::Syncer::offer_held`].
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::target::{CachedHash, MODE_MASK, OWNER_MARKER, TEMP_PREFIX};
+use crate::mode::{mode_of, modes_match};
+use crate::target::{CachedHash, OWNER_MARKER, TEMP_PREFIX};
 use crate::{ContentHash, HashCache, LocalTarget, RelPath};
 
 /// Estimated bytes per entry besides its path, for the batch byte budget.
@@ -107,7 +107,7 @@ fn walk_held(
         };
         let Ok(meta) = entry.metadata() else { continue };
         let mtime = meta.modified().ok();
-        let mode = meta.permissions().mode() & MODE_MASK;
+        let mode = mode_of(&meta);
         let cached = old.entries.remove(&rel).filter(|known| {
             known.size == meta.len() && known.mode == mode && mtime == Some(known.mtime)
         });
@@ -153,10 +153,12 @@ fn walk_held(
 
 /// How a held file compares with the source.
 pub(crate) enum Probe {
-    /// Same contents and mode; the settled mtime is known when not racy.
+    /// Same contents and mode; the settled mtime is known when not racy, and
+    /// `mode` is the source's own.
     Matches {
         size: u64,
         mtime: Option<SystemTime>,
+        mode: u32,
         hash: ContentHash,
     },
     /// The source has a different regular file there (or it could not be read).
@@ -166,11 +168,13 @@ pub(crate) enum Probe {
 }
 
 /// Compares `held` with the source file at the same path below `root`, reading
-/// at most `max_file` bytes. Blocking.
+/// at most `max_file` bytes. Modes compare as [`modes_match`] does with
+/// `read_only_modes`. Blocking.
 pub(crate) fn probe_source(
     root: &Path,
     held: &HeldFile,
     max_file: Option<u64>,
+    read_only_modes: bool,
     settled: impl Fn(&fs::Metadata) -> Option<SystemTime>,
 ) -> Probe {
     // A symlinked or missing parent means the path is not in the source tree.
@@ -197,8 +201,10 @@ pub(crate) fn probe_source(
     let Ok(meta) = file.metadata() else {
         return Probe::Differs;
     };
-    let mode = meta.permissions().mode() & MODE_MASK;
-    if meta.len() != held.size || mode != held.mode || max_file.is_some_and(|max| meta.len() > max)
+    let mode = mode_of(&meta);
+    if meta.len() != held.size
+        || !modes_match(mode, held.mode, read_only_modes)
+        || max_file.is_some_and(|max| meta.len() > max)
     {
         return Probe::Differs;
     }
@@ -207,6 +213,7 @@ pub(crate) fn probe_source(
         Ok(hash) if hash == expected => Probe::Matches {
             size: meta.len(),
             mtime: settled(&meta),
+            mode,
             hash,
         },
         _ => Probe::Differs,

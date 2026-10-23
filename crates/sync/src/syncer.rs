@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read as _};
-use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use bytes::Bytes;
+use devlanes_sys::FileIdentity;
 use notify::event::{AccessKind, AccessMode, ModifyKind};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher as _};
 use serde::{Deserialize, Serialize};
@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::held::{Probe, probe_source};
-use crate::target::MODE_MASK;
+use crate::mode::mode_of;
 use crate::{ContentHash, HeldFile, IgnoreRules, Manifest, RelPath, SyncError, SyncTarget};
 
 /// Default quiet period before a burst of events is processed.
@@ -48,15 +48,21 @@ pub struct SyncOptions {
     pub debounce: Duration,
     /// Files larger than this are reported and skipped instead of read into memory.
     pub max_file: Option<u64>,
+    /// The target keeps only a read-only attribute, not permission bits (a
+    /// Windows client, see [`crate::READ_ONLY_MODES`]): a held file's mode then
+    /// matches the source's when both or neither have a write bit, so `0o755`
+    /// sources are not resent to a target that reports `0o644`.
+    pub read_only_modes: bool,
 }
 
 impl Default for SyncOptions {
-    /// No ignores, 100 ms debounce, no size limit.
+    /// No ignores, 100 ms debounce, no size limit, exact modes.
     fn default() -> Self {
         Self {
             ignore: Vec::new(),
             debounce: DEFAULT_DEBOUNCE,
             max_file: None,
+            read_only_modes: false,
         }
     }
 }
@@ -136,6 +142,8 @@ pub struct Syncer {
     rules: Arc<IgnoreRules>,
     debounce: Duration,
     max_file: Option<u64>,
+    /// See [`SyncOptions::read_only_modes`].
+    read_only_modes: bool,
     /// What the target said it holds, as index entries; see [`Syncer::offer_held`].
     seed: Option<BTreeMap<RelPath, Tracked>>,
     /// Source root resolved for [`Syncer::offer_held`]; `Some(None)` when absent.
@@ -156,6 +164,7 @@ impl Syncer {
             rules: Arc::new(IgnoreRules::new(&options.ignore)?),
             debounce: options.debounce,
             max_file: options.max_file,
+            read_only_modes: options.read_only_modes,
             seed: None,
             held_root: None,
         })
@@ -182,10 +191,13 @@ impl Syncer {
         };
         let rules = self.rules.clone();
         let max_file = self.max_file;
+        let read_only_modes = self.read_only_modes;
         let entries = tokio::task::spawn_blocking(move || {
             batch
                 .into_iter()
-                .filter_map(|held| held_entry(root.as_deref(), &rules, max_file, held))
+                .filter_map(|held| {
+                    held_entry(root.as_deref(), &rules, max_file, read_only_modes, held)
+                })
                 .collect::<Vec<_>>()
         })
         .await
@@ -336,7 +348,7 @@ impl From<&fs::Metadata> for FileMeta {
         Self {
             size: meta.len(),
             mtime: meta.modified().ok(),
-            mode: meta.permissions().mode() & MODE_MASK,
+            mode: mode_of(meta),
         }
     }
 }
@@ -722,8 +734,8 @@ struct SourceWatch {
     _watcher: RecommendedWatcher,
     events: mpsc::Receiver<notify::Result<Event>>,
     overflow: Arc<AtomicBool>,
-    /// Device and inode of the root when the watch started.
-    identity: Option<(u64, u64)>,
+    /// File identity of the root when the watch started.
+    identity: Option<FileIdentity>,
 }
 
 impl SourceWatch {
@@ -761,14 +773,14 @@ impl SourceWatch {
     }
 }
 
-/// Device and inode of `root`, or `None` when it is missing or not a directory.
-async fn root_identity(root: &Path) -> Option<(u64, u64)> {
+/// File identity of `root`, or `None` when it is missing or not a directory.
+async fn root_identity(root: &Path) -> Option<FileIdentity> {
     let root = root.to_owned();
     tokio::task::spawn_blocking(move || {
-        fs::symlink_metadata(root)
+        fs::symlink_metadata(&root)
             .ok()
-            .filter(fs::Metadata::is_dir)
-            .map(|meta| (meta.dev(), meta.ino()))
+            .filter(fs::Metadata::is_dir)?;
+        devlanes_sys::path_identity(&root).ok()
     })
     .await
     .ok()
@@ -992,7 +1004,7 @@ fn read_source(
     let tracked = Tracked {
         size: contents.len() as u64,
         mtime: settled_mtime(&meta),
-        mode: meta.permissions().mode() & MODE_MASK,
+        mode: mode_of(&meta),
         hash: ContentHash::of(&contents),
     };
     Ok(Some((Bytes::from(contents), tracked)))
@@ -1009,13 +1021,14 @@ fn settled_mtime(meta: &fs::Metadata) -> Option<SystemTime> {
 
 /// The index entry a held file becomes, if any. Blocking.
 ///
-/// A match is indexed with the source's own settled mtime, so the first pass skips
-/// it without reading; a held file the source lacks is indexed so the first pass
-/// deletes it; a different file is left out, so the pass sends it.
+/// A match is indexed with the source's own settled mtime and mode, so the first
+/// pass skips it without reading; a held file the source lacks is indexed so the
+/// first pass deletes it; a different file is left out, so the pass sends it.
 fn held_entry(
     root: Option<&Path>,
     rules: &IgnoreRules,
     max_file: Option<u64>,
+    read_only_modes: bool,
     held: HeldFile,
 ) -> Option<(RelPath, Tracked)> {
     // Ignored paths on the target belong to someone else; never compared or deleted.
@@ -1023,16 +1036,21 @@ fn held_entry(
         return None;
     }
     let probe = match root {
-        Some(root) => probe_source(root, &held, max_file, settled_mtime),
+        Some(root) => probe_source(root, &held, max_file, read_only_modes, settled_mtime),
         None => Probe::Absent,
     };
     match probe {
-        Probe::Matches { size, mtime, hash } => Some((
+        Probe::Matches {
+            size,
+            mtime,
+            mode,
+            hash,
+        } => Some((
             held.path,
             Tracked {
                 size,
                 mtime,
-                mode: held.mode,
+                mode,
                 hash,
             },
         )),

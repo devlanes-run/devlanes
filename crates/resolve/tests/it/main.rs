@@ -11,18 +11,21 @@ use std::{
 
 use devlanes_config::{HostConfig, Scalar, Templated};
 use devlanes_core::{
+    StopSignal,
     contrib::{Contributor, DetectCx, ScriptRunner, SecretsProvider, UnitKind},
     env::EnvLayer,
     ports::{PortBlock, PortName},
+    shell::Shell,
 };
 use devlanes_resolve::{
-    ReadySpec, ResolveError, ResolveInput, detect_platform, lane_layout, port_needs,
+    ReadySpec, ResolveError, ResolveInput, ResolvedLane, detect_platform, lane_layout, port_needs,
     profile_summaries, resolve_lane, select, select_profiles,
 };
 use serde_json::json;
 use support::*;
 
-/// Resolves `config` for `facts` with the fake script runner only.
+/// Resolves `config` for `facts` with the fake script runner only, running
+/// `run:` strings with `/bin/sh` on every OS.
 async fn plain(yaml: &str, index: u32) -> devlanes_resolve::ResolvedLane {
     let config = parse(yaml);
     let facts = facts(&config.project, index, Some("main"));
@@ -30,10 +33,12 @@ async fn plain(yaml: &str, index: u32) -> devlanes_resolve::ResolvedLane {
     let infra = infra();
     let runners: [Arc<dyn ScriptRunner>; 1] = [Arc::new(FakeRunner::new())];
     let client = client_env();
+    let shell = Shell::posix();
     let mut input = ResolveInput::new(&config, &facts, block, &offsets);
     input.infra = &infra;
     input.script_runners = &runners;
     input.client_env = &client;
+    input.shell = &shell;
     let lane = resolve_lane(input).await.expect("resolves");
     assert!(lane.errors.is_empty(), "{:?}", lane.errors);
     lane
@@ -715,8 +720,11 @@ services:
     let mut input = ResolveInput::new(&config, &facts, block, &offsets);
     input.contributors = &contributors;
     input.script_runners = &runners;
+    let shell = Shell::posix();
+    input.shell = &shell;
     let lane = resolve_lane(input).await.expect("resolves");
     let port = |unit: &str| lane.services[unit].port.to_string();
+    assert_eq!(lane.services["shell"].launch.program, "/bin/sh");
     assert_eq!(
         lane.services["shell"].launch.args,
         [
@@ -748,6 +756,312 @@ services:
     assert_eq!(calls.len(), 2);
     assert!(calls[0].2.is_empty());
     assert_eq!(calls[1].2, ["--port".to_owned(), port("script")]);
+}
+
+/// Resolves `yaml` (lane 1) with `shell` and a contributor that appends `args`
+/// to every unit.
+async fn with_shell(yaml: &str, shell: &Shell, args: &[&'static str]) -> ResolvedLane {
+    let config = parse(yaml);
+    let facts = facts("demo", 1, None);
+    let flags: Arc<dyn Contributor> = Arc::new(FakeContributor {
+        args: args.to_vec(),
+        ..FakeContributor::env("flags", 100, vec![])
+    });
+    let contributors = [flags];
+    let (block, offsets) = allocation(&config, 21_000, &contributors);
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.contributors = &contributors;
+    input.shell = shell;
+    resolve_lane(input).await.expect("resolves")
+}
+
+#[tokio::test]
+/// Git for Windows' sh keeps POSIX quoting and gets MSYS_NO_PATHCONV; the
+/// cmd.exe fallback quotes for cmd, notes the fallback and refuses arguments it
+/// cannot pass safely. Argv `run:` never goes through a shell.
+async fn run_strings_use_the_given_shell() {
+    let yaml = r#"
+project: demo
+services:
+  web:
+    run: npm run dev
+    ready:
+      cmd: [curl, -fsS, "http://127.0.0.1/a b"]
+  argv:
+    run: [vite]
+"#;
+    let git_sh = Shell::git_sh(std::path::Path::new("sh.exe"));
+    let lane = with_shell(yaml, &git_sh, &["--name", "a b"]).await;
+    let web = &lane.services["web"];
+    assert_eq!(web.launch.program, "sh.exe");
+    assert_eq!(web.launch.args, ["-c", "npm run dev --name 'a b'"]);
+    assert_eq!(web.launch.env.values["MSYS_NO_PATHCONV"], "1");
+    assert_eq!(web.launch.env.values["MSYS2_ARG_CONV_EXCL"], "*");
+    assert_eq!(
+        web.launch.env.sources["MSYS_NO_PATHCONV"],
+        EnvLayer::Devlanes
+    );
+    // The launch keeps them; what `devlanes env` exports does not.
+    assert_eq!(
+        web.launch.env.shell_env.iter().collect::<Vec<_>>(),
+        ["MSYS2_ARG_CONV_EXCL", "MSYS_NO_PATHCONV"]
+    );
+    let exported = web.launch.env.exportable();
+    assert!(!exported.contains_key("MSYS_NO_PATHCONV"));
+    assert!(!exported.contains_key("MSYS2_ARG_CONV_EXCL"));
+    assert_eq!(exported["DEVLANES"], "1");
+    assert!(service_notes(web).is_empty(), "{:?}", web.launch.notes);
+    assert!(matches!(
+        &web.ready.check,
+        ReadySpec::Cmd { shell, .. } if shell == "curl -fsS 'http://127.0.0.1/a b'"
+    ));
+    let argv = &lane.services["argv"].launch;
+    assert_eq!(argv.program, "vite");
+    assert!(!argv.env.values.contains_key("MSYS_NO_PATHCONV"));
+    assert!(argv.env.shell_env.is_empty());
+
+    let cmd = Shell::cmd(std::path::Path::new("W"));
+    let lane = with_shell(yaml, &cmd, &["--name", "a b"]).await;
+    let web = &lane.services["web"];
+    assert_eq!(web.launch.program, cmd.program);
+    assert_eq!(
+        web.launch.args,
+        ["/d", "/s", "/c", r#"npm run dev --name "a b""#]
+    );
+    assert!(!web.launch.env.values.contains_key("MSYS_NO_PATHCONV"));
+    assert!(web.launch.env.shell_env.is_empty());
+    assert_eq!(
+        service_notes(web),
+        [
+            "runs with cmd.exe: Git for Windows' sh.exe was not found, and POSIX syntax may fail there. Install Git for Windows, then run `devlanes daemon restart`."
+        ]
+    );
+    assert!(matches!(
+        &web.ready.check,
+        ReadySpec::Cmd { shell, .. } if shell == r#"curl -fsS "http://127.0.0.1/a b""#
+    ));
+    assert!(service_notes(&lane.services["argv"]).is_empty());
+
+    let lane = with_shell(yaml, &cmd, &["100%"]).await;
+    let error = lane.errors["services.web"].to_string();
+    assert!(error.contains("cmd.exe cannot take safely"), "{error}");
+    assert!(!error.contains("100%"), "{error}");
+}
+
+#[test]
+/// `config check`'s shell advice from a config file with the default shell:
+/// nothing on Unix; on Windows, where the default is the cmd.exe fallback until
+/// the daemon finds Git's sh, one warning naming the first run string and how
+/// many more, plus one for the multi-line string.
+fn config_file_round_trip_reports_the_shell_fallback() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("devlanes.yaml");
+    std::fs::write(
+        &path,
+        "project: demo\nservices:\n  web:\n    run: npm run dev\n  api:\n    run: [node, api.js]\ntasks:\n  seed:\n    run: |\n      ./seed.sh\n      ./check.sh\n",
+    )
+    .expect("write config");
+    let config = devlanes_config::load_project(&path).expect("loads");
+    let warnings = devlanes_resolve::shell_warnings(&config, &Shell::default());
+    #[cfg(unix)]
+    assert!(warnings.is_empty(), "{warnings:?}");
+    #[cfg(windows)]
+    {
+        let found: Vec<_> = warnings
+            .iter()
+            .map(|w| (w.path.as_str(), w.message.as_str()))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (
+                    "services.web.run",
+                    "`services.web.run` and 1 more run with cmd.exe: Git for Windows' sh.exe was not found, and POSIX syntax may fail there. Install Git for Windows, then run `devlanes daemon restart`."
+                ),
+                (
+                    "tasks.seed.run",
+                    "`tasks.seed.run` has more than one line, but cmd.exe runs only the first: Git for Windows' sh.exe was not found. Install Git for Windows, then run `devlanes daemon restart`."
+                ),
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+/// `cmd /c` runs only the first line of its text, so under the cmd.exe
+/// fallback a multi-line `run:` or `ready.cmd` fails its unit instead of
+/// silently running part of it. A trailing line break (YAML `|`) is fine, and
+/// Git's sh takes every line.
+async fn multi_line_shell_text_fails_under_cmd() {
+    let yaml = r#"
+project: demo
+services:
+  web:
+    run: |
+      npm ci
+      npm run dev
+  probe:
+    run: [vite]
+    ready:
+      cmd: "curl -fsS http://127.0.0.1\r\nexit 0"
+  single:
+    run: |
+      npm run dev
+tasks:
+  seed:
+    run: "a\nb"
+"#;
+    let cmd = Shell::cmd(std::path::Path::new("W"));
+    let lane = with_shell(yaml, &cmd, &["--x"]).await;
+    for (unit, path) in [
+        ("services.web", "services.web.run"),
+        ("services.probe", "services.probe.ready"),
+        ("tasks.seed", "tasks.seed.run"),
+    ] {
+        let error = lane.errors.get(unit).map(ToString::to_string);
+        let error = error.unwrap_or_default();
+        assert!(
+            error.starts_with(&format!(
+                "{path}: has more than one line, but cmd.exe runs only the first"
+            )),
+            "{unit}: {error}"
+        );
+        assert!(error.contains("devlanes daemon restart"), "{error}");
+    }
+    assert_eq!(
+        lane.services["single"].launch.args,
+        ["/d", "/s", "/c", "npm run dev --x"]
+    );
+
+    let lane = with_shell(yaml, &Shell::posix(), &[]).await;
+    assert!(lane.errors.is_empty(), "{:?}", lane.errors);
+    assert_eq!(
+        lane.services["web"].launch.args,
+        ["-c", "npm ci\nnpm run dev\n"]
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+/// On Windows a profile's `PATH` replaces the client's `Path` instead of
+/// sitting next to it, and keeps the client's spelling.
+async fn windows_env_names_layer_ignoring_case() {
+    let config = parse(
+        r#"
+project: demo
+services:
+  web:
+    run: [vite]
+    env:
+      PATH: from-config
+"#,
+    );
+    let facts = facts("demo", 1, None);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let client = BTreeMap::from([
+        ("Path".to_owned(), r"C:\Windows".to_owned()),
+        ("SystemRoot".to_owned(), r"C:\Windows".to_owned()),
+    ]);
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.client_env = &client;
+    let lane = resolve_lane(input).await.expect("resolves");
+    let env = &lane.services["web"].launch.env;
+    let paths: Vec<_> = env
+        .values
+        .keys()
+        .filter(|key| key.eq_ignore_ascii_case("path"))
+        .collect();
+    assert_eq!(paths, ["Path"]);
+    assert_eq!(env.values["Path"], "from-config");
+    assert_eq!(env.sources["Path"], EnvLayer::Service);
+    assert_eq!(env.values["SystemRoot"], r"C:\Windows");
+}
+
+#[cfg(windows)]
+#[tokio::test]
+/// On Windows `${{ env.PATH }}` finds the client's `Path`, and a service's
+/// `env.Port` sets its port like `env.PORT`: no `default` port is allocated.
+async fn windows_exact_name_lookups_ignore_case() {
+    let config = parse(
+        r#"
+project: demo
+services:
+  web:
+    run: [vite]
+    env:
+      SEEN_PATH: "${{ env.PATH }}"
+      SEEN_ROOT: "${{ env.SYSTEMROOT }}"
+  fixed:
+    run: [vite]
+    env:
+      Port: 4321
+"#,
+    );
+    let facts = facts("demo", 1, None);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    assert!(
+        !offsets.keys().any(|name| name.unit == "fixed"),
+        "{offsets:?}"
+    );
+    let client = BTreeMap::from([
+        ("Path".to_owned(), r"C:\bin".to_owned()),
+        ("SystemRoot".to_owned(), r"C:\Windows".to_owned()),
+    ]);
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.client_env = &client;
+    let lane = resolve_lane(input).await.expect("resolves");
+    let web = &lane.services["web"].launch.env.values;
+    assert_eq!(web["SEEN_PATH"], r"C:\bin");
+    assert_eq!(web["SEEN_ROOT"], r"C:\Windows");
+    let fixed = &lane.services["fixed"];
+    assert_eq!(fixed.port, 4321);
+    assert!(fixed.literal_port);
+    assert_eq!(
+        devlanes_core::env::get(&fixed.launch.env.values, "PORT").map(String::as_str),
+        Some("4321")
+    );
+}
+
+#[tokio::test]
+/// `stop.signal` becomes the typed signal. Windows notes on every service that
+/// stops terminate at once for now; Unix sends every signal as is, without a
+/// note.
+async fn stop_signals_parse_and_note_windows_termination() {
+    let config = parse(
+        r#"
+project: demo
+services:
+  quit:
+    run: [vite]
+    stop:
+      signal: SIGQUIT
+  int:
+    run: [vite]
+    stop:
+      signal: SIGINT
+"#,
+    );
+    let facts = facts("demo", 1, None);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let lane = resolve_lane(ResolveInput::new(&config, &facts, block, &offsets))
+        .await
+        .expect("resolves");
+    let (quit, int) = (&lane.services["quit"], &lane.services["int"]);
+    assert_eq!(quit.stop.signal, StopSignal::Quit);
+    assert_eq!(int.stop.signal, StopSignal::Interrupt);
+    // SIGINT maps to Ctrl-C on Windows, so only SIGQUIT has no counterpart there.
+    assert!(int.launch.notes.is_empty(), "{:?}", int.launch.notes);
+    #[cfg(unix)]
+    assert!(quit.launch.notes.is_empty(), "{:?}", quit.launch.notes);
+    #[cfg(windows)]
+    assert!(
+        quit.launch
+            .notes
+            .iter()
+            .any(|note| note.contains("SIGQUIT") && note.contains("Ctrl-Break")),
+        "{:?}",
+        quit.launch.notes
+    );
 }
 
 #[tokio::test]
@@ -1121,6 +1435,8 @@ async fn snapshot_minimal() {
     input.infra = &infra;
     input.client_env = &client;
     input.ca_env = &ca;
+    let shell = Shell::posix();
+    input.shell = &shell;
     let lane = resolve_lane(input).await.expect("resolves");
     assert!(lane.errors.is_empty(), "{:?}", lane.errors);
     insta::assert_json_snapshot!(lane_view(&lane));
@@ -1245,6 +1561,8 @@ async fn snapshot_reference() {
     input.infra = &infra;
     input.client_env = &client;
     input.secrets = Some(&secrets as &dyn SecretsProvider);
+    let shell = Shell::posix();
+    input.shell = &shell;
     let lane = resolve_lane(input).await.expect("resolves");
     assert!(lane.errors.is_empty(), "{:?}", lane.errors);
     insta::assert_json_snapshot!(lane_view(&lane));

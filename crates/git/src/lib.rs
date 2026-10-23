@@ -1,5 +1,7 @@
 //! Git worktree discovery preserves administration identities across directory moves.
 
+use devlanes_core::paths::{same_path, slash_joined, strip_path_prefix};
+use devlanes_sys::NoWindow;
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -82,7 +84,7 @@ pub async fn find_config(cwd: &Path) -> Result<Option<PathBuf>, Error> {
 
 /// Returns `None` for an ordinary non-Git directory; other failures remain errors.
 pub async fn discover(cwd: &Path, primary: Option<&str>) -> Result<Option<Repository>, Error> {
-    let probe = Command::new("git")
+    let probe = git_command()
         .args(["-C"])
         .arg(cwd)
         .args(["rev-parse", "--show-toplevel"])
@@ -96,8 +98,8 @@ pub async fn discover(cwd: &Path, primary: Option<&str>) -> Result<Option<Reposi
         }
         return Err(Error::Git(stderr.trim().into()));
     }
-    let root = PathBuf::from(text(&probe.stdout)?.trim_end_matches('\n'));
-    let common_dir = PathBuf::from(
+    let root = native(text(&probe.stdout)?.trim_end_matches('\n'));
+    let common_dir = native(
         text(
             &git(
                 &root,
@@ -125,24 +127,20 @@ pub async fn list(root: &Path, common_dir: &Path) -> Result<Vec<Worktree>, Error
     let output = git(root, &["worktree", "list", "--porcelain", "-z"]).await?;
     let mut worktrees = parse_porcelain(&output)?;
     for worktree in &mut worktrees {
-        worktree.present = tokio::fs::try_exists(&worktree.path).await? && !worktree.prunable;
+        worktree.present = has_git_link(&worktree.path).await? && !worktree.prunable;
         if worktree.present {
-            let admin = git(
-                &worktree.path,
-                &["rev-parse", "--path-format=absolute", "--git-dir"],
-            )
-            .await?;
-            let admin = PathBuf::from(text(&admin)?.trim_end_matches('\n'));
-            worktree.identity = if admin == common_dir {
+            let Some(admin) = admin_dir(&worktree.path).await? else {
+                worktree.present = false;
+                continue;
+            };
+            worktree.identity = if same_path(&admin, common_dir) {
                 "main".into()
             } else {
-                admin
-                    .strip_prefix(common_dir)
-                    .map_err(|_| {
-                        Error::Porcelain("worktree admin directory outside common directory".into())
-                    })?
-                    .to_string_lossy()
-                    .into_owned()
+                // `/`-joined on every OS: identities are state keys and must not
+                // change spelling with the host separator.
+                slash_joined(&strip_path_prefix(&admin, common_dir).ok_or_else(|| {
+                    Error::Porcelain("worktree admin directory outside common directory".into())
+                })?)
             };
         }
     }
@@ -152,10 +150,10 @@ pub async fn list(root: &Path, common_dir: &Path) -> Result<Vec<Worktree>, Error
         while let Some(entry) = entries.next_entry().await? {
             let path = entry.path().join("gitdir");
             if let Ok(content) = tokio::fs::read_to_string(path).await {
-                let gitfile = PathBuf::from(content.trim_end_matches('\n'));
+                let gitfile = native(content.trim_end_matches('\n'));
                 if let Some(worktree) = worktrees
                     .iter_mut()
-                    .find(|tree| tree.path == gitfile.parent().unwrap_or(Path::new("")))
+                    .find(|tree| same_path(&tree.path, gitfile.parent().unwrap_or(Path::new(""))))
                 {
                     worktree.identity =
                         format!("worktrees/{}", entry.file_name().to_string_lossy());
@@ -164,6 +162,47 @@ pub async fn list(root: &Path, common_dir: &Path) -> Result<Vec<Worktree>, Error
         }
     }
     Ok(worktrees)
+}
+
+/// Whether `path` still holds its `.git` entry (a directory in the main
+/// worktree, a link file in linked ones). A directory without it is a removed
+/// worktree: on Windows `git worktree remove` deletes `.git` and the files but
+/// cannot delete directories a running process uses as its cwd, and in a
+/// worktree nested in another checkout Git would answer for the outer one.
+pub async fn has_git_link(path: &Path) -> Result<bool, Error> {
+    Ok(tokio::fs::try_exists(path.join(".git")).await?)
+}
+
+/// The absolute administration directory of the worktree at `path`, or `None`
+/// when its `.git` entry is gone, also when it vanished after [`has_git_link`]
+/// found it.
+async fn admin_dir(path: &Path) -> Result<Option<PathBuf>, Error> {
+    let mut command = git_command();
+    command
+        .arg("-C")
+        .arg(path)
+        .args(["rev-parse", "--path-format=absolute", "--git-dir"])
+        .stdin(Stdio::null());
+    // Git must not search above the worktree: for a worktree nested in another
+    // checkout it would answer for the outer repository, and the worktree would
+    // take the outer one's identity. The variable is a path list (`:` on Unix,
+    // `;` on Windows), so a parent containing the separator would split into
+    // wrong ceilings; `join_paths` refuses those, and then none is set.
+    if let Some(parent) = path.parent().filter(|parent| parent.is_absolute())
+        && let Ok(ceiling) = std::env::join_paths([parent])
+    {
+        command.env("GIT_CEILING_DIRECTORIES", ceiling);
+    }
+    let output = command.output().await?;
+    if output.status.success() {
+        return Ok(Some(native(text(&output.stdout)?.trim_end_matches('\n'))));
+    }
+    if !has_git_link(path).await? {
+        return Ok(None);
+    }
+    Err(Error::Git(
+        String::from_utf8_lossy(&output.stderr).trim().into(),
+    ))
 }
 
 /// NUL records preserve spaces and newlines in worktree paths.
@@ -183,7 +222,7 @@ pub fn parse_porcelain(bytes: &[u8]) -> Result<Vec<Worktree>, Error> {
         } else if let Some(path) = field.strip_prefix("worktree ") {
             current = Some(Worktree {
                 identity: String::new(),
-                path: path.into(),
+                path: native(path),
                 branch: None,
                 head: String::new(),
                 present: false,
@@ -216,7 +255,7 @@ pub fn parse_porcelain(bytes: &[u8]) -> Result<Vec<Worktree>, Error> {
 /// Branch names are passed after an option boundary and never interpreted by a shell.
 pub async fn add(root: &Path, destination: &Path, branch: &str) -> Result<(), Error> {
     git(root, &["check-ref-format", "--branch", branch]).await?;
-    let exists = Command::new("git")
+    let exists = git_command()
         .arg("-C")
         .arg(root)
         .args([
@@ -229,7 +268,7 @@ pub async fn add(root: &Path, destination: &Path, branch: &str) -> Result<(), Er
         .status()
         .await?
         .success();
-    let mut command = Command::new("git");
+    let mut command = git_command();
     command.arg("-C").arg(root).args(["worktree", "add"]);
     if !exists {
         command.args(["-b", branch]);
@@ -320,9 +359,16 @@ async fn default_branch(root: &Path) -> Result<String, Error> {
     Ok("main".into())
 }
 
+/// `git`, without a console window when the daemon runs it.
+fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command.no_window();
+    command
+}
+
 /// Helper subprocesses use Tokio's own reaping independently of managed units.
 async fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, Error> {
-    let output = Command::new("git")
+    let output = git_command()
         .arg("-C")
         .arg(cwd)
         .args(args)
@@ -341,6 +387,20 @@ async fn git(cwd: &Path, args: &[&str]) -> Result<Vec<u8>, Error> {
 /// Rejects undecodable Git metadata rather than silently changing an identity.
 fn text(bytes: &[u8]) -> Result<&str, Error> {
     std::str::from_utf8(bytes).map_err(|_| Error::Encoding)
+}
+
+/// A path printed by Git, in the host's own spelling.
+#[cfg(unix)]
+fn native(path: &str) -> PathBuf {
+    PathBuf::from(path)
+}
+
+/// A path printed by Git, in the host's own spelling. Git for Windows prints
+/// `C:/x/y`; paths stored as state keys and compared with canonical cwds need
+/// `C:\x\y`, or one project would get two spellings.
+#[cfg(windows)]
+fn native(path: &str) -> PathBuf {
+    PathBuf::from(path.replace('/', "\\"))
 }
 
 #[cfg(test)]
@@ -398,12 +458,166 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    /// Git for Windows prints `/`; stored paths use the host's `\`.
+    fn windows_porcelain_paths_use_backslashes() -> Result<(), Error> {
+        let trees = parse_porcelain(b"worktree C:/src/acme lanes/web\0HEAD abc\0\0")?;
+        assert_eq!(trees[0].path.as_os_str(), r"C:\src\acme lanes\web");
+        Ok(())
+    }
+
+    /// A listed worktree whose `.git` link is gone but whose directory remains
+    /// (what `git worktree remove` leaves on Windows while a unit runs there) is
+    /// not present. Locking keeps Git from calling it prunable, and the
+    /// directory sits inside the main checkout, where Git would otherwise
+    /// answer for the outer repository and give it the identity `main`.
+    #[tokio::test]
+    async fn worktree_without_git_link_is_not_present() -> Result<(), Box<dyn std::error::Error>> {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let dir = tempfile::tempdir()?;
+            let temp = TempPath(dunce::canonicalize(dir.path())?);
+            git(temp.path(), &["init", "-b", "main"]).await?;
+            git(
+                temp.path(),
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "initial",
+                ],
+            )
+            .await?;
+            let lane = temp.path().join("lane");
+            add(temp.path(), &lane, "feat/gone").await?;
+            git(temp.path(), &["worktree", "lock", &lane.to_string_lossy()]).await?;
+            std::fs::remove_file(lane.join(".git"))?;
+            assert!(lane.is_dir());
+            let common = temp.path().join(".git");
+            let trees = list(temp.path(), &common).await?;
+            let gone = trees
+                .iter()
+                .find(|tree| tree.branch.as_deref() == Some("feat/gone"))
+                .ok_or("the locked worktree is still listed")?;
+            assert!(!gone.present, "{gone:?}");
+            assert!(!gone.prunable, "locked worktrees are never prunable");
+            assert_eq!(
+                trees.iter().filter(|tree| tree.identity == "main").count(),
+                1,
+                "{trees:?}"
+            );
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    /// The race behind the check above: `.git` vanishes after `has_git_link`
+    /// saw it. The admin lookup must not climb into the enclosing checkout.
+    #[tokio::test]
+    async fn admin_lookup_never_answers_for_the_enclosing_checkout()
+    -> Result<(), Box<dyn std::error::Error>> {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let dir = tempfile::tempdir()?;
+            let temp = TempPath(dunce::canonicalize(dir.path())?);
+            git(temp.path(), &["init", "-b", "main"]).await?;
+            git(
+                temp.path(),
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "initial",
+                ],
+            )
+            .await?;
+            let lane = temp.path().join("lane");
+            add(temp.path(), &lane, "feat/race").await?;
+            let common = temp.path().join(".git");
+            let admin = admin_dir(&lane).await?.ok_or("the worktree has its link")?;
+            assert!(
+                strip_path_prefix(&admin, &common.join("worktrees")).is_some(),
+                "{admin:?}"
+            );
+            std::fs::remove_file(lane.join(".git"))?;
+            // Without the ceiling, Git answers for the main checkout.
+            let outer = git(&lane, &["rev-parse", "--path-format=absolute", "--git-dir"]).await?;
+            assert!(same_path(
+                &native(text(&outer)?.trim_end_matches('\n')),
+                &common
+            ));
+            assert_eq!(admin_dir(&lane).await?, None);
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    /// A directory name holding the platform's path-list separator, which
+    /// `GIT_CEILING_DIRECTORIES` cannot carry.
+    #[cfg(unix)]
+    const SEPARATED: &str = "a:b";
+    #[cfg(windows)]
+    const SEPARATED: &str = "a;b";
+
+    /// Below a directory whose name holds the path-list separator no ceiling is
+    /// set, and the lookup still finds the worktree's own administration directory.
+    #[tokio::test]
+    async fn admin_lookup_works_below_a_path_list_separator()
+    -> Result<(), Box<dyn std::error::Error>> {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let dir = tempfile::tempdir()?;
+            let temp = TempPath(dunce::canonicalize(dir.path())?);
+            git(temp.path(), &["init", "-b", "main"]).await?;
+            git(
+                temp.path(),
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "initial",
+                ],
+            )
+            .await?;
+            let lane = temp.path().join(SEPARATED).join("lane");
+            add(temp.path(), &lane, "feat/separated").await?;
+            let common = temp.path().join(".git");
+            let admin = admin_dir(&lane).await?.ok_or("the worktree has its link")?;
+            assert!(
+                strip_path_prefix(&admin, &common.join("worktrees")).is_some(),
+                "{admin:?}"
+            );
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
+        .await??;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn moved_worktree_keeps_its_identity() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::timeout(Duration::from_secs(15), async {
             let dir = tempfile::tempdir()?;
-            // Git reports canonical paths, while macOS temp paths include a /var symlink.
-            let temp = TempPath(dir.path().canonicalize()?);
+            // Git reports canonical paths, while macOS temp paths include a /var
+            // symlink; dunce avoids the verbatim `\\?\` form Git rejects on Windows.
+            let temp = TempPath(dunce::canonicalize(dir.path())?);
             git(temp.path(), &["init", "-b", "main"]).await?;
             git(
                 temp.path(),
@@ -450,6 +664,11 @@ mod tests {
                 .find(|tree| tree.path == moved)
                 .ok_or("missing moved lane")?;
             assert_eq!(linked.identity, moved.identity);
+            assert!(
+                moved.identity.starts_with("worktrees/"),
+                "{}",
+                moved.identity
+            );
             Ok::<_, Box<dyn std::error::Error>>(())
         })
         .await??;

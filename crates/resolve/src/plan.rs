@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
+    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -11,13 +11,14 @@ use devlanes_config::{
     Templated,
 };
 use devlanes_core::{
-    StopPolicy,
+    StopPolicy, StopSignal,
     color::unit_color,
     contrib::{
         ContribCx, ContribMemo, Contributor, DetectCx, DraftCommand, LaunchDraft, ScriptInfo,
         ScriptPlan, ScriptRequest, ScriptRunner, SecretEnv, SecretsError, SecretsRequest, UnitKind,
     },
-    env::{EnvLayer, assemble},
+    env::{self, EnvLayer, assemble},
+    shell::ShellKind,
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
@@ -27,7 +28,7 @@ use crate::{
     ResolvedLane, ResolvedService, ResolvedTask, ServiceLayout, SyncSpec,
     layout::{self, Namespaces, env_namespace, replica_value},
     select::{active_profiles, merge_options},
-    util::{shell_quote, signal_number},
+    util::{cmd_quote, shell_quote},
 };
 
 /// Plans every service replica, task and infra command of a lane.
@@ -347,7 +348,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             }
             None => None,
         };
-        let launch = self
+        let mut launch = self
             .launch(
                 LaunchInput {
                     kind: UnitKind::Service,
@@ -372,10 +373,13 @@ impl<E: Extensions> Planner<'_, '_, E> {
             &service.effective_ready(),
             layout,
             &launch.cwd,
+            self.input.shell.kind,
             &context,
             &path,
         )?;
         let stop = stop_policy(service.stop.as_ref(), &context, &path)?;
+        // Nothing on Unix; on Windows it says stops terminate at once for now.
+        launch.notes.extend(stop.signal.launch_note());
         let sync = self.sync(service.sync.as_deref().unwrap_or_default(), &context, &path)?;
         Ok(ResolvedService {
             name: layout.name.clone(),
@@ -565,7 +569,9 @@ impl<E: Extensions> Planner<'_, '_, E> {
         // Later profiles win over earlier ones within the profile layer.
         let mut profile = BTreeMap::new();
         for (env_path, env) in &self.profile_envs {
-            profile.extend(env_map(env, context, env_path)?);
+            for (key, value) in env_map(env, context, env_path)? {
+                env::insert(&mut profile, key, value);
+            }
         }
         let cwd = match spec.cwd {
             Some(value) => lane_path.join(
@@ -675,19 +681,28 @@ impl<E: Extensions> Planner<'_, '_, E> {
             files,
             mut notes,
         } = draft;
+        let shell = input.shell;
+        let mut shell_env = BTreeMap::new();
         let (argv, cwd) = match drafted {
             DraftCommand::Shell(text) => {
+                if shell.kind == ShellKind::Cmd {
+                    single_line_for_cmd(&text, &run_path)?;
+                }
                 let text = if args.is_empty() {
                     text
                 } else {
                     // Appending to the last line keeps multi-line scripts valid shell.
-                    let quoted: Vec<_> = args.iter().map(|a| shell_quote(a)).collect();
+                    let quoted = args
+                        .iter()
+                        .map(|a| quote_for(shell.kind, a, &run_path))
+                        .collect::<Result<Vec<_>, _>>()?;
                     format!("{} {}", text.trim_end(), quoted.join(" "))
                 };
-                (
-                    vec!["/bin/sh".to_owned(), "-c".to_owned(), text],
-                    drafted_cwd,
-                )
+                if shell.is_fallback() {
+                    notes.push(CMD_FALLBACK_NOTE.to_owned());
+                }
+                shell_env.clone_from(&shell.env);
+                (shell.argv(&text), drafted_cwd)
             }
             DraftCommand::Argv(mut argv) => {
                 argv.extend(args);
@@ -720,7 +735,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
         };
         let mut client = input.client_env.clone();
         for key in remove.iter().chain(&secrets.remove) {
-            client.remove(key);
+            env::remove(&mut client, key);
         }
         if !secrets.files.is_empty() {
             let keys: Vec<_> = secrets.files.keys().map(String::as_str).collect();
@@ -730,6 +745,11 @@ impl<E: Extensions> Planner<'_, '_, E> {
             ));
         }
         let mut devlanes = self.devlanes.clone();
+        // What the shell itself needs (MSYS_NO_PATHCONV for Git's sh) sits with
+        // the devlanes variables, so `env --explain` shows where it came from;
+        // `shell_env` keeps it out of what `devlanes env` exports.
+        let shell_names: BTreeSet<String> = shell_env.keys().cloned().collect();
+        devlanes.extend(shell_env);
         if let (UnitKind::Service, Some(layout)) = (spec.kind, spec.layout) {
             devlanes.insert("PORT".into(), layout.port.to_string());
             devlanes.insert("HOST".into(), "127.0.0.1".into());
@@ -739,7 +759,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             }
             devlanes.insert("DEVLANES_ORIGINS".into(), self.origins.clone());
         }
-        let env = assemble([
+        let mut env = assemble([
             (EnvLayer::Client, client),
             (EnvLayer::Contributor, contributed),
             (EnvLayer::Secrets, secrets.set.clone()),
@@ -749,6 +769,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
             (EnvLayer::Profile, profile),
             (EnvLayer::Override, input.overrides.clone()),
         ]);
+        env.shell_env = shell_names;
         Ok(Launch {
             program: program.clone(),
             args: rest.to_vec(),
@@ -805,13 +826,15 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let facts = self.input.facts;
         let path = format!("{path}.sync");
         let home = || {
-            self.input
-                .client_env
-                .get("HOME")
-                .map(PathBuf::from)
-                .ok_or_else(|| {
-                    ResolveError::invalid(&path, "HOME is not set in the client environment")
-                })
+            devlanes_core::paths::client_home(self.input.client_env).ok_or_else(|| {
+                ResolveError::invalid(
+                    &path,
+                    format!(
+                        "{} is not set in the client environment",
+                        devlanes_core::paths::HOME_VAR
+                    ),
+                )
+            })
         };
         let mut specs = Vec::new();
         for entry in entries {
@@ -837,7 +860,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
                     })?;
                     home()?
                         .join("devlanes/sync")
-                        .join(&self.input.config.project)
+                        .join(devlanes_core::paths::disk_name(&self.input.config.project))
                         .join(&facts.name)
                         .join(leaf)
                 }
@@ -899,7 +922,7 @@ fn env_map(
         let value = value
             .evaluate(context)
             .map_err(|e| ResolveError::expression(format!("{path}.{key}"), e))?;
-        result.insert(key.clone(), value.to_string());
+        env::insert(&mut result, key.clone(), value.to_string());
     }
     Ok(result)
 }
@@ -932,19 +955,58 @@ fn duration(
         .transpose()
 }
 
-/// Renders a `run` value as one shell command line.
-fn shell_line(run: &Run, context: &ExpressionContext, path: &str) -> Result<String, ResolveError> {
+/// Launch note for `run:` strings that go through the `cmd.exe` fallback.
+const CMD_FALLBACK_NOTE: &str = "runs with cmd.exe: Git for Windows' sh.exe was not found, and POSIX syntax may fail there. Install Git for Windows, then run `devlanes daemon restart`.";
+
+/// Fails shell text with more than one line under the `cmd.exe` fallback:
+/// `cmd /c` runs only the first line, and arguments appended to the text
+/// would land on the last one, so the rest would silently never run.
+fn single_line_for_cmd(text: &str, path: &str) -> Result<(), ResolveError> {
+    if text.trim_end().contains(['\r', '\n']) {
+        return Err(ResolveError::invalid(path, crate::shell::CMD_MULTILINE));
+    }
+    Ok(())
+}
+
+/// Quotes one argument appended to shell text for `kind`. `cmd.exe` cannot take
+/// some characters safely, so those fail the unit instead of running something else.
+fn quote_for(kind: ShellKind, value: &str, path: &str) -> Result<String, ResolveError> {
+    match kind {
+        ShellKind::Posix => Ok(shell_quote(value)),
+        ShellKind::Cmd => cmd_quote(value).ok_or_else(|| {
+            // The value stays out of the message: arguments can carry secrets.
+            ResolveError::invalid(
+                path,
+                "an argument contains characters cmd.exe cannot take safely (\", %, ! or a line break); install Git for Windows so run strings use sh",
+            )
+        }),
+    }
+}
+
+/// Renders a `run` value as one command line for `kind`.
+fn shell_line(
+    run: &Run,
+    kind: ShellKind,
+    context: &ExpressionContext,
+    path: &str,
+) -> Result<String, ResolveError> {
     match run {
-        Run::Shell(text) => text
-            .evaluate(context)
-            .map_err(|e| ResolveError::expression(path, e)),
+        Run::Shell(text) => {
+            let text = text
+                .evaluate(context)
+                .map_err(|e| ResolveError::expression(path, e))?;
+            if kind == ShellKind::Cmd {
+                single_line_for_cmd(&text, path)?;
+            }
+            Ok(text)
+        }
         Run::Argv(items) => {
             let mut words = Vec::new();
             for item in items {
                 let word = item
                     .evaluate(context)
                     .map_err(|e| ResolveError::expression(path, e))?;
-                words.push(shell_quote(&word));
+                words.push(quote_for(kind, &word, path)?);
             }
             Ok(words.join(" "))
         }
@@ -954,10 +1016,12 @@ fn shell_line(run: &Run, context: &ExpressionContext, path: &str) -> Result<Stri
 /// Converts `infra.containers.<name>.ready` (`path` is that key). `None` for
 /// `started`, which `up` already waits for. Port names stay unresolved: the
 /// container's host ports are allocated with its infra. An http-specific
-/// timeout wins over the check-level one.
+/// timeout wins over the check-level one. A `cmd` check runs on the host with
+/// `shell`, which decides how an argv form is quoted.
 pub fn container_ready(
     config: &ReadyConfig,
     cwd: &Path,
+    shell: ShellKind,
     context: &ExpressionContext,
     path: &str,
 ) -> Result<Option<crate::ContainerReady>, ResolveError> {
@@ -1005,7 +1069,7 @@ pub fn container_ready(
         }
     } else if let Some(cmd) = &check.cmd {
         ContainerCheck::Cmd {
-            shell: shell_line(cmd, context, path)?,
+            shell: shell_line(cmd, shell, context, path)?,
             cwd: cwd.to_path_buf(),
         }
     } else {
@@ -1018,11 +1082,12 @@ pub fn container_ready(
 }
 
 /// Converts the effective `ready` config. An http-specific timeout wins over the
-/// check-level one.
+/// check-level one; a `cmd` argv form is quoted for `shell`.
 fn ready(
     config: &ReadyConfig,
     layout: &ServiceLayout,
     cwd: &Path,
+    shell: ShellKind,
     context: &ExpressionContext,
     path: &str,
 ) -> Result<Ready, ResolveError> {
@@ -1079,7 +1144,7 @@ fn ready(
         }
     } else if let Some(cmd) = &check.cmd {
         ReadySpec::Cmd {
-            shell: shell_line(cmd, context, &path)?,
+            shell: shell_line(cmd, shell, context, &path)?,
             cwd: cwd.to_path_buf(),
         }
     } else {
@@ -1102,7 +1167,7 @@ fn stop_policy(
         return Ok(policy);
     };
     if let Some(signal) = &stop.signal {
-        policy.signal = signal_number(signal).ok_or_else(|| {
+        policy.signal = StopSignal::from_config_name(signal).ok_or_else(|| {
             ResolveError::invalid(
                 format!("{path}.stop.signal"),
                 format!("unsupported signal `{signal}`"),

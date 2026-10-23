@@ -113,9 +113,11 @@ fn missing_and_unverifiable_recipes() {
         ],
     );
     let error = plan(&request(temp.path(), "justfile", "seed", &[])).expect_err("missing recipe");
+    // The message shows the host's absolute path; only the shape is checked.
     let message = error
         .to_string()
-        .replace(&temp.path().display().to_string(), "<lane>");
+        .replace(&temp.path().display().to_string(), "<lane>")
+        .replace('\\', "/");
     insta::assert_snapshot!(message, @"`<lane>/justfile` has no recipe `seed` (recipes: deploy, dev, fixtures, serve)");
     let plan = plan(&request(temp.path(), "imports/justfile", "seed", &[])).expect("plan");
     assert_eq!(

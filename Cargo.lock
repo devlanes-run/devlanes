@@ -924,6 +924,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "base64 0.22.1",
  "bollard",
  "bytes",
  "crossterm",
@@ -934,6 +935,7 @@ dependencies = [
  "devlanes-daemon",
  "devlanes-env-direnv",
  "devlanes-env-mise",
+ "devlanes-hosts-service",
  "devlanes-infra-compose",
  "devlanes-infra-docker",
  "devlanes-ipc",
@@ -941,6 +943,7 @@ dependencies = [
  "devlanes-metrics-docker",
  "devlanes-metrics-linux",
  "devlanes-metrics-macos",
+ "devlanes-metrics-windows",
  "devlanes-pki",
  "devlanes-platform-bun",
  "devlanes-platform-deno",
@@ -962,6 +965,7 @@ dependencies = [
  "devlanes-run-script-npm",
  "devlanes-run-script-python",
  "devlanes-runner-pty",
+ "devlanes-runner-windows",
  "devlanes-secrets-fnox",
  "devlanes-start-gate",
  "devlanes-state",
@@ -972,10 +976,12 @@ dependencies = [
  "devlanes-trust",
  "devlanes-trust-linux",
  "devlanes-trust-macos",
+ "devlanes-trust-windows",
  "devlanes-tui",
  "devlanes-tunnel",
  "futures-util",
  "rustix",
+ "schannel",
  "serde_json",
  "tempfile",
  "tokio",
@@ -983,6 +989,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "webpki-root-certs",
 ]
 
 [[package]]
@@ -990,8 +997,10 @@ name = "devlanes-cli"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "clap",
  "clap_complete",
+ "devlanes-core",
  "devlanes-proto",
  "devlanes-term",
  "insta",
@@ -1011,6 +1020,8 @@ dependencies = [
  "bytes",
  "devlanes-ipc",
  "devlanes-proto",
+ "devlanes-sys",
+ "dunce",
  "rustix",
  "serde",
  "serde_json",
@@ -1024,10 +1035,12 @@ dependencies = [
 name = "devlanes-config"
 version = "0.2.0"
 dependencies = [
+ "devlanes-core",
  "devlanes-preset-next",
  "devlanes-preset-tauri",
  "devlanes-preset-vite",
  "devlanes-preset-wrangler",
+ "devlanes-sys",
  "globset",
  "indexmap",
  "insta",
@@ -1079,13 +1092,14 @@ dependencies = [
  "devlanes-resolver-dns",
  "devlanes-resolver-hosts",
  "devlanes-runner-pty",
+ "devlanes-runner-windows",
  "devlanes-start-gate",
  "devlanes-state",
  "devlanes-sync",
  "devlanes-sys",
  "devlanes-transport",
  "devlanes-tunnel",
- "fs2",
+ "dunce",
  "futures-util",
  "globset",
  "indexmap",
@@ -1107,12 +1121,14 @@ dependencies = [
 name = "devlanes-e2e"
 version = "0.2.0"
 dependencies = [
+ "devlanes-sys",
  "devlanes-testing",
  "portable-pty",
  "rustix",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "vt100",
 ]
 
@@ -1122,6 +1138,8 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
+ "devlanes-sys",
+ "devlanes-testing",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1134,6 +1152,8 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
+ "devlanes-sys",
+ "devlanes-testing",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1144,6 +1164,9 @@ dependencies = [
 name = "devlanes-git"
 version = "0.2.0"
 dependencies = [
+ "devlanes-core",
+ "devlanes-sys",
+ "dunce",
  "notify",
  "serde",
  "tempfile",
@@ -1159,9 +1182,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-hosts-service"
+version = "0.2.0"
+dependencies = [
+ "devlanes-hosts-helper",
+ "devlanes-sys",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "windows-service",
+]
+
+[[package]]
 name = "devlanes-infra-compose"
 version = "0.2.0"
 dependencies = [
+ "devlanes-sys",
  "serde",
  "serde_json",
  "tempfile",
@@ -1190,11 +1226,25 @@ version = "0.2.0"
 dependencies = [
  "bytes",
  "devlanes-proto",
+ "devlanes-sys",
  "futures-util",
+ "rustix",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "devlanes-logon-launcher"
+version = "0.2.0"
+dependencies = [
+ "devlanes-client",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1202,6 +1252,7 @@ name = "devlanes-logs"
 version = "0.2.0"
 dependencies = [
  "devlanes-proto",
+ "devlanes-sys",
  "grep-regex",
  "grep-searcher",
  "jiff",
@@ -1267,9 +1318,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-metrics-windows"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "devlanes-core",
+ "devlanes-metrics",
+ "devlanes-sys",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "devlanes-pki"
 version = "0.2.0"
 dependencies = [
+ "devlanes-sys",
  "fs2",
  "rcgen",
  "rustix",
@@ -1410,6 +1474,7 @@ dependencies = [
  "arc-swap",
  "bytes",
  "devlanes-pki",
+ "devlanes-sys",
  "futures-util",
  "http-body-util",
  "hyper",
@@ -1453,6 +1518,7 @@ dependencies = [
 name = "devlanes-resolver-dns"
 version = "0.2.0"
 dependencies = [
+ "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
@@ -1465,6 +1531,8 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "devlanes-hosts-helper",
+ "devlanes-hosts-service",
+ "devlanes-sys",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -1567,11 +1635,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-runner-windows"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "devlanes-core",
+ "devlanes-sys",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "devlanes-secrets-fnox"
 version = "0.2.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
+ "devlanes-sys",
+ "devlanes-testing",
  "serde",
  "serde_json",
  "tempfile",
@@ -1611,6 +1695,8 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "bytes",
+ "devlanes-core",
+ "devlanes-sys",
  "globset",
  "hex",
  "notify",
@@ -1630,8 +1716,12 @@ version = "0.2.0"
 dependencies = [
  "devlanes-core",
  "libc",
+ "rcgen",
  "rustix",
+ "tempfile",
  "thiserror 2.0.21",
+ "tokio",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1639,8 +1729,10 @@ name = "devlanes-term"
 version = "0.2.0"
 dependencies = [
  "devlanes-proto",
+ "devlanes-sys",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -1649,9 +1741,11 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "clap",
+ "crossterm",
  "futures-util",
  "humantime",
  "rustix",
+ "serde",
  "serde_json",
  "socket2",
  "tempfile",
@@ -1681,7 +1775,11 @@ name = "devlanes-transport-ssh"
 version = "0.2.0"
 dependencies = [
  "async-trait",
+ "devlanes-ipc",
+ "devlanes-sys",
+ "devlanes-testing",
  "devlanes-transport",
+ "getrandom 0.3.4",
  "openssh",
  "serde",
  "serde_json",
@@ -1689,6 +1787,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -1715,6 +1814,7 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "devlanes-pki",
+ "devlanes-sys",
  "devlanes-trust",
  "rustix",
  "tempfile",
@@ -1733,6 +1833,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "devlanes-trust-windows"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "devlanes-pki",
+ "devlanes-sys",
+ "devlanes-trust",
+ "rcgen",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "devlanes-tui"
 version = "0.2.0"
 dependencies = [
@@ -1746,6 +1859,7 @@ dependencies = [
  "devlanes-config",
  "devlanes-core",
  "devlanes-proto",
+ "devlanes-sys",
  "devlanes-term",
  "futures-util",
  "insta",
@@ -1885,6 +1999,12 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
+
+[[package]]
+name = "dunce"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
 
 [[package]]
 name = "dyn-clone"
@@ -4194,6 +4314,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "schannel"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cb23c424d8ee841bb4d813677ca237e2a610067d594fec130f87d6093495ab5"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "schemars"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5457,6 +5586,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-root-certs"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "wezterm-bidi"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5529,6 +5667,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5564,6 +5708,17 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-service"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "857224b3b211c6f3616921f081ee54721ee3ad2ace2fac6a6337e032f7b4dcf2"
+dependencies = [
+ "bitflags 2.13.2",
+ "widestring",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "windows-sys"

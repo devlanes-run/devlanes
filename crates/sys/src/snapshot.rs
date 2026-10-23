@@ -1,4 +1,4 @@
-//! Process-table snapshots shared by all units in this process.
+//! Process-table snapshots shared by every caller in this process.
 //!
 //! Scans are coalesced: a caller that needs a fresh table waits for a scan that
 //! started after its request, and every caller waiting at that point shares it. So
@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use devlanes_sys::ProcessInfo;
+use crate::{Error, ProcessInfo};
 
 /// A completed scan, or its error message (shared by every waiter).
 type ScanResult = Result<Arc<Vec<ProcessInfo>>, Arc<str>>;
@@ -42,7 +42,7 @@ fn lock() -> MutexGuard<'static, State> {
 /// started after this call; concurrent callers share it.
 ///
 /// Blocking: call from `spawn_blocking`.
-pub(crate) fn processes(max_age: Duration) -> Result<Arc<Vec<ProcessInfo>>, devlanes_sys::Error> {
+pub fn shared_processes(max_age: Duration) -> Result<Arc<Vec<ProcessInfo>>, Error> {
     let mut state = lock();
     if !max_age.is_zero()
         && let Some((taken, Ok(snapshot))) = &state.last
@@ -59,7 +59,7 @@ pub(crate) fn processes(max_age: Duration) -> Result<Arc<Vec<ProcessInfo>>, devl
         {
             return result
                 .clone()
-                .map_err(|message| devlanes_sys::Error::Io(io::Error::other(message.to_string())));
+                .map_err(|message| Error::Io(io::Error::other(message.to_string())));
         }
         if !state.scanning {
             state.started += 1;
@@ -71,7 +71,7 @@ pub(crate) fn processes(max_age: Duration) -> Result<Arc<Vec<ProcessInfo>>, devl
             std::thread::sleep(Duration::from_millis(
                 SCAN_DELAY_MS.load(std::sync::atomic::Ordering::Relaxed),
             ));
-            let result = devlanes_sys::processes().map(Arc::new);
+            let result = crate::processes().map(Arc::new);
             std::mem::forget(guard);
             state = lock();
             state.scanning = false;
@@ -95,8 +95,9 @@ pub(crate) fn processes(max_age: Duration) -> Result<Arc<Vec<ProcessInfo>>, devl
 static SCAN_DELAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Number of scans started so far, for tests that count scans.
-#[cfg(test)]
-pub(crate) fn scans_started() -> u64 {
+// Public only because runner tests in other crates count scans; not API.
+#[doc(hidden)]
+pub fn scans_started() -> u64 {
     lock().started
 }
 
@@ -128,7 +129,7 @@ mod tests {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    processes(Duration::ZERO)
+                    shared_processes(Duration::ZERO)
                 })
             })
             .collect();

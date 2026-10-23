@@ -9,6 +9,13 @@ use devlanes_pki::{
 
 type Result<T = ()> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// The variable naming the account that creates a root.
+#[cfg(unix)]
+const USER_VAR: &str = "USER";
+/// Windows always sets `USERNAME`; `USER` there may come from Git Bash.
+#[cfg(windows)]
+const USER_VAR: &str = "USERNAME";
+
 /// Persistent roots survive restarts without changing their trust identity.
 #[test]
 fn persists_ca_and_protects_key() -> Result {
@@ -68,7 +75,7 @@ fn ca_subject_and_url() -> Result {
     let ou = ou.ok_or("missing OU")?;
     let (user, host) = ou.split_once('@').ok_or("OU is not user@host")?;
     assert!(!user.is_empty() && !host.is_empty(), "{ou}");
-    if let Ok(expected) = std::env::var("USER")
+    if let Ok(expected) = std::env::var(USER_VAR)
         && !expected.is_empty()
     {
         assert_eq!(user, expected);
@@ -294,7 +301,6 @@ fn imports_mkcert_layout() -> Result {
 /// A root without name constraints (what mkcert makes) permits any name.
 #[test]
 fn unconstrained_roots_report_no_permitted_names() -> Result {
-    use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir()?;
     let key = rcgen::KeyPair::generate()?;
     let mut params = rcgen::CertificateParams::new(Vec::<String>::new())?;
@@ -307,7 +313,11 @@ fn unconstrained_roots_report_no_permitted_names() -> Result {
     let key_path = directory.path().join("rootCA-key.pem");
     fs::write(directory.path().join("rootCA.pem"), cert.pem())?;
     fs::write(&key_path, key.serialize_pem())?;
-    fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
+    }
     let ca = CertificateAuthority::from_mkcert(directory.path())?;
     assert_eq!(ca.permitted_dns_names(), None);
     Ok(())
@@ -394,5 +404,214 @@ fn refuses_exposed_or_symlink_keys() -> Result {
         CertificateAuthority::load_or_create(&path),
         Err(devlanes_pki::Error::InsecurePath)
     ));
+    Ok(())
+}
+
+/// Runs a program with a 30 s limit and reports whether it succeeded.
+#[cfg(windows)]
+fn run(program: &str, args: &[&std::ffi::OsStr]) -> Result<bool> {
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .spawn()?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status.success());
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill()?;
+            child.wait()?;
+            return Err(format!("{program} timed out").into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// A junction in place of the CA directory (creating one needs no privilege) is
+/// refused for devlanes' own CA and for a mkcert CAROOT, never followed.
+#[cfg(windows)]
+#[test]
+fn refuses_junctioned_ca_directories() -> Result {
+    let directory = tempfile::tempdir()?;
+    let target = directory.path().join("ca");
+    CertificateAuthority::load_or_create(&target)?;
+    fs::copy(target.join("ca.pem"), target.join("rootCA.pem"))?;
+    fs::copy(target.join("ca-key.pem"), target.join("rootCA-key.pem"))?;
+    let link = directory.path().join("link");
+    let mklink: [&std::ffi::OsStr; 6] = [
+        "/d".as_ref(),
+        "/c".as_ref(),
+        "mklink".as_ref(),
+        "/J".as_ref(),
+        link.as_os_str(),
+        target.as_os_str(),
+    ];
+    assert!(run("cmd", &mklink)?, "mklink /J failed");
+    assert!(matches!(
+        CertificateAuthority::load_or_create(&link),
+        Err(devlanes_pki::Error::InsecurePath {
+            problem: devlanes_pki::PathProblem::Link,
+            ..
+        })
+    ));
+    assert!(matches!(
+        CertificateAuthority::from_mkcert(&link),
+        Err(devlanes_pki::Error::InsecurePath {
+            problem: devlanes_pki::PathProblem::Link,
+            ..
+        })
+    ));
+    CertificateAuthority::from_mkcert(&target)?;
+    Ok(())
+}
+
+/// A symlinked key is refused. File symlinks need Developer Mode or the
+/// symlink privilege; without either that half is skipped.
+#[cfg(windows)]
+#[test]
+fn refuses_symlinked_keys() -> Result {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("ca");
+    CertificateAuthority::load_or_create(&path)?;
+    let key = path.join("ca-key.pem");
+    fs::rename(&key, path.join("real-key"))?;
+    match std::os::windows::fs::symlink_file(path.join("real-key"), &key) {
+        Ok(()) => assert!(matches!(
+            CertificateAuthority::load_or_create(&path),
+            Err(devlanes_pki::Error::InsecurePath {
+                problem: devlanes_pki::PathProblem::Link,
+                ..
+            })
+        )),
+        // ERROR_PRIVILEGE_NOT_HELD
+        Err(error) if error.raw_os_error() == Some(1314) => {}
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
+}
+
+/// A CA directory other accounts can open is refused, not tightened: its key
+/// would keep the grant it inherited.
+#[cfg(windows)]
+#[test]
+fn refuses_ca_directories_others_can_open() -> Result {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("ca");
+    CertificateAuthority::load_or_create(&path)?;
+    // Everyone (S-1-1-0), read access, inherited by the key.
+    let grant: [&std::ffi::OsStr; 3] = [
+        path.as_os_str(),
+        "/grant".as_ref(),
+        "*S-1-1-0:(OI)(CI)R".as_ref(),
+    ];
+    assert!(run("icacls", &grant)?, "icacls failed");
+    assert!(matches!(
+        CertificateAuthority::load_or_create(&path),
+        Err(devlanes_pki::Error::InsecurePath {
+            problem: devlanes_pki::PathProblem::Accounts(_),
+            fix: Some(_),
+            ..
+        })
+    ));
+    Ok(())
+}
+
+/// A key with its own grant for Everyone is refused even in a private
+/// directory, with the `icacls` reset that lets it inherit again; after the
+/// reset it loads.
+#[cfg(windows)]
+#[test]
+fn refuses_keys_others_can_open() -> Result {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("ca");
+    CertificateAuthority::load_or_create(&path)?;
+    let key = path.join("ca-key.pem");
+    let grant: [&std::ffi::OsStr; 3] = [key.as_os_str(), "/grant".as_ref(), "*S-1-1-0:R".as_ref()];
+    assert!(run("icacls", &grant)?, "icacls failed");
+    let error = CertificateAuthority::load_or_create(&path).expect_err("an open key loaded");
+    let message = error.to_string();
+    match error {
+        devlanes_pki::Error::InsecurePath {
+            path: refused,
+            problem,
+            fix,
+        } => {
+            assert_eq!(refused, key);
+            assert_eq!(
+                problem,
+                devlanes_pki::PathProblem::Accounts(vec!["Everyone (S-1-1-0)".to_owned()])
+            );
+            assert_eq!(fix, Some(format!(r#"icacls "{}" /reset"#, key.display())));
+            assert!(
+                message.contains("other accounts can open it: Everyone (S-1-1-0); fix: icacls"),
+                "{message}"
+            );
+        }
+        other => return Err(format!("{other:?}").into()),
+    }
+    let reset: [&std::ffi::OsStr; 2] = [key.as_os_str(), "/reset".as_ref()];
+    assert!(run("icacls", &reset)?, "icacls failed");
+    CertificateAuthority::load_or_create(&path)?;
+    Ok(())
+}
+
+/// A key with a second name (hard link) is refused: the other name could sit in
+/// a directory others can open.
+#[cfg(windows)]
+#[test]
+fn refuses_hard_linked_keys() -> Result {
+    let directory = tempfile::tempdir()?;
+    let path = directory.path().join("ca");
+    CertificateAuthority::load_or_create(&path)?;
+    fs::hard_link(path.join("ca-key.pem"), directory.path().join("copy.pem"))?;
+    assert!(matches!(
+        CertificateAuthority::load_or_create(&path),
+        Err(devlanes_pki::Error::InsecurePath {
+            problem: devlanes_pki::PathProblem::HardLinks(2),
+            ..
+        })
+    ));
+    Ok(())
+}
+
+/// A mkcert CAROOT outside the profile inherits `Authenticated Users` (as under
+/// a drive root): refused, naming the group, with the daemon's `icacls` fix for
+/// the directory.
+#[cfg(windows)]
+#[test]
+fn refuses_mkcert_caroots_authenticated_users_can_open() -> Result {
+    let directory = tempfile::tempdir()?;
+    let generated = directory.path().join("generated");
+    CertificateAuthority::load_or_create(&generated)?;
+    let caroot = directory.path().join("mkcert");
+    fs::create_dir(&caroot)?;
+    // Authenticated Users (S-1-5-11), read access, inherited by what is created inside.
+    let grant: [&std::ffi::OsStr; 3] = [
+        caroot.as_os_str(),
+        "/grant".as_ref(),
+        "*S-1-5-11:(OI)(CI)R".as_ref(),
+    ];
+    assert!(run("icacls", &grant)?, "icacls failed");
+    fs::copy(generated.join("ca.pem"), caroot.join("rootCA.pem"))?;
+    fs::copy(generated.join("ca-key.pem"), caroot.join("rootCA-key.pem"))?;
+    match CertificateAuthority::from_mkcert(&caroot) {
+        Err(devlanes_pki::Error::InsecurePath { path, problem, fix }) => {
+            assert_eq!(path, caroot);
+            assert_eq!(
+                problem,
+                devlanes_pki::PathProblem::Accounts(vec![
+                    "Authenticated Users (S-1-5-11)".to_owned()
+                ])
+            );
+            let fix = fix.ok_or("no fix")?;
+            let expected = format!(r#"icacls "{}" /inheritance:r /grant:r"#, caroot.display());
+            assert!(fix.starts_with(&expected), "{fix}");
+            assert!(fix.contains(r#"/remove:g "*S-1-5-11""#), "{fix}");
+            assert!(fix.ends_with("/reset /T /C"), "{fix}");
+        }
+        other => return Err(format!("{other:?}").into()),
+    }
     Ok(())
 }

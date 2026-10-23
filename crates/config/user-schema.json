@@ -710,7 +710,7 @@
         },
         "trust": {
           "default": [],
-          "description": "Trust stores that should accept the local CA; mobile targets are ignored with a warning for now.",
+          "description": "Trust stores that should accept the local CA; unset means system, plus windows inside WSL with interop on. Mobile targets are ignored with a warning for now.",
           "examples": [
             [
               "system",
@@ -718,6 +718,10 @@
             ],
             [
               "chrome"
+            ],
+            [
+              "system",
+              "windows"
             ]
           ],
           "items": {
@@ -727,6 +731,7 @@
               "system",
               "firefox",
               "chrome",
+              "windows",
               "ios-simulator",
               "android-emulator"
             ]
@@ -742,6 +747,7 @@
         "system",
         "firefox",
         "chrome",
+        "windows",
         "ios-simulator",
         "android-emulator"
       ],
@@ -767,6 +773,14 @@
           "description": "Trust the local CA in Chrome's certificate database where required.",
           "examples": [
             "chrome"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "windows",
+          "description": "Trust the local CA in the Windows user certificate store, for Windows browsers; from inside WSL, or on Windows, where it is the system store.",
+          "examples": [
+            "windows"
           ],
           "type": "string"
         },

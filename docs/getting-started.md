@@ -8,7 +8,7 @@ devlanes runs a project's dev services once per Git worktree. Each worktree is a
 brew install devlanes-run/tap/devlanes
 ```
 
-The [README](../README.md#install) lists the npm, cargo and `install.sh` options and the source build. devlanes runs on macOS and Linux.
+The [README](../README.md#install) lists the npm, cargo and `install.sh` options and the source build. devlanes runs on macOS, Linux and Windows 11; on Windows, [Windows](guides/windows.md) covers install and setup.
 
 ## First config
 
@@ -64,6 +64,8 @@ A worktree becomes a lane the first time devlanes runs in it (here, `start`), or
 
 To run a folder twice, for example with two profiles, `devlanes lane new --name review` in it adds a second lane with its own index, ports and domain. `--lane review` addresses it; commands run in the folder keep using its first lane.
 
+On Windows, run `devlanes stop` in the worktree before `git worktree remove`. Windows cannot delete a directory that a running process uses as its working directory, so while units run Git for Windows asks `Deletion of directory '...' failed. Should I try again? (y/n)` for each such directory; answer `n`. Git then deletes what it can and its own record of the worktree, which is what tells the daemon the worktree is gone: it counts the worktree as removed and stops its lane. Delete the leftover directory once it has.
+
 ## HTTPS and certificates
 
 The proxy serves `https://api.acme.localhost` and the other hostnames on port 443, or 8443 when 443 cannot be bound. Browsers resolve `*.localhost` to your machine without any setup. To make browsers and command-line tools accept the certificates, trust the devlanes CA once:
@@ -75,6 +77,8 @@ devlanes doctor                 # checks the daemon, Docker, proxy, CA and hosts
 ```
 
 Node and Python services get the CA through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` without trusting it system-wide.
+
+On Windows only browsers resolve `*.localhost` on their own; Node, Python, Go and test runners need `devlanes certs trust --hosts`. There it installs a small Windows service, `devlanes-hosts`, which writes the lane hostnames to `C:\Windows\System32\drivers\etc\hosts` for you and nobody else. Windows asks for administrator approval once, so run it from a normal terminal, not from an agent or over SSH. `devlanes certs untrust --hosts` removes the names and the service.
 
 ## TUI
 
@@ -120,7 +124,7 @@ For more detail in the daemon's log, restart it with a level: `DEVLANES_LOG=debu
 
 - [CLI reference](reference/cli.md): every command and option.
 - [Config reference](reference/config.md): every field of `devlanes.yaml` and the user `config.yaml`.
-- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [terminals](guides/terminals.md), [remote setup](guides/remote-setup.md).
+- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [terminals](guides/terminals.md), [remote setup](guides/remote-setup.md), [Windows](guides/windows.md), [Windows (WSL2)](guides/wsl.md).
 - [Remote boxes](remote.md): run lanes on another machine and use them locally.
 - [Design](design.md): lanes, ports, the daemon and startup order.
 - [Observability](observability.md): the daemon's spans and diagnostics, and plans for tracing and benchmarks.

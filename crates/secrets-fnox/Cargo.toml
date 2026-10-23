@@ -10,11 +10,13 @@ publish.workspace = true
 [dependencies]
 async-trait.workspace = true
 devlanes-core = { path = "../core" }
+devlanes-sys = { path = "../sys" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+devlanes-testing = { path = "../testing" }
 tempfile.workspace = true
 
 [lints]

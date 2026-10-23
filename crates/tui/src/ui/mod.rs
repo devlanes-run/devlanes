@@ -212,7 +212,7 @@ pub(crate) struct Look {
 /// How a unit's state is drawn, by its role (visual.md's glyph table).
 pub(crate) fn unit_look(theme: &Theme, unit: &UnitSummary, spin: u64) -> Look {
     let task = matches!(tree::role(unit), Role::Task | Role::Setup | Role::Teardown);
-    let exit = unit.exit_code.map(|code| format!("exit {code}"));
+    let exit = unit.exit_code.map(crate::words::exit_short);
     let look = |glyph, tone, word: &str, word_tone, detail: Option<String>| Look {
         glyph,
         tone,
@@ -330,7 +330,7 @@ pub(crate) fn task_look(theme: &Theme, info: Option<&crate::api::TaskInfo>, spin
         Some("failed") => {
             let exit = run
                 .and_then(|r| r.exit_code)
-                .map(|code| format!("exit {code}"))
+                .map(crate::words::exit_short)
                 .unwrap_or_default();
             look(
                 theme.glyph(Glyph::Failed),
@@ -1133,4 +1133,55 @@ pub(crate) fn target_error<'a>(
         None => Target::Lane(lane.into()),
     };
     app.target_error(&target)
+}
+
+/// `path` with the user's `home` written as `~` (`~\.devlanes\state.db`),
+/// for the daemon tab and the options page on Windows, where the prefix
+/// matches without case, with either separator and by whole components.
+/// Paths outside the home are left as they are.
+#[cfg(windows)]
+pub fn home_short(home: Option<&std::path::Path>, path: &str) -> String {
+    let rest = home
+        .filter(|home| !home.as_os_str().is_empty())
+        .and_then(|home| devlanes_core::paths::strip_path_prefix(std::path::Path::new(path), home));
+    match rest {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => std::path::Path::new("~").join(rest).display().to_string(),
+        None => path.to_owned(),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use std::path::Path;
+
+    use super::home_short;
+
+    #[test]
+    fn the_windows_home_is_shortened_ignoring_case_and_separators() {
+        let home = Some(Path::new(r"C:\Users\acme"));
+        assert_eq!(
+            home_short(home, r"c:\users\ACME\.devlanes\state.db"),
+            r"~\.devlanes\state.db"
+        );
+        assert_eq!(
+            home_short(
+                Some(Path::new("C:/Users/acme/")),
+                r"C:\Users\acme\.devlanes"
+            ),
+            r"~\.devlanes"
+        );
+        assert_eq!(home_short(home, r"C:\Users\acme"), "~");
+        assert_eq!(home_short(home, r"C:\Users\acme2\x"), r"C:\Users\acme2\x");
+        assert_eq!(home_short(None, r"C:\Users\acme\x"), r"C:\Users\acme\x");
+        assert_eq!(home_short(Some(Path::new("")), r"C:\x"), r"C:\x");
+        // The daemon's named pipe is never under the home.
+        let pipe = r"\\.\pipe\devlanes-0123";
+        assert_eq!(home_short(home, pipe), pipe);
+        // Git Bash's HOME never matches a native path.
+        assert_eq!(
+            home_short(Some(Path::new("/c/Users/acme")), r"C:\Users\acme\x"),
+            r"C:\Users\acme\x"
+        );
+    }
 }

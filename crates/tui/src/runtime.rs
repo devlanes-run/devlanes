@@ -158,7 +158,7 @@ where
     B::Error: Send + Sync + 'static,
     E: Stream<Item = io::Result<TermEvent>> + Unpin,
 {
-    run_loop(terminal, api, options, events, clipboard, None)
+    run_loop(terminal, api, options, events, clipboard, None, false)
         .await
         .map(drop)
 }
@@ -178,7 +178,39 @@ where
     B::Error: Send + Sync + 'static,
     E: Stream<Item = io::Result<TermEvent>> + Unpin,
 {
-    let app = run_loop(terminal, api, options, events, clipboard, Some(start)).await?;
+    let app = run_loop(
+        terminal,
+        api,
+        options,
+        events,
+        clipboard,
+        Some(start),
+        false,
+    )
+    .await?;
+    Ok(app.start_exit().unwrap_or(StartExit::Pending))
+}
+
+/// [`drive`] or, with `start`, [`drive_start`] on the process's own terminal,
+/// for [`crate::run_with`] and [`crate::run_start`]: OSC sequences go to
+/// stdout, and copies go to the system clipboard where
+/// [`system_clipboard::usable`] says so. Tests use the other two, which never
+/// touch the user's clipboard.
+pub(crate) async fn drive_terminal<B, E>(
+    terminal: &mut Terminal<B>,
+    api: Arc<dyn DaemonApi>,
+    options: &Options,
+    events: E,
+    start: Option<StartHandoff>,
+) -> Result<StartExit, Error>
+where
+    B: Backend,
+    B::Error: Send + Sync + 'static,
+    E: Stream<Item = io::Result<TermEvent>> + Unpin,
+{
+    let system = system_clipboard::usable(|key| options.var(key));
+    let stdout = Box::new(io::stdout());
+    let app = run_loop(terminal, api, options, events, stdout, start, system).await?;
     Ok(app.start_exit().unwrap_or(StartExit::Pending))
 }
 
@@ -195,7 +227,8 @@ async fn next_start(start: &mut Option<mpsc::Receiver<StartFrame>>) -> StartFram
 }
 
 /// The event loop behind [`drive`] and [`drive_start`]; returns the app as it
-/// was when the user quit.
+/// was when the user quit. Copies use the system clipboard when
+/// `system_clipboard`, else OSC 52 written to `clipboard`.
 async fn run_loop<B, E>(
     terminal: &mut Terminal<B>,
     api: Arc<dyn DaemonApi>,
@@ -203,6 +236,7 @@ async fn run_loop<B, E>(
     mut events: E,
     clipboard: Box<dyn Write + Send>,
     start: Option<StartHandoff>,
+    system_clipboard: bool,
 ) -> Result<App, Error>
 where
     B: Backend,
@@ -218,12 +252,18 @@ where
         .clone()
         .unwrap_or_else(jiff::tz::TimeZone::system);
     app.service_report = options.service.clone();
-    app.user_home = options.var("HOME").map(std::path::PathBuf::from);
+    // `USERPROFILE` on Windows: Git Bash's `HOME` (`/c/Users/acme`) never
+    // matches the native paths the daemon reports.
+    app.user_home = options
+        .var(devlanes_core::paths::HOME_VAR)
+        .map(std::path::PathBuf::from);
+    app.system_clipboard = system_clipboard;
     if let Some(cwd) = options.cwd.clone().or_else(|| std::env::current_dir().ok()) {
         app.prefer_path(cwd);
     }
     let (sender, mut receiver) = mpsc::channel(MESSAGE_QUEUE);
     let mut executor = Executor::new(api, sender, options, clipboard);
+    executor.system_clipboard = system_clipboard;
     for effect in app.start() {
         executor.execute(effect);
     }
@@ -309,11 +349,69 @@ fn backend_error<E: std::error::Error + Send + Sync + 'static>(error: E) -> Erro
 /// Maps crossterm events; key releases are dropped (kitty protocol reports them).
 fn terminal_msg(event: TermEvent) -> Option<Msg> {
     match event {
-        TermEvent::Key(key) if key.kind != KeyEventKind::Release => Some(Msg::Key(key)),
+        TermEvent::Key(key) if key.kind != KeyEventKind::Release => Some(Msg::Key(altgr(key))),
         TermEvent::Mouse(mouse) => Some(Msg::Mouse(mouse)),
         TermEvent::Paste(text) => Some(Msg::Paste(text)),
         TermEvent::Resize(width, height) => Some(Msg::Resize(width, height)),
         _ => None,
+    }
+}
+
+/// AltGr reaches Windows console programs as Ctrl+Alt with the character it
+/// typed (`@` is AltGr+Q on a German layout), which the app would take for a
+/// Ctrl chord: text fields drop it and units get a control byte. crossterm
+/// reports a real Ctrl+Alt chord with the key's unshifted character, and the
+/// chords programs bind are on letters and digits, so any other character
+/// is taken as typed text.
+#[cfg(windows)]
+fn altgr(mut key: crossterm::event::KeyEvent) -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyCode, KeyModifiers};
+    let chord = KeyModifiers::CONTROL | KeyModifiers::ALT;
+    if let KeyCode::Char(c) = key.code
+        && key.modifiers.contains(chord)
+        && !c.is_ascii_alphanumeric()
+        && c != ' '
+    {
+        key.modifiers.remove(chord);
+    }
+    key
+}
+
+/// Unix terminals resolve AltGr themselves.
+#[cfg(unix)]
+fn altgr(key: crossterm::event::KeyEvent) -> crossterm::event::KeyEvent {
+    key
+}
+
+/// The Windows clipboard for copies: classic console windows drop OSC 52,
+/// and a TUI on this machine shares the clipboard with its terminal anyway.
+#[cfg(windows)]
+mod system_clipboard {
+    /// Whether copies go to this machine's clipboard: not over SSH, where the
+    /// clipboard that matters is the client's and only OSC 52 reaches it.
+    pub fn usable(var: impl Fn(&str) -> Option<String>) -> bool {
+        !["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"]
+            .into_iter()
+            .any(|key| var(key).is_some_and(|value| !value.is_empty()))
+    }
+
+    /// Replaces the clipboard's text; blocks while another program holds it.
+    pub fn set(text: &str) -> std::io::Result<()> {
+        devlanes_sys::windows::clipboard::set_text(text)
+    }
+}
+
+/// Copies always use OSC 52, which also reaches the clipboard over SSH.
+#[cfg(unix)]
+mod system_clipboard {
+    /// Never.
+    pub fn usable(_var: impl Fn(&str) -> Option<String>) -> bool {
+        false
+    }
+
+    /// Unreachable while [`usable`] is false.
+    pub fn set(_text: &str) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
@@ -336,6 +434,8 @@ struct Executor {
     out: ProgressBar<Box<dyn Write + Send>>,
     /// Set inside tmux, whose OSC 52 needs passthrough wrapping.
     in_tmux: bool,
+    /// Copies go to the system clipboard instead of OSC 52.
+    system_clipboard: bool,
     subscription: Option<JoinHandle<()>>,
     attach: Option<(JoinHandle<()>, mpsc::Sender<AttachInput>)>,
     metrics: Option<JoinHandle<()>>,
@@ -363,6 +463,7 @@ impl Executor {
             sender,
             out: ProgressBar::new(clipboard, options.progress),
             in_tmux: options.var("TMUX").is_some(),
+            system_clipboard: false,
             subscription: None,
             attach: None,
             metrics: None,
@@ -608,6 +709,20 @@ impl Executor {
                 });
             }
             Effect::Copy(text) => {
+                // The system clipboard has no size limit of its own.
+                if self.system_clipboard {
+                    // Opening the clipboard waits while another program holds it.
+                    tokio::task::spawn_blocking(move || {
+                        if let Err(error) = system_clipboard::set(&text) {
+                            let msg = Msg::Failed {
+                                what: "copy".into(),
+                                message: error.to_string(),
+                            };
+                            deliver_blocking(&sender, msg);
+                        }
+                    });
+                    return true;
+                }
                 if text.len() > MAX_COPY_BYTES {
                     self.fail(
                         "copy",
@@ -804,6 +919,10 @@ async fn pump_attach(
 
 /// Hands a URL to the desktop's opener.
 fn open_url(url: &str) -> io::Result<()> {
+    // On Windows and inside WSL the browser to open is the Windows one.
+    if let Some(opened) = devlanes_term::open_in_windows_browser(url) {
+        return opened.map_err(io::Error::other);
+    }
     #[cfg(target_os = "macos")]
     let program = "open";
     #[cfg(not(target_os = "macos"))]
@@ -818,5 +937,69 @@ fn open_url(url: &str) -> io::Result<()> {
         Ok(())
     } else {
         Err(io::Error::other(format!("{program} exited with {status}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+
+    fn key(c: char, modifiers: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), modifiers)
+    }
+
+    #[test]
+    fn plain_and_ctrl_keys_pass_unchanged() {
+        let ctrl_alt = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        for event in [
+            key('c', KeyModifiers::CONTROL),
+            key('q', ctrl_alt),
+            key('1', ctrl_alt),
+            key(' ', ctrl_alt),
+            key('!', KeyModifiers::SHIFT),
+            key('@', KeyModifiers::CONTROL),
+        ] {
+            assert_eq!(altgr(event), event);
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn altgr_characters_are_typed_text() {
+        let altgr_q = key('@', KeyModifiers::CONTROL | KeyModifiers::ALT);
+        assert_eq!(altgr(altgr_q), key('@', KeyModifiers::NONE));
+        let shifted = KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SHIFT;
+        assert_eq!(altgr(key('€', shifted)), key('€', KeyModifiers::SHIFT));
+        assert_eq!(
+            altgr(key('{', KeyModifiers::CONTROL | KeyModifiers::ALT)).modifiers,
+            KeyModifiers::NONE
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_copies_use_osc_52() {
+        assert!(!system_clipboard::usable(|_| None));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_copies_use_the_clipboard_outside_ssh() {
+        let usable = |pairs: &[(&str, &str)]| {
+            system_clipboard::usable(|key| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| (*v).to_owned())
+            })
+        };
+        assert!(usable(&[]));
+        assert!(usable(&[("WT_SESSION", "abc")]));
+        assert!(usable(&[("SSH_TTY", "")]));
+        assert!(!usable(&[("SSH_CONNECTION", "10.0.0.2 50000 10.0.0.1 22")]));
+        assert!(!usable(&[("SSH_CLIENT", "10.0.0.2 50000 22")]));
+        assert!(!usable(&[("SSH_TTY", "windows-pty")]));
     }
 }

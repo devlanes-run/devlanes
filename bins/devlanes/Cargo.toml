@@ -16,6 +16,14 @@ bin-dir = "devlanes-{ version }-{ target }/{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 disabled-strategies = ["quick-install"]
 
+# Windows releases are zip archives. devlanes.exe also needs devlanesw.exe and
+# devlanes-hosts-service.exe beside it, which binstall installs from the same archive
+# through the devlanes-logon-launcher and devlanes-hosts-service crates. `cfg(...)`
+# keys need cargo-binstall 1.17 or later; older versions skip them and compile.
+[package.metadata.binstall.overrides.'cfg(windows)']
+pkg-url = "{ repo }/releases/download/v{ version }/devlanes-{ version }-{ target }.zip"
+pkg-fmt = "zip"
+
 [lints]
 workspace = true
 
@@ -23,8 +31,25 @@ workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 devlanes-trust-macos = { path = "../../crates/trust-macos" }
 
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+[target.'cfg(target_os = "linux")'.dependencies]
 devlanes-trust-linux = { path = "../../crates/trust-linux" }
+
+[target.'cfg(unix)'.dependencies]
+devlanes-runner-pty = { path = "../../crates/runner-pty" }
+rustix = { version = "1", features = ["process", "termios"] }
+
+[target.'cfg(windows)'.dependencies]
+# The elevated `__install-hosts-service` subcommand installs and removes it.
+devlanes-hosts-service = { path = "../../crates/hosts-service" }
+devlanes-runner-windows = { path = "../../crates/runner-windows" }
+devlanes-trust-windows = { path = "../../crates/trust-windows" }
+# Windows has no PEM root bundle: bundle.pem is built from Mozilla's roots plus the
+# system certificate store. schannel is what rustls-native-certs reads it with; used
+# directly because that crate prefers SSL_CERT_FILE when set, which may name
+# bundle.pem itself.
+base64.workspace = true
+schannel = "0.1"
+webpki-root-certs.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
@@ -59,6 +84,7 @@ devlanes-metrics = { path = "../../crates/metrics" }
 devlanes-metrics-docker = { path = "../../crates/metrics-docker" }
 devlanes-metrics-linux = { path = "../../crates/metrics-linux" }
 devlanes-metrics-macos = { path = "../../crates/metrics-macos" }
+devlanes-metrics-windows = { path = "../../crates/metrics-windows" }
 devlanes-platform-node = { path = "../../crates/platform-node" }
 devlanes-platform-python = { path = "../../crates/platform-python" }
 devlanes-run-script-cargo = { path = "../../crates/run-script-cargo" }
@@ -77,7 +103,6 @@ devlanes-resolver-hosts = { path = "../../crates/resolver-hosts" }
 devlanes-run-script-just = { path = "../../crates/run-script-just" }
 devlanes-run-script-make = { path = "../../crates/run-script-make" }
 devlanes-run-script-npm = { path = "../../crates/run-script-npm" }
-devlanes-runner-pty = { path = "../../crates/runner-pty" }
 devlanes-start-gate = { path = "../../crates/start-gate" }
 devlanes-state = { path = "../../crates/state" }
 devlanes-sys = { path = "../../crates/sys" }
@@ -90,7 +115,6 @@ anyhow.workspace = true
 async-trait.workspace = true
 bytes.workspace = true
 crossterm = "0.29"
-rustix = { version = "1", features = ["process", "termios"] }
 serde_json.workspace = true
 tempfile.workspace = true
 tokio.workspace = true

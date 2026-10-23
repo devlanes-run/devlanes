@@ -28,6 +28,7 @@ async fn lanes(cwd: &Path) -> Result<(), Error> {
 - `find_config`, `search_config`: the nearest `devlanes.yaml` in `cwd` or its ancestors, never above the repository root; `search_config` also says where a fruitless search stopped.
 - `discover`: the repository's common directory, root, primary branch and worktrees; `None` outside Git.
 - `list` and `parse_porcelain`: the worktree list from `git worktree list --porcelain -z`.
+- `has_git_link`: whether a worktree directory still has its `.git` entry.
 - `add`: `git worktree add` for a new or existing branch, after `git check-ref-format` accepts its name.
 - `watch`: a channel that receives the full worktree list again after each change.
 
@@ -49,6 +50,8 @@ lanes:
 A worktree's `identity` is its administration name under the common Git directory, so `git worktree move` keeps the same lane. The common directory separates independent clones that share a project name. Without an explicit primary branch, `discover` takes origin's default branch, then `main`, then `master`.
 
 `watch` relists on filesystem events and on a timer, because notifications can be dropped.
+
+A worktree is `present` only while its directory holds its `.git` entry (`has_git_link`), and Git is never asked about directories above it. On Windows, `git worktree remove` cannot delete directories that a running process uses as its working directory: Git for Windows asks `Deletion of directory '...' failed. Should I try again? (y/n)`, and after `n` it deletes what it can (not necessarily `.git` first) and the worktree's administration record, then fails. Without the record Git no longer lists the worktree, so it counts as removed whatever is left on disk.
 
 ## License
 

@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 async-trait.workspace = true
 bytes.workspace = true
+devlanes-sys = { path = "../sys" }
 globset = "0.4"
 hex = "0.4"
 notify = "8.2"
@@ -21,6 +22,10 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 walkdir = "2"
+
+# Windows file-name rules for names a box sends.
+[target.'cfg(windows)'.dependencies]
+devlanes-core = { path = "../core" }
 
 [dev-dependencies]
 tempfile.workspace = true

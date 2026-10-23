@@ -9,6 +9,7 @@ mod lanes;
 mod other;
 mod words;
 
+pub(crate) use devlanes_proto::exit::{INTERRUPTED, ctrl_c_exit};
 use devlanes_proto::{Event, LeftProcess, Method, events};
 use serde_json::Value;
 
@@ -175,7 +176,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::Env => other::env(data),
         Method::Url => other::url(data),
         Method::Metrics => other::metrics(data, cx),
-        Method::Subscribe => other::events_page(data),
+        Method::Subscribe => other::events_page(data, cx),
         Method::InfraUp | Method::InfraStatus | Method::InfraDown => other::infra(method, data),
         Method::Doctor => other::doctor(data, cx),
         Method::ConfigCheck => other::config_check(data, cx),
@@ -219,7 +220,7 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
             &text(&event.data, "code"),
             &event.data,
         ))],
-        _ => vec![other::event_line(event)],
+        _ => vec![other::event_line(event, cx)],
     }
 }
 
@@ -274,6 +275,30 @@ pub(crate) fn text(value: &Value, key: &str) -> String {
         .and_then(Value::as_str)
         .map(clean)
         .unwrap_or_default()
+}
+
+/// ` exit=<code>`, appended to status lines. A Ctrl-C exit reads
+/// ` interrupted (Ctrl-C)`, except for `agent` output, whose readers scan the
+/// `key=value` pairs and get ` exit=<code> (Ctrl-C)`.
+pub(crate) fn exit_field(code: impl Into<i64>, agent: bool) -> String {
+    let code = code.into();
+    if !ctrl_c_exit(code) {
+        format!(" exit={code}")
+    } else if agent {
+        format!(" exit={code} (Ctrl-C)")
+    } else {
+        format!(" {INTERRUPTED}")
+    }
+}
+
+/// `exited with code <code>`, or `interrupted (Ctrl-C)`.
+pub(crate) fn exited_with(code: impl Into<i64>) -> String {
+    let code = code.into();
+    if ctrl_c_exit(code) {
+        INTERRUPTED.into()
+    } else {
+        format!("exited with code {code}")
+    }
 }
 
 /// Integer field.

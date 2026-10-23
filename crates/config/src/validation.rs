@@ -4,14 +4,15 @@ use crate::{
 };
 use indexmap::IndexMap;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// A problem that does not stop loading, such as an unused template or an ignored setting.
 #[derive(Debug, Clone, Serialize)]
 pub struct ConfigWarning {
     /// Dotted field path, such as `templates.api` or `tls.trust.0`.
     pub path: String,
-    /// Human-readable explanation, without the path.
+    /// Human-readable explanation, without the path unless the sentence needs
+    /// it (the daemon's `shell_fallback` warnings name it and how many more).
     pub message: String,
 }
 
@@ -118,6 +119,56 @@ fn literal_port(value: &crate::Scalar) -> bool {
         crate::Scalar::String(text) => text.trim().parse::<u16>().is_ok_and(|p| p > 0),
         _ => false,
     }
+}
+
+/// Rejects two units whose logs devlanes would store under the same directory,
+/// `logs/<project>/<lane>/<disk name>`. Services, tasks and infra setup and
+/// teardown entries (units `setup.<name>` and `teardown.<name>`) share that
+/// directory. The name on disk is [`devlanes_core::paths::disk_name`], which
+/// replaces what Windows refuses in file names (`db:migrate` becomes
+/// `db_migrate`), and Windows ignores case (`Web` and `web`). Checked on every
+/// OS because one config is shared by machines running different ones.
+///
+/// The same name spelled the same way in two kinds (a service and a task both
+/// called `web`) stays allowed: it already shared one directory before names
+/// were encoded, and refusing it would break configs that work today.
+fn distinct_on_disk<E: Extensions>(config: &ProjectConfig<E>) -> Result<(), ConfigError> {
+    let infra = |phase: &'static str| {
+        move |name: &String| (format!("infra.{phase}.{name}"), format!("{phase}.{name}"))
+    };
+    let units = config
+        .services
+        .keys()
+        .map(|name| (format!("services.{name}"), name.clone()))
+        .chain(
+            config
+                .tasks
+                .keys()
+                .map(|name| (format!("tasks.{name}"), name.clone())),
+        )
+        .chain(config.infra.setup.keys().map(infra("setup")))
+        .chain(config.infra.teardown.keys().map(infra("teardown")));
+    // Lowercased disk name -> (config path, unit name) of the first unit there.
+    let mut seen: HashMap<String, (String, String)> = HashMap::new();
+    for (path, unit) in units {
+        let stored = devlanes_core::paths::disk_name(&unit);
+        let key = stored.to_lowercase();
+        match seen.get(&key) {
+            None => {
+                seen.insert(key, (path, unit));
+            }
+            Some((_, other)) if *other == unit => {}
+            Some((other_path, other)) => {
+                return Err(fail(
+                    &path,
+                    format!(
+                        "`{other}` ({other_path}) and `{unit}` would share the log directory `{stored}` (Windows ignores case and does not allow some characters in file names, and configs are shared across operating systems); rename one of them"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Check executable declarations uniformly for services, tasks, and infra commands.
@@ -267,7 +318,7 @@ fn validate_inner<E: Extensions>(
                 ));
             }
         }
-        if let Some(Templated::Literal(port)) = template.env.get("PORT")
+        if let Some(Templated::Literal(port)) = crate::env_value(&template.env, "PORT")
             && !literal_port(port)
         {
             return Err(fail(
@@ -284,6 +335,7 @@ fn validate_inner<E: Extensions>(
             ));
         }
     }
+    distinct_on_disk(config)?;
     for (name, service) in &config.services {
         let path = format!("services.{name}");
         if service.run.is_none() && service.run_script.is_none() {
@@ -305,7 +357,7 @@ fn validate_inner<E: Extensions>(
                 ),
             ));
         }
-        if let Some(Templated::Literal(port)) = service.env.get("PORT")
+        if let Some(Templated::Literal(port)) = crate::env_value(&service.env, "PORT")
             && !literal_port(port)
         {
             return Err(fail(
@@ -339,10 +391,7 @@ fn validate_inner<E: Extensions>(
         hosts(&format!("{path}.hosts"), service.hosts.iter().flatten())?;
         if let Some(stop) = &service.stop
             && let Some(signal) = &stop.signal
-            && ![
-                "SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT", "SIGKILL", "SIGUSR1", "SIGUSR2",
-            ]
-            .contains(&signal.as_str())
+            && devlanes_core::StopSignal::from_config_name(signal).is_none()
         {
             return Err(fail(
                 &format!("{path}.stop.signal"),
@@ -561,7 +610,7 @@ fn validate_port_capacity<E: Extensions>(
     };
     let mut ports = BTreeSet::new();
     for (name, service) in &config.services {
-        if !service.env.contains_key("PORT") {
+        if crate::env_value(&service.env, "PORT").is_none() {
             ports.insert((name.clone(), "default".to_owned()));
         }
         if let Some(preset) = &service.preset

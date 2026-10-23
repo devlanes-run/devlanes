@@ -191,6 +191,7 @@ impl UnitHost {
         let (log_tx, log_rx) = std::sync::mpsc::sync_channel(LOG_QUEUE);
         let log_signals = Arc::new(LogSignals::default());
         let log_done = watch::channel(false).0;
+        let rendered = unit.renders_screen();
         spawn_log_thread(
             log.clone(),
             log_rx,
@@ -205,7 +206,7 @@ impl UnitHost {
                 identity,
                 state: watch::channel(UnitState::Starting).0,
                 exit: watch::channel(None).0,
-                screen: StdMutex::new(Screen::new(TerminalSize::default())),
+                screen: StdMutex::new(Screen::new(TerminalSize::default(), rendered)),
                 live: broadcast::channel(1024).0,
                 log,
                 log_tx,
@@ -426,6 +427,14 @@ impl UnitHost {
         let inner = self.inner.clone();
         // Replaying recent output is CPU work proportional to it; keep it off the executor.
         let snapshot = tokio::task::spawn_blocking(move || match inner.screen.lock() {
+            Ok(screen) if screen.rendered() => {
+                let frame = screen.frame(size);
+                let live = inner.live.subscribe();
+                // Rendered viewers only ever get redraws, so the replay may run
+                // after the lock is released.
+                drop(screen);
+                (frame.render(None).0, live)
+            }
             Ok(screen) => {
                 let snapshot = screen.snapshot(size);
                 tracing::debug!(
@@ -443,6 +452,35 @@ impl UnitHost {
         })
         .await;
         snapshot.unwrap_or_else(|_| (Bytes::new(), self.inner.live.subscribe()))
+    }
+
+    /// Whether the output renders the unit's terminal (see
+    /// [`devlanes_core::Unit::renders_screen`]); viewers then get redraws
+    /// from [`Self::render`].
+    pub fn renders_screen(&self) -> bool {
+        self.inner.unit.renders_screen()
+    }
+
+    /// Redraw of a rendered unit for a viewer of `size` (the unit's own size
+    /// when `None`) that shows `shown`, the screen the last redraw left (a
+    /// whole screen when `None`), plus the screen this one leaves. Only the
+    /// copy of the model holds the screen lock, so the unit's output is not
+    /// held up by the replay.
+    pub async fn render(
+        &self,
+        size: Option<TerminalSize>,
+        shown: Option<vt100::Screen>,
+    ) -> (Bytes, Option<vt100::Screen>) {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let frame = inner.screen.lock().map(|screen| screen.frame(size));
+            match frame {
+                Ok(frame) => frame.render(shown.as_ref()),
+                Err(_) => (Bytes::new(), None),
+            }
+        })
+        .await
+        .unwrap_or_default()
     }
 
     /// Fresh redraw at `size` for a viewer that lagged behind the live channel.
@@ -662,6 +700,9 @@ impl Inner {
         let Ok(mut screen) = self.screen.lock() else {
             return;
         };
+        // Viewers of rendered output get nothing but redraws anyway (see
+        // attach's pump), so they need no snapshot and the replay is spared.
+        let redraw = redraw && !screen.rendered();
         for bytes in batch {
             screen.process(bytes);
             if !redraw {
@@ -961,12 +1002,26 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     use async_trait::async_trait;
-    use devlanes_core::{Error, OutputChunk, OutputStream};
+    use devlanes_core::{Error, OutputChunk, OutputStream, StopSignal};
 
     use super::*;
 
     /// Bound for each awaited step; a lost exit shows up as a timeout, not a hang.
     const STEP: Duration = Duration::from_secs(5);
+
+    /// The exit signal a Unix runner reports for `signal` (Linux numbering; the
+    /// tests only need a signal death).
+    fn signal_number(signal: StopSignal) -> i32 {
+        match signal {
+            StopSignal::Hangup => 1,
+            StopSignal::Interrupt => 2,
+            StopSignal::Quit => 3,
+            StopSignal::Kill => 9,
+            StopSignal::User1 => 10,
+            StopSignal::User2 => 12,
+            StopSignal::Terminate => 15,
+        }
+    }
 
     /// A unit that exits on its own after `natural`, or when stopped, whichever is first.
     /// `hang` makes `wait` never return, like a runner whose exit report got lost.
@@ -1024,7 +1079,7 @@ mod tests {
             Err(Error::Unsupported("pipe units have no terminal".into()))
         }
         async fn stop(&self, policy: StopPolicy) -> Result<(), Error> {
-            self.end(None, Some(policy.signal));
+            self.end(None, Some(signal_number(policy.signal)));
             Ok(())
         }
         async fn wait(&self) -> Result<ExitOutcome, Error> {
@@ -1076,9 +1131,15 @@ mod tests {
 
     /// An identity whose process is gone: a child that was spawned and reaped.
     fn gone_identity() -> ProcessIdentity {
-        let mut child = std::process::Command::new("true")
-            .spawn()
-            .expect("spawn true");
+        #[cfg(unix)]
+        let mut command = std::process::Command::new("true");
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/d", "/c", "exit"]);
+            command
+        };
+        let mut child = command.spawn().expect("spawn a short-lived child");
         let pid = child.id();
         let identity = devlanes_sys::identity(pid)
             .ok()
@@ -1192,7 +1253,7 @@ mod tests {
     async fn overdue_stop_is_bounded() {
         let dir = tempfile::tempdir().expect("tempdir");
         let policy = StopPolicy {
-            signal: 15,
+            signal: StopSignal::Terminate,
             timeout: Duration::ZERO,
         };
         let margin = Duration::from_millis(200);

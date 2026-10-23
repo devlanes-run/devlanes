@@ -1,16 +1,24 @@
 //! End-to-end tests: every test drives the real `devlanes` binary in its own [`Lab`].
+//!
+//! On Windows, tests that need a later porting step are ignored with the step in
+//! the reason; the others need only pipe-mode units.
 
 mod cli;
 mod diagnostics;
 // Docker test names must start with `docker_` including the module path, for the CI filter.
 mod docker_full;
 mod docker_pg_redis;
+#[cfg(windows)]
+mod git_bash;
 mod lanes;
 mod lifecycle;
+mod prompts;
 mod proxy;
 mod shutdown;
 mod tasks;
 mod tui_zoom;
+#[cfg(windows)]
+mod windows;
 mod with;
 mod worktrees;
 

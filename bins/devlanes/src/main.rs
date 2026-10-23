@@ -8,17 +8,24 @@ mod choose;
 mod commands;
 mod completion;
 mod daemon;
+mod daemon_log;
 mod driver;
 mod hosts;
+#[cfg(windows)]
+mod hosts_service;
 mod local;
 mod local_doctor;
 mod notices;
+mod orphans;
 mod output;
 mod progress;
 mod remote;
+#[cfg(windows)]
+mod resolver_nrpt;
 mod start_ui;
 mod verbose;
 mod wiring;
+mod wsl_doctor;
 
 use std::process::ExitCode;
 
@@ -26,6 +33,40 @@ use devlanes_cli::{Action, Cli, Runtime, Signals, clap::Parser};
 
 /// Parses, resolves output policy once, then dispatches to client or daemon code.
 fn main() -> ExitCode {
+    // The daemon's console-control helper: no parsing, no threads, no output
+    // beyond what the daemon reads, and it must not be listed as a command.
+    #[cfg(windows)]
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == devlanes_runner_windows::ctrl::HELPER_ARG)
+    {
+        return ExitCode::from(devlanes_runner_windows::console_ctrl_main());
+    }
+    // The elevated hosts service installer that `certs trust --hosts` starts
+    // through the UAC prompt: hidden, so not a listed command.
+    #[cfg(windows)]
+    {
+        let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+        if let Some(subcommand) = args.first().filter(|arg| {
+            *arg == hosts_service::INSTALL_ARG || *arg == hosts_service::UNINSTALL_ARG
+        }) {
+            return hosts_service::elevated_main(subcommand, &args[1..]);
+        }
+    }
+    // ssh runs this binary as SSH_ASKPASS with the prompt as its only argument,
+    // which clap would read as an unknown subcommand.
+    #[cfg(windows)]
+    if let Some(code) = remote::askpass_from_env() {
+        return ExitCode::from(code);
+    }
+    // The agent plugin's PreToolUse hook: needs no daemon, runtime or output
+    // policy, and is not a listed command.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == devlanes_cli::agent_hook::ARG)
+    {
+        return ExitCode::from(devlanes_cli::agent_hook::run());
+    }
     // CompleteEnv must run before any thread exists; it exits when completing.
     completion::install();
     let cli = match Cli::try_parse() {
@@ -49,7 +90,11 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let runtime = match Runtime::resolve(&cli, Signals::detect()) {
+    let signals = Signals {
+        no_escapes: !output::enable_escapes(),
+        ..Signals::detect()
+    };
+    let runtime = match Runtime::resolve(&cli, signals) {
         Ok(runtime) => runtime,
         Err(error) => return output::local_error(&error.to_string(), error.exit_code()),
     };

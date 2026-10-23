@@ -43,7 +43,8 @@ fn https_reaches_each_lane_by_hostname() -> Result<()> {
     for route in &items {
         let host = need(route["host"].as_str(), "route host")?;
         let mut curl = Command::new("curl");
-        curl.args(["-sS", "--max-time", "10", "--cacert"])
+        curl.args(devlanes_e2e::CURL_FLAGS.split_whitespace())
+            .args(["-sS", "--max-time", "10", "--cacert"])
             .arg(&ca)
             .arg("--resolve")
             .arg(format!("{host}:{port}:127.0.0.1"))

@@ -1,8 +1,11 @@
 //! Daemon process setup required by the client's auto-spawn contract.
 
-use std::{fs::File, io::Write};
+#[cfg(unix)]
+use std::fs::File;
+use std::io::Write;
 
 /// Leaves the spawning terminal's session so terminal hangups and job control never reach units.
+#[cfg(unix)]
 pub fn detach() -> std::io::Result<()> {
     match rustix::process::setsid() {
         Ok(_) => Ok(()),
@@ -10,6 +13,14 @@ pub fn detach() -> std::io::Result<()> {
         Err(rustix::io::Errno::PERM) => Ok(()),
         Err(error) => Err(error.into()),
     }
+}
+
+/// The spawning client already started the daemon without a console
+/// (`DETACHED_PROCESS`), which keeps terminal events away. What is left is the
+/// inherited "ignore Ctrl-C" flag, which would stop Ctrl-C from reaching any unit.
+#[cfg(windows)]
+pub fn detach() -> std::io::Result<()> {
+    devlanes_sys::windows::process::accept_ctrl_c()
 }
 
 /// Routes panics through `tracing`, so a crash leaves its message, location and
@@ -80,15 +91,36 @@ impl Readiness {
     }
 
     /// Redirecting stdout matters because a held pipe keeps the CLI's reader waiting forever.
+    ///
+    /// A client that stopped waiting (its start timeout passed) has closed the
+    /// pipe; that is not an error, since the daemon serves its next command.
     fn finish(self, line: &[u8]) -> std::io::Result<()> {
         if !self.enabled {
             return Ok(());
         }
         let mut stdout = std::io::stdout().lock();
-        stdout.write_all(line)?;
-        stdout.flush()?;
-        let null = File::options().write(true).open("/dev/null")?;
-        rustix::stdio::dup2_stdout(&null)?;
-        Ok(())
+        let written = stdout.write_all(line).and_then(|()| stdout.flush());
+        release_stdout()?;
+        match written {
+            Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => {
+                tracing::info!("the spawning client stopped waiting before the daemon was ready");
+                Ok(())
+            }
+            other => other,
+        }
     }
+}
+
+/// Points stdout at `/dev/null`, closing the client's pipe.
+#[cfg(unix)]
+fn release_stdout() -> std::io::Result<()> {
+    let null = File::options().write(true).open("/dev/null")?;
+    rustix::stdio::dup2_stdout(&null)?;
+    Ok(())
+}
+
+/// Swaps the standard output handle for `NUL` and closes the client's pipe.
+#[cfg(windows)]
+fn release_stdout() -> std::io::Result<()> {
+    devlanes_sys::windows::process::release_stdout()
 }

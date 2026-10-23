@@ -16,7 +16,9 @@ use async_trait::async_trait;
 use devlanes_core::{
     Error,
     contrib::{ContribCx, Contributor, LaunchDraft},
+    env,
 };
+use devlanes_sys::NoWindow;
 
 /// Files that make a directory a mise project
 /// (<https://mise.jdx.dev/configuration.html>).
@@ -108,6 +110,7 @@ impl MiseContributor {
         }
         let mut command = tokio::process::Command::new(&self.program);
         command
+            .no_window()
             .args(["env", "--json"])
             .current_dir(lane)
             .env_clear()
@@ -180,9 +183,13 @@ impl Contributor for MiseContributor {
             }
         };
         match outcome.as_ref() {
-            Outcome::Env(env) => draft
-                .env
-                .extend(env.iter().map(|(k, v)| (k.clone(), v.clone()))),
+            Outcome::Env(vars) => {
+                // Through `env::insert` so mise's `PATH` replaces an earlier
+                // contributor's `Path` on Windows.
+                for (key, value) in vars {
+                    env::insert(&mut draft.env, key.clone(), value.clone());
+                }
+            }
             Outcome::Note(note) => draft.notes.push(note.clone()),
             Outcome::Skip => {}
         }

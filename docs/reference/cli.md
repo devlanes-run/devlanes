@@ -402,6 +402,17 @@ devlanes env export [OPTIONS] [UNIT]
 ```
 
 - `[UNIT]`: Unit whose environment to export ([lane:]unit) [default: the lane's variables]
+- `--shell <SHELL>`: Syntax of the printed assignments
+  Values: `posix` (`export NAME='value'`, for sh, bash, zsh and Git Bash), `pwsh` (`$env:NAME = 'value'`, for PowerShell; the script is ASCII, other text is decoded from Base64).
+  Default: `posix`.
+
+```text
+Examples:
+  eval "$(devlanes env export api)"
+  devlanes env export api --shell pwsh | Out-String | Invoke-Expression
+
+In PowerShell, assigning an empty value removes the variable, so variables with empty values end up unset.
+```
 
 ### devlanes env shell
 
@@ -499,7 +510,7 @@ devlanes config check [OPTIONS]
 
 ### devlanes certs
 
-Trust the devlanes CA and install the /etc/hosts helper
+Trust the devlanes CA and install the hosts file writer
 
 ```text
 devlanes certs [OPTIONS] <COMMAND>
@@ -513,8 +524,8 @@ Trust the devlanes CA in the system and browser stores
 devlanes certs trust [OPTIONS]
 ```
 
-- `--hosts`: Also install the /etc/hosts helper for programs that cannot resolve *.localhost
-- `--resolver`: Also send lookups for hostnames.tld to the devlanes DNS server (/etc/resolver on macOS, systemd-resolved on Linux)
+- `--hosts`: Also install the hosts file writer (a sudo helper on macOS and Linux, a service on Windows) for programs that cannot resolve *.localhost
+- `--resolver`: Also send lookups for hostnames.tld to the devlanes DNS server (/etc/resolver on macOS, systemd-resolved on Linux, an NRPT rule on Windows)
 
 ### devlanes certs untrust
 
@@ -524,8 +535,8 @@ Remove the devlanes CA from the trust stores
 devlanes certs untrust [OPTIONS]
 ```
 
-- `--hosts`: Also remove the /etc/hosts helper, its sudo rule and the devlanes block in /etc/hosts
-- `--resolver`: Also remove the OS resolver file for hostnames.tld
+- `--hosts`: Also remove the hosts file writer (its sudo rule, or the Windows service) and the devlanes block in the hosts file
+- `--resolver`: Also remove the OS resolver file for hostnames.tld (the NRPT rule on Windows)
 - `--keep-ca`: Keep the CA trusted; with --hosts or --resolver, remove only those
 
 ### devlanes secrets
@@ -635,7 +646,7 @@ devlanes daemon logs [OPTIONS]
 
 ### devlanes daemon install
 
-Install a login service so the daemon starts at login and outside agent sandboxes
+Start the daemon at login (launchd agent, systemd user unit, or a Windows logon entry)
 
 ```text
 devlanes daemon install [OPTIONS]
@@ -643,7 +654,7 @@ devlanes daemon install [OPTIONS]
 
 ### devlanes daemon uninstall
 
-Remove the login service; a running daemon keeps running
+Stop starting the daemon at login; a running daemon keeps running
 
 ```text
 devlanes daemon uninstall [OPTIONS]

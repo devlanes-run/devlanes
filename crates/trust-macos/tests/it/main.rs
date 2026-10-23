@@ -1,4 +1,5 @@
 //! Argv tests for the macOS stores, plus ignored tests against a real keychain and certutil.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -294,6 +295,13 @@ async fn targets_map_to_stores() {
             Err(TrustError::Unsupported { target: t }) if t == target
         ));
     }
+    assert!(matches!(
+        trust.store(TrustTarget::Windows),
+        Err(TrustError::Unavailable {
+            target: TrustTarget::Windows,
+            ..
+        })
+    ));
 }
 
 #[tokio::test]

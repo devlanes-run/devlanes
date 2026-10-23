@@ -571,6 +571,21 @@ fn render_text(method: Method, data: &Value) -> String {
     output
 }
 
+/// The daemon's shell warnings name their path in the sentence, so `config
+/// check` prints them without a `path:` prefix.
+#[test]
+fn config_check_shell_fallback_is_not_prefixed() {
+    let message = "`services.web.run` and 2 more run with cmd.exe: Git for Windows' sh.exe was not found, and POSIX syntax may fail there. Install Git for Windows, then run `devlanes daemon restart`.";
+    let text = render_text(
+        Method::ConfigCheck,
+        &json!({"project": "acme", "path": "/work/acme/devlanes.yaml", "warnings": [
+            {"code": "shell_fallback", "path": "services.web.run", "message": message},
+        ]}),
+    );
+    assert!(text.contains(&format!("warn {message}")), "{text}");
+    assert!(!text.contains("services.web.run: "), "{text}");
+}
+
 #[test]
 fn every_result_shape_in_every_text_mode() {
     for (name, method, data) in fixtures() {
@@ -628,6 +643,508 @@ fn doctor_without_a_daemon() {
     assert!(
         text.contains("fail tls: CA not trusted by system"),
         "{text}"
+    );
+}
+
+/// Trust entries with a location (Windows) name the store and the dialog `certs
+/// trust` shows, once. A CA in the deny list fails without a `certs trust` fix.
+#[test]
+fn doctor_names_the_store_and_its_dialog() {
+    let approval = "choose Yes in the Windows security warning";
+    let data = json!({
+        "running": false, "version": "0.3.0", "home": r"C:\Users\u\.devlanes",
+        "socket": r"\\.\pipe\devlanes-0", "db_path": r"C:\Users\u\.devlanes\state.db",
+        "ca": {"present": true, "kind": "devlanes", "path": r"C:\Users\u\.devlanes\ca\ca.pem",
+               "name_constrained": true, "hint": null, "fix": null,
+               "trust": [
+                   {"store": "system", "state": "untrusted", "location": "Windows user root store",
+                    "approval": approval},
+                   {"store": "windows", "state": "untrusted",
+                    "location": r"Cert:\CurrentUser\devlanes-test", "approval": approval},
+               ]},
+    });
+    let text = render_text(Method::Doctor, &data);
+    for expected in [
+        "fail tls: CA not trusted by system (Windows user root store)",
+        "devlanes certs trust, then choose Yes in the Windows security warning",
+        r"fail tls: CA not trusted by windows (Cert:\CurrentUser\devlanes-test)",
+    ] {
+        assert!(text.contains(expected), "{expected}:\n{text}");
+    }
+    for mode in text.split("--- ").filter(|mode| !mode.is_empty()) {
+        assert!(
+            mode.matches(approval).count() <= 1,
+            "approval repeated:\n{mode}"
+        );
+    }
+
+    let mut distrusted = data.clone();
+    distrusted["ca"]["trust"] = json!([
+        {"store": "system", "state": "distrusted", "location": "Windows user root store",
+         "reason": r"Cert:\CurrentUser\Disallowed also holds it", "approval": approval},
+    ]);
+    let text = render_text(Method::Doctor, &distrusted);
+    assert!(
+        text.contains(
+            r"fail tls: CA distrusted by system (Windows user root store): Cert:\CurrentUser\Disallowed also holds it"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains(approval), "{text}");
+}
+
+/// Windows terminal facts. Without a daemon an elevated shell fails doctor and a
+/// job that kills on close without breakaway is a warning; with one running, the
+/// elevated shell is only a warning and the job is not mentioned. An ordinary
+/// shell adds nothing. An open home is a warning the daemon fixes, with the fix
+/// `home_check` carries, if any.
+#[test]
+fn doctor_terminal_and_acl_checks() {
+    let base = json!({
+        "running": false, "version": "0.3.0", "home": r"C:\Users\u\.devlanes",
+        "socket": r"\\.\pipe\devlanes-0", "db_path": r"C:\Users\u\.devlanes\state.db",
+        "home_check": {"path": r"C:\Users\u\.devlanes", "exists": true, "problem": "acl"},
+        "sandbox": {"codex_sandbox": false, "app_sandbox": false},
+    });
+    let data = |running: bool, terminal: Value| {
+        let mut data = base.clone();
+        data["running"] = json!(running);
+        data["terminal"] = terminal;
+        if running {
+            // A running daemon reports its schema; without it doctor fails.
+            data["schema_version"] = json!(1);
+            data["supported_schema_version"] = json!(1);
+        }
+        data
+    };
+    let with =
+        |running: bool, terminal: Value| render_text(Method::Doctor, &data(running, terminal));
+    // The agent line after the one containing `needle`, where a fix would go.
+    let after = |text: &str, needle: &str| {
+        let agent = text.split("--- agent").nth(1).unwrap_or_default();
+        let mut lines = agent.lines().skip_while(|line| !line.contains(needle));
+        assert!(lines.next().is_some(), "{needle} missing\n{text}");
+        lines.next().unwrap_or_default().to_owned()
+    };
+    let killing = json!({"elevated": false, "job": {"kill_on_close": true, "breakaway_ok": false}});
+
+    let plain = with(false, json!({"elevated": false, "job": null}));
+    assert!(!plain.contains("terminal"), "{plain}");
+    assert!(plain.contains("--- plain (exit 0)"), "{plain}");
+    assert!(
+        plain.contains("warn home: C:\\Users\\u\\.devlanes lets other accounts in"),
+        "{plain}"
+    );
+    assert!(
+        !after(&plain, "lets other accounts in").contains("fix:"),
+        "{plain}"
+    );
+    let mut fixable = data(false, json!({"elevated": false, "job": null}));
+    fixable["home_check"]["fix"] = json!(r"icacls C:\Users\u\.devlanes /inheritance:r");
+    let fixable = render_text(Method::Doctor, &fixable);
+    assert_eq!(
+        after(&fixable, "lets other accounts in"),
+        r"  fix: icacls C:\Users\u\.devlanes /inheritance:r",
+        "{fixable}"
+    );
+
+    let elevated = with(false, json!({"elevated": true, "job": null}));
+    for mode in ["human", "plain", "agent"] {
+        assert!(
+            elevated.contains(&format!("--- {mode} (exit 1)")),
+            "{elevated}"
+        );
+    }
+    assert!(
+        elevated.contains(
+            "fail terminal: this terminal runs as administrator; the daemon refuses to run elevated"
+        ),
+        "{elevated}"
+    );
+    assert_eq!(
+        after(&elevated, "runs as administrator"),
+        "  fix: run devlanes from a terminal that is not running as administrator",
+        "{elevated}"
+    );
+    let elevated_running = with(true, json!({"elevated": true, "job": null}));
+    assert!(
+        elevated_running.contains("--- agent (exit 0)"),
+        "{elevated_running}"
+    );
+    assert!(
+        elevated_running.contains(
+            "warn terminal: this terminal runs as administrator; it cannot start the daemon"
+        ),
+        "{elevated_running}"
+    );
+    assert!(
+        !after(&elevated_running, "runs as administrator").contains("fix:"),
+        "{elevated_running}"
+    );
+    // `DEVLANES_ALLOW_ELEVATED=1` (CI runners): a warning, not a failure.
+    let allowed = with(
+        false,
+        json!({"elevated": true, "elevation_allowed": true, "job": null}),
+    );
+    assert!(allowed.contains("--- agent (exit 0)"), "{allowed}");
+    assert!(
+        allowed.contains(
+            "warn terminal: this terminal runs as administrator, and DEVLANES_ALLOW_ELEVATED=1"
+        ),
+        "{allowed}"
+    );
+
+    let stopped = with(false, killing.clone());
+    assert!(
+        stopped.contains("warn terminal: this terminal stops every process it started"),
+        "{stopped}"
+    );
+    assert_eq!(
+        after(&stopped, "stops every process"),
+        "  fix: start the daemon from a terminal outside this one (for example Windows Terminal), then devlanes daemon restart",
+        "{stopped}"
+    );
+    let running = with(true, killing);
+    assert!(!running.contains("stops every process"), "{running}");
+    let escapable = with(
+        false,
+        json!({"elevated": false, "job": {"kill_on_close": true, "breakaway_ok": true}}),
+    );
+    assert!(!escapable.contains("stops every process"), "{escapable}");
+
+    // JSON prints the facts unchanged; the exit code follows the same checks.
+    for (running, exit_code) in [(false, 1), (true, 0)] {
+        let data = data(running, json!({"elevated": true, "job": null}));
+        let json = runtime(OutputMode::Json)
+            .reporter()
+            .result(&Report::new(Method::Doctor, &data))
+            .expect("json");
+        assert_eq!(json.exit_code, exit_code, "running: {running}");
+        let printed = serde_json::from_str::<Value>(&json.stdout).expect("json output");
+        assert_eq!(printed["terminal"], data["terminal"]);
+        assert_eq!(printed["home_check"], data["home_check"]);
+    }
+}
+
+/// The Windows build (`windows`): Windows 11 24H2 (build 26100) or later is a
+/// note, anything older fails doctor with the fix.
+#[test]
+fn doctor_windows_build_check() {
+    let data = |build: u64| {
+        json!({
+            "running": false, "version": "0.3.0", "home": r"C:\Users\u\.devlanes",
+            "socket": r"\\.\pipe\devlanes-0", "db_path": r"C:\Users\u\.devlanes\state.db",
+            "sandbox": {"codex_sandbox": false, "app_sandbox": false},
+            "windows": {"build": build},
+        })
+    };
+    let current = render_text(Method::Doctor, &data(26_100));
+    assert!(
+        current.contains("ok windows: Windows build 26100"),
+        "{current}"
+    );
+    assert!(current.contains("--- agent (exit 0)"), "{current}");
+    let old = render_text(Method::Doctor, &data(22_631));
+    assert!(
+        old.contains(
+            "fail windows: Windows build 22631 is older than Windows 11 24H2 (build 26100), the oldest devlanes supports"
+        ),
+        "{old}"
+    );
+    assert!(
+        old.contains("  fix: update Windows to Windows 11 24H2 or later"),
+        "{old}"
+    );
+    assert!(old.contains("--- agent (exit 1)"), "{old}");
+}
+
+/// WSL facts (`wsl`, from the CLI inside a distro, and the daemon's
+/// `windows_drive_worktrees`): interop on is a passing check; interop off, no
+/// systemd, a CA Windows browsers do not trust and worktrees on Windows drives
+/// are warnings with fixes; none fails doctor. Outside WSL nothing is added.
+#[test]
+fn doctor_wsl_checks() {
+    let base = json!({
+        "running": true, "version": "0.3.0", "pid": 42, "home": "/home/acme/.devlanes",
+        "socket": "/home/acme/.devlanes/run/daemon.sock",
+        "db_path": "/home/acme/.devlanes/state.db",
+        "schema_version": 1, "supported_schema_version": 1,
+        "sandbox": {"codex_sandbox": false, "app_sandbox": false},
+        "proxy": {"http": {"bound": true, "port": 8080, "fallback_reason": "port 80 needs root"},
+                  "https": {"bound": true, "port": 8443, "fallback_reason": "port 443 needs root"}},
+        "ca": {"present": true, "path": "/home/acme/.devlanes/ca/ca.pem",
+               "trust": [{"store": "system", "state": "trusted"}]},
+        "hosts": {"mode": "auto", "state": "applied", "names": 2},
+        "windows_drive_worktrees": [
+            {"lane": "acme@2", "path": "/mnt/c/src/acme-2", "drive": r"C:\"},
+        ],
+    });
+    let mut data = base.clone();
+    data["wsl"] = json!({"distro": "Ubuntu", "version": 2, "interop": true, "systemd": false});
+    let text = render_text(Method::Doctor, &data);
+    insta::assert_snapshot!("render_doctor_wsl", text);
+    assert!(text.contains("--- agent (exit 0)"), "{text}");
+
+    // Outside WSL the same daemon facts add no wsl group.
+    let outside = render_text(Method::Doctor, &base);
+    assert!(!outside.contains("wsl:"), "{outside}");
+    assert!(!outside.contains("Windows drive"), "{outside}");
+
+    // Interop off; the windows store is configured, so the CA hint is absent.
+    let mut quiet = data.clone();
+    quiet["wsl"]["interop"] = json!(false);
+    quiet["wsl"]["distro"] = Value::Null;
+    quiet["wsl"]["systemd"] = json!(true);
+    quiet["ca"]["trust"] =
+        json!([{"store": "system", "state": "trusted"}, {"store": "windows", "state": "trusted"}]);
+    quiet["windows_drive_worktrees"] = json!([]);
+    let quiet = render_text(Method::Doctor, &quiet);
+    assert!(
+        quiet
+            .contains("warn wsl: WSL 2, Windows interop off: devlanes cannot open URLs in Windows"),
+        "{quiet}"
+    );
+    for absent in ["systemd", "tls.trust leaves out windows", "Windows drive"] {
+        assert!(!quiet.contains(absent), "{absent}\n{quiet}");
+    }
+}
+
+/// Port ranges Windows reserves (`excluded_ports`): a pool clear of them is a
+/// passing check, overlaps with the pool, the proxy ports or mirrored box ports
+/// are warnings with a fix, and an unreadable list (whole or one family) is a
+/// warning too. None of them fails doctor.
+#[test]
+fn doctor_excluded_port_checks() {
+    let with = |excluded: Value| {
+        render_text(
+            Method::Doctor,
+            &json!({
+                "running": false, "version": "0.3.0", "home": r"C:\Users\u\.devlanes",
+                "socket": r"\\.\pipe\devlanes-0", "db_path": r"C:\Users\u\.devlanes\state.db",
+                "sandbox": {"codex_sandbox": false, "app_sandbox": false},
+                "excluded_ports": excluded,
+            }),
+        )
+    };
+    let after = |text: &str, needle: &str| {
+        let agent = text.split("--- agent").nth(1).unwrap_or_default();
+        let mut lines = agent.lines().skip_while(|line| !line.contains(needle));
+        assert!(lines.next().is_some(), "{needle} missing\n{text}");
+        lines.next().unwrap_or_default().to_owned()
+    };
+    let pool = json!({"start": 20000, "end": 32767});
+
+    let clear = with(json!({
+        "ranges": [{"start": 50000, "end": 50059}], "pool": pool,
+        "pool_overlaps": [], "mirrored": [],
+    }));
+    assert!(
+        clear.contains("ok ports: no port range Windows reserves overlaps ports.range 20000-32767"),
+        "{clear}"
+    );
+
+    let overlapping = with(json!({
+        "ranges": [{"start": 27339, "end": 27339}, {"start": 32700, "end": 32799}],
+        "pool": pool,
+        "pool_overlaps": [{"start": 27339, "end": 27339}, {"start": 32700, "end": 32799}],
+        "mirrored": [27339, 32701],
+        "proxy": [
+            {"listener": "http", "port": 80, "fallback": false},
+            {"listener": "https", "port": 8443, "fallback": true},
+        ],
+    }));
+    insta::assert_snapshot!("render_doctor_excluded_ports", overlapping);
+    assert!(
+        overlapping.contains(
+            "warn ports: proxy ports inside port ranges Windows reserves: 80 (proxy.http_port), 8443 (HTTPS fallback)"
+        ),
+        "{overlapping}"
+    );
+    assert!(
+        overlapping.contains("new port blocks skip them, but the ranges can change after a reboot"),
+        "{overlapping}"
+    );
+    assert!(overlapping.contains("--- agent (exit 0)"), "{overlapping}");
+    assert!(
+        overlapping.contains(
+            "warn ports: ports.range 20000-32767 overlaps ports Windows reserves (27339, 32700-32799)"
+        ),
+        "{overlapping}"
+    );
+    assert!(
+        after(&overlapping, "overlaps ports Windows reserves")
+            .starts_with("  fix: set ports.range in ~/.devlanes/config.yaml clear of them"),
+        "{overlapping}"
+    );
+    assert!(
+        overlapping
+            .contains("warn ports: box ports 27339, 32701 are inside port ranges Windows reserves"),
+        "{overlapping}"
+    );
+    let one = with(json!({
+        "ranges": [{"start": 27339, "end": 27339}], "pool": null,
+        "pool_overlaps": [], "mirrored": [27339],
+    }));
+    assert!(
+        one.contains("warn ports: box port 27339 is inside a port range"),
+        "{one}"
+    );
+    assert!(!one.contains("overlaps"), "{one}");
+
+    let failed = with(json!({"error": "netsh did not answer within 10s"}));
+    assert!(
+        failed.contains("warn ports: cannot read the port ranges Windows reserves: netsh did not answer within 10s"),
+        "{failed}"
+    );
+    assert!(failed.contains("--- agent (exit 0)"), "{failed}");
+    assert!(!failed.contains("ports.range"), "{failed}");
+
+    // One family failed: its error shows next to the checks of what was read.
+    let partial = with(json!({
+        "ranges": [{"start": 27339, "end": 27339}], "pool": pool,
+        "pool_overlaps": [{"start": 27339, "end": 27339}], "mirrored": [], "proxy": [],
+        "error": "ipv6: netsh failed (exit code: 1)",
+    }));
+    for expected in [
+        "warn ports: cannot read the port ranges Windows reserves: ipv6: netsh failed (exit code: 1)",
+        "warn ports: ports.range 20000-32767 overlaps ports Windows reserves (27339)",
+    ] {
+        assert!(partial.contains(expected), "{expected}\n{partial}");
+    }
+
+    // Unix reports nothing, so nothing is rendered.
+    let unix = with(Value::Null);
+    assert!(!unix.contains("ports:"), "{unix}");
+}
+
+/// `STATUS_CONTROL_C_EXIT` (0xC000013A as a signed exit code) reads as
+/// `interrupted (Ctrl-C)` in task results, error lists and reasons; the data
+/// stays the number. Agent status lines keep `exit=<code>` so their
+/// `key=value` pairs still scan, and name Ctrl-C after it.
+#[test]
+fn ctrl_c_exits_read_as_interrupted() {
+    const CTRL_C: i64 = -1_073_741_510;
+    let cases = [
+        (
+            Method::Run,
+            json!({"task": "test", "lane": "acme@2", "unit": "test", "interactive": false, "exit_code": CTRL_C, "state": "failed"}),
+            Some("failed acme@2:test exit=-1073741510 (Ctrl-C)\n"),
+        ),
+        (
+            Method::Errors,
+            json!({"items": [{"lane": "acme@2", "unit": "admin", "state": "failed", "exit_code": CTRL_C,
+                "crashes": 1, "reason": null, "error_lines": [], "port_conflicts": []}],
+                "truncated": false, "next_cursor": null}),
+            Some("failed acme@2:admin exit=-1073741510 (Ctrl-C) crashes=1\n"),
+        ),
+        (
+            Method::Why,
+            json!({"lane": "acme@2", "unit": "admin", "state": "failed",
+                "reasons": [{"code": "exited", "data": {"code": CTRL_C, "signal": null}}]}),
+            None,
+        ),
+    ];
+    for (method, data, agent_line) in cases {
+        let text = render_text(method, &data);
+        let (text, agent) = text.split_once("--- agent").expect("agent section");
+        assert!(text.contains("interrupted (Ctrl-C)"), "{text}");
+        assert!(!text.contains("1073741510"), "{text}");
+        match agent_line {
+            Some(line) => {
+                assert!(agent.contains(line), "{agent}");
+                assert!(!agent.contains("interrupted"), "{agent}");
+            }
+            None => {
+                assert!(agent.contains("interrupted (Ctrl-C)"), "{agent}");
+                assert!(!agent.contains("1073741510"), "{agent}");
+            }
+        }
+        let json = runtime(OutputMode::Json)
+            .reporter()
+            .result(&Report::new(method, &data))
+            .expect("json");
+        assert!(json.stdout.contains("-1073741510"), "{}", json.stdout);
+    }
+    // Ordinary codes keep their number.
+    let text = render_text(
+        Method::Run,
+        &json!({"task": "test", "lane": "acme@2", "unit": "test", "interactive": false, "exit_code": 2, "state": "failed"}),
+    );
+    assert!(text.contains("exit=2"), "{text}");
+}
+
+/// The Windows logon entry (`autostart`): `daemon status` names it in one line
+/// and doctor as a check; an entry for another devlanes or home is a warning
+/// with the fix. Without the facts (Unix) neither mentions logon.
+#[test]
+fn logon_entry_in_status_and_doctor() {
+    let entry = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run\devlanes";
+    let current = json!({"installed": true, "entry": entry, "current": true,
+        "command": r#""C:\devlanes\devlanesw.exe" --home "C:\Users\u\.devlanes""#});
+    let stale = json!({"installed": true, "entry": entry, "current": false,
+        "command": r#""C:\old\devlanesw.exe" --home "C:\Users\u\.devlanes""#});
+    let missing = json!({"installed": false, "entry": entry, "current": false});
+    let status = |autostart: &Value| {
+        let mut data = json!({"version": "0.3.0", "pid": 7, "socket": r"\\.\pipe\devlanes-0"});
+        if !autostart.is_null() {
+            data["autostart"] = autostart.clone();
+        }
+        render_text(Method::DaemonStatus, &data)
+    };
+    let text = status(&current);
+    assert!(
+        text.contains(&format!("logon: starts at logon ({entry})")),
+        "{text}"
+    );
+    let text = status(&missing);
+    assert!(
+        text.contains("logon: does not start at logon (devlanes daemon install adds that)"),
+        "{text}"
+    );
+    assert!(!status(&Value::Null).contains("logon"));
+
+    let doctor = |autostart: &Value| {
+        let mut data = json!({
+            "running": false, "version": "0.3.0", "home": r"C:\Users\u\.devlanes",
+            "socket": r"\\.\pipe\devlanes-0",
+            "sandbox": {"codex_sandbox": false, "app_sandbox": false},
+        });
+        if !autostart.is_null() {
+            data["autostart"] = autostart.clone();
+        }
+        render_text(Method::Doctor, &data)
+    };
+    let text = doctor(&current);
+    assert!(
+        text.contains(&format!("ok daemon: starts at logon ({entry})")),
+        "{text}"
+    );
+    let text = doctor(&stale);
+    assert!(
+        text.contains(
+            r#"warn daemon: starts at logon with another devlanes or home: "C:\old\devlanesw.exe""#
+        ),
+        "{text}"
+    );
+    assert!(text.contains("  fix: devlanes daemon install"), "{text}");
+    assert!(text.contains("--- agent (exit 0)"), "{text}");
+    assert!(!doctor(&Value::Null).contains("logon"));
+
+    // Turned off in Task Manager: the entry exists but Explorer skips it.
+    let mut disabled = current.clone();
+    disabled["disabled"] = json!(true);
+    let text = doctor(&disabled);
+    assert!(
+        text.contains(&format!(
+            "warn daemon: the logon entry ({entry}) is turned off in Task Manager"
+        )),
+        "{text}"
+    );
+    assert!(text.contains("  fix: devlanes daemon install"), "{text}");
+    assert!(
+        status(&disabled).contains("logon: the logon entry"),
+        "{}",
+        status(&disabled)
     );
 }
 
@@ -885,6 +1402,25 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
     );
     assert!(
         text.contains("devlanes daemon restart when convenient (it stops services)"),
+        "{text}"
+    );
+
+    let mut upgraded = release(false, "0.2.1");
+    upgraded["release"]["old_copies"] = json!({
+        "removed": [r"C:\Users\u\AppData\Local\Programs\devlanes\devlanesw.exe.old-20261022120000"],
+        "in_use": [r"C:\Users\u\AppData\Local\Programs\devlanes\devlanes.exe.old-20261022120000"],
+    });
+    let text = render_text(Method::Doctor, &upgraded);
+    assert!(
+        text.contains("deleted 1 old executable left by an upgrade"),
+        "{text}"
+    );
+    assert!(
+        text.contains(r"the previous version still runs from C:\Users\u\AppData\Local\Programs\devlanes\devlanes.exe.old-20261022120000"),
+        "{text}"
+    );
+    assert!(
+        text.contains("doctor deletes the old files afterwards"),
         "{text}"
     );
 
@@ -1188,6 +1724,93 @@ fn doctor_checks_the_dns_server_and_the_resolver_file() {
     assert!(!checks.iter().any(|c| c.group == "output"));
 }
 
+/// On Windows the daemon reports the NRPT rule (`nrpt_rule`) where Unix has
+/// the resolver file: the same verdicts and fix, plus what overrides a local
+/// rule (another program's rule, Group Policy).
+#[test]
+fn doctor_checks_the_nrpt_rule() {
+    let lines = |rule: Value| {
+        let data = json!({"dns": {"tld": "test", "listen": "127.53.0.1:53", "running": true,
+            "error": null, "nrpt_rule": rule}});
+        doctor_checks_of(&data)
+            .into_iter()
+            .filter(|check| check.group == "dns")
+            .map(|check| match check.fix {
+                Some(fix) => format!("{:?} {} (fix: {fix})", check.state, check.text),
+                None => format!("{:?} {}", check.state, check.text),
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let rule = |changes: Value| {
+        let mut rule = json!({"namespace": ".test", "server": "127.53.0.1", "installed": true,
+            "matches": true, "foreign": false, "group_policy": false});
+        for (key, value) in changes.as_object().expect("object") {
+            rule[key] = value.clone();
+        }
+        rule
+    };
+    let output = [
+        rule(json!({})),
+        rule(json!({"installed": false, "matches": false})),
+        rule(json!({"matches": false})),
+        rule(json!({"foreign": true})),
+        rule(json!({"group_policy": true})),
+        json!({"namespace": ".test", "error": "Get-DnsClientNrptRule did not answer within 20 s"}),
+    ]
+    .into_iter()
+    .map(lines)
+    .collect::<Vec<_>>()
+    .join("\n");
+    insta::assert_snapshot!(output, @r"
+    Ok DNS server for .test on 127.53.0.1:53, NRPT rule .test
+    Warn .test lookups do not reach the devlanes DNS server: no NRPT rule for .test (fix: devlanes certs trust --resolver)
+    Warn the NRPT rule for .test sends .test lookups elsewhere, not to 127.53.0.1:53 (fix: devlanes certs trust --resolver)
+    Warn an NRPT rule for .test was not added by devlanes; it sends .test lookups elsewhere (fix: remove it yourself (Get-DnsClientNrptRule lists it) or choose another hostnames.tld)
+    Warn the NRPT rule for .test is in place, but Windows ignores it while Group Policy NRPT rules exist (fix: ask the administrator to add .test -> 127.53.0.1 to the Group Policy NRPT rules)
+    Warn cannot read the NRPT rules for .test: Get-DnsClientNrptRule did not answer within 20 s (fix: run Get-DnsClientNrptRule in PowerShell to see them)
+    ");
+    // The CLI prints the same words, with the fix on its own line.
+    let text = render_text(
+        Method::Doctor,
+        &json!({"dns": {"tld": "test", "listen": "127.53.0.1:53", "running": true,
+            "error": null, "nrpt_rule": rule(json!({"installed": false, "matches": false}))}}),
+    );
+    assert!(
+        text.contains(
+            "warn dns: .test lookups do not reach the devlanes DNS server: no NRPT rule for .test"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("fix: devlanes certs trust --resolver"),
+        "{text}"
+    );
+    // A server on another port is out of an NRPT rule's reach.
+    let text = render_text(
+        Method::Doctor,
+        &json!({"dns": {"tld": "test", "listen": "127.53.0.1:5353", "running": true,
+            "error": null, "nrpt_rule": rule(json!({"matches": false}))}}),
+    );
+    assert!(
+        text.contains(
+            "warn dns: .test lookups do not reach the devlanes DNS server: it listens on \
+             127.53.0.1:5353, and an NRPT rule can only reach port 53"
+        ),
+        "{text}"
+    );
+    // A daemon without the rule's facts still reports its server.
+    let text = render_text(
+        Method::Doctor,
+        &json!({"dns": {"tld": "test", "listen": "127.53.0.1:53", "running": true,
+            "error": null, "nrpt_rule": null}}),
+    );
+    assert!(
+        text.contains("ok dns: DNS server for .test on 127.53.0.1:53"),
+        "{text}"
+    );
+}
+
 /// `lane.warning` events are one line in every mode; outside a start they name the lane.
 #[test]
 fn lane_warning_events_are_one_line() {
@@ -1219,6 +1842,50 @@ fn lane_warning_events_are_one_line() {
     warn acme@2: api.example.com is outside the CA's names; HTTPS will fail; try api.acme.test
     ");
     // Agents see a start's warnings once, in its result.
+}
+
+/// A worktree on a Windows drive inside WSL warns at start with the path, the
+/// drive and where to move it.
+#[test]
+fn windows_drive_warning_names_the_drive() {
+    let event = Event {
+        seq: 1,
+        event: "lane.warning".into(),
+        data: json!({"lane": "acme@2", "code": "windows_drive", "data": {
+            "lane": "acme@2", "path": "/mnt/c/src/acme-2", "drive": r"C:\",
+        }}),
+    };
+    let line = runtime(OutputMode::Plain)
+        .reporter()
+        .event(Method::Subscribe, &event)
+        .expect("event")
+        .stdout;
+    assert_eq!(
+        line.trim_end(),
+        r"warn acme@2: /mnt/c/src/acme-2 is on the Windows drive C:\: file access is slow and file watching misses edits made from Windows; move the repository to the Linux filesystem (for example ~/src)"
+    );
+}
+
+/// `daemon install` inside a WSL distro without systemd says how to turn it on.
+#[test]
+fn wsl_systemd_off_says_how_to_enable_it() {
+    let rendered = runtime(OutputMode::Plain)
+        .reporter()
+        .error(&RpcError::new("wsl_systemd_off", json!({}), 1), None);
+    assert!(
+        rendered
+            .stderr
+            .contains("systemd is not running in this WSL distro, and daemon install needs it"),
+        "{}",
+        rendered.stderr
+    );
+    assert!(
+        rendered
+            .stderr
+            .contains("set systemd=true under [boot] in /etc/wsl.conf"),
+        "{}",
+        rendered.stderr
+    );
 }
 
 #[test]
@@ -1369,4 +2036,63 @@ fn daemon_errors_are_worded_with_hints() {
         output.push_str(&rendered.stderr);
     }
     insta::assert_snapshot!("render_daemon_errors", output);
+}
+
+/// The Windows hosts service's codes: errors carry the daemon's or installer's
+/// message and point at `certs trust --hosts`; `why` names the affected hosts.
+#[test]
+fn hosts_service_codes_are_worded() {
+    for code in [
+        "service_missing",
+        "service_denied",
+        "service_untrusted",
+        "service_source_missing",
+        "service_source_rejected",
+        "elevation_cancelled",
+    ] {
+        assert!(has_wording(code), "{code}");
+    }
+    let reporter = runtime(OutputMode::Plain).reporter();
+    let missing = reporter.error(
+        &RpcError::new(
+            "service_missing",
+            json!({"message": "the devlanes hosts service is not running"}),
+            1,
+        ),
+        None,
+    );
+    assert!(
+        missing
+            .stderr
+            .contains("the devlanes hosts service is not running"),
+        "{missing:?}"
+    );
+    assert!(
+        missing.stderr.contains("devlanes certs trust --hosts"),
+        "{missing:?}"
+    );
+    let cancelled = reporter.error(&RpcError::new("elevation_cancelled", json!({}), 1), None);
+    assert!(
+        cancelled
+            .stderr
+            .contains("administrator prompt was declined"),
+        "{cancelled:?}"
+    );
+    let why = json!({
+        "lane": "acme@2", "unit": "web", "state": "running",
+        "reasons": [
+            {"code": "service_missing", "data": {"hosts": ["web.acme-2.localhost"], "message": "m"}},
+            {"code": "service_denied", "data": {"hosts": ["web.acme-2.localhost"], "message": "m"}},
+            {"code": "service_untrusted", "data": {"hosts": ["web.acme-2.localhost"], "message": "m"}},
+        ],
+    });
+    let text = render_text(Method::Why, &why);
+    for line in [
+        "the devlanes hosts service is not installed or not running, so web.acme-2.localhost may not resolve",
+        "the devlanes hosts service serves another user, not this one, so web.acme-2.localhost may not resolve",
+        "the hosts service's pipe is held by another program, not the devlanes service, so web.acme-2.localhost may not resolve",
+    ] {
+        assert!(text.contains(line), "{line}\n{text}");
+    }
+    assert!(text.contains("devlanes certs trust --hosts"), "{text}");
 }

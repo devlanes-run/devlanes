@@ -33,7 +33,7 @@ use tokio::{
 use super::HostConn;
 use crate::{
     engine::Inner,
-    integrations::{RouteEntry, RouteStatus},
+    integrations::{PortInspector, RouteEntry, RouteStatus},
     model::lock,
 };
 
@@ -314,8 +314,17 @@ impl Mirror {
                 .copied()
                 .filter(|address| !mirror.bound.iter().any(|b| b.address == *address))
                 .collect();
+            let shadowed = if missing.is_empty() {
+                None
+            } else {
+                shadowed_holder(engine.integ.ports.as_ref(), *port).await
+            };
             for address in missing {
-                match bind(address, *port) {
+                let bound = match shadowed {
+                    Some(_) => Err(std::io::Error::from(std::io::ErrorKind::AddrInUse)),
+                    None => bind(address, *port),
+                };
+                match bound {
                     Ok(listener) => {
                         mirror.conflicts.remove(&address);
                         mirror.bound.push(Bound {
@@ -326,23 +335,31 @@ impl Mirror {
                     // No IPv6 loopback on this machine: nothing to mirror there.
                     Err(error) if error.kind() == std::io::ErrorKind::AddrNotAvailable => {}
                     Err(error) => {
-                        let in_use = error.kind() == std::io::ErrorKind::AddrInUse;
-                        let pid = if in_use {
-                            engine.integ.ports.holder(*port).await
-                        } else {
-                            None
+                        let pid = match shadowed {
+                            Some(pid) => Some(pid),
+                            None if maybe_held(&error) => engine.integ.ports.holder(*port).await,
+                            None => None,
                         };
-                        let message = if in_use {
+                        let in_use = error.kind() == std::io::ErrorKind::AddrInUse || pid.is_some();
+                        let (code, message) = if in_use {
                             let holder = match pid {
                                 Some(pid) => format!("{} (pid {pid})", process_name(pid).await),
                                 None => "another process".to_owned(),
                             };
-                            format!(
-                                "port {port} is in use on this machine by {holder}; not mirrored"
+                            (
+                                "port_in_use",
+                                format!(
+                                    "port {port} is in use on this machine by {holder}; not mirrored"
+                                ),
                             )
+                        } else if let Some(message) = reserved(&error, *port).await {
+                            ("port_reserved", message)
                         } else {
-                            format!(
-                                "port {port} cannot be bound on {address}: {error}; not mirrored"
+                            (
+                                "port_in_use",
+                                format!(
+                                    "port {port} cannot be bound on {address}: {error}; not mirrored"
+                                ),
                             )
                         };
                         if !mirror.conflicts.contains_key(&address) {
@@ -351,7 +368,7 @@ impl Mirror {
                                 wire::WARNING_EVENT,
                                 json!({
                                     "host": self.conn.name,
-                                    "code": "port_in_use",
+                                    "code": code,
                                     "message": message,
                                     "port": port,
                                     "address": address,
@@ -587,17 +604,88 @@ async fn process_name(pid: u32) -> String {
     .unwrap_or_else(|| "an unknown process".to_owned())
 }
 
-/// Binds a mirror listener. `SO_REUSEADDR` only on Linux, where it merely skips
-/// `TIME_WAIT` on rebinds: on macOS it would let this listener shadow another
-/// process bound to the wildcard address instead of reporting the conflict.
+/// Binds a mirror listener.
 fn bind(address: IpAddr, port: u16) -> std::io::Result<TcpListener> {
     let socket = match address {
         IpAddr::V4(_) => TcpSocket::new_v4()?,
         IpAddr::V6(_) => TcpSocket::new_v6()?,
     };
-    socket.set_reuseaddr(cfg!(target_os = "linux"))?;
+    claim(&socket)?;
     socket.bind(SocketAddr::new(address, port))?;
     socket.listen(1024)
+}
+
+/// `SO_REUSEADDR` only on Linux, where it merely skips `TIME_WAIT` on rebinds: on
+/// macOS it would let this listener shadow another process bound to the wildcard
+/// address instead of reporting the conflict.
+#[cfg(unix)]
+fn claim(socket: &TcpSocket) -> std::io::Result<()> {
+    socket.set_reuseaddr(cfg!(target_os = "linux"))
+}
+
+/// Mirrors bind loopback only, where `SO_EXCLUSIVEADDRUSE` changes no later bind's
+/// outcome (Microsoft's tables) and, as documented, may keep the port from being
+/// bound again while accepted connections linger, so the defaults stay.
+#[cfg(windows)]
+fn claim(_socket: &TcpSocket) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// Another process's wildcard listener on `port`. Unix refuses a loopback bind over
+/// it with `AddrInUse` (Linux because it is listening, macOS because the mirror
+/// sets no `SO_REUSEADDR`), so `bind` reports it and only Windows looks.
+#[cfg(unix)]
+async fn shadowed_holder(_ports: &dyn PortInspector, _port: u16) -> Option<u32> {
+    None
+}
+
+/// Another process's wildcard listener on `port`: Windows lets a loopback bind
+/// succeed over it and take its loopback connections, so the mirror reports the
+/// conflict instead of binding.
+#[cfg(windows)]
+async fn shadowed_holder(ports: &dyn PortInspector, port: u16) -> Option<u32> {
+    ports.wildcard_holder(port).await
+}
+
+/// Whether a failed bind may mean another socket holds the port, so its holder
+/// is worth looking up.
+#[cfg(unix)]
+fn maybe_held(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::AddrInUse
+}
+
+/// A port another program holds with `SO_EXCLUSIVEADDRUSE` fails with access
+/// denied, which an excluded port range returns too; the holder lookup tells them
+/// apart.
+#[cfg(windows)]
+fn maybe_held(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+    )
+}
+
+/// Unix reserves no port ranges this way.
+#[cfg(unix)]
+async fn reserved(_error: &std::io::Error, _port: u16) -> Option<String> {
+    None
+}
+
+/// The warning for a bind refused inside a port range Windows reserves
+/// (Hyper-V, WSL, Docker Desktop). Winsock answers such a bind with access
+/// denied (WSAEACCES), as it does for a port another program holds exclusively,
+/// so this is asked only once no holder was found.
+#[cfg(windows)]
+async fn reserved(error: &std::io::Error, port: u16) -> Option<String> {
+    if error.kind() != std::io::ErrorKind::PermissionDenied
+        || !crate::excluded_ports::RESERVED.get().await.reserves(port)
+    {
+        return None;
+    }
+    Some(format!(
+        "port {port} is inside a port range Windows reserves (Hyper-V, WSL and Docker Desktop reserve them); not mirrored. `{}` lists them; set ports.range on the box clear of them",
+        crate::excluded_ports::LIST_COMMAND
+    ))
 }
 
 /// Accepts local connections and splices each into a data stream to the box.
@@ -637,5 +725,64 @@ async fn splice(stream: TcpStream, port: u16, conn: Arc<HostConn>) {
         Err(error) => {
             tracing::debug!(%error, port, host = %conn.name, "box refused a mirrored connection")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mirror bind inside a range Windows reserves (27339 on the development
+    /// machine; the first reserved port elsewhere) is refused with access
+    /// denied and reported as reserved, with the `netsh` command that lists
+    /// the ranges. A free port gets no such message.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn reserved_ports_are_reported_with_the_netsh_hint() {
+        let reading = crate::excluded_ports::RESERVED.get().await;
+        let port = if reading.reserves(27339) {
+            Some(27339)
+        } else {
+            reading.ranges.first().map(|(start, _)| *start)
+        };
+        let Some(port) = port.filter(|port| *port != 0) else {
+            eprintln!("skipping: this machine reserves no TCP port ranges");
+            return;
+        };
+        let error = match bind(IpAddr::V4(Ipv4Addr::LOCALHOST), port) {
+            Ok(_) => panic!("port {port} is reserved but bound"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "{error}"
+        );
+        let message = reserved(&error, port).await.expect("reported as reserved");
+        assert!(
+            message.starts_with(&format!(
+                "port {port} is inside a port range Windows reserves"
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains("netsh int ipv4 show excludedportrange"),
+            "{message}"
+        );
+
+        let free = bind(IpAddr::V4(Ipv4Addr::LOCALHOST), 0).expect("ephemeral port");
+        let free = free.local_addr().expect("address").port();
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(reserved(&denied, free).await, None);
+        let busy = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+        assert_eq!(reserved(&busy, port).await, None);
+    }
+
+    /// Unix reports no reserved ranges, whatever the error.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn unix_reserves_no_ports() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        assert_eq!(reserved(&denied, 27339).await, None);
     }
 }

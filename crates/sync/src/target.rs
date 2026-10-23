@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::fs::{self, Permissions};
+use std::fs;
 use std::io::{self, Write as _};
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -11,6 +11,8 @@ use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::mode::{mode_of, persist_with_mode};
+use crate::names::{fold_case, stored_elsewhere, unusable_name};
 use crate::{RelPath, SyncError};
 
 /// Prefix of in-flight temp files; manifests skip them so a crash never syncs one.
@@ -162,7 +164,7 @@ impl LocalTarget {
             walk(&root, |rel, path| {
                 let meta = fs::symlink_metadata(path)?;
                 let mtime = meta.modified().ok();
-                let mode = meta.permissions().mode() & MODE_MASK;
+                let mode = mode_of(&meta);
                 let known = cache.entries.get(&rel).filter(|known| {
                     known.size == meta.len() && known.mode == mode && mtime == Some(known.mtime)
                 });
@@ -184,7 +186,9 @@ impl LocalTarget {
     }
 
     /// Starts writing `path` in pieces; nothing is visible until [`PartialFile::commit`].
+    /// A name this OS cannot hold is refused with [`SyncError::InvalidPath`].
     pub async fn begin_file(&self, path: &RelPath, mode: u32) -> Result<PartialFile, SyncError> {
+        refuse_unusable(path)?;
         let root = self.root.clone();
         let rel = path.clone();
         let dest = path.to_path(&self.root);
@@ -295,14 +299,50 @@ impl PartialFile {
         })?;
         let (dest, mode, owned) = (self.dest.clone(), self.mode, self.owned);
         blocking(format!("writing {}", self.dest.display()), move || {
+            refuse_other_entry(&dest)?;
             clear_directory(&dest, owned)?;
-            temp.as_file()
-                .set_permissions(Permissions::from_mode(mode & MODE_MASK))?;
-            temp.persist(&dest).map_err(|error| error.error)?;
-            Ok(())
+            persist_with_mode(temp, &dest, mode)
         })
         .await
     }
+}
+
+/// Refuses to write `dest` when the entry it reaches is stored under another
+/// name (on Windows an 8.3 short name, or the same name in another case),
+/// since the write would replace that other file.
+fn refuse_other_entry(dest: &Path) -> io::Result<()> {
+    match stored_elsewhere(dest)? {
+        Some(stored) => Err(reaches_other(dest, &stored)),
+        None => Ok(()),
+    }
+}
+
+/// The error for a path that reaches the existing entry `stored` instead.
+fn reaches_other(path: &Path, stored: &OsStr) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "{} reaches the existing {} on this file system; not replaced",
+            path.display(),
+            stored.to_string_lossy()
+        ),
+    )
+}
+
+/// The stored name of `dir`, an existing entry on the way to a file, when
+/// going through it would act on another entry: an 8.3 short name
+/// (`LONGFO~1` reaching `longfolder-name`), or a file in another case that a
+/// folder would replace. A folder in another case passes, because box folders
+/// `Dist/` and `dist/` share one folder on purpose (see [`crate::CaseCollisions`]).
+fn parent_elsewhere(dir: &Path, is_dir: bool) -> io::Result<Option<OsString>> {
+    let Some(stored) = stored_elsewhere(dir)? else {
+        return Ok(None);
+    };
+    let same_folder = is_dir
+        && dir.file_name().is_some_and(|name| {
+            fold_case(&name.to_string_lossy()) == fold_case(&stored.to_string_lossy())
+        });
+    Ok((!same_folder).then_some(stored))
 }
 
 /// Makes `root` a devlanes-owned destination, or explains why it cannot be one.
@@ -375,6 +415,18 @@ fn clear_directory(dest: &Path, owned: bool) -> io::Result<()> {
     }
 }
 
+/// Refuses a path with a name this OS cannot hold, such as `aux.js` or `a:b`
+/// on Windows, before it reaches the file system. Every path passes on Unix.
+pub fn refuse_unusable(path: &RelPath) -> Result<(), SyncError> {
+    if unusable_name(path) {
+        return Err(SyncError::InvalidPath {
+            path: path.to_string(),
+            reason: "it is not a valid file name on this system",
+        });
+    }
+    Ok(())
+}
+
 /// Runs blocking filesystem work off the async executor.
 async fn blocking<T: Send + 'static>(
     context: String,
@@ -401,12 +453,14 @@ impl SyncTarget for LocalTarget {
     }
 
     /// Writes a sibling temp file, sets its mode, then renames it over the target.
+    /// A name this OS cannot hold is refused with [`SyncError::InvalidPath`].
     async fn write_file(
         &self,
         path: &RelPath,
         contents: Bytes,
         mode: u32,
     ) -> Result<(), SyncError> {
+        refuse_unusable(path)?;
         let root = self.root.clone();
         let rel = path.clone();
         let owned = self.owned;
@@ -419,6 +473,11 @@ impl SyncTarget for LocalTarget {
 
     /// Deletes the file and prunes empty parents up to the root.
     async fn remove(&self, path: &RelPath) -> Result<(), SyncError> {
+        // Such a file cannot exist here, and on Windows the name could reach a
+        // device (`aux`) or another file (`a.` is `a`) instead.
+        if unusable_name(path) {
+            return Ok(());
+        }
         let root = self.root.clone();
         let rel = path.clone();
         blocking(
@@ -444,7 +503,7 @@ fn local_manifest(root: &Path) -> io::Result<Manifest> {
             rel,
             ManifestEntry {
                 size: meta.len(),
-                mode: meta.permissions().mode() & MODE_MASK,
+                mode: mode_of(&meta),
                 hash,
             },
         );
@@ -456,17 +515,22 @@ fn local_manifest(root: &Path) -> io::Result<Manifest> {
 /// Makes every directory from `root` to `rel`'s parent a real directory.
 ///
 /// A file or symlink in the way is replaced: the source now has a directory there,
-/// and following a symlink could write outside the root.
+/// and following a symlink could write outside the root. An entry reached under
+/// another name ([`parent_elsewhere`]) is refused instead.
 fn prepare_parents(root: &Path, rel: &RelPath) -> io::Result<PathBuf> {
     fs::create_dir_all(root)?;
     let mut dir = root.to_path_buf();
     for name in rel.parent_names() {
         dir.push(name);
         match fs::symlink_metadata(&dir) {
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => {
-                fs::remove_file(&dir)?;
-                fs::create_dir(&dir)?;
+            Ok(meta) => {
+                if let Some(stored) = parent_elsewhere(&dir, meta.is_dir())? {
+                    return Err(reaches_other(&dir, &stored));
+                }
+                if !meta.is_dir() {
+                    fs::remove_file(&dir)?;
+                    fs::create_dir(&dir)?;
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => fs::create_dir(&dir)?,
             Err(error) => return Err(error),
@@ -485,6 +549,7 @@ fn write_local(
 ) -> io::Result<()> {
     let parent = prepare_parents(root, rel)?;
     let dest = rel.to_path(root);
+    refuse_other_entry(&dest)?;
     // The source turned this directory into a file.
     clear_directory(&dest, owned)?;
     let mut temp = tempfile::Builder::new()
@@ -492,10 +557,7 @@ fn write_local(
         .suffix(".tmp")
         .tempfile_in(&parent)?;
     temp.write_all(contents)?;
-    temp.as_file()
-        .set_permissions(Permissions::from_mode(mode & MODE_MASK))?;
-    temp.persist(&dest).map_err(|error| error.error)?;
-    Ok(())
+    persist_with_mode(temp, &dest, mode)
 }
 
 /// Blocking removal with empty-parent pruning.
@@ -509,8 +571,16 @@ fn remove_local(root: &Path, rel: &RelPath) -> io::Result<()> {
             Ok(meta) if meta.is_dir() => parents.push(dir.clone()),
             _ => return Ok(()),
         }
+        // A short name reaches another folder; the file is not in this one.
+        if parent_elsewhere(&dir, true)?.is_some() {
+            return Ok(());
+        }
     }
     let dest = rel.to_path(root);
+    // Another file answers to this name (an 8.3 short name); it is not this one.
+    if stored_elsewhere(&dest)?.is_some() {
+        return Ok(());
+    }
     match fs::symlink_metadata(&dest) {
         Ok(meta) if !meta.is_dir() => match fs::remove_file(&dest) {
             Ok(()) => {}
@@ -553,11 +623,15 @@ mod tests {
             .expect("write");
         let path = dir.path().join("out/a/b/run.sh");
         assert_eq!(fs::read(&path).expect("read"), b"#!/bin/sh\n");
-        assert_eq!(
-            fs::metadata(&path).expect("meta").permissions().mode() & 0o7777,
-            0o755,
-            "setuid dropped"
-        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&path).expect("meta").permissions().mode() & 0o7777,
+                0o755,
+                "setuid dropped"
+            );
+        }
         let manifest = target.manifest().await.expect("manifest");
         assert_eq!(manifest.len(), 1);
         assert_eq!(
@@ -574,6 +648,191 @@ mod tests {
             .expect("absent is fine");
     }
 
+    /// Windows keeps only the read-only attribute: a mode without write bits
+    /// sets it, exec bits are dropped, and read-only files are still replaced
+    /// and removed.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_maps_modes_to_the_read_only_attribute() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = LocalTarget::new(dir.path().join("out"));
+        let path = dir.path().join("out/locked.txt");
+        target
+            .write_file(&rel("locked.txt"), Bytes::from_static(b"one"), 0o555)
+            .await
+            .expect("write read-only");
+        assert!(fs::metadata(&path).expect("meta").permissions().readonly());
+        assert_eq!(
+            target.manifest().await.expect("manifest")[&rel("locked.txt")].mode,
+            0o444
+        );
+
+        target
+            .write_file(&rel("locked.txt"), Bytes::from_static(b"two"), 0o755)
+            .await
+            .expect("replace read-only");
+        assert_eq!(fs::read(&path).expect("read"), b"two");
+        assert!(!fs::metadata(&path).expect("meta").permissions().readonly());
+        assert_eq!(
+            target.manifest().await.expect("manifest")[&rel("locked.txt")].mode,
+            0o644
+        );
+
+        target
+            .write_file(&rel("locked.txt"), Bytes::from_static(b"three"), 0o444)
+            .await
+            .expect("write read-only again");
+        target.remove(&rel("locked.txt")).await.expect("remove");
+        assert!(!path.exists());
+    }
+
+    /// Names Windows cannot hold are refused before anything is written, and
+    /// removing one touches nothing: `aux` would reach a device and `keep.`
+    /// the file `keep`.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_refuses_names_it_cannot_hold() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let target = LocalTarget::new(dir.path().join("out"));
+        target
+            .write_file(&rel("keep"), Bytes::from_static(b"kept"), 0o644)
+            .await
+            .expect("write");
+        for bad in ["aux.js", "dist/con", "keep.", "a:b", r"a\b"] {
+            let written = target
+                .write_file(&rel(bad), Bytes::from_static(b"x"), 0o644)
+                .await;
+            assert!(
+                matches!(written, Err(SyncError::InvalidPath { .. })),
+                "{bad}: {written:?}"
+            );
+            assert!(
+                matches!(
+                    target.begin_file(&rel(bad), 0o644).await,
+                    Err(SyncError::InvalidPath { .. })
+                ),
+                "{bad}"
+            );
+            target.remove(&rel(bad)).await.expect("removing is a no-op");
+        }
+        assert_eq!(
+            fs::read(dir.path().join("out/keep")).expect("read"),
+            b"kept"
+        );
+        assert_eq!(target.files().await.expect("files"), vec![rel("keep")]);
+    }
+
+    /// A box path that is another file's 8.3 short name never reaches that
+    /// file: writing it is refused either way, and removing it leaves the file.
+    /// Skipped when the volume makes no short names.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn short_names_never_reach_other_files() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("out");
+        let target = LocalTarget::owned(&root).await.expect("claim");
+        target
+            .write_file(&rel("readme-long.md"), Bytes::from_static(b"long"), 0o644)
+            .await
+            .expect("write");
+        if !root.join("README~1.MD").exists() {
+            eprintln!("8.3 names are off on this volume; nothing to check");
+            return;
+        }
+        let written = target
+            .write_file(&rel("README~1.MD"), Bytes::from_static(b"short"), 0o644)
+            .await;
+        assert!(written.is_err(), "{written:?}");
+        let mut file = target
+            .begin_file(&rel("README~1.MD"), 0o644)
+            .await
+            .expect("begin");
+        file.append(Bytes::from_static(b"short"))
+            .await
+            .expect("append");
+        assert!(file.commit().await.is_err(), "the commit is refused");
+        target
+            .remove(&rel("README~1.MD"))
+            .await
+            .expect("removing is a no-op");
+        assert_eq!(
+            fs::read(root.join("readme-long.md")).expect("read"),
+            b"long"
+        );
+        assert_eq!(
+            target.files().await.expect("files"),
+            vec![rel("readme-long.md")]
+        );
+    }
+
+    /// A box path whose folder is another entry's 8.3 short name never goes
+    /// through that entry: a file is not turned into a folder, a folder is not
+    /// written into, and nothing is removed from it. A folder reached in
+    /// another case is the same folder and is used. Skipped when the volume
+    /// makes no short names.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn short_name_folders_never_reach_other_entries() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("out");
+        let target = LocalTarget::owned(&root).await.expect("claim");
+        for (path, contents) in [
+            ("readme-long.md", b"long".as_slice()),
+            ("longfolder-name/keep.js", b"keep".as_slice()),
+        ] {
+            target
+                .write_file(&rel(path), Bytes::copy_from_slice(contents), 0o644)
+                .await
+                .expect("write");
+        }
+        if !root.join("README~1.MD").exists() || !root.join("LONGFO~1").exists() {
+            eprintln!("8.3 names are off on this volume; nothing to check");
+            return;
+        }
+        let begun = target.begin_file(&rel("README~1.MD/x.js"), 0o644).await;
+        assert!(begun.is_err(), "the file became a folder");
+        let written = target
+            .write_file(&rel("README~1.MD/x.js"), Bytes::from_static(b"x"), 0o644)
+            .await;
+        assert!(written.is_err(), "{written:?}");
+        let written = target
+            .write_file(&rel("LONGFO~1/x.js"), Bytes::from_static(b"x"), 0o644)
+            .await;
+        assert!(written.is_err(), "{written:?}");
+        assert!(
+            target
+                .begin_file(&rel("LONGFO~1/y.js"), 0o644)
+                .await
+                .is_err(),
+            "a temp file went into the other folder"
+        );
+        target
+            .remove(&rel("LONGFO~1/keep.js"))
+            .await
+            .expect("removing is a no-op");
+        target
+            .write_file(
+                &rel("LongFolder-Name/case.js"),
+                Bytes::from_static(b"c"),
+                0o644,
+            )
+            .await
+            .expect("a folder in another case is the same folder");
+        assert_eq!(
+            fs::read(root.join("readme-long.md")).expect("read"),
+            b"long"
+        );
+        assert_eq!(
+            target.files().await.expect("files"),
+            vec![
+                rel("longfolder-name/case.js"),
+                rel("longfolder-name/keep.js"),
+                rel("readme-long.md")
+            ]
+        );
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn never_follows_symlinked_directories() {
         let dir = tempfile::tempdir().expect("tempdir");

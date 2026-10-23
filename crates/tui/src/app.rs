@@ -788,6 +788,9 @@ pub struct App {
     pub service_report: Option<serde_json::Value>,
     /// The user's home, so paths under it show as `~/…`; `None` shows them whole.
     pub user_home: Option<PathBuf>,
+    /// Copies go to the system clipboard (Windows, outside SSH) instead of
+    /// OSC 52, so the copy notices need not hedge about the terminal.
+    pub system_clipboard: bool,
     /// [`Effect::QuitWith`] runs; q again quits at once.
     quitting: bool,
 }
@@ -851,6 +854,7 @@ impl App {
             time_zone: jiff::tz::TimeZone::UTC,
             service_report: None,
             user_home: None,
+            system_clipboard: false,
             quitting: false,
         }
     }
@@ -1745,7 +1749,10 @@ impl App {
             && let Some(lane) = self
                 .lanes
                 .iter()
-                .filter(|lane| !lane.path.as_os_str().is_empty() && cwd.starts_with(&lane.path))
+                .filter(|lane| {
+                    !lane.path.as_os_str().is_empty()
+                        && devlanes_core::paths::path_starts_with(cwd, &lane.path)
+                })
                 .max_by_key(|lane| lane.path.as_os_str().len())
         {
             return Some(lane.reference.clone());
@@ -3087,7 +3094,12 @@ impl App {
                 }
                 effects.push(Effect::Copy(text.join("\n")));
                 self.daemon.copy = None;
-                self.set_notice("copied (OSC 52; some terminals block it)".into());
+                let notice = if self.system_clipboard {
+                    "copied"
+                } else {
+                    "copied (OSC 52; some terminals block it)"
+                };
+                self.set_notice(notice.into());
                 return;
             }
             KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('q') => {
@@ -4091,10 +4103,12 @@ impl App {
                 if !text.is_empty() {
                     effects.push(Effect::Copy(text));
                     // OSC 52 has no reply: the terminal may ignore it silently.
-                    self.set_notice(
+                    let notice = if self.system_clipboard {
+                        "copied"
+                    } else {
                         "copied with OSC 52; it reaches the clipboard if the terminal allows that"
-                            .into(),
-                    );
+                    };
+                    self.set_notice(notice.into());
                 }
             }
             _ => {}
@@ -4395,7 +4409,7 @@ impl App {
             if !devlanes_proto::release::is_newer(latest, own) {
                 return None;
             }
-            let command = self.release.0.as_ref()?.upgrade_command(latest);
+            let command = self.release.0.as_ref()?.upgrade_advice(latest);
             Some((
                 update::update_key(latest),
                 format!("{latest} available: {command}"),
@@ -4585,7 +4599,7 @@ pub fn unit_ref(lane: &str, unit: &str) -> String {
 fn failure_words(failure: &devlanes_proto::UnitFailureData) -> Worded {
     let mut worded = match (&failure.reason, failure.exit_code) {
         (Some(reason), _) => words::rpc(reason),
-        (None, Some(code)) => Worded::local(&format!("exited with code {code}")),
+        (None, Some(code)) => Worded::local(&words::exited_with(code)),
         (None, None) => Worded::local("never became ready"),
     };
     worded

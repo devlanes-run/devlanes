@@ -205,7 +205,9 @@ impl Inner {
             )
         };
         if let Some(extra) = extra {
-            overrides.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+            for (name, value) in extra {
+                devlanes_core::env::insert(&mut overrides, name.clone(), value.clone());
+            }
         }
         let facts = self.facts(project, lane)?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
@@ -231,6 +233,7 @@ impl Inner {
         input.script_runners = &self.integ.script_runners;
         input.ca_env = &self.integ.ca_env;
         input.public_https_port = self.integ.routes.https_port();
+        input.shell = &self.integ.shell;
         input.only = only;
         devlanes_resolve::resolve_lane(input)
             .await
@@ -398,6 +401,7 @@ impl Inner {
                     devlanes_resolve::container_ready(
                         ready,
                         cwd,
+                        self.integ.shell.kind,
                         &context,
                         &format!("{path}.ready"),
                     )
@@ -466,7 +470,7 @@ impl Inner {
                 .opts
                 .home
                 .join("infra")
-                .join(project.name())
+                .join(devlanes_core::paths::disk_name(&project.name()))
                 .join(format!("lane{index}")),
         })
     }

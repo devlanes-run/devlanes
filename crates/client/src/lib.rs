@@ -1,4 +1,5 @@
-//! Thin Unix-socket client shared by CLI, completion, and TUI frontends.
+//! Thin daemon client shared by CLI, completion, and TUI frontends. It talks over the
+//! local endpoint from [`devlanes_ipc::local`].
 
 mod paths;
 pub mod restart;
@@ -7,15 +8,17 @@ pub mod update;
 use std::{collections::VecDeque, path::PathBuf, process::Stdio, time::Duration};
 
 use bytes::Bytes;
-use devlanes_ipc::Connection;
 pub use devlanes_ipc::Frame;
+use devlanes_ipc::{
+    Connection,
+    local::{self, LocalStream, ProbeError},
+};
 pub use devlanes_proto::{Context, Hello, Method, RpcError};
 use devlanes_proto::{Control, Outcome, PROTOCOL_VERSION, Request};
-pub use paths::Paths;
+pub use paths::{Paths, user_home};
 use serde_json::Value;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    net::UnixStream,
     process::Command,
     time::{Instant, sleep, timeout},
 };
@@ -88,7 +91,7 @@ impl Error {
 
 /// One client serializes requests; use begin_request/next_frame for streaming consumers.
 pub struct Client {
-    connection: Connection<UnixStream>,
+    connection: Connection<LocalStream>,
     pub peer: Hello,
     /// True when this connection's `connect_or_spawn` started the daemon; `devlanes with`
     /// stops only a daemon it started itself.
@@ -149,8 +152,8 @@ impl Client {
     /// Connects to the socket and exchanges hellos within [`CONNECT_TIMEOUT`].
     async fn exchange(paths: &Paths, strict: bool) -> Result<Self> {
         timeout(CONNECT_TIMEOUT, async {
-            let stream = UnixStream::connect(&paths.socket).await?;
-            if stream.peer_cred()?.uid() != rustix::process::geteuid().as_raw() {
+            let stream = local::connect(&paths.socket).await?;
+            if !stream.peer_is_current_user()? {
                 return Err(Error::WrongPeer);
             }
             let mut connection = Connection::new(stream);
@@ -210,6 +213,7 @@ impl Client {
         let begun = Instant::now();
         let owned_paths = paths.clone();
         tokio::task::spawn_blocking(move || {
+            refuse_elevation()?;
             owned_paths.prepare()?;
             probe_socket(&owned_paths)
         })
@@ -227,7 +231,7 @@ impl Client {
         command
             .env_clear()
             .envs(daemon_env(std::env::vars_os(), remove_env));
-        let mut child = command
+        command
             .args(["daemon", "run"])
             .env("DEVLANES_HOME", &paths.home)
             .env("DEVLANES_READY_FD", "1")
@@ -235,8 +239,8 @@ impl Client {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(false)
-            .spawn()?;
+            .kill_on_drop(false);
+        let mut child = spawn_daemon(&mut command)?;
         let stdout = child
             .stdout
             .take()
@@ -477,11 +481,94 @@ pub mod diagnostics {
     }
 }
 
+/// Unix spawns the daemon whoever the user is.
+#[cfg(unix)]
+fn refuse_elevation() -> Result<()> {
+    Ok(())
+}
+
+/// The daemon would refuse to run elevated anyway; failing here, before
+/// `prepare()`, also keeps an elevated shell from creating the home.
+#[cfg(windows)]
+fn refuse_elevation() -> Result<()> {
+    use devlanes_sys::windows::token::{ELEVATED_REASON, elevation_refused};
+    if elevation_refused()? {
+        return Err(Error::Startup(ELEVATED_REASON.into()));
+    }
+    Ok(())
+}
+
+/// Starts the daemon; on Unix it leaves the terminal's session itself (`setsid`).
+#[cfg(unix)]
+fn spawn_daemon(command: &mut Command) -> std::io::Result<tokio::process::Child> {
+    command.spawn()
+}
+
+/// Starts the daemon detached ([`spawn_detached`]) without inheriting this
+/// process's standard handles: a shell reading devlanes' output
+/// (`$(devlanes status)`) would wait for the daemon to exit.
+#[cfg(windows)]
+fn spawn_daemon(command: &mut Command) -> std::io::Result<tokio::process::Child> {
+    devlanes_sys::windows::process::without_inherited_std_handles(|| {
+        spawn_detached(|flags| command.creation_flags(flags).spawn())
+    })
+}
+
+/// Runs `spawn` with the creation flags that start the daemon without a console,
+/// so the terminal's Ctrl-C and close events never reach it, and outside the
+/// terminal's job object, which some terminals kill when they close. A job that
+/// forbids breaking away refuses that flag with access denied; `spawn` then runs
+/// again without it and the daemon starts inside the job (`doctor` reports
+/// whether that job kills on close). Shared with the Windows logon launcher.
+#[cfg(windows)]
+pub fn spawn_detached<T>(mut spawn: impl FnMut(u32) -> std::io::Result<T>) -> std::io::Result<T> {
+    use devlanes_sys::windows::process::{CREATE_BREAKAWAY_FROM_JOB, DETACHED_PROCESS};
+    match spawn(DETACHED_PROCESS | CREATE_BREAKAWAY_FROM_JOB) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::debug!("the terminal's job refuses breakaway; the daemon starts inside it");
+            spawn(DETACHED_PROCESS)
+        }
+        result => result,
+    }
+}
+
 /// Detects explicit sandbox markers before any auto-spawn filesystem or process operations.
 pub fn sandbox_reason() -> Option<&'static str> {
     ["CODEX_SANDBOX", "APP_SANDBOX_CONTAINER_ID"]
         .into_iter()
+        .chain(PLATFORM_SANDBOX_MARKERS.iter().copied())
         .find(|name| std::env::var_os(name).is_some())
+        .or_else(sandboxed_token)
+}
+
+/// No markers beyond the shared ones on Unix.
+#[cfg(unix)]
+const PLATFORM_SANDBOX_MARKERS: &[&str] = &[];
+
+/// Codex sets `CODEX_SANDBOX` only for macOS Seatbelt. On Windows its sandboxed
+/// commands carry `CODEX_SANDBOX_NETWORK_DISABLED=1` (codex-rs/core/src/spawn.rs
+/// and sandboxing/mod.rs) and, from its unelevated Windows sandbox,
+/// `SBX_NONET_ACTIVE=1` (codex-rs/windows-sandbox-rs/src/env.rs and
+/// spawn_prep.rs), both only when network access is off.
+#[cfg(windows)]
+const PLATFORM_SANDBOX_MARKERS: &[&str] = &["CODEX_SANDBOX_NETWORK_DISABLED", "SBX_NONET_ACTIVE"];
+
+/// Unix relies on the markers and the bind probe.
+#[cfg(unix)]
+fn sandboxed_token() -> Option<&'static str> {
+    None
+}
+
+/// A restricted, AppContainer or low-integrity token, as Codex's unelevated
+/// Windows sandbox runs commands with. A daemon started from it would inherit
+/// the token, and clients refuse such a daemon anyway. A token that cannot be
+/// read is left to the checks that follow.
+#[cfg(windows)]
+fn sandboxed_token() -> Option<&'static str> {
+    use devlanes_sys::windows::token::{MEDIUM_INTEGRITY, current_facts};
+    let facts = current_facts().ok()?;
+    (facts.restricted || facts.app_container || facts.integrity < MEDIUM_INTEGRITY)
+        .then_some("restricted process token")
 }
 
 /// Variables an auto-spawned daemon inherits from the spawning shell, by exact name.
@@ -520,6 +607,79 @@ const DAEMON_ENV: &[&str] = &[
 /// CLI's settings and devlanes' own.
 const DAEMON_ENV_PREFIXES: &[&str] = &["LC_", "XDG_", "DOCKER_", "DEVLANES_"];
 
+/// devlanes variables that match a prefix above but never reach an auto-spawned
+/// daemon. The askpass pair belongs to one ssh run: a daemon spawned from a
+/// shell that has them would hand them to every unit. The daemon drops them
+/// from request environments too.
+const DAEMON_ENV_DENIED: &[&str] = devlanes_proto::remote::ASKPASS_ENV;
+
+/// Nothing extra on Unix.
+#[cfg(unix)]
+pub const PLATFORM_ENV: &[&str] = &[];
+
+/// What Windows programs expect: Winsock fails to start without `SystemRoot`
+/// (WSA error 10106), and helpers such as git and docker read the profile and
+/// program directories. The daemon passes the same list to Compose.
+#[cfg(windows)]
+pub const PLATFORM_ENV: &[&str] = &[
+    "SystemRoot",
+    "SystemDrive",
+    "windir",
+    "ComSpec",
+    "PATHEXT",
+    "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "COMPUTERNAME",
+    "APPDATA",
+    "LOCALAPPDATA",
+    "ProgramData",
+    "ALLUSERSPROFILE",
+    "PUBLIC",
+    "ProgramFiles",
+    "ProgramFiles(x86)",
+    "ProgramW6432",
+    "CommonProgramFiles",
+    "CommonProgramFiles(x86)",
+    "CommonProgramW6432",
+    "TEMP",
+    "TMP",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "OS",
+    "PROCESSOR_ARCHITECTURE",
+    "NUMBER_OF_PROCESSORS",
+    "PSModulePath",
+];
+
+/// Whether environment variable `name` is `listed`: exactly on Unix.
+#[cfg(unix)]
+pub fn env_name_eq(name: &str, listed: &str) -> bool {
+    name == listed
+}
+
+/// Whether environment variable `name` is `listed`: Windows names compare
+/// without case, and the environment usually spells `Path`.
+#[cfg(windows)]
+pub fn env_name_eq(name: &str, listed: &str) -> bool {
+    name.eq_ignore_ascii_case(listed)
+}
+
+/// Whether environment variable `name` starts with `prefix`, compared as
+/// [`env_name_eq`] does.
+pub fn env_name_has_prefix(name: &str, prefix: &str) -> bool {
+    name.get(..prefix.len())
+        .is_some_and(|start| env_name_eq(start, prefix))
+}
+
+/// The part of this process's environment a daemon started from it keeps, as
+/// [`Client::connect_or_spawn`] passes it: tokens and project variables stay
+/// out. For launchers that start `devlanes daemon run` themselves (the Windows
+/// logon launcher); they clear the rest of the environment.
+pub fn daemon_environment() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    daemon_env(std::env::vars_os(), &[])
+}
+
 /// The allowlisted part of `vars` for an auto-spawned daemon, minus `remove`.
 /// Anything else a shell carries (tokens, project variables) stays out of a
 /// process that serves every later shell.
@@ -531,28 +691,29 @@ fn daemon_env(
         let Some(name) = name.to_str() else {
             return false;
         };
-        !remove.contains(&name)
-            && (DAEMON_ENV.contains(&name)
+        !remove
+            .iter()
+            .chain(DAEMON_ENV_DENIED)
+            .any(|removed| env_name_eq(name, removed))
+            && (DAEMON_ENV
+                .iter()
+                .chain(PLATFORM_ENV)
+                .any(|listed| env_name_eq(name, listed))
                 || DAEMON_ENV_PREFIXES
                     .iter()
-                    .any(|prefix| name.starts_with(prefix)))
+                    .any(|prefix| env_name_has_prefix(name, prefix)))
     })
     .collect()
 }
 
 /// A bind probe catches socket restrictions even when the launcher omitted sandbox markers.
 fn probe_socket(paths: &Paths) -> Result<()> {
-    let parent = paths.socket.parent().ok_or(Error::InvalidSocketPath)?;
-    let path = tempfile::Builder::new()
-        .prefix("p")
-        .rand_bytes(3)
-        .tempfile_in(parent)?
-        .into_temp_path();
-    std::fs::remove_file(&path)?;
-    let listener = std::os::unix::net::UnixListener::bind(&path)
-        .map_err(|_| Error::Sandbox("Unix socket bind probe failed"))?;
-    drop(listener);
-    Ok(())
+    paths.socket.parent().ok_or(Error::InvalidSocketPath)?;
+    match local::probe(&paths.socket) {
+        Ok(()) => Ok(()),
+        Err(ProbeError::Setup(error)) => Err(error.into()),
+        Err(ProbeError::Endpoint(_)) => Err(Error::Sandbox("local endpoint bind probe failed")),
+    }
 }
 
 /// Accounts for control payloads too, so a short event count cannot conceal excessive memory.
@@ -571,7 +732,8 @@ mod tests {
 
     use super::daemon_env;
 
-    /// Allowlisted names and prefixes pass, secrets and removed names do not.
+    /// Allowlisted names and prefixes pass; secrets, removed names and the
+    /// denied devlanes variables do not.
     #[test]
     fn daemon_env_is_allowlisted() {
         let vars = [
@@ -581,6 +743,8 @@ mod tests {
             ("LC_ALL", "C"),
             ("DOCKER_HOST", "unix:///var/run/docker.sock"),
             ("DEVLANES_HOME", "/tmp/dl"),
+            ("DEVLANES_ASKPASS", "1"),
+            ("DEVLANES_ASKPASS_SOCKET", "/tmp/dl/run/ssh/a.sock"),
             ("XDG_CONFIG_HOME", "/tmp/xdg"),
             ("https_proxy", "http://proxy.example.invalid"),
             ("CI", "true"),
@@ -605,5 +769,26 @@ mod tests {
                 "CI"
             ]
         );
+    }
+
+    /// Windows keeps the system variables programs need and matches names without
+    /// case, as Windows does.
+    #[cfg(windows)]
+    #[test]
+    fn daemon_env_keeps_windows_variables() {
+        let vars = [
+            ("Path", r"C:\Windows"),
+            ("SystemRoot", r"C:\Windows"),
+            ("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            ("devlanes_home", r"C:\dl"),
+            ("devlanes_askpass_socket", r"\\.\pipe\devlanes-askpass-1-0"),
+            ("GITHUB_TOKEN", "secret"),
+        ]
+        .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        let kept: Vec<String> = daemon_env(vars.into_iter(), &["systemroot"])
+            .into_iter()
+            .filter_map(|(name, _)| name.into_string().ok())
+            .collect();
+        assert_eq!(kept, ["Path", "ProgramFiles(x86)", "devlanes_home"]);
     }
 }
