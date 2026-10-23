@@ -19,12 +19,16 @@ pub const NAME: &str = "vite";
 /// Address the dev server binds; the proxy and `self.url` use loopback.
 pub const HOST: &str = "127.0.0.1";
 
-/// Options under the service's `vite:` key.
+/// Options for `preset: vite`, which adds `--port <self.port> --strictPort --host 127.0.0.1`
+/// to the dev server command. `--strictPort` makes Vite exit when the port is taken instead of
+/// moving to another port the proxy does not know about.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"args":["--open"]}]))]
 pub struct ViteOptions {
-    /// Extra arguments appended after the preset's flags.
+    /// Extra arguments for the Vite command, added after the preset's port and host flags,
+    /// for example `[--mode, staging]`. A local override or `extends` child that sets `args`
+    /// replaces the inherited list. Default: none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [["--open"]]))]
     pub args: Option<Vec<String>>,

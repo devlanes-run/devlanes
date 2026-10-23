@@ -27,28 +27,37 @@ pub const NAME: &str = "tauri";
 /// themselves and do not forward extra arguments.
 pub const CONFIG_ENV: &str = "DEVLANES_TAURI_CONFIG";
 
-/// Options under the service's `tauri:` key, after expression evaluation.
+/// Options for `preset: tauri`, which lets several Tauri v2 dev apps run side by side, one per
+/// lane and replica. The values go into a config overlay at
+/// `<lane worktree>/.devlanes/tauri/<service>.<replica>.conf.json`, passed with `--config` and
+/// in `DEVLANES_TAURI_CONFIG`, which Tauri merges over `tauri.conf.json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"identifier":"io.acme.app.lane${{ lane.index }}.client${{ replica.index }}","dev_url":"${{ services.desktop_web.url }}","before_dev_command":""}]))]
 pub struct TauriOptions {
-    /// Bundle identifier for this lane and replica. Required; it must differ per
-    /// lane and replica, for example
-    /// `com.acme.app.dev${{ '' if lane.index == 0 else '.lane' ~ lane.index }}.client${{ replica.index }}`.
+    /// Bundle identifier for this lane and replica, which keys the app data, webview data and
+    /// keychain entries. Required and must differ per lane and replica, for example
+    /// `com.acme.app.dev.lane${{ lane.index }}.client${{ replica.index }}`; two instances with
+    /// the same value are refused at start. Only letters, digits, `-` and `.` are allowed, with
+    /// no empty part between dots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = ["io.acme.app.lane${{ lane.index }}.client${{ replica.index }}"]))]
     pub identifier: Option<String>,
-    /// `productName` override, shown in the dock and window menus.
+    /// Replaces the app's `productName` from `tauri.conf.json` for this instance, for example
+    /// to tell lanes apart. Default: the value in `tauri.conf.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = ["Acme Dev"]))]
     pub product_name: Option<String>,
-    /// `build.devUrl`, usually another service's `url`.
+    /// Frontend address the app loads, written to `build.devUrl`. Usually another service's
+    /// `url`, such as `${{ services.desktop_web.url }}`, so each lane's app loads that lane's
+    /// frontend. Must start with `http://` or `https://`; when unset, `tauri.conf.json` decides.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = ["${{ services.desktop_web.url }}"]))]
     pub dev_url: Option<String>,
-    /// `build.beforeDevCommand` override. Set it to an empty string when the
-    /// frontend runs as its own devlanes service; otherwise every replica
-    /// starts its own frontend on the port from `tauri.conf.json`.
+    /// Replaces `build.beforeDevCommand`, the command Tauri runs before the app. Set it to `""`
+    /// when the frontend runs as its own devlanes service; otherwise every replica starts its
+    /// own frontend on the port from `tauri.conf.json`. Default: the command in
+    /// `tauri.conf.json`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = ["","pnpm dev"]))]
     pub before_dev_command: Option<String>,

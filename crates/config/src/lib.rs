@@ -58,22 +58,20 @@ pub fn schema_with<E: Extensions>() -> schemars::Schema {
     let mut schema = schemars::schema_for!(ProjectConfig<E>);
     E::extend_schema(&mut schema);
     schema.insert("$id".into(), "https://devlanes.run/v1/schema.json".into());
-    // Editors show the root title and description when hovering the schema modeline.
+    // The version tells which release a cached copy came from. It lives in the description:
+    // yaml-language-server prints a root title as a heading on every field hover.
     schema.insert(
         "description".into(),
-        format!("{HEADLINE} https://devlanes.run").into(),
+        format!("{VERSION} project config. {HEADLINE} https://devlanes.run").into(),
     );
     // The same modeline supports partial local overrides; loading still requires a base project.
     schema.remove("required");
-    schema_docs::prepare(&mut schema, PROJECT_TITLE);
+    schema_docs::prepare(&mut schema);
     schema
 }
 
-/// Root title of the project schema; the version tells which release a cached copy came from.
-const PROJECT_TITLE: &str = concat!("devlanes v", env!("CARGO_PKG_VERSION"));
-
-/// Root title of the user schema.
-const USER_TITLE: &str = concat!("devlanes v", env!("CARGO_PKG_VERSION"), " user config");
+/// Product name and version, leading each schema's root description.
+const VERSION: &str = concat!("devlanes v", env!("CARGO_PKG_VERSION"));
 
 /// Product headline, matching the CLI's about text.
 const HEADLINE: &str = "Run a dev environment per git worktree, side by side.";
@@ -148,7 +146,7 @@ pub fn project_schema_with_presets(presets: &[(&str, schemars::Schema)]) -> serd
             }
         }
     }
-    schema_docs::prepare_value(&mut schema, PROJECT_TITLE);
+    schema_docs::prepare_value(&mut schema);
     schema
 }
 
@@ -183,10 +181,13 @@ pub fn user_schema() -> serde_json::Value {
     );
     schema.insert(
         "description".into(),
-        format!("{HEADLINE} Per-user settings in ~/.devlanes/config.yaml. https://devlanes.run")
-            .into(),
+        format!(
+            "{VERSION} user config: per-user settings in ~/.devlanes/config.yaml. {HEADLINE} \
+             https://devlanes.run"
+        )
+        .into(),
     );
-    schema_docs::prepare(&mut schema, USER_TITLE);
+    schema_docs::prepare(&mut schema);
     schema.to_value()
 }
 

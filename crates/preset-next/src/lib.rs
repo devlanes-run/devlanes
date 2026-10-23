@@ -19,14 +19,17 @@ pub const NAME: &str = "next";
 /// Address the dev server binds.
 pub const HOST: &str = "127.0.0.1";
 
-/// Options under the service's `next:` key.
+/// Options for `preset: next`, which adds `--port <self.port> --hostname 127.0.0.1` to the
+/// `next dev` command. Without the hostname flag Next listens on `0.0.0.0` instead of loopback.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[schemars(extend("examples" = [{"args":["--turbo"]}]))]
+#[schemars(extend("examples" = [{"args":["--turbopack"]}]))]
 pub struct NextOptions {
-    /// Extra arguments appended after the preset's flags.
+    /// Extra arguments for `next dev`, added after the preset's port and hostname flags, for
+    /// example `[--turbopack]`. A local override or `extends` child that sets `args` replaces
+    /// the inherited list. Default: none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(extend("examples" = [["--turbo"]]))]
+    #[schemars(extend("examples" = [["--turbopack"]]))]
     pub args: Option<Vec<String>>,
 }
 

@@ -34,13 +34,19 @@ pub const REGISTRY_DIR: &str = ".devlanes/wrangler-registry";
 /// the camelCase spelling of every dashed option.
 const RESERVED_FLAGS: &[&str] = &["--port", "--inspector-port", "--inspectorPort"];
 
-/// Options under the service's `wrangler:` key.
+/// Options for `preset: wrangler`, which gives each lane's `wrangler dev` its own
+/// `--port <self.port>`, `--inspector-port <self.ports.inspector>` and dev registry. The
+/// `inspector` port is allocated automatically, and a `run_script` script that already passes
+/// either port flag is refused at start.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"vars":{"PUBLIC_BASE_URL":"${{ self.public_url }}"},"args":["--env-file",".dev.vars"],"isolate_registry":true}]))]
 pub struct WranglerOptions {
-    /// Worker variables, passed as `--var KEY:VALUE`. Numbers and booleans are
-    /// accepted because config scalars evaluate to them; wrangler sees strings.
+    /// Worker variables for this lane, each passed as `--var KEY:VALUE` so it overrides the
+    /// same name in the Wrangler config's `vars`. Values can be strings, numbers or booleans
+    /// (sent as text) and may use expressions such as `${{ self.public_url }}`; names must be
+    /// non-empty and cannot contain `:`. Local overrides and `extends` children merge with
+    /// inherited vars per name.
     #[serde(
         default,
         skip_serializing_if = "BTreeMap::is_empty",
@@ -48,12 +54,17 @@ pub struct WranglerOptions {
     )]
     #[schemars(schema_with = "scalar_map_schema", extend("examples" = [{"PUBLIC_BASE_URL":"${{ self.public_url }}"}]))]
     pub vars: BTreeMap<String, String>,
-    /// Extra arguments appended after the preset's flags.
+    /// Extra arguments for `wrangler dev`, added after the port and `--var` flags, for example
+    /// `[--env-file, .dev.vars]`. Do not repeat `--port` or `--inspector-port` here, since the
+    /// preset already sets them. A local override or `extends` child that sets `args` replaces
+    /// the inherited list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [["--env-file",".dev.vars"]]))]
     pub args: Option<Vec<String>>,
-    /// Give each lane its own dev registry through `WRANGLER_REGISTRY_PATH`.
-    /// Default: true.
+    /// Points `WRANGLER_REGISTRY_PATH` at `<lane worktree>/.devlanes/wrangler-registry`, so
+    /// service bindings resolve to workers of the same lane instead of same-named workers in
+    /// another lane. Set `false` to drop the variable for this service, which then uses
+    /// Wrangler's shared default registry. Default: `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [true,false]))]
     pub isolate_registry: Option<bool>,
