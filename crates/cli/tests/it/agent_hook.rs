@@ -51,6 +51,8 @@ fn blocks_backgrounded_dev_servers_in_powershell() {
         "cmd /c start pnpm dev",
         "cmd.exe /c \"start /b npm run dev\"",
         "cmd /c start \"\" /d web pnpm dev",
+        "cmd /c start \"Dev Server\" pnpm dev",
+        "cmd /c 'start \"Dev\" pnpm dev'",
         "if ($true) { pnpm dev & }",
         "Write-Output 'a & b'; pnpm dev &",
         "# start the server\npnpm dev &",
@@ -80,6 +82,7 @@ fn blocks_backgrounded_dev_servers_in_powershell() {
         "Start-Job -WorkingDirectory ../project { pnpm dev }",
         "Start-Process npm -ArgumentList 'run','dev' -WorkingDirectory:../project",
         "Start-Job -WorkingDirectory:../project { pnpm dev }",
+        "cmd /c start \"Dev Server\" /d ../project pnpm dev",
         "cd ~; pnpm dev &",
     ] {
         assert_eq!(
@@ -116,6 +119,9 @@ fn allows_foreground_one_shot_and_quoted_commands() {
         "Start-Job { pnpm build } | Wait-Job | Receive-Job",
         "Start-Job -FilePath .\\tasks.ps1",
         "cmd /c start /wait pnpm dev",
+        "cmd /c start \"Dev Server\" /wait pnpm dev",
+        "cmd /c 'start \"Dev\" /wait pnpm dev'",
+        "cmd /c \"start \"\"Dev\"\" /wait pnpm dev\"",
         "cmd /c pnpm dev",
         "Invoke-Command { pnpm dev }",
         "devlanes exec --name web -- pnpm dev",

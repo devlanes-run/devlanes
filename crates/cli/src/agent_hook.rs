@@ -508,12 +508,8 @@ fn cmd(args: &[&str], detached: bool, dir: &Path) -> bool {
     else {
         return false;
     };
-    // cmd reads its command as one line, so `cmd /c "start pnpm dev"` is the
-    // same as unquoted.
-    let words: Vec<&str> = args[at + 1..]
-        .iter()
-        .flat_map(|arg| arg.split_whitespace())
-        .collect();
+    let tokens = cmd_tokens(&args[at + 1..]);
+    let words: Vec<&str> = tokens.iter().map(|(word, _)| word.as_str()).collect();
     let Some((first, rest)) = words.split_first() else {
         return false;
     };
@@ -522,19 +518,72 @@ fn cmd(args: &[&str], detached: bool, dir: &Path) -> bool {
     }
     let mut dir = dir.to_path_buf();
     let mut target = Vec::new();
-    let mut rest = rest.iter();
-    while let Some(&arg) = rest.next() {
+    let mut rest = rest.iter().zip(&tokens[1..]).peekable();
+    // A quoted first word is the window title: `start "Dev Server" /wait pnpm dev`.
+    rest.next_if(|(_, (_, quoted))| *quoted);
+    while let Some((&arg, _)) = rest.next() {
         if !target.is_empty() || !arg.starts_with('/') {
             target.push(arg);
         } else if arg.eq_ignore_ascii_case("/wait") {
             return false;
         } else if arg.eq_ignore_ascii_case("/d")
-            && let Some(value) = rest.next()
+            && let Some((value, _)) = rest.next()
         {
             dir = moved(&dir, value, None);
         }
     }
     start_target(&target, &dir)
+}
+
+/// The words of the line cmd runs for `cmd /c ARGS`, each with whether it
+/// was in double quotes. PowerShell drops empty arguments and passes one with
+/// a blank in double quotes; cmd then removes the first and last quote of a
+/// line that starts with one, so `cmd /c "start pnpm dev"` reads as
+/// unquoted, and splits the rest on blanks outside quotes.
+fn cmd_tokens(args: &[&str]) -> Vec<(String, bool)> {
+    let mut line = args
+        .iter()
+        .filter(|arg| !arg.is_empty())
+        .map(|arg| {
+            if arg.contains(char::is_whitespace) {
+                format!("\"{arg}\"")
+            } else {
+                (*arg).to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.starts_with('"') {
+        line.remove(0);
+        if let Some(last) = line.rfind('"') {
+            line.remove(last);
+        }
+    }
+    let mut tokens = Vec::new();
+    let (mut word, mut quoted, mut in_quotes, mut in_word) = (String::new(), false, false, false);
+    for c in line.chars() {
+        match c {
+            '"' => {
+                in_quotes = !in_quotes;
+                quoted = true;
+                in_word = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if in_word {
+                    tokens.push((std::mem::take(&mut word), quoted));
+                }
+                (quoted, in_word) = (false, false);
+            }
+            c => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        tokens.push((word, quoted));
+    }
+    tokens
 }
 
 /// The lowercase name of a `-Name` or `-Name:value` parameter word.
