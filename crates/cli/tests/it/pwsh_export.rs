@@ -43,6 +43,10 @@ fn values() -> BTreeMap<String, String> {
         // Long enough that a wrapping `Out-String` would split the line.
         ("LONG".into(), "\u{65e5}\u{672c} x".repeat(200)),
         ("NEXT-PUBLIC".into(), "dash".into()),
+        // Kept on 7.5 and later like `EMPTY`, not deleted.
+        ("EMPTY-DASH".into(), String::new()),
+        ("A:B".into(), "colon".into()),
+        ("A*[B]".into(), "wildcards".into()),
         ("1ST".into(), "digit".into()),
         ("A B".into(), "space".into()),
         ("A}B{C".into(), "braces".into()),

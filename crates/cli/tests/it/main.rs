@@ -796,8 +796,9 @@ fn powershell_exports_are_ascii_literals_or_base64() {
         ("TAB".into(), "a\tb".into()),
         ("SMART".into(), "a\u{2019}; calc".into()),
         ("JAPAN".into(), "日本".into()),
-        // Names `$env:NAME` cannot spell go through .NET.
+        // Names `$env:NAME` cannot spell go through `Set-Item -LiteralPath`.
         ("NEXT-PUBLIC".into(), "z".into()),
+        ("EMPTY-DASH".into(), "".into()),
         ("1ST".into(), "x".into()),
         ("A}B".into(), "x".into()),
         ("CAFÉ".into(), "x".into()),
@@ -807,13 +808,14 @@ fn powershell_exports_are_ascii_literals_or_base64() {
     ]);
     let exported = export_environment(&values, ExportShell::Pwsh);
     insta::assert_snapshot!(exported.script, @r"
-    [Environment]::SetEnvironmentVariable('1ST', 'x')
-    [Environment]::SetEnvironmentVariable('A}B', 'x')
-    [Environment]::SetEnvironmentVariable([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('Q0FGw4k=')), 'x')
+    Set-Item -LiteralPath ('Env:1ST') -Value ('x')
+    Set-Item -LiteralPath ('Env:A}B') -Value ('x')
+    Set-Item -LiteralPath ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('RW52OkNBRsOJ'))) -Value ('x')
     $env:EMPTY = ''
+    Set-Item -LiteralPath ('Env:EMPTY-DASH') -Value ('')
     $env:JAPAN = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5pel5pys'))
     $env:LINES = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('YQpi'))
-    [Environment]::SetEnvironmentVariable('NEXT-PUBLIC', 'z')
+    Set-Item -LiteralPath ('Env:NEXT-PUBLIC') -Value ('z')
     $env:PORT = '3000'
     $env:QUOTES = 'it''s ''''$(Write-Output bad)'''' `n'
     $env:SMART = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('YeKAmTsgY2FsYw=='))
@@ -824,7 +826,7 @@ fn powershell_exports_are_ascii_literals_or_base64() {
     // POSIX still skips every name `export` rejects.
     assert_eq!(
         export_environment(&values, ExportShell::Posix).skipped,
-        ["1ST", "A=B", "A}B", "CAFÉ", "NEXT-PUBLIC", "NUL"]
+        ["1ST", "A=B", "A}B", "CAFÉ", "EMPTY-DASH", "NEXT-PUBLIC", "NUL"]
     );
 }
 

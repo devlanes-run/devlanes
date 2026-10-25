@@ -513,8 +513,10 @@ fn plain_name(key: &str) -> bool {
 
 /// One PowerShell assignment line, or `None` when Windows cannot hold the
 /// variable (an empty name, `=` in the name, NUL anywhere). Names `$env:` cannot
-/// spell, such as `NEXT-PUBLIC`, go through .NET, which takes the name as a
-/// plain string.
+/// spell, such as `NEXT-PUBLIC`, go through `Set-Item -LiteralPath` on the
+/// `Env:` drive, which takes the name as a plain string and, like `$env:`,
+/// keeps an empty value on PowerShell 7.5 and later
+/// (`[Environment]::SetEnvironmentVariable` would delete it).
 fn pwsh_assignment(key: &str, value: &str) -> Option<String> {
     if key.is_empty() || key.contains(['=', '\0']) || value.contains('\0') {
         return None;
@@ -524,8 +526,8 @@ fn pwsh_assignment(key: &str, value: &str) -> Option<String> {
         format!("$env:{key} = {value}\n")
     } else {
         format!(
-            "[Environment]::SetEnvironmentVariable({}, {value})\n",
-            pwsh_string(key)
+            "Set-Item -LiteralPath ({}) -Value ({value})\n",
+            pwsh_string(&format!("Env:{key}"))
         )
     })
 }
