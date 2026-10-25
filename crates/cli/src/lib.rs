@@ -1,6 +1,5 @@
 //! Transport-independent command parsing, request construction, and presentation.
 
-pub mod agent_hook;
 mod args;
 mod choose;
 mod ci;

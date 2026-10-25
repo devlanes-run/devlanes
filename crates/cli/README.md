@@ -27,7 +27,6 @@ The caller executes the returned action and writes the reporter's separate stdou
 - `Reporter`: human, plain, agent, and JSON rendering for results and events.
 - `run_with` / `WithDriver`: start a lane, run a foreground command, collect artifacts, and clean up owned resources.
 - `CiProvider`: phase groups, failure annotations, and step-summary appends.
-- `agent_hook::run` / `agent_hook::decide`: the agent plugin's PowerShell `PreToolUse` hook (`devlanes __agent-hook --shell powershell`, Windows), which denies backgrounded dev servers.
 
 ## Behaviour
 

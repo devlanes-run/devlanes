@@ -1,12 +1,12 @@
-//! `devlanes __agent-hook --shell powershell` as the agent plugin runs it: the
-//! tool call as JSON on stdin, a JSON deny on stdout and exit 0 to block. The
-//! plugin's command must also exit 0 with no output in both shells Claude Code
-//! runs it with on Windows (Git Bash, else PowerShell) when devlanes is missing
-//! or too old to know `__agent-hook`.
+//! `devlanes __agent-hook` as the agent plugin runs it: the tool call as JSON
+//! on stdin, a JSON deny on stdout and exit 0 to block. The plugin's hook
+//! commands must also exit 0 with no output, in the shells Claude Code and
+//! Codex run them with, when devlanes is missing or too old to know
+//! `__agent-hook`.
 
 use std::{
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
@@ -63,24 +63,32 @@ fn run_with_stdin(mut command: Command, payload: &str) -> Outcome {
     )
 }
 
-/// A PowerShell tool call of `command` in `cwd`.
-fn payload(cwd: &Path, command: &str) -> String {
+/// A `tool` call of `command` in `cwd`.
+fn payload(tool: &str, cwd: &Path, command: &str) -> String {
     serde_json::json!({
         "session_id": "s",
         "cwd": cwd,
         "hook_event_name": "PreToolUse",
-        "tool_name": "PowerShell",
+        "tool_name": tool,
         "tool_input": {"command": command, "description": "x", "run_in_background": false},
     })
     .to_string()
 }
+
+/// A command that blocks only when read in the shell Codex uses on this OS:
+/// Codex runs its `Bash` tool in PowerShell on Windows.
+const CODEX_BLOCKED: &str = if cfg!(windows) {
+    "Start-Process npm 'run dev'"
+} else {
+    "setsid -f pnpm dev"
+};
 
 /// Asserts that `stdout` is the PreToolUse deny with the devlanes message.
 fn assert_denied(outcome: &Outcome, context: &str) {
     let (code, stdout, stderr) = outcome;
     assert_eq!(*code, Some(0), "{context}: {stderr}");
     let answer: serde_json::Value = serde_json::from_str(stdout.trim())
-        .unwrap_or_else(|error| panic!("{context}: not JSON ({error}): {stdout}"));
+        .unwrap_or_else(|error| panic!("{context}: not JSON ({error}): {stdout} {stderr}"));
     let output = &answer["hookSpecificOutput"];
     assert_eq!(output["hookEventName"], "PreToolUse", "{context}");
     assert_eq!(output["permissionDecision"], "deny", "{context}");
@@ -122,96 +130,236 @@ fn agent_hook_denies_through_the_binary() {
         }
         run_with_stdin(command, payload)
     };
-    let powershell = ["--shell", "powershell"];
-    let blocked = payload(dir.path(), "Start-Process npm -ArgumentList 'run','dev'");
-    assert_denied(&hook(&blocked, &powershell, false), "Start-Process");
-    assert_allowed(&hook(&blocked, &powershell, true), "turned off");
-    assert_allowed(&hook(&blocked, &[], false), "no shell");
-    assert_allowed(&hook(&blocked, &["--shell", "fish"], false), "other shell");
-    let allowed = payload(dir.path(), "npm run dev");
-    assert_allowed(&hook(&allowed, &powershell, false), "foreground");
-    assert_allowed(&hook("not json", &powershell, false), "bad payload");
+    let claude = ["--agent", "claude-code"];
+    let codex = ["--agent", "codex"];
+    let bash = payload("Bash", dir.path(), "pnpm dev &");
+    let powershell = payload(
+        "PowerShell",
+        dir.path(),
+        "Start-Process npm -ArgumentList 'run','dev'",
+    );
+    assert_denied(&hook(&bash, &claude, false), "Claude Code, Bash");
+    assert_denied(
+        &hook(&powershell, &claude, false),
+        "Claude Code, PowerShell",
+    );
+    assert_denied(
+        &hook(&payload("Bash", dir.path(), CODEX_BLOCKED), &codex, false),
+        "Codex",
+    );
+    assert_allowed(&hook(&bash, &claude, true), "turned off");
+    assert_allowed(&hook(&bash, &[], false), "no agent");
+    assert_allowed(&hook(&bash, &["--agent", "cursor"], false), "other agent");
+    assert_allowed(
+        &hook(&powershell, &["--shell", "powershell"], false),
+        "other arguments",
+    );
+    let foreground = payload("Bash", dir.path(), "pnpm dev");
+    assert_allowed(&hook(&foreground, &claude, false), "foreground");
+    assert_allowed(&hook("not json", &claude, false), "bad payload");
     assert!(!home.exists(), "the hook must not create a devlanes home");
 }
 
-/// The `command` of the plugin's PowerShell hook in `agent-plugin/hooks/hooks.json`.
-fn plugin_command() -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../agent-plugin/hooks/hooks.json");
+/// A hook handler's `field` from one of the plugin's hook files.
+fn plugin_command(file: &str, field: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../agent-plugin/hooks")
+        .join(file);
     let hooks: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).expect("hooks.json"))
-            .expect("hooks.json is JSON");
-    let group = hooks["hooks"]["PreToolUse"]
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("hook file"))
+            .expect("hook file is JSON");
+    let groups = hooks["hooks"]["PreToolUse"]
         .as_array()
-        .expect("PreToolUse hooks")
-        .iter()
-        .find(|group| group["matcher"] == "PowerShell")
-        .expect("a PowerShell hook");
-    group["hooks"][0]["command"]
+        .expect("PreToolUse hooks");
+    assert_eq!(groups.len(), 1, "{file}: one PreToolUse hook");
+    groups[0]["hooks"][0][field]
         .as_str()
-        .expect("a shell-form command")
+        .unwrap_or_else(|| panic!("{file}: a {field}"))
         .to_owned()
 }
 
-/// Git for Windows' `sh.exe`, three levels above `git --exec-path`.
-fn git_sh() -> PathBuf {
-    let mut git = Command::new("git");
-    git.arg("--exec-path");
-    let (code, stdout, stderr) = run_with_stdin(git, "");
-    assert_eq!(code, Some(0), "git --exec-path: {stderr}");
-    let root = Path::new(stdout.trim())
-        .ancestors()
-        .nth(3)
-        .expect("Git's root")
-        .to_path_buf();
-    root.join(r"usr\bin\sh.exe")
-}
-
-#[test]
-fn plugin_command_passes_with_a_missing_or_old_devlanes() {
-    let dir = project();
-    let command = plugin_command();
-    let system32 = Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32");
-    let powershell = system32.join(r"WindowsPowerShell\v1.0\powershell.exe");
-    let sh = git_sh();
-    // `old` answers `__agent-hook` the way a devlanes without it does: a usage
-    // error on stderr and exit 2. `empty` has no devlanes at all.
+/// Directories with a devlanes that answers `__agent-hook` the way a release
+/// without it does (a usage error on stderr and exit 2), and with no devlanes.
+fn old_and_missing() -> (tempfile::TempDir, tempfile::TempDir) {
     let old = tempfile::tempdir().expect("temp dir");
+    let script = old.path().join("devlanes");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho 'error: unrecognized subcommand' >&2\nexit 2\n",
+    )
+    .expect("old devlanes");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod old devlanes");
+    }
+    #[cfg(windows)]
     std::fs::write(
         old.path().join("devlanes.cmd"),
         "@echo error: unrecognized subcommand 1>&2\r\n@exit /b 2\r\n",
     )
     .expect("old devlanes.cmd");
-    std::fs::write(
-        old.path().join("devlanes"),
-        "#!/bin/sh\necho 'error: unrecognized subcommand' >&2\nexit 2\n",
-    )
-    .expect("old devlanes");
-    let empty = tempfile::tempdir().expect("temp dir");
+    (old, tempfile::tempdir().expect("temp dir"))
+}
+
+/// Runs the hook command `shell` builds with `payload` and `PATH` set to the
+/// directory of the devlanes under test, an old devlanes or none, followed by
+/// `system`: it denies with the current devlanes and passes otherwise.
+fn check_shell(
+    name: &str,
+    shell: impl Fn() -> Command,
+    payload: &str,
+    system: &[&Path],
+    home: &Path,
+) {
+    let (old, missing) = old_and_missing();
     let current = Path::new(env!("CARGO_BIN_EXE_devlanes"))
         .parent()
         .expect("target dir");
-    let blocked = payload(dir.path(), "pnpm dev &");
-    let shells: [(&Path, &[&str]); 2] = [
-        (&powershell, &["-NoProfile", "-NonInteractive", "-Command"]),
-        (&sh, &["-c"]),
+    let run = |path_dir: &Path| {
+        let mut child = shell();
+        child
+            .env(
+                "PATH",
+                std::env::join_paths(std::iter::once(path_dir).chain(system.iter().copied()))
+                    .expect("PATH"),
+            )
+            .env_remove("DEVLANES_BLOCK_BACKGROUND")
+            .env("DEVLANES_HOME", home);
+        run_with_stdin(child, payload)
+    };
+    assert_denied(&run(current), &format!("{name}: current devlanes"));
+    assert_allowed(&run(old.path()), &format!("{name}: old devlanes"));
+    assert_allowed(&run(missing.path()), &format!("{name}: no devlanes"));
+}
+
+/// On macOS and Linux Claude Code runs hook commands with sh, and Codex with
+/// the session's shell (`bash -c`, `zsh -c`) or `$SHELL -lc`.
+#[cfg(unix)]
+#[test]
+fn plugin_commands_pass_with_a_missing_or_old_devlanes() {
+    let dir = project();
+    let home = dir.path().join("home");
+    let system = [Path::new("/usr/bin"), Path::new("/bin")];
+    let cases = [
+        (
+            "Claude Code",
+            plugin_command("hooks.json", "command"),
+            payload("Bash", dir.path(), "pnpm dev &"),
+        ),
+        (
+            "Codex",
+            plugin_command("codex.json", "command"),
+            payload("Bash", dir.path(), CODEX_BLOCKED),
+        ),
     ];
-    for (shell, args) in shells {
-        let run = |path_dir: &Path| {
-            let mut child = Command::new(shell);
-            child
-                .args(args)
-                .arg(&command)
-                .env(
-                    "PATH",
-                    std::env::join_paths([path_dir, system32.as_path()]).expect("PATH"),
-                )
-                .env_remove("DEVLANES_BLOCK_BACKGROUND")
-                .env("DEVLANES_HOME", dir.path().join("home"));
-            run_with_stdin(child, &blocked)
-        };
-        let name = shell.file_name().expect("shell name").to_string_lossy();
-        assert_denied(&run(current), &format!("{name}: current devlanes"));
-        assert_allowed(&run(old.path()), &format!("{name}: old devlanes"));
-        assert_allowed(&run(empty.path()), &format!("{name}: no devlanes"));
+    for (agent, command, payload) in &cases {
+        for shell in ["/bin/sh", "/bin/bash", "/bin/zsh"] {
+            if !Path::new(shell).exists() {
+                continue;
+            }
+            let run = || {
+                let mut child = Command::new(shell);
+                child.arg("-c").arg(command);
+                child
+            };
+            check_shell(&format!("{agent} in {shell}"), run, payload, &system, &home);
+        }
     }
+}
+
+/// On Windows Claude Code runs hook commands with Git Bash, else PowerShell.
+/// Codex runs `commandWindows` with the session's PowerShell (`-NoProfile
+/// -Command`), or `cmd.exe /C "..."` when it has none.
+#[cfg(windows)]
+#[test]
+fn plugin_commands_pass_with_a_missing_or_old_devlanes() {
+    use std::os::windows::process::CommandExt;
+
+    let dir = project();
+    let home = dir.path().join("home");
+    let system32 = Path::new(&std::env::var_os("SystemRoot").expect("SystemRoot")).join("System32");
+    let powershell = system32.join(r"WindowsPowerShell\v1.0\powershell.exe");
+    let system = [system32.as_path()];
+    let in_powershell = |program: &Path, command: &str| {
+        let mut child = Command::new(program);
+        child.args(["-NoProfile", "-NonInteractive", "-Command", command]);
+        child
+    };
+
+    let claude = plugin_command("hooks.json", "command");
+    let claude_payload = payload("Bash", dir.path(), "pnpm dev &");
+    check_shell(
+        "Claude Code in Windows PowerShell",
+        || in_powershell(&powershell, &claude),
+        &claude_payload,
+        &system,
+        &home,
+    );
+    let sh = git_sh();
+    check_shell(
+        "Claude Code in Git Bash",
+        || {
+            let mut child = Command::new(&sh);
+            child.arg("-c").arg(&claude);
+            child
+        },
+        &claude_payload,
+        &system,
+        &home,
+    );
+
+    let codex = plugin_command("codex.json", "commandWindows");
+    let codex_payload = payload("Bash", dir.path(), CODEX_BLOCKED);
+    check_shell(
+        "Codex in Windows PowerShell",
+        || in_powershell(&powershell, &codex),
+        &codex_payload,
+        &system,
+        &home,
+    );
+    if let Some(pwsh) = pwsh() {
+        check_shell(
+            "Codex in PowerShell 7",
+            || in_powershell(&pwsh, &codex),
+            &codex_payload,
+            &system,
+            &home,
+        );
+    }
+    check_shell(
+        "Codex in cmd",
+        || {
+            // What Codex's hook runner starts when the session has no shell.
+            let mut child = Command::new(system32.join("cmd.exe"));
+            child.arg("/C").raw_arg(format!("\"{codex}\""));
+            child
+        },
+        &codex_payload,
+        &system,
+        &home,
+    );
+}
+
+/// Git for Windows' `sh.exe`, three levels above `git --exec-path`.
+#[cfg(windows)]
+fn git_sh() -> std::path::PathBuf {
+    let mut git = Command::new("git");
+    git.arg("--exec-path");
+    let (code, stdout, stderr) = run_with_stdin(git, "");
+    assert_eq!(code, Some(0), "git --exec-path: {stderr}");
+    Path::new(stdout.trim())
+        .ancestors()
+        .nth(3)
+        .expect("Git's root")
+        .join(r"usr\bin\sh.exe")
+}
+
+/// PowerShell 7's `pwsh.exe` on `PATH`, when it is installed.
+#[cfg(windows)]
+fn pwsh() -> Option<std::path::PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join("pwsh.exe"))
+        .find(|path| path.exists())
 }

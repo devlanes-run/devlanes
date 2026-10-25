@@ -1,29 +1,20 @@
-//! The agent plugin's PowerShell hook (`devlanes __agent-hook --shell
-//! powershell`): which PowerShell commands it blocks, and that it says what
-//! the Bash hook says.
+//! The PowerShell reader, through Claude Code's `PowerShell` tool.
 
 use std::path::Path;
 
-use devlanes_cli::agent_hook::{BLOCK_MESSAGE, Verdict, decide, deny_output};
+use devlanes_agent_hooks::{Agent, Verdict, decide};
 
-/// A project at `<tmp>/project` with a `web` folder, and `<tmp>/other` outside it.
-fn workspace() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().expect("temp dir");
-    std::fs::create_dir_all(dir.path().join("project/web")).expect("project");
-    std::fs::create_dir_all(dir.path().join("other")).expect("other");
-    std::fs::write(dir.path().join("project/devlanes.yaml"), "project: acme\n").expect("config");
-    dir
-}
+use crate::{payload, workspace};
 
-/// The verdict for `command` run from `cwd` by the PowerShell tool.
+/// The verdict for `command` run from `cwd` by Claude Code's PowerShell tool.
 fn verdict(cwd: &Path, home: &Path, command: &str, background: bool) -> Verdict {
-    let payload = serde_json::json!({
-        "session_id": "s",
-        "cwd": cwd,
-        "tool_name": "PowerShell",
-        "tool_input": {"command": command, "run_in_background": background},
-    });
-    decide(&payload.to_string(), Path::new("/unused"), Some(home))
+    decide(
+        &payload("PowerShell", cwd, command, background),
+        Agent::ClaudeCode,
+        cfg!(windows),
+        Path::new("/unused"),
+        Some(home),
+    )
 }
 
 #[test]
@@ -93,8 +84,96 @@ fn blocks_backgrounded_dev_servers_in_powershell() {
     }
 }
 
+/// Named parameters come in any order, by alias or unambiguous prefix, and
+/// the program is `-FilePath` or the first positional argument wherever it
+/// stands.
 #[test]
-fn allows_foreground_one_shot_and_quoted_commands() {
+fn reads_start_process_parameters_in_any_order() {
+    let tmp = workspace();
+    let project = tmp.path().join("project/web");
+    let other = tmp.path().join("other");
+    let home = tmp.path().join("project");
+    for command in [
+        "Start-Process -ArgumentList '--port 5173' -FilePath vite",
+        "Start-Process -ArgumentList 'run','dev' npm",
+        "Start-Process -Args 'run','dev' -FilePath npm",
+        "Start-Process -Arg 'dev' pnpm",
+        "Start-Process -A dev -F pnpm",
+        "Start-Process -NoNewWindow -PassThru -ArgumentList 'run dev' -FilePath npm",
+        "Start-Process -Path node -ArgumentList server.js",
+        "Start-Process -PSPath vite",
+        "Start-Process -FilePath:vite -Args:'--port','5173'",
+        "Start-Process -Wo ../project/web npm 'run dev'",
+        "Start-Process -Verb RunAs npm 'run dev'",
+        "Start-Process -E @{PORT='3001'} pnpm dev",
+        "Start-Process -V RunAs pnpm dev",
+    ] {
+        assert_eq!(
+            verdict(&project, &home, command, false),
+            Verdict::Block,
+            "{command}"
+        );
+    }
+    for command in [
+        "Start-Process -ArgumentList 'start' -FilePath devlanes",
+        "Start-Process -Args 'logs','web','-f' devlanes",
+        "Start-Process -ArgumentList 'run','dev' npm -Wai",
+        "Start-Process -WhatIf npm 'run dev'",
+        "Start-Process -wi npm 'run dev'",
+        "Start-Process -ArgumentList '--port 5173' -FilePath vite -Wait",
+    ] {
+        assert_eq!(
+            verdict(&project, &home, command, false),
+            Verdict::Allow,
+            "{command}"
+        );
+    }
+    for command in [
+        "Start-Process -WorkingDirectory ../project -ArgumentList 'run','dev' -FilePath npm",
+        "Start-Process -Wor ../project npm 'run dev'",
+    ] {
+        assert_eq!(
+            verdict(&other, &home, command, false),
+            Verdict::Block,
+            "{command}"
+        );
+    }
+}
+
+/// Only `Start-Process` and common parameters are parameters: other words
+/// with a dash are arguments of the started program.
+#[test]
+fn keeps_dash_arguments_of_start_process() {
+    let tmp = workspace();
+    let project = tmp.path().join("project/web");
+    let home = tmp.path().join("project");
+    for command in [
+        "Start-Process tsx -ArgumentList '--watch','src/index.ts'",
+        "Start-Process -ArgumentList '--watch','src/index.ts' -FilePath tsx",
+        "Start-Process tsx --watch",
+        "Start-Process tsx -ArgumentList --watch,src/index.ts",
+        "Start-Process node -- --watch server.mjs",
+        "Start-Process node -ArgumentList '-Wait','--watch'",
+    ] {
+        assert_eq!(
+            verdict(&project, &home, command, false),
+            Verdict::Block,
+            "{command}"
+        );
+    }
+    assert_eq!(
+        verdict(
+            &project,
+            &home,
+            "Start-Process tsx -ArgumentList 'src/index.ts'",
+            false
+        ),
+        Verdict::Allow
+    );
+}
+
+#[test]
+fn allows_foreground_one_shot_and_quoted_commands_in_powershell() {
     let tmp = workspace();
     let project = tmp.path().join("project/web");
     let home = tmp.path().join("project");
@@ -153,51 +232,4 @@ fn allows_foreground_one_shot_and_quoted_commands() {
             "{command}"
         );
     }
-    for payload in ["", "not json", "{\"tool_input\":{}}", "[]"] {
-        assert_eq!(
-            decide(payload, &project, Some(&home)),
-            Verdict::Allow,
-            "{payload}"
-        );
-    }
-}
-
-#[test]
-fn falls_back_to_the_process_directory_without_cwd() {
-    let tmp = workspace();
-    let payload = r#"{"tool_name":"PowerShell","tool_input":{"command":"pnpm dev &"}}"#;
-    assert_eq!(
-        decide(payload, &tmp.path().join("project"), None),
-        Verdict::Block
-    );
-    assert_eq!(
-        decide(payload, &tmp.path().join("other"), None),
-        Verdict::Allow
-    );
-}
-
-#[test]
-fn block_message_matches_the_bash_hook() {
-    let script = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../agent-plugin/scripts/block-background.sh"
-    ))
-    .expect("block-background.sh");
-    let message = script
-        .split_once("<<'EOF'\n")
-        .and_then(|(_, rest)| rest.split_once("\nEOF\n"))
-        .map(|(message, _)| message)
-        .expect("the script's message heredoc");
-    assert_eq!(message, BLOCK_MESSAGE);
-    let output: serde_json::Value = serde_json::from_str(&deny_output()).expect("JSON");
-    assert_eq!(
-        output,
-        serde_json::json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": BLOCK_MESSAGE,
-            }
-        })
-    );
 }

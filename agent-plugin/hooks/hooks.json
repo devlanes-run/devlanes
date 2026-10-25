@@ -3,22 +3,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
-            "command": "sh",
-            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/block-background.sh"],
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "PowerShell",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "devlanes __agent-hook --shell powershell; exit 0",
+            "command": "devlanes __agent-hook --agent claude-code; exit 0",
             "timeout": 10,
             "onFailure": "continue"
           }

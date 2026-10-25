@@ -1,7 +1,5 @@
 use std::time::Duration;
 
-// The PowerShell hook entry point exists only on Windows.
-#[cfg(windows)]
 mod agent_hook;
 
 /// The config crate repeats the DNS zone's TLD rule to reject a bad `hostnames.tld`
