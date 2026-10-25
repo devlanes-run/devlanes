@@ -43,7 +43,8 @@ jobs:
       - name: kache stats
         if: ${{ !cancelled() }}
         run: |
-          kache stats
+          # --full adds the "Not cached" reasons and the remote upload and download counts.
+          kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
   rust:
@@ -86,7 +87,8 @@ jobs:
       - name: kache stats
         if: ${{ !cancelled() }}
         run: |
-          kache stats
+          # --full adds the "Not cached" reasons and the remote upload and download counts.
+          kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
   packaging:
@@ -170,7 +172,8 @@ jobs:
       - name: kache stats
         if: ${{ !cancelled() }}
         run: |
-          kache stats
+          # --full adds the "Not cached" reasons and the remote upload and download counts.
+          kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
   ssh:
@@ -204,6 +207,7 @@ jobs:
       - name: kache stats
         if: ${{ !cancelled() }}
         run: |
-          kache stats
+          # --full adds the "Not cached" reasons and the remote upload and download counts.
+          kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
