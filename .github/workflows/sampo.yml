@@ -39,8 +39,6 @@ jobs:
       - if: steps.sampo.outputs.released == 'true'
         uses: ./.github/actions/kache
         with:
-          store: rust
-          save: "false"
           s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
           s3-endpoint: ${{ vars.KACHE_S3_ENDPOINT }}
           s3-region: ${{ vars.KACHE_S3_REGION }}

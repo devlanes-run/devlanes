@@ -1,17 +1,9 @@
 name: kache
 description: >-
   Install the pinned kache release that .cargo/config.toml uses as rustc wrapper, and connect
-  it to the shared S3 cache. Without the bucket and both keys (fork pull requests never get
-  secrets), the local store is persisted with the Actions cache instead.
+  it to the shared S3 cache when the bucket and both keys are set. Without them, kache
+  only uses the job's own local store.
 inputs:
-  store:
-    description: Name of the local store persisted with the Actions cache when no remote is configured. Empty skips persistence.
-    required: false
-    default: ""
-  save:
-    description: Save that local store when the job ends. "false" only restores it.
-    required: false
-    default: "true"
   s3-bucket:
     description: Remote cache bucket.
     required: false
@@ -64,7 +56,6 @@ runs:
         "$root/bin/kache" --version
         echo "$root/bin" >> "$GITHUB_PATH"
         echo "KACHE_CACHE_DIR=$RUNNER_TEMP/kache" >> "$GITHUB_ENV"
-        echo "KACHE_MAX_SIZE=2GiB" >> "$GITHUB_ENV"
     - if: runner.os != 'Windows'
       name: Install kache
       shell: bash
@@ -98,13 +89,10 @@ runs:
         echo "$dir" >> "$GITHUB_PATH"
         # On the workspace's filesystem, so restores link into target/ instead of copying.
         echo "KACHE_CACHE_DIR=$RUNNER_TEMP/kache" >> "$GITHUB_ENV"
-        # Keeps each saved store small against the repository's Actions cache quota.
-        echo "KACHE_MAX_SIZE=2GiB" >> "$GITHUB_ENV"
     # The daemon uploads what the build compiles and fetches what it misses. It drops
     # remote settings from the environment, so they go in the config file, and it keeps
     # the credentials it was started with, so only this step sees the secrets.
     - name: Connect the remote cache
-      id: remote
       shell: bash
       env:
         BUCKET: ${{ inputs.s3-bucket }}
@@ -118,8 +106,7 @@ runs:
       run: |
         set -euo pipefail
         if [ -z "$BUCKET" ] || [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ]; then
-          echo "No remote cache configured; the local store uses the Actions cache."
-          echo "enabled=false" >> "$GITHUB_OUTPUT"
+          echo "No remote cache configured; kache uses only this job's local store."
           exit 0
         fi
         config=$RUNNER_TEMP/kache.toml
@@ -134,18 +121,3 @@ runs:
         } > "$config"
         echo "KACHE_CONFIG=$config" >> "$GITHUB_ENV"
         KACHE_CONFIG=$config KACHE_S3_ACCESS_KEY=$ACCESS_KEY KACHE_S3_SECRET_KEY=$SECRET_KEY kache daemon start
-        echo "enabled=true" >> "$GITHUB_OUTPUT"
-    # The key changes with the toolchain or the lockfile; restore-keys start a new
-    # key from the previous store, so only changed dependencies compile again.
-    - if: inputs.store != '' && steps.remote.outputs.enabled != 'true' && inputs.save == 'true'
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ runner.temp }}/kache
-        key: kache-${{ inputs.store }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-        restore-keys: kache-${{ inputs.store }}-${{ runner.os }}-${{ runner.arch }}-
-    - if: inputs.store != '' && steps.remote.outputs.enabled != 'true' && inputs.save != 'true'
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-      with:
-        path: ${{ runner.temp }}/kache
-        key: kache-${{ inputs.store }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
-        restore-keys: kache-${{ inputs.store }}-${{ runner.os }}-${{ runner.arch }}-
