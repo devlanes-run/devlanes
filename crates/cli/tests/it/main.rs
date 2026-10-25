@@ -826,7 +826,15 @@ fn powershell_exports_are_ascii_literals_or_base64() {
     // POSIX still skips every name `export` rejects.
     assert_eq!(
         export_environment(&values, ExportShell::Posix).skipped,
-        ["1ST", "A=B", "A}B", "CAFÉ", "EMPTY-DASH", "NEXT-PUBLIC", "NUL"]
+        [
+            "1ST",
+            "A=B",
+            "A}B",
+            "CAFÉ",
+            "EMPTY-DASH",
+            "NEXT-PUBLIC",
+            "NUL"
+        ]
     );
 }
 
