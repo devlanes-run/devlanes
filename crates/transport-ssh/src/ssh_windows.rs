@@ -364,6 +364,13 @@ impl SshTransport {
 
     /// Runs the session script: probe, sentinel, tunnel.
     async fn start(&self) -> Result<Started, SshError> {
+        // Taken before ssh starts, so a `close` while it authenticates ends
+        // this session too instead of leaving a tunnel opened after it.
+        let closed = self
+            .sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .child_token();
         let token = crate::random_token()?;
         let start = format!("devlanes-probe-{token}");
         let end = format!("devlanes-tunnel-ready-{token}");
@@ -375,8 +382,12 @@ impl SshTransport {
             .ok_or_else(|| SshError::Io(io::Error::other("ssh stdin was not piped")))?;
         let stderr = tokio::spawn(collect_tail(pipes.stderr));
         let mut stdout = BufReader::new(pipes.stdout);
-        let header =
-            tokio::time::timeout(self.options.auth_timeout, read_header(&mut stdout, &end)).await;
+        let header = tokio::select! {
+            header = tokio::time::timeout(self.options.auth_timeout, read_header(&mut stdout, &end)) => header,
+            () = closed.cancelled() => {
+                return Err(SshError::Io(io::Error::other("the SSH transport was closed")));
+            }
+        };
         // Prompts end with authentication; the box has answered by now.
         drop(askpass);
         // Returning early drops `process`, whose job ends ssh and whatever
@@ -397,11 +408,6 @@ impl SshTransport {
         }
         let (exit_tx, exit_rx) = oneshot::channel();
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
-        let closed = self
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .child_token();
         tokio::spawn(async move {
             let waiting = async {
                 let status = process.wait().await;
