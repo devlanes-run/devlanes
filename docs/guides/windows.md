@@ -174,7 +174,7 @@ cargo binstall, `cargo install` and npm cannot replace a running `devlanes.exe`.
 
 ## Coding agents
 
-Claude Code on Windows often runs commands through its PowerShell tool. The [agent plugin](../../agent-plugin/README.md#powershell-on-windows) has a hook for that tool, which runs `devlanes __agent-hook` and rejects backgrounded dev servers (`pnpm dev &`, `Start-Process`, `Start-Job`, `cmd /c start`) the way the Bash hook does. It needs `devlanes` on Claude Code's `PATH` and passes every call when it is missing.
+Claude Code on Windows often runs commands through its PowerShell tool. The [agent plugin](../../agent-plugin/README.md#powershell-on-windows) has a hook for that tool, which runs `devlanes __agent-hook` and rejects backgrounded dev servers (`pnpm dev &`, `Start-Process`, `Start-Job`, `cmd /c start`) the way the Bash hook does. It needs `devlanes` on Claude Code's `PATH`; when devlanes is missing or too old, the error goes to the hook's stderr and every call passes.
 
 ## Limitations
 

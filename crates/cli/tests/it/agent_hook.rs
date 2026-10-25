@@ -56,6 +56,10 @@ fn blocks_backgrounded_dev_servers_in_powershell() {
         "# start the server\npnpm dev &",
         "<# a comment with { #> pnpm dev &",
         "pnpm `\n  dev &",
+        "Start-Process npm -ArgumentList 'run','dev' -Wait:$false",
+        "Start-Process -ErrorAction Stop vite",
+        "Start-Process -ea:Stop -OutVariable p vite",
+        "& \"C:\\Program Files\\nodejs\\npm.cmd\" run dev &",
     ] {
         assert_eq!(
             verdict(&project, &home, command, false),
@@ -74,6 +78,8 @@ fn blocks_backgrounded_dev_servers_in_powershell() {
         "Set-Location -Path ../project/web; Start-Process npm -ArgumentList 'run','dev'",
         "Start-Process npm -ArgumentList 'run','dev' -WorkingDirectory ../project",
         "Start-Job -WorkingDirectory ../project { pnpm dev }",
+        "Start-Process npm -ArgumentList 'run','dev' -WorkingDirectory:../project",
+        "Start-Job -WorkingDirectory:../project { pnpm dev }",
         "cd ~; pnpm dev &",
     ] {
         assert_eq!(
@@ -104,7 +110,9 @@ fn allows_foreground_one_shot_and_quoted_commands() {
         "curl.exe \"https://dev.example.invalid/?a=1&b=2\"",
         "cargo build 2>&1 | Select-Object -Last 20",
         "Start-Process npm -ArgumentList 'run','dev' -Wait",
+        "Start-Process npm -ArgumentList 'run','dev' -Wait:$true",
         "Start-Process http://localhost:5173",
+        "& \"C:\\Users\\Jo Smith\\AppData\\Local\\Programs\\devlanes\\devlanes.exe\" start &",
         "Start-Job { pnpm build } | Wait-Job | Receive-Job",
         "Start-Job -FilePath .\\tasks.ps1",
         "cmd /c start /wait pnpm dev",
@@ -131,6 +139,7 @@ fn allows_foreground_one_shot_and_quoted_commands() {
         "Start-Job { pnpm dev }",
         "cd ../project; cd ../other; pnpm dev &",
         "Start-Process npm -ArgumentList 'run','dev' -WorkingDirectory ../other",
+        "Start-Process npm -ArgumentList 'run','dev' -WorkingDirectory:../other",
     ] {
         assert_eq!(
             verdict(&other, &home, command, false),

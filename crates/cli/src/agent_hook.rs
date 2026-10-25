@@ -428,47 +428,73 @@ fn command_blocks(
     }
 }
 
-/// `Start-Process` returns at once unless `-Wait`. Its program and
-/// `-ArgumentList` run in `-WorkingDirectory`, else `dir`. Opening a URL
-/// starts a browser, not a server.
+/// `Start-Process` returns at once unless `-Wait` (`-Wait:$false` does not
+/// wait). Its program and `-ArgumentList` run in `-WorkingDirectory`, else
+/// `dir`. Opening a URL starts a browser, not a server.
 fn start_process(args: &[&str], dir: &Path, home: Option<&Path>) -> bool {
     let mut target = Vec::new();
     let mut rest = args.iter();
     while let Some(&arg) = rest.next() {
-        match parameter(arg).as_deref() {
-            Some(name) if name == "wait" || name.starts_with("wait:") => return false,
-            // `-WorkingDirectory` is read below; the others take values that
-            // are not part of the started command.
-            Some(
-                "workingdirectory"
+        let Some(name) = parameter(arg) else {
+            target.push(arg);
+            continue;
+        };
+        let (name, inline) = match name.split_once(':') {
+            Some((name, value)) => (name.to_owned(), Some(value.to_owned())),
+            None => (name, None),
+        };
+        if name == "wait" {
+            if !inline.is_some_and(|value| matches!(value.as_str(), "$false" | "0")) {
+                return false;
+            }
+            continue;
+        }
+        // `-WorkingDirectory` is read below; these and the common parameters
+        // take values that are not part of the started command. `-FilePath`,
+        // `-ArgumentList`, `-NoNewWindow` and `-PassThru` fall through.
+        let takes_value = matches!(
+            name.as_str(),
+            "workingdirectory"
                 | "windowstyle"
                 | "verb"
                 | "credential"
                 | "redirectstandardinput"
                 | "redirectstandardoutput"
-                | "redirectstandarderror",
-            ) => {
-                rest.next();
-            }
-            // `-FilePath`, `-ArgumentList`, `-NoNewWindow`, `-PassThru`.
-            Some(_) => {}
-            None => target.push(arg),
+                | "redirectstandarderror"
+        ) || COMMON_VALUE_PARAMETERS
+            .split(' ')
+            .any(|common| common == name);
+        if takes_value && inline.is_none() {
+            rest.next();
         }
     }
     start_target(&target, &working_directory(args, dir, home))
 }
+
+/// PowerShell's common parameters that take a value, with their aliases.
+const COMMON_VALUE_PARAMETERS: &str = "erroraction ea warningaction wa informationaction infa \
+                                       progressaction proga errorvariable ev warningvariable wv \
+                                       informationvariable iv outvariable ov outbuffer ob \
+                                       pipelinevariable pv";
 
 /// The command a `Start-Process` or cmd `start` starts, judged as detached.
 fn start_target(target: &[&str], dir: &Path) -> bool {
     !target.first().is_some_and(|first| first.contains("://")) && serves(target, dir)
 }
 
-/// `-WorkingDirectory DIR` from a `Start-Job` or `Start-Process` command,
-/// resolved against `dir`, else `dir`.
+/// `-WorkingDirectory DIR` or `-WorkingDirectory:DIR` from a `Start-Job` or
+/// `Start-Process` command, resolved against `dir`, else `dir`.
 fn working_directory(args: &[&str], dir: &Path, home: Option<&Path>) -> PathBuf {
     args.iter()
-        .position(|arg| parameter(arg).as_deref() == Some("workingdirectory"))
-        .and_then(|at| args.get(at + 1))
+        .enumerate()
+        .find_map(|(at, arg)| {
+            let name = parameter(arg)?;
+            if name == "workingdirectory" {
+                return args.get(at + 1).copied();
+            }
+            name.strip_prefix("workingdirectory:")?;
+            arg.split_once(':').map(|(_, value)| value)
+        })
         .map_or_else(|| dir.to_path_buf(), |value| moved(dir, value, home))
 }
 
@@ -571,18 +597,16 @@ fn program(word: &str) -> String {
 
 /// Whether `words`, started in the background in `dir`, is a dev server
 /// inside a project. A backgrounded devlanes command, such as `devlanes logs
-/// -f`, passes. Quoted words split on blanks, as in the Bash hook, so
-/// `-ArgumentList 'run dev'` reads `dev`.
+/// -f`, passes. Quoted arguments split on blanks, as in the Bash hook, so
+/// `-ArgumentList 'run dev'` reads `dev`; the program stays one word, since
+/// its path may hold a space (`& "C:\Program Files\nodejs\npm.cmd" run dev &`).
 fn serves(words: &[&str], dir: &Path) -> bool {
-    let words: Vec<&str> = words
-        .iter()
-        .flat_map(|word| word.split_whitespace())
-        .collect();
-    words
-        .first()
-        .is_some_and(|first| program(first) != "devlanes")
-        && long_running(&words)
-        && in_project(dir)
+    let Some((&first, rest)) = words.split_first() else {
+        return false;
+    };
+    let mut split = vec![first];
+    split.extend(rest.iter().flat_map(|word| word.split_whitespace()));
+    program(first) != "devlanes" && long_running(&split) && in_project(dir)
 }
 
 /// Words that name a long-running script or command: `pnpm dev`, `npm start`,

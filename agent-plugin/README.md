@@ -46,7 +46,7 @@ On Windows Claude Code may run shell commands through its PowerShell tool instea
 devlanes __agent-hook --shell powershell; exit 0
 ```
 
-It needs a devlanes with `__agent-hook` on Claude Code's `PATH`. The `; exit 0` makes it pass every call when devlanes is missing or too old, whose usage error would otherwise exit 2, which Claude Code reads as a block. The line works the same in Git Bash and in PowerShell, the two shells Claude Code runs hook commands with on Windows, and `onFailure: "continue"` lets the call go ahead if the hook times out. On macOS and Linux, where the PowerShell tool is opt-in, devlanes does not answer `__agent-hook` and the hook passes every call.
+It needs devlanes of the plugin's version or later on Claude Code's `PATH` (each release ships both with the same version). When devlanes is missing or older, the shell's "not found" error or devlanes' usage error still goes to the hook's stderr, but the `; exit 0` makes the call pass: the usage error exits 2, which Claude Code would read as a block of every PowerShell call. The line works the same in Git Bash and in PowerShell, the two shells Claude Code runs hook commands with on Windows, and `onFailure: "continue"` lets the call go ahead if the hook times out. On macOS and Linux, where the PowerShell tool is opt-in, devlanes does not answer `__agent-hook` and the hook passes every call.
 
 It blocks the call (a `permissionDecision: "deny"` answer with the same message) under the same three conditions as the Bash hook, with PowerShell's ways of detaching a command:
 
