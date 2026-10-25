@@ -32,8 +32,8 @@ curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir ~/bin
 ```
 
 ```powershell
-& ([scriptblock]::Create((irm https://devlanes.run/install.ps1))) -Channel next
-& ([scriptblock]::Create((irm https://devlanes.run/install.ps1))) -Version 0.4.0
+iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
+iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
 ```
 
 [packaging](packaging/README.md) describes the release pipeline.

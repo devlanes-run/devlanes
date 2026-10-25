@@ -152,7 +152,7 @@ jobs:
           On Windows, in PowerShell:
 
           \`\`\`powershell
-          & ([scriptblock]::Create((irm https://devlanes.run/install.ps1))) -Channel next
+          iex "& {\$(irm https://devlanes.run/install.ps1)} -Channel next"
           \`\`\`
           EOF
           # SHA256SUMS goes last and old archives are deleted after it, so the install

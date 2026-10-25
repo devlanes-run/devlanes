@@ -2,8 +2,8 @@
 # against the release's SHA256SUMS.
 #
 #   irm https://devlanes.run/install.ps1 | iex
-#   & ([scriptblock]::Create((irm https://devlanes.run/install.ps1))) -Channel next
-#   & ([scriptblock]::Create((irm https://devlanes.run/install.ps1))) -Version 0.4.0
+#   iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
+#   iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
 #
 # -Channel stable (the default) installs the latest release, -Channel next the latest
 # build of main from the rolling `next` prerelease, and -Version X.Y.Z one release.
@@ -24,8 +24,8 @@
 # called with `&`: its variables and functions end with it, and `exit` (which would
 # close the window) is never used. Failures throw, which ends a file run with exit
 # code 1 and leaves an iex session open. The options are the block's parameters, so
-# they never reach the caller's session either; `@args` forwards them by name when the
-# script runs as a script block, and is empty under iex.
+# they never reach the caller's session either. `@args` forwards them by name from the
+# `& { ... } -Channel next` wrapper above, and is empty under plain `irm | iex`.
 & {
     param(
         [ValidateSet('stable', 'next')][string]$Channel,

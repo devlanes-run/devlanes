@@ -15,11 +15,11 @@ In PowerShell:
 irm https://devlanes.run/install.ps1 | iex
 ```
 
-The script checks the archive against the release's `SHA256SUMS`, installs `devlanes.exe` to `%LOCALAPPDATA%\Programs\devlanes` and puts that directory first in your user `PATH`; terminals opened afterwards find `devlanes`. To pass options, run the script as a script block:
+The script checks the archive against the release's `SHA256SUMS`, installs `devlanes.exe` to `%LOCALAPPDATA%\Programs\devlanes` and puts that directory first in your user `PATH`; terminals opened afterwards find `devlanes`. Options go after the script, inside the quotes:
 
 ```powershell
-& ([scriptblock]::Create((irm https://devlanes.run/install.ps1))) -Version 0.4.0
-& ([scriptblock]::Create((irm https://devlanes.run/install.ps1))) -Channel next -Dir D:\tools\devlanes
+iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
+iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next -Dir D:\tools\devlanes"
 ```
 
 `-Channel next` installs the latest build of `main`. The script works in Windows PowerShell 5.1 and PowerShell 7.
