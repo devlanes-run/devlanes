@@ -6,23 +6,24 @@ name: Next
 # Nothing else is published: npm, Homebrew and the website only ever get stable
 # releases from release.yml.
 #
-# CI runs finish in any order, and every one starts this workflow, so only the tip of
-# main is built. A run for an older commit, a failed CI run or a pull request stops in
-# `version` without touching a running build; that's why the concurrency groups sit on
-# `build` and `publish` instead of the whole workflow.
+# The `next` job of ci.yml starts it once every check passed on a push to main; it can
+# also be started by hand. Only the tip of main is built: a run for a commit main has
+# moved past stops in `version` without touching a running build, which is why the
+# concurrency groups sit on `build` and `publish` instead of the whole workflow.
+run-name: Next for ${{ inputs.sha || github.sha }}
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit on main to build; empty builds the tip.
+        required: false
+        type: string
+        default: ""
 permissions:
   contents: read
 jobs:
   version:
-    if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -32,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.sha || github.sha }}
           # The commit count since the last stable tag needs the history and tags.
           fetch-depth: 0
           persist-credentials: false

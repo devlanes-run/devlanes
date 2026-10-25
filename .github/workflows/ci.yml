@@ -210,3 +210,26 @@ jobs:
           kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
+
+  # A commit on main that passed every job above starts next.yml, which builds it as
+  # the rolling `next` prerelease. A commit main has already moved past is skipped: the
+  # newer commit's own run starts the build.
+  next:
+    if: github.event_name == 'push'
+    needs: [lint, rust, packaging, packaging-windows, e2e, ssh]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Start the next build
+        run: |
+          tip=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$GITHUB_SHA" != "$tip" ]; then
+            echo "::notice::main moved to $tip; its own run starts the next build"
+            exit 0
+          fi
+          gh workflow run next.yml --repo "$GITHUB_REPOSITORY" --ref main -f sha="$GITHUB_SHA"
+          echo "::notice::Started next.yml for $GITHUB_SHA"
