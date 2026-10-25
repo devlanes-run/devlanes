@@ -359,6 +359,28 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         Assert-Equal $run.Code 0 "$label, install.ps1 from next: $($run.Output)"
         Assert-Equal (Get-FakeVersion $exe) $versions[0] "$label, version from next"
 
+        # The same through options, as `& ([scriptblock]::Create((irm ...))) -Channel next`
+        # passes them; an option wins over the environment variable.
+        $block = "& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '$installScript')))"
+        $run = Invoke-Child $shell "$block -Channel stable" $environment
+        Assert-Equal $run.Code 0 "$label, -Channel stable: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, -Channel stable over DEVLANES_VERSION=next"
+        $environment.DEVLANES_VERSION = $null
+        $run = Invoke-Child $shell "$block -Channel next" $environment
+        Assert-Equal (Get-FakeVersion $exe) $versions[0] "$label, -Channel next: $($run.Output)"
+        $run = Invoke-Child $shell "$block -Version v$($versions[1])" $environment
+        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, -Version: $($run.Output)"
+        $elsewhere = Join-Path $work "installed elsewhere by $label"
+        $run = Invoke-Child $shell "$block -Version $($versions[0]) -Dir '$elsewhere'" $environment
+        Assert-Equal (Get-FakeVersion (Join-Path $elsewhere 'devlanes.exe')) $versions[0] "$label, -Dir: $($run.Output)"
+        # Windows PowerShell exits with 0 after a parameter validation error, so the check
+        # is the error text and an untouched installation.
+        foreach ($wrong in @('-Channel dev', "-Channel next -Version $($versions[0])")) {
+            $run = Invoke-Child $shell "$block $wrong" $environment
+            Assert-True ($run.Output -match 'Cannot validate argument|can''t be combined') "$label, install.ps1 accepted $($wrong): $($run.Output)"
+            Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, $wrong left the installation alone"
+        }
+
         Restore-UserPath $pathBefore
     }
 
