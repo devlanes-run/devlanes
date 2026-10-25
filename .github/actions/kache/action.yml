@@ -100,9 +100,13 @@ runs:
         REGION: ${{ inputs.s3-region }}
         ACCESS_KEY: ${{ inputs.s3-access-key }}
         SECRET_KEY: ${{ inputs.s3-secret-key }}
-        # Only pushes to the default branch upload. kache also refuses uploads from any
-        # job that is not a push to a protected branch.
+        # Pushes to the default branch upload to `artifacts`. Pull requests read it, fall
+        # back to `pr-artifacts` for what it lacks and upload only there, so they reuse each
+        # other's work without ever reaching main's builds. Every other job is read-only;
+        # kache also refuses uploads from any job that is neither a pull request nor a push
+        # to a protected branch. The bucket's lifecycle rule expires `pr-artifacts/`.
         WRITE: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+        PULL_REQUEST: ${{ github.event_name == 'pull_request' }}
       run: |
         set -euo pipefail
         if [ -z "$BUCKET" ] || [ -z "$ACCESS_KEY" ] || [ -z "$SECRET_KEY" ]; then
@@ -112,10 +116,13 @@ runs:
         config=$RUNNER_TEMP/kache.toml
         {
           echo "[cache]"
-          if [ "$WRITE" != true ]; then echo "remote_readonly = true"; fi
+          # remote_readonly would also stop a pull request from writing to its prefix.
+          if [ "$WRITE" != true ] && [ "$PULL_REQUEST" != true ]; then echo "remote_readonly = true"; fi
           echo "[cache.remote]"
           echo 'type = "s3"'
           echo "bucket = \"$BUCKET\""
+          echo 'prefix = "artifacts"'
+          echo 'pull_request_prefix = "pr-artifacts"'
           if [ -n "$ENDPOINT" ]; then echo "endpoint = \"$ENDPOINT\""; fi
           if [ -n "$REGION" ]; then echo "region = \"$REGION\""; fi
         } > "$config"
