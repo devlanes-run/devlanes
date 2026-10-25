@@ -31,8 +31,16 @@ const WSLPATH_HINT: &str = "wslpath comes with WSL; run devlanes inside a WSL di
 const LOOKUP_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Windows' `certutil.exe` as Linux sees it, or why this machine cannot reach
-/// it: not WSL, or interop off. Blocking on the first call (WSL detection).
+/// it: not WSL, or interop off. Found once per process, since async callers
+/// such as `doctor` ask for the store and finding it reads the mount table
+/// and stats the Windows drives; blocking on that first call.
 pub(crate) fn certutil() -> Result<PathBuf, String> {
+    static CERTUTIL: std::sync::OnceLock<Result<PathBuf, String>> = std::sync::OnceLock::new();
+    CERTUTIL.get_or_init(find_certutil).clone()
+}
+
+/// [`certutil`] without the cache.
+fn find_certutil() -> Result<PathBuf, String> {
     match devlanes_sys::wsl() {
         None => Err("this Linux is not a WSL distro".into()),
         Some(wsl) if !wsl.interop => Err("Windows interop is off in this WSL distro; set \

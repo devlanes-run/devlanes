@@ -43,17 +43,25 @@ pub fn wsl() -> Option<&'static Wsl> {
 /// `/proc/self/mountinfo`; empty outside WSL or when the table cannot be read.
 /// Blocking.
 pub fn windows_drives() -> WindowsDrives {
-    if wsl().is_none() {
-        return WindowsDrives::default();
+    #[cfg(target_os = "linux")]
+    if wsl().is_some() {
+        return read_drives(Path::new("/"));
     }
-    read_drives(Path::new("/"))
+    WindowsDrives::default()
 }
 
 /// Windows' System32 directory as Linux sees it: `Windows/System32` under the
 /// first drive mount that has one, else `/mnt/c/Windows/System32`. Blocking
 /// (reads the mount table and stats the drives).
 pub fn windows_system32() -> PathBuf {
-    system32(Path::new("/"), &windows_drives())
+    #[cfg(target_os = "linux")]
+    {
+        system32(Path::new("/"), &windows_drives())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        PathBuf::from(DEFAULT_SYSTEM32)
+    }
 }
 
 /// A program and its arguments that open a URL in the user's browser.
@@ -205,6 +213,7 @@ impl WindowsDrives {
 }
 
 /// `root/proc/self/mountinfo` parsed; empty when it cannot be read.
+#[cfg(any(target_os = "linux", test))]
 fn read_drives(root: &Path) -> WindowsDrives {
     std::fs::read_to_string(root.join("proc/self/mountinfo"))
         .map(|table| parse_mountinfo(&table))
@@ -212,6 +221,7 @@ fn read_drives(root: &Path) -> WindowsDrives {
 }
 
 /// [`windows_system32`] with the drive mounts looked up under `root`.
+#[cfg(any(target_os = "linux", test))]
 fn system32(root: &Path, drives: &WindowsDrives) -> PathBuf {
     drives
         .drives()
@@ -224,6 +234,7 @@ fn system32(root: &Path, drives: &WindowsDrives) -> PathBuf {
 /// (`id parent dev root mount-point options [optional...] - type source super-options`).
 /// Windows drives are `9p` mounts with `aname=drvfs` (WSL 2) or `drvfs` mounts
 /// (WSL 1), and their source is the Windows root. Malformed lines are skipped.
+#[cfg(any(target_os = "linux", test))]
 fn parse_mountinfo(table: &str) -> WindowsDrives {
     let mounts = table
         .lines()
@@ -243,6 +254,7 @@ fn parse_mountinfo(table: &str) -> WindowsDrives {
 }
 
 /// Decodes the octal escapes mountinfo uses for space, tab, newline and backslash.
+#[cfg(any(target_os = "linux", test))]
 fn unescape(field: &str) -> String {
     let bytes = field.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());

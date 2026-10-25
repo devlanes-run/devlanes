@@ -190,7 +190,7 @@ impl LinuxTrust {
 
     /// The store for `target`; mobile targets are [`TrustError::Unsupported`],
     /// and `windows` outside WSL or without interop is [`TrustError::Unavailable`].
-    /// Blocking for `windows` the first time (WSL detection).
+    /// Blocking for `windows` the first time (finding `certutil.exe`).
     pub fn store(&self, target: TrustTarget) -> Result<Box<dyn TrustStore>, TrustError> {
         match target {
             TrustTarget::Windows => {
