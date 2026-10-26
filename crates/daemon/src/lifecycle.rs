@@ -1081,6 +1081,10 @@ impl LanePhase for ServicesPhase {
 /// Exit of a task: its code (`None` when killed or timed out) and its last unit.
 pub(crate) struct TaskOutcome {
     pub code: Option<i32>,
+    /// The last unit's own exit code. It differs from `code` only for an infra
+    /// entry with `ignore_errors`, which counts a failure as done for starts
+    /// and steps; a `run` of that one entry reports what really happened.
+    pub raw_code: Option<i32>,
     pub host: Option<UnitHost>,
     /// Every unit of the task (steps included) that left processes behind.
     pub leftovers: Vec<Leftovers>,
@@ -1664,6 +1668,7 @@ impl Inner {
             let result: Result<TaskOutcome, RpcError> = async {
                 let mut outcome = TaskOutcome {
                     code: Some(0),
+                    raw_code: Some(0),
                     host: None,
                     leftovers: Vec::new(),
                 };
@@ -1673,6 +1678,7 @@ impl Inner {
                         for step in &task.steps {
                             if cancel.is_cancelled() {
                                 outcome.code = None;
+                                outcome.raw_code = None;
                                 break;
                             }
                             let step_outcome = if let Some(entry) =
@@ -1732,6 +1738,7 @@ impl Inner {
                         leftovers.extend(ended_leftovers(lane, name, &host));
                         outcome = TaskOutcome {
                             code: exit.code,
+                            raw_code: exit.code,
                             host: Some(host),
                             leftovers: Vec::new(),
                         };
@@ -1824,6 +1831,7 @@ impl Inner {
             .collect();
         Ok(TaskOutcome {
             code: if ok { Some(0) } else { outcome.code },
+            raw_code: outcome.code,
             host: Some(host),
             leftovers,
         })

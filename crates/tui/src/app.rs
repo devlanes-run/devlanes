@@ -1337,31 +1337,23 @@ impl App {
                     }
                 }
             }
-            Msg::ContainerLogsOpened { generation, result } => {
-                let Some(attached) = self.attached_mut(generation) else {
-                    return effects;
-                };
-                match result {
-                    Ok(()) => attached.state = AttachState::Live,
-                    Err(error) => {
-                        let mut worded = words::api(&error);
-                        let old = worded.code.as_deref() == Some("unknown_method");
-                        if old {
-                            worded.summary =
-                                "this daemon cannot show container logs; restart it after upgrading devlanes"
-                                    .into();
-                        }
-                        let what = format!(
-                            "show logs of container {} in {}",
-                            attached.unit, attached.lane
-                        );
-                        attached.state = AttachState::Failed(worded.clone());
-                        // An older daemon is no failure of this container; the pane says so.
-                        if !old {
-                            self.report(&what, None, worded);
-                        }
+            Msg::ContainerLogsOpened { generation, result } => match result {
+                Ok(()) => {
+                    if let Some(attached) = self.attached_mut(generation) {
+                        attached.state = AttachState::Live;
                     }
                 }
+                Err(error) => self.container_failed(generation, error),
+            },
+            // The daemon answers `infra.logs` only when the stream ends, so its
+            // refusals (an older daemon, an unknown container) arrive here.
+            Msg::StreamError { generation, error }
+                if self
+                    .attached
+                    .as_ref()
+                    .is_some_and(|a| a.generation == generation && a.container) =>
+            {
+                self.container_failed(generation, error);
             }
             Msg::StreamError { generation, error } => {
                 // A lost connection is reported once by the subscription, and an
@@ -1377,11 +1369,7 @@ impl App {
                 attached.held = None;
                 attached.state = AttachState::Failed(worded.clone());
                 if !expected {
-                    let what = if attached.container {
-                        format!("logs of container {} in {}", attached.unit, attached.lane)
-                    } else {
-                        format!("terminal of {}", unit_ref(&attached.lane, &attached.unit))
-                    };
+                    let what = format!("terminal of {}", unit_ref(&attached.lane, &attached.unit));
                     self.report(&what, None, worded);
                 }
             }
@@ -1726,6 +1714,10 @@ impl App {
         }
         self.errors.push_front(entry);
         self.errors.truncate(MAX_ERRORS);
+        // The error being read stays on screen; the title's count shows the new one.
+        if let Some(Dialog::Errors(state)) = self.dialog.as_mut() {
+            state.index = (state.index + 1).min(self.errors.len() - 1);
+        }
     }
 
     /// The last failed action on a lane or unit, while it still applies.
@@ -1757,6 +1749,12 @@ impl App {
                             .as_ref()
                             .map_or_else(|| "not run".to_owned(), |run| run.state.clone())
                     })
+                })
+                .or_else(|| {
+                    // The list reloads after a config edit, often the fix for the
+                    // error itself; until it is back the task may still exist.
+                    matches!(self.tasks.get(reference), Some(Tasks::Loading))
+                        .then(|| "loading".to_owned())
                 }),
         }
     }
@@ -2747,6 +2745,36 @@ impl App {
         } else {
             // Browsing only watches; focusing the pane or zooming takes the size.
             self.open_attach(lane, name, false, effects);
+        }
+    }
+
+    /// A container's log stream could not open or broke off: the pane shows
+    /// why in place of the logs. A daemon too old for `infra.logs` is no
+    /// failure to report, nor is a lost connection, which the subscription
+    /// reports once.
+    fn container_failed(&mut self, generation: u64, error: ApiError) {
+        let expected = error.is_disconnect() || self.daemon.stopped || self.daemon.busy.is_some();
+        let Some(attached) = self.attached_mut(generation) else {
+            return;
+        };
+        let mut worded = words::api(&error);
+        let old = matches!(
+            worded.code.as_deref(),
+            Some("unknown_method" | "unsupported_method")
+        );
+        if old {
+            worded.summary =
+                "this daemon cannot show container logs; restart it after upgrading devlanes"
+                    .into();
+        }
+        let what = format!(
+            "follow logs of container {} in {}",
+            attached.unit, attached.lane
+        );
+        attached.held = None;
+        attached.state = AttachState::Failed(worded.clone());
+        if !old && !expected {
+            self.report(&what, None, worded);
         }
     }
 
@@ -3914,8 +3942,10 @@ impl App {
     fn errors_key(&mut self, key: KeyEvent, mut state: ErrorsDialog, effects: &mut Vec<Effect>) {
         let last = self.errors.len().saturating_sub(1);
         let max = state.max_scroll.get();
+        // The box may have grown since the scroll was set.
+        state.scroll = state.scroll.min(max);
         match key.code {
-            KeyCode::Esc | KeyCode::Char('q' | 'e') => return,
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q' | 'e') => return,
             KeyCode::Left | KeyCode::Char('h') if state.index < last => {
                 state.index += 1;
                 state.scroll = 0;
@@ -3928,7 +3958,7 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => state.scroll = state.scroll.saturating_sub(1),
             KeyCode::PageDown => state.scroll = (state.scroll + 10).min(max),
             KeyCode::PageUp => state.scroll = state.scroll.saturating_sub(10),
-            KeyCode::Char('y') | KeyCode::Enter => {
+            KeyCode::Char('y') => {
                 if let Some(entry) = self.errors.get(state.index) {
                     effects.push(Effect::Copy(entry.lines().join("\n")));
                     // OSC 52 has no reply: the terminal may ignore it silently.
@@ -4516,9 +4546,12 @@ impl App {
     /// Runs a task; asks first only when its config sets `confirm`, as
     /// `devlanes run` does.
     fn run_task(&mut self, lane: String, task: String, effects: &mut Vec<Effect>) {
-        let confirm = self
-            .task_info(&lane, &task)
-            .is_some_and(|info| info.confirm);
+        // Teardown entries undo setup (drop a database, a bucket) on one key.
+        let teardown = task.starts_with("infra.teardown.");
+        let confirm = teardown
+            || self
+                .task_info(&lane, &task)
+                .is_some_and(|info| info.confirm);
         let effect = Effect::Run {
             lane: lane.clone(),
             params: RunParams {
@@ -4535,7 +4568,11 @@ impl App {
             self.dialog = Some(Dialog::Confirm {
                 title: format!("run {task}"),
                 prompt: format!("Run {task} in {lane}?"),
-                detail: vec!["Its config asks for a confirmation first.".into()],
+                detail: vec![if teardown {
+                    "Teardown entries undo what setup made, such as the lane's database.".into()
+                } else {
+                    "Its config asks for a confirmation first.".into()
+                }],
                 action: "run",
                 strict: false,
                 effect: Box::new(effect),
@@ -4572,8 +4609,15 @@ impl App {
                 }
             }
             Err(error) => {
-                // A task that is not listed as a unit attaches its error to the lane.
-                let target = if self.target_state(&target).is_some() {
+                // A task with a row (a unit, or one `task.list` names) keeps its
+                // error there; any other attaches it to the lane.
+                let listed = self
+                    .lanes
+                    .iter()
+                    .find(|l| l.reference == lane)
+                    .is_some_and(|l| l.units.iter().any(|u| u.name == unit))
+                    || self.task_info(&lane, &unit).is_some();
+                let target = if listed {
                     target
                 } else {
                     Target::Lane(lane.clone())
@@ -4732,6 +4776,11 @@ impl App {
             self.set_notice("select a unit with output first".into());
             return;
         };
+        // The pane shows the container's facts then, not a grid to select in.
+        if attached.container && matches!(attached.state, AttachState::Failed(_)) {
+            self.set_notice("no logs to select: the pane says why".into());
+            return;
+        }
         let (rows, _) = attached.screen.size();
         attached.mode = PaneMode::Copy(CopyState {
             cursor: (rows.saturating_sub(1), 0),
@@ -4827,6 +4876,7 @@ impl App {
         }
         if let Some(Dialog::Errors(state)) = self.dialog.as_mut() {
             let max = state.max_scroll.get();
+            state.scroll = state.scroll.min(max);
             match mouse.kind {
                 MouseEventKind::ScrollDown => state.scroll = (state.scroll + 3).min(max),
                 MouseEventKind::ScrollUp => state.scroll = state.scroll.saturating_sub(3),

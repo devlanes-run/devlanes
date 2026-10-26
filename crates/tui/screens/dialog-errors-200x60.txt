@@ -29,7 +29,7 @@
 │   ● stub-s3                                  ││ acme@0:api-billing, acme@0:api-users, acme@0:wrk-export, acme@0:wrk-mailer, acme@0:web-portal        │                                               │
 │   ◆ stub-twilio         orphaned · pid 48211 ││ run: devlanes lane ls                                                                                │                                               │
 │   ● stub-sendgrid                            ││                                                                                                      │                                               │
-│   ● stub-segment                             ││ j k scroll   y copy   esc close                                                                      │                                               │
+│   ● stub-segment                             ││ y copy   esc close                                                                                   │                                               │
 │   ● stub-auth0                               │└──────────────────────────────────────────────────────────────────────────────────────────────────────┘                                               │
 │   ● proxy-edge                               ││                                                                                                                                                      │
 │   ● docs-search                              ││                                                                                                                                                      │
@@ -57,7 +57,7 @@
 │   ▸ setup                             4 done ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- e error details   r restart   n next problem   pgup scroll back   c select text   / filter                                                                                       ? all keys   q quit
+ r restart   e error details   n next problem   pgup scroll back   c select text   / filter                                                                                       ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-176 red, 179 bold, 180-187 dim, 191 bold, 192-198 dim
@@ -91,7 +91,7 @@
 28: 0 darkgray, 4-5 green, 6-12 darkgray, 47 darkgray, 48 bold, 50-142 bold red, 151 bold, 199 darkgray
 29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-45 dim, 47 darkgray, 48 bold, 50-70 dim, 151 bold, 199 darkgray
 30: 0 darkgray, 4-5 green, 6-18 darkgray, 47 darkgray, 48 bold, 151 bold, 199 darkgray
-31: 0 darkgray, 4-5 green, 6-17 darkgray, 47 darkgray, 48 bold, 50-52 bold, 53-59 dim, 63 bold, 64-68 dim, 72-74 bold, 75-80 dim, 151 bold, 199 darkgray
+31: 0 darkgray, 4-5 green, 6-17 darkgray, 47 darkgray, 48 bold, 50 bold, 51-55 dim, 59-61 bold, 62-67 dim, 151 bold, 199 darkgray
 32: 0 darkgray, 4-5 green, 6-15 darkgray, 47 darkgray, 48-151 bold, 199 darkgray
 33: 0 darkgray, 4-5 green, 6-15 cyan, 47-48 darkgray, 199 darkgray
 34: 0 darkgray, 4-5 green, 6-16 cyan, 47-48 darkgray, 199 darkgray
@@ -119,4 +119,4 @@
 56: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 199 darkgray
 57: 0 darkgray, 47-48 darkgray, 199 darkgray
 58: 0-199 darkgray
-59: 1 bold, 2-18 dim, 19 bold, 20-30 dim, 31 bold, 32-47 dim, 48-51 bold, 52-66 dim, 67 bold, 68-82 dim, 83 bold, 84-93 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1 bold, 2-12 dim, 13 bold, 14-30 dim, 31 bold, 32-47 dim, 48-51 bold, 52-66 dim, 67 bold, 68-82 dim, 83 bold, 84-93 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

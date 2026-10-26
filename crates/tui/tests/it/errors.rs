@@ -6,7 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use devlanes_proto::{AttachResult, RpcError, UnitSummary, events};
 use devlanes_tui::{
     ApiError, DaemonApi,
-    app::{App, Msg, Target, View},
+    app::{App, Msg, Target, Tasks, View},
     ui,
 };
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
@@ -137,7 +137,7 @@ fn check_layout(app: &mut App) -> Result<Buffer, Box<dyn std::error::Error>> {
         );
     }
     assert!(
-        row(&with_notice, height - 1).starts_with(" e error details"),
+        row(&with_notice, height - 1).contains(" e error details "),
         "{}",
         row(&with_notice, height - 1)
     );
@@ -374,6 +374,12 @@ async fn the_error_list_shows_and_copies_the_whole_error() -> TestResult {
     );
     // The older error: the compose failure, every stderr line kept.
     app.update(key(KeyCode::Char('h')));
+    // A new error while reading does not swap the one on screen.
+    app.update(Msg::Failed {
+        what: "copy".into(),
+        message: "broken pipe".into(),
+    });
+    assert!(screen(&render(&app)?).contains("error 3 of 3"));
     let effects = app.update(key(KeyCode::Char('y')));
     let [devlanes_tui::app::Effect::Copy(copied)] = effects.as_slice() else {
         return Err(format!("unexpected {effects:?}").into());
@@ -431,11 +437,33 @@ async fn a_failed_run_of_a_listed_task_stays_on_its_row() -> TestResult {
         "{text}"
     );
     assert!(text.contains("Run seed in acme@1 failed"), "{text}");
-    // Ticks age the notice; the badge stays with the task.
-    for _ in 0..30 {
-        app.update(Msg::Tick);
-    }
-    assert!(app.target_error(&target).is_some());
+    // An edit of devlanes.yaml (often the fix) reloads the task list; the badge
+    // stays while it loads and while the task is still listed.
+    let mut edited = lanes();
+    edited[1].config_changed = true;
+    app.update(Msg::Status(Ok(edited.clone())));
+    assert!(
+        matches!(app.tasks.get("acme@1"), Some(Tasks::Loading)),
+        "the edit reloads the list"
+    );
+    assert!(app.target_error(&target).is_some(), "kept while loading");
+    let seed = || devlanes_tui::api::TaskInfo {
+        name: "seed".into(),
+        ..Default::default()
+    };
+    app.update(Msg::Tasks {
+        lane: "acme@1".into(),
+        result: Ok(vec![seed()]),
+    });
+    app.update(Msg::Status(Ok(edited.clone())));
+    assert!(app.target_error(&target).is_some(), "kept while listed");
+    // A task the config no longer defines takes its badge with it.
+    app.update(Msg::Tasks {
+        lane: "acme@1".into(),
+        result: Ok(Vec::new()),
+    });
+    app.update(Msg::Status(Ok(edited)));
+    assert!(app.target_error(&target).is_none(), "gone with the task");
     Ok(())
 }
 

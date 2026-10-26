@@ -1103,13 +1103,21 @@ fn hints(app: &App) -> Vec<Hint> {
             ("p", "profiles", ch('p')),
             filter,
         ],
-        Some(RowId::Container(_)) => vec![
-            ("pgup", "scroll back", KeyCode::PageUp),
-            ("c", "select text", ch('c')),
-            ("z", "zoom", ch('z')),
-            filter,
-            ("n", "next problem", ch('n')),
-        ],
+        Some(RowId::Container(_))
+            if app
+                .attached
+                .as_ref()
+                .is_some_and(|a| a.container && !matches!(a.state, AttachState::Failed(_))) =>
+        {
+            vec![
+                ("pgup", "scroll back", KeyCode::PageUp),
+                ("c", "select text", ch('c')),
+                ("z", "zoom", ch('z')),
+                filter,
+                ("n", "next problem", ch('n')),
+            ]
+        }
+        Some(RowId::Container(_)) => vec![filter, ("n", "next problem", ch('n'))],
         Some(RowId::Gap(_)) => vec![filter, ("n", "next problem", ch('n'))],
         Some(RowId::Task(_)) => vec![("s", "run", ch('s')), filter],
         Some(RowId::Unit(_)) => {
@@ -1206,7 +1214,9 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         && !copying
         && !typing
     {
-        hints.insert(0, ("e", "error details", KeyCode::Char('e')));
+        // After the row's main key, which stays the first thing to read.
+        let at = hints.len().min(1);
+        hints.insert(at, ("e", "error details", KeyCode::Char('e')));
     }
     let mut used = 0;
     let mut shown = Vec::new();

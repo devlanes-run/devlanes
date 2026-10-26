@@ -25,8 +25,14 @@ use crate::{
 const DEFAULT_TAIL: usize = 200;
 /// Largest `tail` served; Docker reads the whole log file to find the last lines.
 const MAX_TAIL: usize = 5000;
-/// How often a follow checks whether its stopped container runs again.
+/// How soon a follow first checks whether its stopped container runs again.
 const RESUME_POLL: Duration = Duration::from_secs(1);
+/// The longest wait between those checks. Each check can run Compose and a
+/// Docker read, so a pane left on a removed container backs off to this.
+const RESUME_MAX: Duration = Duration::from_secs(10);
+/// Bytes of lines one answer without `follow` carries at most, well under the
+/// IPC frame limit even with every line sent twice (`text` and `styled`).
+const MAX_PAGE_BYTES: usize = 4 * 1024 * 1024;
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 
 /// One line of container output before it gets its sequence number.
@@ -397,6 +403,23 @@ impl Inner {
             merged.drain(..merged.len() - tail);
             truncated = true;
         }
+        // The newest lines that fit the byte budget; long lines can fill it first.
+        let size = |(prefix, line): &(String, Decoded)| {
+            prefix.len() * 2 + line.text.len() + line.styled.as_ref().map_or(0, String::len) + 64
+        };
+        let mut bytes = 0;
+        let keep = merged
+            .iter()
+            .rev()
+            .take_while(|line| {
+                bytes += size(line);
+                bytes <= MAX_PAGE_BYTES
+            })
+            .count();
+        if keep < merged.len() {
+            merged.drain(..merged.len() - keep);
+            truncated = true;
+        }
         Ok((merged, truncated, last_seen))
     }
 
@@ -404,6 +427,8 @@ impl Inner {
     /// containers stop, waits until one runs again and resumes after the last
     /// line sent, so a restart shows as a gap in time and never repeats lines.
     /// `since` is the Unix second to read from for a container without lines yet.
+    /// Replicas resume together: one that restarts while others keep running
+    /// shows its new lines only once all of their streams have ended.
     async fn follow_infra_logs(
         self: &Arc<Self>,
         (project, lane): (&Arc<ProjectRt>, &Arc<LaneRt>),
@@ -414,6 +439,7 @@ impl Inner {
         session: &Session,
     ) {
         let disconnected = session.disconnected();
+        let mut delay = RESUME_POLL;
         loop {
             let prefixes = replica_prefixes(&reader.container, targets.len());
             let mut decoders: Vec<ReplicaDecoder> =
@@ -459,6 +485,8 @@ impl Inner {
                         continue;
                     }
                 };
+                // Output means the container came back: check soon after its next stop.
+                delay = RESUME_POLL;
                 let lines = decoders[index].push(&chunk);
                 let docker = &targets[index].docker;
                 if !send(
@@ -494,11 +522,14 @@ impl Inner {
             }
             since = i64::try_from(now_ms() / 1000).unwrap_or(i64::MAX);
             // Compose can recreate the container under a new id, so look it up again.
+            // A container that is gone, or whose state the provider cannot tell,
+            // ends each reopened stream at once; the growing wait keeps that cheap.
             targets = loop {
                 tokio::select! {
                     () = disconnected.cancelled() => return,
-                    () = tokio::time::sleep(RESUME_POLL) => {}
+                    () = tokio::time::sleep(delay) => {}
                 }
+                delay = (delay * 2).min(RESUME_MAX);
                 if let Ok(found) = self
                     .infra_log_targets(project, lane, &reader.container)
                     .await

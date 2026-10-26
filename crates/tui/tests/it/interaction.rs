@@ -139,15 +139,61 @@ async fn setup_steps_show_their_entry_and_run_with_s() -> TestResult {
         (lane.as_str(), params.task.as_str()),
         ("acme@0", "infra.setup.db")
     );
+    // The answer selects the entry's unit, wherever the selection went meanwhile.
+    app.update(key(KeyCode::Char('g')));
+    assert_ne!(app.selected_id(), Some(&step));
     app.update(Msg::RunDone {
         lane: "acme@0".into(),
         task: "infra.setup.db".into(),
         result: Ok(json!({"unit": "setup.db", "detached": true})),
     });
-    assert_eq!(
-        app.selected_id(),
-        Some(&step),
-        "the run's unit stays selected"
+    assert_eq!(app.selected_id(), Some(&step), "the run selects its unit");
+    // A failed run lands on the entry's row, not the lane.
+    app.update(Msg::RunDone {
+        lane: "acme@0".into(),
+        task: "infra.setup.db".into(),
+        result: Err(ApiError::Rpc(RpcError::new(
+            "unit_running",
+            json!({"unit": "setup.db"}),
+            1,
+        ))),
+    });
+    let on_step = devlanes_tui::app::Target::Unit {
+        lane: "acme@0".into(),
+        unit: "setup.db".into(),
+    };
+    assert!(app.target_error(&on_step).is_some());
+    assert!(
+        app.target_error(&devlanes_tui::app::Target::Lane("acme@0".into()))
+            .is_none()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+/// `r` on a teardown step asks first: teardown entries undo what setup made.
+async fn teardown_steps_ask_before_they_run() -> TestResult {
+    let mut lanes = big_lane(2);
+    let mut teardown = crate::fake::unit("acme@0", "teardown.db", "exited");
+    teardown.kind = "task".into();
+    teardown.exit_code = Some(0);
+    lanes[0].units.push(teardown);
+    let api = FakeApi::with_lanes(lanes);
+    let (mut app, _) = loaded(&api, 100, 30).await;
+    let mut effects = Vec::new();
+    app.select(
+        devlanes_tui::app::Selected::unit("acme@0", "teardown.db"),
+        &mut effects,
+    );
+    assert!(app.update(key(KeyCode::Char('r'))).is_empty());
+    let Some(devlanes_tui::app::Dialog::Confirm { prompt, .. }) = &app.dialog else {
+        return Err(format!("no confirmation: {:?}", app.dialog).into());
+    };
+    assert_eq!(prompt, "Run infra.teardown.db in acme@0?");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        matches!(effects.as_slice(), [Effect::Run { params, .. }] if params.task == "infra.teardown.db"),
+        "{effects:?}"
     );
     Ok(())
 }

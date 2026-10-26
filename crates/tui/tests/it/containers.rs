@@ -133,19 +133,33 @@ async fn a_container_row_shows_its_docker_logs() -> TestResult {
 
 #[tokio::test]
 /// A daemon without `infra.logs` leaves the facts in the pane with a line
-/// saying why, and reports nothing.
+/// saying why, and reports nothing. Its refusal ends the stream, after the
+/// request went out, as the runtime delivers it.
 async fn an_older_daemon_keeps_the_facts() -> TestResult {
     let mut app = App::new(120, 30);
     let generation = on_postgres(&mut app).await?;
     app.update(Msg::ContainerLogsOpened {
         generation,
-        result: Err(ApiError::Rpc(RpcError::new(
+        result: Ok(()),
+    });
+    app.update(Msg::StreamError {
+        generation,
+        error: ApiError::Rpc(RpcError::new(
             "unknown_method",
             json!({"method": "infra.logs"}),
             2,
-        ))),
+        )),
     });
+    app.update(Msg::AttachClosed { generation });
     assert!(app.errors.is_empty(), "{:?}", app.errors);
+    let footer = {
+        let buffer = render(&app)?;
+        row(&buffer, buffer.area.height - 1)
+    };
+    assert!(
+        !footer.contains("select text"),
+        "nothing to select: {footer}"
+    );
     let buffer = render(&app)?;
     let text: Vec<String> = (0..buffer.area.height).map(|y| row(&buffer, y)).collect();
     let text = text.join("\n");
@@ -161,17 +175,98 @@ async fn a_failed_follow_is_reported() -> TestResult {
     let generation = on_postgres(&mut app).await?;
     app.update(Msg::ContainerLogsOpened {
         generation,
-        result: Err(ApiError::Rpc(RpcError::new(
+        result: Ok(()),
+    });
+    app.update(Msg::StreamError {
+        generation,
+        error: ApiError::Rpc(RpcError::new(
             "docker_unavailable",
             json!({"message": "Cannot connect to the Docker daemon"}),
             1,
-        ))),
+        )),
     });
     assert_eq!(app.errors.len(), 1);
     assert!(
         app.errors[0].what.contains("container postgres"),
         "{:?}",
         app.errors[0]
+    );
+    // A connection that cannot open at all says so the same way.
+    let mut fresh = App::new(120, 30);
+    let generation = on_postgres(&mut fresh).await?;
+    fresh.update(Msg::ContainerLogsOpened {
+        generation,
+        result: Err(ApiError::Rpc(RpcError::new(
+            "docker_unavailable",
+            json!({"message": "Cannot connect to the Docker daemon"}),
+            1,
+        ))),
+    });
+    assert_eq!(fresh.errors.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+/// Scrolling a container's logs stays in the pane's scrollback: devlanes
+/// keeps no stored history for it to fetch.
+async fn scrolling_a_container_never_asks_for_stored_logs() -> TestResult {
+    let mut app = App::new(120, 30);
+    let generation = on_postgres(&mut app).await?;
+    app.update(Msg::ContainerLogsOpened {
+        generation,
+        result: Ok(()),
+    });
+    let lines: String = (0..200).map(|i| format!("line {i}\r\n")).collect();
+    app.update(Msg::AttachOutput {
+        generation,
+        bytes: lines.into_bytes(),
+    });
+    for _ in 0..40 {
+        let effects = app.update(key(KeyCode::PageUp));
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::FetchLogs { .. })),
+            "{effects:?}"
+        );
+    }
+    let attached = app.attached.as_ref().ok_or("nothing attached")?;
+    assert!(attached.screen.scroll_offset() > 0);
+    Ok(())
+}
+
+#[tokio::test]
+/// Zoom reopens the logs at the new size; it never turns into a terminal.
+async fn zoom_reopens_the_logs() -> TestResult {
+    let mut app = App::new(120, 30);
+    let generation = on_postgres(&mut app).await?;
+    app.update(Msg::ContainerLogsOpened {
+        generation,
+        result: Ok(()),
+    });
+    let mut effects = app.update(key(KeyCode::Char('z')));
+    // A resize settles before the stream reopens.
+    let settle = effects.iter().find_map(|e| match e {
+        Effect::SettleResize { token, .. } => Some(*token),
+        _ => None,
+    });
+    if let Some(token) = settle {
+        effects.extend(app.update(Msg::ResizeSettled { token }));
+    }
+    assert!(
+        effects.iter().any(
+            |e| matches!(e, Effect::FollowContainer { container, .. } if container == "postgres")
+        ),
+        "{effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Attach { .. })),
+        "{effects:?}"
+    );
+    assert!(
+        app.attached
+            .as_ref()
+            .is_some_and(|a| a.container && !a.interactive)
     );
     Ok(())
 }

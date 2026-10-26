@@ -613,6 +613,8 @@ impl InfraProvider for FakeInfra {
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         Ok(InfraUp {
             namespace: Self::namespace(spec),
+            // As Compose's provider: the same env `up` gives, nothing started.
+            setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             containers: self.containers(spec),
             ..InfraUp::default()
         })

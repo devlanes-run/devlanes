@@ -1055,4 +1055,30 @@ mod tests {
         let typed = terminal_msg(TermEvent::Key(key('@', ctrl_alt)));
         assert!(matches!(typed, Some(Msg::Key(k)) if k == key('@', KeyModifiers::NONE)));
     }
+
+    #[test]
+    /// A container's `log` event becomes its colored line, else its plain
+    /// one, ending in CR LF; other events add nothing.
+    fn container_lines_end_in_crlf_and_keep_colors() {
+        let event = |name: &str, line: serde_json::Value| devlanes_proto::Event {
+            seq: 0,
+            event: name.into(),
+            data: serde_json::json!({"unit": "db", "line": line}),
+        };
+        let styled = event(
+            devlanes_proto::events::LOG,
+            serde_json::json!({"text": "ready", "styled": "\x1b[32mready\x1b[0m"}),
+        );
+        assert_eq!(
+            container_line(&styled).as_deref(),
+            Some(&b"\x1b[32mready\x1b[0m\r\n"[..])
+        );
+        let plain = event(
+            devlanes_proto::events::LOG,
+            serde_json::json!({"text": "ready"}),
+        );
+        assert_eq!(container_line(&plain).as_deref(), Some(&b"ready\r\n"[..]));
+        let other = event(devlanes_proto::events::DIAGNOSTIC, serde_json::json!({}));
+        assert_eq!(container_line(&other), None);
+    }
 }

@@ -761,8 +761,14 @@ async fn interrupted(
         InterruptPolicy::Detach | InterruptPolicy::ForwardCommandThenTeardown => false,
     };
     if stop && let Some(task) = request.params.get("task").and_then(Value::as_str) {
+        // `run infra.setup.db` runs as the unit `setup.db`.
+        let unit = if task.starts_with("infra.setup.") || task.starts_with("infra.teardown.") {
+            &task["infra.".len()..]
+        } else {
+            task
+        };
         // A fresh connection: the streaming one is still busy with the run request.
-        let selection = json!({"units": [task]});
+        let selection = json!({"units": [unit]});
         let mut client = Client::connect(paths).await.map_err(rpc_error)?;
         let stopped = client
             .request(Method::Stop, selection, request.context.clone())
@@ -1088,10 +1094,20 @@ fn more_hint(method: Method, request: &Request) -> Option<Hint> {
                 .get("container")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            Some(scoped(
-                request,
-                &["infra", "logs", container, "--tail", "1000"],
-            ))
+            // More than asked for, up to what the daemon serves; past that only
+            // `docker logs` reads further back.
+            let asked = request
+                .params
+                .get("tail")
+                .and_then(Value::as_u64)
+                .unwrap_or(200);
+            let more = (asked.max(200) * 5).min(5000);
+            (more > asked).then(|| {
+                scoped(
+                    request,
+                    &["infra", "logs", container, "--tail", &more.to_string()],
+                )
+            })
         }
         _ => None,
     }

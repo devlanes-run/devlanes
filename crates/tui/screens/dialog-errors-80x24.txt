@@ -12,7 +12,7 @@
 ││ acme@0:wrk-export, acme@0:wrk-mailer, acme@0:web-portal                    ││
 ││ run: devlanes lane ls                                                      ││
 ││                                                                            ││
-││ j k scroll   y copy   esc close                                            ││
+││ y copy   esc close                                                         ││
 │└────────────────────────────────────────────────────────────────────────────┘│
 │   ● web-landing              ││ 2026-10-21T10:41:17Z INFO job done queue=defa│
 │   ◉ wrk-email                ││ ult id=job_8131 took=183ms                   │
@@ -21,7 +21,7 @@
 │   ◉ wrk-thumbs               ││ 2026-10-21T10:42:31Z INFO job done queue=defa│
 │   ✕ wrk-export  start failed ││ ult id=job_8133 took=209ms                   │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
- e error details   r restart   n next problem             ? all keys   q quit
+ r restart   e error details   n next problem             ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-56 red, 59 bold, 60-67 dim, 71 bold, 72-78 dim
@@ -38,7 +38,7 @@
 11: 0 darkgray, 1 bold, 3-57 bold red, 78 bold, 79 darkgray
 12: 0 darkgray, 1 bold, 3-23 dim, 78 bold, 79 darkgray
 13: 0 darkgray, 1 bold, 78 bold, 79 darkgray
-14: 0 darkgray, 1 bold, 3-5 bold, 6-12 dim, 16 bold, 17-21 dim, 25-27 bold, 28-33 dim, 78 bold, 79 darkgray
+14: 0 darkgray, 1 bold, 3 bold, 4-8 dim, 12-14 bold, 15-20 dim, 78 bold, 79 darkgray
 15: 0 darkgray, 1-78 bold, 79 darkgray
 16: 0 darkgray, 4-16 green, 31-32 darkgray, 34-53 dim, 55-58 color2, 79 darkgray
 17: 0 darkgray, 4-5 green, 6-14 magenta, 31-32 darkgray, 79 darkgray
@@ -47,4 +47,4 @@
 20: 0 darkgray, 4-5 green, 6-15 magenta, 31-32 darkgray, 34-53 dim, 55-58 color2, 79 darkgray
 21: 0 darkgray, 1-30 reversed, 31-32 darkgray, 79 darkgray
 22: 0-79 darkgray
-23: 1 bold, 2-18 dim, 19 bold, 20-30 dim, 31 bold, 32-47 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim
+23: 1 bold, 2-12 dim, 13 bold, 14-30 dim, 31 bold, 32-47 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

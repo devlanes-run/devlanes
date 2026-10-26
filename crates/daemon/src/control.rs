@@ -123,15 +123,18 @@ async fn await_spawn(
     Ok(())
 }
 
-/// The answer to a `run` that waited for its task or entry to end.
+/// The answer to a `run` that waited for its task or entry to end. An entry
+/// with `ignore_errors` still answers with its real exit code: it was run on
+/// its own, to see whether it works.
 fn run_result(task: &str, lane: &str, unit: Option<&str>, outcome: &TaskOutcome) -> Value {
+    let code = outcome.raw_code;
     let mut result = json!({
         "task": task,
         "lane": lane,
         "unit": unit,
         "interactive": false,
-        "exit_code": outcome.code,
-        "state": if outcome.code == Some(0) { "exited" } else { "failed" },
+        "exit_code": code,
+        "state": if code == Some(0) { "exited" } else { "failed" },
     });
     // Daemons the task started (`pg_ctl start`) outlive it on purpose; say so.
     if !outcome.leftovers.is_empty() {
@@ -849,6 +852,7 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
+        self.ensure_infra_env(&project, &lane).await;
         // `--env` applies to this run only; the lane keeps its own overrides.
         let resolved = self
             .resolve_task(&project, &lane, &run.task, &run.env)
@@ -1228,6 +1232,44 @@ impl Inner {
         self.bus
             .emit(events::RESYNC, json!({"reason": "reset_state"}));
         Ok(json!({"stopped": stopped, "terminated": terminated}))
+    }
+
+    /// Fills the lane's infra namespace and Compose env (`COMPOSE_PROJECT_NAME`
+    /// and the rest) when no start or `infra up` did since the daemon began:
+    /// `run` reaches infra entries and `infra.*` expressions on such a lane
+    /// too, after a daemon restart for one. Starts nothing; a lane without
+    /// infra, or Docker being down, leaves things as they are.
+    async fn ensure_infra_env(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
+        if !lane.st().setup_env.is_empty() {
+            return;
+        }
+        let Ok(spec) = self.infra_spec(project, lane, &[]).await else {
+            return;
+        };
+        if spec.is_empty() {
+            return;
+        }
+        let needs = self.integ.infra.port_needs(&spec).await.unwrap_or_default();
+        let spec = match self.infra_spec(project, lane, &needs).await {
+            Ok(with_ports) => with_ports,
+            Err(_) => spec,
+        };
+        match self.integ.infra.namespace(&spec).await {
+            Ok(up) => {
+                let mut st = lane.st();
+                // A start that finished meanwhile knows better.
+                if st.setup_env.is_empty() {
+                    st.setup_env = up.setup_env;
+                    st.infra_ns.get_or_insert(up.namespace);
+                    if st.infra_containers.is_empty() {
+                        st.infra_containers = up.containers;
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::debug!(code = %error.code, "infra env for a run unavailable");
+            }
+        }
     }
 
     /// Spec with ports for the request's lane, allocating infra ports first.

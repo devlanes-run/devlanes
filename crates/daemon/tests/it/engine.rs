@@ -431,36 +431,17 @@ async fn run_infra_entries_keep_the_setup_record() {
             .await
             .expect("stop");
 
-        let detached = h
+        // In the foreground the answer comes after the record is cleared.
+        let torn = h
             .call(
                 Method::Run,
-                json!({"task": "infra.teardown.database", "detach": true}),
+                json!({"task": "infra.teardown.database"}),
                 cx(&main),
             )
             .await
             .expect("run teardown entry");
-        assert_eq!(detached["unit"], "teardown.database");
-        assert_eq!(detached["detached"], true);
-        let torn = eventually(Duration::from_secs(5), || async {
-            h.runner
-                .journal
-                .entries()
-                .contains(&"echo teardown-db".to_owned())
-                .then_some(())
-        })
-        .await;
-        assert!(torn.is_some(), "{:?}", h.runner.journal.entries());
-        // The record clears once the entry exits, after its spawn.
-        let cleared = eventually(Duration::from_secs(5), || async {
-            let lanes = status(&h, cx(&main), json!({})).await;
-            lanes[0]
-                .units
-                .iter()
-                .any(|u| u.name == "teardown.database" && u.state == "exited")
-                .then_some(())
-        })
-        .await;
-        assert!(cleared.is_some());
+        assert_eq!(torn["unit"], "teardown.database");
+        assert_eq!(torn["exit_code"], 0);
 
         assert!(start(&h, cx(&main), json!({})).await.ready);
         assert_eq!(
@@ -474,6 +455,112 @@ async fn run_infra_entries_keep_the_setup_record() {
             ],
             "teardown cleared the record"
         );
+
+        // Detached, the answer names the unit the client attaches to.
+        let detached = h
+            .call(
+                Method::Run,
+                json!({"task": "infra.setup.database", "detach": true}),
+                cx(&main),
+            )
+            .await
+            .expect("run setup entry detached");
+        assert_eq!(detached["unit"], "setup.database");
+        assert_eq!(detached["detached"], true);
+        let again = eventually(Duration::from_secs(5), || async {
+            (h.runner.journal.entries().len() == 6).then_some(())
+        })
+        .await;
+        assert!(again.is_some(), "{:?}", h.runner.journal.entries());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// An entry run on a lane this daemon never started still gets the Compose
+/// env its `docker compose exec` needs.
+async fn run_infra_entry_gets_the_compose_env_without_a_start() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = ENTRIES.replace("echo setup-db", "printenv COMPOSE_PROJECT_NAME");
+        let main = repo(&tmp.path, "r", &config);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(
+            Method::Run,
+            json!({"task": "infra.setup.database"}),
+            cx(&main),
+        )
+        .await
+        .expect("run setup entry");
+        let logs = h
+            .call(
+                Method::Logs,
+                json!({"units": ["setup.database"], "tail": 5}),
+                cx(&main),
+            )
+            .await
+            .expect("logs");
+        assert_eq!(logs["items"][0]["text"], "fake", "{logs}");
+        assert!(
+            !h.infra
+                .calls
+                .entries()
+                .iter()
+                .any(|call| call.starts_with("up")),
+            "nothing started"
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A failing entry run on its own reports its exit code, `ignore_errors` or
+/// not; `ignore_errors` still records it as done for later starts.
+async fn run_infra_entry_reports_a_failure() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: entries\ninfra:\n  containers:\n    db: { image: \"postgres:16\", ports: { pg: 5432 }, per_lane: true }\n  setup:\n    broken: \"exit 3\"\n    tolerated: { run: \"exit 4\", ignore_errors: true }\nservices:\n  api: { run: \"sleep\" }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        for (entry, code) in [("broken", 3), ("tolerated", 4)] {
+            let ran = h
+                .call(
+                    Method::Run,
+                    json!({"task": format!("infra.setup.{entry}")}),
+                    cx(&main),
+                )
+                .await
+                .expect("run answers");
+            assert_eq!(ran["exit_code"], code, "{entry}: {ran}");
+            assert_eq!(ran["state"], "failed", "{entry}: {ran}");
+        }
+        // Only the failure without `ignore_errors` runs again at the start.
+        let result = start(&h, cx(&main), json!({})).await;
+        let entries = h.runner.journal.entries();
+        assert_eq!(
+            entries.iter().filter(|e| *e == "exit 3").count(),
+            2,
+            "{result:?} {entries:?}"
+        );
+        assert_eq!(entries.iter().filter(|e| *e == "exit 4").count(), 1);
         h.close().await;
     })
     .await

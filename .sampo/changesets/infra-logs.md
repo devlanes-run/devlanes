@@ -7,4 +7,4 @@ cargo/devlanes-proto: patch
 cargo/devlanes-tui: patch
 ---
 
-Added `devlanes infra logs <container> [-f]` and Docker logs in the TUI pane when an infra container is selected, streamed from Docker and kept across container restarts.
+Added `devlanes infra logs <container> [-f]` and Docker logs in the TUI pane when an infra container is selected, read from Docker and followed across container restarts.

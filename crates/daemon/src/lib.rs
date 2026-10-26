@@ -733,6 +733,13 @@ const FAILURE_DATA_BYTES: usize = 1024;
 /// showed and then cut left no trace there. Read-only requests stay out:
 /// clients poll some of them.
 fn log_failure(method: Method, lane: Option<&str>, error: &RpcError) {
+    // The `--yes` round trip and requests during shutdown are expected answers.
+    if matches!(
+        error.code.as_str(),
+        "confirmation_required" | "daemon_stopping"
+    ) {
+        return;
+    }
     let method = serde_json::to_value(method)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
