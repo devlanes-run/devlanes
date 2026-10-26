@@ -1,4 +1,7 @@
 //! Real SSH checks, normally run through `e2e/ssh/run.sh` against a throwaway sshd container.
+//! `windows_sshd_box` instead needs a Windows box: `cargo nextest run -p
+//! devlanes-transport-ssh --run-ignored only -E 'test(windows_sshd_box)'` with
+//! the variables below pointing at it.
 //!
 //! Environment:
 //! - `DEVLANES_TEST_SSH_DEST`: ssh destination, default `localhost`.
@@ -219,6 +222,43 @@ async fn ssh_tunnel_session() -> TestResult {
         let session = Session::connect(&transport, SessionOptions::new("ssh-test")).await?;
         assert!(!session.server().is_empty());
         // The box reports its `ports.range` from its daemon.
+        assert!(
+            session.box_info().ports_range.is_some(),
+            "{:?}",
+            session.box_info()
+        );
+        session.close();
+        transport.close().await;
+        Ok(())
+    })
+    .await?
+}
+
+/// A Windows box over its own sshd (Windows' OpenSSH Server, with devlanes
+/// installed for the user `DEVLANES_TEST_SSH_DEST` logs in as, `localhost`
+/// by default): the probe reports Windows and the devlanes it found, and a
+/// session over the tunnel gets the box's handshake, whose daemon did not
+/// stay inside the ssh session.
+#[tokio::test]
+#[ignore = "needs windows sshd"]
+async fn windows_sshd_box() -> TestResult {
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let home = short_home()?;
+        let transport = transport(home.path());
+        let probe = transport.probe().await?;
+        assert_eq!(probe.platform.os, "windows", "{probe:?}");
+        assert!(probe.program.is_some(), "{probe:?}");
+        let session = Session::connect(&transport, SessionOptions::new("windows-sshd")).await?;
+        assert!(
+            session.server().starts_with("devlanes "),
+            "{}",
+            session.server()
+        );
+        assert!(
+            !session.server().contains("(daemon stops with the session)"),
+            "{}",
+            session.server()
+        );
         assert!(
             session.box_info().ports_range.is_some(),
             "{:?}",

@@ -1,6 +1,6 @@
 # devlanes-tunnel
 
-The box side of `devlanes remote connect`. The client's SSH transport runs `devlanes tunnel --stdio` on the box, and this crate answers the mux streams on that pipe from the box's own daemon, which it reaches over the daemon's Unix socket like any other client. Remote is mirroring only: the client gets the registry, data streams and syncs, and never runs commands on the box.
+The box side of `devlanes remote connect`. The client's SSH transport runs `devlanes tunnel --stdio` on the box, and this crate answers the mux streams on that pipe from the box's own daemon, which it reaches over the daemon's socket (a named pipe on Windows) like any other client. Remote is mirroring only: the client gets the registry, data streams and syncs, and never runs commands on the box.
 
 ## Usage
 
@@ -41,7 +41,7 @@ async fn serve_pipe(
 - `run_stdio(paths, start_daemon)`: the `tunnel --stdio` entry point.
 - `services(paths, client)`: `BoxServices` for `devlanes_transport::serve`; `client`, with the id and name from each client's handshake, is listed by the box's `status` while the session lasts.
 - `box_info(paths)`: the box daemon's HTTPS port and `ports.range`, for `ServeOptions::box_info`.
-- `server_label()`: the version label sent in the handshake.
+- `server_label()`: the version label sent in the handshake; `SESSION_BOUND` is what `run_stdio` adds to it on Windows when the daemon it started could not leave the ssh session's job.
 - `TunnelError`: the box daemon was unreachable or stopped, or the session failed; `exit_code` gives the process status.
 
 ## Config example
@@ -71,6 +71,8 @@ The tunnel offers the `extension` sync to the client that ran `devlanes remote c
 - A client cannot send the box daemon requests: remote is mirroring only.
 - Syncs stream the entries the daemon lists in `sync.status`; the client names an entry, never a path. It then sends the files it holds in batches and an end marker. Each batch is compared with the source on arrival and only its outcome is kept; after the marker the box sends new and changed files, then deletions. A client that leaves before the marker leaves nothing behind, so its next subscription starts over. Files over 256 MiB are skipped, and one client follows at most 16 syncs.
 - A daemon the tunnel starts does not inherit the SSH session's variables (`SSH_AUTH_SOCK` and friends). On Linux the handshake label says `(linger off)` when the box would stop it at logout.
+- On Windows the tunnel runs under cmd.exe or PowerShell, whichever the box's sshd uses, with pipes for stdin and stdout that pass every byte. A daemon it starts leaves the ssh session's job (Win32-OpenSSH allows that), so it outlives the session. In a job that refuses breakaway and ends its processes on close, the daemon stays inside: the tunnel says so on stderr and adds `(daemon stops with the session)` to the label, which the client shows as a warning.
+- A Windows box knows only the read-only attribute of its files, so syncs from it compare modes by write access, as for a Windows client.
 - With `start_daemon` false and no daemon running, the tunnel fails with `box daemon is not running` and exit status `devlanes_transport::EXIT_DAEMON_STOPPED`, which the client's transport (SSH or a command) reports as temporary.
 - stdout carries the `devlanes-tunnel 4` preamble line, then only mux frames. Errors go to stderr, which ssh returns to the client as the connection error.
 

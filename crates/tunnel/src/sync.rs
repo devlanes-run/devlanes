@@ -87,7 +87,11 @@ impl DaemonSync {
 /// Feeds one sync entry to a client whose manifest arrives on `input`.
 ///
 /// A client that leaves before its end marker leaves nothing behind: the next
-/// subscription starts over with a fresh manifest.
+/// subscription starts over with a fresh manifest. Modes compare by write
+/// access when either side keeps only a read-only attribute: the client says
+/// so in its request, and a Windows box knows it of itself, since its files
+/// all report `0o644` or `0o444` and an executable a Unix client holds would
+/// otherwise be resent without its exec bits on every connect.
 pub(crate) fn follow_entry(
     entry: &SyncEntry,
     read_only_modes: bool,
@@ -101,7 +105,7 @@ pub(crate) fn follow_entry(
     let options = SyncOptions {
         ignore: entry.ignore.clone(),
         max_file: Some(MAX_SYNC_FILE),
-        read_only_modes,
+        read_only_modes: read_only_modes || devlanes_sync::READ_ONLY_MODES,
         ..SyncOptions::default()
     };
     let mut syncer = Syncer::new(&entry.from, target, options)
@@ -418,7 +422,7 @@ mod tests {
 
     /// A client that keeps only a read-only attribute (Windows) reports `0o644`
     /// for an executable it holds; with `read_only_modes` the box does not resend
-    /// it, without it the box sends it to restore the mode. Boxes are Unix.
+    /// it, without it a Unix box sends it to restore the mode.
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread")]
     async fn read_only_clients_compare_modes_by_write_access() {
@@ -447,6 +451,66 @@ mod tests {
                 assert_eq!(written, expected, "read_only_modes: {read_only}");
                 assert!(deleted.is_empty(), "{deleted:?}");
             }
+        })
+        .await
+        .expect("timeout");
+    }
+
+    /// A Windows box knows only the read-only attribute of its files, so it
+    /// compares modes by write access whatever the client asks: a Unix
+    /// client's executable (`0o755`) is left alone, and a file the box made
+    /// read-only is sent again with `0o444`. Paths travel with `/`.
+    #[cfg(windows)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn windows_boxes_compare_modes_by_write_access() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let (source, destination) = (dir.path().join("src"), dir.path().join("dst"));
+            tree(&source, 3);
+            tree(&destination, 3);
+            let locked = source.join("d2").join("f2.txt");
+            let mut permissions = std::fs::metadata(&locked).expect("meta").permissions();
+            permissions.set_readonly(true);
+            std::fs::set_permissions(&locked, permissions).expect("read-only");
+            let session = connect(&source).await;
+            let request = json!({
+                "op": "follow", "lane": "app@0", "unit": "web", "index": 0,
+                "read_only_modes": false,
+            });
+            let mut sync = session.subscribe_sync(request).await.expect("subscribe");
+            let mut walk = LocalTarget::new(&destination).held(HashCache::default(), 10);
+            while let Some(files) = walk.next().await {
+                let files = files
+                    .into_iter()
+                    .map(|file| SyncFile {
+                        mode: if file.path.as_str() == "d1/f1.txt" {
+                            0o755
+                        } else {
+                            file.mode
+                        },
+                        path: file.path.as_str().to_owned(),
+                        size: file.size,
+                        hash: file.hash.map(|hash| hash.to_hex()).unwrap_or_default(),
+                        mtime_ms: None,
+                    })
+                    .collect();
+                let batch = serde_json::to_value(ManifestBatch { files }).expect("batch");
+                sync.send(batch).await.expect("send batch");
+            }
+            sync.finish_input().await.expect("end");
+            let mut written = Vec::new();
+            while let Some(message) = sync.next().await {
+                match message.expect("message") {
+                    SyncMessage::Manifest(value) => match serde_json::from_value(value) {
+                        Ok(SyncManifest::Ready) => break,
+                        Ok(SyncManifest::File { path, mode, .. }) => written.push((path, mode)),
+                        _ => {}
+                    },
+                    SyncMessage::Delete { path } => panic!("deleted {path}"),
+                    SyncMessage::Chunk { .. } => {}
+                }
+            }
+            assert_eq!(written, [("d2/f2.txt".to_owned(), 0o444)]);
         })
         .await
         .expect("timeout");

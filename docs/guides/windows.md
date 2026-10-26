@@ -187,6 +187,10 @@ cargo binstall, `cargo install`, npm, uv, pipx and pip cannot replace a running 
 
 Claude Code on Windows often runs commands through its PowerShell tool, and Codex runs every shell command in PowerShell. The [agent plugin](../../agent-plugin/README.md#hook)'s hook runs `devlanes __agent-hook` and reads those commands as PowerShell, so it rejects backgrounded dev servers there too (`pnpm dev &`, `Start-Process`, `Start-Job`, `cmd /c start`). It needs `devlanes` on the agent's `PATH`; when devlanes is missing or too old, the error goes to the hook's stderr and every call passes.
 
+## Remote boxes
+
+A Windows machine can be a box that other machines connect to with `devlanes remote connect`, through Windows' OpenSSH Server; [Windows boxes](remote-setup.md#windows-boxes) has the setup. Connecting from Windows to a Linux, macOS or Windows box works too, with the differences in [Windows clients](remote-setup.md#windows-clients).
+
 ## Limitations
 
 - Each unit runs in a job object it cannot leave. A program that insists on starting a child outside its job fails with access denied there.
@@ -195,4 +199,3 @@ Claude Code on Windows often runs commands through its PowerShell tool, and Code
 - `pty: true` units stop with the daemon (see [terminals in units](#terminals-in-units)).
 - The DNS server for `--resolver` always listens on `127.53.0.1:53`, because an NRPT rule cannot name a port.
 - Unit names that differ only in case (`web` and `Web`) would share a log folder, so `devlanes config check` rejects them on Windows.
-- Windows cannot be a remote box; boxes are Linux or macOS. Connecting to one from Windows works, with the differences in [Windows clients](remote-setup.md#windows-clients).

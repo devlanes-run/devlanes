@@ -4,7 +4,6 @@
 use std::io::Write;
 
 use devlanes_cli::Action;
-#[cfg(unix)]
 use devlanes_client::Paths;
 use devlanes_proto::RpcError;
 use serde_json::json;
@@ -29,7 +28,11 @@ pub async fn run(action: Action) -> Result<u8, RpcError> {
 /// client's SSH transport returns that text as the connection error. The user
 /// config's `remote.start_daemon` decides whether a stopped daemon is started
 /// (see [`crate::user_config::tunnel_start_daemon`]).
-#[cfg(unix)]
+///
+/// On Windows sshd runs it through cmd.exe or PowerShell with pipes for
+/// stdin and stdout. `main` gives it a console without a window when none
+/// was passed down, as for every command, so nothing it starts (the daemon)
+/// opens a window.
 async fn tunnel() -> Result<u8, RpcError> {
     let result = match Paths::discover() {
         Ok(paths) => {
@@ -75,13 +78,6 @@ async fn askpass(prompt: &str) -> u8 {
             1
         }
     }
-}
-
-/// Refuses on stderr with exit 2: a Windows machine is never a box.
-#[cfg(windows)]
-async fn tunnel() -> Result<u8, RpcError> {
-    eprintln!("devlanes tunnel: not supported on Windows");
-    Ok(2)
 }
 
 /// Answers ssh's prompt when ssh started this process as `SSH_ASKPASS`:

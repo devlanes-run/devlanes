@@ -62,6 +62,19 @@ fn kill_on_close_ends_members() -> io::Result<()> {
     Ok(())
 }
 
+/// Allowing breakaway keeps the job's other limits: dropping it still ends
+/// its members. Leaving it is checked end to end, where the tunnel's daemon
+/// breaks away from such a job.
+#[test]
+fn allowing_breakaway_keeps_kill_on_close() -> io::Result<()> {
+    let job = test_job()?;
+    job.allow_breakaway()?;
+    let child = long_child(&job)?;
+    drop(job);
+    assert!(child.wait_timeout(PATIENCE)?.is_some(), "outlived its job");
+    Ok(())
+}
+
 /// A job without limits starts empty; the query about this process's own job
 /// is consistent.
 #[test]

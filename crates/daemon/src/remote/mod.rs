@@ -1624,7 +1624,8 @@ fn label_version(label: &str) -> Option<&str> {
 }
 
 /// Findings about the box behind a handshake label (`devlanes <version>`,
-/// optionally `(linger off)`), as warning code and message.
+/// optionally `(linger off)` or `(daemon stops with the session)`), as
+/// warning code and message.
 fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
     let ours = devlanes_version::VERSION;
     let mut warnings = Vec::new();
@@ -1639,6 +1640,13 @@ fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
         warnings.push((
             "box_linger_off",
             "the box stops your processes at logout; run `loginctl enable-linger` there or `devlanes daemon install`".to_owned(),
+        ));
+    }
+    // A Windows box whose ssh session job kept the daemon the tunnel started.
+    if label.contains("(daemon stops with the session)") {
+        warnings.push((
+            "box_daemon_in_session",
+            "the box's daemon was started inside this connection's ssh session and stops when it ends; run `devlanes daemon install` there".to_owned(),
         ));
     }
     warnings
@@ -1826,6 +1834,24 @@ mod tests {
             .map(|(code, _)| code)
             .collect();
         assert_eq!(codes, ["box_version", "box_linger_off"]);
+    }
+
+    /// A Windows box's tunnel says when the daemon it started stays inside
+    /// the ssh session's job, in the words this check looks for.
+    #[test]
+    fn labels_report_a_daemon_bound_to_the_session() {
+        let label = format!(
+            "devlanes {} {}",
+            devlanes_version::VERSION,
+            devlanes_tunnel::SESSION_BOUND
+        );
+        let warnings = label_warnings(&label);
+        let codes: Vec<_> = warnings.iter().map(|(code, _)| *code).collect();
+        assert_eq!(codes, ["box_daemon_in_session"]);
+        assert!(
+            warnings[0].1.contains("devlanes daemon install"),
+            "{warnings:?}"
+        );
     }
 
     /// A transport that asks a password nobody answers, then fails with `error`.

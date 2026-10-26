@@ -32,7 +32,8 @@ use serde::{Deserialize, Serialize};
 use crate::Error;
 
 /// What an installed fake does on every run, in this order: check the arguments,
-/// record them, sleep, print `stderr`, print `stdout` then `stdout_json`, exit.
+/// record them, sleep, print `stderr`, print `stdout` then `stdout_json`, copy
+/// stdin to stdout (`echo_stdin`), run its last argument (`run_with`), exit.
 ///
 /// Printed strings expand `{cwd}` to the canonical working directory (like
 /// `pwd -P`; on Windows the verbatim `\\?\` form `Path::canonicalize` returns) and
@@ -52,6 +53,16 @@ pub struct Behaviour {
     pub stdout: String,
     /// Printed as compact JSON after `stdout`, with every string expanded.
     pub stdout_json: Option<serde_json::Value>,
+    /// Copies stdin to stdout byte for byte until stdin ends, for a fake
+    /// that stands in for a program speaking a protocol over its stdio.
+    pub echo_stdin: bool,
+    /// Windows only: runs the last argument the way Win32-OpenSSH's sshd runs
+    /// a command with this default shell (`cmd` or `powershell`), sharing the
+    /// fake's streams, and exits with its status instead of `exit`. For a fake
+    /// `ssh` whose box is this machine.
+    pub run_with: Option<String>,
+    /// Variables set for `run_with`'s shell, on top of the fake's own.
+    pub run_env: Vec<(String, String)>,
     pub exit: u8,
 }
 
@@ -95,6 +106,27 @@ impl Behaviour {
     /// serialized, so expanded paths are escaped correctly.
     pub fn stdout_json(mut self, value: serde_json::Value) -> Self {
         self.stdout_json = Some(value);
+        self
+    }
+
+    /// Copies stdin to stdout after printing.
+    pub fn echo_stdin(mut self) -> Self {
+        self.echo_stdin = true;
+        self
+    }
+
+    /// Runs the last argument with `shell` as sshd would, with `env` set for it.
+    pub fn run_with<I, K, V>(mut self, shell: &str, env: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.run_with = Some(shell.to_owned());
+        self.run_env = env
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect();
         self
     }
 

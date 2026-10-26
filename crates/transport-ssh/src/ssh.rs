@@ -110,6 +110,19 @@ pub enum SshError {
     /// The box answered the probe with unexpected output.
     #[error("unexpected probe output from the box: {0:?}")]
     Probe(String),
+    /// The box's shell cannot run the devlanes found there by that path.
+    #[error(
+        "devlanes on {destination} is {program}, a path {shell} cannot run as a command \
+         (it holds `%` or `\"`); install it in a folder without them"
+    )]
+    Unquotable {
+        /// The ssh destination.
+        destination: String,
+        /// Where the probe found devlanes.
+        program: String,
+        /// The box's shell, as messages name it.
+        shell: &'static str,
+    },
     /// devlanes is neither on the box's `PATH` nor in `~/.devlanes/bin`.
     #[error(
         "devlanes is not installed on {destination} (not on the ssh PATH or in ~/{INSTALL_DIR}); \
@@ -135,7 +148,7 @@ impl SshError {
         match self {
             Self::Master { permanent, .. } | Self::NotInstalled { permanent, .. } => *permanent,
             Self::Tunnel(error) => error.is_permanent(),
-            Self::ControlPathTooLong(_) => true,
+            Self::ControlPathTooLong(_) | Self::Unquotable { .. } => true,
             Self::Io(_) | Self::AuthTimeout(_) | Self::Ssh(_) | Self::Probe(_) => false,
         }
     }
@@ -249,18 +262,22 @@ impl SshTransport {
     async fn tunnel(&self) -> Result<CommandTransport, SshError> {
         let mut guard = self.master.lock().await;
         let master = self.ensure_master(&mut guard).await?;
-        let program = self
-            .ensure_probe(master)
-            .await?
-            .program
-            .clone()
-            .ok_or_else(|| self.not_installed())?;
+        let probe = self.ensure_probe(master).await?;
+        let program = probe.program.clone().ok_or_else(|| self.not_installed())?;
+        let command = probe
+            .shell
+            .tunnel_command(&program)
+            .ok_or_else(|| SshError::Unquotable {
+                destination: self.destination.clone(),
+                shell: probe.shell.name(),
+                program,
+            })?;
         let mut options = CommandOptions::new(&self.destination);
         options.what = crate::TUNNEL.to_owned();
         options.preamble_wait = crate::PREAMBLE_WAIT;
         options.connected_before = self.connected.load(Ordering::Relaxed);
         Ok(CommandTransport::new(
-            tunnel_argv(&self.options.ssh_program, &master.ctl, &program),
+            tunnel_argv(&self.options.ssh_program, &master.ctl, &command),
             options,
         ))
     }
@@ -295,7 +312,10 @@ impl SshTransport {
             .ok_or_else(|| SshError::Io(io::Error::other("master slot empty after launch")))
     }
 
-    /// Runs the probe once per master.
+    /// Runs the probe once per master, so the box's shell is learnt once too:
+    /// the `sh` probe, then the Windows probe when that calls for it (see
+    /// [`probe::needs_windows_probe`]). Without an answer from the Windows
+    /// probe, as on a Unix box without PowerShell, the `sh` probe's stands.
     async fn ensure_probe<'a>(&self, master: &'a mut Master) -> Result<&'a RemoteProbe, SshError> {
         if master.probe.is_none() {
             let output = master
@@ -306,10 +326,21 @@ impl SshTransport {
                 .stdin(Stdio::null())
                 .output()
                 .await?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let probe =
-                probe::parse_probe(&stdout).ok_or_else(|| SshError::Probe(stdout.into_owned()))?;
-            master.probe = Some(probe);
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let mut found = probe::parse_probe(&stdout);
+            if probe::needs_windows_probe(found.as_ref()) {
+                let output = master
+                    .session
+                    .raw_command(probe::windows_probe_command(&self.options.remote_program))
+                    .stdin(Stdio::null())
+                    .output()
+                    .await?;
+                if let Some(windows) = probe::parse_probe(&String::from_utf8_lossy(&output.stdout))
+                {
+                    found = Some(windows);
+                }
+            }
+            master.probe = Some(found.ok_or(SshError::Probe(stdout))?);
         }
         master
             .probe
@@ -544,17 +575,18 @@ fn tail(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
 }
 
-/// `ssh` running `<program> tunnel --stdio` over the master at `ctl`.
+/// `ssh` running `command`, the box shell's `<program> tunnel --stdio`
+/// ([`probe::BoxShell::tunnel_command`]), over the master at `ctl`.
 ///
 /// The master holds the connection and its authentication, so this client
 /// reads no ssh config (`-F none`): a `Host *` or `Match all` block would
 /// otherwise still apply to it, and its `RemoteCommand`, `RequestTTY` or
 /// `ControlMaster` would break the tunnel. Batch mode, no terminal, and the
 /// destination `none` on the discard port, so a dead master makes this fail
-/// at once instead of opening a connection of its own. ssh joins the words
-/// after the destination into one command for the box's shell, so the
-/// program is quoted for it.
-fn tunnel_argv(ssh_program: &Path, ctl: &Path, program: &str) -> Vec<OsString> {
+/// at once instead of opening a connection of its own. ssh hands the box's
+/// shell the words after the destination as one command, so `command` goes
+/// as one word, already quoted for that shell.
+fn tunnel_argv(ssh_program: &Path, ctl: &Path, command: &str) -> Vec<OsString> {
     let mut argv: Vec<OsString> = vec![ssh_program.into(), "-S".into(), ctl.into()];
     argv.extend(
         [
@@ -567,9 +599,7 @@ fn tunnel_argv(ssh_program: &Path, ctl: &Path, program: &str) -> Vec<OsString> {
             "9",
             "--",
             "none",
-            &crate::sh_quote(program),
-            "tunnel",
-            "--stdio",
+            command,
         ]
         .map(OsString::from),
     );
@@ -730,21 +760,26 @@ mod tests {
         assert!(!TransportError::from(later).is_permanent());
     }
 
-    /// Tunnels run over the master only, with the program quoted for the
-    /// box's shell.
+    /// Tunnels run over the master only, with the command quoted for the
+    /// box's shell as one word: the one a Unix box always ran, or a Windows
+    /// box's cmd.exe or PowerShell form.
     #[test]
     fn tunnels_go_over_the_master() {
-        let argv = tunnel_argv(
-            Path::new("ssh"),
-            Path::new("/tmp/h/run/ssh/m-0123456789abcdef"),
-            "/home/acme/my tools/devlanes",
-        );
-        let argv: Vec<String> = argv
+        let argv = |command: &str| -> Vec<String> {
+            tunnel_argv(
+                Path::new("ssh"),
+                Path::new("/tmp/h/run/ssh/m-0123456789abcdef"),
+                command,
+            )
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
+            .collect()
+        };
+        let unix = probe::BoxShell::Sh
+            .tunnel_command("/home/acme/my tools/devlanes")
+            .expect("quotable");
         assert_eq!(
-            argv,
+            argv(&unix),
             [
                 "ssh",
                 "-S",
@@ -758,11 +793,29 @@ mod tests {
                 "9",
                 "--",
                 "none",
-                "'/home/acme/my tools/devlanes'",
-                "tunnel",
-                "--stdio",
+                "'/home/acme/my tools/devlanes' tunnel --stdio",
             ]
         );
+        let windows = probe::BoxShell::Cmd
+            .tunnel_command(r"C:\Users\acme\.devlanes\bin\devlanes.exe")
+            .expect("quotable");
+        assert_eq!(
+            argv(&windows).last().map(String::as_str),
+            Some(r#""C:\Users\acme\.devlanes\bin\devlanes.exe" tunnel --stdio"#)
+        );
+    }
+
+    /// A program cmd.exe would expand stops the link with what to change,
+    /// instead of a tunnel that runs something else.
+    #[test]
+    fn an_unquotable_program_is_permanent() {
+        let error = SshError::Unquotable {
+            destination: "acme".to_owned(),
+            program: r"C:\100%\devlanes.exe".to_owned(),
+            shell: probe::BoxShell::Cmd.name(),
+        };
+        assert!(error.is_permanent());
+        assert!(error.to_string().contains("cmd.exe"), "{error}");
     }
 
     #[test]

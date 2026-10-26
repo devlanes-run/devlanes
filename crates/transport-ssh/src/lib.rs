@@ -19,7 +19,7 @@ mod ssh;
 pub use askpass::{
     AskpassConfig, AskpassError, AskpassPrompt, PromptKind, PromptRelay, run_askpass,
 };
-pub use probe::{INSTALL_DIR, RemotePlatform, RemoteProbe};
+pub use probe::{BoxShell, INSTALL_DIR, RemotePlatform, RemoteProbe};
 pub use ssh::{SshError, SshOptions, SshTransport};
 
 /// How long a started tunnel gets to write its preamble line. It writes the

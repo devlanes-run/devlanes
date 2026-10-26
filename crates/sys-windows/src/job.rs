@@ -1,9 +1,11 @@
 //! Job objects: the Windows grouping for a unit's processes.
 //!
-//! Jobs created here never allow breakaway. Git for Windows' MSYS2 runtime
-//! asks for `CREATE_BREAKAWAY_FROM_JOB` for every child it starts whenever
-//! the job allows it, so a job that allowed it would lose every process a
-//! `sh -c` starts. A tool that insists on breaking away gets access denied.
+//! Jobs created here do not allow breakaway unless [`Job::allow_breakaway`]
+//! is called, which only tests standing in for another program's job do.
+//! Git for Windows' MSYS2 runtime asks for `CREATE_BREAKAWAY_FROM_JOB` for
+//! every child it starts whenever the job allows it, so a job that allowed it
+//! would lose every process a `sh -c` starts. A tool that insists on breaking
+//! away gets access denied.
 
 use std::io;
 use std::os::windows::io::{AsHandle, AsRawHandle, BorrowedHandle, OwnedHandle};
@@ -165,6 +167,41 @@ impl Job {
     pub fn terminate(&self, exit_code: u32) -> io::Result<()> {
         // SAFETY: the job handle is open with full access.
         if unsafe { TerminateJobObject(self.raw(), exit_code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    /// Lets members leave the job with `CREATE_BREAKAWAY_FROM_JOB`, keeping
+    /// its other limits, as Win32-OpenSSH's session job does. For tests that
+    /// run a program the way sshd would; see the module documentation.
+    pub fn allow_breakaway(&self) -> io::Result<()> {
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        let size = size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32;
+        // SAFETY: the job is open; `limits` matches the class and size.
+        let ok = unsafe {
+            QueryInformationJobObject(
+                self.raw(),
+                JobObjectExtendedLimitInformation,
+                (&raw mut limits).cast(),
+                size,
+                ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        // SAFETY: the job is open; `limits` matches the class and size.
+        let ok = unsafe {
+            SetInformationJobObject(
+                self.raw(),
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                size,
+            )
+        };
+        if ok == 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())

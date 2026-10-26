@@ -9,8 +9,6 @@ mod idle;
 mod lanes;
 mod lifecycle;
 mod proxy;
-// `devlanes tunnel --stdio` exits on Windows until Windows boxes land.
-#[cfg(unix)]
 mod remote;
 mod shutdown;
 mod tasks;
