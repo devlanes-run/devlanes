@@ -330,6 +330,39 @@ async fn the_boxes_view_says_what_connecting_does_without_boxes() -> TestResult 
 }
 
 #[tokio::test]
+async fn a_box_the_restore_could_not_reopen_shows_as_failed_with_its_error() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 30).await;
+    app.update(shifted('B'));
+    // What `host.list` lists for a remembered box whose command left the
+    // user config before the daemon restarted.
+    app.update(Msg::Boxes(Ok(json!({"items": [{
+        "host": "devbox", "transport": "command", "address": "devbox",
+        "daemon_version": "devlanes 0.0.1", "last_connected_ms": 1_792_000_000_000u64,
+        "state": "failed",
+        "error": "box devbox was connected with remote.boxes.devbox.command, which the user \
+                  config no longer has; add it back and run `devlanes remote connect devbox`, \
+                  or run `devlanes remote disconnect devbox`",
+    }]}))));
+    let text = screen_text(&draw(&app)?);
+    for expected in [
+        "B boxes · 1 issue",
+        "failed · command",
+        "failed; nothing is mirrored",
+        "remote.boxes.devbox.command",
+        "fix       devlanes remote connect devbox",
+    ] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
+    assert_eq!(
+        app.projects(),
+        ["acme", "shop"],
+        "no box project without a link"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn sections_and_containers_of_a_box_lane_show_their_details() -> TestResult {
     let mut app = with_boxes(100, 24).await;
     let effects = select(
