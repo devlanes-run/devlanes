@@ -1,0 +1,15 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+acme@2 exposes:
+  port-8000  8000  https://files.acme-2.localhost
+  port-9229  9229  http://127.0.0.1:9229
+--- plain (exit 0)
+acme@2 exposes:
+  port-8000  8000  https://files.acme-2.localhost
+  port-9229  9229  http://127.0.0.1:9229
+--- agent (exit 0)
+exposed acme@2:port-8000 port=8000 url=https://files.acme-2.localhost
+exposed acme@2:port-9229 port=9229 url=http://127.0.0.1:9229

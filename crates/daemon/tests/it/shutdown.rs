@@ -67,6 +67,50 @@ async fn the_engine_goes_idle_after_the_last_subscriber_with_nothing_running() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// An exposed port keeps a daemon that would exit when idle running: it
+/// lives only in that daemon's memory. Removing it lets the daemon go idle.
+async fn an_exposed_port_keeps_the_engine_from_going_idle() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(
+            &tmp.path,
+            "r",
+            "project: quiet\nservices:\n  api: { run: sleep }\n",
+        );
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                idle_exit: Some(Duration::from_millis(200)),
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Expose, json!({"port": 8000}), cx(&main))
+            .await
+            .expect("expose");
+        // Watched once, so only what runs or is exposed keeps it up.
+        let wait = Duration::from_millis(800);
+        let tui = h.engine.subscribe();
+        assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());
+        drop(tui);
+        assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());
+        h.call(
+            Method::Expose,
+            json!({"port": 8000, "remove": true}),
+            cx(&main),
+        )
+        .await
+        .expect("remove");
+        tokio::time::timeout(Duration::from_secs(5), h.engine.idle())
+            .await
+            .expect("idle once nothing is exposed");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// Every stop task runs, a failing one included, and the report names the
 /// stopped units and each task's outcome.
 async fn explicit_shutdown_runs_lane_stop_tasks() {

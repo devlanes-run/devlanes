@@ -4,16 +4,20 @@
 //! same routes as `hosts` (this machine's own lanes only): assigned lanes, their
 //! services, tasks and started containers, with ports, hostnames, hidden flags
 //! and states, never environments or secrets. Tasks carry their state only.
+//! Ports exposed with `devlanes expose` go only to clients listing
+//! `exposed_units`. `remote.report` keeps what each client mirrors.
 
 use std::{sync::Arc, time::Duration};
 
 use devlanes_proto::{
     Event, LaneSummary, RpcError, events,
-    remote::{REGISTRY_CHANGE_EVENT, REGISTRY_SNAPSHOT_EVENT, RegistryParams, RemoteClient},
+    remote::{
+        REGISTRY_CHANGE_EVENT, REGISTRY_SNAPSHOT_EVENT, RegistryParams, RemoteClient, ReportParams,
+    },
 };
 use devlanes_transport::{
-    HostHeader, HostInfo, LaneInfo, LaneKey, PortInfo, Registry, RegistryEvent, RegistrySnapshot,
-    UnitInfo, UnitKey, UnitKind,
+    EXPOSED_UNITS, HostHeader, HostInfo, LaneInfo, LaneKey, PortInfo, Registry, RegistryEvent,
+    RegistrySnapshot, UnitInfo, UnitKey, UnitKind,
 };
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
@@ -21,7 +25,7 @@ use tokio::sync::broadcast;
 use super::{ClientGuard, ClientKey};
 use crate::{
     Session,
-    engine::{Inner, params},
+    engine::{Inner, params, required},
     integrations::RouteEntry,
     model::lock,
 };
@@ -40,11 +44,13 @@ impl Inner {
         session: &Session,
     ) -> Result<Value, RpcError> {
         let args: RegistryParams = params(value)?;
+        // Older clients reject a unit kind they do not know.
+        let exposed = args.features.iter().any(|name| name == EXPOSED_UNITS);
         let _listed = args.client.map(|client| ClientGuard::add(self, client));
         // Subscribed before the snapshot is built, so no change falls between them.
         let mut changes = self.bus.subscribe();
         let disconnected = session.disconnected();
-        let mut current = self.registry_now();
+        let mut current = self.registry_now(exposed);
         if send_snapshot(session, &current).await.is_err() {
             return Ok(json!({}));
         }
@@ -72,7 +78,7 @@ impl Inner {
                     },
                 }
             }
-            let next = self.registry_now();
+            let next = self.registry_now(exposed);
             let sent = if lagged {
                 send_snapshot(session, &next).await
             } else {
@@ -85,11 +91,28 @@ impl Inner {
         }
     }
 
-    /// The registry as of now, from `status --all`'s lanes and this machine's routes.
-    fn registry_now(&self) -> Registry {
+    /// The registry as of now, from `status --all`'s lanes and this machine's
+    /// routes; exposed ports only with `exposed`.
+    fn registry_now(&self, exposed: bool) -> Registry {
         let lanes = self.summaries(&self.all_lanes(), None);
         let routes = self.local_route_entries();
-        build(lanes, &routes)
+        build(lanes, &routes, exposed)
+    }
+
+    /// `remote.report`: keeps a client's mirror report, bounded, with its
+    /// `status` entry, the newest one for its id. A report for a client that
+    /// is not listed (its feed ended meanwhile) is dropped.
+    pub(crate) fn remote_report(&self, value: Value) -> Result<Value, RpcError> {
+        let args: ReportParams = required(value)?;
+        let key = ClientKey::Id(clean(&args.id));
+        let stored = match lock(&self.remote.clients).get_mut(&key) {
+            Some((_, client)) if !args.id.is_empty() => {
+                client.mirror = Some(args.report.bounded());
+                true
+            }
+            _ => false,
+        };
+        Ok(json!({"stored": stored}))
     }
 }
 
@@ -182,9 +205,10 @@ async fn send_changes(session: &Session, changes: Vec<RegistryEvent>) -> Result<
 }
 
 /// Maps lane summaries and routes to the registry: assigned lanes, their
-/// services and started containers with ports, hostnames and hidden flags, and
-/// their tasks with state only. Exec units are left out.
-pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry]) -> Registry {
+/// services and started containers with ports, hostnames and hidden flags,
+/// their tasks with state only, and with `exposed` (a client listing
+/// [`EXPOSED_UNITS`]) their exposed ports. Exec units are left out.
+pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], exposed: bool) -> Registry {
     let hosts_of = |lane: &str, unit: &str| -> Vec<HostInfo> {
         routes
             .iter()
@@ -227,6 +251,7 @@ pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry]) -> Registry 
             let kind = match unit.kind.as_str() {
                 "" | "service" => UnitKind::Service,
                 "task" => UnitKind::Task,
+                devlanes_proto::EXPOSED_KIND if exposed => UnitKind::Exposed,
                 _ => continue,
             };
             let endpoints = kind.has_endpoints();
@@ -309,7 +334,10 @@ mod tests {
                  "ports": {"default": 4104}, "urls": [], "actor": {"kind": "human"}, "reason": null,
                  "kind": "task"},
                 {"name": "shell", "lane": "app@1", "state": "running", "pid": 4, "exit_code": null,
-                 "ports": {}, "urls": [], "actor": {"kind": "human"}, "reason": null, "kind": "exec"}
+                 "ports": {}, "urls": [], "actor": {"kind": "human"}, "reason": null, "kind": "exec"},
+                {"name": "port-8000", "lane": "app@1", "state": "running", "pid": null, "exit_code": null,
+                 "ports": {"default": 8000}, "urls": [], "actor": {"kind": "human"}, "reason": null,
+                 "kind": "exposed"}
             ],
             "containers": [{"name": "db", "ports": {"5432": 4102}, "hidden": false}]
         }, {
@@ -334,11 +362,24 @@ mod tests {
         let routes = [
             route("web.app-1.localhost", "web", 4100),
             route("migrate.app-1.localhost", "migrate", 4104),
+            route("files.app-1.localhost", "port-8000", 8000),
         ];
-        let registry = build(lanes, &routes);
+        let with_exposed = build(lanes.clone(), &routes, true);
+        let port = with_exposed
+            .units()
+            .find(|u| u.key.kind == UnitKind::Exposed)
+            .expect("the exposed port is listed for a client with exposed_units");
+        assert_eq!(port.key.name, "port-8000");
+        assert_eq!(port.hosts[0].host, "files.app-1.localhost");
+        assert!(with_exposed.mirrored_ports().contains_key(&8000));
+        let registry = build(lanes, &routes, false);
         assert_eq!(registry.lanes().count(), 1);
         let units: Vec<_> = registry.units().collect();
-        assert_eq!(units.len(), 5, "exec skipped: {units:?}");
+        assert_eq!(
+            units.len(),
+            5,
+            "exec skipped, exposed left out without the feature: {units:?}"
+        );
         let web = units
             .iter()
             .find(|u| u.key.name == "web")

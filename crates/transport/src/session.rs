@@ -15,8 +15,9 @@ use crate::registry::ClientRegistry;
 use crate::sync::SyncSubscription;
 use crate::transport::{BoxDuplex, Transport, TransportError};
 use crate::wire::{
-    self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, OpenReply,
-    OpenRequest, PROTOCOL_VERSION, Prefixed, RejectReason, SYNC_ZSTD, WireError, negotiate,
+    self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, MIRROR_REPORT,
+    OpenReply, OpenRequest, PROTOCOL_VERSION, Prefixed, RejectReason, SYNC_ZSTD, WireError,
+    negotiate,
 };
 
 /// Liveness and handshake limits shared by both ends.
@@ -201,6 +202,8 @@ struct Inner {
     timing: Timing,
     end: watch::Receiver<Option<SessionEnd>>,
     cancel: CancellationToken,
+    /// The latest mirror report, which the control task sends once.
+    report: watch::Sender<Option<Value>>,
 }
 
 impl Drop for Inner {
@@ -248,13 +251,17 @@ impl Session {
             Ok((control, welcome)) => {
                 let (end_tx, end) = watch::channel(None);
                 let cancel = CancellationToken::new();
+                let report = watch::Sender::new(None);
                 tokio::spawn(run_control(
                     control,
-                    options.registry.clone(),
-                    options.timing,
-                    cancel.clone(),
-                    end_tx,
-                    mux.clone(),
+                    Control {
+                        registry: options.registry.clone(),
+                        timing: options.timing,
+                        cancel: cancel.clone(),
+                        end_tx,
+                        mux: mux.clone(),
+                        reports: report.subscribe(),
+                    },
                 ));
                 Ok(Self {
                     inner: Arc::new(Inner {
@@ -264,6 +271,7 @@ impl Session {
                         timing: options.timing,
                         end,
                         cancel,
+                        report,
                     }),
                 })
             }
@@ -321,6 +329,25 @@ impl Session {
     pub async fn subscribe_sync(&self, request: Value) -> Result<SyncSubscription, SessionError> {
         let channel = self.open_stream(&OpenRequest::Sync { request }).await?;
         Ok(SyncSubscription::new(channel, self.has_feature(SYNC_ZSTD)))
+    }
+
+    /// Tells the box what this client mirrors of it, when both ends list
+    /// [`MIRROR_REPORT`]; false otherwise. The report is opaque to the
+    /// transport. A report equal to the last one of this session is not sent
+    /// again, and reports given faster than the control stream takes them
+    /// replace each other, so callers may report after every change.
+    pub fn report(&self, report: Value) -> bool {
+        if !self.has_feature(MIRROR_REPORT) {
+            return false;
+        }
+        self.inner.report.send_if_modified(|current| {
+            if current.as_ref() == Some(&report) {
+                return false;
+            }
+            *current = Some(report);
+            true
+        });
+        true
     }
 
     /// Returns the end reason once the session ended.
@@ -435,15 +462,28 @@ async fn lost(mux: &MuxClient) -> SessionEnd {
     }
 }
 
-/// Applies registry changes and pings until the session ends.
-async fn run_control(
-    mut control: Channel<MuxStream>,
+/// What the control task of one session works with.
+struct Control {
     registry: ClientRegistry,
     timing: Timing,
     cancel: CancellationToken,
     end_tx: watch::Sender<Option<SessionEnd>>,
     mux: MuxClient,
-) {
+    /// Mirror reports to send, latest only.
+    reports: watch::Receiver<Option<Value>>,
+}
+
+/// Applies registry changes, pings and sends mirror reports until the
+/// session ends.
+async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
+    let Control {
+        registry,
+        timing,
+        cancel,
+        end_tx,
+        mux,
+        mut reports,
+    } = parts;
     let mut ticker =
         tokio::time::interval_at(Instant::now() + timing.ping_interval, timing.ping_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -479,6 +519,17 @@ async fn run_control(
                 // A stalled write counts against the same budget as a missing pong.
                 match timeout(timing.ping_timeout, wire::send(&mut control, &ping)).await {
                     Ok(Ok(())) => outstanding = Some((nonce, sent)),
+                    Ok(Err(error)) => break SessionEnd::Failed(error.to_string()),
+                    Err(_) => break SessionEnd::PingTimeout,
+                }
+            }
+            Ok(()) = reports.changed() => {
+                let report = reports.borrow_and_update().clone();
+                let Some(report) = report else { continue };
+                let message = ClientControl::Mirror { report };
+                // A stalled write is as dead as a stalled ping.
+                match timeout(timing.ping_timeout, wire::send(&mut control, &message)).await {
+                    Ok(Ok(())) => {}
                     Ok(Err(error)) => break SessionEnd::Failed(error.to_string()),
                     Err(_) => break SessionEnd::PingTimeout,
                 }

@@ -215,6 +215,22 @@ pub enum Method {
     /// listed by `status` while the request lasts.
     #[serde(rename = "remote.registry")]
     RemoteRegistry,
+    /// Box side, for `devlanes tunnel`: stores a connected client's
+    /// [`remote::MirrorReport`] with its `status` entry, which `status` shows as
+    /// `clients[].mirror` and `url` turns into the URLs that client opens.
+    /// Params: [`remote::ReportParams`]. Reply `{stored}`, false when no
+    /// client with that id is listed.
+    #[serde(rename = "remote.report")]
+    RemoteReport,
+    /// Exposes a loopback port of the context's lane as a unit of kind
+    /// `exposed` named `port-<port>`, optionally routed under a hostname
+    /// ([`ExposeParams`]); with `remove`, takes it away again; with neither
+    /// `port` nor `remove`, lists the lanes' exposed ports. Kept in memory
+    /// until removed, a whole-lane stop or clean, or the daemon exits. Reply
+    /// `{lane, exposed: [ExposedPort]}` for the lane, or `{items:
+    /// [ExposedPort]}` for the list.
+    #[serde(rename = "expose")]
+    Expose,
     /// Sent by `devlanes certs trust --hosts` and `certs untrust --hosts` after changing the
     /// helper: the daemon drops its sudo backoff and reapplies `/etc/hosts` now.
     #[serde(rename = "hosts.retry")]
@@ -403,6 +419,46 @@ pub struct ExecParams {
     pub pty: bool,
 }
 
+/// `expose` parameters: a port of the lane to expose or remove. Without
+/// `port` and `remove`, the request lists the exposed ports instead.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExposeParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    /// A hostname to route to the port: one label (`api`) becomes
+    /// `api.<lane domain>`; a full name must lie under the lane's domain,
+    /// `localhost` or the configured TLD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Remove the exposure of `port` instead of adding it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove: bool,
+    /// List the exposed ports of every lane, not only the context's project.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub all: bool,
+}
+
+/// A port exposed with `devlanes expose`, listed by `expose` and as a unit of
+/// kind `exposed` in its lane's summary.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExposedPort {
+    /// Canonical lane reference, `project@index`.
+    pub lane: String,
+    /// The unit's name, `port-<port>`.
+    pub unit: String,
+    pub port: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// `https://<host>` (with the proxy's HTTPS port unless it is 443) when
+    /// routed, else `http://127.0.0.1:<port>`.
+    pub url: String,
+    /// When it was exposed (Unix ms).
+    pub since_ms: u64,
+}
+
+/// Unit kind of a port exposed with `devlanes expose`.
+pub const EXPOSED_KIND: &str = "exposed";
+
 /// Existing clients default to terminal-backed units when the field is absent.
 fn default_true() -> bool {
     true
@@ -494,7 +550,8 @@ pub struct UnitSummary {
     pub urls: Vec<String>,
     pub actor: Actor,
     pub reason: Option<RpcError>,
-    /// `service`, `task` or `exec`; clients group and filter on it.
+    /// `service`, `task`, `exec` or `exposed` (a port `devlanes expose` made
+    /// reachable, with no process of its own); clients group and filter on it.
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
@@ -544,8 +601,8 @@ pub struct UnitSummary {
     #[serde(default = "pty_default", skip_serializing_if = "is_true")]
     pub pty: bool,
     /// What the unit is: `service`, `task`, `setup` or `teardown` (an
-    /// `infra.setup` or `infra.teardown` entry, listed as kind `task`), or `exec`.
-    /// Absent from older daemons; clients then fall back to `kind`.
+    /// `infra.setup` or `infra.teardown` entry, listed as kind `task`), `exec`
+    /// or `exposed`. Absent from older daemons; clients then fall back to `kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Where the unit is declared in `devlanes.yaml`, counted from 0 within its
@@ -1072,6 +1129,128 @@ pub mod remote {
         /// The client machine's host name; empty when the client sent none.
         #[serde(default)]
         pub name: String,
+        /// What the client mirrors of this box, from its latest report; absent
+        /// until a client with the `mirror_report` feature sent one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub mirror: Option<MirrorReport>,
+    }
+
+    /// Ports a [`MirrorReport`] lists at most; the box keeps the first ones.
+    pub const MAX_REPORT_PORTS: usize = 1024;
+    /// Skipped lanes and skipped hostnames a [`MirrorReport`] lists at most, each.
+    pub const MAX_REPORT_SKIPPED: usize = 256;
+    /// Longest text a [`MirrorReport`] keeps per field, in bytes.
+    pub const MAX_REPORT_TEXT: usize = 256;
+
+    /// What a client mirrors of one box, sent over the control stream after
+    /// its mirror changed (the `mirror_report` feature) and kept by the box in
+    /// memory with the client's `status` entry. The box shows it and derives
+    /// the URLs that client opens; it never opens anything itself.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct MirrorReport {
+        /// The name the client connects to the box by: its ssh alias or
+        /// `remote.boxes` name, as typed in `devlanes remote connect`.
+        #[serde(default)]
+        pub alias: String,
+        /// The client proxy's HTTPS port; absent when it serves none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub https_port: Option<u16>,
+        /// The client also serves the box's own HTTPS port, so URLs the box
+        /// generated open there unchanged.
+        #[serde(default)]
+        pub serves_box_port: bool,
+        /// Every box port the client mirrors: of running, non-hidden units.
+        #[serde(default)]
+        pub ports: Vec<MirroredPort>,
+        /// Box lanes the client does not mirror, with why.
+        #[serde(default)]
+        pub skipped_lanes: Vec<SkippedLane>,
+        /// Box hostnames the client does not route: outside the names it
+        /// routes to itself, or of a skipped lane.
+        #[serde(default)]
+        pub skipped_hosts: Vec<String>,
+    }
+
+    /// One box port in a [`MirrorReport`].
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct MirroredPort {
+        pub port: u16,
+        /// Box lane reference, `project@index`.
+        pub lane: String,
+        pub unit: String,
+        /// `bound` (listening on the client), `in_use` (something else holds
+        /// the port there), `local_lane` (a local lane's block has it),
+        /// `failed` (the bind failed with nothing holding it) or `unbound`.
+        pub state: String,
+        /// The loopback address it is bound on there, `127.0.0.1` when that
+        /// one is, else `::1`; absent when not bound.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub address: Option<String>,
+        /// What holds the port on the client, for `in_use` (a process or
+        /// another box) and `local_lane` (the lane).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub holder: Option<String>,
+        /// The client's message when the port is not bound.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub message: Option<String>,
+    }
+
+    /// A box lane a client does not mirror.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct SkippedLane {
+        /// Box lane reference, `project@index`.
+        pub lane: String,
+        pub reason: String,
+    }
+
+    impl MirrorReport {
+        /// The report within [`MAX_REPORT_PORTS`], [`MAX_REPORT_SKIPPED`] and
+        /// [`MAX_REPORT_TEXT`], without control characters: the box keeps
+        /// and prints what a client sent, so a client must not be able to
+        /// fill its memory or put terminal escapes in its output.
+        pub fn bounded(mut self) -> Self {
+            self.alias = bounded_text(&self.alias);
+            self.ports.truncate(MAX_REPORT_PORTS);
+            for port in &mut self.ports {
+                port.lane = bounded_text(&port.lane);
+                port.unit = bounded_text(&port.unit);
+                port.state = bounded_text(&port.state);
+                port.address = port.address.as_deref().map(bounded_text);
+                port.holder = port.holder.as_deref().map(bounded_text);
+                port.message = port.message.as_deref().map(bounded_text);
+            }
+            self.skipped_lanes.truncate(MAX_REPORT_SKIPPED);
+            for lane in &mut self.skipped_lanes {
+                lane.lane = bounded_text(&lane.lane);
+                lane.reason = bounded_text(&lane.reason);
+            }
+            self.skipped_hosts.truncate(MAX_REPORT_SKIPPED);
+            for host in &mut self.skipped_hosts {
+                *host = bounded_text(host);
+            }
+            self
+        }
+    }
+
+    /// `text` without control characters, cut on a character boundary to
+    /// [`MAX_REPORT_TEXT`] bytes.
+    pub fn bounded_text(text: &str) -> String {
+        let mut kept = String::new();
+        for c in text.chars().filter(|c| !c.is_control()) {
+            if kept.len() + c.len_utf8() > MAX_REPORT_TEXT {
+                break;
+            }
+            kept.push(c);
+        }
+        kept
+    }
+
+    /// Params of `remote.report`.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct ReportParams {
+        /// The client's id, as in its `remote.registry` request.
+        pub id: String,
+        pub report: MirrorReport,
     }
 
     /// Params of `remote.registry`.
@@ -1195,6 +1374,42 @@ mod tests {
         assert_eq!(hello.managed_processes, 0);
         assert!(hello.features.is_empty());
         Ok(())
+    }
+
+    /// A mirror report keeps a bounded number of entries, each with bounded
+    /// text and no control characters.
+    #[test]
+    fn mirror_reports_are_bounded() {
+        use remote::{
+            MAX_REPORT_PORTS, MAX_REPORT_SKIPPED, MAX_REPORT_TEXT, MirrorReport, MirroredPort,
+            SkippedLane,
+        };
+        let port = MirroredPort {
+            port: 1,
+            lane: "a@0".into(),
+            unit: "web\u{1b}[31m".into(),
+            state: "in_use".into(),
+            address: None,
+            holder: Some("x".repeat(MAX_REPORT_TEXT * 2)),
+            message: None,
+        };
+        let report = MirrorReport {
+            alias: "box\n".into(),
+            ports: vec![port; MAX_REPORT_PORTS + 5],
+            skipped_lanes: vec![SkippedLane::default(); MAX_REPORT_SKIPPED + 1],
+            skipped_hosts: vec!["h".into(); MAX_REPORT_SKIPPED + 1],
+            ..MirrorReport::default()
+        }
+        .bounded();
+        assert_eq!(report.alias, "box");
+        assert_eq!(report.ports.len(), MAX_REPORT_PORTS);
+        assert_eq!(report.ports[0].unit, "web[31m");
+        assert_eq!(
+            report.ports[0].holder.as_deref().map(str::len),
+            Some(MAX_REPORT_TEXT)
+        );
+        assert_eq!(report.skipped_lanes.len(), MAX_REPORT_SKIPPED);
+        assert_eq!(report.skipped_hosts.len(), MAX_REPORT_SKIPPED);
     }
 
     #[test]

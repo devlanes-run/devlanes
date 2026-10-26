@@ -28,6 +28,7 @@ Commands:
   debug        Explain failures: why a unit is not up, errors, events and resource use
   env          Show, export or enter the environment of a lane or unit
   url          Print, open and list service URLs and routed hostnames
+  expose       Make a port of the lane reachable as a unit, optionally under a hostname
   infra        Start, stop and inspect the project's containers
   config       Validate devlanes.yaml, or read and change the user config.yaml
   certs        Trust the devlanes CA and install the /etc/hosts helper

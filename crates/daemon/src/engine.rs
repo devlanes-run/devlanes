@@ -320,6 +320,7 @@ pub(crate) fn mutating(method: &Method) -> bool {
             | Method::HostsRetry
             | Method::DebugFreeze
             | Method::DebugThaw
+            | Method::Expose
     )
 }
 
@@ -343,7 +344,8 @@ pub(crate) type LanePair = (Arc<ProjectRt>, Arc<LaneRt>);
 impl Inner {
     /// Nothing runs and nothing is under way: no live unit or orphan, no
     /// start, stop, clean, task or spawn in flight, no connected box or
-    /// tunnel. Infra containers do not count; they outlive the daemon.
+    /// tunnel, no exposed port (which lives only as long as this daemon).
+    /// Infra containers do not count; they outlive the daemon.
     pub(crate) fn is_idle(&self) -> bool {
         self.remote.is_idle()
             && self.all_lanes().iter().all(|(_, lane)| {
@@ -356,6 +358,7 @@ impl Inner {
                     return false;
                 };
                 !st.any_running()
+                    && st.exposed.is_empty()
                     && st.start.is_none()
                     && st.busy.is_none()
                     && st.spawning == 0
@@ -462,6 +465,8 @@ impl Inner {
             Method::Metrics => self.metrics_method(params, &context).await,
             Method::Subscribe => self.subscribe_method(params, &session).await,
             Method::RemoteRegistry => self.remote_registry(params, &session).await,
+            Method::RemoteReport => self.remote_report(params),
+            Method::Expose => self.expose_method(params, &context).await,
             Method::SyncStatus => self.sync_status_method().await,
             Method::Connect => self.connect_method(params, &session).await,
             Method::Disconnect => self.disconnect_method(params).await,

@@ -358,13 +358,85 @@ pub(super) fn env(data: &Value) -> Vec<String> {
         .collect()
 }
 
-/// `url`: only the URL, for scripts.
-pub(super) fn url(data: &Value) -> Vec<String> {
+/// `url`: only the URL in plain output, for scripts. Human and agent output
+/// add one `on <client>: <url>` line per connected client that reports its
+/// mirror (on a box), or why the unit does not open there.
+pub(super) fn url(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let found = data
         .as_str()
         .or_else(|| data.get("url").and_then(Value::as_str))
         .or_else(|| list(data, "urls").first().and_then(Value::as_str));
-    found.map(clean).into_iter().collect()
+    let mut lines: Vec<String> = found.map(clean).into_iter().collect();
+    if cx.human() || cx.agent() {
+        lines.extend(list(data, "clients").iter().map(client_url_line));
+    }
+    lines
+}
+
+/// `on laptop: https://web.acme-1.localhost`, or `on laptop: not reachable:
+/// <reason>`, for one entry of `url`'s `clients`.
+fn client_url_line(client: &Value) -> String {
+    let name = text(client, "client");
+    match client.get("url").and_then(Value::as_str) {
+        Some(url) if client.get("reachable").and_then(Value::as_bool) != Some(false) => {
+            format!("on {name}: {}", clean(url))
+        }
+        _ => format!("on {name}: not reachable: {}", text(client, "reason")),
+    }
+}
+
+/// `expose`: what the lane exposes after an add or remove, or every exposed
+/// port for the list.
+pub(super) fn expose(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let lane = text(data, "lane");
+    let listing = data.get("items").is_some();
+    let items = if listing {
+        list(data, "items")
+    } else {
+        list(data, "exposed")
+    };
+    if items.is_empty() {
+        return vec![if listing {
+            "no exposed ports; devlanes expose <port> adds one".into()
+        } else {
+            format!("{lane} exposes no ports")
+        }];
+    }
+    if cx.agent() {
+        return items
+            .iter()
+            .map(|item| {
+                format!(
+                    "exposed {}:{} port={} url={}",
+                    text(item, "lane"),
+                    text(item, "unit"),
+                    display_value(&item["port"]),
+                    text(item, "url")
+                )
+            })
+            .collect();
+    }
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|item| {
+            let url = text(item, "url");
+            vec![
+                if listing {
+                    format!("{}:{}", text(item, "lane"), text(item, "unit"))
+                } else {
+                    text(item, "unit")
+                },
+                display_value(&item["port"]),
+                cx.link(&url, &url),
+            ]
+        })
+        .collect();
+    if listing {
+        return table(&rows, "");
+    }
+    let mut lines = vec![format!("{lane} exposes:")];
+    lines.extend(table(&rows, "  "));
+    lines
 }
 
 /// `top`: CPU and memory per lane and unit, or the run's peaks.

@@ -89,10 +89,17 @@ pub fn unit_options(kind: ChoiceKind, lane: &LaneSummary) -> Vec<ChoiceOption> {
     }
     for unit in &lane.units {
         let url = crate::render::display_url(&unit.urls).cloned();
+        let exposed = unit.kind == devlanes_proto::EXPOSED_KIND;
         let keep = match kind {
-            ChoiceKind::Url => (unit.kind.is_empty() || unit.kind == "service") && url.is_some(),
-            ChoiceKind::Running => matches!(unit.state.as_str(), "ready" | "starting" | "running"),
-            _ => true,
+            ChoiceKind::Url => {
+                (unit.kind.is_empty() || unit.kind == "service" || exposed) && url.is_some()
+            }
+            // An exposed port has no process to attach to, wait for, restart
+            // or read logs of; only its URL means something.
+            ChoiceKind::Running => {
+                !exposed && matches!(unit.state.as_str(), "ready" | "starting" | "running")
+            }
+            _ => !exposed,
         };
         if keep {
             options.push(ChoiceOption {

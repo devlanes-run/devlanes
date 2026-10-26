@@ -897,7 +897,9 @@ impl Inner {
         Ok(json!({"lane": reference, "unit": name, "env": env.values}))
     }
 
-    /// `url`: the public URL of a service (internal URL without hosts).
+    /// `url`: the public URL of a service or exposed port (internal URL
+    /// without hosts). On a box, `clients` adds the URL each connected client
+    /// that reports its mirror opens it at, or why it cannot.
     pub(crate) async fn url_method(
         self: &Arc<Self>,
         value: Value,
@@ -911,23 +913,64 @@ impl Inner {
             .lane_for_units(std::slice::from_ref(&unit), context)
             .await?;
         let name = selectors.into_iter().next().unwrap_or_default();
-        let st = lane.st();
-        let service = st
-            .view
-            .as_ref()
-            .and_then(|view| {
+        let (reference, found) = {
+            let st = lane.st();
+            let reference = st.reference(&project.name());
+            let service = st.view.as_ref().and_then(|view| {
                 view.services
                     .iter()
                     .find(|s| s.unit == name || s.name == name)
-            })
-            .ok_or_else(|| RpcError::new("not_found", json!({"reference": unit}), 3))?;
-        let mut urls = vec![service.url.clone()];
-        urls.extend(service.public_url.clone());
+            });
+            let found = match service {
+                Some(service) => {
+                    let mut urls = vec![service.url.clone()];
+                    urls.extend(service.public_url.clone());
+                    let host = service
+                        .public_url
+                        .as_deref()
+                        .and_then(url_host)
+                        .map(str::to_owned);
+                    Some((
+                        service.unit.clone(),
+                        urls,
+                        host,
+                        service.port,
+                        service.hidden,
+                    ))
+                }
+                None => st
+                    .exposed
+                    .iter()
+                    .find(|(port, _)| crate::model::Exposed::unit(**port) == name)
+                    .map(|(port, exposed)| {
+                        let summary =
+                            crate::model::exposed_summary(&st, &reference, *port, exposed);
+                        (
+                            summary.name,
+                            summary.urls,
+                            exposed.host.clone(),
+                            *port,
+                            false,
+                        )
+                    }),
+            };
+            (reference, found)
+        };
+        let (unit_name, urls, host, port, hidden) =
+            found.ok_or_else(|| RpcError::new("not_found", json!({"reference": unit}), 3))?;
+        let clients = self.client_urls(&crate::remote::UnitTarget {
+            lane: &reference,
+            unit: &unit_name,
+            host: host.as_deref(),
+            port: Some(port),
+            hidden,
+        });
         Ok(json!({
-            "lane": st.reference(&project.name()),
-            "unit": service.unit,
-            "url": service.public_url.clone().unwrap_or_else(|| service.url.clone()),
+            "lane": reference,
+            "unit": unit_name,
+            "url": urls.last(),
             "urls": urls,
+            "clients": clients,
         }))
     }
 
@@ -1158,6 +1201,16 @@ impl Inner {
     }
 }
 
+/// The hostname of an `https://host[:port]` URL.
+fn url_host(url: &str) -> Option<&str> {
+    let authority = url.strip_prefix("https://")?.split('/').next()?;
+    Some(
+        authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host),
+    )
+}
+
 /// A config error as `{message, file, line, column}`.
 pub(crate) fn located(error: &devlanes_config::ConfigError) -> Value {
     json!({
@@ -1181,5 +1234,19 @@ mod tests {
         assert_eq!(parse_duration("x"), None);
         // Overflow is no duration rather than a panic (debug) or a wrap (release).
         assert_eq!(parse_duration(&format!("{}d", u64::MAX)), None);
+    }
+
+    #[test]
+    /// The hostname of a public URL, with or without its port.
+    fn url_hosts() {
+        assert_eq!(
+            url_host("https://web.acme.localhost"),
+            Some("web.acme.localhost")
+        );
+        assert_eq!(
+            url_host("https://web.acme.localhost:8443/x"),
+            Some("web.acme.localhost")
+        );
+        assert_eq!(url_host("http://127.0.0.1:3000"), None);
     }
 }

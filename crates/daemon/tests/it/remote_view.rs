@@ -10,7 +10,8 @@ use super::{BOX, BoxSide, ClientSide, SOON, box_port, ipv6_loopback};
 use crate::{LIMIT, cx, eventually, repo, temp};
 
 // Port ranges: 19000-19499, below the default pool, which no other test in
-// this binary uses (see `remote_boxes.rs` and `remote_lifecycle.rs`).
+// this binary uses (see `remote_boxes.rs`, `remote_lifecycle.rs` and
+// `remote_report.rs`, which takes 18000-18999).
 
 /// Waits for the next `remote.mirror.changed` of box `host`; false when none
 /// came within [`SOON`].

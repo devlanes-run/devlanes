@@ -2120,10 +2120,11 @@ impl App {
         {
             return Some(lane.reference.clone());
         }
-        let running = self
-            .lanes
-            .iter()
-            .find(|lane| lane.units.iter().any(|u| is_active(&u.state)));
+        let running = self.lanes.iter().find(|lane| {
+            lane.units
+                .iter()
+                .any(|u| is_active(&u.state) && tree::role(u) != tree::Role::Exposed)
+        });
         // Box lanes only when this machine has none of its own.
         running
             .or(self.lanes.first())
@@ -2156,7 +2157,8 @@ impl App {
             matches!(lane.state.as_str(), "starting" | "stopping")
                 || lane.units.iter().any(|u| {
                     matches!(u.state.as_str(), "starting" | "stopping")
-                        || (u.state == "running" && tree::role(u) != tree::Role::Service)
+                        || (u.state == "running"
+                            && !matches!(tree::role(u), tree::Role::Service | tree::Role::Exposed))
                 })
         })
     }
@@ -2786,8 +2788,8 @@ impl App {
     // ---- attach -----------------------------------------------------------
 
     /// Attaches to the selected unit, or follows the selected container's
-    /// logs, and detaches from anything else. An orphaned unit has no stream;
-    /// the pane explains it instead.
+    /// logs, and detaches from anything else. An orphaned unit and an exposed
+    /// port have no stream; the pane explains them instead.
     fn sync_attach(&mut self, effects: &mut Vec<Effect>) {
         // A box unit has no stream here: the pane shows its details instead.
         let lane = self
@@ -2801,7 +2803,7 @@ impl App {
         };
         let wanted = self
             .selected_unit()
-            .filter(|unit| !is_orphaned(unit))
+            .filter(|unit| !is_orphaned(unit) && tree::role(unit) != tree::Role::Exposed)
             .map(|unit| (unit.name.clone(), false))
             .or(container.map(|name| (name, true)))
             .zip(lane)
@@ -4677,6 +4679,19 @@ impl App {
             return;
         };
         let verb = method_verb(method);
+        // An exposed port has no process to start or stop; only the CLI removes it.
+        if let RowId::Unit(name) = &row
+            && let Some(unit) = lane
+                .units
+                .iter()
+                .find(|u| u.name == *name && tree::role(u) == tree::Role::Exposed)
+        {
+            let port = unit.ports.get("default").copied().unwrap_or_default();
+            self.set_notice(format!(
+                "{name} is an exposed port with no process here; devlanes expose --remove {port} --lane {reference} removes it"
+            ));
+            return;
+        }
         // `(unit, what run takes)`: a setup step's unit `setup.db` runs as `infra.setup.db`.
         let task = match &row {
             RowId::Task(name) => Some((name.clone(), name.clone())),

@@ -73,3 +73,85 @@ fn https_reaches_each_lane_by_hostname() -> Result<()> {
     }
     Ok(())
 }
+
+/// A port `devlanes expose --host` names, here an `exec` unit's server, is
+/// routed by the proxy under the lane's domain and listed as the lane's unit
+/// `port-<port>`; `expose --remove` takes the route and the unit away again.
+#[test]
+fn an_exposed_port_is_routed_by_its_hostname() -> Result<()> {
+    if devlanes_e2e::curl()
+        .arg("--version")
+        .stdout(Stdio::null())
+        .status()
+        .map_or(true, |s| !s.success())
+    {
+        eprintln!("skipped: curl is not installed");
+        return Ok(());
+    }
+    let lab = Lab::new("two-services", BUDGET)?;
+    let started = lab.json(lab.repo(), &["start"])?;
+    assert_eq!(started["ready"], true, "{started}");
+    let served = lab.spare_port(0);
+    let served_text = served.to_string();
+    lab.json(
+        lab.repo(),
+        &[
+            "exec",
+            "--name",
+            "docs",
+            "--",
+            "fixture-server",
+            "--port",
+            &served_text,
+        ],
+    )?;
+    lab.eventually(
+        "the exec unit listens",
+        devlanes_e2e::COMMAND_TIMEOUT,
+        || Ok(devlanes_e2e::listening(served).then_some(())),
+    )?;
+    let exposed = lab.json(lab.repo(), &["expose", &served_text, "--host", "docs"])?;
+    let host = need(exposed["exposed"][0]["host"].as_str(), "exposed host")?.to_owned();
+    assert_eq!(host, "docs.fixture-two.localhost", "{exposed}");
+    let unit_name = format!("port-{served}");
+    let lanes = lab.lanes(lab.repo())?;
+    let listed = need(
+        lane(&lanes, "fixture-two@0").and_then(|l| unit(l, &unit_name)),
+        "exposed unit",
+    )?;
+    assert_eq!(listed["kind"], "exposed", "{listed}");
+
+    let routes = lab.json(lab.repo(), &["url", "ls", "--json"])?;
+    let https = &routes["proxy"]["https"];
+    let Some(port) = https["port"].as_u64().filter(|_| https["bound"] == true) else {
+        eprintln!("skipped: the proxy could not bind HTTPS: {https}");
+        return Ok(());
+    };
+    let ca = lab.home().join("ca/ca.pem");
+    let mut curl = devlanes_e2e::curl();
+    curl.args(["-sS", "--max-time", "10", "--cacert"])
+        .arg(&ca)
+        .arg("--resolve")
+        .arg(format!("{host}:{port}:127.0.0.1"))
+        .args(["-w", "\n%{http_code}"])
+        .arg(format!("https://{host}:{port}/healthz"));
+    let output = lab.run(curl, devlanes_e2e::COMMAND_TIMEOUT)?;
+    output.expect_code(0)?;
+    let code = output.stdout.rsplit('\n').next().unwrap_or_default();
+    assert_eq!(code, "200", "{output}");
+
+    lab.json(lab.repo(), &["expose", "--remove", &served_text])?;
+    let routes = lab.json(lab.repo(), &["url", "ls", "--json"])?;
+    let still = routes["items"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["host"] == host.as_str()));
+    assert!(!still, "removed but still routed: {routes}");
+    let lanes = lab.lanes(lab.repo())?;
+    assert!(
+        lane(&lanes, "fixture-two@0")
+            .and_then(|l| unit(l, &unit_name))
+            .is_none(),
+        "removed but still listed"
+    );
+    Ok(())
+}

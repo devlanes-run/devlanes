@@ -36,7 +36,8 @@ pub struct LaneInfo {
     pub domain: Option<String>,
 }
 
-/// Whether a unit is a managed process, a container or a task run.
+/// Whether a unit is a managed process, a container, a task run or an exposed
+/// port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnitKind {
@@ -46,6 +47,10 @@ pub enum UnitKind {
     Container,
     /// A task run, listed for its state only: never mirrored or dialable.
     Task,
+    /// A port someone exposed on the box with `devlanes expose`, with no
+    /// process the box daemon runs; sent only to clients with
+    /// [`crate::EXPOSED_UNITS`].
+    Exposed,
 }
 
 impl UnitKind {
@@ -277,10 +282,10 @@ impl Registry {
 
     /// Decides whether the box may dial `target`.
     ///
-    /// Only ports advertised by a non-hidden service or container that is
-    /// running pass, so a connected client cannot use the box as a pivot to
-    /// arbitrary local services, nor reach whatever took over the port of a
-    /// stopped unit. Tasks never advertise ports.
+    /// Only ports advertised by a non-hidden service, container or exposed
+    /// port that is running pass, so a connected client cannot use the box as
+    /// a pivot to arbitrary local services, nor reach whatever took over the
+    /// port of a stopped unit. Tasks never advertise ports.
     pub fn authorize(&self, target: &DialTarget) -> Result<AuthorizedTarget, RejectReason> {
         let DialTarget::Port { port } = *target;
         let mut refusal = RejectReason::NotRegistered;
@@ -363,6 +368,14 @@ pub trait RegistrySource: Send + Sync {
     /// Returns a consistent snapshot and every change after it, for the client
     /// described by `client`.
     async fn subscribe(&self, client: &ClientInfo) -> Result<RegistryFeed, BoxError>;
+
+    /// Takes the latest mirror report of `client`, which subscribed before
+    /// and negotiated [`crate::MIRROR_REPORT`]. Reports of one session arrive
+    /// in order, newer ones replacing older ones that were not taken yet. The
+    /// default drops them.
+    async fn report(&self, client: &ClientInfo, report: serde_json::Value) {
+        let _ = (client, report);
+    }
 }
 
 /// In-process [`RegistrySource`] backed by a broadcast channel.
@@ -633,6 +646,24 @@ mod tests {
             other => panic!("expected resync, got {other:?}"),
         }
         Ok(())
+    }
+
+    /// An exposed port is mirrored and dialable like a service's, and goes by
+    /// `exposed` on the wire.
+    #[test]
+    fn exposed_ports_are_mirrored_and_dialable() {
+        let mut exposed = unit("port-8000", 8000, false);
+        exposed.key.kind = UnitKind::Exposed;
+        let registry = Registry::from_snapshot(RegistrySnapshot {
+            lanes: Vec::new(),
+            units: vec![exposed.clone()],
+        });
+        assert!(exposed.exposed());
+        assert!(registry.mirrored_ports().contains_key(&8000));
+        let target = registry.authorize(&DialTarget::Port { port: 8000 });
+        assert_eq!(target.map(|t| t.port()), Ok(8000));
+        let encoded = serde_json::to_value(&exposed.key).expect("encodes");
+        assert_eq!(encoded["kind"], "exposed");
     }
 
     /// Tasks are listed with their state, but even a running task with ports

@@ -267,6 +267,39 @@ pub(crate) struct LaneSt {
     pub missing_since: Option<std::time::Instant>,
     /// Set while the idle loop has the lane's processes throttled or frozen.
     pub power: Option<LanePowerSt>,
+    /// Ports `devlanes expose` made reachable, by port. In memory only: a
+    /// whole-lane stop, a clean or the daemon's exit forgets them.
+    pub exposed: BTreeMap<u16, Exposed>,
+}
+
+/// A port of the lane exposed with `devlanes expose`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Exposed {
+    /// The routed hostname, normalized.
+    pub host: Option<String>,
+    /// What opens it: `https://<host>` with the proxy's port, else the loopback URL.
+    pub url: String,
+    pub since_ms: u64,
+    pub actor: Actor,
+}
+
+impl Exposed {
+    /// The unit name of the exposure of `port`.
+    pub(crate) fn unit(port: u16) -> String {
+        format!("port-{port}")
+    }
+
+    /// The protocol form for `expose` replies.
+    pub(crate) fn listed(&self, lane: &str, port: u16) -> devlanes_proto::ExposedPort {
+        devlanes_proto::ExposedPort {
+            lane: lane.to_owned(),
+            unit: Self::unit(port),
+            port,
+            host: self.host.clone(),
+            url: self.url.clone(),
+            since_ms: self.since_ms,
+        }
+    }
 }
 
 /// A throttled or frozen lane, for its summary.
@@ -366,6 +399,7 @@ impl LaneSt {
             sweeping: false,
             missing_since: None,
             power: None,
+            exposed: BTreeMap::new(),
         }
     }
 
@@ -1018,8 +1052,38 @@ pub(crate) fn idle_summary(lane: &str, service: &ServiceInfo) -> UnitSummary {
     }
 }
 
-/// Builds a lane summary; units list configured services (idle or live) then
-/// one-shot units.
+/// Summary of an exposed port: kind and role `exposed`, `running` while
+/// listed, whether or not anything listens on the port.
+pub(crate) fn exposed_summary(
+    lane: &LaneSt,
+    reference: &str,
+    port: u16,
+    exposed: &Exposed,
+) -> UnitSummary {
+    let name = Exposed::unit(port);
+    let mut urls = vec![format!("http://127.0.0.1:{port}")];
+    let public_url = exposed.host.as_ref().map(|_| exposed.url.clone());
+    urls.extend(public_url.clone());
+    UnitSummary {
+        color: Some(derived_color(lane, &name)),
+        name,
+        lane: reference.to_owned(),
+        state: "running".into(),
+        ports: BTreeMap::from([("default".to_owned(), port)]),
+        urls,
+        actor: exposed.actor.clone(),
+        kind: devlanes_proto::EXPOSED_KIND.into(),
+        role: Some(devlanes_proto::EXPOSED_KIND.into()),
+        started_at_ms: Some(exposed.since_ms),
+        public_url,
+        // No process, so no terminal to size.
+        pty: false,
+        ..UnitSummary::default()
+    }
+}
+
+/// Builds a lane summary; units list configured services (idle or live),
+/// one-shot units, then exposed ports.
 pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
     let reference = lane.reference(project);
     let mut units = Vec::new();
@@ -1046,6 +1110,9 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         if !units.iter().any(|summary| &summary.name == name) {
             units.push(unit_summary(&reference, name, unit));
         }
+    }
+    for (port, exposed) in &lane.exposed {
+        units.push(exposed_summary(lane, &reference, *port, exposed));
     }
     let power = lane.power.as_ref().map(|power| power.level.word());
     for summary in &mut units {

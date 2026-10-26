@@ -11,6 +11,7 @@ mod control;
 pub mod diagnostics;
 mod dns;
 mod engine;
+mod expose;
 mod files;
 pub mod hosts;
 pub mod idle;

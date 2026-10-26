@@ -48,6 +48,8 @@ pub enum RowId {
 
 /// Exec units, after the services.
 pub const AD_HOC: &str = "ad-hoc";
+/// Ports `devlanes expose` made units, after the exec units.
+pub const EXPOSED: &str = "exposed";
 /// The lane's own containers.
 pub const CONTAINERS: &str = "containers";
 /// The project's shared containers, in every lane.
@@ -107,6 +109,8 @@ pub enum Role {
     Exec,
     Setup,
     Teardown,
+    /// A port `devlanes expose` made a unit; no process, nothing to control.
+    Exposed,
 }
 
 /// The role of a unit: the daemon's `role`, else (older daemons) the kind,
@@ -118,7 +122,11 @@ pub fn role(unit: &UnitSummary) -> Role {
         Some("setup") => return Role::Setup,
         Some("teardown") => return Role::Teardown,
         Some("exec") => return Role::Exec,
+        Some(devlanes_proto::EXPOSED_KIND) => return Role::Exposed,
         _ => {}
+    }
+    if unit.kind == devlanes_proto::EXPOSED_KIND {
+        return Role::Exposed;
     }
     if unit.name.starts_with("setup.") {
         Role::Setup
@@ -139,7 +147,7 @@ pub fn run_name(unit: &UnitSummary) -> Option<String> {
     match role(unit) {
         Role::Task => Some(unit.name.clone()),
         Role::Setup | Role::Teardown => Some(format!("infra.{}", unit.name)),
-        Role::Service | Role::Exec => None,
+        Role::Service | Role::Exec | Role::Exposed => None,
     }
 }
 
@@ -215,23 +223,27 @@ pub fn tree(
     let mut nodes = Vec::new();
 
     // Services in devlanes.yaml order, as the daemon lists them, running or
-    // not; then exec units.
+    // not; then exec units, then exposed ports.
     let mut services = Vec::new();
     let mut ad_hoc = Vec::new();
+    let mut exposed = Vec::new();
     for unit in lane.units.iter().filter(|u| keep(u)) {
         let leaf = Node::leaf(RowId::Unit(unit.name.clone()));
         match role(unit) {
             Role::Service => services.push(leaf),
             Role::Exec => ad_hoc.push(leaf),
+            Role::Exposed => exposed.push(leaf),
             _ => {}
         }
     }
-    if !ad_hoc.is_empty() {
-        services.push(Node {
-            id: RowId::Group(Section::Services, AD_HOC.into()),
-            children: ad_hoc,
-            folded_by_default: false,
-        });
+    for (name, children) in [(AD_HOC, ad_hoc), (EXPOSED, exposed)] {
+        if !children.is_empty() {
+            services.push(Node {
+                id: RowId::Group(Section::Services, name.into()),
+                children,
+                folded_by_default: false,
+            });
+        }
     }
     if !services.is_empty() {
         nodes.push(section(Section::Services, services));
@@ -576,6 +588,7 @@ mod tests {
                 unit("api-users", "idle", "service"),
                 unit("api-auth", "failed", "service"),
                 unit("shell", "running", "exec"),
+                unit("port-8000", "running", "exposed"),
                 unit("migrate", "exited", "task"),
                 unit("setup.db", "exited", "task"),
             ],
@@ -591,6 +604,8 @@ mod tests {
                 "  api-auth",
                 "  [ad-hoc]",
                 "    shell",
+                "  [exposed]",
+                "    port-8000",
                 "tasks",
                 "  migrate",
                 "infra",
@@ -598,6 +613,9 @@ mod tests {
             ]
         );
         assert!(!rows.iter().any(|row| row.id == RowId::WholeLane));
+        // An exposed port runs nothing, so it does not make an idle lane live.
+        let idle = self::lane(vec![unit("port-8000", "running", "exposed")], "idle");
+        assert!(!lane_is_live(&idle));
     }
 
     #[test]

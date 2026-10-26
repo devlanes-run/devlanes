@@ -372,10 +372,10 @@ impl BoxHost {
                 });
                 continue;
             }
-            let kind = if unit.key.kind == "task" {
-                "task"
-            } else {
-                "service"
+            let kind = match unit.key.kind.as_str() {
+                "task" => "task",
+                devlanes_proto::EXPOSED_KIND => devlanes_proto::EXPOSED_KIND,
+                _ => "service",
             };
             units.push(UnitSummary {
                 name: unit.key.name.clone(),

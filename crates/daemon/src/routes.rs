@@ -149,8 +149,20 @@ impl Inner {
                     RouteStatus::Ready,
                 )
             });
+            // Listed means routed: whether something listens shows in the request.
+            let exposed_units: Vec<(u16, String, &str)> = st
+                .exposed
+                .iter()
+                .filter_map(|(port, exposed)| {
+                    let host = exposed.host.as_deref()?;
+                    Some((*port, crate::model::Exposed::unit(*port), host))
+                })
+                .collect();
+            let exposed_routes = exposed_units
+                .iter()
+                .map(|(port, unit, host)| (*host, unit, *port, false, false, RouteStatus::Ready));
             for (host, unit, port, fallback, host_header_upstream, status) in
-                service_routes.chain(infra_routes)
+                service_routes.chain(infra_routes).chain(exposed_routes)
             {
                 let host = match devlanes_config::normalize_host(host) {
                     Ok(host) => host,
@@ -311,7 +323,8 @@ impl Inner {
             .collect()
     }
 
-    /// `hosts`: every route with its lane, unit, port and state.
+    /// `hosts`: every route with its lane, unit, port and state, and for this
+    /// machine's own routes the URL each reporting client opens it at.
     pub(crate) fn hosts(&self) -> Value {
         let https_port = self.integ.routes.https_port();
         let items: Vec<Value> = self
@@ -322,6 +335,18 @@ impl Inner {
                 // Wildcards have no single address to open.
                 let url = (!route.host.contains('*'))
                     .then(|| devlanes_resolve::https_url(&route.host, https_port));
+                // Clients mirror only this machine's own lanes.
+                let clients = if route.remote || url.is_none() {
+                    Vec::new()
+                } else {
+                    self.client_urls(&crate::remote::UnitTarget {
+                        lane: &route.lane,
+                        unit: &route.unit,
+                        host: Some(&route.host),
+                        port: None,
+                        hidden: false,
+                    })
+                };
                 json!({
                     "host": route.host,
                     "url": url,
@@ -332,6 +357,7 @@ impl Inner {
                     "fallback": route.fallback,
                     "host_header_upstream": route.host_header_upstream,
                     "state": state,
+                    "clients": clients,
                 })
             })
             .collect();

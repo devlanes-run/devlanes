@@ -399,6 +399,51 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost", "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost"]}),
         ),
         (
+            "url_clients",
+            Method::Url,
+            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost:8443",
+            "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost:8443"],
+            "clients": [
+                {"client": "laptop", "id": "0123abcd", "alias": "hetzner", "url": "https://web.acme-2.localhost", "reachable": true, "reason": null},
+                {"client": "desktop", "id": "4567ef01", "alias": "hetzner", "url": null, "reachable": false,
+                 "reason": "port 20101 is in use there by postgres (pid 812)"},
+            ]}),
+        ),
+        (
+            "hosts_clients",
+            Method::Hosts,
+            json!({
+                "items": [
+                    {"host": "api.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready",
+                     "clients": [{"client": "laptop", "url": "https://api.acme-2.localhost:9443", "reachable": true, "reason": null}]},
+                    {"host": "web.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": false, "state": "ready",
+                     "clients": [{"client": "laptop", "url": null, "reachable": false, "reason": "the lane is not mirrored there"}]},
+                ],
+                "proxy": {"https": {"bound": true, "port": 443, "fallback_reason": null}},
+                "truncated": false, "next_cursor": null,
+            }),
+        ),
+        (
+            "expose",
+            Method::Expose,
+            json!({"lane": "acme@2", "exposed": [
+                {"lane": "acme@2", "unit": "port-8000", "port": 8000, "host": "files.acme-2.localhost", "url": "https://files.acme-2.localhost", "since_ms": 1},
+                {"lane": "acme@2", "unit": "port-9229", "port": 9229, "url": "http://127.0.0.1:9229", "since_ms": 2},
+            ]}),
+        ),
+        (
+            "expose_none",
+            Method::Expose,
+            json!({"lane": "acme@2", "exposed": []}),
+        ),
+        (
+            "expose_list",
+            Method::Expose,
+            json!({"items": [
+                {"lane": "acme@2", "unit": "port-8000", "port": 8000, "host": "files.acme-2.localhost", "url": "https://files.acme-2.localhost", "since_ms": 1},
+            ], "truncated": false, "next_cursor": null}),
+        ),
+        (
             "hosts",
             Method::Hosts,
             json!({
