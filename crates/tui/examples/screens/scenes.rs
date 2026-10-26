@@ -602,6 +602,26 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "dialog-errors",
+            what: "the error list (e): the newest error in full, the header cuts it",
+            setup: |f| {
+                f.unit("acme@0", "wrk-export");
+                f.send(Msg::ActionDone {
+                    label: "start acme@0:wrk-export".into(),
+                    target: Target::Unit {
+                        lane: "acme@0".into(),
+                        unit: "wrk-export".into(),
+                    },
+                    result: Err(ApiError::Rpc(RpcError::new(
+                        "not_found",
+                        json!({"reference": "setup.buckets", "candidates": ["acme@0:api-auth", "acme@0:api-billing", "acme@0:api-users", "acme@0:wrk-export", "acme@0:wrk-mailer", "acme@0:web-portal"]}),
+                        3,
+                    ))),
+                });
+                f.key(KeyCode::Char('e'));
+            },
+        },
+        Scene {
             name: "update-badge",
             what: "a newer release in the header",
             setup: |f| {

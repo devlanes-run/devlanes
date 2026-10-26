@@ -78,6 +78,8 @@ pub enum Click {
     StartLane(String),
     /// The problem counter in the top bar.
     FirstProblem,
+    /// The error in the top bar: the error list.
+    Errors,
     /// A key hint: the click presses the key.
     Key(KeyCode, KeyModifiers),
     /// A monitor table row.
@@ -289,6 +291,33 @@ impl ErrorEntry {
     pub fn verb(&self) -> &str {
         self.what.split(' ').next().unwrap_or("action")
     }
+
+    /// The whole error as plain lines, as the error list shows and copies it:
+    /// the headline, every detail line, then the failed command and the hint.
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = vec![format!("{} failed: {}", self.what, self.worded.summary)];
+        lines.extend(self.worded.detail.iter().cloned());
+        if let Some(command) = &self.worded.command {
+            lines.push(format!("command: {command}"));
+        }
+        if let Some(hint) = &self.worded.hint {
+            lines.push(format!("run: {hint}"));
+        }
+        lines
+    }
+}
+
+/// The error list (`e`, or a click on the header's error): one error at a
+/// time, in full.
+#[derive(Debug, Default)]
+pub struct ErrorsDialog {
+    /// Into [`App::errors`], 0 the newest.
+    pub index: usize,
+    /// Wrapped lines scrolled past at the top.
+    pub scroll: usize,
+    /// The furthest `scroll` that still fills the box, as last drawn; only
+    /// the renderer knows the wrapped length.
+    pub max_scroll: std::cell::Cell<usize>,
 }
 
 /// Modal prompts; while one is open it receives every key.
@@ -322,6 +351,8 @@ pub enum Dialog {
     Targets(TargetPicker),
     /// The first launch in a home (`crate::welcome`).
     Welcome(crate::welcome::Welcome),
+    /// Every error this TUI kept, one at a time in full.
+    Errors(ErrorsDialog),
 }
 
 /// The `T` picker: every target of the kept log lines with its count and
@@ -1659,11 +1690,23 @@ impl App {
             .find(|lane| lane.reference == target_lane(target))?;
         match target {
             Target::Lane(_) => Some(lane.state.clone()),
-            Target::Unit { unit, .. } => lane
+            Target::Unit {
+                lane: reference,
+                unit,
+            } => lane
                 .units
                 .iter()
                 .find(|u| u.name == *unit)
-                .map(|u| u.state.clone()),
+                .map(|u| u.state.clone())
+                .or_else(|| {
+                    // A listed task that has not run since the daemon started has
+                    // no unit, but its row is still there to carry the error.
+                    self.task_info(reference, unit).map(|task| {
+                        task.last_run
+                            .as_ref()
+                            .map_or_else(|| "not run".to_owned(), |run| run.state.clone())
+                    })
+                }),
         }
     }
 
@@ -3618,6 +3661,7 @@ impl App {
                 }
             }
             KeyCode::Char('o') => self.open_url(effects),
+            KeyCode::Char('e') => self.open_errors(),
             KeyCode::Char('c') => self.enter_copy(),
             KeyCode::PageUp => {
                 let page = self.page();
@@ -3753,7 +3797,51 @@ impl App {
                 let action = welcome.key(key);
                 self.welcome_action(action, welcome, effects);
             }
+            Dialog::Errors(state) => self.errors_key(key, state, effects),
         }
+    }
+
+    /// Opens the error list on the newest error.
+    fn open_errors(&mut self) {
+        if self.errors.is_empty() {
+            self.set_notice("no errors since this TUI started".into());
+            return;
+        }
+        self.dialog = Some(Dialog::Errors(ErrorsDialog::default()));
+    }
+
+    /// Keys in the error list: h and l step through the errors, j and k
+    /// scroll a long one, y copies it.
+    fn errors_key(&mut self, key: KeyEvent, mut state: ErrorsDialog, effects: &mut Vec<Effect>) {
+        let last = self.errors.len().saturating_sub(1);
+        let max = state.max_scroll.get();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'e') => return,
+            KeyCode::Left | KeyCode::Char('h') if state.index < last => {
+                state.index += 1;
+                state.scroll = 0;
+            }
+            KeyCode::Right | KeyCode::Char('l') if state.index > 0 => {
+                state.index -= 1;
+                state.scroll = 0;
+            }
+            KeyCode::Down | KeyCode::Char('j') => state.scroll = (state.scroll + 1).min(max),
+            KeyCode::Up | KeyCode::Char('k') => state.scroll = state.scroll.saturating_sub(1),
+            KeyCode::PageDown => state.scroll = (state.scroll + 10).min(max),
+            KeyCode::PageUp => state.scroll = state.scroll.saturating_sub(10),
+            KeyCode::Char('y') | KeyCode::Enter => {
+                if let Some(entry) = self.errors.get(state.index) {
+                    effects.push(Effect::Copy(entry.lines().join("\n")));
+                    // OSC 52 has no reply: the terminal may ignore it silently.
+                    self.set_notice(
+                        "copied with OSC 52; it reaches the clipboard if the terminal allows that"
+                            .into(),
+                    );
+                }
+            }
+            _ => {}
+        }
+        self.dialog = Some(Dialog::Errors(state));
     }
 
     /// Opens the welcome once the first status and the dismissed notices are
@@ -4634,6 +4722,14 @@ impl App {
             }
             other => self.dialog = other,
         }
+        if let Some(Dialog::Errors(state)) = self.dialog.as_mut() {
+            let max = state.max_scroll.get();
+            match mouse.kind {
+                MouseEventKind::ScrollDown => state.scroll = (state.scroll + 3).min(max),
+                MouseEventKind::ScrollUp => state.scroll = state.scroll.saturating_sub(3),
+                _ => {}
+            }
+        }
         if self.dialog.is_some() {
             // A click outside a dialog closes it; nothing it guards happens.
             let inside = self
@@ -4815,6 +4911,7 @@ impl App {
                     self.select(first, effects);
                 }
             }
+            Click::Errors => self.open_errors(),
             Click::Key(code, modifiers) => self.key(KeyEvent::new(code, modifiers), effects),
             Click::MonitorRow(id) => {
                 // A second click on the selected row is Enter: open or fold it.

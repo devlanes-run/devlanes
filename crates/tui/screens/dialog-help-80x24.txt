@@ -17,8 +17,8 @@
 ││   p                 start the lane with chosen profiles                    ││
 ││   C                 clean the lane (asks first)                            ││
 ││   o                 open the unit's address in a browser                   ││
+││   e                 errors in full, newest first; or click the header's e… ││
 ││   /                 filter by name or +tag; enter keeps, esc clears        ││
-││                                                                            ││
 ││ …                                                                          ││
 └│ any key closes                                                             │┘
  └────────────────────────────────────────────────────────────────────────────┘
@@ -44,7 +44,7 @@
 17: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
 18: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
 19: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-20: 0 darkgray, 1 bold, 78 bold, 79 darkgray
+20: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
 21: 0 darkgray, 1 bold, 3 dim, 78 bold, 79 darkgray
 22: 0 darkgray, 1 bold, 3-16 dim, 78 bold, 79 darkgray
 23: 1-78 bold, 79 dim

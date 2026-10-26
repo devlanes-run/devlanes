@@ -296,7 +296,7 @@ pub(crate) fn reference_error(error: ReferenceError) -> RpcError {
 }
 
 /// Methods that change lanes, units, infra or state; refused once shutdown began.
-fn mutating(method: &Method) -> bool {
+pub(crate) fn mutating(method: &Method) -> bool {
     matches!(
         method,
         Method::DaemonResetState

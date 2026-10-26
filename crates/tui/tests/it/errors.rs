@@ -128,13 +128,19 @@ fn check_layout(app: &mut App) -> Result<Buffer, Box<dyn std::error::Error>> {
     let without = render(app)?;
     app.notice = notice;
     let (width, height) = app.size;
-    for y in 1..height {
+    // The footer gains the key that shows the whole error; nothing else moves.
+    for y in 1..height - 1 {
         assert_eq!(
             row(&with_notice, y),
             row(&without, y),
             "row {y} changed with the notice"
         );
     }
+    assert!(
+        row(&with_notice, height - 1).starts_with(" e error details"),
+        "{}",
+        row(&with_notice, height - 1)
+    );
     assert!(
         row(&with_notice, 0).contains("✕ start acme@1:portal"),
         "{}",
@@ -217,8 +223,8 @@ async fn compose_failure_at_160x45() -> TestResult {
 async fn failures_show_inline_without_an_overlay() -> TestResult {
     let mut app = portal_app(120, 40).await?;
     fail_start(&mut app);
-    // `e` no longer opens anything; the failure is on the row and in the pane.
-    app.update(key(KeyCode::Char('e')));
+    // Nothing pops up: the failure is on the row and in the pane, and the
+    // error list opens only on `e` or a click on the header.
     assert!(app.dialog.is_none());
     let text = screen(&render(&app)?);
     assert!(text.contains("start failed"), "row badge: {text}");
@@ -228,10 +234,6 @@ async fn failures_show_inline_without_an_overlay() -> TestResult {
     );
     assert!(text.contains("last line of stderr"), "stderr tail: {text}");
     assert!(text.contains("run      devlanes infra status"), "{text}");
-    assert!(
-        !text.contains("e errors"),
-        "no key for the old overlay: {text}"
-    );
     Ok(())
 }
 
@@ -339,6 +341,101 @@ async fn badge_stays_until_the_target_recovers_and_the_list_keeps_it() -> TestRe
     app.update(changed("ready"));
     assert!(app.target_error(&target).is_none());
     assert_eq!(app.errors.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+/// `e` shows the error the header cuts, whole, and copies it as plain text;
+/// `h` and `l` step through older and newer ones.
+async fn the_error_list_shows_and_copies_the_whole_error() -> TestResult {
+    let mut app = portal_app(100, 30).await?;
+    fail_start(&mut app);
+    app.update(Msg::RunDone {
+        lane: "acme@1".into(),
+        task: "seed".into(),
+        result: Err(ApiError::Rpc(RpcError::new(
+            "config_error",
+            json!({"path": "global_env.ACME_SECRET", "message": "unknown variable env.ACME_TOKEN in the expression"}),
+            1,
+        ))),
+    });
+    app.update(key(KeyCode::Char('e')));
+    assert!(matches!(
+        app.dialog,
+        Some(devlanes_tui::app::Dialog::Errors(_))
+    ));
+    let buffer = render(&app)?;
+    let text = screen(&buffer);
+    assert!(text.contains("error 1 of 2"), "{text}");
+    assert!(text.contains("run seed in acme@1 failed"), "{text}");
+    assert!(
+        text.contains("variable env.ACME_TOKEN in the expression"),
+        "{text}"
+    );
+    // The older error: the compose failure, every stderr line kept.
+    app.update(key(KeyCode::Char('h')));
+    let effects = app.update(key(KeyCode::Char('y')));
+    let [devlanes_tui::app::Effect::Copy(copied)] = effects.as_slice() else {
+        return Err(format!("unexpected {effects:?}").into());
+    };
+    assert!(copied.starts_with("start acme@1:portal failed"), "{copied}");
+    assert!(copied.contains("last line of stderr"), "{copied}");
+    assert!(
+        copied.contains("command: docker compose -p acme"),
+        "{copied}"
+    );
+    assert!(!copied.contains('\x1b'), "plain text: {copied:?}");
+    app.update(key(KeyCode::Esc));
+    assert!(app.dialog.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+/// A run of a task that has not run since the daemon started keeps its error
+/// on the task's row and pane instead of the lane.
+async fn a_failed_run_of_a_listed_task_stays_on_its_row() -> TestResult {
+    let mut app = portal_app(120, 30).await?;
+    app.update(Msg::Tasks {
+        lane: "acme@1".into(),
+        result: Ok(vec![devlanes_tui::api::TaskInfo {
+            name: "seed".into(),
+            ..Default::default()
+        }]),
+    });
+    app.update(Msg::RunDone {
+        lane: "acme@1".into(),
+        task: "seed".into(),
+        result: Err(ApiError::Rpc(RpcError::new(
+            "config_error",
+            json!({"path": "global_env.ACME_SECRET", "message": "unknown variable env.ACME_TOKEN"}),
+            1,
+        ))),
+    });
+    let target = Target::Unit {
+        lane: "acme@1".into(),
+        unit: "seed".into(),
+    };
+    assert!(app.target_error(&target).is_some());
+    assert!(app.target_error(&Target::Lane("acme@1".into())).is_none());
+    let mut effects = Vec::new();
+    app.select(
+        devlanes_tui::app::Selected {
+            lane: "acme@1".into(),
+            row: devlanes_tui::app::RowId::Task("seed".into()),
+        },
+        &mut effects,
+    );
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("seed") && text.contains("run failed"),
+        "{text}"
+    );
+    assert!(text.contains("Run seed in acme@1 failed"), "{text}");
+    // Ticks age the notice; the badge stays with the task.
+    for _ in 0..30 {
+        app.update(Msg::Tick);
+    }
+    assert!(app.target_error(&target).is_some());
     Ok(())
 }
 

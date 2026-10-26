@@ -653,8 +653,12 @@ fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
     if let Some(notice) = &app.notice
         && notice.error
     {
+        // The header cuts the text; the click shows all of it.
         let text = format!("{} {}", theme.glyph(Glyph::Failed), notice.text);
-        return plain(text, Tone::Failure);
+        return Some((
+            vec![Span::styled(text, theme.tone(Tone::Failure))],
+            Some(Click::Errors),
+        ));
     }
     if let Some((line, ended)) = app.start_line() {
         let tone = match ended {
@@ -1183,9 +1187,23 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
     let size = |(key, label, _): &Hint| text::width(key) + text::width(label) + 4;
     let fixed_width: usize = fixed.iter().map(size).sum();
     let budget = width.saturating_sub(1 + fixed_width);
+    let mut hints = hints(app);
+    // While the header shows a cut error, its full text is one key away.
+    let copying = app
+        .attached
+        .as_ref()
+        .is_some_and(|a| matches!(a.mode, PaneMode::Copy(_)));
+    let typing = app.filter.as_ref().is_some_and(|f| f.editing);
+    if app.view == View::Project
+        && app.notice.as_ref().is_some_and(|n| n.error)
+        && !copying
+        && !typing
+    {
+        hints.insert(0, ("e", "error details", KeyCode::Char('e')));
+    }
     let mut used = 0;
     let mut shown = Vec::new();
-    for hint in hints(app) {
+    for hint in hints {
         if used + size(&hint) > budget {
             break;
         }

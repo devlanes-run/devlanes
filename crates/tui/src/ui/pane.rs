@@ -680,7 +680,12 @@ fn task_lines(app: &App, lane: &LaneSummary, name: &str, width: usize) -> Vec<Li
         Some(run) if run.state == "failed" => "Its last run failed. s runs it again.",
         Some(_) => "s runs it again.",
     };
-    let mut lines = sentence(text, width, Vec::new(), plain);
+    let mut lines = Vec::new();
+    if let Some(entry) = target_error(app, &lane.reference, Some(name)) {
+        lines.extend(error_banner(theme, &entry.what, &entry.worded, width));
+        lines.push(Line::from(""));
+    }
+    lines.extend(sentence(text, width, Vec::new(), plain));
     lines.push(Line::from(""));
     if let Some(run) = info.and_then(|i| i.last_run.as_ref()) {
         let mut last = run.state.clone();
