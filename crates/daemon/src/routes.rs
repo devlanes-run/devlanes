@@ -327,6 +327,7 @@ impl Inner {
     /// machine's own routes the URL each reporting client opens it at.
     pub(crate) fn hosts(&self) -> Value {
         let https_port = self.integ.routes.https_port();
+        let unmirrored = self.route_unmirrored();
         let items: Vec<Value> = self
             .route_entries()
             .into_iter()
@@ -343,8 +344,8 @@ impl Inner {
                         lane: &route.lane,
                         unit: &route.unit,
                         host: Some(&route.host),
-                        port: None,
-                        hidden: false,
+                        port: Some(route.port),
+                        unmirrored: unmirrored(&route.lane, &route.unit),
                     })
                 };
                 json!({

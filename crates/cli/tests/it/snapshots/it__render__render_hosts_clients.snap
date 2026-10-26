@@ -6,16 +6,16 @@ expression: text
 HOST                      TARGET      PORT   STATE
 api.acme-2.localhost  ->  acme@2:api  20101  ready
 web.acme-2.localhost  ->  acme@2:web  20100  ready
-on laptop: 1 of 2 hostnames reachable, on port 9443
+on laptop: 1 of 2 hostnames reachable (port 9443)
 proxy: https :443
 --- plain (exit 0)
 HOST                      TARGET      PORT   STATE
 api.acme-2.localhost  ->  acme@2:api  20101  ready
 web.acme-2.localhost  ->  acme@2:web  20100  ready
-on laptop: 1 of 2 hostnames reachable, on port 9443
+on laptop: 1 of 2 hostnames reachable (port 9443)
 proxy: https :443
 --- agent (exit 0)
 ready api.acme-2.localhost -> acme@2:api port=20101
 ready web.acme-2.localhost -> acme@2:web port=20100
-on laptop: 1 of 2 hostnames reachable, on port 9443
+on laptop: 1 of 2 hostnames reachable (port 9443)
 proxy: https :443

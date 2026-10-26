@@ -358,22 +358,23 @@ pub(super) fn env(data: &Value) -> Vec<String> {
         .collect()
 }
 
-/// `url`: only the URL in plain output, for scripts. Human and agent output
-/// add one `on <client>: <url>` line per connected client that reports its
-/// mirror (on a box), or why the unit does not open there.
+/// `url`: only the URL outside a terminal, for scripts and agents (which read
+/// `clients` from `--json`). Human output adds one `on <client>: <url>` line
+/// per connected client that reports its mirror (on a box), or why the unit
+/// does not open there.
 pub(super) fn url(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let found = data
         .as_str()
         .or_else(|| data.get("url").and_then(Value::as_str))
         .or_else(|| list(data, "urls").first().and_then(Value::as_str));
     let mut lines: Vec<String> = found.map(clean).into_iter().collect();
-    if cx.human() || cx.agent() {
+    if cx.human() {
         lines.extend(list(data, "clients").iter().map(client_url_line));
     }
     lines
 }
 
-/// `on laptop: https://web.acme-1.localhost`, or `on laptop: not reachable:
+/// `on laptop: https://web.acme-1.localhost`, or `on desktop, not reachable:
 /// <reason>`, for one entry of `url`'s `clients`.
 fn client_url_line(client: &Value) -> String {
     let name = text(client, "client");
@@ -381,7 +382,7 @@ fn client_url_line(client: &Value) -> String {
         Some(url) if client.get("reachable").and_then(Value::as_bool) != Some(false) => {
             format!("on {name}: {}", clean(url))
         }
-        _ => format!("on {name}: not reachable: {}", text(client, "reason")),
+        _ => format!("on {name}, not reachable: {}", text(client, "reason")),
     }
 }
 

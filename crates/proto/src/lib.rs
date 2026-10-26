@@ -1250,6 +1250,10 @@ pub mod remote {
     pub struct ReportParams {
         /// The client's id, as in its `remote.registry` request.
         pub id: String,
+        /// The `client_serial` of that request's snapshots: the report
+        /// updates the client's entry only while that request owns it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub serial: Option<u64>,
         pub report: MirrorReport,
     }
 
@@ -1269,8 +1273,10 @@ pub mod remote {
     }
 
     /// First event of `remote.registry`, and again whenever the daemon could not
-    /// keep up with its own changes: `{snapshot}`, the whole registry in the
-    /// remote protocol's `RegistrySnapshot` shape, replacing what came before.
+    /// keep up with its own changes: `{snapshot, client_serial?}`, the whole
+    /// registry in the remote protocol's `RegistrySnapshot` shape, replacing
+    /// what came before, and the serial of the client's `status` entry, which
+    /// its `remote.report`s name ([`ReportParams::serial`]).
     pub const REGISTRY_SNAPSHOT_EVENT: &str = "remote.registry.snapshot";
     /// One registry change after the snapshot: `{change}`, a remote protocol
     /// `RegistryEvent` (`lane_upserted`, `lane_removed`, `unit_upserted`,

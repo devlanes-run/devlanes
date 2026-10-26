@@ -25,6 +25,15 @@ use crate::{Harness, LIMIT, cx, eventually, repo, temp};
 // Port ranges: 18000-18999, below the default pool and below `remote_view.rs`'s
 // 19000-19499, which no other test in this binary uses.
 
+/// A box project whose one service is hidden but routed.
+const VAULT: &str = r#"project: vaultapp
+services:
+  vault:
+    run: tcp-echo
+    hidden: true
+    hosts: ["vault.${{ lane.domain }}"]
+"#;
+
 /// The box's `status --all` entry of the connected client whose id is `id`.
 async fn listed_client(side: &BoxSide, id: &str) -> Option<Value> {
     let status = side
@@ -194,6 +203,33 @@ async fn a_mirror_report_reaches_status_and_url_on_the_box() {
             .expect("web route");
         assert_eq!(route["clients"][0]["reachable"], true, "{route}");
 
+        // A hidden unit's hostname is routed on the box but opens on no client.
+        let vault = repo(&tmp.path, "vaultrepo", VAULT);
+        side.h
+            .call(Method::Start, json!({}), cx(&vault))
+            .await
+            .expect("vault start");
+        let hosts = side
+            .h
+            .call(Method::Hosts, json!({}), Context::default())
+            .await
+            .expect("box hosts");
+        let route = hosts["items"]
+            .as_array()
+            .and_then(|items| {
+                items
+                    .iter()
+                    .find(|i| i["host"] == "vault.vaultapp.localhost")
+            })
+            .expect("vault route");
+        assert_eq!(route["clients"][0]["reachable"], false, "{route}");
+        assert!(
+            route["clients"][0]["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("hidden")),
+            "{route}"
+        );
+
         // A client of a release without mirror reports is listed without one.
         let old = direct(&side, "0ld0c11e", &features_without(MIRROR_REPORT)).await;
         assert!(
@@ -282,9 +318,10 @@ async fn routes(h: &Harness, host: &str) -> bool {
 /// `expose <port> --host files` on the box: the lane lists `port-<port>`, the
 /// box's proxy routes `files.<domain>`, and a client with `exposed_units`
 /// mirrors and routes it to whatever listens there, while a client without
-/// the feature never sees or dials it. Hostnames outside the lane's names,
-/// another unit's port and a taken hostname are refused. `--remove` and a
-/// whole-lane stop take it away on both machines.
+/// the feature never sees or dials it. Hostnames outside the lane's domain,
+/// another unit's port, the proxy's port and a taken hostname are refused.
+/// `--remove` and a whole-lane stop take it away on both machines; a hidden
+/// unit that later takes the port wins over the exposure; `lane clean` drops it.
 async fn exposed_ports_are_routed_mirrored_and_removed() {
     if !ipv6_loopback().await {
         eprintln!("skipping exposed_ports_are_routed_mirrored_and_removed: no IPv6 loopback");
@@ -327,6 +364,13 @@ async fn exposed_ports_are_routed_mirrored_and_removed() {
                 json!({"port": other, "host": "files.example.com"}),
                 "host_not_allowed",
             ),
+            // Below a routed suffix, but not the lane's domain.
+            (
+                json!({"port": other, "host": "docs.localhost"}),
+                "host_not_allowed",
+            ),
+            // The proxy's own port (the default user config's 443).
+            (json!({"port": 443}), "port_reserved"),
             (
                 json!({"port": other, "host": "*.boxapp.localhost"}),
                 "invalid_host",
@@ -412,6 +456,60 @@ async fn exposed_ports_are_routed_mirrored_and_removed() {
             "the stop unmirrors: {}",
             client.host().await
         );
+
+        // A hidden unit that takes an exposed port later wins: the exposure
+        // leaves the feed and the port is refused as hidden.
+        expose(json!({"port": port})).await.expect("expose once more");
+        let hidden = repo(
+            &tmp.path,
+            "hiddenrepo",
+            &format!(
+                "project: hiddenapp\nservices:\n  vault:\n    run: sleep\n    hidden: true\n    env:\n      PORT: {port}\n"
+            ),
+        );
+        side.h
+            .call(Method::Start, json!({}), cx(&hidden))
+            .await
+            .expect("hidden start");
+        let unmirrored = eventually(SOON, || async {
+            (!client.mirrored().await.contains(&port)).then_some(())
+        })
+        .await;
+        assert!(
+            unmirrored.is_some(),
+            "a hidden unit's port is not mirrored: {}",
+            client.host().await
+        );
+        let current = direct(&side, "c0ffee00", FEATURES).await;
+        assert!(
+            !current
+                .registry()
+                .current()
+                .units()
+                .any(|unit| unit.key.kind == UnitKind::Exposed),
+            "the exposure of a hidden unit's port was sent"
+        );
+        match current.open(DialTarget::Port { port }).await {
+            Err(OpenError::Rejected { reason, .. }) => assert_eq!(reason, RejectReason::Hidden),
+            Ok(_) => panic!("a hidden unit's port was dialed through an exposure"),
+            Err(error) => panic!("unexpected open failure: {error}"),
+        }
+        current.close();
+
+        // `lane clean` drops what the lane exposes.
+        assert_eq!(exposed_units(&side.h, &main).await.len(), 1);
+        let mut clean = cx(&main);
+        clean.yes = true;
+        side.h
+            .call(Method::LaneClean, json!({}), clean)
+            .await
+            .expect("lane clean");
+        let listed = side
+            .h
+            .call(Method::Expose, json!({"all": true}), Context::default())
+            .await
+            .expect("list");
+        assert_eq!(listed["items"], json!([]), "{listed}");
 
         server.abort();
         client.stop().await;

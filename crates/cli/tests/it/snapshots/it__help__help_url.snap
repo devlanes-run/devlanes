@@ -7,7 +7,7 @@ Print, open and list service URLs and routed hostnames
 Usage: devlanes url [OPTIONS] <COMMAND>
 
 Commands:
-  print  Print a service's URL, for scripts; on a box, a terminal also gets the URL each connected client opens
+  print  Print a service's URL, for scripts; on a box, a terminal also shows each connected client's URL
   open   Open a service's URL in the browser; agent mode only prints it
   ls     List routed hostnames with their lane, unit, port and state
   help   Print this message or the help of the given subcommand(s)

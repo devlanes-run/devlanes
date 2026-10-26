@@ -1,5 +1,11 @@
 //! The box registry, followed through the daemon's `remote.registry` feed.
 
+use std::{
+    collections::HashMap,
+    sync::{Mutex, PoisonError},
+    time::Duration,
+};
+
 use async_trait::async_trait;
 use devlanes_client::{Client, Frame, Paths};
 use devlanes_proto::{
@@ -15,6 +21,11 @@ use devlanes_transport::{
 };
 use futures_util::StreamExt;
 use serde::Deserialize;
+use tokio::time::timeout;
+
+/// Limit for connecting to the box daemon and for its answer to one report;
+/// a report that takes longer is dropped, and the next change sends another.
+const REPORT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// [`RegistrySource`] over the box daemon's socket.
 pub(crate) struct DaemonRegistry {
@@ -23,6 +34,11 @@ pub(crate) struct DaemonRegistry {
     /// The connection mirror reports go over, opened on the first one; the
     /// feed's own connection is busy streaming.
     reports: tokio::sync::Mutex<Option<Client>>,
+    /// The serial of the `status` entry each client's feed got, by client id,
+    /// which its reports name so they update that entry only. A tunnel
+    /// serves one session; in-process tests serve several, and a client's
+    /// newest session wins.
+    serials: Mutex<HashMap<String, u64>>,
 }
 
 impl DaemonRegistry {
@@ -32,24 +48,41 @@ impl DaemonRegistry {
             paths,
             client,
             reports: tokio::sync::Mutex::new(None),
+            serials: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Sends one `remote.report`, over the kept connection or a new one.
-    async fn send_report(&self, params: &serde_json::Value) -> Result<(), devlanes_client::Error> {
+    /// Sends one `remote.report`, over the kept connection or a new one,
+    /// within [`REPORT_TIMEOUT`] for the connect and for the answer.
+    async fn send_report(&self, params: &serde_json::Value) -> Result<(), String> {
         let mut connection = self.reports.lock().await;
-        let daemon = match &mut *connection {
-            Some(daemon) => daemon,
-            None => connection.insert(Client::connect(&self.paths).await?),
-        };
-        let sent = daemon
-            .request(Method::RemoteReport, params.clone(), Context::default())
-            .await;
-        if sent.is_err() {
-            // A broken connection is opened again for the next report.
-            *connection = None;
+        if connection.is_none() {
+            let connected = timeout(REPORT_TIMEOUT, Client::connect(&self.paths))
+                .await
+                .map_err(|_| "connecting to the box daemon timed out".to_owned())?
+                .map_err(|error| error.to_string())?;
+            *connection = Some(connected);
         }
-        sent.map(|_| ())
+        let Some(daemon) = connection.as_mut() else {
+            return Ok(());
+        };
+        let sent = timeout(
+            REPORT_TIMEOUT,
+            daemon.request(Method::RemoteReport, params.clone(), Context::default()),
+        )
+        .await;
+        match sent {
+            Ok(Ok(_)) => Ok(()),
+            // A broken or stuck connection is opened again for the next report.
+            Ok(Err(error)) => {
+                *connection = None;
+                Err(error.to_string())
+            }
+            Err(_) => {
+                *connection = None;
+                Err("the box daemon did not answer the report in time".to_owned())
+            }
+        }
     }
 }
 
@@ -117,8 +150,16 @@ impl RegistrySource for DaemonRegistry {
             .await
             .map_err(FeedError::from)?;
         let snapshot = match next_update(&mut daemon).await? {
-            RegistryUpdate::Resync(snapshot) => snapshot,
-            RegistryUpdate::Event(_) => {
+            (RegistryUpdate::Resync(snapshot), serial) => {
+                if let Some(serial) = serial {
+                    self.serials
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(client.id.clone(), serial);
+                }
+                snapshot
+            }
+            (RegistryUpdate::Event(_), _) => {
                 return Err(FeedError::Malformed {
                     event: REGISTRY_CHANGE_EVENT.into(),
                     error: serde::de::Error::custom("a change came before the snapshot"),
@@ -130,7 +171,7 @@ impl RegistrySource for DaemonRegistry {
         let updates = futures_util::stream::unfold(Some(daemon), |daemon| async move {
             let mut daemon = daemon?;
             match next_update(&mut daemon).await {
-                Ok(update) => Some((Ok(update), Some(daemon))),
+                Ok((update, _)) => Some((Ok(update), Some(daemon))),
                 Err(error) => Some((Err(BoxError::from(error)), None)),
             }
         })
@@ -150,11 +191,20 @@ impl RegistrySource for DaemonRegistry {
                 return;
             }
         };
-        if client.id.is_empty() {
+        let serial = self
+            .serials
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&client.id)
+            .copied();
+        // A daemon from before serials lists the client but cannot tell
+        // which entry is this tunnel's, so the report waits for one that can.
+        let Some(serial) = serial.filter(|_| !client.id.is_empty()) else {
             return;
-        }
+        };
         let params = ReportParams {
             id: client.id.clone(),
+            serial: Some(serial),
             report: report.bounded(),
         };
         let Ok(params) = serde_json::to_value(params) else {
@@ -166,14 +216,16 @@ impl RegistrySource for DaemonRegistry {
     }
 }
 
-/// The next registry update of the feed on `daemon`. Other events are skipped,
-/// so a newer daemon may add some.
-async fn next_update(daemon: &mut Client) -> Result<RegistryUpdate, FeedError> {
+/// The next registry update of the feed on `daemon`, with the serial of the
+/// client's `status` entry that snapshots carry (`client_serial`). Other
+/// events are skipped, so a newer daemon may add some.
+async fn next_update(daemon: &mut Client) -> Result<(RegistryUpdate, Option<u64>), FeedError> {
     loop {
         match daemon.next_frame().await? {
             Frame::Control(Control::Event(event)) => {
                 if let Some(update) = decode(&event)? {
-                    return Ok(update);
+                    let serial = event.data.get("client_serial").and_then(|v| v.as_u64());
+                    return Ok((update, serial));
                 }
             }
             Frame::Control(Control::Response(response)) => {
@@ -278,7 +330,8 @@ mod tests {
     }
 
     /// A mirror report goes to the box daemon as `remote.report` with the
-    /// client's id, bounded; a malformed one is dropped without a request.
+    /// client's id and its entry's serial, bounded; a malformed one, and one
+    /// before the feed named the entry, are dropped without a request.
     #[tokio::test]
     async fn mirror_reports_go_to_the_daemon_bounded() -> crate::test_daemon::TestResult {
         tokio::time::timeout(std::time::Duration::from_secs(30), async {
@@ -299,14 +352,21 @@ mod tests {
             let ports: Vec<_> = (0..devlanes_proto::remote::MAX_REPORT_PORTS + 3)
                 .map(|port| json!({"port": port, "lane": "app@0", "unit": "web", "state": "bound"}))
                 .collect();
+            let report = json!({"alias": "box\u{1b}", "ports": ports});
+            // Without the serial of its feed's entry the report has no owner.
+            registry.report(&client, report.clone()).await;
             registry
-                .report(&client, json!({"alias": "box\u{1b}", "ports": ports}))
-                .await;
+                .serials
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .insert("0123abcd".into(), 7);
+            registry.report(&client, report).await;
             drop(registry);
             let request = daemon.await??;
             assert_eq!(request.method, Method::RemoteReport);
             let params: ReportParams = serde_json::from_value(request.params)?;
             assert_eq!(params.id, "0123abcd");
+            assert_eq!(params.serial, Some(7));
             assert_eq!(params.report.alias, "box");
             assert_eq!(
                 params.report.ports.len(),

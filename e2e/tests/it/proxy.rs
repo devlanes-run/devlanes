@@ -137,8 +137,22 @@ fn an_exposed_port_is_routed_by_its_hostname() -> Result<()> {
         .arg(format!("https://{host}:{port}/healthz"));
     let output = lab.run(curl, devlanes_e2e::COMMAND_TIMEOUT)?;
     output.expect_code(0)?;
-    let code = output.stdout.rsplit('\n').next().unwrap_or_default();
+    let (body, code) = output
+        .stdout
+        .rsplit_once('\n')
+        .unwrap_or(("", output.stdout.as_str()));
     assert_eq!(code, "200", "{output}");
+    // The answer comes from the exec unit's process, not from a service.
+    let reflected: Value = serde_json::from_str(body)?;
+    let docs = need(
+        lane(&lanes, "fixture-two@0").and_then(|l| unit(l, "docs")),
+        "exec unit",
+    )?;
+    assert_eq!(
+        reflected["pid"].as_i64(),
+        pid(docs).map(i64::from),
+        "{host} must reach the exec unit"
+    );
 
     lab.json(lab.repo(), &["expose", "--remove", &served_text])?;
     let routes = lab.json(lab.repo(), &["url", "ls", "--json"])?;

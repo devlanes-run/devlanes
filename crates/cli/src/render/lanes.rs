@@ -1440,7 +1440,7 @@ pub(super) fn hosts(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 
 /// On a box, one line per connected client that reports its mirror: how
 /// many of the routes open there, and on which HTTPS port when it is not the
-/// default: `on laptop: 3 of 4 hostnames reachable, on port 8443`.
+/// default: `on laptop: 3 of 4 hostnames reachable (port 8443)`.
 fn client_route_lines(items: &[Value]) -> Vec<String> {
     // (client, reachable, total, port of a reachable URL), in first-seen order.
     let mut clients: Vec<(String, usize, usize, Option<String>)> = Vec::new();
@@ -1472,7 +1472,7 @@ fn client_route_lines(items: &[Value]) -> Vec<String> {
         .into_iter()
         .map(|(name, reachable, total, port)| {
             let port = port
-                .map(|port| format!(", on port {port}"))
+                .map(|port| format!(" (port {port})"))
                 .unwrap_or_default();
             format!("on {name}: {reachable} of {total} hostnames reachable{port}")
         })

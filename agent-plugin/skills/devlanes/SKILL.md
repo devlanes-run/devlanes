@@ -28,7 +28,7 @@ This page covers daily use. Read a reference first when the task is about the co
 
 A lane reference is `project@N` (lane number), `project@branch`, or `N` / `branch` alone inside the repository. Lane 0 is the main checkout.
 
-A unit is a service, task or `exec` command, referenced as `[lane:]unit`: `api`, `2:api`, `acme@feat/login:web`. Commands that take several units accept globs and tags: `"api-*"`, `+backend`.
+A unit is a service, task, `exec` command or an exposed port (`port-8000`), referenced as `[lane:]unit`: `api`, `2:api`, `acme@feat/login:web`. Commands that take several units accept globs and tags: `"api-*"`, `+backend`.
 
 Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged. A reference that matches nothing or several lanes fails with exit 3 and lists the candidates.
 
@@ -90,7 +90,7 @@ Failures come first, each with its last log lines and the command that shows mor
 | `ready` | Up and passing its ready check. Use it. |
 | `frozen`, `throttled` | A ready service in a lane that had no activity for a while (agent output shows `ready` with `power=frozen` or `power=throttled`, JSON `state: ready` with a `power` field). Any request, connection or devlanes command on the lane resumes it; no action needed. |
 | `starting`, `queued` | Starting, or waiting for a start slot. `devlanes wait UNIT --timeout 180s`. |
-| `running` | A task or exec in progress. Wait for it or read its logs. |
+| `running` | A task or exec in progress. Wait for it or read its logs. An exposed port (kind `exposed`) reads `running` while it is listed; it has no process or logs. |
 | `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code or config and `devlanes restart UNIT`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. |
 | `exited` | A task or exec that ended. `devlanes logs UNIT --tail 50` shows how. |
 | `stopping`, `stopped`, `idle` | Not running. `devlanes start UNIT` when you need it. |
@@ -120,7 +120,7 @@ An `exec` command gets no port or hostname from devlanes. When it serves one, su
 
 ## Working on a remote machine
 
-When the user works on another machine connected to this one with `devlanes remote connect`, the URLs devlanes prints here are this machine's, and the user opens services on theirs. Before giving the user a URL, run `devlanes url print UNIT --json`. Its `clients` list has one entry per connected machine: with `reachable: true`, give the user that entry's `url`; with `reachable: false`, its `reason` says why the unit does not open there (a port in use there, a lane or hostname that machine does not mirror). An empty `clients` list means no machine is connected: tell the user to run `devlanes remote connect BOX` on their machine, where BOX is the `alias` of an earlier `clients` entry when you saw one, else this machine's name from `hostname`.
+When the user works on another machine connected to this one with `devlanes remote connect`, the URLs devlanes prints here are this machine's, and the user opens services on theirs. Before giving the user a URL, run `devlanes url print UNIT --json`. Its `clients` list has one entry per connected machine: with `reachable: true`, give the user that entry's `url`; with `reachable: false`, its `reason` says why the unit does not open there (a port in use there, a lane or hostname that machine does not mirror). An empty `clients` list means no connected machine reports to this one: tell the user to run `devlanes remote connect BOX` on their machine, with BOX the name they reach this machine by over ssh.
 
 ## Daemon and sandboxes
 

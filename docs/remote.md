@@ -61,15 +61,15 @@ A connection to a mirrored port that cannot reach the box's service is closed an
 
 The URLs devlanes prints on the box are the box's own. Each connected client tells the box what it mirrors, so commands on the box, and agents working there, can say what opens on the client. After its mirror changes, a client sends the box a report over the connection, at most a few times a second and only when something changed: every mirrored port with its state (`bound`, `in_use` with what holds it, `local_lane`, `failed` or `unbound`), the box lanes it skips and why, the box hostnames it does not route, its own HTTPS port, whether it serves the box's HTTPS port too ([proxy port](#proxy-port)), and the name it connects to the box by (`alias`, such as the ssh host in `devlanes remote connect hetzner`). The box keeps the latest report in memory with the client's `status` entry, as `clients[].mirror` in `status --json`, and drops it when the client's connection ends. The box still opens nothing on the client.
 
-In a terminal and in agent output, `devlanes url print <unit>` on the box prints one line per connected client after the box's URL; piped, it prints the box's URL alone, as before:
+In a terminal, `devlanes url print <unit>` on the box prints one line per connected client after the box's URL; piped and for agents, it prints the box's URL alone, as before:
 
 ```text
 https://web.acme.localhost:8443
 on laptop: https://web.acme.localhost
-on desktop: not reachable: port 20012 is in use there by postgres (pid 812)
+on desktop, not reachable: port 20012 is in use there by postgres (pid 812)
 ```
 
-A hostname opens on the client through its proxy, on the box's HTTPS port when the client serves that one and on its own otherwise, unless the client skips the lane or the name. A unit without a hostname opens at `http://127.0.0.1:<port>` once the client bound its port. `--json` adds the same as `clients: [{client, id, alias, url, reachable, reason}]`, an empty list when no client reports. `devlanes url ls` adds a line per client counting the hostnames that open there, and `clients` to each route in `--json`. Clients of releases without reports are listed in `status` but get no URLs.
+A hostname opens on the client through its proxy, on the box's HTTPS port when the client serves that one and on its own otherwise, unless the client skips the lane or the name or its proxy serves no HTTPS. A unit without a hostname, or whose hostname does not open there, opens at `http://127.0.0.1:<port>` (or `[::1]`) once the client bound its port. Hidden units and tasks open nowhere. `--json` adds the same as `clients: [{client, id, alias, url, reachable, reason}]`, an empty list when no client reports. `devlanes url ls` adds a line per client counting the hostnames that open there, and `clients` to each route in `--json`. Clients of releases without reports are listed in `status` but get no URLs.
 
 ## Exposed ports
 
@@ -82,7 +82,7 @@ devlanes expose ls                    # exposed ports of this project
 devlanes expose --remove 8000
 ```
 
-The box dials an exposed port only while it is listed, and a connection to it fails like any unit's when nothing listens there. Exposed ports live in the box daemon's memory: `devlanes expose --remove`, a stop of the whole lane (`devlanes stop`), `lane clean` and a daemon restart end them. Clients of releases without exposed ports are not sent them and cannot dial them. [Exposed ports](guides/services.md#exposed-ports) covers the hostname rules, which are the same on a single machine.
+The box dials an exposed port only while it is listed, and a connection to it fails like any unit's when nothing listens there. Exposed ports live in the box daemon's memory: `devlanes expose --remove`, a stop of the whole lane (`devlanes stop`; the stop that ends `devlanes with` keeps them), `lane clean` and a daemon restart end them. A port another unit has, hidden ones included, is never sent as an exposed port, and a hidden unit's port stays refused even when an exposure lists it. Clients of releases without exposed ports are not sent them and cannot dial them. [Exposed ports](guides/services.md#exposed-ports) covers the hostname rules, which are the same on a single machine.
 
 ## Hidden
 

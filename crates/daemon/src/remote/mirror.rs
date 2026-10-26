@@ -387,7 +387,7 @@ impl Mirror {
             .collect();
         let suffixes = route_suffixes(engine);
         // Hidden units and tasks are listed by the box but never mirrored.
-        let visible: Vec<&UnitInfo> = registry.units().filter(|unit| unit.exposed()).collect();
+        let visible: Vec<&UnitInfo> = registry.units().filter(|unit| unit.mirrorable()).collect();
 
         // Hostnames of boxes connected earlier, which keep them over this one.
         let earlier: Vec<(String, BTreeSet<String>)> = engine
@@ -896,7 +896,7 @@ async fn local_blocks(engine: &Arc<Inner>) -> Vec<(PortBlock, String)> {
 ///
 /// The TLD only counts once it passes the special-use check, so a box can never
 /// get public names routed (and certificates minted) on this machine.
-pub(crate) fn route_suffixes(engine: &Inner) -> Vec<String> {
+pub(super) fn route_suffixes(engine: &Inner) -> Vec<String> {
     let mut suffixes = vec!["localhost".to_owned()];
     suffixes.extend(engine.resolver_zone().map(|zone| zone.name().to_owned()));
     suffixes

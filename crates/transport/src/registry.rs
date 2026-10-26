@@ -124,8 +124,13 @@ pub struct UnitInfo {
 impl UnitInfo {
     /// Whether a client may mirror and dial this unit's ports: it is not hidden
     /// and its kind has endpoints. Its state decides the rest ([`serving`]).
-    pub fn exposed(&self) -> bool {
+    pub fn mirrorable(&self) -> bool {
         !self.hidden && self.key.kind.has_endpoints()
+    }
+
+    /// Whether `port` is one of this unit's ports or a port its hostnames route to.
+    pub fn advertises(&self, port: u16) -> bool {
+        self.ports.iter().any(|p| p.port == port) || self.hosts.iter().any(|h| h.port == port)
     }
 }
 
@@ -258,24 +263,24 @@ impl Registry {
         self.units.get(key)
     }
 
-    /// Ports a client should mirror: every port of every [`UnitInfo::exposed`]
+    /// Ports a client should mirror: every port of every [`UnitInfo::mirrorable`]
     /// unit that is [`serving`]. An idle unit's port stays free on the client
     /// until it starts.
     pub fn mirrored_ports(&self) -> BTreeMap<u16, &UnitKey> {
         self.units
             .values()
-            .filter(|unit| unit.exposed() && serving(&unit.state))
+            .filter(|unit| unit.mirrorable() && serving(&unit.state))
             .flat_map(|unit| unit.ports.iter().map(move |port| (port.port, &unit.key)))
             .collect()
     }
 
-    /// Every port of every [`UnitInfo::exposed`] unit, idle ones included: the
+    /// Every port of every [`UnitInfo::mirrorable`] unit, idle ones included: the
     /// ports a client keeps out of its own allocations so the box's units can be
     /// mirrored once they start.
     pub fn advertised_ports(&self) -> BTreeSet<u16> {
         self.units
             .values()
-            .filter(|unit| unit.exposed())
+            .filter(|unit| unit.mirrorable())
             .flat_map(|unit| unit.ports.iter().map(|port| port.port))
             .collect()
     }
@@ -285,23 +290,21 @@ impl Registry {
     /// Only ports advertised by a non-hidden service, container or exposed
     /// port that is running pass, so a connected client cannot use the box as
     /// a pivot to arbitrary local services, nor reach whatever took over the
-    /// port of a stopped unit. Tasks never advertise ports.
+    /// port of a stopped unit. Tasks never advertise ports. A port any hidden
+    /// unit advertises stays refused whatever else lists it, so an exposed
+    /// port can never open a hidden unit's.
     pub fn authorize(&self, target: &DialTarget) -> Result<AuthorizedTarget, RejectReason> {
         let DialTarget::Port { port } = *target;
+        let advertising: Vec<&UnitInfo> = self
+            .units
+            .values()
+            .filter(|unit| unit.key.kind.has_endpoints() && unit.advertises(port))
+            .collect();
+        if advertising.iter().any(|unit| unit.hidden) {
+            return Err(RejectReason::Hidden);
+        }
         let mut refusal = RejectReason::NotRegistered;
-        for unit in self.units.values() {
-            if !unit.key.kind.has_endpoints() {
-                continue;
-            }
-            let advertises = unit.ports.iter().any(|p| p.port == port)
-                || unit.hosts.iter().any(|h| h.port == port);
-            if !advertises {
-                continue;
-            }
-            if unit.hidden {
-                refusal = RejectReason::Hidden;
-                continue;
-            }
+        for unit in advertising {
             if !serving(&unit.state) {
                 if refusal == RejectReason::NotRegistered {
                     refusal = RejectReason::NotRunning;
@@ -658,12 +661,22 @@ mod tests {
             lanes: Vec::new(),
             units: vec![exposed.clone()],
         });
-        assert!(exposed.exposed());
+        assert!(exposed.mirrorable());
         assert!(registry.mirrored_ports().contains_key(&8000));
         let target = registry.authorize(&DialTarget::Port { port: 8000 });
         assert_eq!(target.map(|t| t.port()), Ok(8000));
         let encoded = serde_json::to_value(&exposed.key).expect("encodes");
         assert_eq!(encoded["kind"], "exposed");
+
+        // A hidden unit on the same port wins, whatever lists it too.
+        let registry = Registry::from_snapshot(RegistrySnapshot {
+            lanes: Vec::new(),
+            units: vec![exposed, unit("vault", 8000, true)],
+        });
+        assert_eq!(
+            registry.authorize(&DialTarget::Port { port: 8000 }),
+            Err(RejectReason::Hidden)
+        );
     }
 
     /// Tasks are listed with their state, but even a running task with ports
@@ -681,7 +694,7 @@ mod tests {
             registry.unit(&task.key).map(|unit| unit.state.as_str()),
             Some("running")
         );
-        assert!(!task.exposed());
+        assert!(!task.mirrorable());
         assert!(registry.mirrored_ports().is_empty());
         assert!(registry.advertised_ports().is_empty());
         assert_eq!(

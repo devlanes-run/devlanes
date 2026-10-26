@@ -1253,6 +1253,7 @@ impl Inner {
             st.record = None;
             st.units.clear();
             st.orphans.clear();
+            st.exposed.clear();
         }
         lock(&self.projects).clear();
         self.publish_routes();
