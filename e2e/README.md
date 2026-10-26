@@ -14,7 +14,7 @@ The default nextest profile in `.config/nextest.toml` leaves this crate out, so 
 
 On Windows, tests that need something Windows lacks (POSIX signals) are left out or ignored, with the reason in the attribute. Windows needs Git for Windows (`git` and its `sh` on `PATH`), and `curl.exe` and `tar.exe` from System32.
 
-The remote tests run a box lab's `devlanes tunnel --stdio` and also open sessions to it themselves through `devlanes-transport`. On Windows they run it through cmd.exe and PowerShell, and inside job objects like the one Win32-OpenSSH puts a session in, so a Windows box is checked without an sshd.
+The remote tests run a box lab's `devlanes tunnel --stdio` and also open sessions to it themselves through `devlanes-transport`. On Windows they run it the way Win32-OpenSSH's sshd does with each default shell installed (cmd.exe, Windows PowerShell, PowerShell 7, Git Bash; `fake-tool`'s `run_with`), and inside job objects like the one sshd puts a session in, so a Windows box is checked without an sshd.
 
 Each lab prints the end of its daemon log to stderr on teardown: the last 400 lines from before `daemon stop` and the last 40 written after it. nextest shows that output only for a failing test, or for every test with `--no-capture`.
 

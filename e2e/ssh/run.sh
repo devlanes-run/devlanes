@@ -101,5 +101,6 @@ export DEVLANES_TEST_SSH_KNOWN_HOSTS=$work/known_hosts
 if [ "$bin" = skip ]; then export DEVLANES_TEST_SSH_ALLOW_MISSING=1; fi
 
 cd "$repo"
-# --nocapture keeps skip reasons visible in CI logs.
-cargo test -p devlanes-transport-ssh --test it -- --ignored --nocapture "$@"
+# --nocapture keeps skip reasons visible in CI logs. The box here is Linux, so the
+# Windows box test is left out.
+cargo test -p devlanes-transport-ssh --test it -- --ignored --nocapture --skip windows_sshd_box "$@"

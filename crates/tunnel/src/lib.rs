@@ -114,7 +114,9 @@ fn linger_off() -> bool {
 /// process's job: it could not break away, and the job kills its processes
 /// when it closes, as an ssh session's job does. Win32-OpenSSH's job allows
 /// breakaway, so this happens with other ssh servers, or with a job inside
-/// the session's that refuses it.
+/// the session's that refuses it. Only the innermost job's kill-on-close
+/// limit is read (what `job_of_self` reports), which is the session's own
+/// job under sshd.
 #[cfg(windows)]
 fn bound_to_session(daemon: &Client) -> bool {
     daemon.spawned_in_job

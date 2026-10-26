@@ -206,27 +206,36 @@ impl SshTransport {
     /// Reports the box platform and devlanes location: what the last session
     /// found, else from probe-only ssh runs: the `sh` probe, then the Windows
     /// probe when that calls for it (see [`probe::needs_windows_probe`]).
+    /// Without an answer from the Windows probe the `sh` probe's stands, also
+    /// when running the Windows probe failed; an error then carries the
+    /// Windows probe's stderr too.
     pub async fn probe(&self) -> Result<RemoteProbe, SshError> {
         if let Some(probe) = self.remembered() {
             return Ok(probe);
         }
         let sh = sh_command(&probe::probe_script(&self.options.remote_program));
-        let stdout = self.probe_run(&sh).await?;
+        let stdout = String::from_utf8_lossy(&self.probe_run(&sh).await?.stdout).into_owned();
         let mut found = probe::parse_probe(&stdout);
+        let mut windows_stderr = None;
         if probe::needs_windows_probe(found.as_ref()) {
             let windows = probe::windows_probe_command(&self.options.remote_program);
-            if let Some(windows) = probe::parse_probe(&self.probe_run(&windows).await?) {
-                found = Some(windows);
+            if let Ok(output) = self.probe_run(&windows).await {
+                match probe::parse_probe(&String::from_utf8_lossy(&output.stdout)) {
+                    Some(windows) => found = Some(windows),
+                    None => windows_stderr = Some(output.stderr),
+                }
             }
         }
-        let probe = found.ok_or(SshError::Probe(stdout))?;
+        let probe = found.ok_or_else(|| {
+            SshError::Probe(probe::probe_failure(&stdout, windows_stderr.as_deref()))
+        })?;
         self.remember(Some(probe.clone()));
         Ok(probe)
     }
 
-    /// What one ssh run of `command` printed on stdout; ssh's own failure
-    /// and a run past the authentication limit are errors.
-    async fn probe_run(&self, command: &str) -> Result<String, SshError> {
+    /// One ssh run of `command` to its end; ssh's own failure and a run past
+    /// the authentication limit are errors.
+    async fn probe_run(&self, command: &str) -> Result<Output, SshError> {
         let askpass = self.askpass().await?;
         let argv = self.argv(command, askpass.is_none()).await?;
         let options = self.command_options(askpass.as_ref());
@@ -238,7 +247,7 @@ impl SshTransport {
         if let Some(error) = self.ssh_failed(&output) {
             return Err(error);
         }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(output)
     }
 
     /// Ends every session this transport started.
@@ -258,7 +267,9 @@ impl SshTransport {
     /// `sh`, the PowerShell session follows once (a second authentication).
     /// If that does not start either, the box is not Windows and the `sh`
     /// session's error stands. What the box reported is remembered, so later
-    /// sessions go straight to the right one.
+    /// sessions go straight to the right one, and on a box whose shell is
+    /// PowerShell they also pass the tunnel's exit status on through it (the
+    /// first session cannot, so a stopped box daemon shows there as exit 1).
     async fn open(&self) -> Result<Prefixed<CommandStream>, SshError> {
         if self.windows_box() {
             return self
@@ -294,7 +305,12 @@ impl SshTransport {
         let program = &self.options.remote_program;
         let command = match kind {
             Script::Sh => sh_command(&probe::session_script(program, &start, &end)),
-            Script::Windows => probe::windows_session_command(program, &start, &end),
+            Script::Windows => {
+                let shell = self
+                    .remembered()
+                    .map_or(probe::BoxShell::Cmd, |probe| probe.shell);
+                probe::windows_session_command(program, &start, &end, shell)
+            }
         };
         let askpass = self.askpass().await.map_err(Failed::before_start)?;
         let argv = self
@@ -710,7 +726,7 @@ fn tail(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use devlanes_testing::fake_tool::{Behaviour, install};
+    use devlanes_testing::fake_tool::{Behaviour, SshdShell, install};
     use std::sync::Arc;
 
     use super::*;
@@ -1079,40 +1095,59 @@ mod tests {
         payload.repeat(64)
     }
 
+    /// The default shells of sshd installed here, with their executables
+    /// (see `fake-tool`'s `run_with`). A shell this machine lacks is skipped
+    /// with a note; the CI runners have all.
+    fn sshd_shells() -> Vec<(SshdShell, PathBuf)> {
+        SshdShell::ALL
+            .into_iter()
+            .filter_map(|shell| match shell.program() {
+                Some(program) => Some((shell, program)),
+                None => {
+                    eprintln!("skipping {shell:?}: not installed here");
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// What the fake devlanes of a [`local_windows_box`] does for `tunnel
+    /// --stdio`: print the preamble and echo its input.
+    fn echoing_tunnel() -> Behaviour {
+        Behaviour::new()
+            .args(["tunnel", "--stdio"])
+            .stdout(devlanes_transport::TUNNEL_PREAMBLE)
+            .echo_stdin()
+    }
+
     /// A transport whose fake `ssh` runs the remote command on this machine
-    /// as Win32-OpenSSH's sshd would with the default shell `shell`. That
-    /// shell sees only System32 and Windows PowerShell on `PATH`, so it has
-    /// no `sh`, and `profile` as `USERPROFILE`, where a fake devlanes in
-    /// `.devlanes\bin` serves `tunnel --stdio` by printing the preamble and
-    /// echoing its input.
+    /// as Win32-OpenSSH's sshd would with `shell` at `program`. That shell
+    /// sees only System32 and Windows PowerShell on `PATH` (Git Bash adds its
+    /// own folders), so cmd.exe and PowerShell have no `sh`, and `profile` as
+    /// `USERPROFILE` and `HOME`, where a fake devlanes in `.devlanes\bin`
+    /// serves `tunnel --stdio` as `tunnel` says.
     fn local_windows_box(
         dir: &Path,
-        shell: &str,
+        (shell, program): (SshdShell, &Path),
+        tunnel: &Behaviour,
     ) -> Result<SshTransport, Box<dyn std::error::Error>> {
         let profile = dir.join("profile");
         let bin = profile.join(r".devlanes\bin");
         std::fs::create_dir_all(&bin)?;
-        install(
-            &bin,
-            "devlanes",
-            &Behaviour::new()
-                .args(["tunnel", "--stdio"])
-                .stdout(devlanes_transport::TUNNEL_PREAMBLE)
-                .echo_stdin(),
-        )?;
+        install(&bin, "devlanes", tunnel)?;
         let system = devlanes_sys_windows::file::system_directory()?;
         let path = std::env::join_paths([system.join(r"WindowsPowerShell\v1.0"), system])?;
+        let profile = profile.to_string_lossy().into_owned();
         let ssh = install(
             dir,
             "ssh",
             &Behaviour::new().record(dir.join("args")).run_with(
-                shell,
+                shell.kind(),
+                Some(program),
                 [
                     ("PATH".to_owned(), path.to_string_lossy().into_owned()),
-                    (
-                        "USERPROFILE".to_owned(),
-                        profile.to_string_lossy().into_owned(),
-                    ),
+                    ("USERPROFILE".to_owned(), profile.clone()),
+                    ("HOME".to_owned(), profile),
                 ],
             ),
         )?;
@@ -1134,18 +1169,20 @@ mod tests {
 
     /// The first connect to a box whose shell is cmd.exe or PowerShell finds
     /// no `sh`, runs the PowerShell session instead and reaches the tunnel,
-    /// which every byte crosses both ways unchanged. The box is remembered as
-    /// Windows: the probe needs no run, and the next connect starts with the
-    /// PowerShell session.
+    /// which every byte crosses both ways unchanged. With Git Bash the `sh`
+    /// session itself works. Either way the box is remembered as Windows: the
+    /// probe needs no run, and the next connect starts with the PowerShell
+    /// session.
     #[tokio::test]
     async fn windows_boxes_get_the_powershell_session() -> TestResult {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        tokio::time::timeout(Duration::from_secs(180), async {
+        tokio::time::timeout(Duration::from_secs(300), async {
             let payload = binary_payload();
-            for shell in ["cmd", "powershell"] {
+            for (shell, program) in sshd_shells() {
                 let dir = tempfile::tempdir()?;
-                let transport = local_windows_box(dir.path(), shell)?;
+                let transport =
+                    local_windows_box(dir.path(), (shell, &program), &echoing_tunnel())?;
                 for _ in 0..2 {
                     let stream = transport.connect().await?;
                     let (mut reader, mut writer) = tokio::io::split(stream);
@@ -1154,10 +1191,10 @@ mod tests {
                     let mut echoed = vec![0; payload.len()];
                     reader.read_exact(&mut echoed).await?;
                     writing.await??;
-                    assert!(echoed == payload, "{shell}: the bytes changed on the way");
+                    assert!(echoed == payload, "{shell:?}: the bytes changed on the way");
                 }
                 let probe = transport.probe().await?;
-                assert_eq!(probe.platform.os, "windows", "{shell}");
+                assert_eq!(probe.platform.os, "windows", "{shell:?}");
                 let commands = remote_commands(dir.path())?;
                 let kinds: Vec<&str> = commands
                     .iter()
@@ -1171,7 +1208,47 @@ mod tests {
                         }
                     })
                     .collect();
-                assert_eq!(kinds, ["sh", "powershell", "powershell"], "{shell}");
+                let expected: &[&str] = match shell {
+                    SshdShell::GitBash => &["sh", "powershell"],
+                    _ => &["sh", "powershell", "powershell"],
+                };
+                assert_eq!(kinds, expected, "{shell:?}");
+                transport.close().await;
+            }
+            Ok(())
+        })
+        .await?
+    }
+
+    /// A box daemon that is stopped (`remote.start_daemon: false`) is
+    /// reported as such whatever the box's shell: once the box is known, a
+    /// PowerShell that sshd runs the session with passes the tunnel's exit
+    /// status 75 on instead of turning it into 1.
+    #[tokio::test]
+    async fn a_stopped_box_daemon_is_reported_through_every_shell() -> TestResult {
+        use tokio::io::AsyncReadExt as _;
+
+        tokio::time::timeout(Duration::from_secs(300), async {
+            let stopped = Behaviour::new()
+                .args(["tunnel", "--stdio"])
+                .stdout(devlanes_transport::TUNNEL_PREAMBLE)
+                .exit(75);
+            for (shell, program) in sshd_shells() {
+                let dir = tempfile::tempdir()?;
+                let transport = local_windows_box(dir.path(), (shell, &program), &stopped)?;
+                let mut last = String::new();
+                for _ in 0..2 {
+                    let mut stream = transport.connect().await?;
+                    let mut rest = Vec::new();
+                    let Err(error) = stream.read_to_end(&mut rest).await else {
+                        panic!("{shell:?}: the tunnel ended without its exit status");
+                    };
+                    last = error.to_string();
+                }
+                assert!(
+                    last.contains("the devlanes daemon is not running on box"),
+                    "{shell:?}: {last}"
+                );
                 transport.close().await;
             }
             Ok(())
@@ -1185,7 +1262,9 @@ mod tests {
     async fn a_windows_box_without_devlanes_is_reported() -> TestResult {
         tokio::time::timeout(Duration::from_secs(120), async {
             let dir = tempfile::tempdir()?;
-            let transport = local_windows_box(dir.path(), "cmd")?;
+            let cmd = SshdShell::Cmd.program().ok_or("no cmd.exe")?;
+            let transport =
+                local_windows_box(dir.path(), (SshdShell::Cmd, &cmd), &echoing_tunnel())?;
             std::fs::remove_dir_all(dir.path().join("profile"))?;
             let Err(error) = transport.connect().await else {
                 panic!("connected to a box without devlanes");

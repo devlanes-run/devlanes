@@ -113,7 +113,7 @@ pub enum SshError {
     /// The box's shell cannot run the devlanes found there by that path.
     #[error(
         "devlanes on {destination} is {program}, a path {shell} cannot run as a command \
-         (it holds `%` or `\"`); install it in a folder without them"
+         (it holds `%`, `!` or `\"`); install it in a folder without them"
     )]
     Unquotable {
         /// The ssh destination.
@@ -315,7 +315,9 @@ impl SshTransport {
     /// Runs the probe once per master, so the box's shell is learnt once too:
     /// the `sh` probe, then the Windows probe when that calls for it (see
     /// [`probe::needs_windows_probe`]). Without an answer from the Windows
-    /// probe, as on a Unix box without PowerShell, the `sh` probe's stands.
+    /// probe, as on a Unix box without PowerShell, the `sh` probe's stands,
+    /// also when running the Windows probe failed; an error then carries the
+    /// Windows probe's stderr too.
     async fn ensure_probe<'a>(&self, master: &'a mut Master) -> Result<&'a RemoteProbe, SshError> {
         if master.probe.is_none() {
             let output = master
@@ -328,19 +330,24 @@ impl SshTransport {
                 .await?;
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
             let mut found = probe::parse_probe(&stdout);
+            let mut windows_stderr = None;
             if probe::needs_windows_probe(found.as_ref()) {
                 let output = master
                     .session
                     .raw_command(probe::windows_probe_command(&self.options.remote_program))
                     .stdin(Stdio::null())
                     .output()
-                    .await?;
-                if let Some(windows) = probe::parse_probe(&String::from_utf8_lossy(&output.stdout))
-                {
-                    found = Some(windows);
+                    .await;
+                if let Ok(output) = output {
+                    match probe::parse_probe(&String::from_utf8_lossy(&output.stdout)) {
+                        Some(windows) => found = Some(windows),
+                        None => windows_stderr = Some(output.stderr),
+                    }
                 }
             }
-            master.probe = Some(found.ok_or(SshError::Probe(stdout))?);
+            master.probe = Some(found.ok_or_else(|| {
+                SshError::Probe(probe::probe_failure(&stdout, windows_stderr.as_deref()))
+            })?);
         }
         master
             .probe

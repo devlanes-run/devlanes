@@ -178,11 +178,18 @@ fn tunnel_commands_quote_the_program_for_each_shell() {
     );
     for refused in [
         r"C:\100%\devlanes.exe",
+        r"C:\Wow!\devlanes.exe",
         "C:\\a\"b\\devlanes.exe",
         "C:\\a\nb.exe",
     ] {
         assert_eq!(BoxShell::Cmd.tunnel_command(refused), None, "{refused:?}");
     }
+    assert_eq!(
+        BoxShell::Cmd
+            .command(r"C:\acme\devlanes.exe", "daemon status --json")
+            .as_deref(),
+        Some(r#""C:\acme\devlanes.exe" daemon status --json"#)
+    );
     assert_eq!(
         BoxShell::PowerShell.tunnel_command(windows).as_deref(),
         Some(
@@ -231,6 +238,10 @@ fn the_windows_probe_is_encoded_powershell() {
     );
     assert!(script.contains(r"'.devlanes\bin\devlanes.exe'"), "{script}");
     assert!(
+        script.contains("$e -contains $_.Extension"),
+        "only PATHEXT extensions count: {script}"
+    );
+    assert!(
         script.contains("`ndevlanes-probe:os=Windows`ndevlanes-probe:arch=$a"),
         "{script}"
     );
@@ -241,13 +252,48 @@ fn the_windows_probe_is_encoded_powershell() {
     );
 }
 
+/// The `sh` scripts hold none of cmd.exe's operators, which cmd.exe would
+/// act on while parsing `sh -c '<script>'` on a Windows box: no
+/// redirection that creates `\dev\null`, no `&&` that splits the line.
+#[test]
+fn sh_scripts_give_cmd_nothing_to_act_on() {
+    let scripts = [
+        probe_script("devlanes"),
+        #[cfg(windows)]
+        session_script("devlanes", "start-1", "ready-1"),
+    ];
+    for script in scripts {
+        assert!(!script.contains(['<', '>', '&', '|', '^']), "{script}");
+    }
+}
+
+/// A probe error shows what the `sh` probe printed and the end of the
+/// PowerShell probe's stderr, where a locked-down box says why.
+#[test]
+fn probe_errors_keep_the_powershell_stderr() {
+    assert_eq!(probe_failure(" motd\n", None), "motd");
+    assert_eq!(probe_failure("motd", Some(b" \r\n")), "motd");
+    let long = format!(
+        "{}Cannot invoke method. Method invocation is supported only on core types in this language mode.",
+        "x".repeat(4096)
+    );
+    let message = probe_failure("", Some(long.as_bytes()));
+    assert!(
+        message.starts_with("\nthe PowerShell probe printed on stderr: x"),
+        "{message}"
+    );
+    assert!(message.ends_with("in this language mode."), "{message}");
+    assert!(message.len() < 2200, "only the tail: {}", message.len());
+}
+
 /// A Windows client's session on a Windows box prints its lines in the
 /// order the `sh` session does, then runs the tunnel and passes on its exit
-/// status.
+/// status, also through a PowerShell that sshd runs it with.
 #[cfg(windows)]
 #[test]
 fn windows_sessions_print_the_probe_between_the_lines() {
-    let script = decoded(&windows_session_command("devlanes", "start-1", "ready-1"));
+    let command = windows_session_command("devlanes", "start-1", "ready-1", BoxShell::Cmd);
+    let script = decoded(&command);
     assert!(
         script.contains("Out-Probe (\"`nstart-1`n\"+$t+\"ready-1`n\")\n"),
         "{script}"
@@ -255,6 +301,14 @@ fn windows_sessions_print_the_probe_between_the_lines() {
     assert!(
         script.ends_with("if($p){& $p tunnel --stdio; exit $LASTEXITCODE}\n"),
         "{script}"
+    );
+    assert_eq!(
+        windows_session_command("devlanes", "start-1", "ready-1", BoxShell::PowerShell),
+        format!("{command}; exit $LASTEXITCODE")
+    );
+    assert_eq!(
+        windows_session_command("devlanes", "start-1", "ready-1", BoxShell::Sh),
+        command
     );
 }
 
@@ -299,7 +353,7 @@ fn session_headers_use_the_lines_after_the_start() {
     );
     let script = session_script("devlanes", "start-1", "ready-1");
     assert!(
-        script.starts_with("printf '\\n%s\\n' 'start-1'; if command -v"),
+        script.starts_with("printf '\\n%s\\n' 'start-1'; p=$(command -v 'devlanes');"),
         "{script}"
     );
     assert!(script.contains("printf '%s\\n' 'ready-1'"), "{script}");
@@ -310,19 +364,41 @@ fn session_headers_use_the_lines_after_the_start() {
 }
 
 /// The probe and the tunnel command run in the real shells, started the way
-/// Win32-OpenSSH's sshd starts a session's command.
+/// Win32-OpenSSH's sshd starts a session's command (`fake-tool`'s
+/// `run_with`): cmd.exe, Windows PowerShell, PowerShell 7 and Git Bash. A
+/// shell this machine lacks is skipped with a note; the CI runners have all.
 #[cfg(windows)]
 mod shells {
     use std::path::{Path, PathBuf};
     use std::process::{ExitStatus, Stdio};
     use std::time::Duration;
 
-    use devlanes_testing::fake_tool::{Behaviour, install};
+    use devlanes_testing::fake_tool::{Behaviour, SshdShell, install};
     use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
     use super::super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// The shells installed here, each with its executable and the shell the
+    /// probe should name.
+    fn shells() -> Vec<(SshdShell, PathBuf, BoxShell)> {
+        SshdShell::ALL
+            .into_iter()
+            .filter_map(|shell| {
+                let Some(program) = shell.program() else {
+                    eprintln!("skipping {shell:?}: not installed here");
+                    return None;
+                };
+                let expected = match shell {
+                    SshdShell::Cmd => BoxShell::Cmd,
+                    SshdShell::WindowsPowerShell | SshdShell::Pwsh => BoxShell::PowerShell,
+                    SshdShell::GitBash => BoxShell::Sh,
+                };
+                Some((shell, program, expected))
+            })
+            .collect()
+    }
 
     /// Every byte value, with the line breaks and the Ctrl-Z that text-mode
     /// pipes would change.
@@ -347,32 +423,27 @@ mod shells {
         std::env::join_paths(all).expect("PATH")
     }
 
-    /// Runs `command` as sshd runs it with the default shell `shell`, with
-    /// `env` on top of this process's environment, writing `input` to its
-    /// stdin; the status and stdout once it ended.
+    /// Runs `command` as sshd runs it with `shell` at `program`, with `env`
+    /// set for the shell, writing `input` to its stdin; the status and stdout
+    /// once it ended. The emulation is a fake in `dir`.
     async fn run_like_sshd(
-        shell: BoxShell,
+        dir: &Path,
+        (shell, program): (SshdShell, &Path),
         command: &str,
         env: &[(&str, std::ffi::OsString)],
         input: &[u8],
     ) -> Result<(ExitStatus, Vec<u8>), Box<dyn std::error::Error>> {
-        let mut child = match shell {
-            BoxShell::Cmd => {
-                let mut child = tokio::process::Command::new(system32().join("cmd.exe"));
-                child.raw_arg(format!("/c \"{command}\""));
-                child
-            }
-            BoxShell::PowerShell => {
-                let mut child = tokio::process::Command::new(
-                    system32().join(r"WindowsPowerShell\v1.0\powershell.exe"),
-                );
-                child.args(["-c", command]);
-                child
-            }
-            BoxShell::Sh => return Err("sh is not a Windows shell here".into()),
-        };
-        let mut child = child
-            .envs(env.iter().map(|(name, value)| (name, value)))
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.to_string_lossy().into_owned()))
+            .collect();
+        let sshd = install(
+            dir,
+            &format!("sshd-{}", shell.kind()),
+            &Behaviour::new().run_with(shell.kind(), Some(program), env),
+        )?;
+        let mut child = tokio::process::Command::new(sshd)
+            .arg(command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -393,12 +464,16 @@ mod shells {
     }
 
     /// The Windows probe finds devlanes on `PATH` (an `.exe` in a folder with
-    /// spaces and parentheses), else in `%USERPROFILE%\.devlanes\bin`, and
-    /// names the shell that ran it.
+    /// spaces and parentheses, not the extensionless file of that name
+    /// earlier on `PATH`), else in `%USERPROFILE%\.devlanes\bin`, and names
+    /// the shell that ran it.
     #[tokio::test]
     async fn the_windows_probe_finds_devlanes_and_the_shell() -> TestResult {
-        tokio::time::timeout(Duration::from_secs(120), async {
+        tokio::time::timeout(Duration::from_secs(300), async {
             let dir = tempfile::tempdir()?;
+            let plain = dir.path().join("plain");
+            std::fs::create_dir_all(&plain)?;
+            std::fs::write(plain.join("devlanes"), b"#!/bin/sh\n")?;
             let on_path = dir.path().join("Program Files (x86)").join("acme tools");
             std::fs::create_dir_all(&on_path)?;
             let program = install(&on_path, "devlanes", &Behaviour::new())?;
@@ -409,17 +484,18 @@ mod shells {
             let empty = dir.path().join("empty");
             std::fs::create_dir_all(&empty)?;
             let command = windows_probe_command("devlanes");
-            for shell in [BoxShell::Cmd, BoxShell::PowerShell] {
+            for (shell, sshd_shell, expected) in shells() {
+                let sshd = (shell, sshd_shell.as_path());
                 let env = [
-                    ("PATH", path_of(&[&on_path])),
+                    ("PATH", path_of(&[&plain, &on_path])),
                     ("USERPROFILE", empty.clone().into_os_string()),
                 ];
-                let (status, stdout) = run_like_sshd(shell, &command, &env, b"").await?;
+                let (status, stdout) = run_like_sshd(dir.path(), sshd, &command, &env, b"").await?;
                 let text = String::from_utf8_lossy(&stdout);
                 assert!(status.success(), "{shell:?}: {status} {text}");
                 let probe = parse_probe(&text).ok_or_else(|| format!("{shell:?}: {text}"))?;
                 assert_eq!(probe.platform.os, WINDOWS, "{shell:?}");
-                assert_eq!(probe.shell, shell, "{shell:?}: {text}");
+                assert_eq!(probe.shell, expected, "{shell:?}: {text}");
                 assert_eq!(
                     probe.program.as_deref().map(Path::new),
                     Some(program.as_path()),
@@ -430,7 +506,7 @@ mod shells {
                     ("PATH", path_of(&[])),
                     ("USERPROFILE", profile.clone().into_os_string()),
                 ];
-                let (_, stdout) = run_like_sshd(shell, &command, &env, b"").await?;
+                let (_, stdout) = run_like_sshd(dir.path(), sshd, &command, &env, b"").await?;
                 let text = String::from_utf8_lossy(&stdout);
                 let probe = parse_probe(&text).ok_or_else(|| format!("{shell:?}: {text}"))?;
                 assert_eq!(
@@ -443,7 +519,7 @@ mod shells {
                     ("PATH", path_of(&[])),
                     ("USERPROFILE", empty.clone().into_os_string()),
                 ];
-                let (_, stdout) = run_like_sshd(shell, &command, &env, b"").await?;
+                let (_, stdout) = run_like_sshd(dir.path(), sshd, &command, &env, b"").await?;
                 let text = String::from_utf8_lossy(&stdout);
                 let probe = parse_probe(&text).ok_or_else(|| format!("{shell:?}: {text}"))?;
                 assert_eq!(probe.program, None, "{shell:?}: {text}");
@@ -454,12 +530,13 @@ mod shells {
     }
 
     /// The tunnel command reaches a program whose folder holds spaces,
-    /// parentheses, `&` and `'`, with exactly `tunnel --stdio`, through
-    /// cmd.exe and PowerShell; every byte crosses stdin and stdout unchanged,
-    /// and the program's exit status (the stopped box daemon's 75) comes back.
+    /// parentheses, `&` and `'`, with exactly `tunnel --stdio`, through each
+    /// shell; every byte crosses stdin and stdout unchanged (whatever a
+    /// profile prints before the preamble aside), and the program's exit
+    /// status (the stopped box daemon's 75) comes back.
     #[tokio::test]
     async fn tunnel_commands_reach_the_program_byte_for_byte() -> TestResult {
-        tokio::time::timeout(Duration::from_secs(120), async {
+        tokio::time::timeout(Duration::from_secs(300), async {
             let dir = tempfile::tempdir()?;
             let folder = dir.path().join("Program Files (x86)").join("R&D's tools");
             std::fs::create_dir_all(&folder)?;
@@ -477,24 +554,30 @@ mod shells {
                 &Behaviour::new().args(["tunnel", "--stdio"]).exit(75),
             )?;
             let payload = binary_payload();
-            let mut expected = b"devlanes-tunnel 4\n".to_vec();
-            expected.extend_from_slice(&payload);
-            for shell in [BoxShell::Cmd, BoxShell::PowerShell] {
-                let command = shell
+            let preamble = b"devlanes-tunnel 4\n";
+            for (shell, program, box_shell) in shells() {
+                let sshd = (shell, program.as_path());
+                let command = box_shell
                     .tunnel_command(&echo.to_string_lossy())
                     .ok_or("quotable")?;
-                let (status, stdout) = run_like_sshd(shell, &command, &[], &payload).await?;
+                let (status, stdout) =
+                    run_like_sshd(dir.path(), sshd, &command, &[], &payload).await?;
                 assert!(status.success(), "{shell:?}: {status}");
+                let at = stdout
+                    .windows(preamble.len())
+                    .position(|window| window == preamble)
+                    .ok_or_else(|| format!("{shell:?}: no preamble"))?;
+                let after = &stdout[at + preamble.len()..];
                 assert!(
-                    stdout == expected,
+                    after == payload.as_slice(),
                     "{shell:?}: {} bytes differ",
-                    stdout.len()
+                    after.len()
                 );
 
-                let command = shell
+                let command = box_shell
                     .tunnel_command(&stopped.to_string_lossy())
                     .ok_or("quotable")?;
-                let (status, _) = run_like_sshd(shell, &command, &[], b"").await?;
+                let (status, _) = run_like_sshd(dir.path(), sshd, &command, &[], b"").await?;
                 assert_eq!(status.code(), Some(75), "{shell:?}");
             }
             Ok(())
