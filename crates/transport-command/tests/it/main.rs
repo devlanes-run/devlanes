@@ -342,9 +342,9 @@ async fn run_collects_output_and_ends_slow_commands() -> TestResult {
     .await?
 }
 
-/// Dropping the stream ends the command and, through its job, what it
-/// started.
-#[cfg(windows)]
+/// Dropping the stream ends the command and what it started, through its job
+/// on Windows and its process group on Unix. The child counts as gone once
+/// its pid is free, a zombie, or names a process started later.
 #[tokio::test]
 async fn dropping_the_stream_ends_the_whole_command() -> TestResult {
     tokio::time::timeout(LIMIT, async {
@@ -356,12 +356,10 @@ async fn dropping_the_stream_ends_the_whole_command() -> TestResult {
             .strip_prefix("child ")
             .ok_or("no child pid")?
             .parse()?;
-        assert!(devlanes_sys::process(pid)?.is_some(), "the child runs");
+        let child = devlanes_sys::identity(pid)?.ok_or("the child is not running")?;
+        assert!(devlanes_sys::matches(&child)?, "the child runs");
         drop(opened);
-        loop {
-            if devlanes_sys::process(pid)?.is_none() {
-                break;
-            }
+        while devlanes_sys::matches(&child)? {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         Ok(())

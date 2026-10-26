@@ -95,6 +95,9 @@ pub(crate) struct Remotes {
     restoring: AtomicBool,
     /// The restore task, awaited on shutdown before the store closes.
     restore: Mutex<Option<JoinHandle<()>>>,
+    /// Why the restore could not open a wanted box, by name, shown by `remote
+    /// ls` until the box connects or is disconnected.
+    restore_errors: Mutex<BTreeMap<String, String>>,
 }
 
 /// How often box HTTPS ports that could not be opened are tried again: nothing
@@ -614,6 +617,48 @@ fn remote_failed(host: &str, message: impl std::fmt::Display) -> RpcError {
     )
 }
 
+/// The transport name `remote_hosts` records for a box reached by a command.
+const COMMAND: &str = "command";
+
+/// `box_command_missing`: a restored box was reached by a command that the
+/// user config no longer lists, so the restore does not try ssh instead.
+fn command_missing(host: &str) -> RpcError {
+    RpcError::new(
+        "box_command_missing",
+        json!({
+            "host": host,
+            "message": format!(
+                "box {host} was connected with remote.boxes.{host}.command, which the user config \
+                 no longer has; add it back and run `devlanes remote connect {host}`, or run \
+                 `devlanes remote disconnect {host}`"
+            ),
+        }),
+        1,
+    )
+}
+
+/// One line for a failure nobody waits for, such as a restore's: its message
+/// and, for a `config_error`, the file and line it is about.
+fn error_text(error: &RpcError) -> String {
+    let data = &error.data;
+    let message = data
+        .get("message")
+        .and_then(Value::as_str)
+        .map_or_else(|| format!("{}: {data}", error.code), str::to_owned);
+    match (
+        data.get("file").and_then(Value::as_str),
+        data.get("line")
+            .and_then(Value::as_u64)
+            .filter(|line| *line > 0),
+    ) {
+        (Some(file), Some(line)) => format!("{file} is invalid at line {line}: {message}"),
+        (Some(file), None) if error.code == "config_error" => {
+            format!("{file} is invalid: {message}")
+        }
+        _ => message,
+    }
+}
+
 /// `remote_needs_auth`: the link waits for a person to sign in again, with
 /// the command that does it as `fix`.
 fn remote_needs_auth(host: &str, message: impl std::fmt::Display) -> RpcError {
@@ -783,17 +828,20 @@ impl Inner {
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let identity = self.client_identity().await?;
         let _connecting = self.remote.connecting.lock().await;
-        self.replace_host(host, identity, watcher, connected_before)
+        self.replace_host(host, identity, watcher, connected_before, None)
             .await
     }
 
     /// [`Inner::ensure_host`]'s work, with [`Remotes::connecting`] held.
+    /// `recorded` is the transport `remote_hosts` holds for a restored box
+    /// (see [`Inner::open_host`]).
     async fn replace_host(
         self: &Arc<Self>,
         host: &str,
         identity: identity::ClientIdentity,
         watcher: Option<&Session>,
         connected_before: bool,
+        recorded: Option<&str>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let old = {
             let mut hosts = lock(&self.remote.hosts);
@@ -811,9 +859,10 @@ impl Inner {
             self.refresh_range_overlaps();
         }
         let (conn, guard) = self
-            .open_host(host, identity, watcher, connected_before)
+            .open_host(host, identity, watcher, connected_before, recorded)
             .await?;
         lock(&self.remote.hosts).insert(host.to_owned(), conn.clone());
+        lock(&self.remote.restore_errors).remove(host);
         Ok((conn, guard))
     }
 
@@ -845,12 +894,16 @@ impl Inner {
 
     /// Starts the link and the host's watcher and mirror tasks, with
     /// `watcher` registered for prompts before the link's first attempt.
+    /// A box `recorded` as reached by a command fails with
+    /// `box_command_missing` when the connector no longer has a command for
+    /// it, instead of trying the name as an ssh destination.
     async fn open_host(
         self: &Arc<Self>,
         host: &str,
         identity: identity::ClientIdentity,
         watcher: Option<&Session>,
         connected_before: bool,
+        recorded: Option<&str>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let board = Arc::new(PromptBoard::default());
         let prompter = Arc::new(HostPrompter {
@@ -861,6 +914,9 @@ impl Inner {
             .remote
             .transport(host, prompter, connected_before)
             .await?;
+        if recorded == Some(COMMAND) && remote.kind != COMMAND {
+            return Err(command_missing(host));
+        }
         let transport = Arc::new(Attended {
             inner: remote.transport,
             board: board.clone(),
@@ -946,6 +1002,7 @@ impl Inner {
         }
         // After `close`, which waited for the last record of a connection.
         for name in &names {
+            lock(&self.remote.restore_errors).remove(name);
             if let Err(error) = self.store.set_remote_host_wanted(name.clone(), false).await {
                 tracing::warn!(%error, host = %name, "a restarted daemon may connect this box again");
             }
@@ -959,21 +1016,25 @@ impl Inner {
     }
 
     /// `remote ls`: boxes known from `remote_hosts` plus live connection state.
+    /// A wanted box the restore could not open is `failed` with its error.
     pub(crate) async fn host_list(self: &Arc<Self>) -> Result<Value, RpcError> {
         let stored = self.store.remote_hosts().await.unwrap_or_default();
+        let restore_errors = lock(&self.remote.restore_errors).clone();
         let mut items: BTreeMap<String, Value> = BTreeMap::new();
         for host in stored {
-            items.insert(
-                host.name.clone(),
-                json!({
-                    "host": host.name,
-                    "transport": host.transport,
-                    "address": host.address,
-                    "daemon_version": host.daemon_version,
-                    "last_connected_ms": host.last_connected,
-                    "state": "disconnected",
-                }),
-            );
+            let mut item = json!({
+                "host": host.name,
+                "transport": host.transport,
+                "address": host.address,
+                "daemon_version": host.daemon_version,
+                "last_connected_ms": host.last_connected,
+                "state": "disconnected",
+            });
+            if let Some(error) = restore_errors.get(&host.name) {
+                item["state"] = json!("failed");
+                item["error"] = json!(error);
+            }
+            items.insert(host.name.clone(), item);
         }
         for conn in self.remote.all() {
             let mut status = conn.status_json();
@@ -1143,15 +1204,20 @@ impl Inner {
     /// [`Inner::restore_remotes`]'s work. Stops opening boxes once a shutdown
     /// began, which waits for this before it closes the boxes opened so far.
     async fn restore_wanted(self: &Arc<Self>) {
-        let names: Vec<String> = match self.wanted_hosts().await {
-            Ok(names) => names.into_iter().collect(),
+        // Name order, so the restore order does not depend on the store.
+        let wanted: BTreeMap<String, String> = match self.store.remote_hosts().await {
+            Ok(hosts) => hosts
+                .into_iter()
+                .filter(|host| host.wanted)
+                .map(|host| (host.name, host.transport))
+                .collect(),
             Err(error) => {
                 tracing::warn!(%error, "cannot read the boxes to restore");
                 return;
             }
         };
         let mut restored = false;
-        for name in names {
+        for (name, transport) in wanted {
             if self.shutdown.is_cancelled() {
                 return;
             }
@@ -1175,13 +1241,22 @@ impl Inner {
             if self.shutdown.is_cancelled() {
                 return;
             }
-            match self.replace_host(&name, identity, None, true).await {
+            match self
+                .replace_host(&name, identity, None, true, Some(&transport))
+                .await
+            {
                 Ok(_) => {
                     tracing::info!(host = %name, "reconnecting a box connected before the restart");
                     restored = true;
                 }
                 Err(error) => {
-                    tracing::warn!(host = %name, code = %error.code, "cannot restore the box connection");
+                    let message = error_text(&error);
+                    tracing::warn!(host = %name, code = %error.code, %message, "cannot restore the box connection");
+                    lock(&self.remote.restore_errors).insert(name.clone(), message.clone());
+                    self.bus.emit(
+                        wire::STATE_EVENT,
+                        json!({"host": name, "state": "failed", "error": message}),
+                    );
                 }
             }
         }

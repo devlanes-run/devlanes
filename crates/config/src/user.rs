@@ -73,7 +73,7 @@ pub struct UserConfig {
     /// nothing runs.
     pub daemon: DaemonConfig,
     /// `devlanes remote connect`: boxes this machine reaches with a command
-    /// instead of ssh (`boxes`), and, for this machine as a box, whether a
+    /// instead of SSH (`boxes`), and, for this machine as a box, whether a
     /// connecting client starts its daemon (`start_daemon`).
     pub remote: RemoteConfig,
 }
@@ -417,9 +417,9 @@ impl Default for DaemonConfig {
 #[schemars(extend("examples" = [{"start_daemon":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
 pub struct RemoteConfig {
     /// Boxes that `devlanes remote connect <name>` reaches by running a command on this
-    /// machine instead of ssh, keyed by the name you connect with: a container
+    /// machine instead of SSH, keyed by the name you connect with: a container
     /// (`docker exec -i`, `kubectl exec -i`), a WSL distribution or a codespace. A name
-    /// listed here is never used as an ssh destination; any other name is. The daemon
+    /// listed here is never used as an `ssh` destination; any other name is. The daemon
     /// reads this at each `remote connect`, so no restart is needed; a box that is
     /// already connected keeps its command until `devlanes remote disconnect`.
     #[schemars(extend("examples" = [{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}]))]

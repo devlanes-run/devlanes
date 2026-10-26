@@ -560,3 +560,65 @@ async fn command_boxes_keep_their_transport() {
     .await
     .expect("timeout");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+/// A box recorded as reached by a command is not restored over ssh once the
+/// connector has no command for it: `remote ls` shows it failed with the
+/// reason, nothing connects, and `disconnect` forgets it.
+async fn a_restored_command_box_without_its_command_fails() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "20000-20124").await;
+        let controls = Arc::new(Controls::default());
+        controls
+            .commands
+            .lock()
+            .expect("commands")
+            .insert("box".to_owned());
+        let client =
+            ClientSide::start_controlled(&tmp, "client", "20125-20249", &side, controls).await;
+        client.connect("box").await;
+        client.stop().await;
+
+        let client =
+            ClientSide::start_controlled(&tmp, "client", "20125-20249", &side, Arc::default())
+                .await;
+        let failed = eventually(SOON, || async {
+            let host = client.host().await;
+            (host["state"] == "failed").then_some(host)
+        })
+        .await;
+        let Some(host) = failed else {
+            panic!("the restore did not fail: {}", client.host().await);
+        };
+        assert_eq!(host["transport"], "command", "{host}");
+        let error = host["error"].as_str().unwrap_or_default();
+        assert!(error.contains("remote.boxes.box.command"), "{host}");
+        assert_eq!(
+            *client.controls.handed_out.lock().expect("handed out"),
+            [("box".to_owned(), true)]
+        );
+        // The failure stays; no link retries in the background.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(client.host().await["state"], "failed");
+
+        client
+            .h
+            .call(
+                Method::Disconnect,
+                json!({"host": "box"}),
+                Context::default(),
+            )
+            .await
+            .expect("disconnect");
+        let host = client.host().await;
+        assert_eq!(host["state"], "disconnected", "{host}");
+        assert!(host.get("error").is_none(), "{host}");
+        let home = client.h.home.clone();
+        client.stop().await;
+        assert!(!wanted(&home, "box").await, "disconnect clears wanted");
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}

@@ -78,24 +78,107 @@ fn start_daemon_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (bool,
 
 /// The command of box `name` from `remote.boxes` in the user config of the
 /// devlanes home `home`, or `None` when it has none and `name` is an ssh
-/// destination. Read leniently, so an unrelated bad key does not block
-/// connecting; a problem under `remote.boxes` fails as a `config_error`
-/// instead, since dropping the entry would send the name to ssh. Blocking.
+/// destination. Blocking.
+///
+/// Read leniently, so a bad key elsewhere, including another entry of
+/// `remote.boxes`, does not block connecting. It fails as a `config_error`
+/// whenever falling back would send a command box to ssh: when the file cannot
+/// be read, is not YAML or has too many problems to keep any setting, when
+/// `remote` or `remote.boxes` as a whole is invalid (a wrong type, or a
+/// misspelt `boxes` that holds `name`), when there is a problem under
+/// `remote.boxes.<name>`, and when the file lists `name` but the lenient load
+/// dropped it (a bad entry name can drop the whole map). A problem in another
+/// entry or elsewhere in the file is left to `devlanes doctor`, which lists it.
 pub fn box_command(home: &Path, name: &str) -> Result<Option<Vec<String>>, RpcError> {
-    let (config, problems) = lenient_file(&home.join("config.yaml"));
-    if let Some(problem) = problems
-        .iter()
-        .find(|problem| problem.message.starts_with("remote.boxes"))
-    {
+    let path = home.join("config.yaml");
+    let source = match std::fs::read_to_string(&path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(RpcError::new(
+                "io",
+                json!({"message": format!("reading {}: {error}", path.display())}),
+                1,
+            ));
+        }
+    };
+    box_command_in(&path.display().to_string(), &source, name)
+}
+
+/// [`box_command`] for the text `source` of the user config named `file`.
+fn box_command_in(file: &str, source: &str, name: &str) -> Result<Option<Vec<String>>, RpcError> {
+    let (config, problems) = devlanes_config::parse_user_lenient(file, source);
+    let refuse = |problem: &ConfigError| {
         let mut error = config_error(problem);
         error.data["message"] = json!(problem.message.trim_end_matches("; the default applies"));
-        return Err(error);
+        Err(error)
+    };
+    // The lenient load's only problem is then the parse error.
+    let Ok(raw) = devlanes_config::parse_user_value(source) else {
+        return problems.first().map_or(Ok(None), refuse);
+    };
+    let entry = format!("remote.boxes.{name}");
+    // A misspelt `boxes` holding `name` (`remote.boxs.<name>`) is an unknown key
+    // of its own, so it is matched by what it holds.
+    let misplaced: Vec<String> = raw
+        .get("remote")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .filter(|(key, value)| {
+            !matches!(key.as_str(), "boxes" | "start_daemon") && value.get(name).is_some()
+        })
+        .map(|(key, _)| format!("remote.{key}"))
+        .collect();
+    let blocking = problems.iter().find(|problem| {
+        let path = path_of(problem);
+        path == "remote"
+            || path == "remote.boxes"
+            || path == entry
+            || path
+                .strip_prefix(entry.as_str())
+                .is_some_and(|rest| rest.starts_with('.'))
+            || misplaced.iter().any(|key| key == path)
+            || problem.message.ends_with("every default applies")
+    });
+    if let Some(problem) = blocking {
+        return refuse(problem);
     }
-    Ok(config
-        .remote
-        .boxes
-        .get(name)
-        .map(|entry| entry.command.clone()))
+    if let Some(found) = config.remote.boxes.get(name) {
+        return Ok(Some(found.command.clone()));
+    }
+    let listed = raw
+        .get("remote")
+        .and_then(|remote| remote.get("boxes"))
+        .and_then(|boxes| boxes.get(name))
+        .is_some();
+    if !listed {
+        return Ok(None);
+    }
+    match problems
+        .iter()
+        .find(|problem| path_of(problem).starts_with("remote.boxes."))
+    {
+        Some(problem) => refuse(problem),
+        None => Err(RpcError::new(
+            "config_error",
+            json!({
+                "message": format!("{entry}: the entry could not be read"),
+                "file": file,
+            }),
+            1,
+        )),
+    }
+}
+
+/// The dotted path a lenient load's problem is about: its message reads
+/// `<path>: <message>`, and the fallback to every default `config.yaml: too
+/// many problems ...; every default applies`.
+fn path_of(problem: &ConfigError) -> &str {
+    problem
+        .message
+        .split_once(": ")
+        .map_or("", |(path, _)| path)
 }
 
 /// The user config for settings that only change how output looks or whether
@@ -488,9 +571,100 @@ mod tests {
         let error = box_command(home, "acme").expect_err("misspelt key");
         assert_eq!(error.code, "config_error");
         assert_eq!(error.data["line"], 4, "{error:?}");
+        assert_eq!(error.data["file"], path.display().to_string());
         let message = error.data["message"].as_str().unwrap_or_default();
         assert!(message.starts_with("remote.boxes.acme"), "{message}");
         assert!(!message.contains("the default applies"), "{message}");
+    }
+
+    /// The message of `box_command_in`'s refusal to connect `name` with `source`.
+    fn refusal(source: &str, name: &str) -> String {
+        let error = box_command_in("config.yaml", source, name).expect_err(source);
+        assert_eq!(error.code, "config_error", "{error:?}");
+        error.data["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// A problem in one entry of `remote.boxes` refuses that box only: other
+    /// boxes and ssh destinations still connect.
+    #[test]
+    fn a_bad_box_entry_only_blocks_that_box() {
+        let source = "remote:\n  boxes:\n    acme:\n      comand: [wsl.exe]\n    \
+                      other:\n      command: [docker, exec, -i, other]\n";
+        assert!(refusal(source, "acme").starts_with("remote.boxes.acme"));
+        assert_eq!(
+            box_command_in("config.yaml", source, "other").expect("valid box"),
+            Some(vec![
+                "docker".to_owned(),
+                "exec".to_owned(),
+                "-i".to_owned(),
+                "other".to_owned()
+            ])
+        );
+        assert_eq!(
+            box_command_in("config.yaml", source, "hetzner").expect("ssh host"),
+            None
+        );
+        let empty = "remote:\n  boxes:\n    acme:\n      command: []\n";
+        assert!(refusal(empty, "acme").starts_with("remote.boxes.acme.command"));
+        assert_eq!(
+            box_command_in("config.yaml", empty, "hetzner").expect("ssh host"),
+            None
+        );
+        // A box `acme-dev` is not under `acme`.
+        let prefixed = "remote:\n  boxes:\n    acme-dev:\n      command: []\n";
+        assert_eq!(
+            box_command_in("config.yaml", prefixed, "acme").expect("ssh host"),
+            None
+        );
+    }
+
+    /// A bad entry name makes the lenient load drop the whole map, so a box the
+    /// file lists is refused with that problem while an ssh host still connects.
+    #[test]
+    fn a_dropped_box_map_refuses_the_boxes_it_listed() {
+        let source = "remote:\n  boxes:\n    acme:\n      command: [wsl.exe]\n    \
+                      a.b:\n      command: [wsl.exe]\n";
+        let (config, _) = devlanes_config::parse_user_lenient("config.yaml", source);
+        assert!(config.remote.boxes.is_empty(), "{:?}", config.remote.boxes);
+        assert!(refusal(source, "acme").starts_with("remote.boxes.a.b"));
+        assert_eq!(
+            box_command_in("config.yaml", source, "hetzner").expect("ssh host"),
+            None
+        );
+    }
+
+    /// When the box map itself is unknown (not YAML, a wrong type, a misspelt
+    /// `boxes`, too many problems to keep any setting), every name is refused
+    /// that could be a command box, ssh destinations included.
+    #[test]
+    fn an_unknown_box_map_refuses_to_connect() {
+        let too_many: String = (0..70).map(|n| format!("unknown{n}: 1\n")).collect();
+        for source in [
+            "remote:\n  boxes: [acme\n",
+            "remote: 5\n",
+            "remote:\n",
+            "remote:\n  boxes: 5\n",
+            too_many.as_str(),
+        ] {
+            for name in ["acme", "hetzner"] {
+                assert!(!refusal(source, name).is_empty(), "{source}");
+            }
+        }
+        let misspelt = "remote:\n  boxs:\n    acme:\n      command: [wsl.exe]\n";
+        assert!(refusal(misspelt, "acme").starts_with("remote.boxs"));
+        assert_eq!(
+            box_command_in("config.yaml", misspelt, "hetzner").expect("ssh host"),
+            None
+        );
+        // A mistyped `start_daemon` is about this machine as a box.
+        let start = "remote:\n  start_daemon: flase\n";
+        assert_eq!(
+            box_command_in("config.yaml", start, "hetzner").expect("ssh host"),
+            None
+        );
     }
 
     /// The refusal renders like other config errors, on stderr in every output

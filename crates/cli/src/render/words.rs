@@ -970,6 +970,9 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             with_message(format!("remote {}", field(data, "host"))),
             Some(Hint::command(["remote", "ls"])),
         ),
+        // A restored box whose command left the user config; the message
+        // says what to do.
+        "box_command_missing" => (text(data, "message"), Some(Hint::command(["remote", "ls"]))),
         "remote_needs_auth" => {
             let host = text(data, "host");
             (
