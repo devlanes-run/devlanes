@@ -21,5 +21,6 @@ crates/tui/screens/index.md     merge=ours
 *.snap                          merge=ours
 
 # Written by the release pull request from changesets that it then deletes, so they can't be
-# regenerated and must not take one side on conflict.
-CHANGELOG.md                    linguist-generated=true
+# regenerated; merge=union keeps both sides' entries instead of dropping one. Check the
+# order of the result.
+CHANGELOG.md                    linguist-generated=true merge=union

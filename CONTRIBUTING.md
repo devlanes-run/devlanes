@@ -186,7 +186,7 @@ Run a crate's ignored tests with `cargo nextest run -p <crate> --run-ignored onl
 git config merge.ours.driver true
 ```
 
-After resolving, regenerate before committing: `cargo build` rewrites `Cargo.lock` and the schemas, `DEVLANES_BLESS=1` rewrites the screens and `docs/reference/`, and `INSTA_UPDATE=always` rewrites the snapshots. During a rebase "ours" is the branch you rebase onto, so your side of these files only comes back by regenerating them. `CHANGELOG.md` files have no `merge=ours`, because nothing can regenerate them.
+After resolving, regenerate before committing: `cargo build` rewrites `Cargo.lock` and the schemas, `DEVLANES_BLESS=1` rewrites the screens and `docs/reference/`, and `INSTA_UPDATE=always` rewrites the snapshots. During a rebase "ours" is the branch you rebase onto, so your side of these files only comes back by regenerating them. `CHANGELOG.md` files use Git's built-in `merge=union` instead, because nothing can regenerate them: both sides' lines are kept without conflict markers, so check that entries sit under the right version.
 
 ## Change files
 
