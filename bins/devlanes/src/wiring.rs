@@ -132,9 +132,10 @@ pub async fn engine(
         devlanes_runner_pty::PtyRunner::default(),
     )));
     #[cfg(windows)]
-    step("shell");
-    #[cfg(windows)]
-    let shell = windows_shell().await;
+    let shell = {
+        step("shell");
+        windows_shell().await
+    };
     #[cfg(windows)]
     let mut integ = Integrations::with_runner(Arc::new(WindowsUnits(
         devlanes_runner_windows::WindowsRunner::default().with_shell(shell.clone()),

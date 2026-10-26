@@ -302,9 +302,10 @@ impl Client {
                 ));
             }
             // A daemon binds its endpoint before its startup steps and answers
-            // only after reconciling, so an unanswered hello under a held lock
-            // is one still starting.
-            Err(Error::Timeout) if lock_held(paths).await => {
+            // only after reconciling, so an unanswered hello while it holds the
+            // lock and its starting marker is one still starting. Without the
+            // marker it has started and hangs, which the timeout reports.
+            Err(Error::Timeout) if starting(paths).await => {
                 tracing::debug!("a daemon holds the lock but does not answer yet; waiting");
                 return Self::connect_while_starting(paths).await;
             }
@@ -381,12 +382,15 @@ impl Client {
     /// Connects to a daemon that may hold its singleton lock without
     /// answering yet, while it starts. Retries while the lock is held, fails at
     /// once when the lock is free and nothing listens (that daemon exited), and
-    /// gives up after [`STARTING_WAIT_LIMIT`] on one that never answers.
+    /// gives up after [`STARTING_WAIT_LIMIT`] on one that never answers. An
+    /// unanswered hello without the [`STARTING_MARKER`] fails at once: that
+    /// daemon finished starting and hangs.
     async fn connect_while_starting(paths: &Paths) -> Result<Self> {
         let deadline = Instant::now() + STARTING_WAIT_LIMIT;
         loop {
             let error = match Self::connect(paths).await {
                 Ok(client) => return Ok(client),
+                Err(Error::Timeout) if !marker_exists(paths).await => return Err(Error::Timeout),
                 Err(error) if error.is_not_running() || matches!(error, Error::Timeout) => error,
                 Err(error) => return Err(error),
             };
@@ -936,6 +940,25 @@ const PROBE_FAILED: &str = "Unix socket bind probe failed";
 #[cfg(windows)]
 const PROBE_FAILED: &str = "named pipe probe failed";
 
+/// Name of the file under `paths.run` that a daemon keeps from taking its lock
+/// until it accepts connections; the daemon names it
+/// `devlanes_daemon::STARTING_MARKER`.
+pub const STARTING_MARKER: &str = "daemon.starting";
+
+/// Whether the [`STARTING_MARKER`] exists. Alone it proves nothing: a daemon
+/// that died while starting leaves it behind with its lock free.
+async fn marker_exists(paths: &Paths) -> bool {
+    tokio::fs::try_exists(paths.run.join(STARTING_MARKER))
+        .await
+        .unwrap_or(false)
+}
+
+/// Whether a daemon holds its lock and has not accepted a connection yet, so
+/// an unanswered hello is worth waiting for.
+async fn starting(paths: &Paths) -> bool {
+    marker_exists(paths).await && lock_held(paths).await
+}
+
 /// Whether a daemon holds its singleton lock under `paths.run`, so it runs or
 /// is starting. A probe that fails cannot tell, and counts as free so that no
 /// caller waits on it.
@@ -1011,9 +1034,9 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     use super::{
-        Answer, Client, Error, Paths, READY_LINE_LIMIT, ReadyLines, STARTUP_STEP_TIMEOUT,
-        daemon_env, daemon_lock_held, read_answer, read_lines, read_lines_blocking,
-        user_config_startup_error,
+        Answer, CONNECT_TIMEOUT, Client, Error, Paths, READY_LINE_LIMIT, ReadyLines,
+        STARTING_MARKER, STARTING_WAIT_LIMIT, STARTUP_STEP_TIMEOUT, daemon_env, daemon_lock_held,
+        local, read_answer, read_lines, read_lines_blocking, user_config_startup_error,
     };
 
     /// A readiness pipe that already holds `lines`, and its sender, which
@@ -1178,6 +1201,45 @@ mod tests {
         assert!(daemon_lock_held(run.path()).expect("held"));
         release(file);
         assert!(!daemon_lock_held(run.path()).expect("released"));
+    }
+
+    /// A daemon that holds its lock and accepts but never answers: with the
+    /// starting marker the client waits to the hang guard, without it (the
+    /// daemon finished starting and hangs) it gives up after one connect
+    /// timeout. The paused clock jumps over each wait.
+    #[tokio::test(start_paused = true)]
+    async fn only_a_starting_daemon_is_waited_for() {
+        let home = tempfile::tempdir().expect("home");
+        let paths = Paths::new(home.path()).expect("paths");
+        std::fs::create_dir_all(&paths.run).expect("run");
+        let file = std::fs::File::create(paths.run.join("daemon.lock")).expect("lock file");
+        lock_as_the_daemon(&file);
+        let mut listener = local::LocalListener::bind(&paths.socket)
+            .await
+            .expect("listener");
+        // Holds every connection open without a hello.
+        let silent = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok(stream) = listener.accept().await {
+                held.push(stream);
+            }
+        });
+        let marker = paths.run.join(STARTING_MARKER);
+        for (starting, waited) in [(false, CONNECT_TIMEOUT), (true, STARTING_WAIT_LIMIT)] {
+            if starting {
+                std::fs::write(&marker, b"").expect("marker");
+            }
+            let begun = Instant::now();
+            let ended = Client::connect_while_starting(&paths).await.map(drop);
+            assert!(matches!(ended, Err(Error::Timeout)), "{ended:?}");
+            let elapsed = begun.elapsed();
+            assert!(
+                elapsed >= waited && elapsed < waited + CONNECT_TIMEOUT * 2,
+                "starting {starting}: {elapsed:?}"
+            );
+        }
+        silent.abort();
+        release(file);
     }
 
     /// While the lock is held and nothing listens the client keeps waiting;
