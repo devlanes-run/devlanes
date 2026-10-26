@@ -223,7 +223,7 @@ without the daemon.",
         #[command(subcommand)]
         command: CertsCommand,
     },
-    /// Connect to boxes over SSH and mirror their lanes here
+    /// Connect to boxes over SSH or a command and mirror their lanes here
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
@@ -558,9 +558,9 @@ pub enum CertsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum RemoteCommand {
-    /// Connect to a box over SSH and mirror its lanes, ports and hostnames here
+    /// Connect to a box over SSH or a command and mirror its lanes, ports and hostnames here
     Connect {
-        /// SSH destination, as in ~/.ssh/config
+        /// A box name from remote.boxes in the user config, else an SSH destination as in ~/.ssh/config
         #[arg(id = "connect_host", value_name = "HOST")]
         host: String,
         /// Return once connected instead of staying attached for prompts

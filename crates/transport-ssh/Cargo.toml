@@ -13,6 +13,7 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 devlanes-transport = { path = "../transport" }
+devlanes-transport-command = { path = "../transport-command" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -23,7 +24,7 @@ tracing.workspace = true
 [target.'cfg(unix)'.dependencies]
 openssh = { version = "0.11", default-features = false, features = ["process-mux"] }
 
-# Windows runs ssh.exe itself, one process per session in a kill-on-close job,
+# Windows runs ssh.exe through the command transport, one process per session,
 # and relays askpass prompts over a user-only named pipe.
 [target.'cfg(windows)'.dependencies]
 devlanes-ipc = { path = "../ipc" }

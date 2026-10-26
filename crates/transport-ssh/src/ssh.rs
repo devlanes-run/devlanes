@@ -1,26 +1,22 @@
-//! System OpenSSH as the pipe: one ControlMaster per box, one channel per session.
+//! System OpenSSH as the pipe: one ControlMaster per box, one channel per
+//! session, each a `ssh -S <control socket>` run through the command transport.
 
-use std::future::Future;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use devlanes_transport::{
-    BoxDuplex, Joined, PreambleError, Prefixed, Transport, TransportError, read_preamble,
-};
-use openssh::{ChildStdin, ChildStdout, Session, Stdio};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
-use tokio::sync::{Mutex, oneshot};
+use devlanes_transport::{BoxDuplex, Prefixed, Transport, TransportError};
+use devlanes_transport_command::{CommandError, CommandOptions, CommandStream, CommandTransport};
+use openssh::{Session, Stdio};
+use tokio::sync::Mutex;
 
 use crate::askpass::{AskpassConfig, AskpassServer};
 use crate::probe::{self, INSTALL_DIR, RemoteProbe, SETUP_GUIDE};
-use crate::{ExitInfo, TunnelExit};
 
 /// macOS `sun_path` holds 104 bytes including the terminator, and ssh binds the
 /// master at the control path plus `.` and 16 random characters before renaming it.
@@ -31,8 +27,8 @@ const MAX_CONTROL_PATH: usize = 104 - 1 - 17;
 /// daemon reconnects through it without new prompts.
 const CONTROL_PERSIST: &str = "ControlPersist=600";
 
-/// Bytes of remote stderr kept for error messages.
-const STDERR_TAIL: usize = 4096;
+/// Bytes of ssh's log kept for error messages.
+const LOG_TAIL: usize = 4096;
 
 /// Distinguishes askpass relays started by one process.
 static NEXT_ASKPASS: AtomicU64 = AtomicU64::new(0);
@@ -126,36 +122,21 @@ pub enum SshError {
         /// be missing for a moment, such as during an upgrade on the box.
         permanent: bool,
     },
-    /// The box daemon is not running and the box's `remote.start_daemon` is off.
-    #[error(
-        "the devlanes daemon is not running on {0} and the box's user config turns off \
-         starting it (`remote.start_daemon: false`); run `devlanes daemon start` there, or \
-         `devlanes daemon install` to keep it running"
-    )]
-    BoxDaemonStopped(String),
-    /// The tunnel's output did not start with a preamble line of this protocol.
-    #[error("{error}")]
-    Preamble {
-        /// What went wrong.
-        error: PreambleError,
-        /// See [`PreambleError::is_permanent`].
-        permanent: bool,
-    },
+    /// The tunnel failed: its exit status and stderr, a stopped box daemon
+    /// ([`CommandError::DaemonStopped`]) or output without a preamble line of
+    /// this protocol ([`CommandError::Preamble`]).
+    #[error(transparent)]
+    Tunnel(Box<CommandError>),
 }
 
 impl SshError {
     /// Reports whether reconnecting without user action is pointless.
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Master { permanent, .. }
-            | Self::NotInstalled { permanent, .. }
-            | Self::Preamble { permanent, .. } => *permanent,
+            Self::Master { permanent, .. } | Self::NotInstalled { permanent, .. } => *permanent,
+            Self::Tunnel(error) => error.is_permanent(),
             Self::ControlPathTooLong(_) => true,
-            Self::Io(_)
-            | Self::AuthTimeout(_)
-            | Self::Ssh(_)
-            | Self::Probe(_)
-            | Self::BoxDaemonStopped(_) => false,
+            Self::Io(_) | Self::AuthTimeout(_) | Self::Ssh(_) | Self::Probe(_) => false,
         }
     }
 
@@ -252,17 +233,20 @@ impl SshTransport {
 
     /// Opens the tunnel, starting or reusing the master, and reads up to its
     /// preamble. The master is free for other connects meanwhile.
-    async fn open(&self) -> Result<Prefixed<SshStream>, SshError> {
-        let stream = self.open_tunnel().await?;
-        let preamble = read_preamble(stream, crate::PREAMBLE_WAIT)
-            .await
-            .map_err(|error| self.preamble_error(error))?;
+    async fn open(&self) -> Result<Prefixed<CommandStream>, SshError> {
+        let tunnel = self.tunnel().await?;
+        let opened = tunnel.open().await.map_err(|error| match error {
+            // ssh itself did not start, as when the master's launch fails.
+            CommandError::Spawn { source, .. } => SshError::Io(source),
+            other => SshError::Tunnel(Box::new(other)),
+        })?;
         self.connected.store(true, Ordering::Relaxed);
-        Ok(preamble.stream)
+        Ok(opened.stream)
     }
 
-    /// [`SshTransport::open`] without the bookkeeping.
-    async fn open_tunnel(&self) -> Result<SshStream, SshError> {
+    /// The tunnel command over a live master, starting one and probing the
+    /// box first when needed.
+    async fn tunnel(&self) -> Result<CommandTransport, SshError> {
         let mut guard = self.master.lock().await;
         let master = self.ensure_master(&mut guard).await?;
         let program = self
@@ -271,7 +255,14 @@ impl SshTransport {
             .program
             .clone()
             .ok_or_else(|| self.not_installed())?;
-        spawn_tunnel(master.session.clone(), &program, &self.destination).await
+        let mut options = CommandOptions::new(&self.destination);
+        options.what = crate::TUNNEL.to_owned();
+        options.preamble_wait = crate::PREAMBLE_WAIT;
+        options.connected_before = self.connected.load(Ordering::Relaxed);
+        Ok(CommandTransport::new(
+            tunnel_argv(&self.options.ssh_program, &master.ctl, &program),
+            options,
+        ))
     }
 
     /// [`SshError::NotInstalled`] for this box: permanent until a tunnel once
@@ -280,15 +271,6 @@ impl SshTransport {
         SshError::NotInstalled {
             destination: self.destination.clone(),
             permanent: !self.connected.load(Ordering::Relaxed),
-        }
-    }
-
-    /// [`SshError::Preamble`] for this box, permanent as
-    /// [`PreambleError::is_permanent`] says before or after the first tunnel.
-    fn preamble_error(&self, error: PreambleError) -> SshError {
-        SshError::Preamble {
-            permanent: error.is_permanent(!self.connected.load(Ordering::Relaxed)),
-            error,
         }
     }
 
@@ -556,132 +538,38 @@ async fn sweep_legacy_masters(dir: &Path, ssh_program: &Path) {
     }
 }
 
-/// Returns the last [`STDERR_TAIL`] bytes as lossy UTF-8.
+/// Returns the last [`LOG_TAIL`] bytes as lossy UTF-8.
 fn tail(bytes: &[u8]) -> String {
-    let start = bytes.len().saturating_sub(STDERR_TAIL);
+    let start = bytes.len().saturating_sub(LOG_TAIL);
     String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
 }
 
-/// Runs `<program> tunnel --stdio` on `destination` and joins its stdio into a duplex.
-async fn spawn_tunnel(
-    session: Arc<Session>,
-    program: &str,
-    destination: &str,
-) -> Result<SshStream, SshError> {
-    let mut child = session
-        .arc_command(program)
-        .args(["tunnel", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .await?;
-    let missing = || SshError::Io(io::Error::other("tunnel stdio was not piped"));
-    let stdin = child.stdin().take().ok_or_else(missing)?;
-    let stdout = child.stdout().take().ok_or_else(missing)?;
-    let mut stderr = child.stderr().take().ok_or_else(missing)?;
-    let (exit_tx, exit_rx) = oneshot::channel();
-    let (stop_tx, stop_rx) = oneshot::channel::<()>();
-    tokio::spawn(async move {
-        let collect = async move {
-            let mut buf = Vec::new();
-            let _ = (&mut stderr).take(64 * 1024).read_to_end(&mut buf).await;
-            buf
-        };
-        let waiting = async move {
-            let (status, stderr) = tokio::join!(child.wait(), collect);
-            ExitInfo {
-                status: status.map_err(|error| error.to_string()),
-                stderr: tail(&stderr),
-            }
-        };
-        // Dropping the stream drops `stop_tx`; the child has kill_on_drop, so
-        // abandoning `waiting` disconnects the local ssh client.
-        tokio::select! {
-            info = waiting => {
-                let _ = exit_tx.send(info);
-            }
-            _ = stop_rx => {}
-        }
-    });
-    Ok(SshStream {
-        io: Joined::new(stdout, stdin),
-        destination: destination.to_owned(),
-        exit: Some(exit_rx),
-        finished: None,
-        _stop: stop_tx,
-    })
-}
-
-/// The tunnel process's stdio as one duplex.
+/// `ssh` running `<program> tunnel --stdio` over the master at `ctl`.
 ///
-/// At EOF it waits for the remote exit status, so a crashed or missing
-/// `tunnel` command surfaces as an error carrying its stderr instead of a
-/// bare disconnect, and a stopped box daemon as [`SshError::BoxDaemonStopped`].
-pub struct SshStream {
-    io: Joined<ChildStdout, ChildStdin>,
-    destination: String,
-    exit: Option<oneshot::Receiver<ExitInfo>>,
-    finished: Option<Option<TunnelExit>>,
-    _stop: oneshot::Sender<()>,
-}
-
-impl SshStream {
-    /// Resolves EOF into success or the remote failure.
-    fn poll_eof(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.finished.is_none() {
-            let outcome = match self.exit.as_mut() {
-                Some(exit) => match ready!(Pin::new(exit).poll(cx)) {
-                    Ok(info) => TunnelExit::from_info(info),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-            self.exit = None;
-            self.finished = Some(outcome);
-        }
-        match &self.finished {
-            Some(Some(exit)) => Poll::Ready(Err(exit.to_io(&self.destination))),
-            _ => Poll::Ready(Ok(())),
-        }
-    }
-}
-
-impl AsyncRead for SshStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        if this.finished.is_some() {
-            return this.poll_eof(cx);
-        }
-        let before = buf.filled().len();
-        ready!(Pin::new(&mut this.io).poll_read(cx, buf))?;
-        if buf.filled().len() == before && buf.remaining() > 0 {
-            return this.poll_eof(cx);
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl AsyncWrite for SshStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().io).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_shutdown(cx)
-    }
+/// As the openssh crate ran commands: batch mode, no terminal, and the
+/// destination `none` on the discard port, so a dead master makes this fail
+/// at once instead of opening a connection of its own, and no `Host` block of
+/// the user's config (`RemoteCommand`, `RequestTTY`) applies. ssh joins the
+/// words after the destination into one command for the box's shell, so the
+/// program is quoted for it.
+fn tunnel_argv(ssh_program: &Path, ctl: &Path, program: &str) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![ssh_program.into(), "-S".into(), ctl.into()];
+    argv.extend(
+        [
+            "-o",
+            "BatchMode=yes",
+            "-T",
+            "-p",
+            "9",
+            "--",
+            "none",
+            &crate::sh_quote(program),
+            "tunnel",
+            "--stdio",
+        ]
+        .map(OsString::from),
+    );
+    argv
 }
 
 #[cfg(test)]
@@ -838,32 +726,37 @@ mod tests {
         assert!(!TransportError::from(later).is_permanent());
     }
 
-    /// A tunnel of another protocol stops the link at any time; a silent one
-    /// stops it only before the first tunnel opened.
+    /// Tunnels run over the master only, with the program quoted for the
+    /// box's shell.
     #[test]
-    fn preamble_failures_follow_the_first_connection() {
-        let transport = SshTransport::new("box", SshOptions::new("/tmp/h"));
-        let protocol = || PreambleError::Protocol {
-            found: devlanes_transport::PROTOCOL_VERSION + 1,
-            output: Vec::new(),
-        };
-        let silent = || PreambleError::Silent {
-            waited: crate::PREAMBLE_WAIT,
-            output: Vec::new(),
-        };
-        assert!(transport.preamble_error(protocol()).is_permanent());
-        assert!(transport.preamble_error(silent()).is_permanent());
-        transport.connected.store(true, Ordering::Relaxed);
-        let mismatch = transport.preamble_error(protocol());
-        assert!(mismatch.is_permanent());
-        assert!(
-            mismatch.to_string().contains("install the same release"),
-            "{mismatch}"
+    fn tunnels_go_over_the_master() {
+        let argv = tunnel_argv(
+            Path::new("ssh"),
+            Path::new("/tmp/h/run/ssh/m-0123456789abcdef"),
+            "/home/acme/my tools/devlanes",
         );
-        assert!(TransportError::from(mismatch).is_permanent());
-        let later = transport.preamble_error(silent());
-        assert!(!later.is_permanent());
-        assert!(!TransportError::from(later).is_permanent());
+        let argv: Vec<String> = argv
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            argv,
+            [
+                "ssh",
+                "-S",
+                "/tmp/h/run/ssh/m-0123456789abcdef",
+                "-o",
+                "BatchMode=yes",
+                "-T",
+                "-p",
+                "9",
+                "--",
+                "none",
+                "'/home/acme/my tools/devlanes'",
+                "tunnel",
+                "--stdio",
+            ]
+        );
     }
 
     #[test]

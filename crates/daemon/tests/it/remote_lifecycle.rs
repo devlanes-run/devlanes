@@ -503,3 +503,60 @@ async fn a_connect_during_the_restore_answers_the_next_prompt() {
     .await
     .expect("timeout");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+/// A box the connector reaches by a command is recorded with that transport:
+/// `remote ls` shows it while connected and after `disconnect`, and a
+/// restarted daemon restores it through the connector again.
+async fn command_boxes_keep_their_transport() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "20000-20124").await;
+        let command = || {
+            let controls = Arc::new(Controls::default());
+            controls
+                .commands
+                .lock()
+                .expect("commands")
+                .insert("box".to_owned());
+            controls
+        };
+        let client =
+            ClientSide::start_controlled(&tmp, "client", "20125-20249", &side, command()).await;
+        client.connect("box").await;
+        let host = client.host().await;
+        assert_eq!(host["transport"], "command", "{host}");
+        client.stop().await;
+
+        let client =
+            ClientSide::start_controlled(&tmp, "client", "20125-20249", &side, command()).await;
+        let restored = eventually(SOON, || async {
+            (client.host().await["state"] == "connected").then_some(())
+        })
+        .await;
+        assert!(restored.is_some(), "restored: {}", client.host().await);
+        assert_eq!(
+            *client.controls.handed_out.lock().expect("handed out"),
+            [("box".to_owned(), true)]
+        );
+        client
+            .h
+            .call(
+                Method::Disconnect,
+                json!({"host": "box"}),
+                Context::default(),
+            )
+            .await
+            .expect("disconnect");
+        let host = client.host().await;
+        assert_eq!(
+            (&host["state"], &host["transport"]),
+            (&json!("disconnected"), &json!("command")),
+            "{host}"
+        );
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}

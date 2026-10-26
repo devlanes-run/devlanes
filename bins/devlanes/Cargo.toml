@@ -109,6 +109,7 @@ devlanes-start-gate = { path = "../../crates/start-gate" }
 devlanes-state = { path = "../../crates/state" }
 devlanes-sys = { path = "../../crates/sys" }
 devlanes-transport = { path = "../../crates/transport" }
+devlanes-transport-command = { path = "../../crates/transport-command" }
 devlanes-transport-ssh = { path = "../../crates/transport-ssh" }
 futures-util.workspace = true
 tokio-util.workspace = true

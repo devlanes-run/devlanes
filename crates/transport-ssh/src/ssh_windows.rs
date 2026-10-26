@@ -8,53 +8,34 @@
 //! the sentinel is the tunnel's: its preamble line, then mux traffic. A
 //! standalone [`SshTransport::probe`] is a run of its own.
 //!
-//! Every `ssh.exe` starts inside a kill-on-close job, so whatever it starts
-//! (a `ProxyCommand`) ends with the session, and with the daemon if the
-//! daemon dies. It shares the daemon's hidden console, so no window opens.
+//! Both run through the command transport, so every `ssh.exe` starts inside a
+//! kill-on-close job: whatever it starts (a `ProxyCommand`) ends with the
+//! session, and with the daemon if the daemon dies. The sentinel is the
+//! session's ready line: until it comes, the wait is the authentication limit.
 //!
-//! The public types mirror the Unix module's, which stays as it was.
+//! The public types mirror the Unix module's.
 
-use std::ffi::{OsStr, OsString};
-use std::future::Future;
-use std::io::{self, PipeReader, PipeWriter};
-use std::os::windows::io::{AsHandle, OwnedHandle};
-use std::os::windows::process::ExitStatusExt as _;
+use std::ffi::OsString;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::ExitStatus;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use std::task::{Context, Poll, ready};
+use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use devlanes_sys_windows::job::{Job, JobOptions};
-use devlanes_sys_windows::spawn::{self, Child, CreationFlags, Environment, Spawn, Stdio, Stream};
-use devlanes_transport::{
-    BoxDuplex, Joined, PreambleError, Prefixed, Transport, TransportError, read_preamble,
+use devlanes_transport::{BoxDuplex, PreambleError, Prefixed, Transport, TransportError};
+use devlanes_transport_command::{
+    CommandError, CommandOptions, CommandStream, CommandTransport, Exit, Output, Ready,
 };
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, BufReader, ReadBuf};
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use crate::askpass::{AskpassConfig, AskpassServer, SOCKET_ENV};
 use crate::probe::{self, INSTALL_DIR, RemoteProbe, SETUP_GUIDE};
-use crate::{ExitInfo, TunnelExit, sh_quote};
+use crate::sh_quote;
 
-/// Bytes of remote stderr kept for error messages.
+/// Bytes of ssh's stderr kept for error messages.
 const STDERR_TAIL: usize = 4096;
-
-/// Bytes of ssh's stderr kept while a session runs; read on so ssh never
-/// blocks on a full pipe.
-const STDERR_KEPT: usize = 64 * 1024;
-
-/// Bound on what the box may print before the sentinel.
-const MAX_HEADER: u64 = 64 * 1024;
-
-/// How long a failed ssh gets to report its exit status and last words.
-const EXIT_GRACE: Duration = Duration::from_secs(5);
 
 /// ssh's own exit status for connection and authentication failures.
 const SSH_FAILED: i32 = 255;
@@ -146,34 +127,21 @@ pub enum SshError {
         /// be missing for a moment, such as during an upgrade on the box.
         permanent: bool,
     },
-    /// The box daemon is not running and the box's `remote.start_daemon` is off.
-    #[error(
-        "the devlanes daemon is not running on {0} and the box's user config turns off \
-         starting it (`remote.start_daemon: false`); run `devlanes daemon start` there, or \
-         `devlanes daemon install` to keep it running"
-    )]
-    BoxDaemonStopped(String),
-    /// The tunnel's output did not start with a preamble line of this protocol.
-    #[error("{error}")]
-    Preamble {
-        /// What went wrong.
-        error: PreambleError,
-        /// See [`PreambleError::is_permanent`].
-        permanent: bool,
-    },
+    /// The tunnel failed: its exit status and stderr, a stopped box daemon
+    /// ([`CommandError::DaemonStopped`]) or output without a preamble line of
+    /// this protocol ([`CommandError::Preamble`]).
+    #[error(transparent)]
+    Tunnel(Box<CommandError>),
 }
 
 impl SshError {
     /// Reports whether reconnecting without user action is pointless.
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Master { permanent, .. }
-            | Self::NotInstalled { permanent, .. }
-            | Self::Preamble { permanent, .. } => *permanent,
+            Self::Master { permanent, .. } | Self::NotInstalled { permanent, .. } => *permanent,
+            Self::Tunnel(error) => error.is_permanent(),
             Self::ProgramMissing(_) => true,
-            Self::Io(_) | Self::AuthTimeout(_) | Self::Probe(_) | Self::BoxDaemonStopped(_) => {
-                false
-            }
+            Self::Io(_) | Self::AuthTimeout(_) | Self::Probe(_) => false,
         }
     }
 
@@ -214,39 +182,6 @@ pub struct SshTransport {
     connected: AtomicBool,
 }
 
-/// A running `ssh.exe`. Its job ends ssh and everything it started once
-/// dropped.
-struct SshProcess {
-    _job: Job,
-    child: Arc<Child>,
-}
-
-/// This side's ends of ssh's standard streams.
-struct Pipes {
-    /// `None` when ssh reads `NUL`.
-    stdin: Option<File>,
-    stdout: File,
-    stderr: File,
-}
-
-impl SshProcess {
-    /// Waits for ssh to exit, off the executor.
-    async fn wait(&self) -> io::Result<ExitStatus> {
-        let child = self.child.clone();
-        tokio::task::spawn_blocking(move || child.wait())
-            .await
-            .map_err(io::Error::other)?
-            .map(ExitStatus::from_raw)
-    }
-}
-
-/// What a finished run printed and how it ended.
-struct Output {
-    status: ExitStatus,
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
 impl SshTransport {
     /// Targets `destination`, any name `ssh` accepts.
     pub fn new(destination: impl Into<String>, options: SshOptions) -> Self {
@@ -271,10 +206,14 @@ impl SshTransport {
             return Ok(probe);
         }
         let script = probe::probe_script(&self.options.remote_program);
-        let output = self
-            .run_script(&script, self.options.auth_timeout)
-            .await?
-            .ok_or_else(|| SshError::AuthTimeout(self.destination.clone()))?;
+        let askpass = self.askpass().await?;
+        let argv = self.argv(&script, askpass.is_none()).await?;
+        let options = self.command_options(askpass.as_ref());
+        let output = devlanes_transport_command::run(argv, &options, self.options.auth_timeout)
+            .await
+            .map_err(|error| self.spawn_failed(error))?;
+        drop(askpass);
+        let output = output.ok_or_else(|| SshError::AuthTimeout(self.destination.clone()))?;
         if let Some(error) = self.ssh_failed(&output) {
             return Err(error);
         }
@@ -292,57 +231,36 @@ impl SshTransport {
         *sessions = CancellationToken::new();
     }
 
-    /// Opens the tunnel and reads up to its preamble.
-    async fn open(&self) -> Result<Prefixed<SshStream>, SshError> {
-        let stream = self.start().await?;
-        let preamble = read_preamble(stream, crate::PREAMBLE_WAIT)
-            .await
-            .map_err(|error| self.preamble_error(error))?;
-        self.connected.store(true, Ordering::Relaxed);
-        Ok(preamble.stream)
-    }
-
-    /// Runs the session script: probe, sentinel, tunnel. A box without
-    /// devlanes ends the session after the probe with
-    /// [`SshError::NotInstalled`]. The returned stream starts with the
-    /// tunnel's output, its preamble first.
-    async fn start(&self) -> Result<SshStream, SshError> {
-        // Taken before ssh starts, so a `close` while it authenticates ends
-        // this session too instead of leaving a tunnel opened after it.
-        let closed = self
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .child_token();
+    /// Runs the session script (probe, sentinel, tunnel) and reads up to the
+    /// tunnel's preamble. A box without devlanes ends the session after the
+    /// probe with [`SshError::NotInstalled`].
+    async fn open(&self) -> Result<Prefixed<CommandStream>, SshError> {
         let token = crate::random_token()?;
         let start = format!("devlanes-probe-{token}");
         let end = format!("devlanes-tunnel-ready-{token}");
         let script = probe::session_script(&self.options.remote_program, &start, &end);
         let askpass = self.askpass().await?;
-        let (process, pipes) = self.spawn(&script, true, askpass.as_ref()).await?;
-        let stdin = pipes
-            .stdin
-            .ok_or_else(|| SshError::Io(io::Error::other("ssh stdin was not piped")))?;
-        let stderr = tokio::spawn(collect_tail(pipes.stderr));
-        let mut stdout = BufReader::new(pipes.stdout);
-        let header = tokio::select! {
-            header = tokio::time::timeout(self.options.auth_timeout, read_header(&mut stdout, &end)) => header,
-            () = closed.cancelled() => {
-                return Err(SshError::Io(io::Error::other("the SSH transport was closed")));
-            }
-        };
+        let argv = self.argv(&script, askpass.is_none()).await?;
+        let mut options = self.command_options(askpass.as_ref());
+        options.ready = Some(Ready {
+            line: end.clone(),
+            wait: self.options.auth_timeout,
+        });
+        let closed = options.stop.clone();
+        let opened = CommandTransport::new(argv, options).open().await;
         // Prompts end with authentication; the box has answered by now.
         drop(askpass);
-        // Returning early drops `process`, whose job ends ssh and whatever
-        // ssh started.
-        let lines = match header {
-            Err(_) => return Err(SshError::AuthTimeout(self.destination.clone())),
-            Ok(Err(error)) => return Err(SshError::Io(error)),
-            Ok(Ok(Header::Ready(lines))) => lines,
-            Ok(Ok(Header::Ended { printed })) => {
-                return Err(self.ended_early(&process, stderr, printed).await);
+        let opened = match opened {
+            Ok(opened) => opened,
+            // A `close` while ssh authenticated ended this session too.
+            Err(_) if closed.is_cancelled() => {
+                return Err(SshError::Io(io::Error::other(
+                    "the SSH transport was closed",
+                )));
             }
+            Err(error) => return Err(self.session_failed(error, &start, &end)),
         };
+        let lines = lines(&opened.header);
         let probe = probe::parse_session_header(&lines, &start)
             .ok_or_else(|| SshError::Probe(lines.join("\n")))?;
         let missing = probe.program.is_none();
@@ -350,35 +268,50 @@ impl SshTransport {
         if missing {
             return Err(self.not_installed());
         }
-        let (exit_tx, exit_rx) = oneshot::channel();
-        let (stop_tx, stop_rx) = oneshot::channel::<()>();
-        tokio::spawn(async move {
-            let waiting = async {
-                let status = process.wait().await;
-                let stderr = stderr.await.unwrap_or_default();
-                ExitInfo {
-                    status: status.map_err(|error| error.to_string()),
-                    stderr: tail(&stderr),
-                }
+        self.connected.store(true, Ordering::Relaxed);
+        Ok(opened.stream)
+    }
+
+    /// The error for a session that failed before its preamble. After the
+    /// sentinel the probe ran: a box without devlanes ends there, and
+    /// anything else is the tunnel's failure. Before it, the failure is ssh's
+    /// or the box shell's; see [`SshTransport::ended_early`].
+    fn session_failed(&self, error: CommandError, start: &str, end: &str) -> SshError {
+        let lines = lines(error.output());
+        if let Some(at) = lines.iter().position(|line| line == end) {
+            let Some(probe) = probe::parse_session_header(&lines[..at], start) else {
+                return SshError::Probe(lines[..at].join("\n"));
             };
-            // Dropping the stream drops `stop_tx`. Leaving this task drops
-            // `process`, and its job ends ssh's whole tree.
-            tokio::select! {
-                info = waiting => {
-                    let _ = exit_tx.send(info);
-                }
-                _ = stop_rx => {}
-                () = closed.cancelled() => {}
+            let missing = probe.program.is_none();
+            self.remember(Some(probe));
+            return if missing {
+                self.not_installed()
+            } else {
+                SshError::Tunnel(Box::new(error))
+            };
+        }
+        match error {
+            CommandError::Spawn { .. } | CommandError::Empty { .. } => self.spawn_failed(error),
+            CommandError::NotReady { .. } => SshError::AuthTimeout(self.destination.clone()),
+            CommandError::Exited { exit, output, .. } => {
+                self.ended_early(&exit, !output.is_empty())
             }
-            drop(process);
-        });
-        Ok(SshStream {
-            io: Joined::new(stdout, stdin),
-            destination: self.destination.clone(),
-            exit: Some(exit_rx),
-            finished: None,
-            _stop: stop_tx,
-        })
+            CommandError::Preamble {
+                error: PreambleError::Ended { .. },
+                stderr,
+                ..
+            } => SshError::Probe(format!(
+                "the box ended the session before the probe finished: {stderr}"
+            )),
+            CommandError::Preamble {
+                error: PreambleError::TooLong { .. },
+                ..
+            } => SshError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the box printed too much before the probe finished",
+            )),
+            other => SshError::Tunnel(Box::new(other)),
+        }
     }
 
     /// The error for a session whose output ended before the sentinel. Exit
@@ -390,63 +323,34 @@ impl SshTransport {
     /// 127) must not read as rejected credentials, which would stop
     /// reconnecting for good; those are temporary errors carrying the stderr
     /// tail.
-    async fn ended_early(
-        &self,
-        process: &SshProcess,
-        stderr: JoinHandle<Vec<u8>>,
-        printed: bool,
-    ) -> SshError {
-        let status = tokio::time::timeout(EXIT_GRACE, process.wait()).await;
-        let log = match tokio::time::timeout(EXIT_GRACE, stderr).await {
-            Ok(Ok(log)) => log,
-            _ => Vec::new(),
-        };
-        let log = String::from_utf8_lossy(&log);
-        let status = match status {
-            Ok(Ok(status)) if status.success() => {
-                return SshError::Probe(format!(
-                    "the box ended the session before the probe finished: {}",
-                    log.trim()
-                ));
+    fn ended_early(&self, exit: &Exit, printed: bool) -> SshError {
+        let status = match &exit.status {
+            Ok(status) if status.code() == Some(SSH_FAILED) && !printed => {
+                return master_error(&self.destination, *status, &exit.stderr, self.first());
             }
-            Ok(Ok(status)) if status.code() == Some(SSH_FAILED) && !printed => {
-                return master_error(&self.destination, status, &log, self.first());
-            }
-            Ok(Ok(status)) => status.to_string(),
-            Ok(Err(error)) => error.to_string(),
-            Err(_) => "no exit status".to_owned(),
+            Ok(status) => status.to_string(),
+            Err(error) => error.clone(),
         };
         SshError::Master {
             destination: self.destination.clone(),
             status,
-            log: tail(log.as_bytes()),
+            log: tail(exit.stderr.as_bytes()),
             permanent: false,
             auth: false,
         }
     }
 
-    /// Runs `script` on the box with `sh -c` in its own ssh run, waiting at most
-    /// `limit`; `None` when it did not finish in time (ssh is ended then).
-    async fn run_script(&self, script: &str, limit: Duration) -> Result<Option<Output>, SshError> {
-        let askpass = self.askpass().await?;
-        let (process, pipes) = self.spawn(script, false, askpass.as_ref()).await?;
-        let finished = tokio::time::timeout(limit, async {
-            let (stdout, stderr) =
-                tokio::join!(collect_tail(pipes.stdout), collect_tail(pipes.stderr));
-            let status = process.wait().await?;
-            Ok::<_, io::Error>(Output {
-                status,
-                stdout,
-                stderr,
-            })
-        })
-        .await;
-        drop(askpass);
-        // Anything ssh left running (a ProxyCommand) ends here.
-        drop(process);
-        match finished {
-            Ok(output) => Ok(Some(output?)),
-            Err(_) => Ok(None),
+    /// A command transport error from starting `ssh.exe`: a missing client
+    /// names the optional feature.
+    fn spawn_failed(&self, error: CommandError) -> SshError {
+        match error {
+            CommandError::Spawn {
+                program, source, ..
+            } if source.kind() == io::ErrorKind::NotFound => {
+                SshError::ProgramMissing(PathBuf::from(program))
+            }
+            CommandError::Spawn { source, .. } => SshError::Io(source),
+            other => SshError::Tunnel(Box::new(other)),
         }
     }
 
@@ -458,40 +362,44 @@ impl SshTransport {
         }
     }
 
-    /// Starts `ssh.exe` running `script` with `sh -c` on the box, in a new
-    /// kill-on-close job, with piped stdout and stderr and, for a session,
-    /// piped stdin (`NUL` otherwise).
-    async fn spawn(
-        &self,
-        script: &str,
-        session: bool,
-        askpass: Option<&AskpassServer>,
-    ) -> Result<(SshProcess, Pipes), SshError> {
+    /// Options for one ssh run: messages name the box and the tunnel, the
+    /// relay's environment replaces any inherited one, and [`SshTransport::close`]
+    /// ends the run.
+    fn command_options(&self, askpass: Option<&AskpassServer>) -> CommandOptions {
+        let mut options = CommandOptions::new(&self.destination);
+        options.what = crate::TUNNEL.to_owned();
+        options.preamble_wait = crate::PREAMBLE_WAIT;
+        options.connected_before = !self.first();
+        options.env = askpass
+            .map(AskpassServer::env)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(name, value)| (OsString::from(name), value))
+            .collect();
+        options.env_remove = vec![OsString::from(SOCKET_ENV)];
+        options.stop = self
+            .sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .child_token();
+        options
+    }
+
+    /// The ssh run of `script` with `sh -c` on the box, ssh found as
+    /// [`locate_program`] does.
+    async fn argv(&self, script: &str, batch: bool) -> Result<Vec<String>, SshError> {
         let requested = self.options.ssh_program.clone();
         let program = tokio::task::spawn_blocking(move || locate_program(&requested))
             .await
             .map_err(io::Error::other)?
             .map_err(SshError::ProgramMissing)?;
-        let line = self.command_line(&program, script, askpass.is_none());
-        let env = askpass.map(AskpassServer::env).unwrap_or_default();
-        let found = program.clone();
-        // Process creation touches the disk, so it stays off the executor.
-        let spawned = tokio::task::spawn_blocking(move || start(&found, &line, &env, session))
-            .await
-            .map_err(io::Error::other)?;
-        match spawned {
-            Ok(process) => Ok(process),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                Err(SshError::ProgramMissing(program))
-            }
-            Err(error) => Err(SshError::Io(error)),
-        }
+        Ok(self.command_argv(&program, script, batch))
     }
 
-    /// The whole command line: `ssh -T` with keepalives, the connect limit,
-    /// the extra options, batch mode without a relay, `--`, the destination
-    /// and the remote command.
-    fn command_line(&self, program: &Path, script: &str, batch: bool) -> OsString {
+    /// The whole command: `ssh -T` with keepalives, the connect limit, the
+    /// extra options, batch mode without a relay, `--`, the destination and
+    /// the remote command.
+    fn command_argv(&self, program: &Path, script: &str, batch: bool) -> Vec<String> {
         let mut args: Vec<String> = vec![
             program.to_string_lossy().into_owned(),
             // No terminal on the box: the tunnel speaks binary over stdio.
@@ -520,8 +428,7 @@ impl SshTransport {
         // ssh joins its remaining arguments into one command for the login
         // shell, so the script travels as one quoted word.
         args.push(format!("sh -c {}", sh_quote(script)));
-        let quoted: Vec<String> = args.iter().map(|arg| spawn::quote_arg(arg)).collect();
-        OsString::from(quoted.join(" "))
+        args
     }
 
     /// ssh's own failure in a finished run, classified from its stderr. A run
@@ -549,15 +456,6 @@ impl SshTransport {
         SshError::NotInstalled {
             destination: self.destination.clone(),
             permanent: self.first(),
-        }
-    }
-
-    /// [`SshError::Preamble`] for this box, permanent as
-    /// [`PreambleError::is_permanent`] says before or after the first tunnel.
-    fn preamble_error(&self, error: PreambleError) -> SshError {
-        SshError::Preamble {
-            permanent: error.is_permanent(self.first()),
-            error,
         }
     }
 
@@ -592,86 +490,12 @@ impl Transport for SshTransport {
     }
 }
 
-/// Starts `program` with `line` inside a new kill-on-close job. The
-/// environment is this process's, without the per-drive `=C:` entries (which
-/// cannot go into a block) and with `env` replacing any spelling of its
-/// names. Blocking.
-fn start(
-    program: &Path,
-    line: &OsStr,
-    env: &[(&'static str, OsString)],
-    session: bool,
-) -> io::Result<(SshProcess, Pipes)> {
-    let replaced = |name: &OsStr| {
-        name.to_str().is_none_or(|name| {
-            name.starts_with('=')
-                || name.eq_ignore_ascii_case(SOCKET_ENV)
-                || env.iter().any(|(own, _)| name.eq_ignore_ascii_case(own))
-        })
-    };
-    let mut variables: Vec<(OsString, OsString)> = std::env::vars_os()
-        .filter(|(name, _)| !replaced(name))
-        .collect();
-    variables.extend(
-        env.iter()
-            .map(|(name, value)| (OsString::from(name), value.clone())),
-    );
-    let environment = Environment::new(variables)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let job = Job::create(JobOptions {
-        kill_on_close: true,
-        die_on_unhandled_exception: true,
-    })?;
-    let (out_read, out_write) = spawn::pipe()?;
-    let (err_read, err_write) = spawn::pipe()?;
-    let stdin_pipe = if session { Some(spawn::pipe()?) } else { None };
-    let child = spawn::spawn(&Spawn {
-        program,
-        command_line: line,
-        environment: Some(&environment),
-        cwd: None,
-        stdio: Stdio::Handles {
-            stdin: stdin_pipe
-                .as_ref()
-                .map_or(Stream::Null, |(read, _)| Stream::Handle(read.as_handle())),
-            stdout: Stream::Handle(out_write.as_handle()),
-            stderr: Stream::Handle(err_write.as_handle()),
-        },
-        inherit: &[],
-        job: Some(&job),
-        // ssh shares the daemon's hidden console: no window, no console host.
-        flags: CreationFlags::default(),
-    })?;
-    // ssh holds its own ends now; this process keeps only the other ones, so
-    // ssh's exit reaches the readers as end of file.
-    drop((out_write, err_write));
-    let stdin = stdin_pipe.map(|(read, write)| {
-        drop(read);
-        writer(write)
-    });
-    Ok((
-        SshProcess {
-            _job: job,
-            child: Arc::new(child),
-        },
-        Pipes {
-            stdin,
-            stdout: reader(out_read),
-            stderr: reader(err_read),
-        },
-    ))
-}
-
-/// An async reader over the reading end of an anonymous pipe. Anonymous pipes
-/// have no overlapped I/O, so tokio reads them on its blocking pool, as it
-/// does a child's standard streams.
-fn reader(pipe: PipeReader) -> File {
-    File::from_std(std::fs::File::from(OwnedHandle::from(pipe)))
-}
-
-/// An async writer over the writing end of an anonymous pipe; see [`reader`].
-fn writer(pipe: PipeWriter) -> File {
-    File::from_std(std::fs::File::from(OwnedHandle::from(pipe)))
+/// The lines of what the box printed, without their line breaks.
+fn lines(output: &[u8]) -> Vec<String> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .map(|line| line.trim_end_matches('\r').to_owned())
+        .collect()
 }
 
 /// Resolves a bare `ssh` to the system OpenSSH client
@@ -744,140 +568,10 @@ fn tail(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
 }
 
-/// How the output before the sentinel ended.
-#[derive(Debug, PartialEq, Eq)]
-enum Header {
-    /// The sentinel came; the lines before it.
-    Ready(Vec<String>),
-    /// End of file first. `printed` says whether the box wrote anything, which
-    /// means ssh had authenticated and the box's side ended the session.
-    Ended { printed: bool },
-}
-
-/// Reads lines until `sentinel`. The reader keeps whatever follows the
-/// sentinel for the tunnel.
-async fn read_header<R: AsyncRead + Unpin>(
-    reader: &mut BufReader<R>,
-    sentinel: &str,
-) -> io::Result<Header> {
-    let mut lines = Vec::new();
-    let mut total = 0;
-    loop {
-        let mut line = Vec::new();
-        let read = (&mut *reader)
-            .take(MAX_HEADER + 1 - total)
-            .read_until(b'\n', &mut line)
-            .await?;
-        if read == 0 {
-            return Ok(Header::Ended { printed: total > 0 });
-        }
-        total += read as u64;
-        if total > MAX_HEADER {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "the box printed too much before the probe finished",
-            ));
-        }
-        let text = String::from_utf8_lossy(&line);
-        let text = text.trim_end_matches(['\r', '\n']);
-        if text == sentinel {
-            return Ok(Header::Ready(lines));
-        }
-        lines.push(text.to_owned());
-    }
-}
-
-/// Reads `reader` to its end, keeping the last [`STDERR_KEPT`] bytes.
-async fn collect_tail(mut reader: impl AsyncRead + Unpin) -> Vec<u8> {
-    let mut kept = Vec::new();
-    let mut buffer = [0u8; 8192];
-    loop {
-        match reader.read(&mut buffer).await {
-            Ok(0) | Err(_) => return kept,
-            Ok(read) => {
-                kept.extend_from_slice(&buffer[..read]);
-                if kept.len() > STDERR_KEPT {
-                    kept.drain(..kept.len() - STDERR_KEPT);
-                }
-            }
-        }
-    }
-}
-
-/// The tunnel's standard streams as one duplex.
-///
-/// At end of file it waits for ssh's exit status, so a crashed or missing
-/// `tunnel` command surfaces as an error carrying its stderr instead of a
-/// bare disconnect, and a stopped box daemon as [`SshError::BoxDaemonStopped`].
-pub struct SshStream {
-    io: Joined<BufReader<File>, File>,
-    destination: String,
-    exit: Option<oneshot::Receiver<ExitInfo>>,
-    finished: Option<Option<TunnelExit>>,
-    _stop: oneshot::Sender<()>,
-}
-
-impl SshStream {
-    /// Resolves end of file into success or the remote failure.
-    fn poll_eof(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.finished.is_none() {
-            let outcome = match self.exit.as_mut() {
-                Some(exit) => match ready!(Pin::new(exit).poll(cx)) {
-                    Ok(info) => TunnelExit::from_info(info),
-                    Err(_) => None,
-                },
-                None => None,
-            };
-            self.exit = None;
-            self.finished = Some(outcome);
-        }
-        match &self.finished {
-            Some(Some(exit)) => Poll::Ready(Err(exit.to_io(&self.destination))),
-            _ => Poll::Ready(Ok(())),
-        }
-    }
-}
-
-impl AsyncRead for SshStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        if this.finished.is_some() {
-            return this.poll_eof(cx);
-        }
-        let before = buf.filled().len();
-        ready!(Pin::new(&mut this.io).poll_read(cx, buf))?;
-        if buf.filled().len() == before && buf.remaining() > 0 {
-            return this.poll_eof(cx);
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl AsyncWrite for SshStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().io).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_shutdown(cx)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use devlanes_testing::fake_tool::{Behaviour, install};
+    use std::sync::Arc;
 
     use super::*;
     use crate::askpass::{AskpassPrompt, PromptRelay};
@@ -1130,32 +824,52 @@ mod tests {
         assert!(!TransportError::from(later).is_permanent());
     }
 
-    /// A tunnel of another protocol stops the link at any time; a silent one
-    /// stops it only before the first tunnel opened.
+    /// A box whose probe finds no devlanes ends the session after the
+    /// sentinel, which is a missing binary, not a failed tunnel.
     #[test]
-    fn preamble_failures_follow_the_first_connection() {
+    fn a_box_without_devlanes_ends_after_the_probe() -> TestResult {
         let transport = SshTransport::new("box", SshOptions::new(r"C:\h"));
-        let protocol = || PreambleError::Protocol {
-            found: devlanes_transport::PROTOCOL_VERSION + 1,
-            output: Vec::new(),
+        let start = "devlanes-probe-1";
+        let end = "devlanes-tunnel-ready-1";
+        let error = CommandError::Preamble {
+            error: PreambleError::Ended {
+                output: format!(
+                    "motd\n{start}\ndevlanes-probe:os=Linux\ndevlanes-probe:arch=x86_64\n\
+                         devlanes-probe:program=\n{end}\n"
+                )
+                .into_bytes(),
+            },
+            permanent: false,
+            stderr: String::new(),
         };
-        let silent = || PreambleError::Silent {
-            waited: crate::PREAMBLE_WAIT,
-            output: Vec::new(),
-        };
-        assert!(transport.preamble_error(protocol()).is_permanent());
-        assert!(transport.preamble_error(silent()).is_permanent());
-        transport.connected.store(true, Ordering::Relaxed);
-        let mismatch = transport.preamble_error(protocol());
-        assert!(mismatch.is_permanent());
+        let error = transport.session_failed(error, start, end);
         assert!(
-            mismatch.to_string().contains("install the same release"),
-            "{mismatch}"
+            matches!(
+                error,
+                SshError::NotInstalled {
+                    permanent: true,
+                    ..
+                }
+            ),
+            "{error:?}"
         );
-        assert!(TransportError::from(mismatch).is_permanent());
-        let later = transport.preamble_error(silent());
-        assert!(!later.is_permanent());
-        assert!(!TransportError::from(later).is_permanent());
+        let probe = transport.remembered().ok_or("no probe remembered")?;
+        assert_eq!(probe.platform.os, "linux");
+        // With devlanes found, the same end is the tunnel's own failure.
+        let error = CommandError::Preamble {
+            error: PreambleError::Ended {
+                output: format!(
+                    "{start}\ndevlanes-probe:os=Linux\ndevlanes-probe:arch=x86_64\n\
+                         devlanes-probe:program=/usr/bin/devlanes\n{end}\n"
+                )
+                .into_bytes(),
+            },
+            permanent: false,
+            stderr: String::new(),
+        };
+        let error = transport.session_failed(error, start, end);
+        assert!(matches!(error, SshError::Tunnel(_)), "{error:?}");
+        Ok(())
     }
 
     /// An ssh that never prints the sentinel fails the session once the
@@ -1243,64 +957,42 @@ mod tests {
         );
     }
 
-    /// The command line splits back into the arguments ssh needs, the remote
-    /// command as one argument whatever quotes it holds.
+    /// The command keeps the remote command as one argument whatever quotes it
+    /// holds; the command transport quotes each argument for ssh's parser.
     #[test]
-    fn command_lines_keep_the_remote_command_whole() {
+    fn commands_keep_the_remote_command_whole() {
         let mut options = SshOptions::new(r"C:\h");
         options.ssh_options = vec![r#"IdentityFile="C:\Users\a b\key""#.to_owned()];
         let transport = SshTransport::new("acme@box", options);
         let script = r#"printf '%s\n' "$p" 'x'"#;
-        let line = transport.command_line(
+        let argv = transport.command_argv(
             Path::new(r"C:\Windows\System32\OpenSSH\ssh.exe"),
             script,
             true,
         );
-        let line = line.to_string_lossy();
-        assert!(
-            line.starts_with(r"C:\Windows\System32\OpenSSH\ssh.exe -T -o ServerAliveInterval=15"),
-            "{line}"
-        );
-        assert!(
-            line.contains(r#"-o "IdentityFile=\"C:\Users\a b\key\"""#),
-            "{line}"
-        );
-        assert!(line.contains("-o BatchMode=yes -- acme@box "), "{line}");
-        assert!(
-            line.ends_with(r#""sh -c 'printf '\''%s\n'\'' \"$p\" '\''x'\'''""#),
-            "{line}"
-        );
-    }
-
-    /// Output before the sentinel is the header; what follows stays buffered for
-    /// the tunnel; end of file first says whether anything was printed.
-    #[tokio::test]
-    async fn headers_end_at_the_sentinel_and_keep_the_rest() -> TestResult {
-        let mut reader = BufReader::new(&b"motd\nLinux\r\nx86_64\n/bin/devlanes\nready-7\nMUX"[..]);
-        let header = read_header(&mut reader, "ready-7").await?;
         assert_eq!(
-            header,
-            Header::Ready(vec![
-                "motd".to_owned(),
-                "Linux".to_owned(),
-                "x86_64".to_owned(),
-                "/bin/devlanes".to_owned()
-            ])
+            argv[..4],
+            [
+                r"C:\Windows\System32\OpenSSH\ssh.exe",
+                "-T",
+                "-o",
+                "ServerAliveInterval=15"
+            ]
         );
-        let mut rest = String::new();
-        reader.read_to_string(&mut rest).await?;
-        assert_eq!(rest, "MUX");
-
-        let mut reader = BufReader::new(&b"motd\n"[..]);
+        let at = argv
+            .iter()
+            .position(|arg| arg == r#"IdentityFile="C:\Users\a b\key""#)
+            .expect("the identity option");
+        assert_eq!(argv[at - 1], "-o");
         assert_eq!(
-            read_header(&mut reader, "other").await?,
-            Header::Ended { printed: true }
+            argv[argv.len() - 5..],
+            [
+                "-o",
+                "BatchMode=yes",
+                "--",
+                "acme@box",
+                r#"sh -c 'printf '\''%s\n'\'' "$p" '\''x'\'''"#
+            ]
         );
-        let mut reader = BufReader::new(&b""[..]);
-        assert_eq!(
-            read_header(&mut reader, "other").await?,
-            Header::Ended { printed: false }
-        );
-        Ok(())
     }
 }

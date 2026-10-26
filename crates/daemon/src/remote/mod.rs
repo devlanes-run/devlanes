@@ -810,7 +810,9 @@ impl Inner {
             self.remote.wake_others(old.serial);
             self.refresh_range_overlaps();
         }
-        let (conn, guard) = self.open_host(host, identity, watcher, connected_before)?;
+        let (conn, guard) = self
+            .open_host(host, identity, watcher, connected_before)
+            .await?;
         lock(&self.remote.hosts).insert(host.to_owned(), conn.clone());
         Ok((conn, guard))
     }
@@ -843,7 +845,7 @@ impl Inner {
 
     /// Starts the link and the host's watcher and mirror tasks, with
     /// `watcher` registered for prompts before the link's first attempt.
-    fn open_host(
+    async fn open_host(
         self: &Arc<Self>,
         host: &str,
         identity: identity::ClientIdentity,
@@ -854,11 +856,13 @@ impl Inner {
         let prompter = Arc::new(HostPrompter {
             board: board.clone(),
         });
+        let remote = self
+            .integ
+            .remote
+            .transport(host, prompter, connected_before)
+            .await?;
         let transport = Arc::new(Attended {
-            inner: self
-                .integ
-                .remote
-                .transport(host, prompter, connected_before)?,
+            inner: remote.transport,
             board: board.clone(),
         });
         let guard = watcher.map(|session| board.watch(session));
@@ -868,7 +872,7 @@ impl Inner {
         let link = Link::spawn(transport, options, self.integ.remote.backoff());
         let conn = Arc::new(HostConn {
             name: host.to_owned(),
-            kind: self.integ.remote.kind(),
+            kind: remote.kind,
             state: link.state(),
             registry: link.registry().clone(),
             link: tokio::sync::Mutex::new(Some(link)),

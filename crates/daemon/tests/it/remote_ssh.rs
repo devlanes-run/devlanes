@@ -20,9 +20,8 @@ use std::{
     time::Duration,
 };
 
-use devlanes_daemon::integrations::{RemoteConnector, RemotePrompter};
+use devlanes_daemon::integrations::{RemoteConnector, RemotePrompter, RemoteTransport};
 use devlanes_proto::{Context, Method, RpcError};
-use devlanes_transport::Transport;
 use devlanes_transport_ssh::{SshOptions, SshTransport};
 use serde_json::{Value, json};
 use tokio::{
@@ -50,14 +49,15 @@ const NO_FILE: &str = "NUL";
 /// loopback only (the box is another machine, so nothing here holds its ports).
 struct EnvConnector;
 
+#[async_trait::async_trait]
 impl RemoteConnector for EnvConnector {
     /// Batch mode: the key in the environment needs no prompt.
-    fn transport(
+    async fn transport(
         &self,
         host: &str,
         _prompts: Arc<dyn RemotePrompter>,
         connected_before: bool,
-    ) -> Result<Arc<dyn Transport>, RpcError> {
+    ) -> Result<RemoteTransport, RpcError> {
         let home = std::env::temp_dir();
         let mut options = SshOptions::new(home);
         options.connected_before = connected_before;
@@ -78,11 +78,10 @@ impl RemoteConnector for EnvConnector {
                 "StrictHostKeyChecking=yes".to_owned(),
             ]);
         }
-        Ok(Arc::new(SshTransport::new(host, options)))
-    }
-
-    fn kind(&self) -> &'static str {
-        "ssh"
+        Ok(RemoteTransport {
+            transport: Arc::new(SshTransport::new(host, options)),
+            kind: "ssh",
+        })
     }
 
     fn mirror_addresses(&self) -> Vec<IpAddr> {

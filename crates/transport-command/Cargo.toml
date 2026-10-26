@@ -1,0 +1,26 @@
+[package]
+name = "devlanes-transport-command"
+description = "Command transport for devlanes remote connect: runs a local command whose stdio reaches a box's tunnel"
+version = "0.4.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+devlanes-transport = { path = "../transport" }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+# Every command starts inside a kill-on-close job, as ssh.exe did before.
+[target.'cfg(windows)'.dependencies]
+devlanes-sys-windows = { path = "../sys-windows" }
+
+[dev-dependencies]
+devlanes-sys = { path = "../sys" }
+tempfile.workspace = true

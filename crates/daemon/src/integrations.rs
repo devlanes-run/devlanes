@@ -843,24 +843,29 @@ pub trait RemotePrompter: Send + Sync {
     async fn ask(&self, prompt: RemotePrompt) -> Option<String>;
 }
 
-/// Builds transports to boxes; the composition root wires SSH, tests an in-memory pipe.
+/// A transport to one box, from [`RemoteConnector::transport`].
+pub struct RemoteTransport {
+    pub transport: Arc<dyn devlanes_transport::Transport>,
+    /// Transport name recorded in `remote_hosts` and shown by `remote ls`,
+    /// such as `ssh` or `command`.
+    pub kind: &'static str,
+}
+
+/// Builds transports to boxes; the composition root wires SSH and commands,
+/// tests an in-memory pipe.
+#[async_trait]
 pub trait RemoteConnector: Send + Sync {
     /// A transport to `host`; prompts during authentication go to `prompts`.
     /// `connected_before` is set for a box an earlier daemon connected, which
     /// this daemon restores: its failures count as after a first connection,
     /// so rejected credentials wait for a sign-in instead of failing for good,
     /// and a box that no longer resolves is retried until `remote disconnect`.
-    fn transport(
+    async fn transport(
         &self,
         host: &str,
         prompts: Arc<dyn RemotePrompter>,
         connected_before: bool,
-    ) -> Result<Arc<dyn devlanes_transport::Transport>, devlanes_proto::RpcError>;
-
-    /// Transport name recorded in `remote_hosts`.
-    fn kind(&self) -> &'static str {
-        "ssh"
-    }
+    ) -> Result<RemoteTransport, devlanes_proto::RpcError>;
 
     /// Loopback addresses that mirrored ports bind; each port is bound on all of them.
     fn mirror_addresses(&self) -> Vec<std::net::IpAddr> {
@@ -879,14 +884,15 @@ pub trait RemoteConnector: Send + Sync {
 /// Connector used when no transport is registered: `connect` is unsupported.
 pub struct NoRemote;
 
+#[async_trait]
 impl RemoteConnector for NoRemote {
     /// Refuses with `not_supported_yet`.
-    fn transport(
+    async fn transport(
         &self,
         _: &str,
         _: Arc<dyn RemotePrompter>,
         _: bool,
-    ) -> Result<Arc<dyn devlanes_transport::Transport>, devlanes_proto::RpcError> {
+    ) -> Result<RemoteTransport, devlanes_proto::RpcError> {
         Err(devlanes_proto::RpcError::new(
             "not_supported_yet",
             serde_json::json!({"feature": "remote transport"}),
