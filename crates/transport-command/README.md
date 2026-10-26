@@ -29,7 +29,7 @@ async fn connect() -> Result<Session, Box<dyn std::error::Error>> {
 
 A connect fails for good when the program cannot start, when the box speaks another protocol, and, before the first connection, when the command exits with 127 (a program it runs was not found, usually devlanes inside the box). Silence or more than 64 KiB of output before the preamble is permanent only before the first connection. Exit status 75 (`devlanes_transport::EXIT_DAEMON_STOPPED`) is `CommandError::DaemonStopped`, temporary and with the fix for `remote.start_daemon: false`. Other failures are temporary and carry the exit status, the last 4 KiB of stderr and what the command printed.
 
-The command gets this process's environment and no terminal. A prompt it shows has nobody to answer it, so it fails or hangs until the preamble wait ends.
+The command gets this process's environment without the variables devlanes sets for its own processes (`INTERNAL_ENV`: its home, the daemon's readiness pipe and the ssh prompt relay), and no terminal. A prompt it shows has nobody to answer it, so it fails or hangs until the preamble wait ends.
 
 Whatever the command starts ends with it. On Unix it leads a process group of its own, which is killed when the stream or `run` drops it; a program that moves to another group or session leaves it. On Windows each command runs in a kill-on-close job, which also ends with the daemon. It shares the daemon's hidden console, or gets a windowless one when there is none. A program without a directory is looked up on `PATH` with `.exe`, then `.com` added, unless it already ends in one of them; batch files need `cmd /c`.
 
