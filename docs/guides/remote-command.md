@@ -84,7 +84,7 @@ remote:
 
 ## Differences from SSH
 
-The command runs as a child of your local daemon, with the daemon's environment except its own `DEVLANES_HOME`, and no terminal. Nothing relays its prompts: a password prompt, a device-code login or a "do you trust this host" question has nobody to answer it, so the connection fails or waits until it gives up. Sign in to the tool beforehand (`gh auth login`, `kubectl` credentials, `az login`), and make sure the daemon sees the same environment, such as `KUBECONFIG` or `DOCKER_HOST`; after changing it, `devlanes daemon restart` from the shell that has it.
+The command runs as a child of your local daemon, with no terminal and the daemon's environment except the variables devlanes sets for its own processes (`DEVLANES_HOME`, `DEVLANES_READY_FD`, `DEVLANES_READY_STEPS` and `DEVLANES_ASKPASS_SOCKET`). Nothing relays its prompts: a password prompt, a device-code login or a "do you trust this host" question has nobody to answer it, so the connection fails or waits until it gives up. Sign in to the tool beforehand (`gh auth login`, `kubectl` credentials, `az login`), and make sure the daemon sees the same environment, such as `KUBECONFIG` or `DOCKER_HOST`; after changing it, `devlanes daemon restart` from the shell that has it.
 
 There is no ControlMaster. Every connection and every reconnect runs the command again, and a reconnect after sleep or a network change is a new `docker exec` or `kubectl exec`.
 

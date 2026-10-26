@@ -3,6 +3,7 @@
 //!
 //! - `--print <text>` and `--stderr <text>`: write text as given.
 //! - `--line <text>`: write the text and a line break on stdout.
+//! - `--env <name>`: write `<name>=<value>`, or `<name> unset`, and a line break.
 //! - `--preamble`: write the tunnel preamble.
 //! - `--serve`: serve an empty box over stdio until the client leaves.
 //! - `--child`: start `fake-box --sleep 60` and print `child <pid>`.
@@ -27,6 +28,14 @@ async fn main() {
         match step.as_str() {
             "--print" => out(value().as_bytes()),
             "--line" => out(format!("{}\n", value()).as_bytes()),
+            "--env" => {
+                let name = value();
+                let line = match std::env::var_os(&name) {
+                    Some(set) => format!("{name}={}\n", set.to_string_lossy()),
+                    None => format!("{name} unset\n"),
+                };
+                out(line.as_bytes());
+            }
             "--stderr" => {
                 let _ = std::io::stderr().write_all(value().as_bytes());
             }

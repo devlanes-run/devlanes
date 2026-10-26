@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use devlanes_transport::{PreambleError, Session, SessionOptions, Transport};
 use devlanes_transport_command::{
-    CommandError, CommandOptions, CommandTransport, EXIT_NOT_FOUND, Ready, run,
+    CommandError, CommandOptions, CommandTransport, EXIT_NOT_FOUND, INTERNAL_ENV, Ready, run,
 };
 use tokio::io::AsyncReadExt;
 
@@ -337,6 +337,79 @@ async fn run_collects_output_and_ends_slow_commands() -> TestResult {
         let slow = fake(&["--sleep", "30"]);
         let limit = Duration::from_millis(300);
         assert!(run(slow, &options, limit).await?.is_none());
+        Ok(())
+    })
+    .await?
+}
+
+/// Set for the copy of this test binary that runs [`helper_internal_variables`].
+const HELPER_ENV: &str = "DEVLANES_TRANSPORT_COMMAND_TEST_HELPER";
+
+/// devlanes' own variables never reach a command, even when this process
+/// has them. Setting them here would need `unsafe`, so a copy of this test
+/// binary gets them and runs the checks in [`helper_internal_variables`].
+#[tokio::test]
+async fn internal_variables_stay_out() -> TestResult {
+    let mut helper = tokio::process::Command::new(std::env::current_exe()?);
+    helper
+        .args([
+            "--exact",
+            "helper_internal_variables",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(HELPER_ENV, "1")
+        .env("DEVLANES_HOME", "/acme/home")
+        .env("DEVLANES_READY_FD", "1")
+        .env("DEVLANES_READY_STEPS", "1")
+        .env("DEVLANES_ASKPASS_SOCKET", "/acme/askpass")
+        .env("ACME_KEPT", "kept")
+        .env("ACME_REMOVED", "removed")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(LIMIT, helper.output()).await??;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success() && stdout.contains("internal variables checked"),
+        "{stdout}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(())
+}
+
+/// [`internal_variables_stay_out`]'s checks, in the copy of this binary that
+/// has the variables: a command gets neither [`INTERNAL_ENV`] nor
+/// `env_remove`, keeps the rest, and still gets what `env` sets.
+#[tokio::test]
+#[ignore = "run by internal_variables_stay_out"]
+async fn helper_internal_variables() -> TestResult {
+    if std::env::var_os(HELPER_ENV).is_none() {
+        return Ok(());
+    }
+    tokio::time::timeout(LIMIT, async {
+        let names = INTERNAL_ENV
+            .into_iter()
+            .chain(["ACME_KEPT", "ACME_REMOVED"]);
+        let mut steps: Vec<&str> = names.flat_map(|name| ["--env", name]).collect();
+        steps.extend(["--preamble", "--sleep", "60"]);
+        let mut options = CommandOptions::new("acme");
+        options.env_remove = vec!["ACME_REMOVED".into()];
+        let opened = CommandTransport::new(fake(&steps), options.clone())
+            .open()
+            .await?;
+        assert_eq!(
+            String::from_utf8_lossy(&opened.header),
+            "DEVLANES_HOME unset\nDEVLANES_READY_FD unset\nDEVLANES_READY_STEPS unset\n\
+             DEVLANES_ASKPASS_SOCKET unset\nACME_KEPT=kept\nACME_REMOVED unset\n"
+        );
+        drop(opened);
+
+        options.env = vec![("DEVLANES_ASKPASS_SOCKET".into(), "/acme/relay".into())];
+        let output = run(fake(&["--env", "DEVLANES_ASKPASS_SOCKET"]), &options, LIMIT)
+            .await?
+            .ok_or("did not finish")?;
+        assert_eq!(output.stdout, b"DEVLANES_ASKPASS_SOCKET=/acme/relay\n");
+        println!("internal variables checked");
         Ok(())
     })
     .await?

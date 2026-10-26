@@ -59,6 +59,21 @@ const STDERR_GRACE: Duration = Duration::from_secs(5);
 /// Bytes of output before a failure an error message shows, from the end.
 const SHOWN: usize = 4096;
 
+/// Variables devlanes sets for its own processes, which a command never
+/// inherits: the daemon's home and the readiness pipe its client reads
+/// (`DEVLANES_HOME`, `DEVLANES_READY_FD`, `DEVLANES_READY_STEPS`), and the
+/// prompt relay of a devlanes ssh run (`DEVLANES_ASKPASS_SOCKET`). A devlanes
+/// the command starts on this machine would otherwise use the daemon's home
+/// and pipe, and anything it runs could send prompts to the relay.
+/// [`CommandOptions::env`] can still set them. The rest of the environment,
+/// such as `PATH`, `SSH_AUTH_SOCK` or `KUBECONFIG`, is inherited.
+pub const INTERNAL_ENV: [&str; 4] = [
+    "DEVLANES_HOME",
+    "DEVLANES_READY_FD",
+    "DEVLANES_READY_STEPS",
+    "DEVLANES_ASKPASS_SOCKET",
+];
+
 /// Settings for [`CommandTransport`].
 #[derive(Debug, Clone)]
 pub struct CommandOptions {
@@ -75,7 +90,8 @@ pub struct CommandOptions {
     pub ready: Option<Ready>,
     /// Variables set for the command, on top of this process's environment.
     pub env: Vec<(OsString, OsString)>,
-    /// Variables of this process's environment the command does not get.
+    /// Variables of this process's environment the command does not get,
+    /// besides [`INTERNAL_ENV`].
     pub env_remove: Vec<OsString>,
     /// The box connected before, such as one a restarted daemon restores:
     /// failures are classified as after a first successful connection.
@@ -350,8 +366,8 @@ pub struct Output {
 /// [`Transport`] that runs one command per connection and speaks the mux
 /// over its standard input and output.
 ///
-/// The command inherits this process's environment and gets no terminal, so
-/// a prompt it shows has nobody to answer it.
+/// The command inherits this process's environment without [`INTERNAL_ENV`]
+/// and gets no terminal, so a prompt it shows has nobody to answer it.
 pub struct CommandTransport {
     argv: Vec<OsString>,
     options: CommandOptions,
@@ -423,14 +439,10 @@ impl CommandTransport {
             program: program.to_string_lossy().into_owned(),
             source,
         };
-        let (process, pipes) = process::start(
-            &self.argv,
-            &self.options.env,
-            &self.options.env_remove,
-            true,
-        )
-        .await
-        .map_err(spawn_error)?;
+        let (process, pipes) =
+            process::start(&self.argv, &self.options.env, &removed(&self.options), true)
+                .await
+                .map_err(spawn_error)?;
         let stdin = pipes
             .stdin
             .ok_or_else(|| spawn_error(io::Error::other("stdin was not piped")))?;
@@ -666,7 +678,7 @@ where
         program: program.to_string_lossy().into_owned(),
         source,
     };
-    let (mut process, pipes) = process::start(&argv, &options.env, &options.env_remove, false)
+    let (mut process, pipes) = process::start(&argv, &options.env, &removed(options), false)
         .await
         .map_err(spawn_error)?;
     let outcome = {
@@ -692,6 +704,16 @@ where
         Some(Err(source)) => Err(spawn_error(source)),
         None => Ok(None),
     }
+}
+
+/// What a command started with `options` does not inherit: [`INTERNAL_ENV`]
+/// and [`CommandOptions::env_remove`].
+fn removed(options: &CommandOptions) -> Vec<OsString> {
+    INTERNAL_ENV
+        .iter()
+        .map(OsString::from)
+        .chain(options.env_remove.iter().cloned())
+        .collect()
 }
 
 /// Reads `reader` to its end, keeping the last [`STDERR_KEPT`] bytes.

@@ -918,20 +918,6 @@ fn listener_status(bound: &Value, health: &[devlanes_proxy::ListenerHealth]) -> 
     status
 }
 
-/// Variables of the daemon's environment a box command does not get: its
-/// home and its readiness pipe.
-#[cfg(unix)]
-const BOX_COMMAND_ENV_REMOVED: [&str; 2] = ["DEVLANES_HOME", "DEVLANES_READY_FD"];
-
-/// Variables of the daemon's environment a box command does not get: its
-/// home, its readiness pipe and the askpass relay of `ssh.exe` runs.
-#[cfg(windows)]
-const BOX_COMMAND_ENV_REMOVED: [&str; 3] = [
-    "DEVLANES_HOME",
-    "DEVLANES_READY_FD",
-    devlanes_proto::remote::ASKPASS_ENV,
-];
-
 /// `connect`: the box's command from `remote.boxes` when the user config has
 /// one, otherwise system OpenSSH with ssh's prompts relayed to the attached CLI.
 struct BoxConnector {
@@ -963,9 +949,6 @@ impl RemoteConnector for BoxConnector {
         if let Some(command) = command {
             let mut options = devlanes_transport_command::CommandOptions::new(host);
             options.connected_before = connected_before;
-            // A devlanes the command starts on this machine would otherwise
-            // use this daemon's home and readiness pipe.
-            options.env_remove = BOX_COMMAND_ENV_REMOVED.map(Into::into).to_vec();
             return Ok(RemoteTransport {
                 transport: Arc::new(devlanes_transport_command::CommandTransport::new(
                     command, options,
@@ -2306,6 +2289,22 @@ mod tests {
     impl RemotePrompter for Unattended {
         async fn ask(&self, _prompt: RemotePrompt) -> Option<String> {
             None
+        }
+    }
+
+    /// The command transport's list of devlanes' own variables names the
+    /// ones the client and the ssh prompt relay define.
+    #[test]
+    fn box_commands_lose_the_variables_devlanes_sets() {
+        for name in [
+            devlanes_client::READY_STEPS_ENV,
+            devlanes_proto::remote::ASKPASS_ENV,
+            devlanes_transport_ssh::askpass::SOCKET_ENV,
+        ] {
+            assert!(
+                devlanes_transport_command::INTERNAL_ENV.contains(&name),
+                "{name}"
+            );
         }
     }
 

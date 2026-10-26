@@ -236,9 +236,9 @@ impl SshTransport {
     /// One ssh run of `command` to its end; ssh's own failure and a run past
     /// the authentication limit are errors.
     async fn probe_run(&self, command: &str) -> Result<Output, SshError> {
-        let askpass = self.askpass().await?;
-        let argv = self.argv(command, askpass.is_none()).await?;
-        let options = self.command_options(askpass.as_ref());
+        let stop = self.run_token();
+        let (askpass, argv) = self.prepare(command, &stop).await?;
+        let options = self.command_options(askpass.as_ref(), stop);
         let output = devlanes_transport_command::run(argv, &options, self.options.auth_timeout)
             .await
             .map_err(|error| self.spawn_failed(error))?;
@@ -299,6 +299,7 @@ impl SshTransport {
 
     /// One session with the `kind` of script; see [`SshTransport::open`].
     async fn session(&self, kind: Script) -> Result<Prefixed<CommandStream>, Failed> {
+        let closed = self.run_token();
         let token = crate::random_token().map_err(|error| Failed::before_start(error.into()))?;
         let start = format!("devlanes-probe-{token}");
         let end = format!("devlanes-tunnel-ready-{token}");
@@ -312,28 +313,22 @@ impl SshTransport {
                 probe::windows_session_command(program, &start, &end, shell)
             }
         };
-        let askpass = self.askpass().await.map_err(Failed::before_start)?;
-        let argv = self
-            .argv(&command, askpass.is_none())
+        let (askpass, argv) = self
+            .prepare(&command, &closed)
             .await
             .map_err(Failed::before_start)?;
-        let mut options = self.command_options(askpass.as_ref());
+        let mut options = self.command_options(askpass.as_ref(), closed.clone());
         options.ready = Some(Ready {
             line: end.clone(),
             wait: self.options.auth_timeout,
         });
-        let closed = options.stop.clone();
         let opened = CommandTransport::new(argv, options).open().await;
         // Prompts end with authentication; the box has answered by now.
         drop(askpass);
         let opened = match opened {
             Ok(opened) => opened,
             // A `close` while ssh authenticated ended this session too.
-            Err(_) if closed.is_cancelled() => {
-                return Err(Failed::before_start(SshError::Io(io::Error::other(
-                    "the SSH transport was closed",
-                ))));
-            }
+            Err(_) if closed.is_cancelled() => return Err(Failed::before_start(closed_error())),
             Err(error) => {
                 let started = after_line(error.output(), &start).is_some();
                 let refused = !started && ran_on_box(&error);
@@ -452,10 +447,44 @@ impl SshTransport {
         }
     }
 
+    /// The stop token of one ssh run. Taken before the run's first await, so
+    /// a [`SshTransport::close`] while it starts stops it too: `close`
+    /// replaces the transport's token, and a later child would miss it.
+    fn run_token(&self) -> CancellationToken {
+        self.sessions
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .child_token()
+    }
+
+    /// The prompt relay and the ssh command line for one run of `command`,
+    /// or [`closed_error`] as soon as `stop` is cancelled, so a run closed
+    /// meanwhile never starts ssh.
+    async fn prepare(
+        &self,
+        command: &str,
+        stop: &CancellationToken,
+    ) -> Result<(Option<AskpassServer>, Vec<String>), SshError> {
+        let preparing = async {
+            let askpass = self.askpass().await?;
+            let argv = self.argv(command, askpass.is_none()).await?;
+            Ok((askpass, argv))
+        };
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => Err(closed_error()),
+            prepared = preparing => prepared,
+        }
+    }
+
     /// Options for one ssh run: messages name the box and the tunnel, the
-    /// relay's environment replaces any inherited one, and [`SshTransport::close`]
-    /// ends the run.
-    fn command_options(&self, askpass: Option<&AskpassServer>) -> CommandOptions {
+    /// relay's environment replaces any inherited one, and `stop` (from
+    /// [`SshTransport::run_token`]) ends the run.
+    fn command_options(
+        &self,
+        askpass: Option<&AskpassServer>,
+        stop: CancellationToken,
+    ) -> CommandOptions {
         let mut options = CommandOptions::new(&self.destination);
         options.what = crate::TUNNEL.to_owned();
         options.preamble_wait = crate::PREAMBLE_WAIT;
@@ -467,11 +496,7 @@ impl SshTransport {
             .map(|(name, value)| (OsString::from(name), value))
             .collect();
         options.env_remove = vec![OsString::from(SOCKET_ENV)];
-        options.stop = self
-            .sessions
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .child_token();
+        options.stop = stop;
         options
     }
 
@@ -625,6 +650,11 @@ fn ran_on_box(error: &CommandError) -> bool {
         } => true,
         _ => false,
     }
+}
+
+/// The error of a run that [`SshTransport::close`] ended.
+fn closed_error() -> SshError {
+    SshError::Io(io::Error::other("the SSH transport was closed"))
 }
 
 /// `script` as the remote command `sh -c '<script>'`.
@@ -1275,6 +1305,52 @@ mod tests {
             Ok(())
         })
         .await?
+    }
+
+    /// A `close` while a session prepares (ssh is looked up on the blocking
+    /// pool) ends the connect at once, and ssh never runs. The runtime's one
+    /// blocking thread is held busy, so the lookup cannot finish first; a
+    /// connect after the close runs ssh again.
+    #[test]
+    fn closing_during_startup_starts_no_ssh() -> TestResult {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()?;
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        runtime.block_on(async move {
+            tokio::time::timeout(Duration::from_secs(30), async move {
+                let dir = tempfile::tempdir()?;
+                let transport = fake(dir.path(), "ssh: connect to host box: refused\n", 255)?;
+                let busy = tokio::task::spawn_blocking(move || {
+                    let _ = held.recv();
+                });
+                let connecting = transport.connect();
+                tokio::pin!(connecting);
+                tokio::select! {
+                    biased;
+                    _ = &mut connecting => panic!("the connect finished without ssh's lookup"),
+                    () = std::future::ready(()) => {}
+                }
+                transport.close().await;
+                let Ok(Err(error)) =
+                    tokio::time::timeout(Duration::from_secs(5), &mut connecting).await
+                else {
+                    panic!("the closed connect did not end");
+                };
+                assert!(error.to_string().contains("closed"), "{error}");
+                drop(release);
+                busy.await?;
+                assert!(!dir.path().join("args").exists(), "ssh ran");
+                let Err(error) = transport.connect().await else {
+                    panic!("fake ssh unexpectedly connected");
+                };
+                assert!(error.to_string().contains("refused"), "{error}");
+                assert!(dir.path().join("args").exists(), "ssh did not run");
+                Ok(())
+            })
+            .await?
+        })
     }
 
     /// A missing client is a permanent error that names the optional feature.
