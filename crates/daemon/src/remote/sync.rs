@@ -89,7 +89,15 @@ pub(super) async fn run(engine: Weak<Inner>, conn: Arc<HostConn>, session: BoxSe
             }
             keep
         });
-        lock(&conn.syncs).retain(|key, _| keys.contains(key));
+        let dropped = {
+            let mut syncs = lock(&conn.syncs);
+            let before = syncs.len();
+            syncs.retain(|key, _| keys.contains(key));
+            syncs.len() != before
+        };
+        if dropped {
+            conn.mark_changed();
+        }
         let now = Instant::now();
         let accepted = entries
             .iter()
@@ -503,6 +511,7 @@ impl Drop for Interrupted {
             )
         {
             status["state"] = json!("interrupted");
+            self.conn.mark_changed();
         }
     }
 }
@@ -586,7 +595,14 @@ impl Status {
             "error": self.error,
             "updated_ms": self.updated_ms,
         });
-        lock(&conn.syncs).insert(key.to_owned(), value);
+        let previous = lock(&conn.syncs).insert(key.to_owned(), value);
+        // Counters move with every file; only a new state or error is news.
+        let news = previous.is_none_or(|previous| {
+            previous["state"] != self.state || previous["error"] != json!(self.error)
+        });
+        if news {
+            conn.mark_changed();
+        }
     }
 }
 

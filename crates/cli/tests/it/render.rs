@@ -2185,6 +2185,24 @@ fn failed_opens_are_one_line() {
     );
 }
 
+/// `remote ls` leaves the box's registry, which the TUI reads, to `--json`;
+/// a route shows the URL that opens it here.
+#[test]
+fn box_registries_stay_out_of_remote_ls() {
+    let hosts = json!({"items": [{
+        "host": "hetzner", "state": "connected", "transport": "ssh", "ports": [],
+        "routes": [{"host": "web.acme-1.localhost", "port": 20101, "lane": "acme@1",
+                    "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
+        "registry": {"lanes": [{"key": {"project": "acme", "lane": "1"}, "index": 1}],
+                     "units": [{"key": {"lane": {"project": "acme", "lane": "1"},
+                                        "kind": "service", "name": "registered-only"}}]},
+    }], "truncated": false, "next_cursor": null});
+    let text = render_text(Method::HostList, &hosts);
+    assert!(!text.contains("registry"), "{text}");
+    assert!(!text.contains("registered-only"), "{text}");
+    assert!(text.contains("https://web.acme-1.localhost"), "{text}");
+}
+
 /// A box waiting for a sign-in shows its state, the error and the command
 /// that resumes it in `remote ls`, and `connect` failing that way says so.
 #[test]

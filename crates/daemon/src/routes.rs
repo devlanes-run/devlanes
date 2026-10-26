@@ -38,6 +38,18 @@ pub(crate) struct LocalRoutes {
     pub warnings: Vec<LaneWarning>,
 }
 
+/// A route's state as `hosts` and `host.list` name it.
+pub(crate) fn route_state(status: &RouteStatus) -> &'static str {
+    match status {
+        RouteStatus::Ready => "ready",
+        RouteStatus::Idle => "idle",
+        RouteStatus::Starting => "starting",
+        RouteStatus::Failed { .. } => "failed",
+        RouteStatus::Reconnecting => "reconnecting",
+        RouteStatus::SignInNeeded => "sign_in_needed",
+    }
+}
+
 /// The owner of a claimed hostname.
 struct Claim {
     reference: String,
@@ -306,14 +318,7 @@ impl Inner {
             .route_entries()
             .into_iter()
             .map(|route| {
-                let state = match &route.status {
-                    RouteStatus::Ready => "ready",
-                    RouteStatus::Idle => "idle",
-                    RouteStatus::Starting => "starting",
-                    RouteStatus::Failed { .. } => "failed",
-                    RouteStatus::Reconnecting => "reconnecting",
-                    RouteStatus::SignInNeeded => "sign_in_needed",
-                };
+                let state = route_state(&route.status);
                 // Wildcards have no single address to open.
                 let url = (!route.host.contains('*'))
                     .then(|| devlanes_resolve::https_url(&route.host, https_port));

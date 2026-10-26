@@ -5,6 +5,7 @@
 //! reaches the buffer (see [`crate::text`]), so long or hostile text cannot
 //! spill into another widget or move the real terminal's cursor.
 
+mod boxes;
 pub(crate) mod daemon;
 mod dialog;
 mod list;
@@ -43,7 +44,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_header(app, frame, layout.header);
     match app.view {
         View::Project => {
-            if app.lanes.is_empty() {
+            if app.lanes.is_empty() && app.boxes.lanes.is_empty() {
                 render_welcome(app, frame, layout.body);
             } else {
                 if let Some(bar) = layout.lane_bar {
@@ -57,6 +58,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         }
         View::Monitor => monitor::render(app, frame, layout.body),
         View::Daemon => daemon::render(app, frame, layout.body),
+        View::Boxes => boxes::render(app, frame, layout.body),
     }
     render_footer(app, frame, layout.footer);
     if let Some(dialog) = &app.dialog {
@@ -433,20 +435,29 @@ fn severity(lane: &LaneSummary) -> u8 {
 }
 
 /// ` devlanes   1 acme ●   2 shop ·` on the left, the message, then
-/// `M monitor   D daemon` on the right.
+/// `M monitor   D daemon` on the right, and `B boxes` once a box is known.
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let width = usize::from(area.width);
     // The view buttons, right-aligned.
     let badge = daemon_badge(app);
+    let boxes_badge = boxes_badge(app);
     // Below 100 columns the badge's words would crowd out the message, so
     // the buttons of other views drop their labels; their keys stay.
-    let compact = badge.is_some() && width < 100;
+    let compact = (badge.is_some() || boxes_badge.is_some()) && width < 100;
     let mut buttons: Vec<(Vec<Span<'static>>, KeyCode)> = Vec::new();
-    for (key, label, view) in [
-        ('M', "monitor", View::Monitor),
-        ('D', "daemon", View::Daemon),
-    ] {
+    // `B boxes` only once this machine knows a box; B works either way.
+    let boxes = (!app.boxes.hosts.is_empty() || app.view == View::Boxes).then_some((
+        'B',
+        "boxes",
+        View::Boxes,
+    ));
+    let views = [
+        Some(('M', "monitor", View::Monitor)),
+        Some(('D', "daemon", View::Daemon)),
+        boxes,
+    ];
+    for (key, label, view) in views.into_iter().flatten() {
         let active = app.view == view;
         let label_style = if active {
             theme
@@ -460,14 +471,20 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
             spans.push(Span::styled(format!(" {label}"), label_style));
         }
         // `D daemon · 1 issue`, `D daemon · update`: a count alone said nothing.
-        if view == View::Daemon
-            && let Some((text, tone)) = &badge
-        {
+        let view_badge = match view {
+            View::Daemon => badge.as_ref(),
+            View::Boxes => boxes_badge.as_ref(),
+            _ => None,
+        };
+        if let Some((text, tone)) = view_badge {
             spans.push(Span::styled(format!(" · {text}"), theme.tone(*tone)));
         }
         buttons.push((spans, KeyCode::Char(key)));
     }
-    let buttons_width: usize = buttons.iter().map(|(s, _)| spans_width(s)).sum::<usize>() + 3 + 1;
+    // Three spaces between buttons, one after the last.
+    let buttons_width: usize = buttons.iter().map(|(s, _)| spans_width(s)).sum::<usize>()
+        + 3 * buttons.len().saturating_sub(1)
+        + 1;
     let mut x = area.right().saturating_sub(buttons_width as u16);
     let mut right: Vec<Span> = Vec::new();
     for (index, (spans, key)) in buttons.into_iter().enumerate() {
@@ -503,8 +520,7 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         .iter()
         .enumerate()
         .map(|(index, name)| {
-            let lanes: Vec<&LaneSummary> =
-                app.lanes.iter().filter(|l| l.project == *name).collect();
+            let lanes: Vec<&LaneSummary> = app.all_lanes().filter(|l| l.project == *name).collect();
             let worst = lanes.iter().max_by_key(|lane| severity(lane)).copied();
             let (glyph, tone) =
                 worst.map_or(("", Tone::Quiet), |lane| lane_glyph(theme, lane, app.spin));
@@ -545,9 +561,16 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     // The message takes what is left; tabs come first and scroll to keep the
     // shown project in view.
     let message = header_message(app);
-    let room = width.saturating_sub(buttons_width + used);
     // Each tab pads itself; one space separates them.
     let tab_widths: Vec<usize> = tabs.iter().map(|(_, s)| spans_width(s) + 1).collect();
+    // Tabs that already fold (`›`) leave a message 24 columns, so a notice
+    // such as why a box lane's key did nothing still shows.
+    let folds = used + tab_widths.iter().sum::<usize>() + 2 > width.saturating_sub(buttons_width);
+    let reserve = match &message {
+        Some((spans, _)) if folds => spans_width(spans).min(24) + 4,
+        _ => 0,
+    };
+    let room = width.saturating_sub(buttons_width + used + reserve);
     let active = current
         .as_ref()
         .and_then(|c| projects.iter().position(|p| p == c))
@@ -562,7 +585,7 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     }
     for (index, (name, spans)) in tabs.into_iter().enumerate().skip(first) {
         let w = tab_widths[index];
-        if used + w + 2 > width.saturating_sub(buttons_width) {
+        if used + w + 2 > width.saturating_sub(buttons_width + reserve) {
             left.push(Span::styled(" ›", theme.quiet()));
             used += 2;
             break;
@@ -603,7 +626,11 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         middle.extend(line.spans);
         middle.push(Span::raw("  "));
     } else {
-        middle.push(Span::raw(" ".repeat(free + 4)));
+        // At least one space after a folded tab strip's `›`; the buttons'
+        // trailing pad gives way for it.
+        middle.push(Span::raw(
+            " ".repeat(width.saturating_sub(used + buttons_width).max(1)),
+        ));
     }
     let mut spans = left;
     spans.extend(middle);
@@ -637,6 +664,28 @@ fn daemon_badge(app: &App) -> Option<(String, Tone)> {
         text.push_str(", update");
     }
     let tone = if fail > 0 {
+        Tone::Failure
+    } else {
+        Tone::Attention
+    };
+    Some((text, tone))
+}
+
+/// Boxes whose link is down or that have warnings: the count and tone of the
+/// boxes button's badge. A box only remembered, with no link, is no issue.
+fn boxes_badge(app: &App) -> Option<(String, Tone)> {
+    let hosts = &app.boxes.hosts;
+    let down = |state: &str| matches!(state, "reconnecting" | "needs_auth" | "failed");
+    let issues = hosts
+        .iter()
+        .filter(|h| down(&h.state) || !h.warnings.is_empty())
+        .count();
+    let text = match issues {
+        0 => return None,
+        1 => "1 issue".to_owned(),
+        n => format!("{n} issues"),
+    };
+    let tone = if hosts.iter().any(|h| h.state == "failed") {
         Tone::Failure
     } else {
         Tone::Attention
@@ -1049,6 +1098,13 @@ fn hints(app: &App) -> Vec<Hint> {
             }
             return hints;
         }
+        View::Boxes => {
+            return vec![
+                ("j k", "scroll", ch('j')),
+                ("tab", "projects", KeyCode::Tab),
+                ("esc", "back", KeyCode::Esc),
+            ];
+        }
         View::Project => {}
     }
     if app.filter.as_ref().is_some_and(|f| f.editing) {
@@ -1092,6 +1148,31 @@ fn hints(app: &App) -> Vec<Hint> {
     };
     let filter = ("/", "filter", ch('/'));
     let switch = ("[ ]", "switch lane", ch(']'));
+    // A box lane is read-only: what helps here, and the footer's note says
+    // where the rest happens.
+    if app.box_lane(&lane.reference).is_some() {
+        return match app.selected_id() {
+            Some(RowId::Section(_) | RowId::Group(..)) => {
+                vec![
+                    ("enter", "fold", KeyCode::Enter),
+                    filter,
+                    ("B", "boxes", ch('B')),
+                ]
+            }
+            Some(RowId::WholeLane) | None => vec![
+                ("o", "open in browser", ch('o')),
+                switch,
+                filter,
+                ("B", "boxes", ch('B')),
+            ],
+            _ => vec![
+                ("o", "open in browser", ch('o')),
+                ("z", "zoom", ch('z')),
+                filter,
+                ("B", "boxes", ch('B')),
+            ],
+        };
+    }
     match app.selected_id() {
         Some(RowId::WholeLane) => {
             let missing = lane
@@ -1270,12 +1351,35 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
     for hint in shown {
         record(&mut left, &mut x, hint);
     }
+    // On a box lane, where its start, stop and logs are, in what is left.
+    if let Some(note) = box_note(app).filter(|_| !typing && !copying) {
+        let room = budget.saturating_sub(used);
+        if room > 12 {
+            left.push(Span::styled(clip(&note, room), theme.quiet()));
+        }
+    }
     let mut right = Vec::new();
     let mut rx = area.right().saturating_sub(fixed_width as u16);
     for hint in fixed {
         record(&mut right, &mut rx, hint);
     }
     frame.render_widget(Paragraph::new(spread(left, right, width)), area);
+}
+
+/// The footer's note on a box lane: `read-only: manage it on hetzner (ssh
+/// hetzner)`, or without the ssh command for a box reached by a command.
+fn box_note(app: &App) -> Option<String> {
+    if app.view != View::Project {
+        return None;
+    }
+    let lane = app.selected_lane()?;
+    let (host, _) = app.box_lane(&lane.reference)?;
+    let name = clean(&host.host);
+    Some(if host.over_ssh() {
+        format!("read-only: manage it on {name} (ssh {name})")
+    } else {
+        format!("read-only: manage it on {name}")
+    })
 }
 
 /// The failed action on `target`, if any.

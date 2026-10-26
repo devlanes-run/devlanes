@@ -1,6 +1,6 @@
 # devlanes-tui
 
-The terminal UI opened by bare `devlanes`, `devlanes ui` and `devlanes start` on a terminal. It is a daemon client like the CLI: it talks to the daemon through `devlanes-client` and shows each project's lanes with a live terminal for the selected unit, a resource monitor and a daemon page.
+The terminal UI opened by bare `devlanes`, `devlanes ui` and `devlanes start` on a terminal. It is a daemon client like the CLI: it talks to the daemon through `devlanes-client` and shows each project's lanes with a live terminal for the selected unit, a resource monitor, a daemon page and, read-only, the lanes of connected remote boxes with a page for their connections (`boxes`).
 
 ## Usage
 
@@ -32,6 +32,7 @@ async fn main() -> Result<(), devlanes_tui::Error> {
 - `drive` runs the event loop on any ratatui backend with any event stream.
 - `app::App::update` turns messages into effects without I/O; `ui::render` draws an `App`.
 - `tree` builds a lane's rows; `monitor` sorts, filters and groups the monitor's rows; `graph` draws braille graphs, sparklines and meters in the load gradient.
+- `boxes` reads `host.list` and turns each connected box's registry into read-only lanes (`acme@1 @hetzner` in project `acme @hetzner`).
 
 ## Config example
 

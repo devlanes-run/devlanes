@@ -32,6 +32,8 @@ pub struct FakeApi {
     pub home: Option<PathBuf>,
     /// When set, `profile.list` fails with this daemon error.
     pub profiles_error: Option<RpcError>,
+    /// What `host.list` answers; no boxes unless a test sets some.
+    pub boxes: Mutex<Option<Value>>,
     pub calls: Mutex<Vec<String>>,
     pub events: Mutex<Option<mpsc::Sender<Result<Event, ApiError>>>>,
     /// Keeps attach output channels open so streams do not end on their own.
@@ -215,6 +217,12 @@ impl DaemonApi for FakeApi {
             lane,
             items: profiles(),
         })
+    }
+
+    async fn host_list(&self) -> Result<Value, ApiError> {
+        self.record("host.list".into());
+        let boxes = self.boxes.lock().ok().and_then(|b| b.clone());
+        Ok(boxes.unwrap_or_else(|| json!({"items": []})))
     }
 
     fn daemon_log(&self) -> Option<PathBuf> {

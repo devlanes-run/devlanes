@@ -58,13 +58,15 @@ pub enum Focus {
     Terminal,
 }
 
-/// What the body shows: the selected project, or one of the two views that
-/// open over it.
+/// What the body shows: the selected project, or one of the views that open
+/// over it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Project,
     Monitor,
     Daemon,
+    /// The boxes this machine connects to (`B`).
+    Boxes,
 }
 
 /// What a click on a top-bar, lane-bar or footer item does. Rendering records
@@ -610,6 +612,8 @@ pub enum Msg {
         lane: String,
         result: Result<Vec<TaskInfo>, ApiError>,
     },
+    /// `host.list`: the boxes and what they mirror here.
+    Boxes(Result<Value, ApiError>),
     /// A spinner frame passed; sent only while something spins.
     Spin,
     /// config.yaml as read for the options page.
@@ -683,6 +687,8 @@ pub enum Effect {
     FetchTasks {
         lane: String,
     },
+    /// `host.list`, answered with [`Msg::Boxes`].
+    FetchBoxes,
     FetchLogs {
         generation: u64,
         lane: String,
@@ -785,9 +791,33 @@ pub fn areas_with(width: u16, height: u16, zoom: bool, lane_bar: bool) -> Option
     })
 }
 
+/// What the TUI knows of the boxes this machine connects to.
+#[derive(Debug, Default)]
+pub struct BoxesView {
+    /// `host.list` as last fetched.
+    pub hosts: Vec<crate::boxes::BoxHost>,
+    /// The connected boxes' lanes, read-only, as the list draws them; they
+    /// come after this machine's lanes and never mix with them.
+    pub lanes: Vec<LaneSummary>,
+    /// Seconds since `hosts` arrived, so a retry countdown can count down.
+    pub age: u64,
+    /// Rows of the boxes view scrolled off its top.
+    pub scroll: usize,
+    /// The furthest `scroll` that still fills the page, as last drawn.
+    pub max_scroll: std::cell::Cell<usize>,
+    /// A fetch is in flight; another trigger only sets `again`.
+    fetching: bool,
+    again: bool,
+    /// Failures repeat on every fetch; only a change is reported.
+    last_error: Option<String>,
+    ticks: u8,
+}
+
 /// All TUI state.
 pub struct App {
     pub lanes: Vec<LaneSummary>,
+    /// Connected boxes and their read-only lanes (`host.list`).
+    pub boxes: BoxesView,
     pub loaded: bool,
     /// The selected row; its lane is the lane shown and its project the tab.
     pub selected: Option<Selected>,
@@ -912,6 +942,7 @@ impl App {
     pub fn new(width: u16, height: u16) -> Self {
         Self {
             lanes: Vec::new(),
+            boxes: BoxesView::default(),
             loaded: false,
             selected: None,
             focus: Focus::List,
@@ -982,15 +1013,19 @@ impl App {
         if matches!(self.dialog, Some(Dialog::Welcome(_))) {
             return vec![crate::welcome::DOCS_URL.into()];
         }
-        self.selected_lane()
-            .map(|lane| {
-                lane.units
-                    .iter()
-                    .filter_map(|unit| unit.urls.first())
-                    .map(|url| text::clean(url))
-                    .collect()
-            })
-            .unwrap_or_default()
+        let Some(lane) = self.selected_lane() else {
+            return Vec::new();
+        };
+        // A box unit's details list every URL that opens it here.
+        let every = self.box_lane(&lane.reference).is_some();
+        let containers = lane.containers.iter().map(|c| &c.urls);
+        lane.units
+            .iter()
+            .map(|unit| &unit.urls)
+            .chain(containers.filter(|_| every))
+            .flat_map(|urls| urls.iter().take(if every { usize::MAX } else { 1 }))
+            .map(|url| text::clean(url))
+            .collect()
     }
 
     /// The tab title: `devlanes · acme@0`, with how the lane stands when that
@@ -1289,6 +1324,7 @@ impl App {
                 // Someone may have started the daemon this TUI stopped.
                 self.daemon.stopped = false;
                 effects.push(Effect::Refresh);
+                self.fetch_boxes(&mut effects);
                 if reconnected {
                     self.reattach_if_closed(&mut effects);
                 }
@@ -1662,6 +1698,7 @@ impl App {
                 self.tasks.insert(lane, tasks);
                 self.after_change(&mut effects);
             }
+            Msg::Boxes(result) => self.boxes_loaded(result, &mut effects),
             Msg::Spin => self.spin = self.spin.wrapping_add(1),
             Msg::DaemonRestarted(result) | Msg::DaemonStarted(result) => {
                 let verb = if self.daemon.busy == Some("restarting") {
@@ -1895,6 +1932,11 @@ impl App {
         if event.event == events::PHASE {
             self.track_phase(&event.data);
         }
+        // Link states, warnings and `remote.mirror.changed` all change what
+        // `host.list` says.
+        if event.event.starts_with("remote.") || event.event == events::RESYNC {
+            self.fetch_boxes(effects);
+        }
         match event.event.as_str() {
             events::RESYNC => effects.push(Effect::Refresh),
             events::LANE_CHANGED => {
@@ -1997,7 +2039,7 @@ impl App {
         let lane_known = self
             .selected
             .as_ref()
-            .is_some_and(|s| self.lanes.iter().any(|lane| lane.reference == s.lane));
+            .is_some_and(|s| self.lane(&s.lane).is_some());
         if !lane_known {
             // A lane that went away (cleaned, removed) leaves the selection
             // in its project, on the lane numbered closest to it.
@@ -2077,14 +2119,35 @@ impl App {
             .lanes
             .iter()
             .find(|lane| lane.units.iter().any(|u| is_active(&u.state)));
+        // Box lanes only when this machine has none of its own.
         running
             .or(self.lanes.first())
+            .or(self.boxes.lanes.first())
             .map(|lane| lane.reference.clone())
+    }
+
+    /// Every lane the list can show: this machine's, then the boxes'.
+    pub fn all_lanes(&self) -> impl Iterator<Item = &LaneSummary> {
+        self.lanes.iter().chain(&self.boxes.lanes)
+    }
+
+    /// A lane by reference, local or of a box.
+    pub fn lane(&self, reference: &str) -> Option<&LaneSummary> {
+        self.all_lanes().find(|lane| lane.reference == reference)
+    }
+
+    /// The box behind the box lane `reference`, with the lane's own reference
+    /// on the box (`acme@1`); `None` for this machine's lanes.
+    pub fn box_lane(&self, reference: &str) -> Option<(&crate::boxes::BoxHost, String)> {
+        self.boxes.hosts.iter().find_map(|host| {
+            let lane = reference.strip_suffix(&format!(" @{}", host.host))?;
+            host.lane(lane).map(|_| (host, lane.to_owned()))
+        })
     }
 
     /// Whether a spinner is on screen somewhere, so the runtime redraws often.
     pub fn spinning(&self) -> bool {
-        self.lanes.iter().any(|lane| {
+        self.all_lanes().any(|lane| {
             matches!(lane.state.as_str(), "starting" | "stopping")
                 || lane.units.iter().any(|u| {
                     matches!(u.state.as_str(), "starting" | "stopping")
@@ -2105,7 +2168,7 @@ impl App {
         if let Some(row) = self.remembered.get(lane) {
             return row.clone();
         }
-        let Some(summary) = self.lanes.iter().find(|l| l.reference == lane) else {
+        let Some(summary) = self.lane(lane) else {
             return RowId::WholeLane;
         };
         if let Some(problem) = summary.units.iter().find(|u| tree::is_problem(u)) {
@@ -2129,12 +2192,7 @@ impl App {
         let Some(selected) = self.selected.clone() else {
             return;
         };
-        if let Some(project) = self
-            .lanes
-            .iter()
-            .find(|lane| lane.reference == selected.lane)
-            .map(|lane| lane.project.clone())
-        {
+        if let Some(project) = self.lane(&selected.lane).map(|lane| lane.project.clone()) {
             self.project_lane.insert(project, selected.lane.clone());
         }
         self.remembered.insert(selected.lane, selected.row);
@@ -2143,6 +2201,10 @@ impl App {
     /// Asks for the lane's task list the first time it shows, and again
     /// after its config changed.
     fn want_tasks(&mut self, lane: &str, effects: &mut Vec<Effect>) {
+        // A box lane's tasks are its registry's; this daemon has no config for it.
+        if self.box_lane(lane).is_some() {
+            return;
+        }
         let changed = self
             .lanes
             .iter()
@@ -2181,10 +2243,11 @@ impl App {
 
     // ---- tree -------------------------------------------------------------
 
-    /// Project names in tab order.
+    /// Project names in tab order: this machine's, then the boxes'
+    /// (`acme @hetzner`).
     pub fn projects(&self) -> Vec<String> {
         let mut projects: Vec<String> = Vec::new();
-        for lane in &self.lanes {
+        for lane in self.all_lanes() {
             if !projects.contains(&lane.project) {
                 projects.push(lane.project.clone());
             }
@@ -2203,8 +2266,7 @@ impl App {
             return Vec::new();
         };
         // Lanes that exist; a worktree without one is not a lane to switch to.
-        self.lanes
-            .iter()
+        self.all_lanes()
             .filter(|l| l.project == project && l.index.is_some())
             .collect()
     }
@@ -2230,8 +2292,7 @@ impl App {
     pub fn shared_containers(&self, project: &str) -> Vec<devlanes_proto::ContainerSummary> {
         let mut shared: Vec<devlanes_proto::ContainerSummary> = Vec::new();
         for container in self
-            .lanes
-            .iter()
+            .all_lanes()
             .filter(|lane| lane.project == project)
             .flat_map(|lane| lane.containers.iter())
             .filter(|c| c.shared)
@@ -2299,7 +2360,7 @@ impl App {
 
     /// Whether a header holds a unit with a problem or a failed action.
     fn holds_problem(&self, lane: &str, id: &RowId) -> bool {
-        let Some(summary) = self.lanes.iter().find(|l| l.reference == lane) else {
+        let Some(summary) = self.lane(lane) else {
             return false;
         };
         let nodes = self.lane_tree(summary, None);
@@ -2334,7 +2395,7 @@ impl App {
         if self.auto_folds.contains_key(lane) {
             return;
         }
-        let Some(summary) = self.lanes.iter().find(|l| l.reference == lane) else {
+        let Some(summary) = self.lane(lane) else {
             return;
         };
         if summary.units.is_empty() {
@@ -2399,7 +2460,7 @@ impl App {
     /// The lane shown.
     pub fn selected_lane(&self) -> Option<&LaneSummary> {
         let reference = &self.selected.as_ref()?.lane;
-        self.lanes.iter().find(|lane| lane.reference == *reference)
+        self.lane(reference)
     }
 
     /// The selected unit, when a unit row is selected.
@@ -2476,9 +2537,7 @@ impl App {
         self.remember();
         let lane = target.lane.clone();
         let nodes = self
-            .lanes
-            .iter()
-            .find(|l| l.reference == lane)
+            .lane(&lane)
             .map(|summary| self.lane_tree(summary, None))
             .unwrap_or_default();
         for parent in tree::parents(&nodes, &target.row) {
@@ -2516,11 +2575,10 @@ impl App {
         let remembered = self
             .project_lane
             .get(name)
-            .filter(|lane| self.lanes.iter().any(|l| l.reference == **lane))
+            .filter(|lane| self.lane(lane).is_some())
             .cloned();
         let lane = remembered.or_else(|| {
-            self.lanes
-                .iter()
+            self.all_lanes()
                 .find(|lane| lane.project == name)
                 .map(|lane| lane.reference.clone())
         });
@@ -2543,8 +2601,7 @@ impl App {
                 .and_then(|(_, n)| n.parse::<i64>().ok())
         };
         let target = index(gone).unwrap_or(0);
-        self.lanes
-            .iter()
+        self.all_lanes()
             .filter(|lane| lane.project == project)
             .min_by_key(|lane| {
                 let n = lane.index.map_or(i64::MAX / 2, i64::from);
@@ -2723,7 +2780,12 @@ impl App {
     /// logs, and detaches from anything else. An orphaned unit has no stream;
     /// the pane explains it instead.
     fn sync_attach(&mut self, effects: &mut Vec<Effect>) {
-        let lane = self.selected.as_ref().map(|s| s.lane.clone());
+        // A box unit has no stream here: the pane shows its details instead.
+        let lane = self
+            .selected
+            .as_ref()
+            .map(|s| s.lane.clone())
+            .filter(|lane| self.box_lane(lane).is_none());
         let container = match self.selected_id() {
             Some(RowId::Container(name)) => Some(name.clone()),
             _ => None,
@@ -3037,8 +3099,26 @@ impl App {
         match self.view {
             View::Monitor => self.monitor_key(key, effects),
             View::Daemon => self.daemon_key(key, effects),
+            View::Boxes => self.boxes_key(key),
             View::Project => self.list_key(key, effects),
         }
+    }
+
+    /// Keys on the boxes view: it only scrolls; nothing there acts on a box.
+    fn boxes_key(&mut self, key: KeyEvent) {
+        let page = usize::from(self.size.1 / 2).max(1);
+        let max = self.boxes.max_scroll.get();
+        let scroll = self.boxes.scroll.min(max);
+        self.boxes.scroll = match key.code {
+            KeyCode::Char('j') | KeyCode::Down => scroll + 1,
+            KeyCode::Char('k') | KeyCode::Up => scroll.saturating_sub(1),
+            KeyCode::PageDown | KeyCode::Char(' ') => scroll + page,
+            KeyCode::PageUp => scroll.saturating_sub(page),
+            KeyCode::Char('g') | KeyCode::Home => 0,
+            KeyCode::Char('G') | KeyCode::End => max,
+            _ => return,
+        }
+        .min(max);
     }
 
     /// Keys that work on every screen while watching; true when `key` was one.
@@ -3072,6 +3152,7 @@ impl App {
             }
             KeyCode::Char('M') => self.set_view(View::Monitor, effects),
             KeyCode::Char('D') => self.set_view(View::Daemon, effects),
+            KeyCode::Char('B') => self.set_view(View::Boxes, effects),
             KeyCode::Char('?') => self.dialog = Some(Dialog::Help),
             KeyCode::Esc if self.view != View::Project => self.set_view(View::Project, effects),
             _ => return false,
@@ -3100,7 +3181,107 @@ impl App {
         if view == View::Monitor && self.view != View::Monitor {
             effects.push(Effect::FetchMetrics(self.metrics_query()));
         }
+        if view == View::Boxes && self.view != View::Boxes {
+            self.boxes.ticks = 0;
+            self.fetch_boxes(effects);
+        }
         self.view = view;
+    }
+
+    // ---- boxes ------------------------------------------------------------
+
+    /// Asks for `host.list`, once at a time: a trigger while a fetch is in
+    /// flight fetches again when it returns, so a burst of events costs two.
+    fn fetch_boxes(&mut self, effects: &mut Vec<Effect>) {
+        if self.boxes.fetching {
+            self.boxes.again = true;
+            return;
+        }
+        self.boxes.fetching = true;
+        effects.push(Effect::FetchBoxes);
+    }
+
+    /// Takes a `host.list` answer: the boxes, their lanes and a selection
+    /// that still exists. A daemon that cannot list boxes has none to show;
+    /// other failures are reported once each.
+    fn boxes_loaded(&mut self, result: Result<Value, ApiError>, effects: &mut Vec<Effect>) {
+        self.boxes.fetching = false;
+        if std::mem::take(&mut self.boxes.again) {
+            self.fetch_boxes(effects);
+        }
+        match result {
+            Ok(value) => {
+                self.boxes.last_error = None;
+                self.boxes.hosts = crate::boxes::parse(&value);
+                self.boxes.lanes = self
+                    .boxes
+                    .hosts
+                    .iter()
+                    .flat_map(crate::boxes::BoxHost::lanes)
+                    .collect();
+                self.boxes.age = 0;
+                self.after_change(effects);
+            }
+            // The subscription reports a lost daemon once.
+            Err(error) if error.is_disconnect() || crate::api::is_unsupported(&error) => {}
+            Err(error) => {
+                let worded = words::api(&error);
+                let line = worded.one_line();
+                if self.boxes.last_error.as_ref() != Some(&line) {
+                    self.boxes.last_error = Some(line);
+                    self.report("list boxes", None, worded);
+                }
+            }
+        }
+    }
+
+    /// Whether the shown lane is a box's, so actions on it belong to the box.
+    pub fn on_box(&self) -> bool {
+        self.selected
+            .as_ref()
+            .is_some_and(|s| self.box_lane(&s.lane).is_some())
+    }
+
+    /// Says why a key that acts on units does nothing for a box lane, with
+    /// the command that does it on the box: `acme@1:web runs on hetzner: ssh
+    /// hetzner, then devlanes restart acme@1:web`. `verb` is what the key
+    /// does (`start`, `logs`, ...).
+    fn box_refusal(&mut self, verb: &str) {
+        let Some(selected) = self.selected.clone() else {
+            return;
+        };
+        let Some((host, lane)) = self.box_lane(&selected.lane) else {
+            return;
+        };
+        // Containers start and stop with their lane, so they get the lane's command.
+        let unit = match &selected.row {
+            RowId::Unit(name) if verb != "start all" => Some(name.as_str()),
+            _ => None,
+        };
+        let task = unit.is_some_and(|name| {
+            host.unit(&lane, name)
+                .is_some_and(|unit| unit.key.kind == "task")
+        });
+        let command = match (verb, unit) {
+            ("start" | "restart", Some(name)) if task => {
+                format!("devlanes run {name} --lane {lane}")
+            }
+            ("start" | "stop" | "restart", Some(name)) => {
+                format!("devlanes {verb} {}", unit_ref(&lane, name))
+            }
+            ("profiles", _) => format!("devlanes start --lane {lane} --profile <name>"),
+            ("clean", _) => format!("devlanes lane clean {lane}"),
+            ("attach", Some(name)) => format!("devlanes attach {}", unit_ref(&lane, name)),
+            ("logs", Some(name)) => format!("devlanes logs {}", unit_ref(&lane, name)),
+            ("start all", _) => format!("devlanes start --lane {lane}"),
+            (verb, _) if matches!(verb, "start" | "stop" | "restart") => {
+                format!("devlanes {verb} --lane {lane}")
+            }
+            _ => format!("devlanes status {lane}"),
+        };
+        let what = unit.map_or_else(|| lane.clone(), |name| unit_ref(&lane, name));
+        let notice = format!("{what} runs on {}: {}", host.host, host.there(&command));
+        self.set_notice(notice);
     }
 
     /// Keys while the list filter takes typing: text narrows the list, Enter
@@ -3354,6 +3535,10 @@ impl App {
     fn focus_terminal(&mut self, effects: &mut Vec<Effect>) {
         if self.view != View::Project {
             self.set_notice("the terminal is in the project view".into());
+            return;
+        }
+        if self.on_box() {
+            self.box_refusal("attach");
             return;
         }
         let Some(attached) = self.attached.as_ref() else {
@@ -3750,6 +3935,24 @@ impl App {
 
     /// Keys in list focus.
     fn list_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
+        // A box runs its lanes; keys that would act on them here only say
+        // what to run there. Moving, folding, filtering and `o` still work.
+        if self.on_box() {
+            let verb = match key.code {
+                KeyCode::Char('s') => Some("start"),
+                KeyCode::Char('S') => Some("start all"),
+                KeyCode::Char('x') => Some("stop"),
+                KeyCode::Char('r') => Some("restart"),
+                KeyCode::Char('p') => Some("profiles"),
+                KeyCode::Char('C') => Some("clean"),
+                KeyCode::Char('c') | KeyCode::PageUp | KeyCode::PageDown => Some("logs"),
+                _ => None,
+            };
+            if let Some(verb) = verb {
+                self.box_refusal(verb);
+                return;
+            }
+        }
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.move_selection(1, effects),
             KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1, effects),
@@ -4965,6 +5168,18 @@ impl App {
             View::Project => self.project_mouse(mouse, &layout, effects),
             View::Monitor => self.monitor_mouse(mouse, &layout, effects),
             View::Daemon => self.daemon_mouse(mouse, effects),
+            View::Boxes => {
+                let max = self.boxes.max_scroll.get();
+                match mouse.kind {
+                    MouseEventKind::ScrollDown => {
+                        self.boxes.scroll = (self.boxes.scroll + 3).min(max);
+                    }
+                    MouseEventKind::ScrollUp => {
+                        self.boxes.scroll = self.boxes.scroll.min(max).saturating_sub(3);
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 
@@ -5250,7 +5465,7 @@ impl App {
     // ---- misc -------------------------------------------------------------
 
     /// Ages the notice, polls metrics on the monitor and follows the daemon
-    /// tab's facts and log while it is visible.
+    /// tab's facts and log and the boxes view's `host.list` while visible.
     fn tick(&mut self, effects: &mut Vec<Effect>) {
         if self.notice_ticks > 0 {
             self.notice_ticks -= 1;
@@ -5261,6 +5476,15 @@ impl App {
         let online = self.connection == Connection::Online;
         if self.view == View::Monitor && online {
             effects.push(Effect::FetchMetrics(self.metrics_query()));
+        }
+        self.boxes.age += 1;
+        // Sync counters and retry times move without an event.
+        if self.view == View::Boxes && online {
+            self.boxes.ticks += 1;
+            if self.boxes.ticks >= DAEMON_REFRESH_TICKS {
+                self.boxes.ticks = 0;
+                self.fetch_boxes(effects);
+            }
         }
         // Phase timings and the spinner on terminals that only redraw per tick.
         self.spin = self.spin.wrapping_add(1);
@@ -5349,10 +5573,11 @@ impl App {
     /// project on screen run, then does what `tui.on_quit` says (asks by
     /// default). Pressed again while stopping, it closes without waiting.
     pub fn quit(&mut self, effects: &mut Vec<Effect>) {
+        // A box's lanes are the box's to stop.
         let running: Vec<String> = self
             .project_lanes()
             .into_iter()
-            .filter(|lane| tree::lane_is_live(lane))
+            .filter(|lane| tree::lane_is_live(lane) && self.box_lane(&lane.reference).is_none())
             .map(|lane| lane.reference.clone())
             .collect();
         if self.quitting || running.is_empty() {

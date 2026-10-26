@@ -1,0 +1,82 @@
+ devlanes  1 acme   2 billing   3 shop             starting feat/checkout: 4 of 8 ready  M monitor   D daemon   B boxes
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No boxes. devlanes remote connect <box> mirrors a box's lanes here: its ports, hostnames and synced folders. The box │
+│ keeps running them; this view only shows them.                                                                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ j k scroll   tab projects   esc back                                                             ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 89 bold, 90-97 dim, 101 bold, 102-108 dim, 112 bold, 113-118 bold underlined
+1: 0 darkgray, 1-7 bold, 8-119 darkgray
+2: 0 darkgray, 119 darkgray
+3: 0 darkgray, 119 darkgray
+4: 0 darkgray, 119 darkgray
+5: 0 darkgray, 119 darkgray
+6: 0 darkgray, 119 darkgray
+7: 0 darkgray, 119 darkgray
+8: 0 darkgray, 119 darkgray
+9: 0 darkgray, 119 darkgray
+10: 0 darkgray, 119 darkgray
+11: 0 darkgray, 119 darkgray
+12: 0 darkgray, 119 darkgray
+13: 0 darkgray, 119 darkgray
+14: 0 darkgray, 119 darkgray
+15: 0 darkgray, 119 darkgray
+16: 0 darkgray, 119 darkgray
+17: 0 darkgray, 119 darkgray
+18: 0 darkgray, 119 darkgray
+19: 0 darkgray, 119 darkgray
+20: 0 darkgray, 119 darkgray
+21: 0 darkgray, 119 darkgray
+22: 0 darkgray, 119 darkgray
+23: 0 darkgray, 119 darkgray
+24: 0 darkgray, 119 darkgray
+25: 0 darkgray, 119 darkgray
+26: 0 darkgray, 119 darkgray
+27: 0 darkgray, 119 darkgray
+28: 0 darkgray, 119 darkgray
+29: 0 darkgray, 119 darkgray
+30: 0 darkgray, 119 darkgray
+31: 0 darkgray, 119 darkgray
+32: 0 darkgray, 119 darkgray
+33: 0 darkgray, 119 darkgray
+34: 0 darkgray, 119 darkgray
+35: 0 darkgray, 119 darkgray
+36: 0 darkgray, 119 darkgray
+37: 0 darkgray, 119 darkgray
+38: 0-119 darkgray
+39: 1-3 bold, 4-13 dim, 14-16 bold, 17-28 dim, 29-31 bold, 32-39 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

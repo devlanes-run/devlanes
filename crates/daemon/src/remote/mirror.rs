@@ -292,9 +292,16 @@ pub(super) async fn run(engine: Weak<Inner>, conn: Arc<HostConn>) {
     drop(inner);
     let mut registry = conn.registry.subscribe();
     let mut state = conn.state.clone();
+    let mut announced = Registry::default();
     loop {
         let Some(inner) = engine.upgrade() else { break };
         let current = registry.borrow_and_update().clone();
+        // `host.list` carries the registry, so a client showing it hears of
+        // any change, also one that binds or routes nothing.
+        if current != announced {
+            conn.mark_changed();
+            announced = current.clone();
+        }
         let phase = Phase::of(&state.borrow_and_update());
         if phase == Phase::Over {
             mirror.clear(&inner).await;
@@ -352,6 +359,9 @@ impl Mirror {
         let (had_routes, had_ports) = {
             let mut view = lock(&self.conn.view);
             let had = (!view.routes.is_empty(), !view.bound.is_empty());
+            if had.0 || !view.ports.is_empty() || !view.skipped.is_empty() {
+                self.conn.mark_changed();
+            }
             *view = View::default();
             had
         };
@@ -541,27 +551,34 @@ impl Mirror {
                         // the port and has not listed it yet. Its reconcile wakes
                         // this mirror once it has, and the check above names it.
                         let own = pid == Some(std::process::id());
-                        let message = if let Some((other, unit)) = &other_box {
-                            format!(
-                                "port {port} is in use on this machine by box {other} ({unit}); not mirrored"
-                            )
+                        // `holder` is what keeps the port: the message's subject.
+                        let (holder, message) = if let Some((other, unit)) = &other_box {
+                            let holder = format!("box {other} ({unit})");
+                            let message = format!(
+                                "port {port} is in use on this machine by {holder}; not mirrored"
+                            );
+                            (holder, message)
                         } else if own {
-                            format!(
-                                "port {port} is in use on this machine by this devlanes daemon; not mirrored"
-                            )
+                            let holder = "this devlanes daemon".to_owned();
+                            let message = format!(
+                                "port {port} is in use on this machine by {holder}; not mirrored"
+                            );
+                            (holder, message)
                         } else if in_use {
                             let holder = match pid {
                                 Some(pid) => format!("{} (pid {pid})", process_name(pid).await),
                                 None => "another process".to_owned(),
                             };
-                            format!(
+                            let message = format!(
                                 "port {port} is in use on this machine by {holder}; not mirrored"
-                            )
+                            );
+                            (holder, message)
                         } else {
-                            format!(
-                                "port {port} cannot be bound on {address}: {}; not mirrored",
-                                bind_failure(&error)
-                            )
+                            let holder = bind_failure(&error);
+                            let message = format!(
+                                "port {port} cannot be bound on {address}: {holder}; not mirrored"
+                            );
+                            (holder, message)
                         };
                         // Reported once per holder: again when another box, or
                         // something other than a box, holds it now. A port this
@@ -597,6 +614,7 @@ impl Mirror {
                                 "address": address,
                                 "pid": pid,
                                 "box": other_box.as_ref().map(|(other, _)| other),
+                                "holder": holder,
                                 "message": message,
                             }),
                         );
@@ -686,11 +704,23 @@ impl Mirror {
                     if let Some((message, owner)) = &mirror.local {
                         conflicts.push(json!({"message": message, "local": owner}));
                     }
+                    // `bound` with a listener on at least one address; a port
+                    // held on one address and bound on the other still works.
+                    let state = if mirror.local.is_some() {
+                        "local_lane"
+                    } else if !mirror.bound.is_empty() {
+                        "bound"
+                    } else if !mirror.conflicts.is_empty() {
+                        "in_use"
+                    } else {
+                        "unbound"
+                    };
                     json!({
                         "port": port,
                         "lane": mirror.lane,
                         "unit": mirror.unit,
                         "kind": mirror.kind,
+                        "state": state,
                         "addresses": mirror.bound.iter().map(|b| b.address).collect::<Vec<_>>(),
                         "conflicts": conflicts,
                         "relay": self.relays.get(port).map(|(local, _)| local),
@@ -729,6 +759,13 @@ impl Mirror {
                 hosts(&current.routes) != hosts(&view.routes)
                     || current.bound.keys().ne(view.bound.keys()),
             );
+            if changed.0
+                || current.ports != view.ports
+                || current.skipped != view.skipped
+                || current.refused_hosts != view.refused_hosts
+            {
+                self.conn.mark_changed();
+            }
             // Failed opens outlive a reconcile, but not the port they are about.
             view.open_errors = std::mem::take(&mut current.open_errors);
             view.warned = std::mem::take(&mut current.warned);
@@ -846,7 +883,7 @@ async fn local_blocks(engine: &Arc<Inner>) -> Vec<(PortBlock, String)> {
 ///
 /// The TLD only counts once it passes the special-use check, so a box can never
 /// get public names routed (and certificates minted) on this machine.
-fn route_suffixes(engine: &Inner) -> Vec<String> {
+pub(super) fn route_suffixes(engine: &Inner) -> Vec<String> {
     let mut suffixes = vec!["localhost".to_owned()];
     suffixes.extend(engine.resolver_zone().map(|zone| zone.name().to_owned()));
     suffixes
@@ -962,7 +999,9 @@ async fn splice(stream: TcpStream, port: u16, conn: Arc<HostConn>, engine: Weak<
     };
     match session.open(DialTarget::Port { port }).await {
         Ok(remote) => {
-            lock(&conn.view).open_errors.remove(&port);
+            if lock(&conn.view).open_errors.remove(&port).is_some() {
+                conn.mark_changed();
+            }
             let spliced =
                 devlanes_transport::splice(stream, remote, devlanes_transport::HALF_CLOSE_IDLE)
                     .await;
@@ -1031,6 +1070,8 @@ fn open_failed(
         tracing::debug!(host = %conn.name, port, reason, %message, "mirrored connection failed");
         return;
     }
+    // A new `last_error`; repeats within the minute only move its time.
+    conn.mark_changed();
     let Some(engine) = engine.upgrade() else {
         return;
     };

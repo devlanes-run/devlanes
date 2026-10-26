@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/boxes.rs
+expression: draw(&app)?.backend()
+---
+" devlanes  1 acme   2 shop   3 acme @hetzner              M monitor   D daemon   B boxes · 2 issues "
+"┌ acme@1 on hetzner ───────────────────┐┌ acme@1  running · 2 up ────────────────────── on hetzner ┐"
+"│ ▾ services                         2 ││ box       hetzner · ssh · devlanes 0.0.1                 │"
+"│   ● web                              ││ lane      acme@1 on the box                              │"
+"│   ◉ worker                           ││ domain    acme-1.localhost                               │"
+"│                                      ││ services  2 of 2 up                                      │"
+"│ ▾ tasks                            1 ││ tasks     1 running                                      │"
+"│   ⠋ migrate                  running ││ ports     1 mirrored here, 1 not (select a unit for why) │"
+"│                                      ││ urls      https://web.acme-1.localhost                   │"
+"│                                      ││                                                          │"
+"│                                      ││ Runs on hetzner and is read-only here. On the box (ssh   │"
+"│                                      ││ hetzner), devlanes status acme@1 shows it there.         │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"└──────────────────────────────────────┘└──────────────────────────────────────────────────────────┘"
+" o open in browser   [ ] switch lane   / filter   B boxes   read-only: manag… ? all keys   q quit   "

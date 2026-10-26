@@ -108,7 +108,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
                 "next, previous project (not on the daemon page)",
             ),
             ("shift+1-9", "project by number"),
-            ("M  D", "monitor, daemon; again or esc returns"),
+            ("M  D  B", "monitor, daemon, boxes; again or esc returns"),
             ("esc", "one step back, then the menu: options, help, quit"),
             ("u", "hide the version notice"),
             ("q", "quit; asks first while lanes run (tui.on_quit)"),
@@ -121,7 +121,7 @@ fn first_section(app: &App) -> &'static str {
     match app.view {
         View::Monitor => "monitor (M)",
         View::Daemon => "daemon (D)",
-        View::Project => "list",
+        View::Project | View::Boxes => "list",
     }
 }
 
