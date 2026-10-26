@@ -317,6 +317,9 @@ pub(crate) fn mutating(method: &Method) -> bool {
             | Method::InfraDown
             | Method::Connect
             | Method::Disconnect
+            | Method::RemotePair
+            | Method::RemotePairingClaim
+            | Method::RemoteRevoke
             | Method::HostsRetry
             | Method::DebugFreeze
             | Method::DebugThaw
@@ -463,6 +466,11 @@ impl Inner {
             Method::Subscribe => self.subscribe_method(params, &session).await,
             Method::RemoteRegistry => self.remote_registry(params, &session).await,
             Method::RemoteReport => self.remote_report(params),
+            Method::RemotePair => self.pair_method(),
+            Method::RemotePairingVerify => self.verify_pairing(params).await,
+            Method::RemotePairingClaim => self.claim_pairing(params).await,
+            Method::RemoteClients => self.clients_method().await,
+            Method::RemoteRevoke => self.revoke_method(params).await,
             Method::SyncStatus => self.sync_status_method().await,
             Method::Connect => self.connect_method(params, &session).await,
             Method::Disconnect => self.disconnect_method(params).await,

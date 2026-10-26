@@ -11,7 +11,9 @@
 //!   services `web` (an HTTP server with `hosts: web.${{ lane.domain }}` and a
 //!   `sync` of `ext`) and `echo` (TCP echo). `ext` holds `hello.txt`, the
 //!   executable `run.sh`, and names this machine may not hold: `con.txt`,
-//!   `a:b`, `trail.` and both `README.md` and `Readme.md`.
+//!   `a:b`, `trail.` and both `README.md` and `Readme.md`. The box's user config
+//!   sets `remote.require_pairing: false`: these tests check SSH, and pairing
+//!   has its own tests over the in-memory transport.
 
 use std::{
     net::{IpAddr, Ipv4Addr},

@@ -14,7 +14,7 @@
 │ │   tls.ca                       devlanes│ permission), the daemon falls   │ │
 │ │   tls.trust                        none│ back to 8443 and service URLs   │a│
 │ │   remote.start_daemon              true│ carry the port.                 │ │
-│ │                                        │                                 │a│
+│ │   remote.require_pai…              true│                                 │a│
 │ │                                        │ default  443                    │ │
 │ │                                        │ example  443, 8443              │a│
 │ │                                        │                                 │ │
@@ -40,7 +40,7 @@
 13: 0 darkgray, 2 bold, 4 bold, 35-42 dim, 43 darkgray, 77 bold, 79 darkgray
 14: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
 15: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
-16: 0 darkgray, 2 bold, 43 darkgray, 77 bold, 79 darkgray
+16: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
 17: 0 darkgray, 2 bold, 43 darkgray, 45-53 dim, 77 bold, 79 darkgray
 18: 0 darkgray, 2 bold, 43 darkgray, 45-53 dim, 77 bold, 79 darkgray
 19: 0 darkgray, 2 bold, 43 darkgray, 77 bold, 79 darkgray

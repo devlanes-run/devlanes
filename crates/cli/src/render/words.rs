@@ -997,10 +997,57 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 Some(Hint::command(["remote", "connect", host.as_str()])),
             )
         }
+        "remote_needs_pairing" => {
+            let host = text(data, "host");
+            (
+                with_message(format!("box {host} needs this machine to pair with it")),
+                Some(Hint(format!(
+                    "devlanes remote pair on {host}, then {} --code <code>",
+                    Hint::command(["remote", "connect", host.as_str()]).0
+                ))),
+            )
+        }
+        // Tunnel-side answers of the box daemon, shown when someone calls
+        // these methods by hand.
+        "client_not_paired" => (
+            "the client is not paired with this box".to_owned(),
+            Some(Hint::command(["remote", "clients"])),
+        ),
+        "client_revoked" => (
+            "the client's pairing was revoked on this box".to_owned(),
+            Some(Hint::command(["remote", "clients"])),
+        ),
+        "pairing_refused" => (
+            with_message("the box refused the pairing code".into()),
+            Some(Hint::command(["remote", "pair"])),
+        ),
+        "random_failed" => (
+            with_message("this machine's random number source failed".into()),
+            None,
+        ),
+        code @ ("client_not_found" | "client_ambiguous") => {
+            let client = text(data, "client");
+            let names: Vec<String> = list(data, "candidates")
+                .iter()
+                .map(|candidate| format!("{} ({})", text(candidate, "name"), text(candidate, "id")))
+                .collect();
+            let mut message = if code == "client_not_found" {
+                format!("no paired client is called {client}")
+            } else {
+                format!(
+                    "{client} names more than one paired client; give its id instead: {}",
+                    names.join(", ")
+                )
+            };
+            if code == "client_not_found" && !names.is_empty() {
+                message.push_str(&format!("; paired: {}", names.join(", ")));
+            }
+            (message, Some(Hint::command(["remote", "clients"])))
+        }
         "client_identity" => {
             let path = text(data, "path");
             let file = if path.is_empty() {
-                "remote-client-id in the devlanes home".to_owned()
+                "client-id in the devlanes home".to_owned()
             } else {
                 super::clean(&path)
             };

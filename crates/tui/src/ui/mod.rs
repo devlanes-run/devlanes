@@ -684,7 +684,12 @@ fn daemon_badge(app: &App) -> Option<(String, Tone)> {
 /// boxes button's badge. A box only remembered, with no link, is no issue.
 fn boxes_badge(app: &App) -> Option<(String, Tone)> {
     let hosts = &app.boxes.hosts;
-    let down = |state: &str| matches!(state, "reconnecting" | "needs_auth" | "failed");
+    let down = |state: &str| {
+        matches!(
+            state,
+            "reconnecting" | "needs_auth" | "needs_pairing" | "failed"
+        )
+    };
     let issues = hosts
         .iter()
         .filter(|h| down(&h.state) || !h.warnings.is_empty())

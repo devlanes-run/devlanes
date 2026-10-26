@@ -222,6 +222,38 @@ pub enum Method {
     /// client with that id is listed.
     #[serde(rename = "remote.report")]
     RemoteReport,
+    /// Box side, for `devlanes remote pair`: a one-time pairing code, valid
+    /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Reply
+    /// `{code, expires_at_ms, retry_after_ms?}`; `retry_after_ms` is set while
+    /// failed attempts keep every code refused.
+    #[serde(rename = "remote.pair")]
+    RemotePair,
+    /// Box side, for `devlanes tunnel`: whether a client's remote token is
+    /// valid ([`remote::VerifyParams`]). Reply `{paired}`, with `reason`
+    /// (`missing` or `invalid`) when not.
+    #[serde(rename = "remote.pairing.verify")]
+    RemotePairingVerify,
+    /// Box side, for `devlanes tunnel`: trades a one-time code for a remote
+    /// token ([`remote::ClaimParams`]). Reply `{token}`. Error
+    /// `pairing_refused` (`{message, retry_after_ms?}`) for a wrong, expired
+    /// or used code, which also invalidates every outstanding code, and while
+    /// too many failures refuse every code.
+    #[serde(rename = "remote.pairing.claim")]
+    RemotePairingClaim,
+    /// Box side, for `devlanes remote clients`: paired and connected clients by
+    /// name, `{items: [{id, name, paired, paired_at_ms, last_seen_ms,
+    /// connections: [{address, since_ms, mirror}]}]}`; a client connected
+    /// without pairing (`remote.require_pairing: false`) has `paired: false`
+    /// and no times.
+    #[serde(rename = "remote.clients")]
+    RemoteClients,
+    /// Box side, for `devlanes remote revoke`: deletes the pairing of the
+    /// client named by `{client}` (its name, its id or a unique start of the
+    /// id) and ends its sessions. Reply `{revoked: [{id, name}], ended}`.
+    /// Errors `client_not_found` (`{client, candidates}`) and
+    /// `client_ambiguous` (`{client, candidates}`).
+    #[serde(rename = "remote.revoke")]
+    RemoteRevoke,
     /// Sent by `devlanes certs trust --hosts` and `certs untrust --hosts` after changing the
     /// helper: the daemon drops its sudo backoff and reapplies `/etc/hosts` now.
     #[serde(rename = "hosts.retry")]
@@ -961,10 +993,61 @@ pub mod remote {
 
     use serde::{Deserialize, Serialize};
 
-    /// Event sent to the CLI attached to `connect` when ssh asks for input:
-    /// `{host, prompt, kind: secret|confirm|notify, stream_id}`. The CLI answers with
-    /// one binary frame on `stream_id`; an empty frame cancels.
+    /// Event sent to the CLI attached to `connect` when ssh asks for input, or
+    /// the box asks for a pairing code: `{host, prompt, kind:
+    /// secret|confirm|notify|code, stream_id}`. A `code` is read like a
+    /// `confirm`, shown as typed. The CLI answers with one binary frame on
+    /// `stream_id`; an empty frame cancels.
     pub const PROMPT_EVENT: &str = "remote.prompt";
+
+    /// How a client id starts; 64 lowercase hex digits (256 random bits) follow.
+    pub const CLIENT_ID_PREFIX: &str = "dl_cid_";
+    /// How a remote token starts; 64 lowercase hex digits (256 random bits) follow.
+    pub const TOKEN_PREFIX: &str = "dl_rt_";
+    /// How long a pairing code from `remote.pair` stays valid: 10 minutes.
+    pub const PAIRING_CODE_TTL_MS: u64 = 10 * 60 * 1000;
+
+    /// Whether `text` is `prefix` followed by 64 lowercase hex digits, the
+    /// shape of client ids and remote tokens.
+    pub fn is_random_id(text: &str, prefix: &str) -> bool {
+        text.strip_prefix(prefix).is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    }
+
+    /// Params of `remote.pairing.verify`. Not `Debug`: it holds a token.
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct VerifyParams {
+        /// The client's id from its handshake.
+        pub id: String,
+        /// The client's host name from its handshake.
+        #[serde(default)]
+        pub name: String,
+        /// The remote token the client presented; absent when it sent none.
+        #[serde(default)]
+        pub token: Option<String>,
+        /// The tunnel's `$SSH_CONNECTION`, for the box's log.
+        #[serde(default)]
+        pub address: Option<String>,
+    }
+
+    /// Params of `remote.pairing.claim`. Not `Debug`: it holds a code.
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct ClaimParams {
+        /// The client's id from its handshake.
+        pub id: String,
+        /// The client's host name from its handshake.
+        #[serde(default)]
+        pub name: String,
+        /// The one-time code the client sent.
+        pub code: String,
+        /// The tunnel's `$SSH_CONNECTION`, for the box's log.
+        #[serde(default)]
+        pub address: Option<String>,
+    }
     /// `{host, state, ...}` whenever a connection changes state.
     pub const STATE_EVENT: &str = "remote.state";
     /// `{host, code, ...}` for mirroring problems such as a skipped lane or a busy port.
@@ -1225,6 +1308,12 @@ pub mod remote {
         /// Remote protocol features the tunnel and its client both implement.
         #[serde(default)]
         pub features: Vec<String>,
+        /// The tunnel requires pairing and the client passed it: the feed
+        /// ends with `client_not_paired` when the client has no pairing (any
+        /// more) once it is listed, so a revoke while the tunnel checked the
+        /// token still ends the session.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub paired: bool,
     }
 
     /// First event of `remote.registry`, and again whenever the daemon could not

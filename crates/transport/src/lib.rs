@@ -21,15 +21,22 @@
 //! uses a feature only when the other side lists it too
 //! ([`Session::has_feature`], [`ClientInfo::features`]).
 //!
+//! Before the welcome, the box's [`PairingGate`] decides whether it serves the
+//! client: by its id and remote token, or after the client traded a one-time
+//! code for a token ([`pairing`]). A client it does not serve learns nothing
+//! about the box.
+//!
 //! The box side is [`serve`], driven by injected [`BoxServices`]. [`Link`]
 //! reconnects with backoff and keeps one [`ClientRegistry`] across sessions.
 //! It stops for a [`TransportError::Permanent`] or
 //! [`TransportError::AuthFailed`] failure and waits for
-//! [`Link::resume`] after a [`TransportError::NeedsAuth`] one.
+//! [`Link::resume`] after a [`TransportError::NeedsAuth`] one or a session
+//! that needs pairing ([`SessionError::is_needs_pairing`]).
 //! [`memory`] provides an in-process transport with fault injection for tests.
 
 pub mod memory;
 mod mux;
+pub mod pairing;
 mod preamble;
 mod reconnect;
 mod registry;
@@ -41,6 +48,7 @@ mod transport;
 mod wire;
 
 pub use mux::{MuxError, MuxStream};
+pub use pairing::{NoPairing, PairingCheck, PairingClaim, PairingClient, PairingGate};
 pub use preamble::{PREAMBLE_LIMIT, Preamble, PreambleError, TUNNEL_PREAMBLE, read_preamble};
 pub use reconnect::{Backoff, Link, LinkError, LinkState};
 pub use registry::{
@@ -63,6 +71,6 @@ pub use transport::{
     BoxDuplex, BoxError, Duplex, EXIT_DAEMON_STOPPED, Joined, Transport, TransportError, stdio,
 };
 pub use wire::{
-    BoxInfo, DialTarget, EXTERNAL_UNITS, FEATURES, MIRROR_REPORT, PROTOCOL_VERSION, Prefixed,
-    RejectReason, SYNC_ZSTD, WireError,
+    BoxInfo, DialTarget, EXTERNAL_UNITS, FEATURES, MIRROR_REPORT, PROTOCOL_VERSION, PairingReason,
+    Prefixed, RejectReason, SYNC_ZSTD, WireError,
 };

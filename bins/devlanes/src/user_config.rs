@@ -43,19 +43,32 @@ pub async fn lenient(paths: &Paths) -> UserConfig {
         .unwrap_or_default()
 }
 
-/// `remote.start_daemon` for `devlanes tunnel --stdio`, read leniently so an
-/// unrelated bad key does not cut clients off. A problem under `remote` turns
-/// starting off instead of falling back to the default `true`, so a mistyped
-/// `start_daemon: false` does not start a daemon the user meant to keep stopped.
-/// The second value is the stderr text for those problems, empty when there
-/// are none. Blocking.
-pub fn tunnel_start_daemon(paths: &Paths) -> (bool, String) {
-    start_daemon_of(lenient_file(&file(paths)))
+/// What `devlanes tunnel --stdio` reads from the user config of this machine
+/// as a box.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TunnelSettings {
+    /// `remote.start_daemon`.
+    pub start_daemon: bool,
+    /// `remote.require_pairing`.
+    pub require_pairing: bool,
 }
 
-/// [`tunnel_start_daemon`] for a lenient load's result. Problems with the
-/// boxes this machine connects to (`remote.boxes`) do not concern it as a box.
-fn start_daemon_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (bool, String) {
+/// [`TunnelSettings`] for `devlanes tunnel --stdio`, read leniently so an
+/// unrelated bad key does not cut clients off. A problem under `remote` makes
+/// both settings fall to the safe side instead of their defaults: starting is
+/// off, so a mistyped `start_daemon: false` does not start a daemon the user
+/// meant to keep stopped, and pairing is required, so a mistyped
+/// `require_pairing: false` cannot let unpaired clients in. The second value
+/// is the stderr text for those problems, empty when there are none. Blocking.
+pub fn tunnel_settings(paths: &Paths) -> (TunnelSettings, String) {
+    tunnel_settings_of(lenient_file(&file(paths)))
+}
+
+/// [`tunnel_settings`] for a lenient load's result. Problems with the boxes
+/// this machine connects to (`remote.boxes`) do not concern it as a box.
+fn tunnel_settings_of(
+    (config, problems): (UserConfig, Vec<ConfigError>),
+) -> (TunnelSettings, String) {
     let remote: Vec<ConfigError> = problems
         .into_iter()
         .filter(|problem| {
@@ -64,14 +77,22 @@ fn start_daemon_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (bool,
         })
         .collect();
     if remote.is_empty() {
-        return (config.remote.start_daemon, String::new());
+        let settings = TunnelSettings {
+            start_daemon: config.remote.start_daemon,
+            require_pairing: config.remote.require_pairing,
+        };
+        return (settings, String::new());
     }
     let stderr = format!(
         "devlanes tunnel: the remote settings of the user config are invalid, so the daemon \
-         is not started\n{}",
+         is not started and clients must be paired\n{}",
         warnings(&remote)
     );
-    (false, stderr)
+    let settings = TunnelSettings {
+        start_daemon: false,
+        require_pairing: true,
+    };
+    (settings, stderr)
 }
 
 /// The command of box `name` from `remote.boxes` in the user config of the
@@ -124,7 +145,8 @@ fn box_command_in(file: &str, source: &str, name: &str) -> Result<Option<Vec<Str
         .into_iter()
         .flatten()
         .filter(|(key, value)| {
-            !matches!(key.as_str(), "boxes" | "start_daemon") && value.get(name).is_some()
+            !matches!(key.as_str(), "boxes" | "start_daemon" | "require_pairing")
+                && value.get(name).is_some()
         })
         .map(|(key, _)| format!("remote.{key}"))
         .collect();
@@ -503,33 +525,46 @@ mod tests {
         assert_eq!(warning.lines().count(), 1);
     }
 
-    /// A problem under `remote` turns the tunnel's daemon start off and is
-    /// reported; a problem elsewhere keeps the setting and stays quiet.
+    /// A problem under `remote` turns the tunnel's daemon start off, requires
+    /// pairing and is reported; a problem elsewhere keeps the settings and
+    /// stays quiet.
     #[test]
-    fn remote_problems_turn_starting_off() {
+    fn remote_problems_turn_starting_off_and_pairing_on() {
         let parse = |source: &str| devlanes_config::parse_user_lenient("config.yaml", source);
-        assert_eq!(start_daemon_of(parse("")), (true, String::new()));
+        let settings = |start_daemon, require_pairing| TunnelSettings {
+            start_daemon,
+            require_pairing,
+        };
         assert_eq!(
-            start_daemon_of(parse("remote:\n  start_daemon: false\n")),
-            (false, String::new())
+            tunnel_settings_of(parse("")),
+            (settings(true, true), String::new())
         );
         assert_eq!(
-            start_daemon_of(parse("tui:\n  theme: neon\n")),
-            (true, String::new())
+            tunnel_settings_of(parse(
+                "remote:\n  start_daemon: false\n  require_pairing: false\n"
+            )),
+            (settings(false, false), String::new())
+        );
+        assert_eq!(
+            tunnel_settings_of(parse("tui:\n  theme: neon\n")),
+            (settings(true, true), String::new())
         );
         // The boxes this machine connects to are not about it as a box.
         assert_eq!(
-            start_daemon_of(parse("remote:\n  boxes:\n    acme:\n      command: []\n")),
-            (true, String::new())
+            tunnel_settings_of(parse("remote:\n  boxes:\n    acme:\n      command: []\n")),
+            (settings(true, true), String::new())
         );
         for source in [
             "remote:\n  start_daemon: flase\n",
             "remote:\n  start_deamon: false\n",
+            "remote:\n  require_pairing: no way\n",
+            "remote:\n  require_pairing: false\n  requre_pairing: false\n",
             "remote: 5\n",
         ] {
-            let (start, stderr) = start_daemon_of(parse(source));
-            assert!(!start, "{source}");
+            let (found, stderr) = tunnel_settings_of(parse(source));
+            assert_eq!(found, settings(false, true), "{source}");
             assert!(stderr.contains("the daemon is not started"), "{stderr}");
+            assert!(stderr.contains("clients must be paired"), "{stderr}");
             assert!(
                 stderr.contains("warning: config.yaml is invalid"),
                 "{stderr}"

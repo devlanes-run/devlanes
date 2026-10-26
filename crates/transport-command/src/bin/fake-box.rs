@@ -68,6 +68,7 @@ async fn serve() {
         registry: Arc::new(SharedRegistry::new(RegistrySnapshot::default(), 4)),
         dialer: Arc::new(LoopbackDialer),
         sync: Arc::new(NoSync),
+        pairing: Arc::new(devlanes_transport::NoPairing),
     };
     let served = devlanes_transport::serve(
         devlanes_transport::stdio(),

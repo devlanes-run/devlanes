@@ -229,6 +229,22 @@ pub(crate) struct RemoteRow {
     pub last_connected: Option<i64>,
     pub wanted: i32,
 }
+#[derive(Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = remote_pairings, primary_key(client_id), treat_none_as_null = true, check_for_backend(diesel::sqlite::Sqlite))]
+pub(crate) struct PairingRow {
+    pub client_id: String,
+    pub name: String,
+    pub token_sha256: String,
+    pub paired_at: i64,
+    pub last_seen: Option<i64>,
+}
+#[derive(Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = remote_tokens, primary_key(host), check_for_backend(diesel::sqlite::Sqlite))]
+pub(crate) struct TokenRow {
+    pub host: String,
+    pub token: String,
+    pub paired_at: i64,
+}
 
 impl From<ProjectRow> for Project {
     /// Restores paths without losing non-UTF-8 bytes.

@@ -13,6 +13,8 @@ mod boxes;
 mod large_sync;
 #[path = "remote_lifecycle.rs"]
 mod lifecycle;
+#[path = "remote_pairing.rs"]
+mod pairing;
 #[path = "remote_ssh.rs"]
 mod real_ssh;
 #[path = "remote_report.rs"]
@@ -146,22 +148,30 @@ impl BoxSide {
         ports: &str,
         dialer: Option<Arc<dyn Dialer>>,
     ) -> Self {
-        Self::start_full(tmp, name, ports, dialer, None).await
+        Self::start_full(tmp, name, ports, dialer, None, true).await
     }
 
     /// [`BoxSide::start`] for a box whose proxy reports `https_port`.
     async fn start_on_https(tmp: &Temp, name: &str, ports: &str, https_port: u16) -> Self {
-        Self::start_full(tmp, name, ports, None, Some(https_port)).await
+        Self::start_full(tmp, name, ports, None, Some(https_port), true).await
+    }
+
+    /// [`BoxSide::start`] for a box with `remote.require_pairing: false`,
+    /// which serves every client.
+    async fn start_unpaired(tmp: &Temp, name: &str, ports: &str) -> Self {
+        Self::start_full(tmp, name, ports, None, None, false).await
     }
 
     /// [`BoxSide::start_with`], with the HTTPS port the box reports in the
-    /// handshake when `https_port` is set.
+    /// handshake when `https_port` is set, serving only paired clients with
+    /// `require_pairing`, as a box does by default.
     async fn start_full(
         tmp: &Temp,
         name: &str,
         ports: &str,
         dialer: Option<Arc<dyn Dialer>>,
         https_port: Option<u16>,
+        require_pairing: bool,
     ) -> Self {
         let h = engine_with(&tmp.path.join(name), ports, None, None).await;
         let home = tmp.path.join(format!("{name}-srv"));
@@ -195,6 +205,7 @@ impl BoxSide {
                 since_ms: 0,
                 ..RemoteClient::default()
             },
+            require_pairing,
         );
         if let Some(dialer) = dialer {
             services.dialer = dialer;
@@ -217,12 +228,65 @@ impl BoxSide {
         }
     }
 
+    /// A fresh one-time code from `remote pair` on the box.
+    async fn code(&self) -> String {
+        pairing_code(&self.h.engine).await
+    }
+
     /// Stops the box daemon (and with it every unit).
     async fn stop(self) {
         self.accept.abort();
         self.token.cancel();
         let _ = self.server.await;
         self.h.close().await;
+    }
+}
+
+/// A fresh one-time code from `remote pair` on the box engine `engine`.
+async fn pairing_code(engine: &Engine) -> String {
+    static NEXT: AtomicU64 = AtomicU64::new(1 << 32);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let request = Request {
+        id,
+        method: Method::RemotePair,
+        params: json!({}),
+        context: Context::default(),
+    };
+    let (session, _frames) = Session::local(id);
+    let paired = engine.handle(request, session).await.expect("remote pair");
+    paired["code"].as_str().expect("a code").to_owned()
+}
+
+/// Pairing for a session a test opens itself: it holds no token, gives
+/// `code` when the box asks and keeps the token it gets in memory.
+struct OneCode {
+    code: String,
+    token: std::sync::Mutex<Option<String>>,
+}
+
+impl OneCode {
+    /// Gives `code`.
+    fn new(code: String) -> Arc<Self> {
+        Arc::new(Self {
+            code,
+            token: std::sync::Mutex::new(None),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl devlanes_transport::PairingClient for OneCode {
+    async fn token(&self) -> Option<String> {
+        self.token.lock().ok()?.clone()
+    }
+
+    async fn code(&self, _: devlanes_transport::PairingReason) -> Option<String> {
+        Some(self.code.clone())
+    }
+
+    async fn store(&self, token: String) -> Result<(), devlanes_transport::BoxError> {
+        *self.token.lock().map_err(|_| "poisoned")? = Some(token);
+        Ok(())
     }
 }
 
@@ -445,6 +509,7 @@ impl RouteSink for ProxyRoutes {
                     }
                     RouteStatus::Reconnecting => devlanes_proxy::RouteState::Reconnecting,
                     RouteStatus::SignInNeeded => devlanes_proxy::RouteState::SignInNeeded,
+                    RouteStatus::PairingNeeded => devlanes_proxy::RouteState::PairingNeeded,
                 };
                 route.start_hint = entry.start_hint;
                 route.remote = entry.remote;
@@ -465,6 +530,8 @@ struct ClientSide {
     proxy_port: u16,
     proxy_stop: CancellationToken,
     controls: Arc<Controls>,
+    /// Each box's engine by name, for the pairing codes [`ClientSide::connect`] uses.
+    box_engines: BTreeMap<String, Engine>,
 }
 
 impl ClientSide {
@@ -538,6 +605,10 @@ impl ClientSide {
             proxy_port,
             proxy_stop,
             controls,
+            box_engines: boxes
+                .iter()
+                .map(|(name, side)| ((*name).to_owned(), side.h.engine.clone()))
+                .collect(),
         }
     }
 
@@ -560,18 +631,30 @@ impl ClientSide {
             .unwrap_or(Value::Null)
     }
 
-    /// `connect <name> --background`, which must succeed.
+    /// `connect <name> --background` with a fresh pairing code from the box,
+    /// which must succeed. A box that does not ask for the code, because this
+    /// client holds a token or it pairs nobody, leaves the code unused.
     async fn connect(&self, name: &str) {
         let connected = self
             .h
             .call(
                 Method::Connect,
-                json!({"host": name, "background": true}),
+                self.connect_params(name).await,
                 Context::default(),
             )
             .await
             .expect("connect");
         assert_eq!(connected["state"], "connected", "{connected}");
+    }
+
+    /// `connect` params for `name` in the background with a fresh pairing
+    /// code from that box, as `remote connect <name> --background --code`.
+    async fn connect_params(&self, name: &str) -> Value {
+        let code = match self.box_engines.get(name) {
+            Some(engine) => Some(pairing_code(engine).await),
+            None => None,
+        };
+        json!({"host": name, "background": true, "code": code})
     }
 
     /// Box ports this client mirrors.
@@ -744,28 +827,22 @@ async fn remote_box_end_to_end() {
             .await
             .ok();
 
-        // The box reports its `ports.range` in the handshake. (Before `connect`,
-        // so the client's link stays the transport's last one.)
-        let direct =
-            devlanes_transport::Session::connect(&side.transport, SessionOptions::new("probe"))
-                .await
-                .expect("session");
+        // The box reports its `ports.range` in the handshake, to a paired
+        // session only. (Before `connect`, so the client's link stays the
+        // transport's last one.)
+        let mut options = SessionOptions::new("probe");
+        options.client_id = format!("dl_cid_{}", "0".repeat(64));
+        options.pairing = Some(OneCode::new(side.code().await));
+        let direct = devlanes_transport::Session::connect(&side.transport, options)
+            .await
+            .expect("session");
         assert_eq!(
             direct.box_info().ports_range.as_deref(),
             Some("29000-29499")
         );
         direct.close();
 
-        let connected = client
-            .h
-            .call(
-                Method::Connect,
-                json!({"host": "box", "background": true}),
-                Context::default(),
-            )
-            .await
-            .expect("connect");
-        assert_eq!(connected["state"], "connected", "{connected}");
+        client.connect("box").await;
 
         // Mirrored ports: visible services only.
         let mirrored = eventually(SOON, || async {
@@ -817,7 +894,7 @@ async fn remote_box_end_to_end() {
 
         // The box lists its connected client by the id the client keeps in its
         // home, with its host name.
-        let client_id = std::fs::read_to_string(client.h.home.join("remote-client-id"))
+        let client_id = std::fs::read_to_string(client.h.home.join("client-id"))
             .expect("the client stored its id");
         let status = side
             .h
@@ -1040,7 +1117,7 @@ async fn shared_pool_keeps_box_and_local_ports_apart() {
             .h
             .call(
                 Method::Connect,
-                json!({"host": "box", "background": true}),
+                client.connect_params("box").await,
                 Context::default(),
             )
             .await
@@ -1155,7 +1232,7 @@ async fn colliding_lane_is_skipped() {
             .h
             .call(
                 Method::Connect,
-                json!({"host": "box", "background": true}),
+                client.connect_params("box").await,
                 Context::default(),
             )
             .await
@@ -1258,7 +1335,7 @@ async fn refused_opens_are_reported() {
             .h
             .call(
                 Method::Connect,
-                json!({"host": "box", "background": true}),
+                client.connect_params("box").await,
                 Context::default(),
             )
             .await
@@ -1560,7 +1637,7 @@ async fn a_stopped_box_daemon_ends_the_session() {
             .h
             .call(
                 Method::Connect,
-                json!({"host": "box", "background": true}),
+                client.connect_params("box").await,
                 Context::default(),
             )
             .await

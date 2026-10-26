@@ -48,6 +48,10 @@ pub enum RouteState {
     /// The route belongs to a remote box whose connection waits for a person to
     /// sign in again; requests get the sign-in page without waiting.
     SignInNeeded,
+    /// The route belongs to a remote box that no longer accepts this
+    /// machine's pairing, or never did; requests get the pairing page without
+    /// waiting.
+    PairingNeeded,
 }
 
 /// A hostname mapping independent of daemon/configuration types.

@@ -76,7 +76,7 @@ impl Ctx<'_> {
             "ready" | "running" | "ok" | "applied" | "exited" => "32",
             "failed" | "fail" | "error" => "31",
             "starting" | "stopping" | "warn" | "reconnecting" | "sign_in_needed" | "needs_auth"
-            | "unassigned" | "orphaned" => "33",
+            | "pairing_needed" | "needs_pairing" | "unassigned" | "orphaned" => "33",
             // Queued, idle, throttled, frozen and stopped units are dim.
             _ => "2",
         };
@@ -205,6 +205,9 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::DaemonShutdown => other::daemon_shutdown(data),
         Method::DaemonResetState => other::reset_state(data),
         Method::HostList => other::host_list(data),
+        Method::RemotePair => other::remote_pair(data, cx),
+        Method::RemoteClients => other::remote_clients(data, cx),
+        Method::RemoteRevoke => other::remote_revoke(data, cx),
         _ => tree(data),
     }
 }

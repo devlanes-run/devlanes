@@ -39,16 +39,21 @@ pub(crate) struct DaemonRegistry {
     /// serves one session; in-process tests serve several, and a client's
     /// newest session wins.
     serials: Mutex<HashMap<String, u64>>,
+    /// Clients passed the pairing gate: the daemon refuses the feed of one
+    /// without a pairing ([`RegistryParams::paired`]).
+    paired: bool,
 }
 
 impl DaemonRegistry {
-    /// Reads the daemon behind `paths`; `client` describes this tunnel to `status`.
-    pub(crate) fn new(paths: Paths, client: RemoteClient) -> Self {
+    /// Reads the daemon behind `paths`; `client` describes this tunnel to
+    /// `status`, and `paired` says the box requires pairing.
+    pub(crate) fn new(paths: Paths, client: RemoteClient, paired: bool) -> Self {
         Self {
             paths,
             client,
             reports: tokio::sync::Mutex::new(None),
             serials: Mutex::new(HashMap::new()),
+            paired,
         }
     }
 
@@ -143,6 +148,7 @@ impl RegistrySource for DaemonRegistry {
                 ..self.client.clone()
             }),
             features: client.features.clone(),
+            paired: self.paired,
         };
         let params = serde_json::to_value(params).map_err(FeedError::Params)?;
         daemon
@@ -341,7 +347,7 @@ mod tests {
                 data: json!({"stored": true}),
             })
             .await?;
-            let registry = DaemonRegistry::new(paths, RemoteClient::default());
+            let registry = DaemonRegistry::new(paths, RemoteClient::default(), false);
             let client = ClientInfo {
                 id: "0123abcd".into(),
                 ..ClientInfo::default()
@@ -389,7 +395,7 @@ mod tests {
                 error: RpcError::new("unknown_method", json!({"method": "unknown"}), 2),
             })
             .await?;
-            let registry = DaemonRegistry::new(paths, RemoteClient::default());
+            let registry = DaemonRegistry::new(paths, RemoteClient::default(), true);
             let client = ClientInfo {
                 label: "devlanes test".into(),
                 id: "0123abcd".into(),
@@ -419,6 +425,7 @@ mod tests {
                 ("0123abcd", "laptop")
             );
             assert_eq!(params.features, ["mirror_report"]);
+            assert!(params.paired, "a box that requires pairing says so");
             Ok(())
         })
         .await?

@@ -14,14 +14,22 @@
 //! Client and box exchange [`report`]s of what the client mirrors: the client
 //! sends one after its mirror changed, and the box keeps the latest per client.
 //!
+//! A box that requires pairing serves a client only with the remote token it
+//! gave that client for a one-time code ([`pairing`]). The client keeps the
+//! token per box; without a valid one and nobody to type a code, its link
+//! waits in `needs_pairing`, keeping listeners and routes like `needs_auth`,
+//! until `remote connect` (with `--code` or a prompt) pairs it again.
+//!
 //! Box side: `remote.registry` ([`feed`]) streams what a tunnel's client
 //! mirrors, `status` lists the tunnels serving clients with their reports,
 //! `url` and `hosts` add the URLs each client opens, and `sync.status` lists
-//! the sync entries a tunnel may stream.
+//! the sync entries a tunnel may stream. `remote.pair`, `remote.pairing.*`,
+//! `remote.clients` and `remote.revoke` manage pairings.
 
 mod feed;
 mod identity;
 mod mirror;
+mod pairing;
 mod report;
 mod sync;
 
@@ -89,6 +97,13 @@ pub(crate) struct Remotes {
     /// the serial of the [`ClientGuard`] that listed it.
     clients: Mutex<BTreeMap<ClientKey, (u64, RemoteClient)>>,
     next_client: AtomicU64,
+    /// Box side: every open `remote.registry` feed by its serial, with its
+    /// client's id and the token `remote revoke` cancels to end it. Apart from
+    /// `clients`, where a newer connection of a client replaces the entry
+    /// while the older feed may still run.
+    feeds: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
+    /// Box side: outstanding pairing codes and recent failed attempts.
+    codes: Mutex<pairing::Codes>,
     /// What this machine sends every box, read from disk on the first connect.
     identity: tokio::sync::OnceCell<identity::ClientIdentity>,
     /// Hands each new connection its place in connect order ([`HostConn::serial`]).
@@ -134,16 +149,18 @@ struct BoxPortProblem {
 const RANGE_OVERLAP: &str = "ports_range_overlap";
 
 impl Remotes {
-    /// No box is connected and no tunnel serves a client, so an idle exit
-    /// would cut nobody off. A box counts as connected while its link
-    /// reconnects or waits for a sign-in, and while a starting daemon restores
-    /// it, so a daemon with wanted boxes stays up for them. A box whose link
-    /// failed for good does not count: it mirrors nothing, and it stays wanted,
-    /// so the next daemon tries it again.
+    /// No box is connected, no tunnel serves a client and no pairing code is
+    /// outstanding, so an idle exit would cut nobody off or void a code
+    /// someone is about to type. A box counts as connected while its link
+    /// reconnects or waits for a sign-in or pairing, and while a starting
+    /// daemon restores it, so a daemon with wanted boxes stays up for them. A
+    /// box whose link failed for good does not count: it mirrors nothing, and
+    /// it stays wanted, so the next daemon tries it again.
     pub(crate) fn is_idle(&self) -> bool {
         lock(&self.hosts).values().all(|conn| conn.ended())
             && lock(&self.clients).is_empty()
             && !self.restoring.load(Ordering::Relaxed)
+            && !lock(&self.codes).outstanding(now_ms())
     }
 
     /// Mirrored routes of every connected box, in connect order.
@@ -355,6 +372,10 @@ pub(crate) struct HostConn {
     changed: tokio::sync::Notify,
     /// [`announce_changes`], waited for on close.
     announce_task: Mutex<Option<JoinHandle<()>>>,
+    /// A code from `remote connect --code`, for the next time the box asks
+    /// for one; cleared once a session is up, so a stale code is never sent
+    /// (a wrong code voids the box's other codes).
+    code: Arc<Mutex<Option<String>>>,
 }
 
 /// Shortest time between two [`wire::MIRROR_EVENT`]s for one box: a start on
@@ -368,7 +389,7 @@ impl HostConn {
     }
 
     /// Waits up to `limit` for a live session; `None` when the link gave up or
-    /// waits for a sign-in.
+    /// waits for a sign-in or pairing.
     async fn session_within(&self, limit: Duration) -> Option<BoxSession> {
         let mut state = self.state.clone();
         let wait = async {
@@ -382,6 +403,7 @@ impl HostConn {
                             LinkState::Failed { .. }
                                 | LinkState::Stopped
                                 | LinkState::NeedsAuth { .. }
+                                | LinkState::NeedsPairing { .. }
                         ),
                     )
                 };
@@ -396,12 +418,13 @@ impl HostConn {
         tokio::time::timeout(limit, wait).await.ok().flatten()
     }
 
-    /// Why the link is down, while it retries, waits for a sign-in or after
-    /// it failed.
+    /// Why the link is down, while it retries, waits for a sign-in or
+    /// pairing, or after it failed.
     fn link_error(&self) -> Option<String> {
         match &*self.state.borrow() {
             LinkState::Retrying { error, .. }
             | LinkState::NeedsAuth { error }
+            | LinkState::NeedsPairing { error, .. }
             | LinkState::Failed { error } => Some(error.clone()),
             _ => None,
         }
@@ -420,29 +443,43 @@ impl HostConn {
         matches!(*self.state.borrow(), LinkState::NeedsAuth { .. })
     }
 
-    /// Makes a link waiting for a sign-in try again, now that a CLI can answer
-    /// its prompts. Does nothing otherwise; true when it resumed the link.
+    /// True while the link waits for a person to pair this machine with the
+    /// box again.
+    fn needs_pairing(&self) -> bool {
+        matches!(*self.state.borrow(), LinkState::NeedsPairing { .. })
+    }
+
+    /// Makes a link waiting for a sign-in or pairing try again, now that a
+    /// CLI can answer its prompts or gave a code. Does nothing otherwise; true
+    /// when it resumed the link.
     async fn resume(&self) -> bool {
         let resumed = self.link.lock().await.as_ref().is_some_and(Link::resume);
         if resumed {
-            tracing::info!(host = %self.name, "retrying a box that needs a sign-in");
+            tracing::info!(host = %self.name, "retrying a box that needs a sign-in or pairing");
         }
         resumed
     }
 
     /// Waits, at most `limit`, for the attempt in flight when a `connect` CLI
     /// attached, and resumes the link once if that attempt ended needing a
-    /// sign-in: it may have asked its prompt before the CLI was there, as an
-    /// attempt of a restore that a `remote connect` right after a daemon
-    /// restart catches. The CLI stays registered meanwhile, so the next
-    /// attempt asks it.
+    /// sign-in, or pairing with nobody having given a code: it may have asked
+    /// its prompt before the CLI was there, as an attempt of a restore that a
+    /// `remote connect` right after a daemon restart catches. The CLI stays
+    /// registered meanwhile, so the next attempt asks it. A refused code is
+    /// not tried again: the box voided its codes, and `connect` reports why.
     async fn resume_after_attempt(&self, limit: Duration) {
         let mut state = self.state.clone();
         let attempt = async {
             state
                 .wait_for(|state| !matches!(state, LinkState::Connecting { .. }))
                 .await
-                .is_ok_and(|state| matches!(*state, LinkState::NeedsAuth { .. }))
+                .is_ok_and(|state| {
+                    matches!(
+                        *state,
+                        LinkState::NeedsAuth { .. }
+                            | LinkState::NeedsPairing { refused: false, .. }
+                    )
+                })
         };
         if matches!(tokio::time::timeout(limit, attempt).await, Ok(true)) {
             self.resume().await;
@@ -450,17 +487,18 @@ impl HostConn {
     }
 
     /// The error `connect` answers with for a link that failed for good or
-    /// waits for a sign-in; `None` otherwise.
+    /// waits for a sign-in or pairing; `None` otherwise.
     fn stuck(&self) -> Option<RpcError> {
         match &*self.state.borrow() {
             LinkState::Failed { error } => Some(remote_failed(&self.name, error)),
             LinkState::NeedsAuth { error } => Some(remote_needs_auth(&self.name, error)),
+            LinkState::NeedsPairing { error, .. } => Some(remote_needs_pairing(&self.name, error)),
             _ => None,
         }
     }
 
-    /// Resolves when the link stops or needs a sign-in again: `Err` carries a
-    /// permanent failure or the sign-in error.
+    /// Resolves when the link stops or needs a sign-in or pairing again:
+    /// `Err` carries a permanent failure or what the person has to do.
     async fn finished(&self) -> Result<(), RpcError> {
         let mut state = self.state.clone();
         loop {
@@ -476,7 +514,8 @@ impl HostConn {
         }
     }
 
-    /// Waits until connected, stopped or waiting for a sign-in, at most `limit`.
+    /// Waits until connected, stopped or waiting for a sign-in or pairing, at
+    /// most `limit`.
     async fn settled(&self, limit: Duration) {
         let mut state = self.state.clone();
         let wait = async {
@@ -486,6 +525,7 @@ impl HostConn {
                     LinkState::Connected(_)
                         | LinkState::Failed { .. }
                         | LinkState::NeedsAuth { .. }
+                        | LinkState::NeedsPairing { .. }
                         | LinkState::Stopped
                 );
                 if done || state.changed().await.is_err() {
@@ -508,13 +548,19 @@ impl HostConn {
     }
 
     /// `remote.state` payload for the current state, with the command that
-    /// resumes a link waiting for a sign-in as `fix`.
+    /// resumes a link waiting for a sign-in or pairing as `fix`.
     fn state_json(&self) -> Value {
         let mut value = describe(&self.state.borrow());
         if let Some(map) = value.as_object_mut() {
             map.insert("host".into(), json!(self.name));
-            if map.get("state").and_then(Value::as_str) == Some("needs_auth") {
-                map.insert("fix".into(), json!(sign_in_command(&self.name)));
+            match map.get("state").and_then(Value::as_str) {
+                Some("needs_auth") => {
+                    map.insert("fix".into(), json!(sign_in_command(&self.name)));
+                }
+                Some("needs_pairing") => {
+                    map.insert("fix".into(), json!(pair_command(&self.name)));
+                }
+                _ => {}
             }
         }
         value
@@ -669,6 +715,7 @@ fn describe(state: &LinkState) -> Value {
             "error": error,
         }),
         LinkState::NeedsAuth { error } => json!({"state": "needs_auth", "error": error}),
+        LinkState::NeedsPairing { error, .. } => json!({"state": "needs_pairing", "error": error}),
         LinkState::Failed { error } => json!({"state": "failed", "error": error}),
         LinkState::Stopped => json!({"state": "stopped"}),
     }
@@ -677,6 +724,12 @@ fn describe(state: &LinkState) -> Value {
 /// The command that signs in to `host` again and resumes its link.
 fn sign_in_command(host: &str) -> String {
     format!("devlanes remote connect {host}")
+}
+
+/// The command that pairs with `host` again, with the code `devlanes remote
+/// pair` printed on the box.
+fn pair_command(host: &str) -> String {
+    format!("devlanes remote connect {host} --code <code>")
 }
 
 /// Milliseconds since the Unix epoch.
@@ -769,12 +822,25 @@ fn remote_needs_auth(host: &str, message: impl std::fmt::Display) -> RpcError {
     )
 }
 
-/// `connect` parameters.
-#[derive(Debug, Deserialize)]
+/// `remote_needs_pairing`: the box serves only paired clients and took no
+/// token or code from this machine, with the command that pairs it as `fix`.
+fn remote_needs_pairing(host: &str, message: impl std::fmt::Display) -> RpcError {
+    RpcError::new(
+        "remote_needs_pairing",
+        json!({"host": host, "message": message.to_string(), "fix": pair_command(host)}),
+        4,
+    )
+}
+
+/// `connect` parameters. Not `Debug`: `code` is a secret.
+#[derive(Deserialize)]
 struct ConnectParams {
     host: String,
     #[serde(default)]
     background: bool,
+    /// A pairing code from `devlanes remote pair` on the box.
+    #[serde(default)]
+    code: Option<String>,
 }
 
 /// `disconnect` parameters; no host means every box.
@@ -797,12 +863,15 @@ struct ClientGuard {
     engine: Arc<Inner>,
     key: ClientKey,
     serial: u64,
+    /// Cancelled by `remote revoke` to end the feed, and with it the session.
+    revoked: CancellationToken,
 }
 
 impl Drop for ClientGuard {
     /// Forgets the tunnel, unless a newer connection of the same client
     /// replaced its entry.
     fn drop(&mut self) {
+        lock(&self.engine.remote.feeds).remove(&self.serial);
         let mut clients = lock(&self.engine.remote.clients);
         if clients
             .get(&self.key)
@@ -854,7 +923,8 @@ impl Inner {
     /// `connect`: creates (or reuses) the box's link, then streams `remote.state`
     /// events until the CLI detaches. The connection lives in the daemon either way;
     /// `background` only returns once the first attempt settled and, when it
-    /// connected, the connection is recorded.
+    /// connected, the connection is recorded. A `code` is kept for the next
+    /// time the box asks for one, and dropped when the link is up already.
     pub(crate) async fn connect_method(
         self: &Arc<Self>,
         value: Value,
@@ -868,13 +938,19 @@ impl Inner {
                 2,
             ));
         }
-        let (conn, _watching) = self.ensure_host(&args.host, Some(session), false).await?;
+        let code = args.code.filter(|code| !code.trim().is_empty());
+        let (conn, _watching) = self
+            .ensure_host(&args.host, Some(session), false, code)
+            .await?;
         // Connecting to a box again retries a box HTTPS port that was taken.
         self.reconcile_box_ports().await;
         // This CLI can answer prompts now, so a link waiting for one goes on,
         // and one still trying may have asked nobody before the CLI attached.
         let in_flight =
             !conn.resume().await && matches!(*conn.state.borrow(), LinkState::Connecting { .. });
+        if conn.session().is_some() {
+            lock(&conn.code).take();
+        }
         if args.background {
             if in_flight {
                 conn.resume_after_attempt(CONNECT_WAIT).await;
@@ -917,7 +993,8 @@ impl Inner {
     /// its listeners, before its replacement starts. `watcher`, the CLI of a
     /// `connect`, gets the link's prompts from before its first attempt until
     /// the returned guard drops. `connected_before` marks a box restored after
-    /// a daemon restart (see [`RemoteConnector::transport`]).
+    /// a daemon restart (see [`RemoteConnector::transport`]). `code` is a
+    /// pairing code for the next time the box asks for one.
     ///
     /// [`RemoteConnector::transport`]: crate::integrations::RemoteConnector::transport
     async fn ensure_host(
@@ -925,10 +1002,11 @@ impl Inner {
         host: &str,
         watcher: Option<&Session>,
         connected_before: bool,
+        code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let identity = self.client_identity().await?;
         let _connecting = self.remote.connecting.lock().await;
-        self.replace_host(host, identity, watcher, connected_before, None)
+        self.replace_host(host, identity, watcher, connected_before, None, code)
             .await
     }
 
@@ -942,12 +1020,16 @@ impl Inner {
         watcher: Option<&Session>,
         connected_before: bool,
         recorded: Option<&str>,
+        code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let old = {
             let mut hosts = lock(&self.remote.hosts);
             match hosts.get(host) {
                 Some(conn) if !conn.ended() => {
                     let guard = watcher.map(|session| conn.board.watch(session));
+                    if code.is_some() {
+                        *lock(&conn.code) = code;
+                    }
                     return Ok((conn.clone(), guard));
                 }
                 _ => hosts.remove(host),
@@ -959,7 +1041,7 @@ impl Inner {
             self.refresh_range_overlaps();
         }
         let (conn, guard) = self
-            .open_host(host, identity, watcher, connected_before, recorded)
+            .open_host(host, identity, watcher, connected_before, recorded, code)
             .await?;
         lock(&self.remote.hosts).insert(host.to_owned(), conn.clone());
         lock(&self.remote.restore_errors).remove(host);
@@ -993,10 +1075,10 @@ impl Inner {
     }
 
     /// Starts the link and the host's watcher and mirror tasks, with
-    /// `watcher` registered for prompts before the link's first attempt.
-    /// A box `recorded` as reached by a command fails with
-    /// `box_command_missing` when the connector no longer has a command for
-    /// it, instead of trying the name as an ssh destination.
+    /// `watcher` registered for prompts and `code` kept for pairing before the
+    /// link's first attempt. A box `recorded` as reached by a command fails
+    /// with `box_command_missing` when the connector no longer has a command
+    /// for it, instead of trying the name as an ssh destination.
     async fn open_host(
         self: &Arc<Self>,
         host: &str,
@@ -1004,6 +1086,7 @@ impl Inner {
         watcher: Option<&Session>,
         connected_before: bool,
         recorded: Option<&str>,
+        code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let board = Arc::new(PromptBoard::default());
         let prompter = Arc::new(HostPrompter {
@@ -1012,7 +1095,7 @@ impl Inner {
         let remote = self
             .integ
             .remote
-            .transport(host, prompter, connected_before)
+            .transport(host, prompter.clone(), connected_before)
             .await?;
         if recorded == Some(COMMAND) && remote.kind != COMMAND {
             return Err(command_missing(host));
@@ -1022,9 +1105,16 @@ impl Inner {
             board: board.clone(),
         });
         let guard = watcher.map(|session| board.watch(session));
+        let code = Arc::new(Mutex::new(code));
         let mut options = SessionOptions::new(format!("devlanes {}", devlanes_version::VERSION));
         options.client_id = identity.id;
         options.client_name = identity.name;
+        options.pairing = Some(Arc::new(pairing::HostPairing {
+            host: host.to_owned(),
+            store: self.store.clone(),
+            prompter,
+            code: code.clone(),
+        }));
         let link = Link::spawn(transport, options, self.integ.remote.backoff());
         let conn = Arc::new(HostConn {
             name: host.to_owned(),
@@ -1049,6 +1139,7 @@ impl Inner {
             connected_since: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             announce_task: Mutex::new(None),
+            code,
         });
         let watcher = tokio::spawn(watch_link(Arc::downgrade(self), conn.clone()));
         *lock(&conn.watch_task) = Some(watcher);
@@ -1355,7 +1446,7 @@ impl Inner {
                 return;
             }
             match self
-                .replace_host(&name, identity, None, true, Some(&transport))
+                .replace_host(&name, identity, None, true, Some(&transport), None)
                 .await
             {
                 Ok(_) => {
@@ -1682,6 +1773,10 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
                 None => *since = None,
             }
         }
+        if session.is_some() {
+            // Paired, or never asked: a code left over must not go out later.
+            lock(&conn.code).take();
+        }
         if let Some(session) = &session {
             let record = devlanes_state::RemoteHost {
                 name: conn.name.clone(),
@@ -1995,6 +2090,7 @@ mod tests {
             connected_since: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             announce_task: Mutex::new(None),
+            code: Arc::default(),
         })
     }
 
@@ -2008,6 +2104,7 @@ mod tests {
             )),
             dialer: Arc::new(devlanes_transport::LoopbackDialer),
             sync: Arc::new(devlanes_transport::NoSync),
+            pairing: Arc::new(devlanes_transport::NoPairing),
         };
         tokio::spawn(devlanes_transport::serve(
             box_io,
@@ -2017,9 +2114,10 @@ mod tests {
         Ok(BoxSession::establish(Box::new(client_io), SessionOptions::new("client")).await?)
     }
 
-    /// A daemon is idle only with no box it would cut off: restoring, or a box
-    /// that is connected, reconnecting or waiting for a sign-in, keeps it up;
-    /// a box whose link failed for good or stopped does not.
+    /// A daemon is idle only with no box it would cut off and no pairing code
+    /// outstanding: restoring, a code, or a box that is connected,
+    /// reconnecting or waiting for a sign-in or pairing, keeps it up; a box
+    /// whose link failed for good or stopped does not.
     #[tokio::test]
     async fn only_failed_and_stopped_boxes_leave_the_daemon_idle()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -2028,6 +2126,10 @@ mod tests {
         remotes.restoring.store(true, Ordering::Relaxed);
         assert!(!remotes.is_idle(), "restoring");
         remotes.restoring.store(false, Ordering::Relaxed);
+        // A code someone is about to type keeps the daemon up.
+        lock(&remotes.codes).mint(now_ms())?;
+        assert!(!remotes.is_idle(), "a pairing code is outstanding");
+        *lock(&remotes.codes) = pairing::Codes::default();
 
         let (state, receiver) = watch::channel(LinkState::Connecting { attempt: 1 });
         lock(&remotes.hosts).insert("box".into(), conn_with(receiver));
@@ -2041,6 +2143,10 @@ mod tests {
             },
             LinkState::NeedsAuth {
                 error: "Permission denied (password).".into(),
+            },
+            LinkState::NeedsPairing {
+                error: "the box serves only paired clients".into(),
+                refused: false,
             },
         ];
         for link in busy {

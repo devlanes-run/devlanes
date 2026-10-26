@@ -21,6 +21,7 @@ use devlanes_transport::{
 };
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 
 use super::{ClientGuard, ClientKey};
 use crate::{
@@ -51,6 +52,14 @@ impl Inner {
         // Older clients reject a unit kind they do not know.
         let external = args.features.iter().any(|name| name == EXTERNAL_UNITS);
         let listed = args.client.map(|client| ClientGuard::add(self, client));
+        // Checked after the listing, which a revoke ends: a revoke either
+        // deleted the pairing before this read or finds the listing.
+        if args.paired && !self.listed_paired(listed.as_ref()).await? {
+            return Err(client_not_paired());
+        }
+        let revoked = listed
+            .as_ref()
+            .map_or_else(CancellationToken::new, |guard| guard.revoked.clone());
         // The tunnel's reports name it, so only this request's entry takes them.
         let serial = listed.as_ref().map(|guard| guard.serial);
         // Subscribed before the snapshot is built, so no change falls between them.
@@ -64,6 +73,7 @@ impl Inner {
             let mut lagged = tokio::select! {
                 () = disconnected.cancelled() => return Ok(json!({})),
                 () = self.shutdown.cancelled() => return Ok(json!({})),
+                () = revoked.cancelled() => return Err(client_revoked()),
                 change = next_change(&mut changes) => match change {
                     Some(lagged) => lagged,
                     None => return Ok(json!({})),
@@ -77,6 +87,7 @@ impl Inner {
                     () = &mut settle => break,
                     () = disconnected.cancelled() => return Ok(json!({})),
                     () = self.shutdown.cancelled() => return Ok(json!({})),
+                    () = revoked.cancelled() => return Err(client_revoked()),
                     next = changes.recv() => match next {
                         Ok(_) => {}
                         Err(broadcast::error::RecvError::Lagged(_)) => lagged = true,
@@ -95,6 +106,20 @@ impl Inner {
             }
             current = next;
         }
+    }
+
+    /// Whether the client `listed` names has a pairing; an anonymous client
+    /// never has one.
+    async fn listed_paired(&self, listed: Option<&ClientGuard>) -> Result<bool, RpcError> {
+        let Some(ClientKey::Id(id)) = listed.map(|guard| &guard.key) else {
+            return Ok(false);
+        };
+        Ok(self
+            .store
+            .remote_pairing(id.clone())
+            .await
+            .map_err(crate::registry::store_error)?
+            .is_some())
     }
 
     /// The registry as of now, from `status --all`'s lanes and this machine's
@@ -162,13 +187,36 @@ impl ClientGuard {
         } else {
             ClientKey::Id(client.id.clone())
         };
+        let revoked = CancellationToken::new();
+        lock(&engine.remote.feeds).insert(serial, (client.id.clone(), revoked.clone()));
         lock(&engine.remote.clients).insert(key.clone(), (serial, client));
         Self {
             engine: engine.clone(),
             key,
             serial,
+            revoked,
         }
     }
+}
+
+/// `client_not_paired`: a tunnel that requires pairing asked for the feed of
+/// a client without a pairing, which a revoke just deleted.
+fn client_not_paired() -> RpcError {
+    RpcError::new(
+        "client_not_paired",
+        json!({"message": "the client is not paired with this box"}),
+        4,
+    )
+}
+
+/// `client_revoked`: the feed ends because `devlanes remote revoke` deleted
+/// the client's pairing, which ends its session.
+fn client_revoked() -> RpcError {
+    RpcError::new(
+        "client_revoked",
+        json!({"message": "the client's pairing was revoked on the box"}),
+        4,
+    )
 }
 
 /// Longest client id or name the box keeps, in bytes.
@@ -177,7 +225,7 @@ const MAX_CLIENT_TEXT: usize = 256;
 /// `text` without control characters, cut to [`MAX_CLIENT_TEXT`] bytes. The
 /// box shows what clients send in `status`, so a client must not be able to
 /// fill it or put terminal escapes in it.
-fn clean(text: &str) -> String {
+pub(super) fn clean(text: &str) -> String {
     let mut cleaned = String::new();
     for c in text.chars().filter(|c| !c.is_control()) {
         if cleaned.len() + c.len_utf8() > MAX_CLIENT_TEXT {

@@ -26,8 +26,9 @@ pub async fn run(action: Action) -> Result<u8, RpcError> {
 /// stdout carries only mux frames; failures go straight to stderr (whatever the
 /// output mode, since a JSON error on stdout would corrupt the pipe), and the
 /// client's SSH transport returns that text as the connection error. The user
-/// config's `remote.start_daemon` decides whether a stopped daemon is started
-/// (see [`crate::user_config::tunnel_start_daemon`]).
+/// config's `remote.start_daemon` decides whether a stopped daemon is started,
+/// and `remote.require_pairing` whether clients must be paired (see
+/// [`crate::user_config::tunnel_settings`]).
 ///
 /// On Windows sshd runs it through cmd.exe or PowerShell with pipes for
 /// stdin and stdout. `main` gives it a console without a window when none
@@ -37,12 +38,16 @@ async fn tunnel() -> Result<u8, RpcError> {
     let result = match Paths::discover() {
         Ok(paths) => {
             let read = paths.clone();
-            let (start_daemon, problems) =
-                tokio::task::spawn_blocking(move || crate::user_config::tunnel_start_daemon(&read))
+            let fallback = crate::user_config::TunnelSettings {
+                start_daemon: true,
+                require_pairing: true,
+            };
+            let (settings, problems) =
+                tokio::task::spawn_blocking(move || crate::user_config::tunnel_settings(&read))
                     .await
-                    .unwrap_or((true, String::new()));
+                    .unwrap_or((fallback, String::new()));
             eprint!("{problems}");
-            devlanes_tunnel::run_stdio(paths, start_daemon)
+            devlanes_tunnel::run_stdio(paths, settings.start_daemon, settings.require_pairing)
                 .await
                 .map_err(|error| (error.to_string(), error.exit_code()))
         }

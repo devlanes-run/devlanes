@@ -14,9 +14,12 @@ remote:
 ```
 
 ```sh
-devlanes remote connect acme
-devlanes remote ls                  # transport: command
+docker exec acme devlanes remote pair           # a one-time code for the first connection
+devlanes remote connect acme --code K7QM-3XWD
+devlanes remote ls                              # transport: command
 ```
+
+The box serves only machines it paired with, as over SSH ([pairing](../remote.md#pairing)); later connections, and the ones after a daemon restart, need no code. A throwaway container that only you reach can skip pairing with `remote.require_pairing: false` in its user config.
 
 Or without editing the file:
 

@@ -620,6 +620,25 @@ fn remote_start_daemon_defaults_to_true() {
     assert!(parse_user("remote: { start_daemon: maybe }").is_err());
 }
 
+/// A box serves only paired clients unless `remote.require_pairing` is false.
+#[test]
+fn remote_require_pairing_defaults_to_true() {
+    assert!(parse_user("{}").expect("defaults").remote.require_pairing);
+    assert!(
+        parse_user("remote: {}")
+            .expect("empty")
+            .remote
+            .require_pairing
+    );
+    assert!(
+        !parse_user("remote: { require_pairing: false }")
+            .expect("off")
+            .remote
+            .require_pairing
+    );
+    assert!(parse_user("remote: { require_pairing: maybe }").is_err());
+}
+
 /// Command boxes need a name `remote connect` can take and a program; the
 /// rest of the command is passed as written.
 #[test]

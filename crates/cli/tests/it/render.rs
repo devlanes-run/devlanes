@@ -2311,6 +2311,153 @@ fn boxes_that_need_a_sign_in_name_the_command() {
     );
 }
 
+/// `remote pair` in each mode: the code with what to run on the client for a
+/// person, one line saying what to ask the user for an agent, the code alone
+/// when piped, and the daemon's data for `--json`. A pause after wrong codes
+/// is said.
+#[test]
+fn remote_pair_prints_the_code_in_every_mode() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let data = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000});
+    let render = |mode: OutputMode, data: &Value| {
+        runtime(mode)
+            .reporter()
+            .result(&Report::new(Method::RemotePair, data))
+            .expect("render")
+            .stdout
+    };
+    let human = render(OutputMode::Human, &data);
+    assert!(
+        human.starts_with("pairing code: K7QM-3XWD (works once, for 10 minutes)"),
+        "{human}"
+    );
+    assert!(
+        human.contains("on your machine, run: devlanes remote connect <box> --code K7QM-3XWD"),
+        "{human}"
+    );
+    let agent = render(OutputMode::Agent, &data);
+    assert_eq!(agent.lines().count(), 1, "{agent}");
+    assert!(
+        agent.starts_with("pairing code K7QM-3XWD valid_for=10m"),
+        "{agent}"
+    );
+    assert!(
+        agent.contains("ask the user to run `devlanes remote connect <box> --code K7QM-3XWD`"),
+        "{agent}"
+    );
+    assert_eq!(render(OutputMode::Plain, &data), "K7QM-3XWD\n");
+    let json: Value = serde_json::from_str(&render(OutputMode::Json, &data)).expect("json output");
+    assert_eq!(json["code"], "K7QM-3XWD");
+
+    let paused = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
+                        "retry_after_ms": 4 * 60_000});
+    assert!(
+        render(OutputMode::Human, &paused)
+            .contains("wrong codes paused pairing; this code works in 4 minutes"),
+        "{}",
+        render(OutputMode::Human, &paused)
+    );
+    assert!(render(OutputMode::Agent, &paused).contains("it works in 4m"));
+}
+
+/// `remote clients` lists each client with a short id that `revoke` takes,
+/// whether it is paired, its connection or when it was last seen, and what
+/// it mirrors; `revoke` says whom it revoked.
+#[test]
+fn remote_clients_and_revoke_name_each_client() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let id = format!("dl_cid_{}", "ab12".repeat(16));
+    let clients = json!({"items": [
+        {"id": id, "name": "laptop", "paired": true, "paired_at_ms": now - 86_400_000,
+         "last_seen_ms": now, "connections": [{"address": "203.0.113.4",
+         "since_ms": now - 5 * 60_000, "mirror": {"ports": 4, "bound": 3, "skipped_lanes": 0}}]},
+        {"id": format!("dl_cid_{}", "cd34".repeat(16)), "name": "desk", "paired": true,
+         "paired_at_ms": now - 86_400_000, "last_seen_ms": now - 3 * 3_600_000, "connections": []},
+    ]});
+    let text = render_text(Method::RemoteClients, &clients);
+    assert!(
+        text.contains(
+            "laptop  dl_cid_ab12ab12  paired  connected 5m from 203.0.113.4  mirrors 3/4 ports"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("desk    dl_cid_cd34cd34  paired  last seen 3h ago"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("client laptop id={id} paired=true connections=1")),
+        "{text}"
+    );
+    let empty = render_text(Method::RemoteClients, &json!({"items": []}));
+    assert!(
+        empty.contains("devlanes remote pair prints a code"),
+        "{empty}"
+    );
+
+    let revoked = json!({"revoked": [{"id": id, "name": "laptop"}], "ended": 1});
+    let text = render_text(Method::RemoteRevoke, &revoked);
+    assert!(
+        text.contains(&format!("revoked laptop ({id}) and ended 1 connection")),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("revoked laptop id={id} ended=1")),
+        "{text}"
+    );
+}
+
+/// A box that needs pairing names the box command and the client command,
+/// and an unknown or ambiguous client lists the paired ones.
+#[test]
+fn pairing_errors_say_what_to_run() {
+    let error = |code: &str, data: Value| {
+        runtime(OutputMode::Agent)
+            .reporter()
+            .error(&RpcError::new(code, data, 4), None)
+            .stderr
+    };
+    let needs = error(
+        "remote_needs_pairing",
+        json!({"host": "hetzner", "message": "the box serves only paired clients",
+               "fix": "devlanes remote connect hetzner --code <code>"}),
+    );
+    assert!(
+        needs.contains("box hetzner needs this machine to pair with it"),
+        "{needs}"
+    );
+    assert!(
+        needs.contains(
+            "devlanes remote pair on hetzner, then devlanes remote connect hetzner --code <code>"
+        ),
+        "{needs}"
+    );
+    let missing = error(
+        "client_not_found",
+        json!({"client": "tablet", "candidates": [{"id": "dl_cid_ab", "name": "laptop"}]}),
+    );
+    assert!(
+        missing.contains("no paired client is called tablet; paired: laptop (dl_cid_ab)"),
+        "{missing}"
+    );
+    assert!(missing.contains("devlanes remote clients"), "{missing}");
+    let ambiguous = error(
+        "client_ambiguous",
+        json!({"client": "laptop", "candidates": [{"id": "dl_cid_ab", "name": "laptop"},
+                                                  {"id": "dl_cid_cd", "name": "laptop"}]}),
+    );
+    assert!(
+        ambiguous.contains("give its id instead: laptop (dl_cid_ab), laptop (dl_cid_cd)"),
+        "{ambiguous}"
+    );
+}
+
 /// Warnings about another box name it; the proxy port and range overlap
 /// warnings say what to do.
 #[test]

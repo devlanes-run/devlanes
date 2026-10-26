@@ -541,6 +541,7 @@ impl Proxy {
             RouteState::Failed { .. } => Some(ErrorCode::ServiceFailed),
             RouteState::Reconnecting => Some(ErrorCode::BoxReconnecting),
             RouteState::SignInNeeded => Some(ErrorCode::BoxSignInNeeded),
+            RouteState::PairingNeeded => Some(ErrorCode::BoxPairingNeeded),
         };
         if let Some(code) = code {
             let mut page = route_page(&route, code);

@@ -157,8 +157,15 @@ fn entire_command_inventory_builds_actions() {
             &["remote", "connect", "box", "--background"],
             Some(Method::Connect),
         ),
+        (
+            &["remote", "connect", "box", "--code", "K7QM-3XWD"],
+            Some(Method::Connect),
+        ),
         (&["remote", "disconnect", "box"], Some(Method::Disconnect)),
         (&["remote", "ls"], Some(Method::HostList)),
+        (&["remote", "pair"], Some(Method::RemotePair)),
+        (&["remote", "clients"], Some(Method::RemoteClients)),
+        (&["remote", "revoke", "laptop"], Some(Method::RemoteRevoke)),
         (
             &["debug", "events", "-f", "--timeout", "30s"],
             Some(Method::Subscribe),

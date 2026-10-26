@@ -174,11 +174,12 @@ async fn a_background_connect_waits_for_the_record() {
 
         let (session, _frames) = Session::local(9_304);
         let engine = client.h.engine.clone();
+        let params = client.connect_params("box").await;
         let connecting = tokio::spawn(async move {
             let request = Request {
                 id: 1,
                 method: Method::Connect,
-                params: json!({"host": "box", "background": true}),
+                params,
                 context: Context::default(),
             };
             engine.handle(request, session).await

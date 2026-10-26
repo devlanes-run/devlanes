@@ -1,4 +1,6 @@
 //! Real SSH checks, normally run through `e2e/ssh/run.sh` against a throwaway sshd container.
+//! These tests open sessions without pairing, so the box's user config must set
+//! `remote.require_pairing: false`, as `run.sh` does for its container.
 //! `windows_sshd_box` instead needs a Windows box (Windows' OpenSSH Server, devlanes
 //! installed for the account it logs in as, no daemon running there yet), so `run.sh`
 //! skips it. Run it from any client, Linux, macOS, WSL or Windows, with the variables

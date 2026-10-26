@@ -11,13 +11,14 @@ use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::mux::{self, MuxClient, MuxError, MuxStream};
+use crate::pairing::PairingClient;
 use crate::registry::ClientRegistry;
 use crate::sync::SyncSubscription;
 use crate::transport::{BoxDuplex, Transport, TransportError};
 use crate::wire::{
     self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, MIRROR_REPORT,
-    OpenReply, OpenRequest, PROTOCOL_VERSION, Prefixed, RejectReason, SYNC_ZSTD, WireError,
-    negotiate,
+    OpenReply, OpenRequest, PROTOCOL_VERSION, PairingReason, Prefixed, RejectReason, SYNC_ZSTD,
+    Secret, WireError, negotiate,
 };
 
 /// Liveness and handshake limits shared by both ends.
@@ -59,11 +60,15 @@ pub struct SessionOptions {
     /// Limit for one whole attempt in a [`crate::Link`]: transport connect
     /// (including SSH prompts) plus handshake.
     pub connect_timeout: Duration,
+    /// The remote token for the box and the person with a pairing code;
+    /// without one the client sends no token and cannot pair.
+    pub pairing: Option<Arc<dyn PairingClient>>,
 }
 
 impl SessionOptions {
-    /// Default timing, this build's features, no identity, a fresh registry and
-    /// a 3-minute attempt limit, enough for a person to answer SSH prompts.
+    /// Default timing, this build's features, no identity, no pairing, a fresh
+    /// registry and a 3-minute attempt limit, enough for a person to answer
+    /// SSH prompts.
     pub fn new(client: impl Into<String>) -> Self {
         Self {
             client: client.into(),
@@ -73,6 +78,7 @@ impl SessionOptions {
             timing: Timing::default(),
             registry: ClientRegistry::new(),
             connect_timeout: Duration::from_secs(180),
+            pairing: None,
         }
     }
 }
@@ -140,6 +146,17 @@ pub enum SessionError {
     /// as the stderr of a remote `devlanes tunnel --stdio` that exited.
     #[error("box closed the connection: {0}")]
     Closed(String),
+    /// The box serves only paired clients and nobody gave a pairing code.
+    #[error("{}", needs_pairing_text(*.0))]
+    NeedsPairing(PairingReason),
+    /// The box refused the pairing code.
+    #[error("the box refused the pairing code: {message}")]
+    PairingRefused {
+        /// The box's reason.
+        message: String,
+        /// How long the box refuses every code.
+        retry_after: Option<Duration>,
+    },
     /// The session already ended.
     #[error("{0}")]
     Ended(SessionEnd),
@@ -158,6 +175,26 @@ impl SessionError {
     /// Reports whether a person has to sign in again before reconnecting.
     pub fn is_needs_auth(&self) -> bool {
         matches!(self, Self::Transport(error) if error.is_needs_auth())
+    }
+
+    /// Reports whether a person has to pair this client with the box (with a
+    /// new code) before reconnecting.
+    pub fn is_needs_pairing(&self) -> bool {
+        matches!(self, Self::NeedsPairing(_) | Self::PairingRefused { .. })
+    }
+}
+
+/// What [`SessionError::NeedsPairing`] says for `reason`.
+fn needs_pairing_text(reason: PairingReason) -> &'static str {
+    match reason {
+        PairingReason::Missing => {
+            "the box serves only paired clients; run `devlanes remote pair` on the box and enter \
+             the code here"
+        }
+        PairingReason::Invalid => {
+            "the box no longer accepts this machine's pairing (it was revoked or replaced); run \
+             `devlanes remote pair` on the box and enter the new code here"
+        }
     }
 }
 
@@ -385,14 +422,22 @@ impl Session {
     }
 }
 
-/// Opens the control stream, checks the protocol, negotiates features and
-/// applies the first snapshot.
+/// Opens the control stream, checks the protocol, pairs when the box asks for
+/// it, negotiates features and applies the first snapshot.
+///
+/// Each exchange with the box has the handshake limit. Asking a person for a
+/// pairing code does not: the [`PairingClient`] bounds it, and a
+/// [`crate::Link`] bounds the whole attempt.
 async fn handshake(
     mux: &MuxClient,
     options: &SessionOptions,
 ) -> Result<(Channel<MuxStream>, Welcome), SessionError> {
     let limit = options.timing.handshake_timeout;
-    let exchange = async {
+    let token = match &options.pairing {
+        Some(pairing) => pairing.token().await,
+        None => None,
+    };
+    let (mut control, first) = within(mux, limit, async {
         let mut control = wire::channel(mux.open().await?);
         let hello = OpenRequest::Control {
             protocol: PROTOCOL_VERSION,
@@ -400,9 +445,26 @@ async fn handshake(
             features: options.features.clone(),
             client_id: options.client_id.clone(),
             client_name: options.client_name.clone(),
+            token: token.map(Secret),
         };
         wire::send(&mut control, &hello).await?;
-        let welcome = match wire::recv::<_, BoxControl>(&mut control).await? {
+        let first = wire::recv::<_, BoxControl>(&mut control).await?;
+        Ok((control, first))
+    })
+    .await?;
+    let first = match first {
+        Some((BoxControl::PairingRequired { reason }, _)) => {
+            pair(mux, &mut control, options, reason).await?;
+            None
+        }
+        other => Some(other),
+    };
+    let welcome = within(mux, limit, async {
+        let first = match first {
+            Some(first) => first,
+            None => wire::recv::<_, BoxControl>(&mut control).await?,
+        };
+        let welcome = match first {
             Some((
                 BoxControl::Welcome {
                     protocol,
@@ -437,17 +499,78 @@ async fn handshake(
             Some(_) => return Err(SessionError::Handshake("expected registry snapshot")),
             None => return Err(SessionError::Handshake("box closed the control stream")),
         }
-        Ok((control, welcome))
+        Ok(welcome)
+    })
+    .await?;
+    Ok((control, welcome))
+}
+
+/// Answers the box's request to pair: asks the [`PairingClient`] for a code,
+/// sends it and keeps the token the box sends back. Without a code the
+/// session needs pairing; a refused code says why.
+async fn pair(
+    mux: &MuxClient,
+    control: &mut Channel<MuxStream>,
+    options: &SessionOptions,
+    reason: PairingReason,
+) -> Result<(), SessionError> {
+    let Some(pairing) = &options.pairing else {
+        return Err(SessionError::NeedsPairing(reason));
     };
+    let Some(code) = pairing
+        .code(reason)
+        .await
+        .filter(|code| !code.trim().is_empty())
+    else {
+        return Err(SessionError::NeedsPairing(reason));
+    };
+    let token = within(mux, options.timing.handshake_timeout, async {
+        let message = ClientControl::Pair { code: Secret(code) };
+        wire::send(control, &message).await?;
+        match wire::recv::<_, BoxControl>(control).await? {
+            Some((BoxControl::Paired { token }, _)) => Ok(token.0),
+            Some((
+                BoxControl::PairingRefused {
+                    message,
+                    retry_after_ms,
+                },
+                _,
+            )) => Err(SessionError::PairingRefused {
+                message,
+                retry_after: retry_after_ms.map(Duration::from_millis),
+            }),
+            Some(_) => Err(SessionError::Handshake("expected the pairing answer")),
+            None => Err(SessionError::Handshake("box closed the control stream")),
+        }
+    })
+    .await?;
+    // The box has the pairing now; losing the token only costs a new code
+    // on the next connection, so this session goes on.
+    if let Err(error) = pairing.store(token).await {
+        tracing::warn!(%error, "cannot keep the box's remote token");
+    }
+    Ok(())
+}
+
+/// Runs one handshake exchange within `limit`. A failure other than the
+/// box's own answer (a protocol mismatch, a refused pairing code) is replaced
+/// by the pipe's error when the pipe died, which usually says why.
+async fn within<T>(
+    mux: &MuxClient,
+    limit: Duration,
+    exchange: impl std::future::Future<Output = Result<T, SessionError>>,
+) -> Result<T, SessionError> {
     match timeout(limit, exchange).await {
         Err(_) => Err(SessionError::HandshakeTimeout),
-        Ok(Err(error @ SessionError::IncompatibleProtocol { .. })) => Err(error),
-        // A closed control stream usually means the pipe died; its error says why.
+        Ok(Err(
+            error @ (SessionError::IncompatibleProtocol { .. }
+            | SessionError::PairingRefused { .. }),
+        )) => Err(error),
         Ok(Err(error)) => match mux.failure_within(FAILURE_GRACE).await {
             Some(reason) => Err(SessionError::Closed(reason)),
             None => Err(error),
         },
-        Ok(Ok(established)) => Ok(established),
+        Ok(Ok(value)) => Ok(value),
     }
 }
 
@@ -571,6 +694,7 @@ mod tests {
             registry: Arc::new(SharedRegistry::new(RegistrySnapshot::default(), 4)),
             dialer: Arc::new(LoopbackDialer),
             sync: Arc::new(NoSync),
+            pairing: Arc::new(crate::NoPairing),
         }
     }
 
@@ -652,6 +776,7 @@ mod tests {
                 features: Vec::new(),
                 client_id: String::new(),
                 client_name: String::new(),
+                token: None,
             };
             wire::send(&mut control, &hello).await?;
             let reply = wire::recv::<_, BoxControl>(&mut control).await?;
@@ -721,6 +846,216 @@ mod tests {
             };
             assert!(matches!(error, SessionError::Closed(_)), "{error:?}");
             assert!(error.to_string().contains("not_supported_yet"), "{error}");
+            Ok(())
+        })
+        .await?
+    }
+
+    /// A box gate that serves `TOKEN` and trades `CODE` for it.
+    #[derive(Default)]
+    struct OneCode {
+        claims: std::sync::atomic::AtomicU32,
+    }
+
+    const TOKEN: &str = "dl_rt_test";
+    const CODE: &str = "ABCD-EFGH";
+
+    #[async_trait::async_trait]
+    impl crate::PairingGate for OneCode {
+        async fn check(
+            &self,
+            _: &crate::ClientInfo,
+            token: Option<&str>,
+        ) -> Result<crate::PairingCheck, crate::BoxError> {
+            Ok(match token {
+                Some(TOKEN) => crate::PairingCheck::Allowed,
+                Some(_) => crate::PairingCheck::Required(PairingReason::Invalid),
+                None => crate::PairingCheck::Required(PairingReason::Missing),
+            })
+        }
+
+        async fn claim(
+            &self,
+            _: &crate::ClientInfo,
+            code: &str,
+        ) -> Result<crate::PairingClaim, crate::BoxError> {
+            self.claims
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(if code == CODE {
+                crate::PairingClaim::Paired {
+                    token: TOKEN.into(),
+                }
+            } else {
+                crate::PairingClaim::Refused {
+                    message: "the code is wrong".into(),
+                    retry_after: Some(Duration::from_secs(5)),
+                }
+            })
+        }
+    }
+
+    /// A client holding `token` that answers every code question with `code`.
+    #[derive(Default)]
+    struct Holder {
+        token: std::sync::Mutex<Option<String>>,
+        code: Option<&'static str>,
+        asked: std::sync::Mutex<Vec<PairingReason>>,
+    }
+
+    impl Holder {
+        /// Why the box asked for codes so far.
+        fn asked(&self) -> Vec<PairingReason> {
+            self.asked
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PairingClient for Holder {
+        async fn token(&self) -> Option<String> {
+            self.token.lock().ok()?.clone()
+        }
+
+        async fn code(&self, reason: PairingReason) -> Option<String> {
+            self.asked.lock().ok()?.push(reason);
+            self.code.map(str::to_owned)
+        }
+
+        async fn store(&self, token: String) -> Result<(), crate::BoxError> {
+            *self.token.lock().map_err(|_| "poisoned")? = Some(token);
+            Ok(())
+        }
+    }
+
+    /// A box with one lane behind `gate`, served once on a fresh pipe.
+    fn paired_box(
+        gate: Arc<OneCode>,
+    ) -> (
+        BoxDuplex,
+        tokio::task::JoinHandle<Result<(), crate::ServeError>>,
+    ) {
+        let (client_io, box_io) = tokio::io::duplex(64 * 1024);
+        let snapshot = RegistrySnapshot {
+            lanes: vec![crate::LaneInfo {
+                key: crate::LaneKey {
+                    project: "acme".into(),
+                    lane: "0".into(),
+                },
+                index: 0,
+                domain: None,
+            }],
+            units: Vec::new(),
+        };
+        let services = BoxServices {
+            registry: Arc::new(SharedRegistry::new(snapshot, 4)),
+            pairing: gate,
+            ..services()
+        };
+        let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+        (Box::new(client_io), server)
+    }
+
+    /// Options with `holder` as the pairing client.
+    fn holding(holder: &Arc<Holder>) -> SessionOptions {
+        let mut options = SessionOptions::new("client");
+        options.pairing = Some(holder.clone());
+        options
+    }
+
+    /// A client without a token is asked for a code, gets the box's token for
+    /// it and keeps it; the next session presents the token and is not asked.
+    #[tokio::test]
+    async fn a_code_is_traded_for_a_token_that_later_sessions_present()
+    -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let gate = Arc::new(OneCode::default());
+            let holder = Arc::new(Holder {
+                code: Some(CODE),
+                ..Holder::default()
+            });
+            let (io, server) = paired_box(gate.clone());
+            let session = Session::establish(io, holding(&holder)).await?;
+            assert_eq!(session.registry().current().lanes().count(), 1);
+            assert_eq!(holder.token().await.as_deref(), Some(TOKEN));
+            assert_eq!(holder.asked(), [PairingReason::Missing]);
+            session.close();
+            server.abort();
+
+            let (io, server) = paired_box(gate.clone());
+            let again = Session::establish(io, holding(&holder)).await?;
+            assert_eq!(holder.asked().len(), 1, "a held token needs no code");
+            assert_eq!(gate.claims.load(std::sync::atomic::Ordering::SeqCst), 1);
+            again.close();
+            server.abort();
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Without a code, with a wrong one and with a token the box does not
+    /// accept, the session needs pairing, the box ends it, and the client
+    /// never sees the box's registry.
+    #[tokio::test]
+    async fn an_unpaired_client_learns_nothing_about_the_box()
+    -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let cases: [(Option<&str>, Option<&'static str>); 3] = [
+                (None, None),
+                (None, Some("WRNG-CODE")),
+                (Some("dl_rt_old"), None),
+            ];
+            for (token, code) in cases {
+                let gate = Arc::new(OneCode::default());
+                let holder = Arc::new(Holder {
+                    token: std::sync::Mutex::new(token.map(str::to_owned)),
+                    code,
+                    ..Holder::default()
+                });
+                let (io, server) = paired_box(gate);
+                let options = holding(&holder);
+                let registry = options.registry.clone();
+                let Err(error) = Session::establish(io, options).await else {
+                    panic!("an unpaired client connected");
+                };
+                assert!(error.is_needs_pairing(), "{error:?}");
+                assert!(!error.is_permanent(), "{error:?}");
+                assert_eq!(registry.current().lanes().count(), 0);
+                let served = server.await?;
+                match (token, code) {
+                    (_, Some(_)) => {
+                        assert!(
+                            matches!(&error, SessionError::PairingRefused { retry_after, .. }
+                                if *retry_after == Some(Duration::from_secs(5))),
+                            "{error:?}"
+                        );
+                        assert!(error.to_string().contains("the code is wrong"), "{error}");
+                        assert!(
+                            matches!(served, Err(crate::ServeError::PairingRefused { .. })),
+                            "{served:?}"
+                        );
+                    }
+                    (Some(_), None) => {
+                        assert!(matches!(
+                            error,
+                            SessionError::NeedsPairing(PairingReason::Invalid)
+                        ));
+                        assert!(error.to_string().contains("revoked"), "{error}");
+                    }
+                    (None, None) => {
+                        assert!(matches!(
+                            error,
+                            SessionError::NeedsPairing(PairingReason::Missing)
+                        ));
+                        assert!(
+                            matches!(served, Err(crate::ServeError::NotPaired { .. })),
+                            "{served:?}"
+                        );
+                    }
+                }
+                assert_eq!(holder.token().await.as_deref(), token, "nothing stored");
+            }
             Ok(())
         })
         .await?

@@ -12,8 +12,9 @@ use devlanes_transport::{Backoff, DialTarget, Link, SessionOptions, Transport};
 
 async fn client(transport: Arc<dyn Transport>) -> Result<(), Box<dyn std::error::Error>> {
     let mut options = SessionOptions::new("devlanes 0.1.0");
-    options.client_id = "0f3c...".into(); // kept by the client machine across restarts
+    options.client_id = "dl_cid_0f3c...".into(); // kept by the client machine across restarts
     options.client_name = "laptop".into();
+    // options.pairing = Some(Arc::new(my_pairing)); // stored token, and a code when the box asks
     let link = Link::spawn(transport, options, Backoff::default());
     let session = link.connected().await?;
     println!("box proxy on {:?}", session.box_info().https_port);
@@ -32,8 +33,8 @@ Box side, over the tunnel's stdio:
 ```rust
 use std::sync::Arc;
 use devlanes_transport::{
-    BoxServices, LoopbackDialer, NoSync, RegistrySnapshot, ServeOptions, SharedRegistry,
-    TUNNEL_PREAMBLE, serve, stdio,
+    BoxServices, LoopbackDialer, NoPairing, NoSync, RegistrySnapshot, ServeOptions,
+    SharedRegistry, TUNNEL_PREAMBLE, serve, stdio,
 };
 use tokio::io::AsyncWriteExt;
 
@@ -47,6 +48,8 @@ async fn tunnel() -> Result<(), Box<dyn std::error::Error>> {
         registry: Arc::new(registry.clone()),
         dialer: Arc::new(LoopbackDialer),
         sync: Arc::new(NoSync),
+        // Serves every client; a `PairingGate` checks tokens and trades codes instead.
+        pairing: Arc::new(NoPairing),
     };
     serve(stdio(), services, ServeOptions::new("devlanes 0.1.0")).await?;
     Ok(())
@@ -60,9 +63,10 @@ Publish changes with `registry.publish(event)`. A daemon that only has full snap
 - `Transport`: produces one duplex byte stream per `connect`.
 - `read_preamble`: skips output before the tunnel's `TUNNEL_PREAMBLE` line, keeping it for errors.
 - `Session`: one connection; `open`, `subscribe_sync`, `report` (what the client mirrors, with `mirror_report`), `features`, `has_feature`, `box_info`, `closed`.
-- `Link`: keeps a session alive and shares one `ClientRegistry` across reconnects. A transport error classified `TransportError::NeedsAuth` parks it in `LinkState::NeedsAuth` without retrying until `Link::resume`. `TransportError::AuthFailed`, rejected credentials on a box that never connected, stops it like `Permanent`, unless the caller knows a prompt went unanswered and turns it into `NeedsAuth` with `into_needs_auth`.
+- `Link`: keeps a session alive and shares one `ClientRegistry` across reconnects. A transport error classified `TransportError::NeedsAuth` parks it in `LinkState::NeedsAuth` without retrying until `Link::resume`, and a session that needs pairing (`SessionError::is_needs_pairing`) in `LinkState::NeedsPairing`. `TransportError::AuthFailed`, rejected credentials on a box that never connected, stops it like `Permanent`, unless the caller knows a prompt went unanswered and turns it into `NeedsAuth` with `into_needs_auth`.
 - `Registry`: snapshot plus events; `mirrored_ports`, `advertised_ports`, `authorize`, `diff`.
-- `serve` with `BoxServices`: `RegistrySource` (told each client's `ClientInfo`, and handed its mirror reports), `Dialer`, `SyncSource`.
+- `serve` with `BoxServices`: `RegistrySource` (told each client's `ClientInfo`, and handed its mirror reports), `Dialer`, `SyncSource`, `PairingGate`.
+- `PairingClient` and `PairingGate`: the client's stored token and code, and the box's check of a token and trade of a code.
 - `memory::memory_transport`: in-process transport with freeze and sever controls for tests.
 
 ## Config example
@@ -84,6 +88,8 @@ A client running `devlanes remote connect <box>` binds every other service and c
 ## Behaviour
 
 Only the client opens streams, at most 512 at once; an open beyond that fails alone and the session stays up. With the `mirror_report` feature the client reports what it mirrors on the control stream, at most once per change, and the box hands the newest report of a burst to `RegistrySource::report`. The box dials only ports of running, non-hidden services, containers and external ports (state `external`) in its registry. A client without the `external_units` feature cannot read external ports (`UnitKind::External`), so a registry source leaves them out of that client's feed. An external port may name its loopback address (`PortInfo::address`); `LoopbackDialer` then dials only that address instead of `127.0.0.1`, then `::1`. The box rejects everything else, and closes open streams when their unit stops, disappears or becomes hidden. Tasks are listed with their state but never mirrored or dialed. A data stream whose one side finished and that stays silent for 60 s is closed. There are no request streams: a client never runs commands on the box. On a sync stream the client may send input after its request (`SyncSubscription::send`, then `finish_input` for an explicit end marker); the `SyncSource` reads it from `SyncInput`, and a client sending faster than the source reads waits. With the `sync_zstd` feature the box compresses each chunk zstd makes smaller (chunks under 256 bytes go raw, and so does the rest of a file after a chunk that did not shrink), and `SyncSubscription::next` returns it decompressed; the client compresses its input values the same way. Compressed data may not decode to more than the size its frame declares, at most 8 MiB. Pings run every 10 s; a session dies after 20 s with neither a pong nor any other incoming frame, so a large transfer does not starve it. On reconnect, the box's snapshot replaces the client's registry; until then the client keeps the last known state. The session ends when the registry feed fails or ends.
+
+Before the welcome, the box's `PairingGate` checks the client's id and token from the hello. A client it does not serve gets `pairing_required` instead, may answer once with a one-time code, and gets a token for it or a refusal that ends the session; it learns nothing about the box until then. Asking a person for the code has no handshake limit, so the `PairingClient` bounds it, and the box waits for the code for `ServeOptions::pairing_timeout`.
 
 Both ends must speak the same `PROTOCOL_VERSION`, which also covers devlanes' payload shapes, and a mismatch is a permanent error. It changes only for breaking changes. Additive behaviour is a named feature: both ends list theirs in the handshake (`FEATURES` by default), and a side uses a feature only when the other lists it too.
 

@@ -655,6 +655,7 @@ mod tests {
             registry: Arc::new(SharedRegistry::new(RegistrySnapshot::default(), 4)),
             dialer: Arc::new(LoopbackDialer),
             sync: Arc::new(TestSource { files }),
+            pairing: Arc::new(crate::NoPairing),
         };
         let mut options = ServeOptions::new("box");
         options.features = names(box_features);
@@ -681,6 +682,7 @@ mod tests {
             features: names(client_features),
             client_id: String::new(),
             client_name: String::new(),
+            token: None,
         };
         wire::send(&mut control, &hello).await?;
         // The welcome, then the registry snapshot.

@@ -75,6 +75,16 @@ pub enum LinkState {
         /// Why the attempt needed a person.
         error: String,
     },
+    /// Waiting for a person to pair this client with the box again
+    /// ([`Link::resume`], with a new code) because the box serves only paired
+    /// clients and accepted no token or code ([`SessionError::is_needs_pairing`]).
+    /// Nothing is retried meanwhile, and the registry keeps the last known state.
+    NeedsPairing {
+        /// What the box said.
+        error: String,
+        /// The box refused a code the attempt sent; false when nobody gave one.
+        refused: bool,
+    },
     /// Stopped because retrying cannot help, such as a protocol mismatch.
     Failed {
         /// The permanent failure.
@@ -141,15 +151,16 @@ impl Link {
         self.state.clone()
     }
 
-    /// Makes a link waiting in [`LinkState::NeedsAuth`] try again now, with a
-    /// fresh backoff. The state is [`LinkState::Connecting`] when this returns
-    /// true; false means the link was not waiting or has stopped.
+    /// Makes a link waiting in [`LinkState::NeedsAuth`] or
+    /// [`LinkState::NeedsPairing`] try again now, with a fresh backoff. The
+    /// state is [`LinkState::Connecting`] when this returns true; false means
+    /// the link was not waiting or has stopped.
     pub fn resume(&self) -> bool {
         let Some(state_tx) = self.state_tx.upgrade() else {
             return false;
         };
         state_tx.send_if_modified(|state| {
-            if matches!(state, LinkState::NeedsAuth { .. }) {
+            if waits_for_person(state) {
                 *state = LinkState::Connecting { attempt: 1 };
                 true
             } else {
@@ -172,7 +183,7 @@ impl Link {
     }
 
     /// Waits for a live session, or for the link to stop. A link waiting for
-    /// sign-in keeps this waiting until it is resumed.
+    /// a sign-in or pairing keeps this waiting until it is resumed.
     pub async fn connected(&self) -> Result<Session, LinkError> {
         let mut state = self.state.clone();
         loop {
@@ -205,9 +216,17 @@ impl Drop for Link {
     }
 }
 
+/// Whether `state` waits for a person: a sign-in or pairing.
+fn waits_for_person(state: &LinkState) -> bool {
+    matches!(
+        state,
+        LinkState::NeedsAuth { .. } | LinkState::NeedsPairing { .. }
+    )
+}
+
 /// Connect, wait for the session to end, back off, repeat. A failure that
-/// needs a person parks the link in [`LinkState::NeedsAuth`] until
-/// [`Link::resume`] moves it on.
+/// needs a person parks the link in [`LinkState::NeedsAuth`] or
+/// [`LinkState::NeedsPairing`] until [`Link::resume`] moves it on.
 async fn supervise(
     transport: Arc<dyn Transport>,
     options: SessionOptions,
@@ -254,15 +273,24 @@ async fn supervise(
                 });
                 return;
             }
-            Err(error) if error.is_needs_auth() => {
-                tracing::debug!("waiting for sign-in: {error}");
-                state.send_replace(LinkState::NeedsAuth {
-                    error: error.to_string(),
-                });
+            Err(error) if error.is_needs_auth() || error.is_needs_pairing() => {
+                let waiting = if error.is_needs_pairing() {
+                    tracing::debug!("waiting for pairing: {error}");
+                    LinkState::NeedsPairing {
+                        error: error.to_string(),
+                        refused: matches!(error, SessionError::PairingRefused { .. }),
+                    }
+                } else {
+                    tracing::debug!("waiting for sign-in: {error}");
+                    LinkState::NeedsAuth {
+                        error: error.to_string(),
+                    }
+                };
+                state.send_replace(waiting);
                 let mut resumed = state.subscribe();
                 // This task holds the only sender, so the wait cannot fail.
                 tokio::select! {
-                    _ = resumed.wait_for(|current| !matches!(current, LinkState::NeedsAuth { .. })) => {}
+                    _ = resumed.wait_for(|current| !waits_for_person(current)) => {}
                     () = cancel.cancelled() => break,
                 }
                 backoff.reset();
@@ -392,6 +420,83 @@ mod tests {
             "a link that is not waiting is not resumed"
         );
         connecting.shutdown().await;
+        Ok(())
+    }
+
+    /// A link to a box that pairs nobody without a code parks in
+    /// `NeedsPairing` without retrying, keeps its registry, and `resume`
+    /// tries once more.
+    #[tokio::test]
+    async fn needing_pairing_waits_for_resume() -> Result<(), Box<dyn std::error::Error>> {
+        struct Unpaired;
+
+        #[async_trait::async_trait]
+        impl crate::PairingGate for Unpaired {
+            async fn check(
+                &self,
+                _: &crate::ClientInfo,
+                _: Option<&str>,
+            ) -> Result<crate::PairingCheck, crate::BoxError> {
+                Ok(crate::PairingCheck::Required(crate::PairingReason::Missing))
+            }
+
+            async fn claim(
+                &self,
+                _: &crate::ClientInfo,
+                _: &str,
+            ) -> Result<crate::PairingClaim, crate::BoxError> {
+                Err("not asked".into())
+            }
+        }
+
+        let (transport, mut listener) = crate::memory::memory_transport();
+        let accepted = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let counted = accepted.clone();
+        let acceptor = tokio::spawn(async move {
+            while let Some(stream) = listener.accept().await {
+                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let services = crate::BoxServices {
+                    registry: Arc::new(crate::SharedRegistry::new(
+                        crate::RegistrySnapshot::default(),
+                        4,
+                    )),
+                    dialer: Arc::new(crate::LoopbackDialer),
+                    sync: Arc::new(crate::NoSync),
+                    pairing: Arc::new(Unpaired),
+                };
+                tokio::spawn(crate::serve(
+                    stream,
+                    services,
+                    crate::ServeOptions::new("box"),
+                ));
+            }
+        });
+        let link = Link::spawn(
+            Arc::new(transport),
+            SessionOptions::new("client"),
+            Backoff::new(Duration::from_millis(10), Duration::from_millis(10)),
+        );
+        let mut state = link.state();
+        let attempts = || accepted.load(std::sync::atomic::Ordering::SeqCst);
+        let parked = |state: &LinkState| matches!(state, LinkState::NeedsPairing { .. });
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let error = match &*state.wait_for(parked).await? {
+                LinkState::NeedsPairing { error, .. } => error.clone(),
+                _ => String::new(),
+            };
+            assert!(error.contains("devlanes remote pair"), "{error}");
+            // Twenty backoff periods: a retrying link would have tried again.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            assert_eq!(attempts(), 1);
+            assert!(link.resume());
+            state.borrow_and_update();
+            state.wait_for(parked).await?;
+            assert_eq!(attempts(), 2);
+            Ok::<_, watch::error::RecvError>(())
+        })
+        .await??;
+        link.shutdown().await;
+        acceptor.abort();
         Ok(())
     }
 

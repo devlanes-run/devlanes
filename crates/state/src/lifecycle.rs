@@ -629,6 +629,8 @@ impl Store {
                 diesel::delete(startup_peaks::table).execute(c)?;
                 diesel::delete(unit_run_members::table).execute(c)?;
                 diesel::delete(remote_hosts::table).execute(c)?;
+                diesel::delete(remote_pairings::table).execute(c)?;
+                diesel::delete(remote_tokens::table).execute(c)?;
                 diesel::delete(lane_setup::table).execute(c)?;
                 diesel::delete(task_completions::table).execute(c)?;
                 diesel::delete(task_runs::table).execute(c)?;

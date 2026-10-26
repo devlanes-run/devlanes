@@ -157,6 +157,9 @@ fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'s
         "needs_auth" => Some(format!(
             "{name} needs a sign-in; this is its last known state. devlanes remote connect {name} resumes it."
         )),
+        "needs_pairing" => Some(format!(
+            "{name} needs this machine to pair again; this is its last known state. Run devlanes remote pair on {name}, then devlanes remote connect {name} --code <code>."
+        )),
         "reconnecting" | "connecting" => Some(format!(
             "{name} is reconnecting; this is its last known state."
         )),
@@ -450,7 +453,7 @@ fn host_status(theme: &Theme, host: &BoxHost, box_lane: &str, name: &str) -> (St
         let state = route
             .state
             .as_deref()
-            .filter(|state| matches!(*state, "reconnecting" | "sign_in_needed"))
+            .filter(|state| matches!(*state, "reconnecting" | "sign_in_needed" | "pairing_needed"))
             .map(|state| format!(" ({})", clean(&state.replace('_', " "))))
             .unwrap_or_default();
         return match &route.url {
@@ -784,7 +787,7 @@ fn link_look(theme: &Theme, host: &BoxHost, spin: u64) -> (&'static str, Tone) {
     match host.state.as_str() {
         "connected" => (theme.glyph(Glyph::Ready), Tone::Ok),
         "connecting" | "reconnecting" => (theme.spinner(spin), Tone::Busy),
-        "needs_auth" => (theme.glyph(Glyph::Attention), Tone::Attention),
+        "needs_auth" | "needs_pairing" => (theme.glyph(Glyph::Attention), Tone::Attention),
         "failed" => (theme.glyph(Glyph::Failed), Tone::Failure),
         _ => (theme.glyph(Glyph::Stopped), Tone::Quiet),
     }
@@ -810,6 +813,7 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
     let (glyph, tone) = link_look(theme, host, app.spin);
     let state = match host.state.as_str() {
         "needs_auth" => "needs a sign-in".to_owned(),
+        "needs_pairing" => "needs pairing".to_owned(),
         "disconnected" | "stopped" => "not connected".to_owned(),
         state => clean(state),
     };
@@ -859,6 +863,13 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
             lines.extend(fact(
                 "link",
                 "waiting for you to sign in again; ports and hostnames stay",
+                theme.tone(Tone::Attention),
+            ));
+        }
+        "needs_pairing" => {
+            lines.extend(fact(
+                "link",
+                "waiting for you to pair again with a code from devlanes remote pair on the box; ports and hostnames stay",
                 theme.tone(Tone::Attention),
             ));
         }

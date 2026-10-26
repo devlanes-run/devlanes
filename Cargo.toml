@@ -26,6 +26,9 @@ serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON output follows struct field order, and the feature is pinned
 # here so per-crate and workspace builds don't disagree through feature unification.
 serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+# Constant-time comparison of pairing codes and token hashes.
+subtle = "2.6"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

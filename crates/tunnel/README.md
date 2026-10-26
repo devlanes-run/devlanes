@@ -9,9 +9,10 @@ use devlanes_client::Paths;
 
 // `devlanes tunnel --stdio`: writes the preamble line, starts the box daemon
 // if needed and allowed (the box's `remote.start_daemon`), then serves one
-// client over stdin and stdout until it leaves.
-async fn tunnel(start_daemon: bool) -> Result<(), Box<dyn std::error::Error>> {
-    devlanes_tunnel::run_stdio(Paths::discover()?, start_daemon).await?;
+// client over stdin and stdout until it leaves, if it is paired or the box
+// does not require it (`remote.require_pairing`).
+async fn tunnel(start_daemon: bool, require_pairing: bool) -> Result<(), Box<dyn std::error::Error>> {
+    devlanes_tunnel::run_stdio(Paths::discover()?, start_daemon, require_pairing).await?;
     Ok(())
 }
 ```
@@ -30,7 +31,7 @@ async fn serve_pipe(
     let mut options = ServeOptions::new(devlanes_tunnel::server_label());
     options.box_info = devlanes_tunnel::box_info(&paths).await?;
     let client = RemoteClient { pid: std::process::id(), ..RemoteClient::default() };
-    let services = devlanes_tunnel::services(paths, client);
+    let services = devlanes_tunnel::services(paths, client, true);
     serve(stream, services, options).await?;
     Ok(())
 }
@@ -38,8 +39,8 @@ async fn serve_pipe(
 
 ## API
 
-- `run_stdio(paths, start_daemon)`: the `tunnel --stdio` entry point.
-- `services(paths, client)`: `BoxServices` for `devlanes_transport::serve`; `client`, with the id and name from each client's handshake, is listed by the box's `status` while the session lasts.
+- `run_stdio(paths, start_daemon, require_pairing)`: the `tunnel --stdio` entry point.
+- `services(paths, client, require_pairing)`: `BoxServices` for `devlanes_transport::serve`; `client`, with the id and name from each client's handshake, is listed by the box's `status` while the session lasts.
 - `box_info(paths)`: the box daemon's HTTPS port and `ports.range`, for `ServeOptions::box_info`.
 - `server_label()`: the version label sent in the handshake; `SESSION_BOUND` is what `run_stdio` adds to it on Windows when the daemon it started could not leave the ssh session's job.
 - `TunnelError`: the box daemon was unreachable or stopped, or the session failed; `exit_code` gives the process status.
@@ -69,6 +70,7 @@ The tunnel offers the `extension` sync to the client that ran `devlanes remote c
 - The registry is the daemon's `remote.registry` feed: a snapshot, then each change, built from the same lanes as `status --all` and the same routes as `hosts`. It carries ports, hostnames and states, never environments or secrets. Hidden services and containers are listed but never mirrored; tasks are listed with their state only. A feed that ends or sends something malformed ends the session, and a daemon older than the tunnel is reported with the fix (`devlanes daemon restart`).
 - Data streams only dial loopback ports of running services, containers and `infra.external` ports that are not hidden. External ports go only to clients listing `external_units`, and only while their project runs a lane.
 - A client's mirror reports go to the daemon with `remote.report`, bounded in size, and `status` shows the latest one with the client.
+- With `require_pairing`, a client is served only once the daemon accepted its remote token (`remote.pairing.verify`) or traded its one-time code for one (`remote.pairing.claim`); both see the tunnel's `SSH_CONNECTION`, which the daemon logs with refusals. The registry feed is asked for a paired client only, and the daemon ends it when `devlanes remote revoke` deletes the pairing, which ends the session.
 - A client cannot send the box daemon requests: remote is mirroring only.
 - Syncs stream the entries the daemon lists in `sync.status`; the client names an entry, never a path. It then sends the files it holds in batches and an end marker. Each batch is compared with the source on arrival and only its outcome is kept; after the marker the box sends new and changed files, then deletions. A client that leaves before the marker leaves nothing behind, so its next subscription starts over. Files over 256 MiB are skipped, and one client follows at most 16 syncs.
 - A daemon the tunnel starts does not inherit the SSH session's variables (`SSH_AUTH_SOCK` and friends). On Linux the handshake label says `(linger off)` when the box would stop it at logout.

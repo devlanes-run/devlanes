@@ -794,6 +794,7 @@ impl RouteSink for ProxyRoutes {
                     }
                     RouteStatus::Reconnecting => devlanes_proxy::RouteState::Reconnecting,
                     RouteStatus::SignInNeeded => devlanes_proxy::RouteState::SignInNeeded,
+                    RouteStatus::PairingNeeded => devlanes_proxy::RouteState::PairingNeeded,
                 };
                 route.start_hint = entry.start_hint;
                 route.certificate_names = entry.certificate_names;

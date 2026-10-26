@@ -11,8 +11,13 @@
 //!   keeps the latest one with the client's `status` entry;
 //! - data streams dial loopback ports of running, non-hidden services,
 //!   containers and `infra.external` ports, nothing else;
-//! - syncs stream `sync.status` entries; the client never chooses a path.
+//! - syncs stream `sync.status` entries; the client never chooses a path;
+//! - with `remote.require_pairing` (the default), a client is served only
+//!   after the daemon accepted its remote token (`remote.pairing.verify`) or
+//!   traded its one-time code for one (`remote.pairing.claim`), and its feed
+//!   ends when `remote revoke` deletes its pairing.
 
+mod pairing;
 mod registry;
 mod sync;
 #[cfg(test)]
@@ -23,8 +28,8 @@ use std::sync::Arc;
 use devlanes_client::{Client, Paths};
 use devlanes_proto::{Context, Method, remote::RemoteClient};
 use devlanes_transport::{
-    BoxInfo, BoxServices, EXIT_DAEMON_STOPPED, LoopbackDialer, ServeError, ServeOptions,
-    TUNNEL_PREAMBLE,
+    BoxInfo, BoxServices, EXIT_DAEMON_STOPPED, LoopbackDialer, NoPairing, PairingGate, ServeError,
+    ServeOptions, TUNNEL_PREAMBLE,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -76,12 +81,28 @@ impl TunnelError {
 /// Box services backed by the daemon behind `paths`.
 ///
 /// `client` (with the id and name from each client's handshake) is listed by
-/// the box's `status` while that client's registry feed is open.
-pub fn services(paths: Paths, client: RemoteClient) -> BoxServices {
+/// the box's `status` while that client's registry feed is open. With
+/// `require_pairing` (the box's `remote.require_pairing`), the daemon checks
+/// each client's token or code first, and ends the feed of a client whose
+/// pairing is revoked; without it every client is served, as SSH let it in.
+pub fn services(paths: Paths, client: RemoteClient, require_pairing: bool) -> BoxServices {
+    let pairing: Arc<dyn PairingGate> = if require_pairing {
+        Arc::new(pairing::DaemonPairing::new(
+            paths.clone(),
+            client.ssh.clone(),
+        ))
+    } else {
+        Arc::new(NoPairing)
+    };
     BoxServices {
-        registry: Arc::new(registry::DaemonRegistry::new(paths.clone(), client)),
+        registry: Arc::new(registry::DaemonRegistry::new(
+            paths.clone(),
+            client,
+            require_pairing,
+        )),
         dialer: Arc::new(LoopbackDialer),
         sync: Arc::new(sync::DaemonSync::new(paths)),
+        pairing,
     }
 }
 
@@ -153,15 +174,21 @@ fn linger_off() -> bool {
 /// the client can tell this tunnel's output from what the box's login shell
 /// printed. Starts the box daemon when it is not running and `start_daemon`
 /// (the box's `remote.start_daemon`) allows it; otherwise a stopped daemon
-/// fails with [`TunnelError::DaemonStopped`]. Nothing but the preamble and mux
-/// frames may reach stdout, so diagnostics belong on stderr, which ssh hands
-/// back to the client. A daemon started here that stays inside the ssh
-/// session's job is reported there and in the label ([`SESSION_BOUND`]).
+/// fails with [`TunnelError::DaemonStopped`]. `require_pairing` (the box's
+/// `remote.require_pairing`) serves only paired clients ([`services`]).
+/// Nothing but the preamble and mux frames may reach stdout, so diagnostics
+/// belong on stderr, which ssh hands back to the client. A daemon started
+/// here that stays inside the ssh session's job is reported there and in the
+/// label ([`SESSION_BOUND`]).
 ///
 /// On Windows stdin and stdout are the pipes sshd passes to a command without
 /// a terminal, which std reads and writes byte for byte; only console handles
 /// get text conversion.
-pub async fn run_stdio(paths: Paths, start_daemon: bool) -> Result<(), TunnelError> {
+pub async fn run_stdio(
+    paths: Paths,
+    start_daemon: bool,
+    require_pairing: bool,
+) -> Result<(), TunnelError> {
     write_preamble(&mut tokio::io::stdout()).await?;
     let mut daemon = daemon_client(&paths, start_daemon).await?;
     let bound = bound_to_session(&daemon);
@@ -189,7 +216,7 @@ pub async fn run_stdio(paths: Paths, start_daemon: bool) -> Result<(), TunnelErr
     options.box_info = box_info;
     devlanes_transport::serve(
         devlanes_transport::stdio(),
-        services(paths, client),
+        services(paths, client, require_pairing),
         options,
     )
     .await?;

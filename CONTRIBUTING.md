@@ -123,7 +123,7 @@ They create containers labelled `dev.devlanes.*` and remove them afterwards. To 
 
 ## Remote and SSH
 
-Remote is mirroring only: a client never runs commands on a box. Most of it is tested without SSH. `crates/daemon/tests/it/remote.rs` runs a box daemon and a client daemon in one process over an in-memory transport, covering mirrored ports, proxy routes, the registry feed, sync, reconnect and failure:
+Remote is mirroring only: a client never runs commands on a box. Most of it is tested without SSH. `crates/daemon/tests/it/remote.rs` runs a box daemon and a client daemon in one process over an in-memory transport, covering pairing, mirrored ports, proxy routes, the registry feed, sync, reconnect and failure:
 
 ```sh
 cargo nextest run -p devlanes-daemon -E 'test(/remote/)'
@@ -139,7 +139,8 @@ DEVLANES_TEST_SSH_BIN=skip e2e/ssh/run.sh   # no box binary; only the connection
 To use `dl remote connect` by hand you need a box with `devlanes` installed (on its PATH or in `~/.devlanes/bin`) and an entry for it in `~/.ssh/config`. A Linux VM or a spare machine works best: a box on the same machine as the client is confusing, because mirroring binds the box's port numbers locally and they collide with the box's own listeners.
 
 ```sh
-dl remote connect mybox      # streams connection status; Ctrl-C detaches, the connection stays up
+devlanes remote pair         # on the box: a one-time code; or set remote.require_pairing: false there
+dl remote connect mybox      # asks for the code, then streams connection status; Ctrl-C detaches, the connection stays up
 dl remote ls                 # mirrored ports, routes, syncs and warnings
 ssh mybox devlanes status    # lanes are managed on the box itself
 dl remote disconnect mybox

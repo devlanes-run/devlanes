@@ -222,6 +222,7 @@ async fn a_stopped_box_daemon_retries_until_it_runs() -> Result<(), Box<dyn std:
                     registry: Arc::new(SharedRegistry::new(RegistrySnapshot::default(), 4)),
                     dialer: Arc::new(LoopbackDialer),
                     sync: Arc::new(NoSync),
+                    pairing: Arc::new(devlanes_transport::NoPairing),
                 };
                 tokio::spawn(devlanes_transport::serve(
                     stream,

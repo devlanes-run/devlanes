@@ -9,7 +9,7 @@ use crate::{lane, project, schema};
 
 #[tokio::test]
 /// Migration 010 keeps the boxes of earlier daemons, none of them wanted, and
-/// its down script keeps the rows.
+/// adds empty pairing tables; its down script drops those and keeps the hosts.
 async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
     use diesel::{migration::MigrationSource, prelude::*};
     use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
@@ -45,6 +45,12 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
             .await
             .expect("want")
     );
+    assert!(store.remote_pairings().await.expect("pairings").is_empty());
+    assert_eq!(store.remote_token("box".into()).await.expect("token"), None);
+    store
+        .set_remote_token("box".into(), "dl_rt_x".into(), 1)
+        .await
+        .expect("token");
     store.close().await.expect("close");
     // Later migrations go first; 010 is the one under test.
     while c.applied_migrations().expect("ledger").len() > 10 {
@@ -57,7 +63,94 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
         .load(&mut c)
         .expect("hosts after down");
     assert_eq!(names, ["box"]);
+    let gone = diesel::sql_query("SELECT host FROM remote_tokens").execute(&mut c);
+    assert!(gone.is_err(), "down drops the pairing tables");
     c.run_pending_migrations(MIGRATIONS).expect("redo 010");
+}
+
+#[tokio::test]
+/// A box keeps one pairing per client id: pairing again replaces it, a
+/// connection updates its name and last seen time, and deleting removes it.
+/// A client keeps one token per box, replaced when it pairs again. A reset
+/// removes both.
+async fn pairings_and_tokens_round_trip() {
+    use devlanes_state::RemotePairing;
+    let store = Store::open(":memory:").await.expect("store");
+    let pairing = |hash: &str, at: i64| RemotePairing {
+        client_id: "dl_cid_a".into(),
+        name: "laptop".into(),
+        token_sha256: hash.into(),
+        paired_at: at,
+        last_seen: Some(at),
+    };
+    store
+        .upsert_remote_pairing(pairing("one", 1))
+        .await
+        .expect("pair");
+    store
+        .upsert_remote_pairing(pairing("two", 2))
+        .await
+        .expect("pair again");
+    assert_eq!(
+        store.remote_pairings().await.expect("list"),
+        [pairing("two", 2)]
+    );
+    assert!(
+        store
+            .touch_remote_pairing("dl_cid_a".into(), "desk".into(), 9)
+            .await
+            .expect("touch")
+    );
+    assert!(
+        !store
+            .touch_remote_pairing("dl_cid_other".into(), "x".into(), 9)
+            .await
+            .expect("touch unknown")
+    );
+    let stored = store
+        .remote_pairing("dl_cid_a".into())
+        .await
+        .expect("get")
+        .expect("paired");
+    assert_eq!(
+        (stored.name.as_str(), stored.last_seen, stored.paired_at),
+        ("desk", Some(9), 2)
+    );
+    assert_eq!(
+        store
+            .delete_remote_pairings(vec!["dl_cid_a".into(), "dl_cid_b".into()])
+            .await
+            .expect("delete"),
+        1
+    );
+    assert_eq!(
+        store.remote_pairing("dl_cid_a".into()).await.expect("get"),
+        None
+    );
+
+    store
+        .set_remote_token("box".into(), "dl_rt_1".into(), 1)
+        .await
+        .expect("token");
+    store
+        .set_remote_token("box".into(), "dl_rt_2".into(), 2)
+        .await
+        .expect("token again");
+    assert_eq!(
+        store
+            .remote_token("box".into())
+            .await
+            .expect("get")
+            .as_deref(),
+        Some("dl_rt_2")
+    );
+    store
+        .upsert_remote_pairing(pairing("three", 3))
+        .await
+        .expect("pair");
+    store.reset().await.expect("reset");
+    assert_eq!(store.remote_token("box".into()).await.expect("get"), None);
+    assert!(store.remote_pairings().await.expect("list").is_empty());
 }
 
 #[tokio::test]

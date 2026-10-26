@@ -6,16 +6,16 @@ use std::{
     path::Path,
 };
 
-/// File under `$DEVLANES_HOME` that holds the id.
-pub(crate) const ID_FILE: &str = "remote-client-id";
+use devlanes_proto::remote::{CLIENT_ID_PREFIX, is_random_id};
 
-/// Hex digits of an id: 128 random bits.
-const ID_LEN: usize = 32;
+/// File under `$DEVLANES_HOME` that holds the id.
+pub(crate) const ID_FILE: &str = "client-id";
 
 /// What a client daemon tells boxes about itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClientIdentity {
-    /// Random id kept in [`ID_FILE`].
+    /// Random id kept in [`ID_FILE`]: `dl_cid_` and 64 lowercase hex digits.
+    /// Boxes bind their pairing with this machine to it.
     pub id: String,
     /// This machine's host name.
     pub name: String,
@@ -82,17 +82,12 @@ fn write_new(path: &Path, id: &str) -> io::Result<()> {
 
 /// Whether `text` is an id this module writes.
 fn valid(text: &str) -> bool {
-    text.len() == ID_LEN
-        && text
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    is_random_id(text, CLIENT_ID_PREFIX)
 }
 
-/// 128 bits from the OS random source as lowercase hex.
+/// `dl_cid_` and 256 bits from the OS random source as lowercase hex.
 fn random_id() -> io::Result<String> {
-    let mut bytes = [0u8; ID_LEN / 2];
-    getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+    super::pairing::random_hex(CLIENT_ID_PREFIX)
 }
 
 /// The machine's host name, empty when unknown.
@@ -119,6 +114,8 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let first = load(dir.path())?;
         assert!(valid(&first.id), "{}", first.id);
+        assert!(first.id.starts_with("dl_cid_"), "{}", first.id);
+        assert_eq!(first.id.len(), "dl_cid_".len() + 64);
         assert_eq!(load(dir.path())?, first, "a second read keeps the id");
         let stored = std::fs::read_to_string(dir.path().join(ID_FILE))?;
         assert_eq!(stored.trim(), first.id);
@@ -142,7 +139,11 @@ mod tests {
     #[test]
     fn a_damaged_id_is_replaced() -> io::Result<()> {
         let dir = tempfile::tempdir()?;
-        std::fs::write(dir.path().join(ID_FILE), b"not an id\n")?;
+        // Phase 2's bare 128-bit form is not an id either.
+        std::fs::write(
+            dir.path().join(ID_FILE),
+            b"0123456789abcdef0123456789abcdef\n",
+        )?;
         let identity = load(dir.path())?;
         assert!(valid(&identity.id), "{}", identity.id);
         assert_eq!(load(dir.path())?.id, identity.id);

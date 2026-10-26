@@ -74,8 +74,8 @@ pub(super) struct View {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct OpenFailure {
     /// `not_registered`, `hidden`, `not_running` or `dial_failed` when the box
-    /// refused; `timeout`, `interrupted`, `session_lost`, `not_connected` or
-    /// `needs_auth` otherwise.
+    /// refused; `timeout`, `interrupted`, `session_lost`, `not_connected`,
+    /// `needs_auth` or `needs_pairing` otherwise.
     pub reason: &'static str,
     pub message: String,
     /// Milliseconds since the Unix epoch.
@@ -199,6 +199,9 @@ enum Phase {
     /// Down until a person signs in again: listeners stay, routes show the
     /// sign-in page.
     SignIn,
+    /// Down until a person pairs this machine with the box again: listeners
+    /// stay, routes show the pairing page.
+    Pairing,
     /// Given up: nothing stays mirrored.
     Over,
 }
@@ -209,6 +212,7 @@ impl Phase {
         match state {
             LinkState::Connected(_) => Self::Connected,
             LinkState::NeedsAuth { .. } => Self::SignIn,
+            LinkState::NeedsPairing { .. } => Self::Pairing,
             LinkState::Failed { .. } | LinkState::Stopped => Self::Over,
             LinkState::Connecting { .. } | LinkState::Retrying { .. } => Self::Down,
         }
@@ -659,10 +663,14 @@ impl Mirror {
                 let reference = lane_ref(&unit.key.lane);
                 let box_name = &self.conn.name;
                 // The proxy shows the hint on the page of the route's state.
-                let start_hint = if phase == Phase::SignIn {
-                    format!("Sign in to {box_name} again: devlanes remote connect {box_name}")
-                } else {
-                    format!("Start it on {box_name}: devlanes start --lane {reference}")
+                let start_hint = match phase {
+                    Phase::SignIn => {
+                        format!("Sign in to {box_name} again: devlanes remote connect {box_name}")
+                    }
+                    Phase::Pairing => format!(
+                        "Pair with {box_name} again: run devlanes remote pair on {box_name}, then devlanes remote connect {box_name} --code <code>"
+                    ),
+                    _ => format!("Start it on {box_name}: devlanes start --lane {reference}"),
                 };
                 routes.push(RouteEntry {
                     host: host.host.to_ascii_lowercase(),
@@ -841,11 +849,12 @@ fn lane_ref(lane: &LaneKey) -> String {
 }
 
 /// Proxy state for a box unit: reconnecting while the link is down, and
-/// waiting for a sign-in while it needs a person.
+/// waiting for a sign-in or pairing while it needs a person.
 fn route_status(state: &str, phase: Phase) -> RouteStatus {
     match phase {
         Phase::Connected => {}
         Phase::SignIn => return RouteStatus::SignInNeeded,
+        Phase::Pairing => return RouteStatus::PairingNeeded,
         Phase::Down | Phase::Over => return RouteStatus::Reconnecting,
     }
     match state {
@@ -1000,6 +1009,14 @@ async fn splice(stream: TcpStream, port: u16, conn: Arc<HostConn>, engine: Weak<
                     conn.name, conn.name
                 );
                 open_failed(&engine, &conn, port, "needs_auth", message);
+                return;
+            }
+            None if conn.needs_pairing() => {
+                let message = format!(
+                    "box {} needs this machine to pair again: run `devlanes remote pair` there, then `devlanes remote connect {} --code <code>`",
+                    conn.name, conn.name
+                );
+                open_failed(&engine, &conn, port, "needs_pairing", message);
                 return;
             }
             None => {

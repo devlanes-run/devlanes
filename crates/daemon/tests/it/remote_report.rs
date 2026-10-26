@@ -50,10 +50,15 @@ async fn listed_client(side: &BoxSide, id: &str) -> Option<Value> {
 
 /// The id a client engine keeps in its home.
 fn client_id(client: &ClientSide) -> String {
-    std::fs::read_to_string(client.h.home.join("remote-client-id"))
+    std::fs::read_to_string(client.h.home.join("client-id"))
         .expect("the client stored its id")
         .trim()
         .to_owned()
+}
+
+/// A client id made of `hex`, eight hex digits, repeated.
+fn id_of(hex: &str) -> String {
+    format!("dl_cid_{}", hex.repeat(8))
 }
 
 /// `url <unit>` on `h` for the lane of `cwd`.
@@ -71,12 +76,14 @@ fn reported(report: &Value, port: u16) -> Option<&Value> {
         .find(|entry| entry["port"] == port)
 }
 
-/// A session straight to the box listing `features`, with its own id.
-async fn direct(side: &BoxSide, id: &str, features: &[&str]) -> Session {
+/// A session straight to the box listing `features`, with its own id
+/// ([`id_of`] `hex`), paired with a fresh code.
+async fn direct(side: &BoxSide, hex: &str, features: &[&str]) -> Session {
     let mut options = SessionOptions::new("devlanes test-old-client");
-    options.client_id = id.into();
+    options.client_id = id_of(hex);
     options.client_name = "old-laptop".into();
     options.features = features.iter().map(|name| (*name).to_owned()).collect();
+    options.pairing = Some(super::OneCode::new(side.code().await));
     Session::connect(&side.transport, options)
         .await
         .expect("direct session")
@@ -231,12 +238,13 @@ async fn a_mirror_report_reaches_status_and_url_on_the_box() {
         );
 
         // A client of a release without mirror reports is listed without one.
-        let old = direct(&side, "0ld0c11e", &features_without(MIRROR_REPORT)).await;
+        let old = direct(&side, "01d0c11e", &features_without(MIRROR_REPORT)).await;
         assert!(
             !old.report(json!({"alias": "box"})),
             "the box does not take it"
         );
-        let listed = eventually(SOON, || async { listed_client(&side, "0ld0c11e").await })
+        let old_id = id_of("01d0c11e");
+        let listed = eventually(SOON, || async { listed_client(&side, &old_id).await })
             .await
             .expect("the old client is listed");
         assert!(listed.get("mirror").is_none(), "{listed}");
@@ -441,7 +449,7 @@ async fn external_ports_are_routed_and_mirrored_while_a_lane_runs() {
         current.close();
 
         // An older client never gets the unit kind it would reject, nor dials it.
-        let old = direct(&side, "0ld0c11e", &features_without(EXTERNAL_UNITS)).await;
+        let old = direct(&side, "01d0c11e", &features_without(EXTERNAL_UNITS)).await;
         assert!(!lists_external(&old), "an old client got an external unit");
         assert_eq!(refusal(&old, port).await, Some(RejectReason::NotRegistered));
         old.close();

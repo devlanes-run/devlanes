@@ -169,6 +169,22 @@ diesel::table! {
     }
 }
 diesel::table! {
+    remote_pairings (client_id) {
+        client_id -> Text,
+        name -> Text,
+        token_sha256 -> Text,
+        paired_at -> BigInt,
+        last_seen -> Nullable<BigInt>,
+    }
+}
+diesel::table! {
+    remote_tokens (host) {
+        host -> Text,
+        token -> Text,
+        paired_at -> BigInt,
+    }
+}
+diesel::table! {
     startup_peaks (id) {
         id -> BigInt,
         series -> Text,
@@ -192,5 +208,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     metric_rollups,
     run_summaries,
     remote_hosts,
+    remote_pairings,
+    remote_tokens,
     startup_peaks,
 );

@@ -146,6 +146,7 @@ fn start_box_with(initial: RegistrySnapshot, options: ServeOptions) -> TestBox {
         registry: Arc::new(registry.clone()),
         dialer: Arc::new(LoopbackDialer),
         sync: Arc::new(TestSync),
+        pairing: Arc::new(devlanes_transport::NoPairing),
     };
     let task = tokio::spawn(async move {
         while let Some(link) = listener.accept().await {
@@ -304,6 +305,7 @@ async fn a_failing_registry_feed_ends_the_session() -> TestResult {
             }),
             dialer: Arc::new(LoopbackDialer),
             sync: Arc::new(TestSync),
+            pairing: Arc::new(devlanes_transport::NoPairing),
         };
         let server = tokio::spawn(async move {
             let link = listener.accept().await.ok_or("no link")?;
@@ -349,6 +351,7 @@ async fn a_closed_registry_feed_ends_the_session() -> TestResult {
             }),
             dialer: Arc::new(LoopbackDialer),
             sync: Arc::new(TestSync),
+            pairing: Arc::new(devlanes_transport::NoPairing),
         };
         let server = tokio::spawn(async move {
             let link = listener.accept().await.ok_or("no link")?;
@@ -403,6 +406,7 @@ fn reporting_box(
         }),
         dialer: Arc::new(LoopbackDialer),
         sync: Arc::new(TestSync),
+        pairing: Arc::new(devlanes_transport::NoPairing),
     };
     let mut options = ServeOptions::new("box");
     options.timing = fast_timing();
@@ -699,6 +703,7 @@ async fn box_closes_silent_client() -> TestResult {
             registry: Arc::new(registry),
             dialer: Arc::new(LoopbackDialer),
             sync: Arc::new(TestSync),
+            pairing: Arc::new(devlanes_transport::NoPairing),
         };
         let server = tokio::spawn(async move {
             let link = listener.accept().await.ok_or("no link")?;

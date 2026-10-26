@@ -3,6 +3,7 @@
 mod allocation;
 mod lifecycle;
 mod models;
+mod pairings;
 mod paths;
 mod queries;
 mod records;
@@ -13,6 +14,7 @@ pub use lifecycle::{
     LogSegmentInput, RemoteHost, RollupRow, RunSummaryRow, STARTUP_PEAKS_PER_SERIES, SetupRecord,
     StartupPeak, TaskRun, TaskRunId, TaskRunInput,
 };
+pub use pairings::RemotePairing;
 pub use records::*;
 pub use retention::*;
 

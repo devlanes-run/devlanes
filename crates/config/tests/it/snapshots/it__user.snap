@@ -80,6 +80,7 @@ expression: user
   },
   "remote": {
     "boxes": {},
-    "start_daemon": true
+    "start_daemon": true,
+    "require_pairing": true
   }
 }

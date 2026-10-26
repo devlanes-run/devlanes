@@ -16,6 +16,7 @@ use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::mux::{self, MuxStream};
+use crate::pairing::{PairingCheck, PairingClaim, PairingGate};
 use crate::registry::{AuthorizedTarget, Registry, RegistrySource, RegistryUpdate};
 use crate::session::Timing;
 use crate::sync::{self, SyncSource};
@@ -62,6 +63,8 @@ pub struct BoxServices {
     pub dialer: Arc<dyn Dialer>,
     /// Sync feeds; use [`crate::NoSync`] when unsupported.
     pub sync: Arc<dyn SyncSource>,
+    /// Which clients are served; use [`crate::NoPairing`] to serve every one.
+    pub pairing: Arc<dyn PairingGate>,
 }
 
 /// Box-side session settings.
@@ -77,10 +80,14 @@ pub struct ServeOptions {
     pub timing: Timing,
     /// Limit for connecting a data stream's target.
     pub dial_timeout: Duration,
+    /// How long a client asked to pair may take to send its code: a person
+    /// types it, so this is longer than the handshake limit.
+    pub pairing_timeout: Duration,
 }
 
 impl ServeOptions {
-    /// Default timing, this build's features and no box info, with the given
+    /// Default timing, this build's features, no box info and three minutes to
+    /// pair, as long as a client's whole connection attempt, with the given
     /// version label.
     pub fn new(server: impl Into<String>) -> Self {
         Self {
@@ -89,6 +96,7 @@ impl ServeOptions {
             box_info: BoxInfo::default(),
             timing: Timing::default(),
             dial_timeout: Duration::from_secs(10),
+            pairing_timeout: Duration::from_secs(180),
         }
     }
 }
@@ -142,6 +150,23 @@ pub enum ServeError {
     /// No ping arrived within the idle limit, or a control write stalled.
     #[error("client stopped responding")]
     ClientTimeout,
+    /// The pairing gate failed to check a client or to trade its code.
+    #[error("pairing: {0}")]
+    Pairing(BoxError),
+    /// The client is not paired and left without sending a code.
+    #[error("client {id} is not paired with this box and sent no code")]
+    NotPaired {
+        /// The client's id.
+        id: String,
+    },
+    /// The client's code was refused; it was told why.
+    #[error("refused the pairing code of client {id}: {message}")]
+    PairingRefused {
+        /// The client's id.
+        id: String,
+        /// What the client was told.
+        message: String,
+    },
 }
 
 /// State shared by per-stream tasks of one session.
@@ -221,6 +246,7 @@ where
             features,
             client_id,
             client_name,
+            token,
         },
         _,
     )) = open
@@ -247,6 +273,15 @@ where
         id: client_id,
         name: client_name,
     };
+    // Nothing about the box, not even its welcome, goes to a client it does not serve.
+    pair(
+        &mut control,
+        &services,
+        &peer,
+        token.map(|token| token.0),
+        &options,
+    )
+    .await?;
     let feed = services
         .registry
         .subscribe(&peer)
@@ -312,6 +347,9 @@ where
                     // Without the feature nobody forwards it; the client should not send it.
                     reports.send_replace(Some(report));
                 }
+                Some((ClientControl::Pair { .. }, _)) => {
+                    return Err(ServeError::Handshake("a pairing code after the welcome"));
+                }
                 None => return Ok(()),
             },
             update = updates.next() => {
@@ -340,6 +378,78 @@ where
                 deadline = alive_until;
             }
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+        }
+    }
+}
+
+/// Lets the session go on once the pairing gate serves `peer`: at once for a
+/// valid `token` (or a box that pairs nobody), else after the client traded a
+/// one-time code, which it gets [`ServeOptions::pairing_timeout`] to send.
+/// The new token goes to the client before the welcome. A refused code and a
+/// client that leaves without one end the session.
+async fn pair(
+    control: &mut Channel<MuxStream>,
+    services: &BoxServices,
+    peer: &ClientInfo,
+    token: Option<String>,
+    options: &ServeOptions,
+) -> Result<(), ServeError> {
+    let timing = options.timing;
+    let reason = match services
+        .pairing
+        .check(peer, token.as_deref())
+        .await
+        .map_err(ServeError::Pairing)?
+    {
+        PairingCheck::Allowed => return Ok(()),
+        PairingCheck::Required(reason) => reason,
+    };
+    send_control(control, &BoxControl::PairingRequired { reason }, timing).await?;
+    let answer = timeout(
+        options.pairing_timeout,
+        wire::recv::<_, ClientControl>(control),
+    )
+    .await
+    .map_err(|_| ServeError::HandshakeTimeout)??;
+    let code = match answer {
+        Some((ClientControl::Pair { code }, _)) => code.0,
+        Some(_) => return Err(ServeError::Handshake("expected a pairing code")),
+        None => {
+            return Err(ServeError::NotPaired {
+                id: peer.id.clone(),
+            });
+        }
+    };
+    match services
+        .pairing
+        .claim(peer, &code)
+        .await
+        .map_err(ServeError::Pairing)?
+    {
+        PairingClaim::Paired { token } => {
+            let paired = BoxControl::Paired {
+                token: wire::Secret(token),
+            };
+            send_control(control, &paired, timing).await
+        }
+        PairingClaim::Refused {
+            message,
+            retry_after,
+        } => {
+            let refused = BoxControl::PairingRefused {
+                message: message.clone(),
+                retry_after_ms: retry_after
+                    .map(|wait| u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)),
+            };
+            let _ = timeout(timing.handshake_timeout, async {
+                wire::send(control, &refused).await?;
+                control.close().await
+            })
+            .await;
+            Err(ServeError::PairingRefused {
+                id: peer.id.clone(),
+                message,
+            })
         }
     }
 }

@@ -47,6 +47,7 @@ pub(crate) fn route_state(status: &RouteStatus) -> &'static str {
         RouteStatus::Failed { .. } => "failed",
         RouteStatus::Reconnecting => "reconnecting",
         RouteStatus::SignInNeeded => "sign_in_needed",
+        RouteStatus::PairingNeeded => "pairing_needed",
     }
 }
 

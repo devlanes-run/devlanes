@@ -74,7 +74,8 @@ pub struct UserConfig {
     pub daemon: DaemonConfig,
     /// `devlanes remote connect`: boxes this machine reaches with a command
     /// instead of SSH (`boxes`), and, for this machine as a box, whether a
-    /// connecting client starts its daemon (`start_daemon`).
+    /// connecting client starts its daemon (`start_daemon`) and must be paired
+    /// (`require_pairing`).
     pub remote: RemoteConfig,
 }
 
@@ -414,7 +415,7 @@ impl Default for DaemonConfig {
 /// a box for other machines.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"start_daemon":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
+#[schemars(extend("examples" = [{"start_daemon":false},{"require_pairing":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
 pub struct RemoteConfig {
     /// Boxes that `devlanes remote connect <name>` reaches by running a command on this
     /// machine instead of SSH, keyed by the name you connect with: a container
@@ -434,14 +435,24 @@ pub struct RemoteConfig {
     /// value here counts as false. Read at each connection, so no restart is needed.
     #[schemars(extend("examples" = [true,false]))]
     pub start_daemon: bool,
+    /// Serve only clients this machine paired with; defaults to true. A client's first
+    /// connection needs a one-time code from `devlanes remote pair` here, which it trades
+    /// for a token it presents from then on; `devlanes remote revoke` ends a client's
+    /// pairing. Set false to serve every client that gets in over SSH or its command, as
+    /// before pairing existed. An invalid value here counts as true. Read at each
+    /// connection, so no restart is needed.
+    #[schemars(extend("examples" = [true,false]))]
+    pub require_pairing: bool,
 }
 
 impl Default for RemoteConfig {
-    /// Connections start the daemon unless turned off; no command boxes.
+    /// Connections start the daemon and need pairing unless turned off; no
+    /// command boxes.
     fn default() -> Self {
         Self {
             boxes: std::collections::BTreeMap::new(),
             start_daemon: true,
+            require_pairing: true,
         }
     }
 }

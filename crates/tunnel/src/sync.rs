@@ -315,6 +315,7 @@ mod tests {
         let services = BoxServices {
             registry: Arc::new(SharedRegistry::new(RegistrySnapshot::default(), 4)),
             dialer: Arc::new(LoopbackDialer),
+            pairing: Arc::new(devlanes_transport::NoPairing),
             sync: Arc::new(TestSource {
                 entry: SyncEntry {
                     lane: "app@0".into(),

@@ -33,9 +33,13 @@ Host acme-box
 `%h` is replaced with the `HostName`. Write the full path to `cloudflared`: the `ssh` that devlanes runs is a child of the local daemon and sees the daemon's `PATH`, which may not include Homebrew's `/opt/homebrew/bin`. `cloudflared access ssh-config --hostname ssh.example.com` prints a block with the path of the `cloudflared` you ran it from. Then:
 
 ```sh
-ssh acme-box true                   # in a terminal first; see below
-devlanes remote connect acme-box
+ssh acme-box                        # in a terminal first, see below; then on the box:
+devlanes remote pair                # a one-time code for the first connection
+exit
+devlanes remote connect acme-box --code K7QM-3XWD
 ```
+
+The code pairs this machine with the box on its first connection ([pairing](../remote.md#pairing)); later connections present the token it got.
 
 ### Log in before connecting
 

@@ -17,8 +17,9 @@ use serde_json::Value;
 #[serde(default)]
 pub struct BoxHost {
     pub host: String,
-    /// `connected`, `connecting`, `reconnecting`, `needs_auth`, `failed`,
-    /// `stopped`, or `disconnected` for a box with no link in this daemon.
+    /// `connected`, `connecting`, `reconnecting`, `needs_auth`,
+    /// `needs_pairing`, `failed`, `stopped`, or `disconnected` for a box with
+    /// no link in this daemon.
     pub state: String,
     pub error: Option<String>,
     /// While reconnecting: how long the link waits before the next attempt.

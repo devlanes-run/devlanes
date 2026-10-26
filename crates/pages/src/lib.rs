@@ -218,7 +218,9 @@ impl<'a> ErrorPage<'a> {
             remote: self.remote
                 && !matches!(
                     self.code,
-                    ErrorCode::BoxReconnecting | ErrorCode::BoxSignInNeeded
+                    ErrorCode::BoxReconnecting
+                        | ErrorCode::BoxSignInNeeded
+                        | ErrorCode::BoxPairingNeeded
                 ),
             logs: self.logs.trim_end(),
             suggestion,

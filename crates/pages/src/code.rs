@@ -25,6 +25,9 @@ pub enum ErrorCode {
     BoxReconnecting = 204,
     /// `DL205`: the route's box needs a person to sign in again before it reconnects.
     BoxSignInNeeded = 205,
+    /// `DL206`: the route's box serves only paired clients and does not accept this
+    /// machine's pairing.
+    BoxPairingNeeded = 206,
     /// `DL301`: nothing accepted the connection on the service's port, even after retries.
     UpstreamUnreachable = 301,
     /// `DL302`: the service closed the connection or sent an invalid response.
@@ -81,7 +84,7 @@ impl Severity {
 
 impl ErrorCode {
     /// Every code, by ID; the docs list them in this order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::UnknownHost,
         Self::InvalidHost,
         Self::ConnectUnsupported,
@@ -91,6 +94,7 @@ impl ErrorCode {
         Self::ServiceFailed,
         Self::BoxReconnecting,
         Self::BoxSignInNeeded,
+        Self::BoxPairingNeeded,
         Self::UpstreamUnreachable,
         Self::UpstreamFailed,
         Self::UnexpectedUpgrade,
@@ -121,6 +125,7 @@ impl ErrorCode {
             Self::ServiceFailed => "service-failed",
             Self::BoxReconnecting => "box-reconnecting",
             Self::BoxSignInNeeded => "box-sign-in-needed",
+            Self::BoxPairingNeeded => "box-pairing-needed",
             Self::UpstreamUnreachable => "upstream-unreachable",
             Self::UpstreamFailed => "upstream-failed",
             Self::UnexpectedUpgrade => "unexpected-upgrade",
@@ -139,6 +144,7 @@ impl ErrorCode {
             | Self::ServiceFailed
             | Self::BoxReconnecting
             | Self::BoxSignInNeeded
+            | Self::BoxPairingNeeded
             | Self::UpstreamUnreachable => 503,
             Self::UpstreamFailed | Self::UnexpectedUpgrade => 502,
         }
@@ -148,9 +154,10 @@ impl ErrorCode {
     pub fn severity(self) -> Severity {
         match self {
             Self::ServiceIdle => Severity::Info,
-            Self::ServiceStarting | Self::BoxReconnecting | Self::BoxSignInNeeded => {
-                Severity::Warning
-            }
+            Self::ServiceStarting
+            | Self::BoxReconnecting
+            | Self::BoxSignInNeeded
+            | Self::BoxPairingNeeded => Severity::Warning,
             _ => Severity::Error,
         }
     }
@@ -179,6 +186,7 @@ impl ErrorCode {
             Self::ServiceFailed => "Service failed",
             Self::BoxReconnecting => "Box reconnecting",
             Self::BoxSignInNeeded => "Box sign-in needed",
+            Self::BoxPairingNeeded => "Box pairing needed",
             Self::UpstreamUnreachable => "Service not listening",
             Self::UpstreamFailed => "Upstream request failed",
             Self::UnexpectedUpgrade => "Unexpected protocol upgrade",
@@ -210,6 +218,9 @@ impl ErrorCode {
             }
             Self::BoxSignInNeeded => {
                 "The service runs on a remote box whose connection needs you to sign in again, such as an SSH password prompt nobody answered or a changed host key. devlanes stopped retrying until you do."
+            }
+            Self::BoxPairingNeeded => {
+                "The service runs on a remote box that serves only paired machines, and it does not accept this machine's pairing: the pairing was revoked or replaced, or no code was entered. devlanes stopped retrying until you pair again."
             }
             Self::UpstreamUnreachable => {
                 "devlanes has the service as running, but nothing accepted connections on its port while the proxy retried."
@@ -269,6 +280,13 @@ impl ErrorCode {
                     "devlanes remote connect <box>",
                 ),
                 run("Show the connection state and error", "devlanes remote ls"),
+            ],
+            Self::BoxPairingNeeded => vec![
+                run("On the box, get a one-time code", "devlanes remote pair"),
+                run(
+                    "Here, pair again with that code",
+                    "devlanes remote connect <box> --code <code>",
+                ),
             ],
             Self::UpstreamUnreachable => vec![
                 note("Make the service listen on `PORT`, on 127.0.0.1 or ::1"),

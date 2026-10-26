@@ -6,8 +6,9 @@ use devlanes_proto::{Event, LogLine, Method, RpcError, events};
 use serde_json::Value;
 
 use super::{
-    Ctx, Outcome, bytes, cap_line, clean, compact_fields, display_value, duration, endpoint_label,
-    int, leftover_notes_of, list, percent, plural, table, tail_lines, text, tree, words,
+    Ctx, Outcome, age, bytes, cap_line, clean, compact_fields, display_value, duration,
+    endpoint_label, int, leftover_notes_of, list, percent, plural, table, tail_lines, text, tree,
+    words,
 };
 use crate::Hint;
 
@@ -1995,6 +1996,171 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
         fields.insert("last_error".into(), Value::String(line));
     }
     tree(&data)
+}
+
+/// `remote pair`: the code and what to run on the client. Plain output is the
+/// code alone, for scripts; agents get one line saying what to ask the user.
+pub(super) fn remote_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let code = text(data, "code");
+    if cx.mode == crate::OutputMode::Plain {
+        return vec![code];
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    // Whole minutes, rounded up.
+    let minutes = |ms: u64| ms.div_ceil(60_000).max(1);
+    let valid = data
+        .get("expires_at_ms")
+        .and_then(Value::as_u64)
+        .map(|expires| minutes(expires.saturating_sub(now)));
+    let paused = data
+        .get("retry_after_ms")
+        .and_then(Value::as_u64)
+        .map(minutes);
+    let connect = format!("devlanes remote connect <box> --code {code}");
+    if cx.agent() {
+        let mut line = format!(
+            "pairing code {code}{}: ask the user to run `{connect}` on their machine, where <box> is \
+             the name they connect to this machine by (its SSH host or remote.boxes name), or to \
+             run `devlanes remote connect <box>` and enter the code; it works once",
+            valid
+                .map(|valid| format!(" valid_for={valid}m"))
+                .unwrap_or_default()
+        );
+        if let Some(paused) = paused {
+            line.push_str(&format!(
+                "; wrong codes paused pairing, so it works in {paused}m"
+            ));
+        }
+        return vec![line];
+    }
+    let mut lines = vec![match valid {
+        Some(valid) => format!(
+            "pairing code: {code} (works once, for {})",
+            plural(usize::try_from(valid).unwrap_or(usize::MAX), "minute")
+        ),
+        None => format!("pairing code: {code} (works once)"),
+    }];
+    if let Some(paused) = paused {
+        lines.push(cx.warning(&format!(
+            "wrong codes paused pairing; this code works in {}",
+            plural(usize::try_from(paused).unwrap_or(usize::MAX), "minute")
+        )));
+    }
+    lines.push(format!("on your machine, run: {connect}"));
+    lines.push(
+        "  <box> is the name you connect to this machine by; without --code, devlanes remote \
+         connect asks for the code"
+            .into(),
+    );
+    lines
+}
+
+/// `remote clients`: one row per client by name, with its short id, whether
+/// it is paired, its connections or when it was last seen, and what it mirrors.
+pub(super) fn remote_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let items = list(data, "items");
+    if items.is_empty() {
+        return vec![
+            "no paired or connected clients; devlanes remote pair prints a code that pairs one"
+                .into(),
+        ];
+    }
+    let short = |id: &str| -> String {
+        let keep = devlanes_proto::remote::CLIENT_ID_PREFIX.len() + 8;
+        if id.len() > keep {
+            id.chars().take(keep).collect()
+        } else {
+            id.to_owned()
+        }
+    };
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|item| {
+            let id = text(item, "id");
+            let paired = item.get("paired").and_then(Value::as_bool) == Some(true);
+            let connections = list(item, "connections");
+            let seen = match connections.first() {
+                Some(connection) => {
+                    let since = connection
+                        .get("since_ms")
+                        .and_then(Value::as_u64)
+                        .map(age)
+                        .unwrap_or_default();
+                    let from = text(connection, "address");
+                    let mut word = format!("connected {since}");
+                    if !from.is_empty() {
+                        word.push_str(&format!(" from {from}"));
+                    }
+                    if connections.len() > 1 {
+                        word.push_str(&format!(" (+{})", connections.len() - 1));
+                    }
+                    word
+                }
+                None => match item.get("last_seen_ms").and_then(Value::as_u64) {
+                    Some(ms) => format!("last seen {}", ago(ms)),
+                    None => "never connected".into(),
+                },
+            };
+            let mirror = connections
+                .iter()
+                .find_map(|connection| connection.get("mirror").filter(|m| m.is_object()))
+                .map(|mirror| {
+                    format!(
+                        "mirrors {}/{} ports",
+                        display_value(&mirror["bound"]),
+                        display_value(&mirror["ports"])
+                    )
+                })
+                .unwrap_or_default();
+            if cx.agent() {
+                return vec![format!(
+                    "client {} id={id} paired={paired} connections={} {seen}{}",
+                    text(item, "name"),
+                    connections.len(),
+                    if mirror.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" {mirror}")
+                    }
+                )];
+            }
+            vec![
+                text(item, "name"),
+                short(&id),
+                if paired { "paired" } else { "not paired" }.to_owned(),
+                seen,
+                mirror,
+            ]
+        })
+        .collect();
+    if cx.agent() {
+        return rows.into_iter().flatten().collect();
+    }
+    table(&rows, "")
+}
+
+/// `remote revoke`: whom it revoked and how many connections it ended.
+pub(super) fn remote_revoke(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let ended = data.get("ended").and_then(Value::as_u64).unwrap_or(0);
+    list(data, "revoked")
+        .iter()
+        .map(|client| {
+            let (name, id) = (text(client, "name"), text(client, "id"));
+            if cx.agent() {
+                format!("revoked {name} id={id} ended={ended}")
+            } else if ended == 0 {
+                format!("revoked {name} ({id}); it was not connected")
+            } else {
+                format!(
+                    "revoked {name} ({id}) and ended {}",
+                    plural(usize::try_from(ended).unwrap_or(usize::MAX), "connection")
+                )
+            }
+        })
+        .collect()
 }
 
 /// A past epoch-milliseconds time as `5m ago`, `3h ago` or `2d ago`.

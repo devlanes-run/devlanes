@@ -26,8 +26,8 @@ use crate::registry::{RegistryEvent, RegistrySnapshot};
 /// [`FEATURES`]). Revision 2 added sync manifests sent by the client and
 /// `not_running` refusals; revision 3 streams the client's manifest in batches as
 /// sync input frames, ended by an explicit marker; revision 4 adds the tunnel
-/// preamble, features, client identity and box info to the handshake, task units
-/// to the registry, and removes daemon request streams.
+/// preamble, features, client identity, pairing and box info to the handshake,
+/// task units to the registry, and removes daemon request streams.
 pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Additive protocol features this build implements, listed by both ends in the
@@ -71,6 +71,30 @@ pub struct BoxInfo {
     /// The box's `ports.range` user setting, such as `20000-29999`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ports_range: Option<String>,
+}
+
+/// Why a box asks a client to pair before it serves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingReason {
+    /// The client sent no remote token.
+    Missing,
+    /// The box does not accept the client's token: it was revoked, the client
+    /// paired again, or it never belonged to this client id.
+    Invalid,
+}
+
+/// A code or remote token on the wire, kept out of `Debug` output so a logged
+/// message never shows it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct Secret(pub(crate) String);
+
+impl std::fmt::Debug for Secret {
+    /// Writes a placeholder instead of the value.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
 }
 
 /// Frames above this size are rejected before allocation.
@@ -286,6 +310,9 @@ pub(crate) enum OpenRequest {
         /// The client machine's host name.
         #[serde(default)]
         client_name: String,
+        /// The remote token this box gave the client when they paired.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<Secret>,
     },
     /// A raw byte stream to a registered endpoint.
     Data { target: DialTarget },
@@ -304,6 +331,11 @@ pub(crate) enum ClientControl {
     /// [`MIRROR_REPORT`].
     Mirror {
         report: Value,
+    },
+    /// The one-time code a person got from `devlanes remote pair` on the box,
+    /// sent once in answer to [`BoxControl::PairingRequired`].
+    Pair {
+        code: Secret,
     },
 }
 
@@ -324,6 +356,23 @@ pub(crate) enum BoxControl {
     Incompatible {
         protocol: u32,
         server: String,
+    },
+    /// Sent instead of the welcome to a client the box does not serve yet;
+    /// the client answers with [`ClientControl::Pair`] or leaves.
+    PairingRequired {
+        reason: PairingReason,
+    },
+    /// The code was accepted: the client keeps `token` for later connections.
+    /// The welcome follows.
+    Paired {
+        token: Secret,
+    },
+    /// The code was refused; the box closes the session after it.
+    PairingRefused {
+        message: String,
+        /// How long the box refuses every code, after too many failures.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_ms: Option<u64>,
     },
     Snapshot {
         snapshot: RegistrySnapshot,
@@ -561,6 +610,45 @@ mod tests {
             },
         })?;
         assert_eq!(encoded["box"], serde_json::json!({"https_port": 8443}));
+        Ok(())
+    }
+
+    /// A hello without a token leaves the field out, and codes and tokens
+    /// never show in `Debug` output.
+    #[test]
+    fn secrets_stay_out_of_debug_output() -> Result<(), serde_json::Error> {
+        let hello = |token: Option<&str>| OpenRequest::Control {
+            protocol: PROTOCOL_VERSION,
+            client: "c".into(),
+            features: Vec::new(),
+            client_id: "dl_cid_x".into(),
+            client_name: "laptop".into(),
+            token: token.map(|token| Secret(token.into())),
+        };
+        assert!(serde_json::to_value(hello(None))?.get("token").is_none());
+        let with = hello(Some("dl_rt_0123"));
+        assert_eq!(serde_json::to_value(&with)?["token"], "dl_rt_0123");
+        assert!(!format!("{with:?}").contains("dl_rt_0123"));
+        let pair = ClientControl::Pair {
+            code: Secret("ABCD-EFGH".into()),
+        };
+        assert!(!format!("{pair:?}").contains("ABCD"));
+        assert_eq!(
+            serde_json::to_value(&pair)?,
+            serde_json::json!({"type": "pair", "code": "ABCD-EFGH"})
+        );
+        let paired: BoxControl =
+            serde_json::from_value(serde_json::json!({"type": "paired", "token": "dl_rt_1"}))?;
+        assert!(!format!("{paired:?}").contains("dl_rt_1"));
+        let required: BoxControl = serde_json::from_value(
+            serde_json::json!({"type": "pairing_required", "reason": "invalid"}),
+        )?;
+        assert!(matches!(
+            required,
+            BoxControl::PairingRequired {
+                reason: PairingReason::Invalid
+            }
+        ));
         Ok(())
     }
 

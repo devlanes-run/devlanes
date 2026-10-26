@@ -223,7 +223,7 @@ without the daemon.",
         #[command(subcommand)]
         command: CertsCommand,
     },
-    /// Connect to boxes over SSH or a command and mirror their lanes here
+    /// Connect to boxes over SSH or a command and mirror their lanes here; on a box, pair and revoke clients
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
@@ -566,6 +566,19 @@ pub enum RemoteCommand {
         /// Return once connected instead of staying attached for prompts
         #[arg(long)]
         background: bool,
+        /// Pair with the box using this one-time code from devlanes remote pair on the box, instead of entering it when asked
+        #[arg(long, value_name = "CODE")]
+        code: Option<String>,
+    },
+    /// On a box: print a one-time code that pairs a client with this machine on its next devlanes remote connect
+    Pair,
+    /// On a box: list paired clients and the clients connected now
+    Clients,
+    /// On a box: delete a client's pairing and end its connections now
+    Revoke {
+        /// The client's name or id from devlanes remote clients (a unique start of the id works)
+        #[arg(value_name = "CLIENT")]
+        client: String,
     },
     /// Disconnect from a box, remove its mirrored ports and hostnames, and stop reconnecting it after daemon restarts
     Disconnect {
@@ -1143,10 +1156,19 @@ impl Cli {
                 DaemonCommand::Run => return Ok(Action::DaemonRun),
             },
             Some(Command::Remote { command }) => match command {
-                RemoteCommand::Connect { host, background } => (
+                RemoteCommand::Connect {
+                    host,
+                    background,
+                    code,
+                } => (
                     Method::Connect,
-                    json!({"host": host, "background": background}),
+                    json!({"host": host, "background": background, "code": code}),
                 ),
+                RemoteCommand::Pair => (Method::RemotePair, json!({})),
+                RemoteCommand::Clients => (Method::RemoteClients, json!({})),
+                RemoteCommand::Revoke { client } => {
+                    (Method::RemoteRevoke, json!({"client": client}))
+                }
                 RemoteCommand::Disconnect { host } => (Method::Disconnect, json!({"host": host})),
                 RemoteCommand::Ls => (Method::HostList, json!({})),
                 RemoteCommand::Sync => (Method::SyncStatus, json!({})),

@@ -1968,6 +1968,13 @@ mod tests {
             .expect("remote.start_daemon");
         assert_eq!(start_daemon.kind, Kind::Bool);
         assert_eq!(start_daemon.applies, Applies::NextCommand);
+        let pairing = categories[1]
+            .items
+            .iter()
+            .find(|item| item.key == "remote.require_pairing")
+            .expect("remote.require_pairing");
+        assert_eq!(pairing.kind, Kind::Bool);
+        assert_eq!(pairing.applies, Applies::NextCommand);
         let title = categories[0]
             .items
             .iter()

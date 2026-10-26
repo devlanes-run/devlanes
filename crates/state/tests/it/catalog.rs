@@ -123,14 +123,26 @@ async fn schema_rs_matches_the_migrations() {
     }
 }
 
+/// Columns that hold a credential on purpose: the remote token a box gave this
+/// machine (a client's only proof of its pairing, in its 0700 home), and the
+/// hash a box keeps of each token it gave out.
+const CREDENTIALS: [(&str, &str); 2] = [
+    ("remote_tokens", "token"),
+    ("remote_pairings", "token_sha256"),
+];
+
 #[tokio::test]
-/// No table has a column meant for client environments, secrets or launch commands.
+/// No table has a column meant for client environments, secrets or launch
+/// commands, apart from the pairing credentials in [`CREDENTIALS`].
 async fn no_table_stores_environments_or_secrets() {
     let (_dir, mut c) = migrated().await;
     let tables = tables(&mut c);
     assert!(tables.len() > 10, "{tables:?}");
     for table in tables {
         for column in columns(&mut c, &table) {
+            if CREDENTIALS.contains(&(table.as_str(), column.name.as_str())) {
+                continue;
+            }
             let name = column.name.to_ascii_lowercase();
             for word in ["env", "secret", "password", "token", "command", "argv"] {
                 assert!(

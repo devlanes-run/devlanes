@@ -68,9 +68,26 @@ fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// A box in `remote.boxes` connects through its command: the client mirrors
-/// the box lane's ports, `remote ls` shows the command transport, the box
-/// lists the client, and `disconnect` ends the tunnel.
+/// A one-time code from `remote pair` on `boxed`, as its plain output prints
+/// it for scripts: the code alone.
+fn pairing_code(boxed: &Lab) -> Result<String> {
+    let mut pair = boxed.command(boxed.repo(), &["remote", "pair"])?;
+    pair.env("DEVLANES_OUTPUT", "plain");
+    let output = boxed.run(pair, Duration::from_secs(60))?;
+    output.expect_code(0)?;
+    let code = output.stdout.trim().to_owned();
+    if code.len() != 9 || code.as_bytes().get(4) != Some(&b'-') {
+        return Err(Error::Unexpected(format!("not a pairing code: {code:?}")));
+    }
+    Ok(code)
+}
+
+/// A box in `remote.boxes` connects through its command once paired with a
+/// code from `remote pair`: the client mirrors the box lane's ports, `remote
+/// ls` shows the command transport, and the box lists the client as paired
+/// and connected. `remote revoke` on the box ends the tunnel and leaves the
+/// client waiting in `needs_pairing`; a new code connects it again, and
+/// `disconnect` ends the tunnel.
 #[test]
 fn a_command_box_mirrors_its_lane() -> Result<()> {
     let boxed = Lab::new("two-services", BUDGET)?;
@@ -94,17 +111,19 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
     ));
     std::fs::write(&config, text)?;
 
+    let code = pairing_code(&boxed)?;
     client.json(
         client.repo(),
-        &["remote", "connect", "acme", "--background"],
+        &["remote", "connect", "acme", "--background", "--code", &code],
     )?;
+    let mirrored_api = |host: &Value| {
+        host["state"] == "connected"
+            && host["ports"]
+                .as_array()
+                .is_some_and(|ports| ports.iter().any(|entry| entry["port"] == api))
+    };
     let mirrored = client.eventually("acme's api port in remote ls", CONNECT, || {
-        Ok(host(&client, "acme")?.filter(|host| {
-            host["state"] == "connected"
-                && host["ports"]
-                    .as_array()
-                    .is_some_and(|ports| ports.iter().any(|entry| entry["port"] == api))
-        }))
+        Ok(host(&client, "acme")?.filter(mirrored_api))
     })?;
     assert_eq!(mirrored["transport"], "command", "{mirrored}");
     assert_eq!(mirrored["lanes"], 1, "{mirrored}");
@@ -112,6 +131,34 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
     let status = boxed.json(boxed.repo(), &["status", "--json"])?;
     let clients = status["clients"].as_array().cloned().unwrap_or_default();
     assert_eq!(clients.len(), 1, "the box lists one client: {status}");
+    let id = clients[0]["id"].as_str().unwrap_or_default().to_owned();
+    let paired = boxed.json(boxed.repo(), &["remote", "clients", "--json"])?;
+    let entry = paired["items"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["id"] == id.as_str()))
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(entry["paired"], true, "{paired}");
+
+    let revoked = boxed.json(boxed.repo(), &["remote", "revoke", &id, "--json"])?;
+    assert_eq!(revoked["ended"], 1, "{revoked}");
+    let waiting = client.eventually("acme to need pairing", CONNECT, || {
+        Ok(host(&client, "acme")?.filter(|host| host["state"] == "needs_pairing"))
+    })?;
+    assert!(
+        waiting["ports"]
+            .as_array()
+            .is_some_and(|ports| ports.iter().any(|entry| entry["port"] == api)),
+        "the mirrored port stays: {waiting}"
+    );
+    let code = pairing_code(&boxed)?;
+    client.json(
+        client.repo(),
+        &["remote", "connect", "acme", "--background", "--code", &code],
+    )?;
+    client.eventually("acme to connect again", CONNECT, || {
+        Ok(host(&client, "acme")?.filter(mirrored_api))
+    })?;
 
     client.json(client.repo(), &["remote", "disconnect", "acme"])?;
     boxed.eventually("the box's tunnel to end", CONNECT, || {
@@ -227,10 +274,16 @@ async fn websocket_echo(
 /// A session over a real `devlanes tunnel --stdio`, started directly and,
 /// on Windows, as sshd starts it through each default shell: the preamble
 /// comes first, the handshake and registry work, and a data stream to the
-/// box's api service carries every byte value both ways unchanged.
+/// box's api service carries every byte value both ways unchanged. The box
+/// does not require pairing here: the sessions are the test's own, and
+/// `a_command_box_mirrors_its_lane` pairs through the real binaries.
 #[test]
 fn a_tunnel_carries_every_byte() -> Result<()> {
     let boxed = Lab::new("two-services", BUDGET)?;
+    let config = boxed.home().join("config.yaml");
+    let mut text = std::fs::read_to_string(&config)?;
+    text.push_str("remote:\n  require_pairing: false\n");
+    std::fs::write(&config, text)?;
     let started = boxed.json(boxed.repo(), &["start"])?;
     assert_eq!(started["ready"], true, "{started}");
     let lanes = boxed.lanes(boxed.repo())?;

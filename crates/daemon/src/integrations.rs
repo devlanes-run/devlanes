@@ -488,6 +488,10 @@ pub enum RouteStatus {
     /// A mirrored route whose box connection waits for a person to sign in
     /// again with `devlanes remote connect`.
     SignInNeeded,
+    /// A mirrored route whose box serves only paired clients and took no
+    /// token or code from this machine: a person pairs it again with a code
+    /// from `devlanes remote pair` on the box.
+    PairingNeeded,
 }
 
 /// One hostname route, independent of the proxy crate's types.
