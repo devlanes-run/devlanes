@@ -1,7 +1,13 @@
 //! Real SSH checks, normally run through `e2e/ssh/run.sh` against a throwaway sshd container.
-//! `windows_sshd_box` instead needs a Windows box: `cargo nextest run -p
-//! devlanes-transport-ssh --run-ignored only -E 'test(windows_sshd_box)'` with
-//! the variables below pointing at it.
+//! `windows_sshd_box` instead needs a Windows box (Windows' OpenSSH Server, devlanes
+//! installed for the account it logs in as, no daemon running there yet), so `run.sh`
+//! skips it. Run it from any client, Linux, macOS, WSL or Windows, with the variables
+//! below pointing at that box:
+//!
+//! ```sh
+//! DEVLANES_TEST_SSH_DEST=acme@winbox cargo nextest run -p devlanes-transport-ssh \
+//!   --run-ignored only -E 'test(windows_sshd_box)'
+//! ```
 //!
 //! Environment:
 //! - `DEVLANES_TEST_SSH_DEST`: ssh destination, default `localhost`.
@@ -234,36 +240,78 @@ async fn ssh_tunnel_session() -> TestResult {
     .await?
 }
 
+/// The PID of the box daemon, from `devlanes daemon status --json` run over
+/// a plain ssh session with the program and shell `probe` found.
+async fn box_daemon_pid(
+    home: &Path,
+    probe: &devlanes_transport_ssh::RemoteProbe,
+) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
+    let program = probe
+        .program
+        .as_deref()
+        .ok_or("devlanes not found on the box")?;
+    let command = probe
+        .shell
+        .command(program, "daemon status --json")
+        .ok_or("the box's shell cannot run devlanes")?;
+    let options = options(home, env("DEVLANES_TEST_SSH_KEY"));
+    let mut ssh = tokio::process::Command::new("ssh");
+    ssh.args(["-T", "-o", "BatchMode=yes"]);
+    for option in &options.ssh_options {
+        ssh.arg("-o").arg(option);
+    }
+    let output = ssh
+        .arg("--")
+        .arg(destination())
+        .arg(command)
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .output()
+        .await?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let status: serde_json::Value = serde_json::from_str(stdout.trim())
+        .map_err(|error| format!("daemon status: {error}: {stdout}"))?;
+    Ok(status["pid"]
+        .as_u64()
+        .ok_or_else(|| format!("no pid: {status}"))?)
+}
+
 /// A Windows box over its own sshd (Windows' OpenSSH Server, with devlanes
 /// installed for the user `DEVLANES_TEST_SSH_DEST` logs in as, `localhost`
-/// by default): the probe reports Windows and the devlanes it found, and a
-/// session over the tunnel gets the box's handshake, whose daemon did not
-/// stay inside the ssh session.
+/// by default): the probe reports Windows and the devlanes it found, a
+/// session over the tunnel gets the box's handshake, and the daemon that
+/// session's tunnel started is the one still running after every ssh
+/// session closed and the transport connected again.
 #[tokio::test]
 #[ignore = "needs windows sshd"]
 async fn windows_sshd_box() -> TestResult {
-    tokio::time::timeout(Duration::from_secs(120), async {
+    tokio::time::timeout(Duration::from_secs(180), async {
         let home = short_home()?;
         let transport = transport(home.path());
         let probe = transport.probe().await?;
         assert_eq!(probe.platform.os, "windows", "{probe:?}");
         assert!(probe.program.is_some(), "{probe:?}");
         let session = Session::connect(&transport, SessionOptions::new("windows-sshd")).await?;
+        let label = session.server().to_owned();
+        assert!(label.starts_with("devlanes "), "{label}");
         assert!(
-            session.server().starts_with("devlanes "),
-            "{}",
-            session.server()
-        );
-        assert!(
-            !session.server().contains("(daemon stops with the session)"),
-            "{}",
-            session.server()
+            !label.contains("(daemon stops with the session)"),
+            "{label}"
         );
         assert!(
             session.box_info().ports_range.is_some(),
             "{:?}",
             session.box_info()
         );
+        let first = box_daemon_pid(home.path(), &probe).await?;
+        session.close();
+        transport.close().await;
+
+        // A new session would start a new daemon if the first had ended
+        // with its ssh session.
+        let transport = self::transport(home.path());
+        let session = Session::connect(&transport, SessionOptions::new("windows-sshd")).await?;
+        assert_eq!(box_daemon_pid(home.path(), &probe).await?, first);
         session.close();
         transport.close().await;
         Ok(())

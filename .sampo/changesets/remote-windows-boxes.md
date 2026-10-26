@@ -7,6 +7,6 @@ cargo/devlanes-client: patch
 cargo/devlanes-sys-windows: patch
 ---
 
-Added Windows boxes for `devlanes remote connect`: a Windows machine with Windows' OpenSSH Server and devlanes installed can now be a box, whether its ssh shell is cmd.exe, PowerShell or Git Bash, and the daemon the connection starts there keeps running after the ssh session ends.
+Added Windows boxes for `devlanes remote connect`: a Windows machine with Windows' OpenSSH Server and devlanes installed can be a box, with cmd.exe, PowerShell or Git Bash as its ssh shell.
 
 See "Windows boxes" in `docs/guides/remote-setup.md`.

@@ -95,33 +95,41 @@ impl BoxShell {
         }
     }
 
-    /// The command that runs `<program> tunnel --stdio` in this shell, with
+    /// The command that runs `<program> tunnel --stdio` in this shell; see
+    /// [`BoxShell::command`].
+    pub fn tunnel_command(self, program: &str) -> Option<String> {
+        self.command(program, "tunnel --stdio")
+    }
+
+    /// The command that runs `program` with `args` in this shell, with
     /// `program` as one word whatever spaces, parentheses or quotes it holds;
-    /// `None` when this shell cannot take it as it is.
+    /// `None` when this shell cannot take it as it is. `args` are plain words
+    /// that need no quoting in any of the shells, such as `daemon status`.
     ///
     /// - sh: single quotes.
     /// - cmd.exe: double quotes. sshd passes the whole command as
     ///   `cmd.exe /c "<command>"`, and cmd strips that outer pair since the
     ///   command holds more quotes, so the program's pair stays. Inside quotes
-    ///   cmd still expands `%NAME%`, and a path cannot hold `"`, so a program
-    ///   with `%`, `"` or a control character is refused.
+    ///   cmd still expands `%NAME%`, and `!NAME!` where delayed expansion is
+    ///   on by default (a registry setting), and a path cannot hold `"`, so a
+    ///   program with `%`, `!`, `"` or a control character is refused.
     /// - PowerShell: the call operator on a single-quoted string, and the
-    ///   tunnel's exit status passed on, since PowerShell's `-c` otherwise
+    ///   program's exit status passed on, since PowerShell's `-c` otherwise
     ///   exits 1 for any failure (the box daemon's stopped status included).
-    pub fn tunnel_command(self, program: &str) -> Option<String> {
+    pub fn command(self, program: &str, args: &str) -> Option<String> {
         match self {
-            Self::Sh => Some(format!("{} tunnel --stdio", sh_quote(program))),
+            Self::Sh => Some(format!("{} {args}", sh_quote(program))),
             Self::Cmd => {
                 if program
                     .chars()
-                    .any(|c| matches!(c, '"' | '%') || c.is_control())
+                    .any(|c| matches!(c, '"' | '%' | '!') || c.is_control())
                 {
                     return None;
                 }
-                Some(format!("\"{program}\" tunnel --stdio"))
+                Some(format!("\"{program}\" {args}"))
             }
             Self::PowerShell => Some(format!(
-                "& {} tunnel --stdio; exit $LASTEXITCODE",
+                "& {} {args}; exit $LASTEXITCODE",
                 ps_quote(program)
             )),
         }
@@ -148,12 +156,18 @@ const PROBE_TAG: &str = "devlanes-probe:";
 /// lines, the last one empty when devlanes is not found, and leaves the program
 /// found in `p`. The newline first puts the tags on lines of their own even
 /// after login output without a final newline.
+///
+/// The script holds none of cmd.exe's operators (`< > & | ^`): on a Windows
+/// box cmd.exe parses the whole `sh -c '<script>'` line first, knows nothing
+/// of single quotes, and would carry out a `>/dev/null` itself (creating
+/// `\dev\null` on the current drive) or split the line at `&&`. `command -v`
+/// prints nothing when the program is missing, so its output alone decides.
 pub(crate) fn probe_script(program: &str) -> String {
     let program = sh_quote(program);
     format!(
-        "if command -v {program} >/dev/null 2>&1; then p=$(command -v {program}); \
-         elif [ -x \"$HOME/{INSTALL_DIR}/devlanes\" ]; then p=\"$HOME/{INSTALL_DIR}/devlanes\"; \
-         else p=; fi; \
+        "p=$(command -v {program}); \
+         if [ -z \"$p\" ]; then if [ -x \"$HOME/{INSTALL_DIR}/devlanes\" ]; then \
+         p=\"$HOME/{INSTALL_DIR}/devlanes\"; fi; fi; \
          printf '\\n{PROBE_TAG}os=%s\\n{PROBE_TAG}arch=%s\\n{PROBE_TAG}program=%s\\n' \
          \"$(uname -s)\" \"$(uname -m)\" \"$p\""
     )
@@ -198,13 +212,36 @@ pub(crate) fn needs_windows_probe(probe: Option<&RemoteProbe>) -> bool {
     probe.is_none_or(|probe| probe.platform.os == WINDOWS)
 }
 
+/// Bytes of the Windows probe's stderr a probe error keeps, from the end.
+const PROBE_STDERR_TAIL: usize = 2048;
+
+/// The text of a probe error: what the `sh` probe printed, then the end of
+/// what the Windows probe wrote on stderr when it ran and said something,
+/// which is where a box that blocks PowerShell explains why.
+pub(crate) fn probe_failure(sh_stdout: &str, windows_stderr: Option<&[u8]>) -> String {
+    let sh = sh_stdout.trim();
+    let Some(stderr) = windows_stderr else {
+        return sh.to_owned();
+    };
+    let start = stderr.len().saturating_sub(PROBE_STDERR_TAIL);
+    let tail = String::from_utf8_lossy(&stderr[start..]);
+    let tail = tail.trim();
+    if tail.is_empty() {
+        sh.to_owned()
+    } else {
+        format!("{sh}\nthe PowerShell probe printed on stderr: {tail}")
+    }
+}
+
 /// Finds devlanes and the shell, as Windows PowerShell 5.1 and PowerShell 7
 /// both run it, into `$p` (the program, empty when not found), `$a` (the
 /// architecture) and `$s` (the shell), and defines `Out-Probe`, which writes
 /// UTF-8 bytes to stdout untranslated. `@NAME@` is the quoted program name.
 ///
 /// On a machine that is not Windows it exits, so a `powershell` on a Linux
-/// box never reports one. `Get-Command` prefers an `.exe` over a `.cmd`
+/// box never reports one. Of what `Get-Command` finds, only files whose
+/// extension is in `PATHEXT` count (it also lists a `devlanes` file without
+/// one, which cmd.exe cannot start), and an `.exe` comes before a `.cmd`
 /// shim. The shell is the program that started this PowerShell: sshd runs the
 /// probe through it. When that is not a known shell (`Get-CimInstance` failed,
 /// or something else stands between), Win32-OpenSSH's `DefaultShell` value
@@ -213,7 +250,8 @@ const WINDOWS_PROBE: &str = r#"$ProgressPreference='SilentlyContinue'
 $ErrorActionPreference='SilentlyContinue'
 if([Environment]::OSVersion.Platform -ne 'Win32NT'){exit 1}
 $p=''
-$c=@(Get-Command -Name @NAME@ -CommandType Application)
+$e=@(if($env:PATHEXT){$env:PATHEXT -split ';'}else{'.COM','.EXE','.BAT','.CMD'})
+$c=@(Get-Command -Name @NAME@ -CommandType Application|Where-Object{$_.Extension -and $e -contains $_.Extension})
 $x=@($c|Where-Object{$_.Extension -eq '.exe'})
 if($x.Count){$p=$x[0].Path}elseif($c.Count){$p=$c[0].Path}
 $f=Join-Path $env:USERPROFILE '.devlanes\bin\devlanes.exe'
@@ -247,13 +285,27 @@ pub(crate) fn windows_probe_command(program: &str) -> String {
 /// --stdio` with its exit status when devlanes was found, as
 /// [`session_script`] does on a POSIX box. PowerShell starts the tunnel
 /// with this session's stdin and stdout, so its bytes pass untouched.
+///
+/// `shell` is the box's shell as far as it is known. sshd runs the command
+/// through it, and a PowerShell there would turn the tunnel's exit status
+/// (the box daemon's stopped status included) into 1, so the command then
+/// passes the status on itself.
 #[cfg(windows)]
-pub(crate) fn windows_session_command(program: &str, start: &str, end: &str) -> String {
-    encoded_powershell(&format!(
+pub(crate) fn windows_session_command(
+    program: &str,
+    start: &str,
+    end: &str,
+    shell: BoxShell,
+) -> String {
+    let command = encoded_powershell(&format!(
         "{}Out-Probe (\"`n{start}`n\"+$t+\"{end}`n\")\n\
          if($p){{& $p tunnel --stdio; exit $LASTEXITCODE}}\n",
         windows_probe_body(program)
-    ))
+    ));
+    match shell {
+        BoxShell::PowerShell => format!("{command}; exit $LASTEXITCODE"),
+        BoxShell::Sh | BoxShell::Cmd => command,
+    }
 }
 
 /// `powershell -NoProfile -NonInteractive -EncodedCommand <script>`: the

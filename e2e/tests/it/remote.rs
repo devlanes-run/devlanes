@@ -121,34 +121,49 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
     Ok(())
 }
 
-/// Ways to start the box's tunnel, by name: directly, and on Windows through
-/// cmd.exe and PowerShell, the shells a Windows box's sshd runs commands with.
-fn tunnel_commands() -> Result<Vec<(&'static str, Vec<OsString>)>> {
+/// Ways to start the box's tunnel, by name: directly, and on Windows the way
+/// a Windows box's sshd runs the tunnel command (quoted as the SSH transport
+/// quotes it) with each default shell installed here: cmd.exe, Windows
+/// PowerShell, PowerShell 7 and Git Bash, emulated by fakes in `dir`.
+#[cfg_attr(
+    unix,
+    expect(unused_variables, reason = "Windows puts its fakes there")
+)]
+fn tunnel_commands(dir: &std::path::Path) -> Result<Vec<(String, Vec<OsString>)>> {
     let devlanes = devlanes()?;
     let direct: Vec<OsString> = vec![devlanes.clone().into(), "tunnel".into(), "--stdio".into()];
-    #[cfg(unix)]
-    let commands = vec![("direct", direct)];
+    #[cfg_attr(unix, expect(unused_mut, reason = "Windows adds its shells"))]
+    let mut commands = vec![("direct".to_owned(), direct)];
     #[cfg(windows)]
-    let commands = {
-        let mut cmd: Vec<OsString> = vec![
-            devlanes_e2e::system32("cmd.exe").into(),
-            "/d".into(),
-            "/c".into(),
-        ];
-        cmd.extend(direct.iter().cloned());
-        let powershell: Vec<OsString> = vec![
-            devlanes_e2e::system32(r"WindowsPowerShell\v1.0\powershell.exe").into(),
-            "-NoProfile".into(),
-            "-NonInteractive".into(),
-            "-Command".into(),
-            format!(
-                "& {} tunnel --stdio; exit $LASTEXITCODE",
-                ps_quote(&devlanes.to_string_lossy())
-            )
-            .into(),
-        ];
-        vec![("direct", direct), ("cmd", cmd), ("powershell", powershell)]
-    };
+    {
+        use devlanes_testing::fake_tool::{Behaviour, SshdShell, install};
+        use devlanes_transport_ssh::BoxShell;
+
+        for shell in SshdShell::ALL {
+            let Some(program) = shell.program() else {
+                eprintln!("skipping {shell:?}: not installed here");
+                continue;
+            };
+            let quoting = match shell {
+                SshdShell::Cmd => BoxShell::Cmd,
+                SshdShell::WindowsPowerShell | SshdShell::Pwsh => BoxShell::PowerShell,
+                SshdShell::GitBash => BoxShell::Sh,
+            };
+            let command = quoting
+                .tunnel_command(&devlanes.to_string_lossy())
+                .ok_or_else(|| Error::Setup(format!("{shell:?} cannot run {devlanes:?}")))?;
+            let sshd = install(
+                dir,
+                &format!("sshd-{}", shell.kind()),
+                &Behaviour::new().run_with(
+                    shell.kind(),
+                    Some(&program),
+                    Vec::<(String, String)>::new(),
+                ),
+            )?;
+            commands.push((shell.kind().to_owned(), vec![sshd.into(), command.into()]));
+        }
+    }
     Ok(commands)
 }
 
@@ -210,9 +225,9 @@ async fn websocket_echo(
 }
 
 /// A session over a real `devlanes tunnel --stdio`, started directly and,
-/// on Windows, through cmd.exe and PowerShell: the preamble comes first, the
-/// handshake and registry work, and a data stream to the box's api service
-/// carries every byte value both ways unchanged.
+/// on Windows, as sshd starts it through each default shell: the preamble
+/// comes first, the handshake and registry work, and a data stream to the
+/// box's api service carries every byte value both ways unchanged.
 #[test]
 fn a_tunnel_carries_every_byte() -> Result<()> {
     let boxed = Lab::new("two-services", BUDGET)?;
@@ -235,7 +250,8 @@ fn a_tunnel_carries_every_byte() -> Result<()> {
         .enable_all()
         .build()?;
     let payload = binary_payload();
-    for (name, argv) in tunnel_commands()? {
+    let fakes = tempfile::tempdir()?;
+    for (name, argv) in tunnel_commands(fakes.path())? {
         let mut options = CommandOptions::new(format!("box via {name}"));
         options.env = env.clone();
         let transport = CommandTransport::new(argv, options);
@@ -290,17 +306,20 @@ mod session_job {
     /// How long the tunnel gets for its preamble and the daemon it starts.
     const START: Duration = Duration::from_secs(60);
 
-    /// What a tunnel that ran in a session job printed: its first stdout
-    /// line, and its stderr once the job was closed.
+    /// A tunnel that ran in a session job and ended: its first stdout line,
+    /// its stderr, the daemon it started, and the job, still open.
     struct Ran {
         preamble: String,
         stderr: String,
+        daemon: u32,
+        job: Job,
     }
 
     /// Runs `lab`'s `devlanes tunnel --stdio` inside a kill-on-close job
     /// (allowing breakaway when `breakaway` is set), as sshd runs a session's
-    /// command, waits for its preamble and the daemon it starts, then closes
-    /// the job as the session's end does.
+    /// command. After its preamble the client goes away (stdin closes), so
+    /// the tunnel starts the daemon, says what it has to say about it, finds
+    /// no client and exits; the job stays open for the caller to close.
     fn tunnel_session(lab: &Lab, breakaway: bool) -> Result<Ran> {
         let job = Job::create(JobOptions {
             kill_on_close: true,
@@ -359,43 +378,50 @@ mod session_job {
         let preamble = preamble
             .recv_timeout(START)
             .map_err(|_| Error::Unexpected("no preamble from the tunnel".into()))??;
-        lab.eventually("the daemon the tunnel started", START, || {
-            Ok(lab.daemon_running().then_some(()))
-        })?;
-        // The tunnel reports a daemon it could not move out right after the
-        // daemon answers, before it serves the session.
-        std::thread::sleep(Duration::from_millis(500));
-        drop(job);
-        if child.wait_timeout(START)?.is_none() {
-            return Err(Error::Unexpected("the tunnel outlived its job".into()));
-        }
         drop(stdin_write);
+        if child.wait_timeout(START)?.is_none() {
+            return Err(Error::Unexpected(
+                "the tunnel kept running without a client".into(),
+            ));
+        }
         let stderr = stderr
             .recv_timeout(START)
             .map_err(|_| Error::Unexpected("the tunnel's stderr stayed open".into()))?;
-        Ok(Ran { preamble, stderr })
+        // The tunnel waited for the daemon to be ready before it read stdin.
+        let daemon = lab
+            .daemon_pid()?
+            .and_then(|pid| u32::try_from(pid).ok())
+            .ok_or_else(|| Error::Unexpected(format!("no daemon after the tunnel: {stderr}")))?;
+        Ok(Ran {
+            preamble,
+            stderr,
+            daemon,
+            job,
+        })
     }
 
     /// The daemon a tunnel starts breaks away from a session job that
-    /// allows it, as Win32-OpenSSH's does, and keeps running after the
-    /// session ends.
+    /// allows it, as Win32-OpenSSH's does: it is not in the job, and keeps
+    /// running once the job is closed as the session's end closes it.
     #[test]
     fn a_tunnel_daemon_outlives_the_ssh_session() -> Result<()> {
         let lab = Lab::without_config(BUDGET)?;
         assert!(!lab.daemon_running(), "a daemon ran before the tunnel");
         let ran = tunnel_session(&lab, true)?;
         assert_eq!(ran.preamble, devlanes_transport::TUNNEL_PREAMBLE);
-        std::thread::sleep(Duration::from_secs(1));
+        assert!(!ran.stderr.contains("could not leave"), "{}", ran.stderr);
+        let members = ran.job.members()?;
+        assert!(!members.contains(&ran.daemon), "{members:?}");
+        drop(ran.job);
         assert!(
             lab.daemon_running(),
             "the daemon ended with the session job"
         );
-        assert!(!ran.stderr.contains("could not leave"), "{}", ran.stderr);
         Ok(())
     }
 
     /// In a session job that refuses breakaway the daemon stays inside: the
-    /// tunnel says so on stderr, and the daemon ends with the session.
+    /// tunnel says so on stderr, and the daemon ends when the job is closed.
     #[test]
     fn a_tunnel_reports_a_daemon_its_session_job_keeps() -> Result<()> {
         let lab = Lab::without_config(BUDGET)?;
@@ -407,6 +433,9 @@ mod session_job {
             "{}",
             ran.stderr
         );
+        let members = ran.job.members()?;
+        assert!(members.contains(&ran.daemon), "{members:?}");
+        drop(ran.job);
         lab.eventually("the daemon to end with the job", START, || {
             Ok((!lab.daemon_running()).then_some(()))
         })?;
