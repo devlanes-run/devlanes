@@ -13,8 +13,7 @@ use bytes::Bytes;
 use devlanes_pki::CertificateAuthority;
 use devlanes_proxy::{
     HostHeader, LaneActivity, Proxy, ProxyConfig, ProxyLimits, Route, RouteState, RouteTable,
-    ScopedPorts,
-    Upstream,
+    ScopedPorts, Upstream,
 };
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::{BodyExt, Empty, Full};
