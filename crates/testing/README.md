@@ -38,7 +38,7 @@ HTTP paths return the request path, headers and PID as JSON. `/ws` echoes text/b
 
 ## Fake tools
 
-`fake-tool` stands in for external programs (`mise`, `direnv`, `mkcert`) where `#!/bin/sh` scripts cannot run. `fake_tool::install(dir, "mise", &behaviour)` copies the binary to `dir/mise` (`mise.exe` on Windows) and writes the `Behaviour` (expected arguments, a file recording each call, a sleep, stdout, stderr, exit code) next to it as `mise.exe.json`. Tests never build it: build this crate first (`cargo build -p devlanes-testing`, or any workspace test build), and the helper finds the binary next to the test binaries.
+`fake-tool` stands in for external programs (`mise`, `direnv`, `mkcert`) where `#!/bin/sh` scripts cannot run. `fake_tool::install(dir, "mise", &behaviour)` copies the binary to `dir/mise` (`mise.exe` on Windows) and writes the `Behaviour` (expected arguments, a file recording each call, a sleep, stdout, stderr, echoing stdin, exit code) next to it as `mise.exe.json`. On Windows, `run_with` makes the fake an `ssh` whose box is this machine: it runs its last argument through cmd.exe or PowerShell the way Win32-OpenSSH's sshd does. Tests never build it: build this crate first (`cargo build -p devlanes-testing`, or any workspace test build), and the helper finds the binary next to the test binaries.
 
 ```rust
 use devlanes_testing::fake_tool::{Behaviour, install};

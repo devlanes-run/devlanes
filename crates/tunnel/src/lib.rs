@@ -83,6 +83,16 @@ pub fn services(paths: Paths, client: RemoteClient) -> BoxServices {
     }
 }
 
+/// What the handshake label adds when the box daemon this tunnel started
+/// stays inside the ssh session's job, which ends it with the session
+/// (Windows, when the job refuses breakaway). The client warns about it.
+pub const SESSION_BOUND: &str = "(daemon stops with the session)";
+
+/// What the tunnel tells the client on stderr in that case.
+const SESSION_BOUND_HINT: &str = "the box daemon started here could not leave this ssh session's \
+     job, so it stops when the session ends; run `devlanes daemon install` on the box, or start \
+     the daemon outside ssh";
+
 /// Version label sent to clients in the handshake: `devlanes <version>`, plus
 /// `(linger off)` on Linux boxes whose user services stop at logout.
 pub fn server_label() -> String {
@@ -97,6 +107,23 @@ pub fn server_label() -> String {
 /// False: Windows has no systemd to stop the user's processes at logout.
 #[cfg(windows)]
 fn linger_off() -> bool {
+    false
+}
+
+/// Whether the daemon that `daemon`'s connection started ends with this
+/// process's job: it could not break away, and the job kills its processes
+/// when it closes, as an ssh session's job does. Win32-OpenSSH's job allows
+/// breakaway, so this happens with other ssh servers, or with a job inside
+/// the session's that refuses it.
+#[cfg(windows)]
+fn bound_to_session(daemon: &Client) -> bool {
+    daemon.spawned_in_job
+        && devlanes_sys_windows::job::job_of_self().is_ok_and(|job| job.kill_on_close)
+}
+
+/// False: a Unix daemon detaches from the ssh session with `setsid`.
+#[cfg(unix)]
+fn bound_to_session(_daemon: &Client) -> bool {
     false
 }
 
@@ -124,10 +151,19 @@ fn linger_off() -> bool {
 /// (the box's `remote.start_daemon`) allows it; otherwise a stopped daemon
 /// fails with [`TunnelError::DaemonStopped`]. Nothing but the preamble and mux
 /// frames may reach stdout, so diagnostics belong on stderr, which ssh hands
-/// back to the client.
+/// back to the client. A daemon started here that stays inside the ssh
+/// session's job is reported there and in the label ([`SESSION_BOUND`]).
+///
+/// On Windows stdin and stdout are the pipes sshd passes to a command without
+/// a terminal, which std reads and writes byte for byte; only console handles
+/// get text conversion.
 pub async fn run_stdio(paths: Paths, start_daemon: bool) -> Result<(), TunnelError> {
     write_preamble(&mut tokio::io::stdout()).await?;
     let mut daemon = daemon_client(&paths, start_daemon).await?;
+    let bound = bound_to_session(&daemon);
+    if bound {
+        eprintln!("devlanes tunnel: {SESSION_BOUND_HINT}");
+    }
     let box_info = status_box_info(&mut daemon).await?;
     drop(daemon);
     let client = RemoteClient {
@@ -139,9 +175,12 @@ pub async fn run_stdio(paths: Paths, start_daemon: bool) -> Result<(), TunnelErr
         ..RemoteClient::default()
     };
     // `loginctl` blocks briefly; it runs once, before serving starts.
-    let label = tokio::task::spawn_blocking(server_label)
+    let mut label = tokio::task::spawn_blocking(server_label)
         .await
         .unwrap_or_else(|_| format!("devlanes {}", devlanes_version::VERSION));
+    if bound {
+        label = format!("{label} {SESSION_BOUND}");
+    }
     let mut options = ServeOptions::new(label);
     options.box_info = box_info;
     devlanes_transport::serve(

@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 devlanes-transport = { path = "../transport" }
 devlanes-transport-command = { path = "../transport-command" }
 serde.workspace = true

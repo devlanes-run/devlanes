@@ -8,6 +8,10 @@
 //! the sentinel is the tunnel's: its preamble line, then mux traffic. A
 //! standalone [`SshTransport::probe`] is a run of its own.
 //!
+//! A Windows box's shell (cmd.exe or PowerShell) has no `sh` for that script,
+//! so the session also exists as an encoded PowerShell command, which runs
+//! under either; [`SshTransport::open`] says when each is used.
+//!
 //! Both run through the command transport, so every `ssh.exe` starts inside a
 //! kill-on-close job: whatever it starts (a `ProxyCommand`) ends with the
 //! session, and with the daemon if the daemon dies. The sentinel is the
@@ -200,14 +204,31 @@ impl SshTransport {
     }
 
     /// Reports the box platform and devlanes location: what the last session
-    /// found, else from a probe-only ssh run.
+    /// found, else from probe-only ssh runs: the `sh` probe, then the Windows
+    /// probe when that calls for it (see [`probe::needs_windows_probe`]).
     pub async fn probe(&self) -> Result<RemoteProbe, SshError> {
         if let Some(probe) = self.remembered() {
             return Ok(probe);
         }
-        let script = probe::probe_script(&self.options.remote_program);
+        let sh = sh_command(&probe::probe_script(&self.options.remote_program));
+        let stdout = self.probe_run(&sh).await?;
+        let mut found = probe::parse_probe(&stdout);
+        if probe::needs_windows_probe(found.as_ref()) {
+            let windows = probe::windows_probe_command(&self.options.remote_program);
+            if let Some(windows) = probe::parse_probe(&self.probe_run(&windows).await?) {
+                found = Some(windows);
+            }
+        }
+        let probe = found.ok_or(SshError::Probe(stdout))?;
+        self.remember(Some(probe.clone()));
+        Ok(probe)
+    }
+
+    /// What one ssh run of `command` printed on stdout; ssh's own failure
+    /// and a run past the authentication limit are errors.
+    async fn probe_run(&self, command: &str) -> Result<String, SshError> {
         let askpass = self.askpass().await?;
-        let argv = self.argv(&script, askpass.is_none()).await?;
+        let argv = self.argv(command, askpass.is_none()).await?;
         let options = self.command_options(askpass.as_ref());
         let output = devlanes_transport_command::run(argv, &options, self.options.auth_timeout)
             .await
@@ -217,11 +238,7 @@ impl SshTransport {
         if let Some(error) = self.ssh_failed(&output) {
             return Err(error);
         }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let probe =
-            probe::parse_probe(&stdout).ok_or_else(|| SshError::Probe(stdout.into_owned()))?;
-        self.remember(Some(probe.clone()));
-        Ok(probe)
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     /// Ends every session this transport started.
@@ -231,16 +248,59 @@ impl SshTransport {
         *sessions = CancellationToken::new();
     }
 
-    /// Runs the session script (probe, sentinel, tunnel) and reads up to the
-    /// tunnel's preamble. A box without devlanes ends the session after the
-    /// probe with [`SshError::NotInstalled`].
+    /// Runs a session (probe, sentinel, tunnel) and reads up to the tunnel's
+    /// preamble. A box without devlanes ends the session after the probe with
+    /// [`SshError::NotInstalled`].
+    ///
+    /// A box known to run Windows gets the PowerShell session; any other gets
+    /// the `sh` one. When the first session to a box fails before its start
+    /// line although the box ran it, as cmd.exe and PowerShell do without an
+    /// `sh`, the PowerShell session follows once (a second authentication).
+    /// If that does not start either, the box is not Windows and the `sh`
+    /// session's error stands. What the box reported is remembered, so later
+    /// sessions go straight to the right one.
     async fn open(&self) -> Result<Prefixed<CommandStream>, SshError> {
-        let token = crate::random_token()?;
+        if self.windows_box() {
+            return self
+                .session(Script::Windows)
+                .await
+                .map_err(|failed| failed.error);
+        }
+        let failed = match self.session(Script::Sh).await {
+            Ok(stream) => return Ok(stream),
+            Err(failed) => failed,
+        };
+        if !failed.refused || self.remembered().is_some() {
+            return Err(failed.error);
+        }
+        match self.session(Script::Windows).await {
+            Ok(stream) => Ok(stream),
+            Err(windows) if windows.started => Err(windows.error),
+            Err(_) => Err(failed.error),
+        }
+    }
+
+    /// Whether the last session or probe found Windows on the box.
+    fn windows_box(&self) -> bool {
+        self.remembered()
+            .is_some_and(|probe| probe.platform.os == probe::WINDOWS)
+    }
+
+    /// One session with the `kind` of script; see [`SshTransport::open`].
+    async fn session(&self, kind: Script) -> Result<Prefixed<CommandStream>, Failed> {
+        let token = crate::random_token().map_err(|error| Failed::before_start(error.into()))?;
         let start = format!("devlanes-probe-{token}");
         let end = format!("devlanes-tunnel-ready-{token}");
-        let script = probe::session_script(&self.options.remote_program, &start, &end);
-        let askpass = self.askpass().await?;
-        let argv = self.argv(&script, askpass.is_none()).await?;
+        let program = &self.options.remote_program;
+        let command = match kind {
+            Script::Sh => sh_command(&probe::session_script(program, &start, &end)),
+            Script::Windows => probe::windows_session_command(program, &start, &end),
+        };
+        let askpass = self.askpass().await.map_err(Failed::before_start)?;
+        let argv = self
+            .argv(&command, askpass.is_none())
+            .await
+            .map_err(Failed::before_start)?;
         let mut options = self.command_options(askpass.as_ref());
         options.ready = Some(Ready {
             line: end.clone(),
@@ -254,19 +314,32 @@ impl SshTransport {
             Ok(opened) => opened,
             // A `close` while ssh authenticated ended this session too.
             Err(_) if closed.is_cancelled() => {
-                return Err(SshError::Io(io::Error::other(
+                return Err(Failed::before_start(SshError::Io(io::Error::other(
                     "the SSH transport was closed",
-                )));
+                ))));
             }
-            Err(error) => return Err(self.session_failed(error, &start, &end)),
+            Err(error) => {
+                let started = after_line(error.output(), &start).is_some();
+                let refused = !started && ran_on_box(&error);
+                return Err(Failed {
+                    error: self.session_failed(error, &start, &end),
+                    started,
+                    refused,
+                });
+            }
+        };
+        let started = |error| Failed {
+            error,
+            started: true,
+            refused: false,
         };
         let lines = lines(&opened.header);
         let probe = probe::parse_session_header(&lines, &start)
-            .ok_or_else(|| SshError::Probe(lines.join("\n")))?;
+            .ok_or_else(|| started(SshError::Probe(lines.join("\n"))))?;
         let missing = probe.program.is_none();
         self.remember(Some(probe));
         if missing {
-            return Err(self.not_installed());
+            return Err(started(self.not_installed()));
         }
         self.connected.store(true, Ordering::Relaxed);
         Ok(opened.stream)
@@ -386,21 +459,21 @@ impl SshTransport {
         options
     }
 
-    /// The ssh run of `script` with `sh -c` on the box, ssh found as
-    /// [`locate_program`] does.
-    async fn argv(&self, script: &str, batch: bool) -> Result<Vec<String>, SshError> {
+    /// The ssh run of the remote `command`, ssh found as [`locate_program`]
+    /// does.
+    async fn argv(&self, command: &str, batch: bool) -> Result<Vec<String>, SshError> {
         let requested = self.options.ssh_program.clone();
         let program = tokio::task::spawn_blocking(move || locate_program(&requested))
             .await
             .map_err(io::Error::other)?
             .map_err(SshError::ProgramMissing)?;
-        Ok(self.command_argv(&program, script, batch))
+        Ok(self.command_argv(&program, command, batch))
     }
 
     /// The whole command: `ssh -T` with keepalives, the connect limit, the
     /// extra options, batch mode without a relay, `--`, the destination and
     /// the remote command.
-    fn command_argv(&self, program: &Path, script: &str, batch: bool) -> Vec<String> {
+    fn command_argv(&self, program: &Path, command: &str, batch: bool) -> Vec<String> {
         let mut args: Vec<String> = vec![
             program.to_string_lossy().into_owned(),
             // No terminal on the box: the tunnel speaks binary over stdio.
@@ -427,8 +500,8 @@ impl SshTransport {
         args.push("--".to_owned());
         args.push(self.destination.clone());
         // ssh joins its remaining arguments into one command for the login
-        // shell, so the script travels as one quoted word.
-        args.push(format!("sh -c {}", sh_quote(script)));
+        // shell, so the command travels as one word.
+        args.push(command.to_owned());
         args
     }
 
@@ -489,6 +562,58 @@ impl Transport for SshTransport {
     async fn connect(&self) -> Result<BoxDuplex, TransportError> {
         Ok(Box::new(self.open().await?))
     }
+}
+
+/// Which session script a connect runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Script {
+    /// [`probe::session_script`] through `sh -c`, for POSIX boxes.
+    Sh,
+    /// [`probe::windows_session_command`], for Windows boxes.
+    Windows,
+}
+
+/// A session that did not reach the tunnel, and how far it got.
+#[derive(Debug)]
+struct Failed {
+    error: SshError,
+    /// The box printed the session's start line, so its shell ran the script.
+    started: bool,
+    /// The box ran the command but never printed the start line: its shell
+    /// could not run the script (cmd.exe or PowerShell without `sh`).
+    refused: bool,
+}
+
+impl Failed {
+    /// A failure before ssh ran, or with nothing learnt about the box.
+    fn before_start(error: SshError) -> Self {
+        Self {
+            error,
+            started: false,
+            refused: false,
+        }
+    }
+}
+
+/// Whether the box ran the command of a session that failed: ssh's own
+/// failure (status 255 with nothing printed), a timeout and a start failure
+/// say nothing about the box's shell.
+fn ran_on_box(error: &CommandError) -> bool {
+    match error {
+        CommandError::Exited { exit, output, .. } => {
+            !(exit.code() == Some(SSH_FAILED) && output.is_empty())
+        }
+        CommandError::Preamble {
+            error: PreambleError::Ended { .. },
+            ..
+        } => true,
+        _ => false,
+    }
+}
+
+/// `script` as the remote command `sh -c '<script>'`.
+fn sh_command(script: &str) -> String {
+    format!("sh -c {}", sh_quote(script))
 }
 
 /// Where the first line that is exactly `line` ends in `output`, after its
@@ -945,6 +1070,134 @@ mod tests {
         .await?
     }
 
+    /// Every byte value, with the line breaks and the Ctrl-Z that text-mode
+    /// pipes would change; it ends with a line break, so the fake's line
+    /// buffered stdout passes all of it on.
+    fn binary_payload() -> Vec<u8> {
+        let mut payload: Vec<u8> = (0..=255).collect();
+        payload.extend_from_slice(b"\r\n\n\r\x1a\x00\x1a\r\n");
+        payload.repeat(64)
+    }
+
+    /// A transport whose fake `ssh` runs the remote command on this machine
+    /// as Win32-OpenSSH's sshd would with the default shell `shell`. That
+    /// shell sees only System32 and Windows PowerShell on `PATH`, so it has
+    /// no `sh`, and `profile` as `USERPROFILE`, where a fake devlanes in
+    /// `.devlanes\bin` serves `tunnel --stdio` by printing the preamble and
+    /// echoing its input.
+    fn local_windows_box(
+        dir: &Path,
+        shell: &str,
+    ) -> Result<SshTransport, Box<dyn std::error::Error>> {
+        let profile = dir.join("profile");
+        let bin = profile.join(r".devlanes\bin");
+        std::fs::create_dir_all(&bin)?;
+        install(
+            &bin,
+            "devlanes",
+            &Behaviour::new()
+                .args(["tunnel", "--stdio"])
+                .stdout(devlanes_transport::TUNNEL_PREAMBLE)
+                .echo_stdin(),
+        )?;
+        let system = devlanes_sys_windows::file::system_directory()?;
+        let path = std::env::join_paths([system.join(r"WindowsPowerShell\v1.0"), system])?;
+        let ssh = install(
+            dir,
+            "ssh",
+            &Behaviour::new().record(dir.join("args")).run_with(
+                shell,
+                [
+                    ("PATH".to_owned(), path.to_string_lossy().into_owned()),
+                    (
+                        "USERPROFILE".to_owned(),
+                        profile.to_string_lossy().into_owned(),
+                    ),
+                ],
+            ),
+        )?;
+        let mut options = SshOptions::new(dir);
+        options.ssh_program = ssh;
+        Ok(SshTransport::new("box", options))
+    }
+
+    /// The remote command of every recorded run, in order.
+    fn remote_commands(dir: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let text = std::fs::read_to_string(dir.join("args"))?;
+        text.lines()
+            .map(|line| {
+                let args: Vec<String> = serde_json::from_str(line)?;
+                Ok(args.last().cloned().unwrap_or_default())
+            })
+            .collect()
+    }
+
+    /// The first connect to a box whose shell is cmd.exe or PowerShell finds
+    /// no `sh`, runs the PowerShell session instead and reaches the tunnel,
+    /// which every byte crosses both ways unchanged. The box is remembered as
+    /// Windows: the probe needs no run, and the next connect starts with the
+    /// PowerShell session.
+    #[tokio::test]
+    async fn windows_boxes_get_the_powershell_session() -> TestResult {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        tokio::time::timeout(Duration::from_secs(180), async {
+            let payload = binary_payload();
+            for shell in ["cmd", "powershell"] {
+                let dir = tempfile::tempdir()?;
+                let transport = local_windows_box(dir.path(), shell)?;
+                for _ in 0..2 {
+                    let stream = transport.connect().await?;
+                    let (mut reader, mut writer) = tokio::io::split(stream);
+                    let sent = payload.clone();
+                    let writing = tokio::spawn(async move { writer.write_all(&sent).await });
+                    let mut echoed = vec![0; payload.len()];
+                    reader.read_exact(&mut echoed).await?;
+                    writing.await??;
+                    assert!(echoed == payload, "{shell}: the bytes changed on the way");
+                }
+                let probe = transport.probe().await?;
+                assert_eq!(probe.platform.os, "windows", "{shell}");
+                let commands = remote_commands(dir.path())?;
+                let kinds: Vec<&str> = commands
+                    .iter()
+                    .map(|command| {
+                        if command.starts_with("sh -c ") {
+                            "sh"
+                        } else if command.starts_with("powershell -NoProfile ") {
+                            "powershell"
+                        } else {
+                            "other"
+                        }
+                    })
+                    .collect();
+                assert_eq!(kinds, ["sh", "powershell", "powershell"], "{shell}");
+                transport.close().await;
+            }
+            Ok(())
+        })
+        .await?
+    }
+
+    /// A Windows box without devlanes is reported like any other, after the
+    /// PowerShell session's probe.
+    #[tokio::test]
+    async fn a_windows_box_without_devlanes_is_reported() -> TestResult {
+        tokio::time::timeout(Duration::from_secs(120), async {
+            let dir = tempfile::tempdir()?;
+            let transport = local_windows_box(dir.path(), "cmd")?;
+            std::fs::remove_dir_all(dir.path().join("profile"))?;
+            let Err(error) = transport.connect().await else {
+                panic!("connected to a box without devlanes");
+            };
+            assert!(error.is_permanent(), "{error}");
+            assert!(error.to_string().contains("not installed"), "{error}");
+            assert_eq!(transport.probe().await?.platform.os, "windows");
+            Ok(())
+        })
+        .await?
+    }
+
     /// A missing client is a permanent error that names the optional feature.
     #[tokio::test]
     async fn a_missing_client_is_reported() -> TestResult {
@@ -988,7 +1241,7 @@ mod tests {
         let script = r#"printf '%s\n' "$p" 'x'"#;
         let argv = transport.command_argv(
             Path::new(r"C:\Windows\System32\OpenSSH\ssh.exe"),
-            script,
+            &sh_command(script),
             true,
         );
         assert_eq!(

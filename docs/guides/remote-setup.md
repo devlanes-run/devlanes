@@ -6,7 +6,7 @@ A box runs its own devlanes and its own lanes. Your machine connects over SSH an
 
 devlanes on the box is an ordinary install. It needs:
 
-- Linux with glibc 2.35 or newer (Debian 12, Ubuntu 22.04 and later, Fedora), x86_64 or arm64; or macOS. Alpine and other musl systems have no release build.
+- Linux with glibc 2.35 or newer (Debian 12, Ubuntu 22.04 and later, Fedora), x86_64 or arm64; or macOS; or Windows 11 24H2 or later (see [Windows boxes](#windows-boxes)). Alpine and other musl systems have no release build.
 - `git`, and Docker if the project has `infra`.
 - The `devlanes` binary on the `PATH` that a non-interactive ssh session gets, or at `~/.devlanes/bin/devlanes`. `remote connect` finds it with `sh -c 'command -v devlanes'`, which does not read `.bashrc` or `.zshrc`.
 
@@ -72,6 +72,25 @@ infra:
 ```
 
 Hidden units stay on the box: their ports are not mirrored and the box refuses streams to them. Everything else that is running or starting is mirrored.
+
+### Windows boxes
+
+A Windows machine is a box through Windows' own OpenSSH Server, an optional feature. In an elevated PowerShell on the box:
+
+```powershell
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+Get-NetFirewallRule -Name OpenSSH-Server-In-TCP   # the feature adds this rule for port 22
+```
+
+If that rule is missing, add it with `New-NetFirewallRule -Name OpenSSH-Server-In-TCP -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22`. Only the ssh port needs a rule: mirrored ports and synced files travel inside the ssh connection. Install devlanes as the user you log in as, as in the [Windows guide](windows.md#install). `install.ps1` puts `%LOCALAPPDATA%\Programs\devlanes` on your user `PATH`, which sshd reads from the registry for every session, so `remote connect` finds it; it also looks for `%USERPROFILE%\.devlanes\bin\devlanes.exe` (`-Dir $env:USERPROFILE\.devlanes\bin`). Log in with a standard account rather than an administrator: an administrator's ssh session is elevated, so its daemon would run every unit as administrator, which `devlanes doctor` warns about.
+
+sshd runs commands with `cmd.exe` unless the `DefaultShell` registry value names another shell. `remote connect` works with cmd.exe, Windows PowerShell, PowerShell 7 and Git Bash: when its `sh` probe finds no `sh`, it asks PowerShell for devlanes and the shell, and quotes the tunnel command for that shell. A Windows client therefore authenticates twice the first time it connects to a Windows box, and once from then on. With cmd.exe as the shell, the path to devlanes must not hold `%`, which cmd.exe would expand.
+
+The daemon a connection starts leaves the ssh session and keeps running after it ends. Without anyone signed in on the box's desktop it runs in the background session, so a unit that opens a window shows nothing, and `devlanes certs trust` there fails as it does over any ssh session; the client serves the box's hostnames with its own CA, so the box needs no trust. `devlanes daemon install` starts the daemon when you sign in on the desktop, not when the machine boots. A box nobody signs in to gets its daemon from the first connection or the first `devlanes` command over ssh, or from a Task Scheduler task that runs `devlanes.exe daemon run` as you at startup. When an ssh server other than Windows' own keeps the daemon inside the session, `remote ls` warns `the box's daemon was started inside this connection's ssh session`; start the daemon in one of those ways instead.
+
+Synced folders come from a Windows box with `/` in their paths and the names as the box stores them. Windows keeps only a read-only attribute, so the box sends new files as `0o644`, or `0o444` when read-only, and leaves the exec bits of files the client already holds alone.
 
 ## On the client
 
@@ -155,7 +174,7 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 
 | Message | Cause | Fix |
 | --- | --- | --- |
-| `devlanes is not installed on hetzner` | not on the ssh `PATH` or in `~/.devlanes/bin` | install it on the box, or move the binary there, then connect again |
+| `devlanes is not installed on hetzner` | not on the ssh `PATH` or in `~/.devlanes/bin` (`%USERPROFILE%\.devlanes\bin` on Windows) | install it on the box, or move the binary there, then connect again |
 | `the devlanes daemon is not running on hetzner` | `remote.start_daemon: false` on the box and its daemon is stopped | `devlanes daemon start` on the box, or `devlanes daemon install` to keep it running; the client keeps retrying |
 | `hetzner: a connection to port 20012 (acme@0:api) failed: the unit is not running on the box` | an `open_failed` warning; `remote ls` shows the same as the port's `last_error` | start the unit on the box |
 | `… failed: nothing on the box accepted it: connection refused` | the unit runs but does not listen on the box's loopback | make it listen on `127.0.0.1`, `::1` or a wildcard address |
@@ -176,6 +195,8 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | `the box's URLs use HTTPS port 8443, which this machine cannot serve: in use by …; open its hostnames on port 443 instead` | another process holds the box's proxy port on the client | stop that process; the client tries the port again every 30 seconds, or at once on `devlanes remote connect` for the box. Until then use the client's own HTTPS port |
 | `the box's URLs use HTTPS port 443, which this machine cannot serve: permission denied (low ports may need privileges); …` | the box's proxy runs on a low port that the client's user may not bind (on macOS the extra port binds loopback only, which needs root below 1024) | on Linux, allow low ports as [Ports 443 and 80](https.md#ports-443-and-80) describes, then `devlanes daemon restart`; otherwise use the client's own HTTPS port |
 | `linger off` | Linux box without `loginctl enable-linger` | run it on the box |
+| `the box's daemon was started inside this connection's ssh session and stops when it ends` | a Windows box whose ssh server does not let the daemon leave the session | start the daemon outside ssh, as [Windows boxes](#windows-boxes) describes |
+| `devlanes on hetzner is C:\…\devlanes.exe, a path cmd.exe cannot run as a command` | the box's shell is cmd.exe and the path holds `%` | install devlanes in another folder |
 | `ssh to hetzner failed (255): Permission denied` | no agent or key for the daemon's ssh | load the key, `devlanes daemon restart`, connect again |
 | `needs_auth` in `remote ls`, a sign-in needed page in the browser | a reconnect asked for a password, passphrase or host key with no `remote connect` attached, or ssh rejected credentials that worked before | `devlanes remote connect hetzner` in a terminal; load the key into an agent so later reconnects need no prompt |
 | `box hetzner needs you to sign in again: … Host key verification failed` | the box's host key changed | check the new key, `ssh-keygen -R hetzner`, then `devlanes remote connect hetzner` |
