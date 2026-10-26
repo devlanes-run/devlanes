@@ -33,6 +33,7 @@ tokio-util = { version = "0.7", features = ["codec", "rt"] }
 tracing = "0.1"
 tempfile = "3"
 windows-sys = { version = "0.61", default-features = false }
+zstd = { version = "0.13", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

@@ -669,10 +669,37 @@ async fn http_get(port: u16, host: &str) -> Option<String> {
         .flatten()
 }
 
+/// A 2.5 MiB synced file of text, bytes zstd cannot shrink (xorshift) and text
+/// again, 1 MiB, 1 MiB and 0.5 MiB. With the tunnel's 1 MiB `CHUNK` that is
+/// three chunks: the first goes compressed, the second raw, and the third raw
+/// too, since the rest of a file goes raw once a chunk does not shrink.
+fn bundle() -> Vec<u8> {
+    const MIB: usize = 1024 * 1024;
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let noise = std::iter::repeat_with(move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 32) as u8
+    });
+    let text = || {
+        b"export const greeting = 'hello';\n"
+            .iter()
+            .copied()
+            .cycle()
+    };
+    text()
+        .take(MIB)
+        .chain(noise.take(MIB))
+        .chain(text().take(MIB / 2))
+        .collect()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// Connect mirrors ports and hostnames (hidden units and foreign hostnames
 /// excluded, a busy local port reported), the box reports its info and lists
-/// the client by id, a folder syncs into the devlanes-owned root, a lane started mid-session gets
+/// the client by id, a folder syncs into the devlanes-owned root (a file in
+/// compressed and raw chunks among them), a lane started mid-session gets
 /// listeners, a reconnect keeps listeners and resends no unchanged file, a failed
 /// link unmirrors, and disconnect cleans up.
 async fn remote_box_end_to_end() {
@@ -686,6 +713,8 @@ async fn remote_box_end_to_end() {
         std::fs::create_dir_all(main.join("ext/js")).expect("ext");
         std::fs::write(main.join("ext/manifest.json"), b"{\"v\":1}").expect("manifest");
         std::fs::write(main.join("ext/js/app.js"), b"console.log(1)").expect("app");
+        let bundle = bundle();
+        std::fs::write(main.join("ext/js/bundle.js"), &bundle).expect("bundle");
         let side = BoxSide::start(&tmp, "box", "29000-29499").await;
         side.h
             .call(Method::Start, json!({}), cx(&main))
@@ -801,6 +830,7 @@ async fn remote_box_end_to_end() {
         // changes and deletions. The box's `to:` is ignored.
         let copied = eventually(SOON, || async {
             (std::fs::read(out.join("js/app.js")).ok()? == b"console.log(1)"
+                && std::fs::read(out.join("js/bundle.js")).ok()? == bundle
                 && !out.join("stale.txt").exists())
             .then_some(())
         })

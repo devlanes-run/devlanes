@@ -109,6 +109,18 @@ devlanes remote connect hetzner     # shows SSH prompts in this terminal, then r
 
 While it waits and the daemon keeps running, the box's ports stay bound and its hostnames answer with a [sign-in needed](../errors/box-sign-in-needed.md) page; after a daemon restart they appear once the box connects. `status --json` lists it under `hosts` with the same `fix`. A box that never connected is different: on the first `remote connect`, rejected credentials fail it for good, unless ssh asked something nobody answered.
 
+### Slow links
+
+devlanes compresses synced files itself: the box sends their contents with zstd wherever that makes them smaller. Mirrored connections (HTTP, database and other TCP traffic) cross ssh as they are. On a slow or high-latency link, turn on ssh's own compression in the box's `Host` block of `~/.ssh/config`:
+
+```text
+Host hetzner
+  HostName 203.0.113.10
+  Compression yes
+```
+
+devlanes doesn't set it for you, because options on the `ssh` command line would override what your `~/.ssh/config` says for that host. Compression costs CPU on both machines and gains nothing on a fast link, so leave it off there. It applies from the next ssh connection to the box: run `devlanes remote disconnect hetzner`, then `remote connect` again.
+
 ### Several boxes
 
 Connect to each box by its own name. Give every machine its own `ports.range`, for example `20000-24999` on the client, `25000-29999` on one box and `30000-32767` on the other, then `devlanes daemon restart` on each; lanes that already have ports keep them until `devlanes lane clean`. When two boxes run the same project, the box you connected first keeps the shared hostnames, and the other box's lane is listed under `skipped_lanes` in `remote ls` until the first one stops serving them or disconnects. When the ranges of two connected boxes overlap, `remote ls` shows a warning on both while they do.
