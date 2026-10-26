@@ -1221,7 +1221,9 @@ mod tests {
     async fn only_a_starting_daemon_is_waited_for() {
         let home = tempfile::tempdir().expect("home");
         let paths = Paths::new(home.path()).expect("paths");
-        std::fs::create_dir_all(&paths.run).expect("run");
+        // A long temporary path puts the Unix socket outside `run`, in a
+        // directory only `prepare` creates.
+        paths.prepare().expect("directories");
         let file = std::fs::File::create(paths.run.join("daemon.lock")).expect("lock file");
         lock_as_the_daemon(&file);
         let mut listener = local::LocalListener::bind(&paths.socket)
