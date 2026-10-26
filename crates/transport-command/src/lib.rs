@@ -216,6 +216,47 @@ impl CommandError {
             Self::Empty { .. } | Self::Spawn { .. } | Self::DaemonStopped { .. } => &[],
         }
     }
+
+    /// The error without the first `bytes` of [`CommandError::output`], for
+    /// a caller that already read them, such as the probe before a
+    /// [`Ready::line`], so the message shows only what came after.
+    pub fn skip_output(self, bytes: usize) -> Self {
+        let rest = |output: Vec<u8>| output.get(bytes..).unwrap_or_default().to_vec();
+        match self {
+            Self::Exited {
+                name,
+                what,
+                exit,
+                output,
+                permanent,
+            } => Self::Exited {
+                name,
+                what,
+                exit,
+                output: rest(output),
+                permanent,
+            },
+            Self::NotReady {
+                what,
+                waited,
+                output,
+            } => Self::NotReady {
+                what,
+                waited,
+                output: rest(output),
+            },
+            Self::Preamble {
+                error,
+                permanent,
+                stderr,
+            } => Self::Preamble {
+                error: map_output(error, rest),
+                permanent,
+                stderr,
+            },
+            other => other,
+        }
+    }
 }
 
 impl From<CommandError> for TransportError {
@@ -506,25 +547,29 @@ fn with_header(error: PreambleError, header: Vec<u8>) -> PreambleError {
     if header.is_empty() {
         return error;
     }
-    let joined = |output: Vec<u8>| [header, output].concat();
+    map_output(error, |output| [header, output].concat())
+}
+
+/// `error` with `change` applied to its output.
+fn map_output(error: PreambleError, change: impl FnOnce(Vec<u8>) -> Vec<u8>) -> PreambleError {
     match error {
         PreambleError::Ended { output } => PreambleError::Ended {
-            output: joined(output),
+            output: change(output),
         },
         PreambleError::TooLong { output } => PreambleError::TooLong {
-            output: joined(output),
+            output: change(output),
         },
         PreambleError::Silent { waited, output } => PreambleError::Silent {
             waited,
-            output: joined(output),
+            output: change(output),
         },
         PreambleError::Protocol { found, output } => PreambleError::Protocol {
             found,
-            output: joined(output),
+            output: change(output),
         },
         PreambleError::Io { source, output } => PreambleError::Io {
             source,
-            output: joined(output),
+            output: change(output),
         },
     }
 }

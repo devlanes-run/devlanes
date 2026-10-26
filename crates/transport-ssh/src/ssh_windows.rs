@@ -277,17 +277,18 @@ impl SshTransport {
     /// anything else is the tunnel's failure. Before it, the failure is ssh's
     /// or the box shell's; see [`SshTransport::ended_early`].
     fn session_failed(&self, error: CommandError, start: &str, end: &str) -> SshError {
-        let lines = lines(error.output());
-        if let Some(at) = lines.iter().position(|line| line == end) {
-            let Some(probe) = probe::parse_session_header(&lines[..at], start) else {
-                return SshError::Probe(lines[..at].join("\n"));
+        if let Some(after) = after_line(error.output(), end) {
+            let lines = lines(&error.output()[..after]);
+            let Some(probe) = probe::parse_session_header(&lines, start) else {
+                return SshError::Probe(lines.join("\n"));
             };
             let missing = probe.program.is_none();
             self.remember(Some(probe));
             return if missing {
                 self.not_installed()
             } else {
-                SshError::Tunnel(Box::new(error))
+                // The message shows what the tunnel printed, not the probe.
+                SshError::Tunnel(Box::new(error.skip_output(after)))
             };
         }
         match error {
@@ -488,6 +489,20 @@ impl Transport for SshTransport {
     async fn connect(&self) -> Result<BoxDuplex, TransportError> {
         Ok(Box::new(self.open().await?))
     }
+}
+
+/// Where the first line that is exactly `line` ends in `output`, after its
+/// line break.
+fn after_line(output: &[u8], line: &str) -> Option<usize> {
+    let mut start = 0;
+    while let Some(length) = output[start..].iter().position(|byte| *byte == b'\n') {
+        let text = &output[start..start + length];
+        if text.strip_suffix(b"\r").unwrap_or(text) == line.as_bytes() {
+            return Some(start + length + 1);
+        }
+        start += length + 1;
+    }
+    None
 }
 
 /// The lines of what the box printed, without their line breaks.
@@ -860,7 +875,7 @@ mod tests {
             error: PreambleError::Ended {
                 output: format!(
                     "{start}\ndevlanes-probe:os=Linux\ndevlanes-probe:arch=x86_64\n\
-                         devlanes-probe:program=/usr/bin/devlanes\n{end}\n"
+                         devlanes-probe:program=/usr/bin/devlanes\n{end}\r\nexec failed\n"
                 )
                 .into_bytes(),
             },
@@ -869,6 +884,12 @@ mod tests {
         };
         let error = transport.session_failed(error, start, end);
         assert!(matches!(error, SshError::Tunnel(_)), "{error:?}");
+        let message = error.to_string();
+        assert!(
+            message.ends_with("the box printed: exec failed"),
+            "{message}"
+        );
+        assert!(!message.contains("devlanes-probe"), "{message}");
         Ok(())
     }
 

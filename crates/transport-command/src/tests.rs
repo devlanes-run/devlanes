@@ -138,6 +138,19 @@ fn headers_lead_the_output_of_a_failure() {
         b"probe\nready\n".to_vec(),
     );
     assert_eq!(error.output(), b"probe\nready\nrest");
+    let error = CommandError::Preamble {
+        error,
+        permanent: false,
+        stderr: String::new(),
+    }
+    .skip_output(b"probe\nready\n".len());
+    assert_eq!(error.output(), b"rest");
+    let gone = with_output(
+        exit_error("acme", "x", &exit(1, "")).expect("an error"),
+        b"short".to_vec(),
+        false,
+    );
+    assert!(gone.skip_output(99).output().is_empty());
 }
 
 /// The first connect yields a pipe that fails like a tunnel whose box daemon

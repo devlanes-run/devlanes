@@ -851,6 +851,7 @@ pub trait RemotePrompter: Send + Sync {
 
 /// A transport to one box, from [`RemoteConnector::transport`].
 pub struct RemoteTransport {
+    /// Opens one pipe to the box per connect.
     pub transport: Arc<dyn devlanes_transport::Transport>,
     /// Transport name recorded in `remote_hosts` and shown by `remote ls`,
     /// such as `ssh` or `command`.
