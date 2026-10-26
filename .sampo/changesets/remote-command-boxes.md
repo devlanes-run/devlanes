@@ -5,6 +5,7 @@ cargo/devlanes-config: patch
 cargo/devlanes-daemon: patch
 cargo/devlanes-transport-command: patch
 cargo/devlanes-transport-ssh: patch
+cargo/devlanes-tui: patch
 ---
 
 Added `remote.boxes.<name>.command` to the user config, so `devlanes remote connect <name>` reaches a container, pod, WSL distribution or codespace by running a command such as `docker exec` instead of SSH.
