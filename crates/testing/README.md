@@ -57,6 +57,8 @@ let mise = install(
 
 Helpers perform blocking work; `TestRepo` requires Git on PATH and disables global Git configuration and hooks. `TestHome::configure` sets home variables on a command without changing the caller's environment. Temporary directories are removed on drop, so stop owned processes first.
 
+`no_window(&mut command)` sets `CREATE_NO_WINDOW` on Windows and does nothing elsewhere. Use it for shells and other console programs a test starts itself: when the test run has no console (some agents and IDEs start it that way), each of them would otherwise open a window.
+
 Server descendants deliberately survive parent termination. Tests must clean them up and supply an exit deadline as a fallback. Clear the subprocess environment before testing `--print-env` to avoid recording credentials.
 
 ## License

@@ -34,3 +34,6 @@ devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
 devlanes-sys = { path = "../sys" }
+
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-testing = { path = "../testing" }
