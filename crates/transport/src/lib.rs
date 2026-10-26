@@ -9,7 +9,10 @@
 //!   registry snapshot, registry events and pings (every 10 s, dead after 20 s
 //!   without a pong);
 //! - data streams to registered endpoints ([`Session::open`]);
-//! - sync subscriptions ([`Session::subscribe_sync`]).
+//! - sync subscriptions ([`Session::subscribe_sync`]). With [`SYNC_ZSTD`], the
+//!   box compresses file chunks and the client its input values where zstd
+//!   makes them smaller, and the other end decompresses them, so sync sources
+//!   and their clients only see file bytes and values.
 //!
 //! [`PROTOCOL_VERSION`] must match exactly on both ends and changes only for
 //! breaking changes. Anything additive is a named feature instead: each end
@@ -59,5 +62,5 @@ pub use transport::{
     BoxDuplex, BoxError, Duplex, EXIT_DAEMON_STOPPED, Joined, Transport, TransportError, stdio,
 };
 pub use wire::{
-    BoxInfo, DialTarget, FEATURES, PROTOCOL_VERSION, Prefixed, RejectReason, WireError,
+    BoxInfo, DialTarget, FEATURES, PROTOCOL_VERSION, Prefixed, RejectReason, SYNC_ZSTD, WireError,
 };

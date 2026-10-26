@@ -21,3 +21,4 @@ tokio.workspace = true
 tokio-util = { workspace = true, features = ["compat"] }
 tracing.workspace = true
 yamux = "0.14"
+zstd.workspace = true

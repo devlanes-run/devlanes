@@ -16,7 +16,7 @@ use crate::sync::SyncSubscription;
 use crate::transport::{BoxDuplex, Transport, TransportError};
 use crate::wire::{
     self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, OpenReply,
-    OpenRequest, PROTOCOL_VERSION, Prefixed, RejectReason, WireError, negotiate,
+    OpenRequest, PROTOCOL_VERSION, Prefixed, RejectReason, SYNC_ZSTD, WireError, negotiate,
 };
 
 /// Liveness and handshake limits shared by both ends.
@@ -320,7 +320,7 @@ impl Session {
     /// Starts a sync subscription; the request is opaque to the transport.
     pub async fn subscribe_sync(&self, request: Value) -> Result<SyncSubscription, SessionError> {
         let channel = self.open_stream(&OpenRequest::Sync { request }).await?;
-        Ok(SyncSubscription::new(channel))
+        Ok(SyncSubscription::new(channel, self.has_feature(SYNC_ZSTD)))
     }
 
     /// Returns the end reason once the session ended.

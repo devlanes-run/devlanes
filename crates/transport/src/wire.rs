@@ -32,7 +32,11 @@ pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Additive protocol features this build implements, listed by both ends in the
 /// handshake. A side uses a feature only when the other side lists it too.
-pub const FEATURES: &[&str] = &[];
+pub const FEATURES: &[&str] = &[SYNC_ZSTD];
+
+/// Sync chunks from the box and input values from the client may travel
+/// compressed with zstd; each end lists it when it can decompress them.
+pub const SYNC_ZSTD: &str = "sync_zstd";
 
 /// Names in both lists, sorted and without repeats: the features a session uses.
 pub(crate) fn negotiate(ours: &[String], theirs: &[String]) -> Vec<String> {
@@ -360,6 +364,9 @@ pub(crate) enum SyncFrame {
         path: String,
         offset: u64,
         last: bool,
+        /// Raw for boxes without [`SYNC_ZSTD`], which leave it out.
+        #[serde(default, skip_serializing_if = "PayloadEncoding::is_raw")]
+        encoding: PayloadEncoding,
     },
     Delete {
         path: String,
@@ -370,6 +377,26 @@ pub(crate) enum SyncFrame {
     End,
 }
 
+/// How a sync frame carries its data: a chunk's file bytes, or the JSON of a
+/// client input value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PayloadEncoding {
+    /// As they are: chunk bytes in the payload, input values in the header.
+    #[default]
+    Raw,
+    /// One zstd frame in the payload; `size` is the decompressed length, which
+    /// the receiver allows decompression to produce and nothing more.
+    Zstd { size: u64 },
+}
+
+impl PayloadEncoding {
+    /// Whether the data travels as it is.
+    fn is_raw(&self) -> bool {
+        *self == Self::Raw
+    }
+}
+
 /// Client frames on a sync stream after the request, such as manifest batches.
 ///
 /// EOF without `EndInput` means the client left, which cancels the subscription:
@@ -378,7 +405,14 @@ pub(crate) enum SyncFrame {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum SyncClientFrame {
-    Input { value: Value },
+    Input {
+        /// Null when the payload carries it compressed.
+        #[serde(default)]
+        value: Value,
+        /// Raw for clients without [`SYNC_ZSTD`], which leave it out.
+        #[serde(default, skip_serializing_if = "PayloadEncoding::is_raw")]
+        encoding: PayloadEncoding,
+    },
     EndInput,
 }
 
@@ -395,13 +429,67 @@ mod tests {
             path: "a/b".into(),
             offset: 7,
             last: true,
+            encoding: PayloadEncoding::Zstd { size: 9 },
         };
         send_with_payload(&mut a, &message, Bytes::from_static(&[0, 255, 1])).await?;
-        let Some((SyncFrame::Chunk { path, offset, last }, payload)) = recv(&mut b).await? else {
+        let Some((
+            SyncFrame::Chunk {
+                path,
+                offset,
+                last,
+                encoding,
+            },
+            payload,
+        )) = recv(&mut b).await?
+        else {
             panic!("chunk frame changed kind");
         };
         assert_eq!((path.as_str(), offset, last), ("a/b", 7, true));
+        assert_eq!(encoding, PayloadEncoding::Zstd { size: 9 });
         assert_eq!(payload.as_ref(), &[0, 255, 1]);
+        Ok(())
+    }
+
+    /// Raw chunks look as they did before `sync_zstd`, so either end may lack it.
+    #[test]
+    fn raw_chunks_leave_the_encoding_out() -> Result<(), serde_json::Error> {
+        let raw = SyncFrame::Chunk {
+            path: "a".into(),
+            offset: 0,
+            last: true,
+            encoding: PayloadEncoding::Raw,
+        };
+        let encoded = serde_json::to_value(&raw)?;
+        assert_eq!(
+            encoded,
+            serde_json::json!({"type": "chunk", "path": "a", "offset": 0, "last": true})
+        );
+        let decoded: SyncFrame = serde_json::from_value(encoded)?;
+        assert!(matches!(
+            decoded,
+            SyncFrame::Chunk {
+                encoding: PayloadEncoding::Raw,
+                ..
+            }
+        ));
+        let zstd = SyncFrame::Chunk {
+            path: "a".into(),
+            offset: 0,
+            last: true,
+            encoding: PayloadEncoding::Zstd { size: 5 },
+        };
+        assert_eq!(
+            serde_json::to_value(&zstd)?["encoding"],
+            serde_json::json!({"zstd": {"size": 5}})
+        );
+        let input = SyncClientFrame::Input {
+            value: serde_json::json!({"files": []}),
+            encoding: PayloadEncoding::Raw,
+        };
+        assert_eq!(
+            serde_json::to_value(&input)?,
+            serde_json::json!({"type": "input", "value": {"files": []}})
+        );
         Ok(())
     }
 

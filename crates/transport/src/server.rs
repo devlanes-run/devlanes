@@ -20,7 +20,7 @@ use crate::sync::{self, SyncSource};
 use crate::transport::{BoxDuplex, BoxError, Duplex};
 use crate::wire::{
     self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, OpenReply,
-    OpenRequest, PROTOCOL_VERSION, RejectReason, WireError, negotiate,
+    OpenRequest, PROTOCOL_VERSION, RejectReason, SYNC_ZSTD, WireError, negotiate,
 };
 
 /// Connects to an authorized endpoint on the box.
@@ -144,6 +144,8 @@ struct StreamContext {
     services: BoxServices,
     handshake_timeout: Duration,
     dial_timeout: Duration,
+    /// Whether sync chunks may go out compressed, as negotiated with this client.
+    sync_zstd: bool,
     /// Open data streams, closed when their target stops being authorized.
     open: Mutex<HashMap<u64, (DialTarget, CancellationToken)>>,
     next_stream: AtomicU64,
@@ -269,6 +271,7 @@ where
         services,
         handshake_timeout: timing.handshake_timeout,
         dial_timeout: options.dial_timeout,
+        sync_zstd: peer.has_feature(SYNC_ZSTD),
         open: Mutex::new(HashMap::new()),
         next_stream: AtomicU64::new(0),
     });
@@ -353,7 +356,8 @@ async fn handle_stream(stream: MuxStream, context: Arc<StreamContext>) {
     match open {
         OpenRequest::Control { .. } => tracing::warn!("ignoring a second control stream"),
         OpenRequest::Sync { request } => {
-            sync::serve_subscription(channel, request, context.services.sync.clone()).await;
+            let source = context.services.sync.clone();
+            sync::serve_subscription(channel, request, source, context.sync_zstd).await;
         }
         OpenRequest::Data { target } => serve_data(channel, target, &context).await,
     }
