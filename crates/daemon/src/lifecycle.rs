@@ -3108,8 +3108,16 @@ impl Inner {
     async fn containers_ready(&self, lane: &LaneRt, spec: &InfraSpec) -> Result<(), RpcError> {
         let mut env: EnvMap = lane.st().env.as_deref().cloned().unwrap_or_default();
         env.extend(spec.env.clone());
+        // `up` just listed every plain container here under its Docker name.
+        let dockers: BTreeMap<String, String> = lane
+            .st()
+            .infra_containers
+            .iter()
+            .map(|container| (container.name.clone(), container.docker.clone()))
+            .collect();
         let checks = spec.containers.iter().filter_map(|container| {
             let ready = container.ready.as_ref()?;
+            let docker = dockers.get(&container.name);
             let ports: Vec<(String, u16)> = container
                 .ports
                 .iter()
@@ -3120,12 +3128,30 @@ impl Inner {
                 .collect();
             let env = &env;
             Some(async move {
+                // A failed read counts as no output yet, so the check polls again.
                 let logs = || async {
-                    self.integ
-                        .infra
-                        .container_logs(spec, &container.name, 200)
-                        .await
-                        .unwrap_or_default()
+                    let Some(docker) = docker else {
+                        return Vec::new();
+                    };
+                    let options = crate::integrations::ContainerLogOptions {
+                        tail: Some(200),
+                        ..Default::default()
+                    };
+                    let Ok(mut stream) = self.integ.infra.container_logs(docker, options).await
+                    else {
+                        return Vec::new();
+                    };
+                    let mut bytes = Vec::new();
+                    while let Some(chunk) = stream.next().await {
+                        match chunk {
+                            Ok(chunk) => bytes.extend_from_slice(&chunk.bytes),
+                            Err(_) => return Vec::new(),
+                        }
+                    }
+                    String::from_utf8_lossy(&bytes)
+                        .lines()
+                        .map(str::to_owned)
+                        .collect()
                 };
                 #[cfg(unix)]
                 let check =

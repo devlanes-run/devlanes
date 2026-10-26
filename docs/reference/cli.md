@@ -496,6 +496,19 @@ Show the containers' health and ports
 devlanes infra status [OPTIONS]
 ```
 
+### devlanes infra logs
+
+Print a container's Docker logs; replicas of a compose service are merged
+
+```text
+devlanes infra logs [OPTIONS] <CONTAINER>
+```
+
+- `<CONTAINER>`: Compose service or infra.containers name
+- `-n, --tail <N>`: Show the last N lines
+  Default: `200`.
+- `-f, --follow`: Keep streaming new lines, also across container restarts; agent mode requires --timeout
+
 ### devlanes config
 
 Validate devlanes.yaml

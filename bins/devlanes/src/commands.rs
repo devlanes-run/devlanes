@@ -591,7 +591,10 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                 Method::Start | Method::Restart | Method::Wait | Method::Resume | Method::Run
             )
     });
-    let open_ended = matches!(method, Method::Logs | Method::Subscribe | Method::Status);
+    let open_ended = matches!(
+        method,
+        Method::Logs | Method::InfraLogs | Method::Subscribe | Method::Status
+    );
     // The tab's progress bar while a start is followed; a no-op otherwise.
     let progress = crate::progress::Follower::start(runtime, &request);
     let id = client
@@ -1035,6 +1038,9 @@ fn streamed_output(request: &Request) -> Option<Option<Hint>> {
         Method::Logs if params.get("follow").and_then(Value::as_bool) == Some(true) => {
             Some(more_hint(Method::Logs, request))
         }
+        Method::InfraLogs if params.get("follow").and_then(Value::as_bool) == Some(true) => {
+            Some(None)
+        }
         Method::Run if params.get("detach").and_then(Value::as_bool) != Some(true) => Some(None),
         // Watches and event streams share the agent's output budget too.
         Method::Status if params.get("watch").and_then(Value::as_bool) == Some(true) => Some(None),
@@ -1067,14 +1073,28 @@ fn scoped(request: &Request, args: &[&str]) -> Hint {
 
 /// Truncated logs say how to get the rest.
 fn more_hint(method: Method, request: &Request) -> Option<Hint> {
-    (method == Method::Logs).then(|| {
-        let units = request.params.get("units").and_then(Value::as_array);
-        let unit = units
-            .and_then(|u| u.first())
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        scoped_logs(request, &[unit, "--tail", "500"])
-    })
+    match method {
+        Method::Logs => {
+            let units = request.params.get("units").and_then(Value::as_array);
+            let unit = units
+                .and_then(|u| u.first())
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            Some(scoped_logs(request, &[unit, "--tail", "500"]))
+        }
+        Method::InfraLogs => {
+            let container = request
+                .params
+                .get("container")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            Some(scoped(
+                request,
+                &["infra", "logs", container, "--tail", "1000"],
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Common hints for daemon error codes; the CLI owns all wording.
@@ -1101,6 +1121,7 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
         // What this command accepts, rather than every lane.
         "not_found" => match request.method {
             Method::Run => Some(Hint::command(["run", "--list"])),
+            Method::InfraLogs => Some(scoped(request, &["infra", "status"])),
             Method::Logs
             | Method::Env
             | Method::Why
