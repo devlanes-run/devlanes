@@ -170,12 +170,14 @@ pub enum Method {
     /// past the raw ring.
     ///
     /// Every unit and lane row also has `series`, the stable key of its
-    /// history (unique per row), `ended` and `removed`. `ended` rows belong to
-    /// units, containers and lanes that are not running now; they have no
+    /// history (unique per row; `null` for a unit of a lane that has no
+    /// record yet), `ended` and `removed`. `ended` rows belong to units,
+    /// containers and lanes that are not running now; they have no
     /// `cpu_percent` or `memory_bytes` and are sent only while their newest
-    /// sample is inside the range, so a client's graphs keep their past.
-    /// `removed` rows belong to a lane that no longer exists, whose reference
-    /// may already name a new lane.
+    /// sample is inside the range, so a client's graphs keep their past. Lane
+    /// rows of existing lanes are the exception and always go out. `removed`
+    /// rows belong to a lane that no longer exists, whose reference may
+    /// already name a new lane.
     ///
     /// `system.history` rows are `[ts_ms, cpu_percent?, available_memory_bytes?,
     /// level?]`, where `level` is the memory pressure at that tick: 0 normal,

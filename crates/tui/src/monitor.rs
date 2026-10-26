@@ -73,6 +73,10 @@ pub enum MonitorId {
     Row {
         lane: String,
         unit: String,
+        /// The daemon's series key. Two lanes cleaned under one reference
+        /// share a `(removed)` group, and without it their rows would have one
+        /// id, which pins the selection to the first of them.
+        series: Option<String>,
     },
     /// The devlanes daemon's own row.
     Daemon,
@@ -185,7 +189,8 @@ pub struct Entry {
     pub label: String,
     /// `svc`, `task`, `exec` or `ctr`.
     pub kind: &'static str,
-    /// The shown state word, `up` for containers without one.
+    /// The shown state word; containers without one read `up`, or `stopped`
+    /// once ended.
     pub state: String,
     pub started_at_ms: Option<u64>,
     /// The listed unit, for its glyph and color.
@@ -255,6 +260,7 @@ impl MonitorRow {
             Self::Entry(entry) => MonitorId::Row {
                 lane: entry.lane.clone(),
                 unit: entry.unit.clone(),
+                series: entry.metrics.series.clone(),
             },
             Self::Daemon(_) => MonitorId::Daemon,
         }
@@ -303,7 +309,7 @@ fn sources(metrics: Option<&Metrics>, lanes: &[LaneSummary]) -> Vec<UnitMetrics>
 }
 
 /// A metrics row with what lane status knows about it. Ended rows without a
-/// summary to ask read `stopped` and have no uptime.
+/// summary to ask read `stopped`; no ended row has an uptime.
 fn entry(row: UnitMetrics, lanes: &[LaneSummary]) -> Entry {
     // A removed row's reference may already name a newer lane, whose units
     // and containers say nothing about this row.
@@ -580,11 +586,13 @@ pub fn rows(
     // Lane series match by group key too, so a removed lane's header shows
     // its own series and not the newer lane's under the same reference.
     let lane_metrics = |key: &str| {
-        metrics.and_then(|m| {
-            m.lanes
-                .iter()
-                .find(|l| group_key(&l.lane, l.removed) == key)
-        })
+        let mut found = metrics
+            .into_iter()
+            .flat_map(|m| m.lanes.iter())
+            .filter(|l| group_key(&l.lane, l.removed) == key);
+        // Two lanes cleaned under one reference share a group, and neither
+        // series is its total; the header sums its rows instead.
+        found.next().filter(|_| found.next().is_none())
     };
     let mut groups: Vec<(Group, Vec<&Entry>)> = keys
         .into_iter()
@@ -874,7 +882,8 @@ mod tests {
             view.selected,
             Some(MonitorId::Row {
                 lane: "acme@1 (removed)".into(),
-                unit: "web".into()
+                unit: "web".into(),
+                series: Some("unit:1:2:web".into()),
             })
         );
         // Its history left the range: the row and its group go, and the
@@ -975,7 +984,8 @@ mod tests {
             view.selected,
             Some(MonitorId::Row {
                 lane: "acme@1".into(),
-                unit: "web".into()
+                unit: "web".into(),
+                series: None,
             })
         );
         // api calms down; web on acme@1 moves to the top and the cursor follows.

@@ -55,8 +55,8 @@ pub(crate) struct MetricsState {
     /// so containers that went away drop out.
     pub containers: BTreeMap<Subject, ContainerRow>,
     /// Row labels of unit, lane and container series as of their last sample,
-    /// so `metrics` can still send rows for units, lanes and containers that
-    /// stopped or went away. Keyed by series, not by lane reference, because a
+    /// so `metrics` can still send rows for what stopped or went away. Keyed
+    /// by series, not by lane reference, because a
     /// cleaned lane's reference can come back on a new lane. Pruned with the
     /// series.
     pub labels: BTreeMap<Subject, Label>,
@@ -157,7 +157,8 @@ pub(crate) enum Label {
         /// Lane reference.
         lane: String,
     },
-    /// The container's row with `latest` cleared, since a label is no reading.
+    /// The container's row with `latest` cleared, so a gone container never
+    /// reports a reading.
     Container(ContainerRow),
 }
 
@@ -603,10 +604,15 @@ impl Inner {
             if unit.state == "idle" || unit.state == "stopped" || unit.state == "exited" {
                 continue;
             }
-            if let Some((cpu, memory)) = state
-                .latest
-                .get(&(summary.reference.clone(), unit.name.clone()))
-            {
+            let key = (summary.reference.clone(), unit.name.clone());
+            // `latest` outlives a unit that stopped (it is no target any more,
+            // so nothing clears it) and a cleaned lane whose reference a new
+            // lane took; only a sample of the latest tick is current.
+            let current = state
+                .subjects
+                .get(&key)
+                .is_some_and(|subject| state.sampled.contains(subject));
+            if let Some((cpu, memory)) = state.latest.get(&key).filter(|_| current) {
                 unit.cpu_percent = Some(*cpu);
                 unit.memory_bytes = Some(*memory);
             }
@@ -1119,9 +1125,16 @@ fn container_entries(state: &MetricsState, view: &View, current: &BTreeSet<LaneI
         .collect();
     rows.iter()
         .map(|(subject, row)| {
+            // Same lane id too: a cleaned lane's container and the one of the
+            // new lane that took its reference share group and name, and are
+            // no replicas of each other.
             let replicas = rows
                 .iter()
-                .filter(|(_, other)| other.group == row.group && other.name == row.name)
+                .filter(|(other_subject, other)| {
+                    other.group == row.group
+                        && other.name == row.name
+                        && other_subject.lane() == subject.lane()
+                })
                 .count();
             let unit = if replicas > 1 { &row.docker } else { &row.name };
             let series = state.history.series(subject);
@@ -1360,7 +1373,8 @@ mod tests {
 
     /// Listed containers with a reading are live; listed ones without and
     /// gone ones are ended while in range, gone per-lane ones of a lane
-    /// without a record are `removed`, and ended rows count as replicas.
+    /// without a record are `removed`, and ended rows count as replicas only
+    /// within their own lane.
     #[test]
     fn container_rows_keep_ended_and_gone_containers_in_range() {
         let now = 100_000;
@@ -1383,6 +1397,11 @@ mod tests {
                 container(Some(1), "old-1"),
                 container_row("old", "old-1", "acme@0", None),
             ),
+            // Lane 3 took lane 2's reference after lane 2 was cleaned.
+            (
+                container(Some(3), "cache-1"),
+                container_row("cache", "cache-1", "acme@1", Some((1.0, 1))),
+            ),
         ];
         for (subject, row) in listed {
             let ts = if row.name == "old" { 50_000 } else { 99_000 };
@@ -1403,7 +1422,7 @@ mod tests {
             state.history.record(&sample(subject.clone(), 95_000));
             state.labels.insert(subject, Label::Container(row));
         }
-        let current = BTreeSet::from([LaneId(1)]);
+        let current = BTreeSet::from([LaneId(1), LaneId(3)]);
         let rows = container_entries(&state, &last_ten_seconds(now), &current);
         let rows: Vec<(String, String, bool, bool)> = rows
             .iter()
@@ -1422,6 +1441,8 @@ mod tests {
             [
                 ("acme@0".into(), "db-1".into(), false, false),
                 ("acme@0".into(), "db-2".into(), true, false),
+                // Not replicas of the cleaned lane's `cache`: both keep the name.
+                ("acme@1".into(), "cache".into(), false, false),
                 ("acme (shared)".into(), "shared".into(), true, false),
                 ("acme@1".into(), "cache".into(), true, true),
             ]

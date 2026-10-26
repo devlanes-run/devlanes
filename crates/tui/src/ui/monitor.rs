@@ -1507,7 +1507,8 @@ fn entry_line(
                 spans.push(Span::raw(format!("{text:>width$} ")));
             }
             Column::Spark => {
-                // By series, as the total's parts are (see `total_series`).
+                // A newer lane under the same reference must not get this
+                // row's cached columns.
                 let key = format!("spark:{}", entry.metrics.series_key());
                 spans.extend(sparkline(page, &key, &entry.metrics.history, width, 100.0));
                 spans.push(Span::raw(" "));

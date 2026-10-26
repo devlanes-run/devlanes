@@ -112,6 +112,7 @@ async fn the_sort_steps_reverses_and_the_selection_follows_its_row() -> TestResu
     let web = MonitorId::Row {
         lane: "acme@0".into(),
         unit: "web".into(),
+        series: None,
     };
     assert_eq!(app.monitor.selected, Some(web.clone()));
     // web gets busy and moves up; the cursor goes with it.
@@ -579,7 +580,8 @@ async fn stopped_and_removed_lanes_keep_their_rows_but_no_meters() -> TestResult
         app.monitor.selected,
         Some(MonitorId::Row {
             lane: "acme@4 (removed)".into(),
-            unit: "search".into()
+            unit: "search".into(),
+            series: Some("unit:1:5:search".into()),
         })
     );
     assert!(app.update(key(KeyCode::Char('x'))).is_empty());
@@ -615,5 +617,50 @@ async fn two_removed_lanes_with_one_reference_do_not_share_columns() -> TestResu
     let fresh = monitor(120, 40, second).await;
     assert_eq!(after, oldest_cpu_columns(&fresh)?);
     assert_ne!(after, busy);
+    Ok(())
+}
+
+#[tokio::test]
+async fn two_removed_lanes_in_one_reply_keep_their_rows_apart() -> TestResult {
+    // Both acme@1 lanes were cleaned within the range: one `(removed)` group
+    // holds a `web` of each.
+    let mut data = with_lanes(vec![
+        lane("acme@1", "lane:1:2", 300.0, NOW - 30_000, true),
+        lane("acme@1", "lane:1:3", 0.0, NOW - 10_000, true),
+    ]);
+    let web = |series: &str, until: u64| UnitMetrics {
+        lane: "acme@1".into(),
+        unit: "web".into(),
+        kind: "service".into(),
+        history: history(NOW, 50.0, 100 << 20)
+            .into_iter()
+            .filter(|p| p.0 <= until)
+            .collect(),
+        series: Some(series.into()),
+        ended: true,
+        removed: true,
+        ..UnitMetrics::default()
+    };
+    data.units = vec![
+        web("unit:1:2:web", NOW - 30_000),
+        web("unit:1:3:web", NOW - 10_000),
+    ];
+    let mut app = monitor(120, 40, data).await;
+    let rows = app.monitor_rows();
+    let Some(devlanes_tui::app::MonitorRow::Group(group)) = rows.first() else {
+        return Err("no group first".into());
+    };
+    // Neither lane series is the group's total, so the header sums its rows.
+    assert_eq!(
+        (group.key.as_str(), group.series.as_deref()),
+        ("acme@1 (removed)", None)
+    );
+    assert_ne!(rows[1].id(), rows[2].id(), "one id would pin the selection");
+    // `j` reaches the second `web` and stays there.
+    app.update(key(KeyCode::Char('g')));
+    app.update(key(KeyCode::Char('j')));
+    app.update(key(KeyCode::Char('j')));
+    assert_eq!(app.monitor.index, 2);
+    assert_eq!(app.monitor.selected, Some(rows[2].id()));
     Ok(())
 }

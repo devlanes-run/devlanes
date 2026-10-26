@@ -551,6 +551,7 @@ fn scenes() -> Vec<Scene> {
                 f.app.monitor.selected = Some(MonitorId::Row {
                     lane: "acme@1 (removed)".into(),
                     unit: "web-app".into(),
+                    series: Some("unit:1:7:web-app".into()),
                 });
                 f.send(Msg::Metrics(Ok(data::metrics_with_ended())));
                 // A frame tells the keys how many rows the table shows, and
