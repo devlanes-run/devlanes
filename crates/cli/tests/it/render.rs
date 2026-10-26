@@ -2209,7 +2209,7 @@ fn boxes_that_need_a_sign_in_name_the_command() {
     assert!(
         rendered
             .stderr
-            .contains("hetzner needs you to sign in again: Permission denied (publickey)."),
+            .contains("box hetzner needs you to sign in again: Permission denied (publickey)."),
         "{}",
         rendered.stderr
     );

@@ -973,7 +973,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         "remote_needs_auth" => {
             let host = text(data, "host");
             (
-                with_message(format!("{host} needs you to sign in again")),
+                with_message(format!("box {host} needs you to sign in again")),
                 Some(Hint::command(["remote", "connect", host.as_str()])),
             )
         }

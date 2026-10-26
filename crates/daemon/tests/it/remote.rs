@@ -273,8 +273,8 @@ impl Gate {
 struct Controls {
     /// While set, connecting asks for [`PASSWORD`] first.
     sign_in: AtomicBool,
-    /// `connected_before` of every transport handed out, in order.
-    handed_out: std::sync::Mutex<Vec<bool>>,
+    /// Box name and `connected_before` of every transport handed out, in order.
+    handed_out: std::sync::Mutex<Vec<(String, bool)>>,
     /// Holds the connector before it hands out a transport, which is where
     /// the daemon opens a link.
     open: Gate,
@@ -303,7 +303,7 @@ impl RemoteConnector for MemoryConnector {
                     .handed_out
                     .lock()
                     .expect("handed out")
-                    .push(connected_before);
+                    .push((host.to_owned(), connected_before));
                 Ok(Arc::new(SignIn {
                     host: host.to_owned(),
                     inner: transport.clone(),
@@ -562,22 +562,6 @@ impl ClientSide {
             .await
             .expect("connect");
         assert_eq!(connected["state"], "connected", "{connected}");
-    }
-
-    /// Waits until the daemon recorded the connection to box `name`, which it
-    /// does in the background after the link connected. A daemon stopped
-    /// before that does not restore the box.
-    async fn recorded(&self, name: &str) {
-        let recorded = eventually(SOON, || async {
-            let host = self.host_named(name).await;
-            host["last_connected_ms"].is_number().then_some(())
-        })
-        .await;
-        assert!(
-            recorded.is_some(),
-            "the connection was recorded: {}",
-            self.host_named(name).await
-        );
     }
 
     /// Box ports this client mirrors.

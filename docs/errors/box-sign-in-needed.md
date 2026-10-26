@@ -11,7 +11,7 @@ sidebar:
 
 ```sh
 devlanes remote ls                  # the box shows needs_auth with SSH's error
-devlanes remote connect my-box      # answers SSH prompts in this terminal and reconnects
+devlanes remote connect my-box      # shows SSH prompts in this terminal, then reconnects
 ```
 
-When SSH reports a changed host key, check the key with whoever runs the box, update `~/.ssh/known_hosts` (`ssh-keygen -R <host>`), then run `devlanes remote connect` again. Loading the key into an SSH agent, or a key without a passphrase, lets later reconnects run without a prompt. See [remote boxes](../remote.md).
+When SSH reports a changed host key, check the key with whoever runs the box, update `~/.ssh/known_hosts` (`ssh-keygen -R <host>`), then run `devlanes remote connect` again. A key in an SSH agent, or one without a passphrase, lets later reconnects run without a prompt. See [remote boxes](../remote.md).

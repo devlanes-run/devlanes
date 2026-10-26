@@ -147,8 +147,10 @@ impl ErrorCode {
     /// How bad the error is.
     pub fn severity(self) -> Severity {
         match self {
-            Self::ServiceIdle | Self::BoxSignInNeeded => Severity::Info,
-            Self::ServiceStarting | Self::BoxReconnecting => Severity::Warning,
+            Self::ServiceIdle => Severity::Info,
+            Self::ServiceStarting | Self::BoxReconnecting | Self::BoxSignInNeeded => {
+                Severity::Warning
+            }
             _ => Severity::Error,
         }
     }

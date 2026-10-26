@@ -15,6 +15,7 @@ anyhow = "1"
 base64 = "0.22"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
+diesel = { version = "2.3", default-features = false, features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
 # `std::fs::canonicalize` on Unix; on Windows it avoids the `\\?\` form Git and
 # most tools cannot use.
 dunce = "1"

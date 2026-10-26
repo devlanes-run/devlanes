@@ -71,7 +71,7 @@ fn warns(host: &Value, text: &str) -> bool {
 
 // Port ranges: every test in this binary that binds real ports takes its own
 // fixed range, so concurrent tests never hand out the same number. The ones
-// here use 21000-22999, 27500-27999 and 30000-32767.
+// here use 21000-21499, 22000-22999, 27500-27999 and 30000-32767.
 
 #[tokio::test(flavor = "multi_thread")]
 /// Two boxes running the same project: the box connected later skips its lane
