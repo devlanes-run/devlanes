@@ -25,7 +25,7 @@ async fn connect(home: &std::path::Path, relay: Arc<dyn PromptRelay>) -> Result<
 - `SshOptions::new(devlanes_home)`: control files under `<home>/run/ssh`, extra `-o` options, askpass, and `connected_before` for a box that connected in an earlier daemon.
 - `PromptRelay`: shows ssh prompts to the attached client.
 - `SshError::is_permanent`: separates rejected credentials or a missing binary from network failures and a stopped box daemon.
-- `SshError::needs_auth`: rejected credentials or a host key failure on a box that connected before, which `devlanes_transport::Link` waits on until a person signs in again.
+- `SshError::is_auth_failure`: rejected credentials or a host key failure. It converts to `TransportError::AuthFailed` on a first connection and to `TransportError::NeedsAuth`, which `devlanes_transport::Link` waits on until a person signs in again, on a box that connected before.
 
 ## Behaviour
 

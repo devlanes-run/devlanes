@@ -91,7 +91,7 @@ devlanes remote disconnect hetzner
 
 Passphrase, one-time-password and host-key prompts appear in the terminal running `remote connect`, prefixed with the box name; type `yes` to a host-key question even though the input is hidden.
 
-The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an upgrade): the new daemon connects every box you connected and did not disconnect, in the background. Only `remote disconnect` ends that.
+The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an upgrade): the new daemon connects every box you connected and did not disconnect, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
 
 ### Unattended reconnects
 
@@ -106,7 +106,7 @@ devlanes remote ls
 devlanes remote connect hetzner     # answers the prompts here and resumes
 ```
 
-While it waits, the box's ports stay bound, its hostnames answer with a [sign-in needed](../errors/box-sign-in-needed.md) page and `status --json` lists it under `hosts` with the same `fix`. A box that never connected is different: rejected credentials on the first `remote connect` fail it for good, as before.
+While it waits and the daemon keeps running, the box's ports stay bound and its hostnames answer with a [sign-in needed](../errors/box-sign-in-needed.md) page; after a daemon restart they appear once the box connects. `status --json` lists it under `hosts` with the same `fix`. A box that never connected is different: on the first `remote connect`, credentials rejected when you answered the prompt fail it for good, as before.
 
 ### Several boxes
 

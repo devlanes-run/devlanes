@@ -854,7 +854,8 @@ pub trait RemoteConnector: Send + Sync {
     /// A transport to `host`; prompts during authentication go to `prompts`.
     /// `connected_before` is set for a box an earlier daemon connected, which
     /// this daemon restores: its failures count as after a first connection,
-    /// so rejected credentials wait for a sign-in instead of failing for good.
+    /// so rejected credentials wait for a sign-in instead of failing for good,
+    /// and a box that no longer resolves is retried until `remote disconnect`.
     fn transport(
         &self,
         host: &str,

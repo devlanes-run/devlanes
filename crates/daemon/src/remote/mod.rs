@@ -72,7 +72,8 @@ static NEXT_STREAM: AtomicU64 = AtomicU64::new(1 << 40);
 pub(crate) struct Remotes {
     hosts: Mutex<BTreeMap<String, Arc<HostConn>>>,
     /// Serializes connects so a replaced connection is gone before its successor
-    /// binds the same ports.
+    /// binds the same ports, and orders `disconnect` against the restore so a
+    /// box disconnected meanwhile is not opened again.
     connecting: tokio::sync::Mutex<()>,
     /// Box side: tunnels currently serving a client, for `status`, each with
     /// the serial of the [`ClientGuard`] that listed it.
@@ -89,6 +90,8 @@ pub(crate) struct Remotes {
     /// Set while a starting daemon reopens the boxes an earlier one had
     /// connected ([`Inner::restore_remotes`]).
     restoring: AtomicBool,
+    /// The restore task, awaited on shutdown before the store closes.
+    restore: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// How often box HTTPS ports that could not be opened are tried again: nothing
@@ -121,9 +124,11 @@ impl Remotes {
     /// No box is connected and no tunnel serves a client, so an idle exit
     /// would cut nobody off. A box counts as connected while its link
     /// reconnects or waits for a sign-in, and while a starting daemon restores
-    /// it, so a daemon with wanted boxes stays up for them.
+    /// it, so a daemon with wanted boxes stays up for them. A box whose link
+    /// failed for good does not count: it mirrors nothing, and it stays wanted,
+    /// so the next daemon tries it again.
     pub(crate) fn is_idle(&self) -> bool {
-        lock(&self.hosts).is_empty()
+        lock(&self.hosts).values().all(|conn| conn.ended())
             && lock(&self.clients).is_empty()
             && !self.restoring.load(Ordering::Relaxed)
     }
@@ -264,9 +269,11 @@ impl RemotePrompter for HostPrompter {
 }
 
 /// The box's transport, as the connector built it, with one more rule: an
-/// attempt that asked a prompt while no CLI was attached needs a sign-in
-/// ([`TransportError::NeedsAuth`]), whatever the transport made of the missing
-/// answer, so the link waits for `remote connect` instead of retrying.
+/// attempt that asked a prompt while no CLI was attached and then failed
+/// authentication needs a sign-in ([`TransportError::NeedsAuth`]), also on a
+/// first connection, so the link waits for `remote connect` instead of
+/// stopping. An attempt that failed for another reason keeps its class: a
+/// transient failure is retried, whatever happened to the prompt.
 struct Attended {
     inner: Arc<dyn Transport>,
     board: Arc<PromptBoard>,
@@ -274,7 +281,8 @@ struct Attended {
 
 #[async_trait]
 impl Transport for Attended {
-    /// Connects through the inner transport and reclassifies its failure.
+    /// Connects through the inner transport and reclassifies an
+    /// authentication failure after an unanswered prompt.
     async fn connect(&self) -> Result<BoxDuplex, TransportError> {
         self.board.unanswered.store(false, Ordering::Relaxed);
         let result = self.inner.connect().await;
@@ -383,12 +391,31 @@ impl HostConn {
     }
 
     /// Makes a link waiting for a sign-in try again, now that a CLI can answer
-    /// its prompts. Does nothing otherwise.
-    async fn resume(&self) {
-        if let Some(link) = self.link.lock().await.as_ref()
-            && link.resume()
-        {
+    /// its prompts. Does nothing otherwise; true when it resumed the link.
+    async fn resume(&self) -> bool {
+        let resumed = self.link.lock().await.as_ref().is_some_and(Link::resume);
+        if resumed {
             tracing::info!(host = %self.name, "retrying a box that needs a sign-in");
+        }
+        resumed
+    }
+
+    /// Waits, at most `limit`, for the attempt in flight when a `connect` CLI
+    /// attached, and resumes the link once if that attempt ended needing a
+    /// sign-in: it may have asked its prompt before the CLI was there, as an
+    /// attempt of a restore that a `remote connect` right after a daemon
+    /// restart catches. The CLI stays registered meanwhile, so the next
+    /// attempt asks it.
+    async fn resume_after_attempt(&self, limit: Duration) {
+        let mut state = self.state.clone();
+        let attempt = async {
+            state
+                .wait_for(|state| !matches!(state, LinkState::Connecting { .. }))
+                .await
+                .is_ok_and(|state| matches!(*state, LinkState::NeedsAuth { .. }))
+        };
+        if matches!(tokio::time::timeout(limit, attempt).await, Ok(true)) {
+            self.resume().await;
         }
     }
 
@@ -681,9 +708,14 @@ impl Inner {
         let (conn, _watching) = self.ensure_host(&args.host, Some(session), false).await?;
         // Connecting to a box again retries a box HTTPS port that was taken.
         self.reconcile_box_ports().await;
-        // This CLI can answer prompts now, so a link waiting for one goes on.
-        conn.resume().await;
+        // This CLI can answer prompts now, so a link waiting for one goes on,
+        // and one still trying may have asked nobody before the CLI attached.
+        let in_flight =
+            !conn.resume().await && matches!(*conn.state.borrow(), LinkState::Connecting { .. });
         if args.background {
+            if in_flight {
+                conn.resume_after_attempt(CONNECT_WAIT).await;
+            }
             conn.settled(CONNECT_WAIT).await;
             if let Some(error) = conn.stuck() {
                 return Err(error);
@@ -703,9 +735,15 @@ impl Inner {
             (event.event == wire::STATE_EVENT || event.event == wire::WARNING_EVENT)
                 && event.data.get("host").and_then(Value::as_str) == Some(host.as_str())
         };
+        let finished = async {
+            if in_flight {
+                conn.resume_after_attempt(CONNECT_WAIT).await;
+            }
+            conn.finished().await
+        };
         tokio::select! {
             () = self.bus.forward(session, mine) => Ok(conn.status_json()),
-            finished = conn.finished() => finished.map(|()| conn.status_json()),
+            finished = finished => finished.map(|()| conn.status_json()),
         }
     }
 
@@ -724,6 +762,18 @@ impl Inner {
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let identity = self.client_identity().await?;
         let _connecting = self.remote.connecting.lock().await;
+        self.replace_host(host, identity, watcher, connected_before)
+            .await
+    }
+
+    /// [`Inner::ensure_host`]'s work, with [`Remotes::connecting`] held.
+    async fn replace_host(
+        self: &Arc<Self>,
+        host: &str,
+        identity: identity::ClientIdentity,
+        watcher: Option<&Session>,
+        connected_before: bool,
+    ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let old = {
             let mut hosts = lock(&self.remote.hosts);
             match hosts.get(host) {
@@ -824,18 +874,18 @@ impl Inner {
     /// `disconnect [host]`: closes one box or all of them, unmirrors them and
     /// clears `remote_hosts.wanted`, so a restarted daemon leaves them alone.
     /// A wanted box without a connection here, such as one whose restore
-    /// failed, is only forgotten.
+    /// failed or has not reached it yet, is only forgotten.
     pub(crate) async fn disconnect_method(
         self: &Arc<Self>,
         value: Value,
     ) -> Result<Value, RpcError> {
         let args: DisconnectParams = crate::engine::params(value)?;
-        let wanted: BTreeSet<String> = match self.store.remote_hosts().await {
-            Ok(hosts) => hosts
-                .into_iter()
-                .filter(|host| host.wanted)
-                .map(|host| host.name)
-                .collect(),
+        // Held until `wanted` is cleared: a restore checks it under this lock
+        // before opening a box, so it either sees the box unwanted or has
+        // opened it already, and then the box is closed here.
+        let connecting = self.remote.connecting.lock().await;
+        let wanted = match self.wanted_hosts().await {
+            Ok(wanted) => wanted,
             Err(error) => {
                 tracing::warn!(%error, "cannot read the boxes to restore");
                 BTreeSet::new()
@@ -874,6 +924,7 @@ impl Inner {
                 tracing::warn!(%error, host = %name, "a restarted daemon may connect this box again");
             }
         }
+        drop(connecting);
         let names: Vec<String> = names.into_iter().collect();
         self.refresh_range_overlaps();
         self.reconcile_box_ports().await;
@@ -1056,39 +1107,55 @@ impl Inner {
     pub(crate) fn restore_remotes(self: &Arc<Self>) {
         self.remote.restoring.store(true, Ordering::Relaxed);
         let engine = self.clone();
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             engine.restore_wanted().await;
             engine.remote.restoring.store(false, Ordering::Relaxed);
         });
+        *lock(&self.remote.restore) = Some(task);
     }
 
-    /// [`Inner::restore_remotes`]'s work.
+    /// [`Inner::restore_remotes`]'s work. Stops opening boxes once a shutdown
+    /// began, which waits for this before it closes the boxes opened so far.
     async fn restore_wanted(self: &Arc<Self>) {
-        let hosts = match self.store.remote_hosts().await {
-            Ok(hosts) => hosts,
+        let names: Vec<String> = match self.wanted_hosts().await {
+            Ok(names) => names.into_iter().collect(),
             Err(error) => {
                 tracing::warn!(%error, "cannot read the boxes to restore");
                 return;
             }
         };
         let mut restored = false;
-        for host in hosts.into_iter().filter(|host| host.wanted) {
+        for name in names {
             if self.shutdown.is_cancelled() {
                 return;
             }
-            match self.ensure_host(&host.name, None, true).await {
-                // A shutdown that began meanwhile may have closed the others already.
-                Ok((conn, _)) if self.shutdown.is_cancelled() => {
-                    lock(&self.remote.hosts).remove(&conn.name);
-                    conn.close().await;
+            let identity = match self.client_identity().await {
+                Ok(identity) => identity,
+                Err(error) => {
+                    tracing::warn!(code = %error.code, "cannot restore box connections");
                     return;
                 }
+            };
+            let _connecting = self.remote.connecting.lock().await;
+            // A `remote disconnect` since the list was read wins.
+            match self.wanted_hosts().await {
+                Ok(wanted) if wanted.contains(&name) => {}
+                Ok(_) => continue,
+                Err(error) => {
+                    tracing::warn!(%error, host = %name, "cannot read the boxes to restore");
+                    continue;
+                }
+            }
+            if self.shutdown.is_cancelled() {
+                return;
+            }
+            match self.replace_host(&name, identity, None, true).await {
                 Ok(_) => {
-                    tracing::info!(host = %host.name, "reconnecting a box connected before the restart");
+                    tracing::info!(host = %name, "reconnecting a box connected before the restart");
                     restored = true;
                 }
                 Err(error) => {
-                    tracing::warn!(host = %host.name, code = %error.code, "cannot restore the box connection");
+                    tracing::warn!(host = %name, code = %error.code, "cannot restore the box connection");
                 }
             }
         }
@@ -1097,8 +1164,26 @@ impl Inner {
         }
     }
 
-    /// Closes every box connection; called on daemon shutdown so ssh masters exit.
+    /// Names of the boxes recorded as wanted in `remote_hosts`.
+    async fn wanted_hosts(&self) -> Result<BTreeSet<String>, devlanes_state::Error> {
+        Ok(self
+            .store
+            .remote_hosts()
+            .await?
+            .into_iter()
+            .filter(|host| host.wanted)
+            .map(|host| host.name)
+            .collect())
+    }
+
+    /// Closes every box connection; called on daemon shutdown so ssh masters
+    /// exit. Waits for the restore first, so it opens nothing afterwards and
+    /// is done with the store before the store closes.
     pub(crate) async fn remote_shutdown(self: &Arc<Self>) {
+        let restore = lock(&self.remote.restore).take();
+        if let Some(restore) = restore {
+            let _ = restore.await;
+        }
         let hosts: Vec<Arc<HostConn>> = std::mem::take(&mut *lock(&self.remote.hosts))
             .into_values()
             .collect();
@@ -1490,6 +1575,78 @@ mod tests {
             .map(|(code, _)| code)
             .collect();
         assert_eq!(codes, ["box_version", "box_linger_off"]);
+    }
+
+    /// A transport that asks a password nobody answers, then fails with `error`.
+    struct AsksThenFails {
+        prompts: Arc<dyn RemotePrompter>,
+        error: fn() -> TransportError,
+    }
+
+    #[async_trait]
+    impl Transport for AsksThenFails {
+        /// Asks, then fails whatever the answer.
+        async fn connect(&self) -> Result<BoxDuplex, TransportError> {
+            let _ = self
+                .prompts
+                .ask(RemotePrompt {
+                    host: "box".into(),
+                    prompt: "box's password: ".into(),
+                    kind: "secret",
+                })
+                .await;
+            Err((self.error)())
+        }
+    }
+
+    /// [`AsksThenFails`] behind [`Attended`], with no CLI attached.
+    fn unattended(error: fn() -> TransportError) -> Arc<Attended> {
+        let board = Arc::new(PromptBoard::default());
+        let prompts = Arc::new(HostPrompter {
+            board: board.clone(),
+        });
+        Arc::new(Attended {
+            inner: Arc::new(AsksThenFails { prompts, error }),
+            board,
+        })
+    }
+
+    /// After an unanswered prompt only an authentication failure waits for a
+    /// sign-in; a transient failure is retried and a permanent one stays.
+    #[tokio::test]
+    async fn an_unanswered_prompt_reclassifies_only_auth_failures()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let rejected = || TransportError::auth_failed("Permission denied (password).");
+        let reset = || TransportError::transient("Connection reset by peer");
+        let missing = || TransportError::permanent("devlanes is not installed");
+        let Err(error) = unattended(rejected).connect().await else {
+            panic!("connected");
+        };
+        assert!(error.is_needs_auth(), "{error}");
+        let Err(error) = unattended(reset).connect().await else {
+            panic!("connected");
+        };
+        assert!(!error.is_needs_auth() && !error.is_permanent(), "{error}");
+        let Err(error) = unattended(missing).connect().await else {
+            panic!("connected");
+        };
+        assert!(error.is_permanent() && !error.is_needs_auth(), "{error}");
+
+        let link = Link::spawn(
+            unattended(reset),
+            SessionOptions::new("client"),
+            devlanes_transport::Backoff::new(Duration::from_millis(10), Duration::from_millis(10)),
+        );
+        let mut state = link.state();
+        let retrying = tokio::time::timeout(
+            Duration::from_secs(5),
+            state.wait_for(|state| matches!(state, LinkState::Retrying { .. })),
+        )
+        .await?
+        .is_ok();
+        assert!(retrying, "the link retries: {:?}", *link.state().borrow());
+        link.shutdown().await;
+        Ok(())
     }
 
     /// Ranges overlap when they share one port; invalid ranges never parse.

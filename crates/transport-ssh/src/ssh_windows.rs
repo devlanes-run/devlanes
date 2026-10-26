@@ -79,7 +79,9 @@ pub struct SshOptions {
     /// Prompt relay; without it ssh runs with `BatchMode=yes`.
     pub askpass: Option<AskpassConfig>,
     /// The box connected before, such as one a restarted daemon restores:
-    /// failures are classified as after a first successful tunnel.
+    /// failures are classified as after a first successful tunnel. Only
+    /// permanent non-auth failures then stop the link; a box that is gone
+    /// keeps being retried until the caller stops the link.
     pub connected_before: bool,
 }
 
@@ -122,9 +124,9 @@ pub enum SshError {
         /// Whether retrying cannot help, such as rejected credentials on a
         /// first connection.
         permanent: bool,
-        /// Rejected credentials or a host key failure on a box that connected
-        /// before: a person has to sign in again.
-        needs_auth: bool,
+        /// ssh rejected the credentials or the host key: permanent on a first
+        /// connection, and a person has to sign in again after one.
+        auth: bool,
     },
     /// ssh did not finish authenticating in time.
     #[error("ssh to {0} did not authenticate in time")]
@@ -175,26 +177,21 @@ impl SshError {
         }
     }
 
-    /// Reports whether a person has to sign in again before reconnecting.
-    pub fn needs_auth(&self) -> bool {
-        matches!(
-            self,
-            Self::Master {
-                needs_auth: true,
-                ..
-            }
-        )
+    /// Reports whether ssh rejected the credentials or the host key.
+    pub fn is_auth_failure(&self) -> bool {
+        matches!(self, Self::Master { auth: true, .. })
     }
 }
 
 impl From<SshError> for TransportError {
+    /// Rejected credentials stop a first connection and wait for a sign-in
+    /// after one.
     fn from(error: SshError) -> Self {
-        if error.is_permanent() {
-            TransportError::permanent(error)
-        } else if error.needs_auth() {
-            TransportError::needs_auth(error)
-        } else {
-            TransportError::transient(error)
+        match (error.is_permanent(), error.is_auth_failure()) {
+            (true, true) => TransportError::auth_failed(error),
+            (true, false) => TransportError::permanent(error),
+            (false, true) => TransportError::needs_auth(error),
+            (false, false) => TransportError::transient(error),
         }
     }
 }
@@ -424,7 +421,7 @@ impl SshTransport {
             status,
             log: tail(log.as_bytes()),
             permanent: false,
-            needs_auth: false,
+            auth: false,
         }
     }
 
@@ -736,7 +733,7 @@ fn master_error(destination: &str, status: ExitStatus, log: &str, first: bool) -
         destination: destination.to_owned(),
         status: status.to_string(),
         permanent: first && (auth || log.contains("Could not resolve hostname")),
-        needs_auth: auth && !first,
+        auth,
         log: tail(log.as_bytes()),
     }
 }
@@ -943,6 +940,10 @@ mod tests {
             };
             assert!(error.is_permanent(), "{error}");
             let message = error.to_string();
+            assert!(
+                error.into_needs_auth().is_needs_auth(),
+                "a caller whose prompt went unanswered waits for a sign-in"
+            );
             assert!(message.contains("Permission denied"), "{message}");
             assert!(message.contains("require=force"), "{message}");
             assert!(
