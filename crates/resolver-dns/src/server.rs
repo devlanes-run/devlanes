@@ -123,7 +123,8 @@ impl DnsServer {
         let mut rejected = Vec::new();
         for _ in 0..EPHEMERAL_ATTEMPTS {
             // TCP first: Windows keeps its ephemeral TCP ports out of the TCP
-            // ranges Hyper-V and WSL reserve, but not its ephemeral UDP ports.
+            // ranges Hyper-V and WSL reserve, but its ephemeral UDP ports can
+            // land inside those TCP ranges.
             let tcp = TcpListener::bind(listen)
                 .await
                 .map_err(|e| bind_error(listen, e))?;

@@ -5,7 +5,7 @@ sidebar:
 
 # DL205 Box sign-in needed
 
-`503`. The hostname belongs to a lane on a remote box, and reconnecting to the box needs you. Either SSH asked for a password, a key passphrase or a host key confirmation while no `devlanes remote connect` was attached to answer, or SSH rejected the credentials or the host key of a box that connected before. The daemon stopped retrying. The box's ports stay bound on this machine and its hostnames stay routed, so requests get this page right away instead of waiting.
+`503`. The hostname belongs to a lane on a remote box, and reconnecting to the box needs you. Either SSH asked for a password, a key passphrase or a host key confirmation while no `devlanes remote connect` was attached to answer, or SSH rejected the credentials or the host key of a box that connected before. The daemon stopped retrying. While the daemon keeps running, the box's ports stay bound on this machine and its hostnames stay routed, so requests get this page right away instead of waiting. After a daemon restart, the box's ports and hostnames appear once it connects, so until then its hostnames are unknown here ([DL101](unknown-host.md)).
 
 ## Fix
 

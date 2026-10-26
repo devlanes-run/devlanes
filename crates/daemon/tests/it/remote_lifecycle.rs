@@ -2,21 +2,40 @@
 //! a person to sign in. A child of `remote`, whose box and client harness it
 //! reuses.
 
-use std::{net::Ipv6Addr, sync::atomic::Ordering};
+use std::{
+    net::Ipv6Addr,
+    path::Path,
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
 
 use bytes::Bytes;
 use devlanes_daemon::{Handler, Session};
 use devlanes_ipc::Frame;
-use devlanes_proto::{Context, Control, Method, Request, remote::PROMPT_EVENT};
+use devlanes_proto::{
+    Context, Control, Method, Request,
+    remote::{PROMPT_EVENT, STATE_EVENT},
+};
 use devlanes_state::Store;
 use serde_json::json;
 use tokio::net::TcpStream;
 
-use super::{BOX, BoxSide, ClientSide, PASSWORD, SOON, box_port, echo, http_get, ipv6_loopback};
+use super::{
+    BOX, BoxSide, ClientSide, Controls, PASSWORD, SOON, box_port, echo, http_get, ipv6_loopback,
+};
 use crate::{LIMIT, cx, eventually, repo, temp};
 
 // Port ranges: these tests take 21500-21999, which no other test in this
-// binary uses (see `remote_boxes.rs`).
+// binary uses (see `remote_boxes.rs`), and 20000-20999 for boxes that run
+// nothing, so nothing binds them.
+
+/// Whether the store under the client home `home` still wants box `name`.
+async fn wanted(home: &Path, name: &str) -> bool {
+    let store = Store::open(home.join("state.db")).await.expect("store");
+    let hosts = store.remote_hosts().await.expect("hosts");
+    store.close().await.expect("close");
+    hosts.iter().any(|host| host.name == name && host.wanted)
+}
 
 #[tokio::test(flavor = "multi_thread")]
 /// A box connected before a client daemon restart is connected again by the
@@ -44,7 +63,10 @@ async fn a_restart_restores_wanted_boxes() {
         })
         .await;
         assert!(mirrored.is_some(), "echo mirrored before the restart");
-        assert_eq!(*client.handed_out.lock().expect("handed out"), [false]);
+        assert_eq!(
+            *client.controls.handed_out.lock().expect("handed out"),
+            [false]
+        );
         client.stop().await;
 
         let client = ClientSide::start(&tmp, "client", "21625-21749", &side).await;
@@ -58,7 +80,7 @@ async fn a_restart_restores_wanted_boxes() {
             client.host().await
         );
         assert_eq!(
-            *client.handed_out.lock().expect("handed out"),
+            *client.controls.handed_out.lock().expect("handed out"),
             [true],
             "a restored box counts as connected before"
         );
@@ -74,11 +96,10 @@ async fn a_restart_restores_wanted_boxes() {
             .expect("disconnect");
         let home = client.h.home.clone();
         client.stop().await;
-        let store = Store::open(home.join("state.db")).await.expect("store");
-        let hosts = store.remote_hosts().await.expect("hosts");
-        assert_eq!(hosts.len(), 1, "{hosts:?}");
-        assert!(!hosts[0].wanted, "a disconnected box is not restored");
-        store.close().await.expect("close");
+        assert!(
+            !wanted(&home, "box").await,
+            "a disconnected box is not restored"
+        );
 
         side.stop().await;
     })
@@ -116,7 +137,7 @@ async fn an_unanswered_prompt_waits_for_sign_in() {
         assert!(served.is_some(), "web is routed to the box");
 
         // The box now asks for a password, and no CLI is attached to answer.
-        client.sign_in.store(true, Ordering::SeqCst);
+        client.controls.sign_in.store(true, Ordering::SeqCst);
         side.transport.last_link().expect("link").sever();
         let host = eventually(SOON, || async {
             let host = client.host().await;
@@ -205,6 +226,140 @@ async fn an_unanswered_prompt_waits_for_sign_in() {
         assert!(echo(echo_port).await, "the mirrored port works again");
 
         session.close();
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A `disconnect` while the restarted daemon's restore is about to open the
+/// box wins: the box ends up closed and unwanted, whichever of the two gets
+/// to it first.
+async fn a_disconnect_during_the_restore_wins() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "20000-20249").await;
+        let client = ClientSide::start(&tmp, "client", "20250-20499", &side).await;
+        client.connect("box").await;
+        client.stop().await;
+
+        let controls = Arc::new(Controls::default());
+        controls.open.arm();
+        let client =
+            ClientSide::start_controlled(&tmp, "client", "20250-20499", &side, controls.clone())
+                .await;
+        controls.open.reached().await;
+        let (session, _frames) = Session::local(9_302);
+        let engine = client.h.engine.clone();
+        let disconnecting = tokio::spawn(async move {
+            let request = Request {
+                id: 1,
+                method: Method::Disconnect,
+                params: json!({"host": "box"}),
+                context: Context::default(),
+            };
+            engine.handle(request, session).await
+        });
+        // Time for a disconnect that does not wait for the restore to run
+        // first; the outcome must be the same either way.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        controls.open.release();
+        let disconnected = disconnecting
+            .await
+            .expect("disconnect task")
+            .expect("disconnect");
+        assert_eq!(
+            disconnected["disconnected"],
+            json!(["box"]),
+            "{disconnected}"
+        );
+        let host = client.host().await;
+        assert_eq!(host["state"], "disconnected", "{host}");
+
+        let home = client.h.home.clone();
+        client.stop().await;
+        assert!(!wanted(&home, "box").await, "the box stays disconnected");
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `remote connect` right after a restart, while the restore's attempt is
+/// still under way after asking its prompt with nobody attached: that attempt
+/// needs a sign-in, and `connect` resumes the link once, so the next attempt
+/// asks this CLI and connects.
+async fn a_connect_during_the_restore_answers_the_next_prompt() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "20500-20749").await;
+        let client = ClientSide::start(&tmp, "client", "20750-20999", &side).await;
+        client.connect("box").await;
+        client.stop().await;
+
+        let controls = Arc::new(Controls::default());
+        controls.sign_in.store(true, Ordering::SeqCst);
+        controls.unanswered.arm();
+        let client =
+            ClientSide::start_controlled(&tmp, "client", "20750-20999", &side, controls.clone())
+                .await;
+        controls.unanswered.reached().await;
+
+        let (session, mut frames) = Session::local(9_303);
+        let engine = client.h.engine.clone();
+        let attached = session.clone();
+        let mut connecting = tokio::spawn(async move {
+            let request = Request {
+                id: 1,
+                method: Method::Connect,
+                params: json!({"host": "box"}),
+                context: Context::default(),
+            };
+            engine.handle(request, attached).await
+        });
+        let engine = client.h.engine.clone();
+        let mut prompts = 0;
+        let mut states = Vec::new();
+        loop {
+            tokio::select! {
+                result = &mut connecting => {
+                    panic!("connect ended early: {result:?}, states {states:?}");
+                }
+                frame = frames.recv() => match frame {
+                    None => panic!("the session closed, states {states:?}"),
+                    Some(Frame::Control(Control::Event(event))) if event.event == PROMPT_EVENT => {
+                        prompts += 1;
+                        let stream = event.data["stream_id"].as_u64().expect("stream id");
+                        engine
+                            .input(stream, Bytes::from_static(PASSWORD.as_bytes()), session.clone())
+                            .await
+                            .expect("answer");
+                    }
+                    Some(Frame::Control(Control::Event(event))) if event.event == STATE_EVENT => {
+                        let state = event.data["state"].as_str().unwrap_or_default().to_owned();
+                        // The CLI is registered once it gets its first state,
+                        // so the held attempt may fail now.
+                        if states.is_empty() {
+                            controls.unanswered.release();
+                        }
+                        states.push(state.clone());
+                        if state == "connected" {
+                            break;
+                        }
+                    }
+                    Some(_) => {}
+                },
+            }
+        }
+        assert_eq!(prompts, 1, "the resumed attempt asks once: {states:?}");
+        assert_eq!(client.host().await["state"], "connected");
+
+        session.close();
+        let detached = connecting.await.expect("connect task");
+        assert!(detached.is_ok(), "{detached:?}");
         client.stop().await;
         side.stop().await;
     })

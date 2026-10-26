@@ -26,9 +26,11 @@ pub trait Transport: Send + Sync {
     /// Opens a fresh pipe to the box.
     ///
     /// Return [`TransportError::Permanent`] when retrying cannot help (missing
-    /// binary, rejected credentials) so reconnect loops stop instead of spinning,
-    /// and [`TransportError::NeedsAuth`] when a person has to sign in again to a
-    /// box that worked before, so [`crate::Link`] waits for them.
+    /// binary) so reconnect loops stop instead of spinning,
+    /// [`TransportError::AuthFailed`] for rejected credentials on a box that
+    /// never connected, and [`TransportError::NeedsAuth`] when a person has to
+    /// sign in again to a box that worked before, so [`crate::Link`] waits for
+    /// them.
     async fn connect(&self) -> Result<BoxDuplex, TransportError>;
 }
 
@@ -44,6 +46,10 @@ pub enum TransportError {
     /// A failure that needs user action before another attempt makes sense.
     #[error(transparent)]
     Permanent(BoxError),
+    /// The box rejected the credentials or the host key on a box that never
+    /// connected. Permanent like [`TransportError::Permanent`].
+    #[error(transparent)]
+    AuthFailed(BoxError),
     /// A person has to answer a prompt or fix credentials or a host key before
     /// another attempt makes sense, on a box that connected before.
     #[error(transparent)]
@@ -61,26 +67,32 @@ impl TransportError {
         Self::Permanent(error.into())
     }
 
+    /// Wraps rejected credentials or a rejected host key on a box that never
+    /// connected, which stops reconnect loops like [`TransportError::permanent`].
+    pub fn auth_failed(error: impl Into<BoxError>) -> Self {
+        Self::AuthFailed(error.into())
+    }
+
     /// Wraps a cause that a person resolves by signing in again, which makes
     /// [`crate::Link`] wait for [`crate::Link::resume`].
     pub fn needs_auth(error: impl Into<BoxError>) -> Self {
         Self::NeedsAuth(error.into())
     }
 
-    /// The same cause, reclassified as [`TransportError::NeedsAuth`], for a
-    /// caller that knows a prompt went unanswered during the attempt.
+    /// An authentication failure reclassified as [`TransportError::NeedsAuth`],
+    /// for a caller that knows a prompt went unanswered during the attempt.
+    /// Other failures keep their class: the attempt got past authentication,
+    /// so the missing answer is not what failed it.
     pub fn into_needs_auth(self) -> Self {
         match self {
-            Self::Io(error) => Self::NeedsAuth(Box::new(error)),
-            Self::Transient(error) | Self::Permanent(error) | Self::NeedsAuth(error) => {
-                Self::NeedsAuth(error)
-            }
+            Self::AuthFailed(error) => Self::NeedsAuth(error),
+            other => other,
         }
     }
 
     /// Reports whether reconnecting without user action is pointless.
     pub fn is_permanent(&self) -> bool {
-        matches!(self, Self::Permanent(_))
+        matches!(self, Self::Permanent(_) | Self::AuthFailed(_))
     }
 
     /// Reports whether a person has to sign in again before reconnecting.
@@ -94,9 +106,10 @@ impl TransportError {
     pub fn downcast_ref<E: std::error::Error + 'static>(&self) -> Option<&E> {
         match self {
             Self::Io(_) => None,
-            Self::Transient(error) | Self::Permanent(error) | Self::NeedsAuth(error) => {
-                error.downcast_ref()
-            }
+            Self::Transient(error)
+            | Self::Permanent(error)
+            | Self::AuthFailed(error)
+            | Self::NeedsAuth(error) => error.downcast_ref(),
         }
     }
 }
@@ -157,4 +170,25 @@ pub const EXIT_DAEMON_STOPPED: i32 = 75;
 /// The process's stdin and stdout as one duplex, for `devlanes tunnel --stdio` on the box.
 pub fn stdio() -> Joined<tokio::io::Stdin, tokio::io::Stdout> {
     Joined::new(tokio::io::stdin(), tokio::io::stdout())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only an authentication failure waits for a sign-in after an
+    /// unanswered prompt; other failures keep their class.
+    #[test]
+    fn only_auth_failures_turn_into_needs_auth() {
+        let rejected = TransportError::auth_failed("Permission denied (publickey).");
+        assert!(rejected.is_permanent());
+        assert!(rejected.into_needs_auth().is_needs_auth());
+
+        let transient = TransportError::transient("connection reset").into_needs_auth();
+        assert!(!transient.is_needs_auth() && !transient.is_permanent());
+        let io = TransportError::from(io::Error::from(io::ErrorKind::BrokenPipe)).into_needs_auth();
+        assert!(!io.is_needs_auth() && !io.is_permanent());
+        let missing = TransportError::permanent("devlanes is not installed").into_needs_auth();
+        assert!(missing.is_permanent() && !missing.is_needs_auth());
+    }
 }

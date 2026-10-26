@@ -225,13 +225,67 @@ impl BoxSide {
 /// The password [`SignIn`] accepts.
 const PASSWORD: &str = "hunter2";
 
+/// Stops the first caller that passes while armed until the test releases it.
+#[derive(Default)]
+struct Gate {
+    armed: AtomicBool,
+    reached: tokio::sync::Notify,
+    released: tokio::sync::Notify,
+}
+
+impl Gate {
+    /// Makes the next [`Gate::pass`] wait.
+    fn arm(&self) {
+        self.armed.store(true, Ordering::SeqCst);
+    }
+
+    /// Waits for [`Gate::release`] when armed, disarming the gate.
+    async fn pass(&self) {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            self.reached.notify_one();
+            self.released.notified().await;
+        }
+    }
+
+    /// [`Gate::pass`] from synchronous code on a multi-threaded runtime.
+    fn pass_blocking(&self) {
+        if self.armed.load(Ordering::SeqCst) {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(self.pass());
+            });
+        }
+    }
+
+    /// Resolves once a caller waits at the gate.
+    async fn reached(&self) {
+        self.reached.notified().await;
+    }
+
+    /// Lets the waiting caller, or the next one, through.
+    fn release(&self) {
+        self.released.notify_one();
+    }
+}
+
+/// What a test controls in a client's [`MemoryConnector`], set before the
+/// client starts when its restore must see it.
+#[derive(Default)]
+struct Controls {
+    /// While set, connecting asks for [`PASSWORD`] first.
+    sign_in: AtomicBool,
+    /// `connected_before` of every transport handed out, in order.
+    handed_out: std::sync::Mutex<Vec<bool>>,
+    /// Holds the connector before it hands out a transport, which is where
+    /// the daemon opens a link.
+    open: Gate,
+    /// Holds an attempt whose password prompt got no answer before it fails.
+    unanswered: Gate,
+}
+
 /// A connector handing out each test box's memory transport by box name.
 struct MemoryConnector {
     boxes: BTreeMap<String, MemoryTransport>,
-    /// While set, connecting asks for [`PASSWORD`] first.
-    sign_in: Arc<AtomicBool>,
-    /// `connected_before` of every transport handed out, in order.
-    handed_out: Arc<std::sync::Mutex<Vec<bool>>>,
+    controls: Arc<Controls>,
 }
 
 impl RemoteConnector for MemoryConnector {
@@ -242,9 +296,11 @@ impl RemoteConnector for MemoryConnector {
         prompts: Arc<dyn RemotePrompter>,
         connected_before: bool,
     ) -> Result<Arc<dyn Transport>, RpcError> {
+        self.controls.open.pass_blocking();
         match self.boxes.get(host) {
             Some(transport) => {
-                self.handed_out
+                self.controls
+                    .handed_out
                     .lock()
                     .expect("handed out")
                     .push(connected_before);
@@ -252,7 +308,7 @@ impl RemoteConnector for MemoryConnector {
                     host: host.to_owned(),
                     inner: transport.clone(),
                     prompts,
-                    required: self.sign_in.clone(),
+                    controls: self.controls.clone(),
                 }))
             }
             None => Err(RpcError::new("bad_request", json!({"host": host}), 2)),
@@ -275,21 +331,21 @@ impl RemoteConnector for MemoryConnector {
     }
 }
 
-/// A box's memory transport that, while `required` is set, asks for
+/// A box's memory transport that, while [`Controls::sign_in`] is set, asks for
 /// [`PASSWORD`] the way ssh asks through askpass, and fails like ssh rejecting
-/// the login when the answer is missing or wrong.
+/// the first login when the answer is missing or wrong.
 struct SignIn {
     host: String,
     inner: MemoryTransport,
     prompts: Arc<dyn RemotePrompter>,
-    required: Arc<AtomicBool>,
+    controls: Arc<Controls>,
 }
 
 #[async_trait::async_trait]
 impl Transport for SignIn {
     /// Asks first when a sign-in is required, then connects.
     async fn connect(&self) -> Result<BoxDuplex, devlanes_transport::TransportError> {
-        if self.required.load(Ordering::SeqCst) {
+        if self.controls.sign_in.load(Ordering::SeqCst) {
             let answer = self
                 .prompts
                 .ask(RemotePrompt {
@@ -298,8 +354,11 @@ impl Transport for SignIn {
                     kind: "secret",
                 })
                 .await;
+            if answer.is_none() {
+                self.controls.unanswered.pass().await;
+            }
             if answer.as_deref() != Some(PASSWORD) {
-                return Err(devlanes_transport::TransportError::permanent(
+                return Err(devlanes_transport::TransportError::auth_failed(
                     "Permission denied (password).",
                 ));
             }
@@ -395,16 +454,24 @@ struct ClientSide {
     h: Harness,
     proxy_port: u16,
     proxy_stop: CancellationToken,
-    /// See [`MemoryConnector::sign_in`].
-    sign_in: Arc<AtomicBool>,
-    /// See [`MemoryConnector::handed_out`].
-    handed_out: Arc<std::sync::Mutex<Vec<bool>>>,
+    controls: Arc<Controls>,
 }
 
 impl ClientSide {
     /// A client engine whose `connect box` reaches `side`'s box.
     async fn start(tmp: &Temp, name: &str, ports: &str, side: &BoxSide) -> Self {
         Self::start_with(tmp, name, ports, &[("box", side)], None).await
+    }
+
+    /// [`ClientSide::start`] with `controls` set up by the test.
+    async fn start_controlled(
+        tmp: &Temp,
+        name: &str,
+        ports: &str,
+        side: &BoxSide,
+        controls: Arc<Controls>,
+    ) -> Self {
+        Self::start_full(tmp, name, ports, &[("box", side)], None, controls).await
     }
 
     /// A client engine whose `connect <name>` reaches each named box, with
@@ -415,6 +482,18 @@ impl ClientSide {
         ports: &str,
         boxes: &[(&str, &BoxSide)],
         tls: Option<(u16, Arc<CertificateAuthority>)>,
+    ) -> Self {
+        Self::start_full(tmp, name, ports, boxes, tls, Arc::default()).await
+    }
+
+    /// [`ClientSide::start_with`] with `controls` set up by the test.
+    async fn start_full(
+        tmp: &Temp,
+        name: &str,
+        ports: &str,
+        boxes: &[(&str, &BoxSide)],
+        tls: Option<(u16, Arc<CertificateAuthority>)>,
+        controls: Arc<Controls>,
     ) -> Self {
         let proxy = devlanes_proxy::Proxy::new(
             devlanes_proxy::ProxyConfig::default(),
@@ -430,15 +509,12 @@ impl ClientSide {
         tokio::spawn(async move {
             let _ = serving.serve(listener, stop).await;
         });
-        let sign_in = Arc::new(AtomicBool::new(false));
-        let handed_out = Arc::new(std::sync::Mutex::new(Vec::new()));
         let connector = Arc::new(MemoryConnector {
             boxes: boxes
                 .iter()
                 .map(|(name, side)| ((*name).to_owned(), side.transport.clone()))
                 .collect(),
-            sign_in: sign_in.clone(),
-            handed_out: handed_out.clone(),
+            controls: controls.clone(),
         });
         let h = engine_with(
             &tmp.path.join(name),
@@ -451,8 +527,7 @@ impl ClientSide {
             h,
             proxy_port,
             proxy_stop,
-            sign_in,
-            handed_out,
+            controls,
         }
     }
 

@@ -1,6 +1,6 @@
 //! Keeps a session alive across transport failures.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -102,9 +102,11 @@ pub enum LinkError {
 /// snapshot replaces it.
 pub struct Link {
     state: watch::Receiver<LinkState>,
-    /// Shared with the supervisor so [`Link::resume`] can leave
-    /// [`LinkState::NeedsAuth`] itself, before the supervisor wakes up.
-    state_tx: Arc<watch::Sender<LinkState>>,
+    /// The supervisor's sender, so [`Link::resume`] can leave
+    /// [`LinkState::NeedsAuth`] itself, before the supervisor wakes up. Weak,
+    /// so the sender still drops when the supervisor ends and receivers see
+    /// the channel close.
+    state_tx: Weak<watch::Sender<LinkState>>,
     registry: ClientRegistry,
     cancel: CancellationToken,
     task: Option<JoinHandle<()>>,
@@ -115,18 +117,19 @@ impl Link {
     pub fn spawn(transport: Arc<dyn Transport>, options: SessionOptions, backoff: Backoff) -> Self {
         let (state_tx, state) = watch::channel(LinkState::Connecting { attempt: 1 });
         let state_tx = Arc::new(state_tx);
+        let weak = Arc::downgrade(&state_tx);
         let cancel = CancellationToken::new();
         let registry = options.registry.clone();
         let task = tokio::spawn(supervise(
             transport,
             options,
             backoff,
-            state_tx.clone(),
+            state_tx,
             cancel.clone(),
         ));
         Self {
             state,
-            state_tx,
+            state_tx: weak,
             registry,
             cancel,
             task: Some(task),
@@ -140,9 +143,12 @@ impl Link {
 
     /// Makes a link waiting in [`LinkState::NeedsAuth`] try again now, with a
     /// fresh backoff. The state is [`LinkState::Connecting`] when this returns
-    /// true; false means the link was not waiting.
+    /// true; false means the link was not waiting or has stopped.
     pub fn resume(&self) -> bool {
-        self.state_tx.send_if_modified(|state| {
+        let Some(state_tx) = self.state_tx.upgrade() else {
+            return false;
+        };
+        state_tx.send_if_modified(|state| {
             if matches!(state, LinkState::NeedsAuth { .. }) {
                 *state = LinkState::Connecting { attempt: 1 };
                 true
@@ -254,12 +260,9 @@ async fn supervise(
                     error: error.to_string(),
                 });
                 let mut resumed = state.subscribe();
+                // This task holds the only sender, so the wait cannot fail.
                 tokio::select! {
-                    changed = resumed.wait_for(|current| !matches!(current, LinkState::NeedsAuth { .. })) => {
-                        if changed.is_err() {
-                            break;
-                        }
-                    }
+                    _ = resumed.wait_for(|current| !matches!(current, LinkState::NeedsAuth { .. })) => {}
                     () = cancel.cancelled() => break,
                 }
                 backoff.reset();
@@ -389,6 +392,38 @@ mod tests {
             "a link that is not waiting is not resumed"
         );
         connecting.shutdown().await;
+        Ok(())
+    }
+
+    /// A transport whose every attempt fails for good.
+    struct Refused;
+
+    #[async_trait::async_trait]
+    impl Transport for Refused {
+        async fn connect(&self) -> Result<crate::BoxDuplex, crate::TransportError> {
+            Err(crate::TransportError::permanent(
+                "devlanes is not installed",
+            ))
+        }
+    }
+
+    /// When the supervisor ends on its own, receivers see the channel close
+    /// although the [`Link`] is still alive, and `resume` does nothing.
+    #[tokio::test]
+    async fn a_failed_link_closes_its_state() -> Result<(), Box<dyn std::error::Error>> {
+        let link = Link::spawn(
+            Arc::new(Refused),
+            SessionOptions::new("client"),
+            Backoff::default(),
+        );
+        let mut state = link.state();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while state.changed().await.is_ok() {}
+        })
+        .await?;
+        assert!(matches!(*state.borrow(), LinkState::Failed { .. }));
+        assert!(!link.resume());
+        link.shutdown().await;
         Ok(())
     }
 
