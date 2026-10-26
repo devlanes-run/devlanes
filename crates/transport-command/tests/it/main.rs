@@ -351,6 +351,8 @@ const HELPER_ENV: &str = "DEVLANES_TRANSPORT_COMMAND_TEST_HELPER";
 #[tokio::test]
 async fn internal_variables_stay_out() -> TestResult {
     let mut helper = tokio::process::Command::new(std::env::current_exe()?);
+    #[cfg(windows)]
+    devlanes_testing::no_window(helper.as_std_mut());
     helper
         .args([
             "--exact",

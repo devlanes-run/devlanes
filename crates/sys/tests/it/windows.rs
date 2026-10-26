@@ -50,7 +50,7 @@ fn system32(program: &str) -> PathBuf {
 /// outlives every test, in case cleanup is skipped.
 fn sleeper() -> Reaped {
     Reaped(
-        Command::new(system32("PING.EXE"))
+        devlanes_testing::no_window(&mut Command::new(system32("PING.EXE")))
             .args(["-n", "30", "127.0.0.1"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -99,7 +99,7 @@ fn verified_termination_rejects_recycled_identity() -> Result<(), devlanes_sys::
 #[test]
 fn exited_processes_keep_identity_while_held() -> Result<(), devlanes_sys::Error> {
     let child = Reaped(
-        Command::new(system32("cmd.exe"))
+        devlanes_testing::no_window(&mut Command::new(system32("cmd.exe")))
             .args(["/d", "/c", "exit 3"])
             .stdin(Stdio::null())
             .spawn()
@@ -136,17 +136,19 @@ fn listening_ports_of_a_child() -> Result<(), Box<dyn std::error::Error>> {
                   $l.Start(); [Console]::Out.WriteLine($l.LocalEndpoint.Port); [Console]::Out.Flush(); \
                   Start-Sleep -Seconds 30";
     let mut child = Reaped(
-        Command::new(system32(r"WindowsPowerShell\v1.0\powershell.exe"))
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                script,
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .spawn()?,
+        devlanes_testing::no_window(&mut Command::new(system32(
+            r"WindowsPowerShell\v1.0\powershell.exe",
+        )))
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            script,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()?,
     );
     let stdout = child.0.stdout.take().expect("piped stdout");
     let (sender, receiver) = mpsc::channel();
@@ -177,7 +179,7 @@ fn listening_ports_of_a_child() -> Result<(), Box<dyn std::error::Error>> {
 #[test]
 fn tracker_follows_parent_links() -> Result<(), devlanes_sys::Error> {
     let root = Reaped(
-        Command::new(system32("cmd.exe"))
+        devlanes_testing::no_window(&mut Command::new(system32("cmd.exe")))
             .args(["/d", "/c", "PING.EXE -n 30 127.0.0.1"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())

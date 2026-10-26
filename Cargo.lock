@@ -1066,6 +1066,7 @@ dependencies = [
  "devlanes-core",
  "devlanes-proto",
  "devlanes-term",
+ "devlanes-testing",
  "devlanes-version",
  "insta",
  "is-ai-agent",
@@ -1788,6 +1789,7 @@ version = "0.5.0"
 dependencies = [
  "devlanes-core",
  "devlanes-sys-windows",
+ "devlanes-testing",
  "libc",
  "rustix",
  "tempfile",
@@ -1858,6 +1860,7 @@ dependencies = [
  "async-trait",
  "devlanes-sys",
  "devlanes-sys-windows",
+ "devlanes-testing",
  "devlanes-transport",
  "rustix",
  "thiserror 2.0.21",

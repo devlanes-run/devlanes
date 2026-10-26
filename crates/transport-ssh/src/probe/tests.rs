@@ -442,7 +442,9 @@ mod shells {
             &format!("sshd-{}", shell.kind()),
             &Behaviour::new().run_with(shell.kind(), Some(program), env),
         )?;
-        let mut child = tokio::process::Command::new(sshd)
+        let mut sshd = tokio::process::Command::new(sshd);
+        devlanes_testing::no_window(sshd.as_std_mut());
+        let mut child = sshd
             .arg(command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

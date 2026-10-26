@@ -179,7 +179,7 @@ fn on_path(name: &str) -> Option<PathBuf> {
 /// exited 0, its stdout and its stderr. Kills it after a minute so a hung
 /// shell fails the test instead of stalling the run.
 fn run(program: &Path, input: &str) -> (bool, String, String) {
-    let mut child = Command::new(program)
+    let mut child = devlanes_testing::no_window(&mut Command::new(program))
         .args(["-NoProfile", "-Command", "-"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

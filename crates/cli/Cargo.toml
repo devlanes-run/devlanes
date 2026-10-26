@@ -27,5 +27,8 @@ tempfile.workspace = true
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }
 
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-testing = { path = "../testing" }
+
 [lints]
 workspace = true

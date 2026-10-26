@@ -28,3 +28,6 @@ tempfile.workspace = true
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1", features = ["fs", "process", "pty", "std"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-testing = { path = "../testing" }
