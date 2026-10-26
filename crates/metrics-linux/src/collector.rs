@@ -34,7 +34,9 @@ struct State {
 ///
 /// Membership per unit is: members of the target's sessions, tracked processes
 /// whose `starttime` still matches, and live descendants (by parent PID) of
-/// either. A process claimed by several targets counts for the first one.
+/// either. A process claimed by several targets counts for the first one. The
+/// request's daemon process is read by PID alone, without its descendants, and
+/// never counts for a unit.
 #[derive(Debug, Clone)]
 pub struct LinuxSource {
     state: Arc<Mutex<State>>,
@@ -60,13 +62,19 @@ impl LinuxSource {
         }
     }
 
-    /// Samples synchronously, reading `/proc` for every visible process. Async
-    /// callers use [`MetricsSource::sample`], which runs this on the blocking pool.
-    pub fn sample_blocking(&self, units: &[UnitTarget]) -> Result<Vec<Sample>, Error> {
+    /// Samples synchronously: every unit's members as [`Subject::Process`] and,
+    /// when given, the `daemon` process alone as [`Subject::Daemon`]. Reads
+    /// `/proc` for every visible process when there are units. Async callers use
+    /// [`MetricsSource::sample`], which runs this on the blocking pool.
+    pub fn sample_blocking(
+        &self,
+        units: &[UnitTarget],
+        daemon: Option<ProcessIdentity>,
+    ) -> Result<Vec<Sample>, Error> {
         // A poisoned lock only means an earlier sample panicked; the caches are
         // advisory and rebuilt on every call.
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        collect(&mut state, units)
+        collect(&mut state, units, daemon)
     }
 }
 
@@ -84,11 +92,13 @@ impl MetricsSource for LinuxSource {
         "linux"
     }
 
-    /// Samples every unit target on the blocking pool; containers are ignored.
+    /// Samples every unit target and the daemon on the blocking pool; containers
+    /// are ignored.
     async fn sample(&self, request: &SampleRequest) -> Result<Vec<Sample>, Error> {
         let source = self.clone();
         let units = request.units.clone();
-        tokio::task::spawn_blocking(move || source.sample_blocking(&units))
+        let daemon = request.daemon;
+        tokio::task::spawn_blocking(move || source.sample_blocking(&units, daemon))
             .await
             .map_err(|error| Error::Unavailable {
                 source_name: "linux",
@@ -193,57 +203,49 @@ fn membership(units: &[UnitTarget], table: &HashMap<u32, ProcStat>) -> HashMap<u
     owners
 }
 
-/// Resolves membership and measures every member.
-fn collect(state: &mut State, units: &[UnitTarget]) -> Result<Vec<Sample>, Error> {
-    if units.is_empty() {
-        state.previous.clear();
-        state.pss.clear();
-        return Ok(Vec::new());
+/// Resolves membership and measures every member and the daemon.
+fn collect(
+    state: &mut State,
+    units: &[UnitTarget],
+    daemon: Option<ProcessIdentity>,
+) -> Result<Vec<Sample>, Error> {
+    // Without units only the daemon is read, so `/proc` is not scanned.
+    let (table, mut owners) = if units.is_empty() {
+        (HashMap::new(), HashMap::new())
+    } else {
+        let table = process_table()?;
+        let owners = membership(units, &table);
+        (table, owners)
+    };
+    if let Some(daemon) = daemon {
+        // The daemon gets its own sample; a unit that reaches it through a shared
+        // session or a tracked PID must not count it as well.
+        owners.remove(&daemon.pid);
     }
-    let table = process_table()?;
-    let owners = membership(units, &table);
-    let uptime = procfs::parse_uptime(&fs::read_to_string("/proc/uptime")?)?;
+    // A different starttime means the daemon's PID now names an unrelated process.
+    let daemon = daemon.and_then(|daemon| {
+        read_stat(daemon.pid)
+            .ok()
+            .flatten()
+            .filter(|stat| stat.starttime == daemon.start_time && !stat.is_exited())
+            .map(|stat| (daemon.pid, stat))
+    });
+    let mut cycle = Cycle {
+        uptime: procfs::parse_uptime(&fs::read_to_string("/proc/uptime")?)?,
+        now: Instant::now(),
+        previous: HashMap::with_capacity(owners.len() + 1),
+        pss: HashMap::with_capacity(owners.len() + 1),
+    };
     let ts_ms = unix_ms(SystemTime::now());
-    let now = Instant::now();
-    let mut previous = HashMap::with_capacity(owners.len());
-    let mut pss_cache = HashMap::with_capacity(owners.len());
-    let mut samples = Vec::with_capacity(owners.len());
+    let mut samples = Vec::with_capacity(owners.len() + 1);
     for (pid, index) in owners {
         let Some(stat) = table.get(&pid) else {
             continue;
         };
-        let Ok(Some(statm)) = read_proc(pid, "statm") else {
+        let Some((cpu_percent, footprint_bytes, rss_bytes)) = measure(state, &mut cycle, pid, stat)
+        else {
             continue;
         };
-        let Ok(statm) = procfs::parse_statm(&statm) else {
-            continue;
-        };
-        let key = (pid, stat.starttime);
-        let ticks = stat.utime.saturating_add(stat.stime);
-        let cpu_percent = match state.previous.get(&key) {
-            Some(last) => procfs::cpu_percent(
-                ticks.saturating_sub(last.ticks),
-                state.ticks_per_second,
-                now.duration_since(last.at).as_secs_f64(),
-            ),
-            // First sight: lifetime average so a busy process is not idle for a tick.
-            None => procfs::lifetime_cpu_percent(stat, state.ticks_per_second, uptime),
-        };
-        previous.insert(key, CpuReading { ticks, at: now });
-
-        let rss_bytes = statm.resident.saturating_mul(state.page_size);
-        let pss = match state.pss.get(&key) {
-            Some(&(bytes, at)) if now.duration_since(at) < state.pss_interval => Some((bytes, at)),
-            // Unreadable smaps_rollup (kernel < 4.14, ptrace policy) falls back to RSS.
-            _ => read_proc(pid, "smaps_rollup")
-                .ok()
-                .flatten()
-                .and_then(|text| procfs::parse_smaps_rollup_pss(&text).ok())
-                .map(|bytes| (bytes, now)),
-        };
-        if let Some(entry) = pss {
-            pss_cache.insert(key, entry);
-        }
         samples.push(Sample {
             subject: Subject::Process {
                 unit: units[index].unit.clone(),
@@ -251,14 +253,75 @@ fn collect(state: &mut State, units: &[UnitTarget]) -> Result<Vec<Sample>, Error
                 start_time: stat.starttime,
             },
             cpu_percent,
-            footprint_bytes: pss.map_or(rss_bytes, |(bytes, _)| bytes),
+            footprint_bytes,
+            rss_bytes,
+            ts_ms,
+        });
+    }
+    if let Some((pid, stat)) = daemon
+        && let Some((cpu_percent, footprint_bytes, rss_bytes)) =
+            measure(state, &mut cycle, pid, &stat)
+    {
+        samples.push(Sample {
+            subject: Subject::Daemon,
+            cpu_percent,
+            footprint_bytes,
             rss_bytes,
             ts_ms,
         });
     }
     // Replacing the caches drops exited processes.
-    state.previous = previous;
-    state.pss = pss_cache;
+    state.previous = cycle.previous;
+    state.pss = cycle.pss;
     samples.sort_by(|a, b| a.subject.cmp(&b.subject));
     Ok(samples)
+}
+
+/// One sampling pass: its clocks and the caches that replace [`State`]'s at
+/// the end, so processes not read in this pass drop out.
+struct Cycle {
+    uptime: f64,
+    now: Instant,
+    previous: HashMap<(u32, u64), CpuReading>,
+    pss: HashMap<(u32, u64), (u64, Instant)>,
+}
+
+/// Measures one process as `(cpu_percent, footprint_bytes, rss_bytes)`, with
+/// CPU against the previous pass and PSS from the cache while it is fresh.
+/// Returns `None` once the process is gone.
+fn measure(state: &State, cycle: &mut Cycle, pid: u32, stat: &ProcStat) -> Option<(f64, u64, u64)> {
+    let statm = read_proc(pid, "statm").ok().flatten()?;
+    let statm = procfs::parse_statm(&statm).ok()?;
+    let now = cycle.now;
+    let key = (pid, stat.starttime);
+    let ticks = stat.utime.saturating_add(stat.stime);
+    let cpu_percent = match state.previous.get(&key) {
+        Some(last) => procfs::cpu_percent(
+            ticks.saturating_sub(last.ticks),
+            state.ticks_per_second,
+            now.duration_since(last.at).as_secs_f64(),
+        ),
+        // First sight: lifetime average so a busy process is not idle for a tick.
+        None => procfs::lifetime_cpu_percent(stat, state.ticks_per_second, cycle.uptime),
+    };
+    cycle.previous.insert(key, CpuReading { ticks, at: now });
+
+    let rss_bytes = statm.resident.saturating_mul(state.page_size);
+    let pss = match state.pss.get(&key) {
+        Some(&(bytes, at)) if now.duration_since(at) < state.pss_interval => Some((bytes, at)),
+        // Unreadable smaps_rollup (kernel < 4.14, ptrace policy) falls back to RSS.
+        _ => read_proc(pid, "smaps_rollup")
+            .ok()
+            .flatten()
+            .and_then(|text| procfs::parse_smaps_rollup_pss(&text).ok())
+            .map(|bytes| (bytes, now)),
+    };
+    if let Some(entry) = pss {
+        cycle.pss.insert(key, entry);
+    }
+    Some((
+        cpu_percent,
+        pss.map_or(rss_bytes, |(bytes, _)| bytes),
+        rss_bytes,
+    ))
 }

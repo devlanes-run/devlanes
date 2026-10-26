@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use devlanes_core::{ProcessIdentity, UnitRunId};
+use devlanes_core::{ProcessIdentity, UnitRunId, gate::MemoryPressure};
 use devlanes_metrics::{
     COARSE_CAPACITY, COARSE_INTERVAL_MS, ContainerTarget, History, RAW_CAPACITY, RunTracker,
     Sample, SampleRequest, Series, Subject, UnitKey, UnitTarget, Window, aggregate,
@@ -59,11 +59,26 @@ pub(crate) struct MetricsState {
     pub last_prune_ms: u64,
     /// The machine as of the last tick, for `metrics.system`.
     pub system: Option<SystemReading>,
-    /// `(ts_ms, cpu_percent, available_memory_bytes)` per tick, newest last,
-    /// at most [`RAW_CAPACITY`] entries.
-    pub system_history: VecDeque<(u64, Option<f64>, Option<u64>)>,
+    /// One [`SystemPoint`] per tick, newest last, at most [`RAW_CAPACITY`]
+    /// entries.
+    pub system_history: VecDeque<SystemPoint>,
     /// Physical memory, read once.
     pub memory_total: Option<u64>,
+    /// The daemon's own process, set by the first tick that could identify it.
+    pub daemon: Option<DaemonProcess>,
+}
+
+/// `(ts_ms, cpu_percent, available_memory_bytes, memory_pressure)` of one tick.
+pub(crate) type SystemPoint = (u64, Option<f64>, Option<u64>, Option<&'static str>);
+
+/// The daemon's own process, measured on every tick under [`Subject::Daemon`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DaemonProcess {
+    pub identity: ProcessIdentity,
+    /// When the engine started (Unix ms); peaks count from here.
+    pub started_at_ms: u64,
+    /// `(cpu, memory)` from the last tick, `None` when that tick could not read it.
+    pub latest: Option<(f64, u64)>,
 }
 
 /// One reading of the whole machine.
@@ -187,10 +202,14 @@ impl Inner {
         }
     }
 
-    /// Samples every live unit once and updates history, peaks and rollups.
+    /// Samples every live unit and the daemon itself once and updates history,
+    /// peaks and rollups.
     pub(crate) async fn sample_once(self: &Arc<Self>) {
         let mut targets = Vec::new();
-        let mut request = SampleRequest::default();
+        let mut request = SampleRequest {
+            daemon: self.daemon_identity().await,
+            ..SampleRequest::default()
+        };
         let mut containers: BTreeMap<Subject, ContainerRow> = BTreeMap::new();
         for (project, lane) in self.all_lanes() {
             let project_name = project.name();
@@ -270,6 +289,11 @@ impl Inner {
             }
         }
         let totals = aggregate(&leaves);
+        let daemon_samples: Vec<Sample> = leaves
+            .iter()
+            .filter(|sample| sample.subject == Subject::Daemon)
+            .cloned()
+            .collect();
         // Container leaves get their own history, for the monitor and rollups.
         let container_samples: Vec<Sample> = leaves
             .into_iter()
@@ -297,11 +321,18 @@ impl Inner {
                     now,
                     reading.cpu_percent,
                     reading.available_memory_bytes,
+                    reading.memory_pressure,
                 ));
                 state.system = Some(reading);
             }
             state.history.record_all(&totals);
             state.history.record_all(&container_samples);
+            state.history.record_all(&daemon_samples);
+            if let Some(daemon) = &mut state.daemon {
+                daemon.latest = daemon_samples
+                    .last()
+                    .map(|sample| (sample.cpu_percent, sample.footprint_bytes));
+            }
             state.containers = containers;
             for target in &targets {
                 if let Some(run) = target.run
@@ -431,6 +462,29 @@ impl Inner {
         ))
     }
 
+    /// The daemon's own process identity, read on the first call and kept in
+    /// [`MetricsState::daemon`]. `None` while the process table cannot be read.
+    async fn daemon_identity(&self) -> Option<ProcessIdentity> {
+        let known = lock(&self.metrics).daemon.map(|daemon| daemon.identity);
+        if known.is_some() {
+            return known;
+        }
+        let identity = tokio::task::spawn_blocking(|| devlanes_sys::identity(std::process::id()))
+            .await
+            .ok()?
+            .ok()??;
+        // `uptime_ms` in `status` counts from the same instant.
+        let uptime = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut state = lock(&self.metrics);
+        // A concurrent tick may have stored it first; keep that one.
+        let daemon = state.daemon.get_or_insert(DaemonProcess {
+            identity,
+            started_at_ms: now_ms().saturating_sub(uptime),
+            latest: None,
+        });
+        Some(daemon.identity)
+    }
+
     /// Adds the latest CPU and memory to a lane summary's units.
     pub(crate) fn fill_metrics(&self, summary: &mut LaneSummary) {
         let state = lock(&self.metrics);
@@ -461,8 +515,9 @@ impl Inner {
         }
     }
 
-    /// `metrics`: per-unit samples and history, or `peaks: true` for the current
-    /// lane start.
+    /// `metrics`: per-unit samples and history, lane totals, the machine and the
+    /// daemon's own process, or `peaks: true` for the current lane start. The
+    /// reply shape is documented on [`devlanes_proto::Method::Metrics`].
     pub(crate) async fn metrics_method(
         self: &Arc<Self>,
         value: Value,
@@ -577,8 +632,10 @@ impl Inner {
             let history: Vec<Value> = state
                 .system_history
                 .iter()
-                .filter(|(ts, _, _)| *ts >= view.since_ms)
-                .map(|(ts, cpu, available)| json!([ts, cpu, available]))
+                .filter(|(ts, ..)| *ts >= view.since_ms)
+                .map(|(ts, cpu, available, pressure)| {
+                    json!([ts, cpu, available, pressure.and_then(pressure_level)])
+                })
                 .collect();
             json!({
                 "cpus": std::thread::available_parallelism().map(usize::from).ok(),
@@ -595,8 +652,45 @@ impl Inner {
         if let Some(system) = system {
             result["system"] = system;
         }
+        if let Some(daemon) = daemon_entry(&state, &view) {
+            result["daemon"] = daemon;
+        }
         Ok(result)
     }
+}
+
+/// The `metrics` reply's `daemon` object; `None` until a tick has read the
+/// daemon's own process.
+fn daemon_entry(state: &MetricsState, view: &View) -> Option<Value> {
+    let daemon = state.daemon?;
+    let series = state.history.series(&Subject::Daemon)?;
+    let peak = peak_since(series, daemon.started_at_ms);
+    let mut entry = json!({
+        "pid": daemon.identity.pid,
+        "started_at_ms": daemon.started_at_ms,
+        "cpu_percent": daemon.latest.map(|l| l.0),
+        "memory_bytes": daemon.latest.map(|l| l.1),
+        "peak_cpu_percent": peak.0,
+        "peak_memory_bytes": peak.1,
+        "history": view.history(Some(series)),
+    });
+    if view.windows {
+        entry["windows"] = json!(view.windows(Some(series)));
+    }
+    Some(entry)
+}
+
+/// The `metrics` system history's pressure level for a
+/// [`MemoryPressure::word`]: 0 normal, 1 warn, 2 critical.
+fn pressure_level(word: &str) -> Option<usize> {
+    // Matching through `word()` keeps this in step with what `read_system` stores.
+    [
+        MemoryPressure::Normal,
+        MemoryPressure::Warn,
+        MemoryPressure::Critical,
+    ]
+    .iter()
+    .position(|level| level.word() == word)
 }
 
 /// What to measure for one unit: the leader's session, the leader and the
@@ -881,6 +975,64 @@ mod tests {
         track(&mut state, "gone", 0);
         state.prune(now + 1_000, &live);
         assert_eq!(state.subjects.len(), 3);
+    }
+
+    /// Every pressure word maps to its wire level; anything else has none.
+    #[test]
+    fn pressure_levels_follow_the_words() {
+        let levels: Vec<Option<usize>> = [
+            MemoryPressure::Normal,
+            MemoryPressure::Warn,
+            MemoryPressure::Critical,
+        ]
+        .iter()
+        .map(|level| pressure_level(level.word()))
+        .collect();
+        assert_eq!(levels, [Some(0), Some(1), Some(2)]);
+        assert_eq!(pressure_level("unknown"), None);
+    }
+
+    /// The `daemon` entry waits for the first reading and carries peaks since
+    /// the daemon started.
+    #[test]
+    fn daemon_entry_needs_a_reading() {
+        let mut state = MetricsState::default();
+        let view = View {
+            since_ms: 0,
+            range_ms: RAW_RANGE_MS,
+            points: None,
+            windows: false,
+        };
+        assert!(daemon_entry(&state, &view).is_none());
+        state.daemon = Some(DaemonProcess {
+            identity: process(42, 42),
+            started_at_ms: 2_000,
+            latest: Some((1.5, 300)),
+        });
+        assert!(daemon_entry(&state, &view).is_none(), "no series yet");
+        for (ts_ms, cpu_percent, footprint_bytes) in [(1_000, 90.0, 900), (3_000, 1.5, 300)] {
+            state.history.record(&Sample {
+                subject: Subject::Daemon,
+                cpu_percent,
+                footprint_bytes,
+                rss_bytes: footprint_bytes,
+                ts_ms,
+            });
+        }
+        let entry = daemon_entry(&state, &view).expect("entry");
+        assert_eq!(entry["pid"], 42);
+        assert_eq!(entry["started_at_ms"], 2_000);
+        assert_eq!(
+            (&entry["cpu_percent"], &entry["memory_bytes"]),
+            (&json!(1.5), &json!(300))
+        );
+        assert_eq!(
+            (&entry["peak_cpu_percent"], &entry["peak_memory_bytes"]),
+            (&json!(1.5), &json!(300)),
+            "the point before the start does not count"
+        );
+        assert_eq!(entry["history"].as_array().map(Vec::len), Some(2));
+        assert!(entry.get("windows").is_none());
     }
 
     /// The unit key every target test uses.
