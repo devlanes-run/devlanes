@@ -1,13 +1,13 @@
  devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                                                     M monitor   D daemon   B boxes · 3 issues
- lanes  1 acme@0  2 acme@4                                                                                                                                                      1-9 or [ ] switch lanes
+ lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
 ┌ @4 · 6/7 up ─────────────────────────────────┐┌ ext-build  ready · http://127.0.0.1:24105 ─────────────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
 │ ▾ services                                 6 ││ state     ready on the box                                                                                                                           │
 │   ● api-gateway                              ││ ports     default 24105  mirrored here                                                                                                               │
-│   ● web-app                                  ││ hosts     ext.example.com  not routed: only names under .localhost are                                                                               │
+│   ● web-app                                  ││ hosts     ext.example.com  not routed here (not under .localhost)                                                                                    │
 │   ◉ wrk-email                                ││ syncs     dist  up to date, following changes                                                                                                        │
 │   ● api-admin                                ││ into      /Users/acme/.devlanes/sync/hetzner/acme/acme@4/dist                                                                                        │
 │   · web-docs                                 ││                                                                                                                                                      │
-│   ● ext-build                                ││ Runs on hetzner and is read-only here. On the box (ssh hetzner), devlanes logs acme@4:ext-build shows its output there.                              │
+│   ● ext-build                                ││ Read-only here. Its output stays on hetzner: ssh hetzner, then devlanes logs acme@4:ext-build                                                        │
 │                                              ││                                                                                                                                                      │
 │ ▾ tasks                                    1 ││                                                                                                                                                      │
 │   ■ migrate                            ended ││                                                                                                                                                      │
@@ -61,15 +61,15 @@
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 158 bold, 159-166 dim, 170 bold, 171-177 dim, 181 bold, 182-187 dim, 188-198 yellow
-1: 0-6 dim, 8-9 dim, 10-15 green, 17-26 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
+1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-58 bold, 59-60 dim, 61-65 green, 66-90 dim, 92-186 darkgray, 188-197 dim, 199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-75 dim, 199 darkgray
 4: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 50-59 dim, 75-87 green, 199 darkgray
-5: 0 darkgray, 4-12 green, 47-48 darkgray, 50-59 dim, 60-119 yellow, 199 darkgray
+5: 0 darkgray, 4-12 green, 47-48 darkgray, 50-59 dim, 60-114 yellow, 199 darkgray
 6: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 50-59 dim, 66-94 green, 199 darkgray
 7: 0 darkgray, 4-5 green, 6-14 dim blue, 47-48 darkgray, 50-110 dim, 199 darkgray
 8: 0 darkgray, 4-5 dim, 6-13 dim green, 47-48 darkgray, 199 darkgray
-9: 0 darkgray, 1-46 reversed, 47-48 darkgray, 50-168 dim, 199 darkgray
+9: 0 darkgray, 1-46 reversed, 47-48 darkgray, 50-142 dim, 199 darkgray
 10: 0 darkgray, 47-48 darkgray, 199 darkgray
 11: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 199 darkgray
 12: 0 darkgray, 4-12 dim, 41-45 dim, 47-48 darkgray, 199 darkgray

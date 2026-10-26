@@ -2185,22 +2185,41 @@ fn failed_opens_are_one_line() {
     );
 }
 
-/// `remote ls` leaves the box's registry, which the TUI reads, to `--json`;
-/// a route shows the URL that opens it here.
+/// `remote ls` leaves what the TUI reads (the box's registry, handshake
+/// info, proxy ports and name suffixes) to `--json`; a route shows the URL
+/// that opens it here, and the connection its age.
 #[test]
 fn box_registries_stay_out_of_remote_ls() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
     let hosts = json!({"items": [{
         "host": "hetzner", "state": "connected", "transport": "ssh", "ports": [],
+        "connected_since_ms": now - 5 * 60_000,
         "routes": [{"host": "web.acme-1.localhost", "port": 20101, "lane": "acme@1",
                     "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
         "registry": {"lanes": [{"key": {"project": "acme", "lane": "1"}, "index": 1}],
                      "units": [{"key": {"lane": {"project": "acme", "lane": "1"},
                                         "kind": "service", "name": "registered-only"}}]},
+        "box": {"version": "0.0.1", "label": "devlanes 0.0.1", "https_port": 7443,
+                "ports_range": "24000-24999"},
+        "proxy": {"https_port": 443, "box_port": 7443, "open": true},
+        "suffixes": ["localhost", "tld-only-in-json"],
     }], "truncated": false, "next_cursor": null});
     let text = render_text(Method::HostList, &hosts);
-    assert!(!text.contains("registry"), "{text}");
-    assert!(!text.contains("registered-only"), "{text}");
+    for hidden in [
+        "registry",
+        "registered-only",
+        "7443",
+        "24000-24999",
+        "tld-only-in-json",
+        "connected_since_ms",
+    ] {
+        assert!(!text.contains(hidden), "{hidden}: {text}");
+    }
     assert!(text.contains("https://web.acme-1.localhost"), "{text}");
+    assert!(text.contains("connected_since: 5m ago"), "{text}");
 }
 
 /// A box waiting for a sign-in shows its state, the error and the command

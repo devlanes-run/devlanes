@@ -27,8 +27,6 @@ pub struct BoxHost {
     pub fix: Option<String>,
     /// `ssh` or `command`.
     pub transport: Option<String>,
-    /// The box's version label from its last handshake, as stored.
-    pub daemon_version: Option<String>,
     pub last_connected_ms: Option<u64>,
     pub connected_since_ms: Option<u64>,
     pub ports: Vec<MirrorPort>,
@@ -101,6 +99,10 @@ pub struct MirrorRoute {
 pub struct SkippedLane {
     pub lane: String,
     pub hosts: Vec<String>,
+    /// The box connected earlier that serves them; `None` when a local
+    /// lane does.
+    #[serde(rename = "box")]
+    pub other: Option<String>,
     pub reason: String,
 }
 
@@ -255,18 +257,9 @@ impl BoxHost {
         self.transport.as_deref().is_none_or(|t| t == "ssh")
     }
 
-    /// The box's devlanes version, from the handshake or the stored label.
+    /// The box's devlanes version from its last handshake.
     pub fn version(&self) -> Option<String> {
-        self.info
-            .as_ref()
-            .and_then(|info| info.version.clone())
-            .or_else(|| {
-                let label = self.daemon_version.as_deref()?;
-                label
-                    .strip_prefix("devlanes ")
-                    .and_then(|rest| rest.split_whitespace().next())
-                    .map(str::to_owned)
-            })
+        self.info.as_ref().and_then(|info| info.version.clone())
     }
 
     /// The box lane `lane` (`project@index`) of the registry.
@@ -324,13 +317,14 @@ impl BoxHost {
             .filter(move |s| s.lane == lane && s.unit == unit)
     }
 
-    /// The command that runs `command` on the box, for hints: `ssh hetzner,
-    /// then devlanes …` over ssh, `devlanes … on devbox` otherwise.
+    /// How to run `command` on the box, after `On <box>: ` in every hint:
+    /// `ssh hetzner, then devlanes …` over ssh, the command alone for a box
+    /// reached by a command, which has no shell to name.
     pub fn there(&self, command: &str) -> String {
         if self.over_ssh() {
             format!("ssh {}, then {command}", self.host)
         } else {
-            format!("{command} on {}", self.host)
+            command.to_owned()
         }
     }
 
@@ -413,8 +407,8 @@ impl BoxHost {
             reference,
             project: project_label(&lane.key.project, &self.host),
             index: Some(lane.index),
-            // The chips name a box lane by its reference on the box.
-            name: Some(box_ref),
+            // The chips name a box lane by its number; the tab names the project.
+            name: Some(format!("@{}", lane.index)),
             state: state.into(),
             units,
             containers,
@@ -424,7 +418,7 @@ impl BoxHost {
     }
 
     /// What opens `unit` here: its routed hostnames' URLs, then the loopback
-    /// address of each port bound on this machine.
+    /// address of each port bound on this machine, IPv4 when it is bound there.
     fn urls(&self, lane: &str, unit: &RegistryUnit) -> Vec<String> {
         let mut urls: Vec<String> = unit
             .hosts
@@ -432,15 +426,28 @@ impl BoxHost {
             .filter_map(|host| self.route(&host.host)?.url.clone())
             .collect();
         for port in &unit.ports {
-            let bound = self.port(lane, &unit.key.name, port.port).is_some_and(|p| {
-                p.state.as_deref().unwrap_or("bound") == "bound" && !p.addresses.is_empty()
-            });
-            if bound {
+            let Some(mirrored) = self
+                .port(lane, &unit.key.name, port.port)
+                .filter(|p| p.state.as_deref().unwrap_or("bound") == "bound")
+            else {
+                continue;
+            };
+            if mirrored.bound_v4() {
                 urls.push(format!("http://127.0.0.1:{}", port.port));
+            } else if mirrored.addresses.iter().any(|a| a == "::1") {
+                urls.push(format!("http://[::1]:{}", port.port));
             }
         }
         urls.dedup();
         urls
+    }
+}
+
+impl MirrorPort {
+    /// Whether `127.0.0.1:<port>` reaches the box; the mirror may hold only
+    /// `::1` when something else has the IPv4 address.
+    pub fn bound_v4(&self) -> bool {
+        self.addresses.iter().any(|a| a == "127.0.0.1")
     }
 }
 
@@ -497,7 +504,7 @@ mod tests {
         let lane = &lanes[0];
         assert_eq!(lane.reference, "acme@1 @hetzner");
         assert_eq!(lane.project, "acme @hetzner");
-        assert_eq!(lane.name.as_deref(), Some("acme@1"));
+        assert_eq!(lane.name.as_deref(), Some("@1"));
         assert_eq!(lane.state, "running");
         let web = &lane.units[0];
         assert_eq!(
@@ -512,6 +519,11 @@ mod tests {
             Some("https://web.acme-1.localhost:8443")
         );
         assert_eq!(lane.units[1].kind, "task");
+        // Held on 127.0.0.1 by something else, the port opens on ::1 only.
+        let mut v6 = listed();
+        v6["items"][0]["ports"][0]["addresses"] = json!(["::1"]);
+        let urls = &parse(&v6)[0].lanes()[0].units[0].urls;
+        assert_eq!(urls[1], "http://[::1]:20101");
         assert_eq!(lane.containers[0].name, "db");
         assert_eq!(
             boxes[0].there("devlanes stop acme@1:web"),

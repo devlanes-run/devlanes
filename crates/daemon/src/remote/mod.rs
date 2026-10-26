@@ -332,6 +332,9 @@ pub(crate) struct HostConn {
     /// What the box said about itself in its latest handshake, kept while it
     /// reconnects.
     info: Mutex<BoxInfo>,
+    /// The box's version label (`devlanes 0.5.0 (linger off)`) from its latest
+    /// handshake, kept while it reconnects like `info`.
+    label: Mutex<String>,
     /// The `proxy_port_in_use` message while the proxy cannot serve the box's
     /// HTTPS port.
     proxy_port: Mutex<Option<String>>,
@@ -603,14 +606,8 @@ impl HostConn {
             })
             .collect();
         let info = lock(&self.info).clone();
-        let label = self
-            .session()
-            .map(|session| session.server().to_owned())
-            .unwrap_or_default();
-        let version = label
-            .strip_prefix("devlanes ")
-            .and_then(|rest| rest.split_whitespace().next())
-            .map(str::to_owned);
+        let label = lock(&self.label).clone();
+        let version = label_version(&label).map(str::to_owned);
         let box_port = info.https_port.filter(|port| Some(*port) != https_port);
         let Some(map) = value.as_object_mut() else {
             return value;
@@ -1039,6 +1036,7 @@ impl Inner {
             warnings: Mutex::new(BTreeMap::new()),
             serial: self.remote.next_serial.fetch_add(1, Ordering::Relaxed),
             info: Mutex::new(BoxInfo::default()),
+            label: Mutex::new(String::new()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
             connected_since: Mutex::new(None),
@@ -1618,15 +1616,19 @@ fn ranges_overlap(a: (u16, u16), b: (u16, u16)) -> bool {
     a.0 <= b.1 && b.0 <= a.1
 }
 
+/// The release in a handshake label: `0.5.0` of `devlanes 0.5.0 (linger off)`.
+fn label_version(label: &str) -> Option<&str> {
+    label
+        .strip_prefix("devlanes ")
+        .and_then(|rest| rest.split_whitespace().next())
+}
+
 /// Findings about the box behind a handshake label (`devlanes <version>`,
 /// optionally `(linger off)`), as warning code and message.
 fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
     let ours = devlanes_version::VERSION;
     let mut warnings = Vec::new();
-    let theirs = label
-        .strip_prefix("devlanes ")
-        .and_then(|rest| rest.split_whitespace().next())
-        .unwrap_or("");
+    let theirs = label_version(label).unwrap_or("");
     if theirs != ours {
         warnings.push((
             "box_version",
@@ -1679,6 +1681,7 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
         inner.bus.emit(wire::STATE_EVENT, conn.state_json());
         if let Some(session) = session {
             *lock(&conn.info) = session.box_info().clone();
+            *lock(&conn.label) = session.server().to_owned();
             let findings = label_warnings(session.server());
             let known = {
                 let mut warnings = lock(&conn.warnings);
@@ -1916,6 +1919,7 @@ mod tests {
             warnings: Mutex::new(BTreeMap::new()),
             serial: 0,
             info: Mutex::new(BoxInfo::default()),
+            label: Mutex::new(String::new()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
             connected_since: Mutex::new(None),

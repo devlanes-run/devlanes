@@ -1,50 +1,50 @@
  devlanes  1 acme   2 billing   3 shop   4 acme @hetzner  › M   D   B · 3 issues
- lanes  1 acme@0  2 acme@4                              1-9 or [ ] switch lanes
+ lanes  1 @0  2 @4                                      1-9 or [ ] switch lanes
 ┌ @4 · 6/7 up ─────────────────┐┌ acme@4  running · 6 up ────────── on hetzner ┐
 │ ▾ services                 6 ││ box       hetzner · ssh · devlanes 0.9.2     │
-│   ● api-gateway              ││ lane      acme@4 on the box                  │
-│   ● web-app                  ││ domain    acme-4.localhost                   │
-│   ◉ wrk-email                ││ services  5 of 6 up                          │
-│   ● api-admin                ││           · web-docs         stopped         │
-│   · web-docs                 ││ tasks     1 ended                            │
-│   ● ext-build                ││ infra     postgres :24110                    │
-│                              ││ ports     4 mirrored here, 1 not (select a   │
-│ ▾ tasks                    1 ││           unit for why)                      │
+│   ● api-gateway              ││ domain    acme-4.localhost                   │
+│   ● web-app                  ││ services  5 of 6 up                          │
+│   ◉ wrk-email                ││           · web-docs         stopped         │
+│   ● api-admin                ││ tasks     1 ended                            │
+│   · web-docs                 ││ infra     postgres :24110                    │
+│   ● ext-build                ││ ports     4 of 5 mirrored here               │
+│                              ││ proxy     this machine serves its hostnames  │
+│ ▾ tasks                    1 ││           on 8443 (the box's URLs use 443)   │
 │   ■ migrate            ended ││ urls                                         │
 │                              ││   https://gateway.acme-4.localhost:8443      │
-│ ▾ infra                      ││           https://app.acme-4.localhost:8443  │
-│   ▾ containers          1 up ││           https://docs.acme-4.localhost:8443 │
-│     ● postgres               ││ syncs     1 folder synced here; select the   │
-│                              ││           unit for each                      │
+│ ▾ infra                      ││   https://app.acme-4.localhost:8443          │
+│   ▾ containers          1 up ││   https://docs.acme-4.localhost:8443         │
+│     ● postgres               ││ syncs     ext-build  up to date, following   │
+│                              ││                      changes                 │
 │                              ││                                              │
-│                              ││ Runs on hetzner and is read-only here. On the│
-│                              ││ box (ssh hetzner), devlanes status acme@4    │
-│                              ││ shows it there.                              │
+│                              ││ Read-only here. On hetzner: ssh hetzner, then│
+│                              ││ devlanes status acme@4                       │
+│                              ││                                              │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
  o open in browser   [ ] switch lane   / filter           ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 57-58 dim, 60 bold, 64 bold, 68 bold, 69-79 yellow
-1: 0-6 dim, 8-9 dim, 10-15 green, 17-26 bold reversed, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
+1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
 2: 0 darkgray, 1-13 bold reversed, 14-32 darkgray, 34-39 bold, 40-55 dim, 57-66 darkgray, 68-77 dim, 79 darkgray
 3: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
 4: 0 darkgray, 4-5 green, 6-16 blue, 31-32 darkgray, 34-43 dim, 79 darkgray
 5: 0 darkgray, 4-12 green, 31-32 darkgray, 34-43 dim, 79 darkgray
-6: 0 darkgray, 4-5 green, 6-14 magenta, 31-32 darkgray, 34-43 dim, 79 darkgray
-7: 0 darkgray, 4-5 green, 6-14 dim blue, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
+6: 0 darkgray, 4-5 green, 6-14 magenta, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
+7: 0 darkgray, 4-5 green, 6-14 dim blue, 31-32 darkgray, 34-43 dim, 79 darkgray
 8: 0 darkgray, 4-5 dim, 6-13 dim green, 31-32 darkgray, 34-43 dim, 79 darkgray
 9: 0 darkgray, 4-14 green, 31-32 darkgray, 34-43 dim, 79 darkgray
 10: 0 darkgray, 31-32 darkgray, 34-43 dim, 79 darkgray
 11: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
 12: 0 darkgray, 4-12 dim, 25-29 dim, 31-32 darkgray, 34-37 dim, 79 darkgray
 13: 0 darkgray, 31-32 darkgray, 79 darkgray
-14: 0 darkgray, 2-3 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-15: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-16: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-43 dim, 79 darkgray
-17: 0 darkgray, 31-32 darkgray, 34-43 dim, 79 darkgray
+14: 0 darkgray, 2-3 dim, 31-32 darkgray, 79 darkgray
+15: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 79 darkgray
+16: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-43 dim, 55-75 green, 79 darkgray
+17: 0 darkgray, 31-32 darkgray, 34-43 dim, 55-61 green, 79 darkgray
 18: 0 darkgray, 31-32 darkgray, 79 darkgray
 19: 0 darkgray, 31-32 darkgray, 34-78 dim, 79 darkgray
-20: 0 darkgray, 31-32 darkgray, 34-74 dim, 79 darkgray
-21: 0 darkgray, 31-32 darkgray, 34-48 dim, 79 darkgray
+20: 0 darkgray, 31-32 darkgray, 34-55 dim, 79 darkgray
+21: 0 darkgray, 31-32 darkgray, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-20 dim, 21-23 bold, 24-38 dim, 39 bold, 40-49 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

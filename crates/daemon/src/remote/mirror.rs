@@ -359,7 +359,12 @@ impl Mirror {
         let (had_routes, had_ports) = {
             let mut view = lock(&self.conn.view);
             let had = (!view.routes.is_empty(), !view.bound.is_empty());
-            if had.0 || !view.ports.is_empty() || !view.skipped.is_empty() {
+            if had.0
+                || !view.ports.is_empty()
+                || !view.skipped.is_empty()
+                || !view.refused_hosts.is_empty()
+                || !view.open_errors.is_empty()
+            {
                 self.conn.mark_changed();
             }
             *view = View::default();
@@ -551,34 +556,29 @@ impl Mirror {
                         // the port and has not listed it yet. Its reconcile wakes
                         // this mirror once it has, and the check above names it.
                         let own = pid == Some(std::process::id());
-                        // `holder` is what keeps the port: the message's subject.
-                        let (holder, message) = if let Some((other, unit)) = &other_box {
-                            let holder = format!("box {other} ({unit})");
-                            let message = format!(
-                                "port {port} is in use on this machine by {holder}; not mirrored"
-                            );
-                            (holder, message)
+                        // What keeps the port when something does: the
+                        // message's subject. A bind that failed for another
+                        // reason has none.
+                        let holder = if let Some((other, unit)) = &other_box {
+                            Some(format!("box {other} ({unit})"))
                         } else if own {
-                            let holder = "this devlanes daemon".to_owned();
-                            let message = format!(
-                                "port {port} is in use on this machine by {holder}; not mirrored"
-                            );
-                            (holder, message)
+                            Some("this devlanes daemon".to_owned())
                         } else if in_use {
-                            let holder = match pid {
+                            Some(match pid {
                                 Some(pid) => format!("{} (pid {pid})", process_name(pid).await),
                                 None => "another process".to_owned(),
-                            };
-                            let message = format!(
-                                "port {port} is in use on this machine by {holder}; not mirrored"
-                            );
-                            (holder, message)
+                            })
                         } else {
-                            let holder = bind_failure(&error);
-                            let message = format!(
-                                "port {port} cannot be bound on {address}: {holder}; not mirrored"
-                            );
-                            (holder, message)
+                            None
+                        };
+                        let message = match &holder {
+                            Some(holder) => format!(
+                                "port {port} is in use on this machine by {holder}; not mirrored"
+                            ),
+                            None => format!(
+                                "port {port} cannot be bound on {address}: {}; not mirrored",
+                                bind_failure(&error)
+                            ),
                         };
                         // Reported once per holder: again when another box, or
                         // something other than a box, holds it now. A port this
@@ -704,17 +704,11 @@ impl Mirror {
                     if let Some((message, owner)) = &mirror.local {
                         conflicts.push(json!({"message": message, "local": owner}));
                     }
-                    // `bound` with a listener on at least one address; a port
-                    // held on one address and bound on the other still works.
-                    let state = if mirror.local.is_some() {
-                        "local_lane"
-                    } else if !mirror.bound.is_empty() {
-                        "bound"
-                    } else if !mirror.conflicts.is_empty() {
-                        "in_use"
-                    } else {
-                        "unbound"
-                    };
+                    let state = port_state(
+                        mirror.local.is_some(),
+                        !mirror.bound.is_empty(),
+                        &mirror.conflicts,
+                    );
                     json!({
                         "port": port,
                         "lane": mirror.lane,
@@ -803,6 +797,25 @@ impl Mirror {
         ));
         self.relays.insert(port, (local, Bound { address, task }));
         Some(local)
+    }
+}
+
+/// A mirrored port's `state` for `host.list`: `local_lane` inside a local
+/// lane's block, `bound` with a listener on at least one address (a port held
+/// on one address and bound on the other still works), `in_use` when
+/// something holds it, `failed` when the binds failed with nothing holding it
+/// (a port Windows reserves, a low port), else `unbound`.
+fn port_state(local: bool, bound: bool, conflicts: &BTreeMap<IpAddr, Value>) -> &'static str {
+    if local {
+        "local_lane"
+    } else if bound {
+        "bound"
+    } else if conflicts.values().any(|c| !c["holder"].is_null()) {
+        "in_use"
+    } else if !conflicts.is_empty() {
+        "failed"
+    } else {
+        "unbound"
     }
 }
 
@@ -1167,6 +1180,26 @@ mod tests {
             view.warned.keys().copied().collect::<Vec<_>>(),
             [(4000, "not_running")]
         );
+    }
+
+    /// A bind that failed with nothing holding the port is `failed`, one held
+    /// by something `in_use`; a bound address or a local block wins.
+    #[test]
+    fn port_states_tell_a_held_port_from_a_failed_bind() {
+        let v4 = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let v6 = IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+        let held = BTreeMap::from([(v4, json!({"holder": "nginx (pid 812)"}))]);
+        let failed = BTreeMap::from([(v4, json!({"holder": null, "message": "access denied"}))]);
+        let both = BTreeMap::from([
+            (v4, json!({"holder": null})),
+            (v6, json!({"holder": "box alpha (app@0:web)"})),
+        ]);
+        assert_eq!(port_state(false, false, &held), "in_use");
+        assert_eq!(port_state(false, false, &failed), "failed");
+        assert_eq!(port_state(false, false, &both), "in_use");
+        assert_eq!(port_state(false, true, &failed), "bound");
+        assert_eq!(port_state(true, true, &BTreeMap::new()), "local_lane");
+        assert_eq!(port_state(false, false, &BTreeMap::new()), "unbound");
     }
 
     /// Each refusal reason gets its own wording, without the port; a dial

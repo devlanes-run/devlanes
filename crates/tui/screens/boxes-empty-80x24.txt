@@ -1,11 +1,11 @@
- devlanes  1 acme   2 billing   3 shop   start…  M monitor   D daemon   B boxes
+ devlanes  1 acme   2 billing   3 shop   starting feat/checko…  M   D   B boxes
 ┌ boxes ───────────────────────────────────────────────────────────────────────┐
-│ No boxes. devlanes remote connect <box> mirrors a box's lanes here: its      │
-│ ports, hostnames and synced folders. The box keeps running them; this view   │
-│ only shows them.                                                             │
+│ no boxes connected                                                           │
 │                                                                              │
+│   devlanes remote connect <box>   mirrors a box's lanes here: their ports,   │
+│                                   hostnames and synced folders               │
 │                                                                              │
-│                                                                              │
+│ The box keeps running them; this view is read-only.                          │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -24,14 +24,14 @@
  j k scroll   tab projects   esc back                     ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 49 bold, 50-57 dim, 61 bold, 62-68 dim, 72 bold, 73-78 bold underlined
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 64 bold, 68 bold, 72 bold, 73-78 bold underlined
 1: 0 darkgray, 1-7 bold, 8-79 darkgray
-2: 0 darkgray, 79 darkgray
+2: 0 darkgray, 2-19 bold, 79 darkgray
 3: 0 darkgray, 79 darkgray
-4: 0 darkgray, 79 darkgray
-5: 0 darkgray, 79 darkgray
+4: 0 darkgray, 4-32 bold, 36-75 dim, 79 darkgray
+5: 0 darkgray, 36-63 dim, 79 darkgray
 6: 0 darkgray, 79 darkgray
-7: 0 darkgray, 79 darkgray
+7: 0 darkgray, 2-52 dim, 79 darkgray
 8: 0 darkgray, 79 darkgray
 9: 0 darkgray, 79 darkgray
 10: 0 darkgray, 79 darkgray

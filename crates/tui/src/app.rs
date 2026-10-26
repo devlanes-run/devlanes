@@ -874,6 +874,9 @@ pub struct App {
     pub daemon_checks_box: std::cell::Cell<ratatui::layout::Rect>,
     pub list_offset: usize,
     pub notice: Option<Notice>,
+    /// The row of a box lane whose key did nothing, and the line the pane
+    /// shows on why and what to run on the box; it goes with the notice.
+    pub refusal: Option<(Selected, String)>,
     /// Recent errors, newest first.
     pub errors: VecDeque<ErrorEntry>,
     pub daemon: DaemonView,
@@ -975,6 +978,7 @@ impl App {
             daemon_checks_box: std::cell::Cell::default(),
             list_offset: 0,
             notice: None,
+            refusal: None,
             errors: VecDeque::new(),
             daemon: DaemonView::default(),
             size: (width, height),
@@ -1756,6 +1760,7 @@ impl App {
             error: true,
         });
         self.notice_ticks = ERROR_TICKS;
+        self.refusal = None;
         if let Some(target) = target {
             self.target_errors.insert(target, entry.clone());
         }
@@ -2595,9 +2600,13 @@ impl App {
             .iter()
             .find(|(_, lane)| lane.as_str() == gone)
             .map(|(project, _)| project.clone())?;
+        // A box lane is `acme@1 @<box>`, and box names may hold `@`
+        // (`user@host`); the lane part never holds a space.
         let index = |reference: &str| {
-            reference
-                .rsplit_once('@')
+            let lane = reference
+                .split_once(" @")
+                .map_or(reference, |(lane, _)| lane);
+            lane.rsplit_once('@')
                 .and_then(|(_, n)| n.parse::<i64>().ok())
         };
         let target = index(gone).unwrap_or(0);
@@ -3242,11 +3251,12 @@ impl App {
             .is_some_and(|s| self.box_lane(&s.lane).is_some())
     }
 
-    /// Says why a key that acts on units does nothing for a box lane, with
-    /// the command that does it on the box: `acme@1:web runs on hetzner: ssh
-    /// hetzner, then devlanes restart acme@1:web`. `verb` is what the key
-    /// does (`start`, `logs`, ...).
-    fn box_refusal(&mut self, verb: &str) {
+    /// Says why `key` does nothing for a box lane, with the command that does
+    /// it on the box: the pane's first line reads `r does not restart it here.
+    /// On hetzner: ssh hetzner, then devlanes restart acme@1:web`, the header
+    /// `on hetzner: devlanes restart acme@1:web`. `verb` is what the key does
+    /// (`start`, `logs`, ...).
+    fn box_refusal(&mut self, key: &str, verb: &str) {
         let Some(selected) = self.selected.clone() else {
             return;
         };
@@ -3262,6 +3272,18 @@ impl App {
             host.unit(&lane, name)
                 .is_some_and(|unit| unit.key.kind == "task")
         });
+        let it = if unit.is_some() { "it" } else { "the lane" };
+        let refused = match verb {
+            "start" if task => format!("{key} does not run it here."),
+            "restart" if task => format!("{key} does not run it again here."),
+            "start" | "stop" | "restart" => format!("{key} does not {verb} {it} here."),
+            "start all" => format!("{key} does not start the lane here."),
+            "profiles" => format!("{key} does not start the lane with profiles here."),
+            "clean" => format!("{key} does not clean the lane here."),
+            "attach" => format!("{key} has nothing to type into here."),
+            "logs" if key == "c" => format!("{key} has no output to select here."),
+            _ => format!("{key} has no output to scroll here."),
+        };
         let command = match (verb, unit) {
             ("start" | "restart", Some(name)) if task => {
                 format!("devlanes run {name} --lane {lane}")
@@ -3279,9 +3301,11 @@ impl App {
             }
             _ => format!("devlanes status {lane}"),
         };
-        let what = unit.map_or_else(|| lane.clone(), |name| unit_ref(&lane, name));
-        let notice = format!("{what} runs on {}: {}", host.host, host.there(&command));
+        let banner = format!("{refused} On {}: {}", host.host, host.there(&command));
+        let notice = format!("on {}: {command}", host.host);
         self.set_notice(notice);
+        // After the notice, which clears an older refusal.
+        self.refusal = Some((selected, banner));
     }
 
     /// Keys while the list filter takes typing: text narrows the list, Enter
@@ -3538,7 +3562,7 @@ impl App {
             return;
         }
         if self.on_box() {
-            self.box_refusal("attach");
+            self.box_refusal("enter", "attach");
             return;
         }
         let Some(attached) = self.attached.as_ref() else {
@@ -3938,18 +3962,20 @@ impl App {
         // A box runs its lanes; keys that would act on them here only say
         // what to run there. Moving, folding, filtering and `o` still work.
         if self.on_box() {
-            let verb = match key.code {
-                KeyCode::Char('s') => Some("start"),
-                KeyCode::Char('S') => Some("start all"),
-                KeyCode::Char('x') => Some("stop"),
-                KeyCode::Char('r') => Some("restart"),
-                KeyCode::Char('p') => Some("profiles"),
-                KeyCode::Char('C') => Some("clean"),
-                KeyCode::Char('c') | KeyCode::PageUp | KeyCode::PageDown => Some("logs"),
+            let refused = match key.code {
+                KeyCode::Char('s') => Some(("s", "start")),
+                KeyCode::Char('S') => Some(("S", "start all")),
+                KeyCode::Char('x') => Some(("x", "stop")),
+                KeyCode::Char('r') => Some(("r", "restart")),
+                KeyCode::Char('p') => Some(("p", "profiles")),
+                KeyCode::Char('C') => Some(("C", "clean")),
+                KeyCode::Char('c') => Some(("c", "logs")),
+                KeyCode::PageUp => Some(("pgup", "logs")),
+                KeyCode::PageDown => Some(("pgdn", "logs")),
                 _ => None,
             };
-            if let Some(verb) = verb {
-                self.box_refusal(verb);
+            if let Some((name, verb)) = refused {
+                self.box_refusal(name, verb);
                 return;
             }
         }
@@ -5414,7 +5440,11 @@ impl App {
                             KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
                             effects,
                         );
-                    } else if pressed && self.selected_unit().is_some_and(|u| is_active(&u.state)) {
+                    } else if pressed
+                        // A box unit's pane holds its details, nothing to type into.
+                        && !self.on_box()
+                        && self.selected_unit().is_some_and(|u| is_active(&u.state))
+                    {
                         if let Some(attached) = self.attached.as_mut() {
                             attached.mode = PaneMode::Live;
                         }
@@ -5471,6 +5501,7 @@ impl App {
             self.notice_ticks -= 1;
             if self.notice_ticks == 0 {
                 self.notice = None;
+                self.refusal = None;
             }
         }
         let online = self.connection == Connection::Online;
@@ -5677,6 +5708,7 @@ impl App {
             error: false,
         });
         self.notice_ticks = NOTICE_TICKS;
+        self.refusal = None;
     }
 
     /// Rows of the monitor table: from metrics when the daemon sent them,

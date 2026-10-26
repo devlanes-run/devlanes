@@ -138,6 +138,70 @@ a project whose devlanes.yaml does not load (Shift+2)
 - 120x40: [txt](project-config-error-120x40.txt) · [png](project-config-error-120x40.png) · [ansi](project-config-error-120x40.ansi)
 - 80x24: [txt](project-config-error-80x24.txt) · [png](project-config-error-80x24.png) · [ansi](project-config-error-80x24.ansi)
 
+## box-lane
+
+a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the pane says what to run on the box
+
+- 200x60: [txt](box-lane-200x60.txt) · [png](box-lane-200x60.png) · [ansi](box-lane-200x60.ansi)
+- 120x40: [txt](box-lane-120x40.txt) · [png](box-lane-120x40.png) · [ansi](box-lane-120x40.ansi)
+- 80x24: [txt](box-lane-80x24.txt) · [png](box-lane-80x24.png) · [ansi](box-lane-80x24.ansi)
+
+## box-unit
+
+a box service: state, its port in use here (relayed), the URL that opens it here
+
+- 200x60: [txt](box-unit-200x60.txt) · [png](box-unit-200x60.png) · [ansi](box-unit-200x60.ansi)
+- 120x40: [txt](box-unit-120x40.txt) · [png](box-unit-120x40.png) · [ansi](box-unit-120x40.ansi)
+- 80x24: [txt](box-unit-80x24.txt) · [png](box-unit-80x24.png) · [ansi](box-unit-80x24.ansi)
+
+## box-unit-sync
+
+a box service with a synced folder and a hostname this machine does not route
+
+- 200x60: [txt](box-unit-sync-200x60.txt) · [png](box-unit-sync-200x60.png) · [ansi](box-unit-sync-200x60.ansi)
+- 120x40: [txt](box-unit-sync-120x40.txt) · [png](box-unit-sync-120x40.png) · [ansi](box-unit-sync-120x40.ansi)
+- 80x24: [txt](box-unit-sync-80x24.txt) · [png](box-unit-sync-80x24.png) · [ansi](box-unit-sync-80x24.ansi)
+
+## box-lane-skipped
+
+a box lane that is not mirrored because a local lane serves its hostnames
+
+- 200x60: [txt](box-lane-skipped-200x60.txt) · [png](box-lane-skipped-200x60.png) · [ansi](box-lane-skipped-200x60.ansi)
+- 120x40: [txt](box-lane-skipped-120x40.txt) · [png](box-lane-skipped-120x40.png) · [ansi](box-lane-skipped-120x40.ansi)
+- 80x24: [txt](box-lane-skipped-80x24.txt) · [png](box-lane-skipped-80x24.png) · [ansi](box-lane-skipped-80x24.ansi)
+
+## box-reconnecting
+
+a box reached by a command while its link reconnects: the lane as last reported, a failed service
+
+- 200x60: [txt](box-reconnecting-200x60.txt) · [png](box-reconnecting-200x60.png) · [ansi](box-reconnecting-200x60.ansi)
+- 120x40: [txt](box-reconnecting-120x40.txt) · [png](box-reconnecting-120x40.png) · [ansi](box-reconnecting-120x40.ansi)
+- 80x24: [txt](box-reconnecting-80x24.txt) · [png](box-reconnecting-80x24.png) · [ansi](box-reconnecting-80x24.ansi)
+
+## box-refused
+
+r on a box service: nothing restarts; the pane's first line says why and what to run on the box
+
+- 200x60: [txt](box-refused-200x60.txt) · [png](box-refused-200x60.png) · [ansi](box-refused-200x60.ansi)
+- 120x40: [txt](box-refused-120x40.txt) · [png](box-refused-120x40.png) · [ansi](box-refused-120x40.ansi)
+- 80x24: [txt](box-refused-80x24.txt) · [png](box-refused-80x24.png) · [ansi](box-refused-80x24.ansi)
+
+## boxes
+
+the boxes view (B): link state, errors and fixes, box info, proxy port, skipped lanes and hostnames, syncs, warnings
+
+- 200x60: [txt](boxes-200x60.txt) · [png](boxes-200x60.png) · [ansi](boxes-200x60.ansi)
+- 120x40: [txt](boxes-120x40.txt) · [png](boxes-120x40.png) · [ansi](boxes-120x40.ansi)
+- 80x24: [txt](boxes-80x24.txt) · [png](boxes-80x24.png) · [ansi](boxes-80x24.ansi)
+
+## boxes-empty
+
+the boxes view before any box connected
+
+- 200x60: [txt](boxes-empty-200x60.txt) · [png](boxes-empty-200x60.png) · [ansi](boxes-empty-200x60.ansi)
+- 120x40: [txt](boxes-empty-120x40.txt) · [png](boxes-empty-120x40.png) · [ansi](boxes-empty-120x40.ansi)
+- 80x24: [txt](boxes-empty-80x24.txt) · [png](boxes-empty-80x24.png) · [ansi](boxes-empty-80x24.ansi)
+
 ## unit-failed
 
 a failed service: failure card above its last output

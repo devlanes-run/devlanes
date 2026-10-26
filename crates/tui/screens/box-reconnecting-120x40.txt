@@ -1,12 +1,12 @@
  devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox     M monitor   D daemon   B boxes · 3 issues
 ┌ shop@0 on devbox ────────────────────────────┐┌ checkout-api  failed ───────────────────────────────────── on devbox ┐
-│ ▾ services                                 2 ││ ! devbox is reconnecting; what shows here is from before.            │
+│ ▾ services                                 2 ││ ! devbox is reconnecting; this is its last known state.              │
 │   ● storefront                               ││                                                                      │
 │   ✕ checkout-api                      failed ││ state     failed on the box                                          │
 │                                              ││ ports     default 30001  mirrored once it runs                       │
 │                                              ││                                                                      │
-│                                              ││ Runs on devbox and is read-only here. On the box, devlanes logs      │
-│                                              ││ shop@0:checkout-api shows its output there.                          │
+│                                              ││ Read-only here. Its output stays on devbox: devlanes logs            │
+│                                              ││ shop@0:checkout-api                                                  │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
@@ -47,8 +47,8 @@
 4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 50-59 dim, 60-76 red, 119 darkgray
 5: 0 darkgray, 47-48 darkgray, 50-59 dim, 75-95 dim, 119 darkgray
 6: 0 darkgray, 47-48 darkgray, 119 darkgray
-7: 0 darkgray, 47-48 darkgray, 50-112 dim, 119 darkgray
-8: 0 darkgray, 47-48 darkgray, 50-92 dim, 119 darkgray
+7: 0 darkgray, 47-48 darkgray, 50-106 dim, 119 darkgray
+8: 0 darkgray, 47-48 darkgray, 50-68 dim, 119 darkgray
 9: 0 darkgray, 47-48 darkgray, 119 darkgray
 10: 0 darkgray, 47-48 darkgray, 119 darkgray
 11: 0 darkgray, 47-48 darkgray, 119 darkgray

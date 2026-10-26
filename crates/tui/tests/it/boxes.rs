@@ -1,9 +1,9 @@
 //! Boxes in the TUI: box projects after the local ones, read-only lanes
 //! whose keys say where to act instead, the details pane and the boxes view.
 
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_proto::remote::MIRROR_EVENT;
-use devlanes_tui::app::{App, Effect, Msg, RowId, Selected, View};
+use devlanes_tui::app::{App, Effect, Focus, Msg, RowId, Section, Selected, View};
 use ratatui::{Terminal, backend::TestBackend};
 use serde_json::{Value, json};
 
@@ -11,8 +11,9 @@ use super::{TestResult, draw, key, loaded, select, shifted};
 use crate::fake::{FakeApi, mixed_lanes};
 
 /// `host.list` with `hetzner` connected over ssh, running `acme@1` with a
-/// mirrored `web`, a `worker` whose port is taken here and a task, and
-/// `devbox` reached by a command, waiting for a sign-in.
+/// mirrored `web`, a `worker` whose port is taken here, a task and a `db`
+/// container whose port cannot be bound here, and `devbox` reached by a
+/// command, waiting for a sign-in.
 fn hosts() -> Value {
     let lane = json!({"project": "acme", "lane": "1"});
     let unit = |kind: &str, name: &str, state: &str, ports: Value, hosts: Value| {
@@ -31,6 +32,10 @@ fn hosts() -> Value {
                  "state": "in_use", "addresses": [], "relay": null, "last_error": null,
                  "conflicts": [{"holder": "postgres (pid 812)",
                                 "message": "port 24101 is in use on this machine by postgres (pid 812); not mirrored"}]},
+                {"port": 24110, "lane": "acme@1", "unit": "db", "kind": "container",
+                 "state": "failed", "addresses": [], "relay": null, "last_error": null,
+                 "conflicts": [{"holder": null,
+                                "message": "port 24110 cannot be bound on 127.0.0.1: access denied; not mirrored"}]},
             ],
             "routes": [{"host": "web.acme-1.localhost", "port": 24100, "lane": "acme@1",
                         "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
@@ -43,6 +48,7 @@ fn hosts() -> Value {
                          json!([{"host": "web.acme-1.localhost", "port": 24100}])),
                     unit("service", "worker", "running", json!([{"name": "default", "port": 24101}]), json!([])),
                     unit("task", "migrate", "running", json!([]), json!([])),
+                    unit("container", "db", "running", json!([{"name": "5432", "port": 24110}]), json!([])),
                 ],
             },
             "box": {"version": "0.0.1", "https_port": 443, "ports_range": "24000-24999"},
@@ -77,6 +83,22 @@ async fn with_boxes(width: u16, height: u16) -> App {
     let (mut app, _) = loaded(&api, width, height).await;
     app.update(Msg::Boxes(Ok(hosts())));
     app
+}
+
+/// The header's notice.
+fn notice(app: &App) -> String {
+    app.notice
+        .as_ref()
+        .map(|n| n.text.clone())
+        .unwrap_or_default()
+}
+
+/// The refusal line the pane shows first.
+fn refusal(app: &App) -> String {
+    app.refusal
+        .as_ref()
+        .map(|(_, text)| text.clone())
+        .unwrap_or_default()
 }
 
 /// Effects that would act on a unit or lane, or open its stream.
@@ -124,7 +146,10 @@ async fn a_box_unit_shows_its_details_instead_of_a_terminal() -> TestResult {
     assert!(app.attached.is_none());
     let text = screen_text(&draw(&app)?);
     assert!(text.contains("in use here by postgres"), "{text}");
-    assert!(text.contains("read-only: manage it on"), "{text}");
+    // The footer's note in the form that fits.
+    let footer = text.lines().last().unwrap_or_default();
+    assert!(footer.contains("   read-only"), "{footer}");
+    assert!(!footer.contains('…'), "the note is never cut: {footer}");
     assert_screen!("box_unit", draw(&app)?.backend());
     select(&mut app, Selected::unit("acme@1 @hetzner", "web"));
     // The URL that opens it here is a link like every unit URL.
@@ -147,55 +172,91 @@ async fn actions_on_box_units_do_nothing_and_name_the_command_for_the_box() -> T
     let mut app = with_boxes(100, 24).await;
     select(&mut app, Selected::unit("acme@1 @hetzner", "web"));
     let cases = [
-        (key(KeyCode::Char('s')), "devlanes start acme@1:web"),
-        (key(KeyCode::Char('x')), "devlanes stop acme@1:web"),
-        (key(KeyCode::Char('r')), "devlanes restart acme@1:web"),
-        (shifted('S'), "devlanes start --lane acme@1"),
+        (
+            key(KeyCode::Char('s')),
+            "s does not start it here.",
+            "devlanes start acme@1:web",
+        ),
+        (
+            key(KeyCode::Char('x')),
+            "x does not stop it here.",
+            "devlanes stop acme@1:web",
+        ),
+        (
+            key(KeyCode::Char('r')),
+            "r does not restart it here.",
+            "devlanes restart acme@1:web",
+        ),
+        (
+            shifted('S'),
+            "S does not start the lane here.",
+            "devlanes start --lane acme@1",
+        ),
         (
             key(KeyCode::Char('p')),
+            "p does not start the lane with profiles here.",
             "devlanes start --lane acme@1 --profile <name>",
         ),
-        (shifted('C'), "devlanes lane clean acme@1"),
-        (key(KeyCode::Enter), "devlanes attach acme@1:web"),
-        (key(KeyCode::Char('c')), "devlanes logs acme@1:web"),
-        (key(KeyCode::PageUp), "devlanes logs acme@1:web"),
+        (
+            shifted('C'),
+            "C does not clean the lane here.",
+            "devlanes lane clean acme@1",
+        ),
+        (
+            key(KeyCode::Enter),
+            "enter has nothing to type into here.",
+            "devlanes attach acme@1:web",
+        ),
+        (
+            key(KeyCode::Char('c')),
+            "c has no output to select here.",
+            "devlanes logs acme@1:web",
+        ),
+        (
+            key(KeyCode::PageUp),
+            "pgup has no output to scroll here.",
+            "devlanes logs acme@1:web",
+        ),
     ];
-    for (msg, command) in cases {
+    for (msg, refused, command) in cases {
         let shown = format!("{msg:?}");
         let effects = app.update(msg);
         assert!(!acts(&effects), "{shown}: {effects:?}");
         assert!(app.dialog.is_none(), "{shown} opened a dialog");
-        let notice = app
-            .notice
-            .as_ref()
-            .map(|n| n.text.clone())
-            .unwrap_or_default();
-        assert!(
-            notice.contains("runs on hetzner: ssh hetzner, then ") && notice.contains(command),
-            "{shown}: {notice}"
+        assert_eq!(
+            notice(&app),
+            format!("on hetzner: {command}"),
+            "{shown}: the header's short form"
+        );
+        assert_eq!(
+            refusal(&app),
+            format!("{refused} On hetzner: ssh hetzner, then {command}"),
+            "{shown}: the pane's first line"
         );
     }
+    let text = screen_text(&draw(&app)?);
+    assert!(
+        text.contains("! pgup has no output to scroll here."),
+        "{text}"
+    );
     // A box task runs again on the box; the lane stops there.
     select(&mut app, Selected::unit("acme@1 @hetzner", "migrate"));
     app.update(key(KeyCode::Char('r')));
-    let notice = app
-        .notice
-        .as_ref()
-        .map(|n| n.text.clone())
-        .unwrap_or_default();
-    assert!(
-        notice.contains("devlanes run migrate --lane acme@1"),
-        "{notice}"
+    assert_eq!(
+        notice(&app),
+        "on hetzner: devlanes run migrate --lane acme@1"
     );
+    assert!(refusal(&app).starts_with("r does not run it again here."));
     select(&mut app, Selected::lane("acme@1 @hetzner"));
     let effects = app.update(key(KeyCode::Char('x')));
     assert!(!acts(&effects), "{effects:?}");
-    let notice = app
-        .notice
-        .as_ref()
-        .map(|n| n.text.clone())
-        .unwrap_or_default();
-    assert!(notice.contains("devlanes stop --lane acme@1"), "{notice}");
+    assert_eq!(notice(&app), "on hetzner: devlanes stop --lane acme@1");
+    assert!(refusal(&app).starts_with("x does not stop the lane here."));
+    // The line goes with the notice.
+    for _ in 0..10 {
+        app.update(Msg::Tick);
+    }
+    assert!(app.refusal.is_none() && app.notice.is_none());
     // Moving, folding and the filter still work.
     app.update(key(KeyCode::Char('j')));
     assert_ne!(app.selected_id(), Some(&RowId::WholeLane));
@@ -242,11 +303,136 @@ async fn the_boxes_view_shows_links_errors_fixes_and_warnings() -> TestResult {
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
+    assert!(!text.contains('`'), "backticks stripped: {text}");
     assert_screen!("boxes_view", draw(&app)?.backend());
     // B again, or esc, goes back.
+    app.update(shifted('B'));
+    assert_eq!(app.view, View::Project);
+    app.update(shifted('B'));
+    assert_eq!(app.view, View::Boxes);
     app.update(key(KeyCode::Esc));
     assert_eq!(app.view, View::Project);
     Ok(())
+}
+
+#[tokio::test]
+async fn the_boxes_view_says_what_connecting_does_without_boxes() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    app.update(shifted('B'));
+    let text = screen_text(&draw(&app)?);
+    assert!(text.contains("no boxes connected"), "{text}");
+    assert!(
+        text.contains("devlanes remote connect <box>   mirrors a box's lanes here"),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn sections_and_containers_of_a_box_lane_show_their_details() -> TestResult {
+    let mut app = with_boxes(100, 24).await;
+    let effects = select(
+        &mut app,
+        Selected {
+            lane: "acme@1 @hetzner".into(),
+            row: RowId::Section(Section::Services),
+        },
+    );
+    assert!(!acts(&effects), "{effects:?}");
+    let text = screen_text(&draw(&app)?);
+    assert!(text.contains("name    state     url"), "{text}");
+    assert!(text.contains("https://web.acme-1.localhost"), "{text}");
+    assert!(!text.contains("memory"), "no metrics for box units: {text}");
+    // Enter folds a section of a box lane as of any lane.
+    app.update(key(KeyCode::Enter));
+    assert!(
+        app.rows()
+            .iter()
+            .any(|row| row.id == RowId::Section(Section::Services) && row.folded == Some(true))
+    );
+    let effects = select(
+        &mut app,
+        Selected {
+            lane: "acme@1 @hetzner".into(),
+            row: RowId::Container("db".into()),
+        },
+    );
+    assert!(
+        !acts(&effects),
+        "no docker logs for a box container: {effects:?}"
+    );
+    let text = screen_text(&draw(&app)?);
+    assert!(
+        text.contains("cannot be bound on") && text.contains("access denied"),
+        "a failed bind shows the daemon's words: {text}"
+    );
+    assert!(!text.contains("in use here"), "{text}");
+    assert!(text.contains("It starts and stops with its lane"), "{text}");
+    app.update(key(KeyCode::Char('s')));
+    assert_eq!(notice(&app), "on hetzner: devlanes start --lane acme@1");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_port_bound_on_ipv6_alone_opens_there() -> TestResult {
+    let mut boxes = hosts();
+    boxes["items"][0]["ports"][0]["addresses"] = json!(["::1"]);
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    app.update(Msg::Boxes(Ok(boxes)));
+    select(&mut app, Selected::unit("acme@1 @hetzner", "web"));
+    let text = screen_text(&draw(&app)?);
+    assert!(text.contains("mirrored here (IPv6 only)"), "{text}");
+    assert!(
+        app.link_targets()
+            .contains(&"http://[::1]:24100".to_owned()),
+        "{:?}",
+        app.link_targets()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_click_in_a_box_units_pane_does_nothing() -> TestResult {
+    let mut app = with_boxes(100, 24).await;
+    select(&mut app, Selected::unit("acme@1 @hetzner", "web"));
+    draw(&app)?;
+    let pane = app.areas().ok_or("no layout")?.pane_inner;
+    let at = |kind| {
+        Msg::Mouse(MouseEvent {
+            kind,
+            column: pane.x + 2,
+            row: pane.y + 2,
+            modifiers: KeyModifiers::NONE,
+        })
+    };
+    let mut effects = app.update(at(MouseEventKind::Down(MouseButton::Left)));
+    effects.extend(app.update(at(MouseEventKind::Up(MouseButton::Left))));
+    assert!(!acts(&effects), "{effects:?}");
+    assert!(app.notice.is_none() && app.refusal.is_none());
+    assert_eq!(app.focus, Focus::List);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_box_lane_that_goes_away_leaves_the_nearest_one_of_its_box() {
+    // `user@host` box names hold an `@` of their own.
+    let lane =
+        |index: u32| json!({"key": {"project": "acme", "lane": index.to_string()}, "index": index});
+    let listing = |indexes: &[u32]| {
+        json!({"items": [{"host": "me@gpu", "state": "connected", "transport": "ssh",
+            "registry": {"lanes": indexes.iter().map(|i| lane(*i)).collect::<Vec<_>>(), "units": []}}]})
+    };
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    app.update(Msg::Boxes(Ok(listing(&[0, 3, 5]))));
+    select(&mut app, Selected::lane("acme@3 @me@gpu"));
+    app.update(Msg::Boxes(Ok(listing(&[0, 5]))));
+    assert_eq!(
+        app.selected.as_ref().map(|s| s.lane.as_str()),
+        Some("acme@5 @me@gpu")
+    );
 }
 
 #[tokio::test]

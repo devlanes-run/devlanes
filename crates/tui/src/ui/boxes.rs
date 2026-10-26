@@ -37,7 +37,7 @@ pub(super) fn pane(
         format!("on {}", clean(&host.host)),
         theme.quiet(),
     )];
-    let mut lines = notes(theme, host, box_lane, width);
+    let mut lines = notes(app, host, box_lane, width);
     match app.selected_id().cloned() {
         Some(RowId::Unit(name)) => {
             let unit = lane.units.iter().find(|u| u.name == name);
@@ -66,7 +66,7 @@ pub(super) fn pane(
                 ));
                 if tree::role(unit) == Role::Task {
                     lines.extend(sentence(
-                        "The box reports a task's state only; its output stays on the box.",
+                        "The box reports a task's state only.",
                         width,
                         Vec::new(),
                         theme.quiet(),
@@ -75,13 +75,12 @@ pub(super) fn pane(
                 lines.extend(endpoint_lines(app, host, box_lane, registered, width));
             }
             let command = format!("devlanes logs {box_lane}:{name}");
-            lines.extend(read_only(
-                theme,
-                host,
-                &command,
-                "shows its output there",
-                width,
-            ));
+            let text = format!(
+                "Read-only here. Its output stays on {}: {}",
+                host.host,
+                host.there(&command)
+            );
+            lines.extend(read_only(theme, &text, width));
         }
         Some(RowId::Container(name)) => {
             let container = lane.containers.iter().find(|c| c.name == name);
@@ -95,13 +94,13 @@ pub(super) fn pane(
             if let Some(registered) = host.unit(box_lane, &name) {
                 lines.extend(endpoint_lines(app, host, box_lane, registered, width));
             }
-            lines.push(Line::from(""));
-            lines.extend(sentence(
-                "Containers start and stop with the lane on the box.",
-                width,
-                Vec::new(),
-                theme.quiet(),
-            ));
+            let command = format!("devlanes status {box_lane}");
+            let text = format!(
+                "Read-only here. It starts and stops with its lane on {}: {}",
+                host.host,
+                host.there(&command)
+            );
+            lines.extend(read_only(theme, &text, width));
         }
         Some(RowId::Section(_) | RowId::Group(..)) => {
             let label = match app.selected_id() {
@@ -129,73 +128,90 @@ pub(super) fn pane(
             );
             lines.extend(lane_lines(app, host, box_lane, lane, width));
             let command = format!("devlanes status {box_lane}");
-            lines.extend(read_only(theme, host, &command, "shows it there", width));
+            let text = format!("Read-only here. On {}: {}", host.host, host.there(&command));
+            lines.extend(read_only(theme, &text, width));
         }
     }
     details(frame, lines, area, app);
 }
 
-/// Banners above a box lane's details: a link that is down, so what shows
-/// may be old, and a lane this machine does not mirror.
-fn notes(theme: &Theme, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'static>> {
+/// Banners above a box lane's details: a key that just did nothing here and
+/// what to run on the box instead, a link that is down, so what shows is the
+/// last known state, and a lane this machine does not mirror.
+fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'static>> {
+    let theme = &app.theme;
+    let attention = |text: &str, rest: &[String]| {
+        let mut lines = banner(theme, Glyph::Attention, Tone::Attention, text, rest, width);
+        lines.push(Line::from(""));
+        lines
+    };
     let mut lines = Vec::new();
+    if let Some((selected, text)) = &app.refusal
+        && app.selected.as_ref() == Some(selected)
+    {
+        lines.extend(attention(text, &[]));
+    }
     let name = clean(&host.host);
     let down = match host.state.as_str() {
         "connected" => None,
         "needs_auth" => Some(format!(
-            "{name} needs a sign-in; what shows here is from before. devlanes remote connect {name} resumes it."
+            "{name} needs a sign-in; this is its last known state. devlanes remote connect {name} resumes it."
         )),
         "reconnecting" | "connecting" => Some(format!(
-            "{name} is reconnecting; what shows here is from before."
+            "{name} is reconnecting; this is its last known state."
         )),
         state => Some(format!(
-            "{name} is {}; what shows here is from before.",
+            "{name} is {}; this is its last known state.",
             clean(state)
         )),
     };
     if let Some(down) = down {
-        lines.extend(banner(
-            theme,
-            Glyph::Attention,
-            Tone::Attention,
-            &down,
-            &[],
-            width,
-        ));
-        lines.push(Line::from(""));
+        lines.extend(attention(&down, &[]));
     }
     if let Some(skipped) = host.skipped(box_lane) {
-        let reason = clean(&skipped.reason);
-        lines.extend(banner(
-            theme,
-            Glyph::Attention,
-            Tone::Attention,
+        let reason = skip_reason(app, skipped);
+        lines.extend(attention(
             &format!("Not mirrored here: {reason}."),
             &["Its ports and hostnames are mirrored once that changes.".to_owned()],
-            width,
         ));
-        lines.push(Line::from(""));
     }
     lines
 }
 
-/// The last lines of a box pane: read-only here, and the command on the box.
-fn read_only(
-    theme: &Theme,
-    host: &BoxHost,
-    command: &str,
-    what: &str,
-    width: usize,
-) -> Vec<Line<'static>> {
-    let mut lines = vec![Line::from("")];
-    let name = clean(&host.host);
-    let there = if host.over_ssh() {
-        format!("On the box (ssh {name})")
-    } else {
-        "On the box".to_owned()
+/// Why a box lane is skipped, naming the local lane that serves its
+/// hostnames when one does: local lanes win over every box, so that lane is
+/// the one to stop.
+fn skip_reason(app: &App, skipped: &crate::boxes::SkippedLane) -> String {
+    match local_owner(app, &skipped.hosts) {
+        Some(local) if skipped.other.is_none() => {
+            format!("{} on this machine serves its hostnames", clean(&local))
+        }
+        _ => clean(&skipped.reason),
+    }
+}
+
+/// The local lane that serves one of `hosts`: a unit URL naming it, or the
+/// lane's domain it falls under.
+fn local_owner(app: &App, hosts: &[String]) -> Option<String> {
+    let serves = |lane: &LaneSummary, host: &str| {
+        let host = host.to_ascii_lowercase();
+        let under = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+        lane.units.iter().flat_map(|u| &u.urls).any(|url| {
+            url.strip_prefix("https://")
+                .and_then(|rest| rest.split([':', '/']).next())
+                .is_some_and(|named| named.eq_ignore_ascii_case(&host))
+        }) || lane.domain.as_deref().is_some_and(under)
     };
-    let text = format!("Runs on {name} and is read-only here. {there}, {command} {what}.");
-    lines.extend(sentence(&text, width, Vec::new(), theme.quiet()));
+    app.lanes
+        .iter()
+        .find(|lane| hosts.iter().any(|host| serves(lane, host)))
+        .map(|lane| lane.reference.clone())
+}
+
+/// The last lines of a box pane: `Read-only here.` and where to act instead.
+fn read_only(theme: &Theme, text: &str, width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from("")];
+    lines.extend(sentence(text, width, Vec::new(), theme.quiet()));
     lines
 }
 
@@ -232,26 +248,44 @@ fn row(
         .collect()
 }
 
-/// A URL under `label`, unbroken so it stays one link: beside the label when
-/// it fits there, else on a line of its own.
-fn url_row(
-    theme: &Theme,
-    label: &str,
-    url: &str,
-    style: Style,
-    width: usize,
-) -> Vec<Line<'static>> {
-    if LABEL + text::width(url) <= width {
-        return row(theme, label, "", url, style, width);
-    }
+/// One entry of a group under a label: its text, style and whether the text
+/// is a URL, which never wraps so it stays one link.
+type Entry = (String, Style, bool);
+
+/// `entries` under `label`, one per line, all in the same column: beside the
+/// label when every URL fits there, else each on a line of its own from
+/// column 2. A URL wider than even that is cut with `…`; other text wraps.
+fn group(theme: &Theme, label: &str, entries: &[Entry], width: usize) -> Vec<Line<'static>> {
+    let beside = entries
+        .iter()
+        .all(|(text, _, url)| !url || LABEL + text::width(text) <= width);
     let mut lines = Vec::new();
-    if !label.is_empty() {
+    if !beside && !entries.is_empty() {
         lines.push(Line::styled(label.to_owned(), theme.quiet()));
     }
-    lines.push(fit(
-        vec![Span::raw("  "), Span::styled(clean(url), style)],
-        width,
-    ));
+    for (index, (text, style, url)) in entries.iter().enumerate() {
+        if beside {
+            let label = if index == 0 { label } else { "" };
+            if *url {
+                lines.push(fit(
+                    vec![
+                        Span::styled(format!("{label:<LABEL$}"), theme.quiet()),
+                        Span::styled(clean(text), *style),
+                    ],
+                    width,
+                ));
+            } else {
+                lines.extend(row(theme, label, "", text, *style, width));
+            }
+        } else if *url {
+            lines.push(fit(
+                vec![Span::raw("  "), Span::styled(clean(text), *style)],
+                width,
+            ));
+        } else {
+            lines.extend(sentence(text, width, vec![Span::raw("  ")], *style));
+        }
+    }
     lines
 }
 
@@ -287,25 +321,29 @@ fn endpoint_lines(
             .and_then(|p| p.last_error.as_ref());
         if let Some(error) = error {
             let pad = " ".repeat(text::width(&lead));
+            // `nothing on the box accepted it: connection refused` reads
+            // `last try: nothing on the box accepted it (connection refused)`.
+            let message = clean(&error.message);
+            let text = match message.split_once(": ") {
+                Some((what, detail)) => format!("last try: {what} ({detail})"),
+                None => format!("last try: {message}"),
+            };
             lines.extend(row(
                 theme,
                 "",
                 &pad,
-                &format!("last connection failed: {}", error.message),
+                &text,
                 theme.tone(Tone::Failure),
                 width,
             ));
         }
     }
-    for (index, entry) in unit.hosts.iter().enumerate() {
-        let label = if index == 0 { "hosts" } else { "" };
-        let (value, style, url) = host_status(theme, host, box_lane, &entry.host);
-        if url {
-            lines.extend(url_row(theme, label, &value, style, width));
-        } else {
-            lines.extend(row(theme, label, "", &value, style, width));
-        }
-    }
+    let hosts: Vec<Entry> = unit
+        .hosts
+        .iter()
+        .map(|entry| host_status(theme, host, box_lane, &entry.host))
+        .collect();
+    lines.extend(group(theme, "hosts", &hosts, width));
     for (index, sync) in host.syncs_of(box_lane, &unit.key.name).enumerate() {
         let label = if index == 0 { "syncs" } else { "" };
         let leaf = sync
@@ -356,24 +394,37 @@ fn port_status(host: &BoxHost, box_lane: &str, unit: &RegistryUnit, port: u16) -
             } else {
                 "bound"
             });
+        let relayed = if mirrored.relay.is_some() {
+            "; its hostnames still open it"
+        } else {
+            ""
+        };
         return match (state, local) {
             ("local_lane", Some(local)) => (
                 format!("kept for {}; not mirrored", clean(local)),
                 Tone::Attention,
             ),
-            ("bound", _) => ("mirrored here".into(), Tone::Ok),
-            ("in_use", _) => {
-                let mut text = match holder {
-                    Some(holder) => format!("in use here by {}", clean(holder)),
-                    None => mirrored
-                        .conflicts
-                        .first()
-                        .map_or_else(|| "in use here".to_owned(), |c| clean(&c.message)),
-                };
-                if mirrored.relay.is_some() {
-                    text.push_str("; its hostnames go through a relay");
+            ("bound", _) => {
+                if mirrored.bound_v4() {
+                    ("mirrored here".into(), Tone::Ok)
+                } else {
+                    ("mirrored here (IPv6 only)".into(), Tone::Ok)
                 }
-                (text, Tone::Attention)
+            }
+            ("in_use", _) => {
+                let text = match holder {
+                    Some(holder) => format!("in use here by {}", clean(holder)),
+                    None => "in use here".to_owned(),
+                };
+                (format!("{text}{relayed}"), Tone::Attention)
+            }
+            // The bind failed for another reason: the daemon's words say which.
+            ("failed", _) => {
+                let text = mirrored
+                    .conflicts
+                    .first()
+                    .map_or_else(|| "cannot be bound here".to_owned(), |c| clean(&c.message));
+                (format!("{text}{relayed}"), Tone::Attention)
             }
             _ => ("not bound here".into(), Tone::Quiet),
         };
@@ -410,13 +461,13 @@ fn host_status(theme: &Theme, host: &BoxHost, box_lane: &str, name: &str) -> (St
     }
     let why = if host.refused(&name) {
         suffixes(host).map_or_else(
-            || "not routed: outside the names this machine routes".to_owned(),
-            |names| format!("not routed: only names under {names} are"),
+            || "not routed here (outside the names this machine routes)".to_owned(),
+            |names| format!("not routed here (not under {names})"),
         )
     } else if host.skipped(box_lane).is_some() {
-        "not routed: lane not mirrored".to_owned()
+        "not routed here (lane not mirrored)".to_owned()
     } else {
-        "not routed".to_owned()
+        "not routed here".to_owned()
     };
     (format!("{name}  {why}"), theme.tone(Tone::Attention), false)
 }
@@ -460,13 +511,6 @@ fn lane_lines(
     about.extend(host.transport.as_deref().map(clean));
     about.extend(host.version().map(|v| format!("devlanes {}", clean(&v))));
     lines.extend(field(theme, "box", &about.join(" · "), width, plain));
-    lines.extend(field(
-        theme,
-        "lane",
-        &format!("{box_lane} on the box"),
-        width,
-        plain,
-    ));
     if let Some(domain) = &lane.domain {
         lines.extend(field(theme, "domain", domain, width, plain));
     }
@@ -546,36 +590,41 @@ fn lane_lines(
         .iter()
         .filter(|p| p.state.as_deref() == Some("bound"))
         .count();
-    let held = ports.len() - bound;
-    let mut mirrored = format!("{bound} mirrored here");
-    if held > 0 {
-        mirrored.push_str(&format!(", {held} not (select a unit for why)"));
-    }
-    if host.skipped(box_lane).is_none() {
+    if host.skipped(box_lane).is_none() && !ports.is_empty() {
+        let mirrored = format!("{bound} of {} mirrored here", ports.len());
         lines.extend(field(theme, "ports", &mirrored, width, plain));
     }
-    let urls: Vec<String> = host
+    if let Some(proxy) = proxy_line(host) {
+        lines.extend(field(theme, "proxy", &proxy, width, plain));
+    }
+    let urls: Vec<Entry> = host
         .routes
         .iter()
         .filter(|route| route.lane == box_lane)
-        .filter_map(|route| route.url.as_deref().map(clean))
+        .filter_map(|route| route.url.as_deref().map(|url| (clean(url), plain, true)))
         .collect();
-    for (index, url) in urls.iter().enumerate() {
-        let label = if index == 0 { "urls" } else { "" };
-        lines.extend(url_row(theme, label, url, plain, width));
-    }
-    let syncs = host.syncs.iter().filter(|s| s.lane == box_lane).count();
-    if syncs > 0 {
-        let word = if syncs == 1 { "folder" } else { "folders" };
-        lines.extend(field(
-            theme,
-            "syncs",
-            &format!("{syncs} {word} synced here; select the unit for each"),
-            width,
-            plain,
-        ));
+    lines.extend(group(theme, "urls", &urls, width));
+    for (index, sync) in host.syncs.iter().filter(|s| s.lane == box_lane).enumerate() {
+        let label = if index == 0 { "syncs" } else { "" };
+        let (state, tone) = sync_state(&sync.state);
+        let lead = format!("{}  ", clean(&sync.unit));
+        lines.extend(row(theme, label, &lead, state, theme.tone(tone), width));
     }
     lines
+}
+
+/// How this machine serves the box's hostnames when the box's proxy uses
+/// another HTTPS port: `proxy.https_port` is this machine's, `box_port` the
+/// box's. `None` when both use the same port.
+fn proxy_line(host: &BoxHost) -> Option<String> {
+    let proxy = host.proxy.as_ref()?;
+    let theirs = proxy.box_port?;
+    let own = proxy.https_port?;
+    Some(if proxy.open {
+        format!("this machine serves its hostnames on {own}, and on {theirs} too as its URLs say")
+    } else {
+        format!("this machine serves its hostnames on {own} (the box's URLs use {theirs})")
+    })
 }
 
 /// A section or group of a box lane: one line per unit with its state and
@@ -661,19 +710,6 @@ fn members_table(
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let hosts = &app.boxes.hosts;
-    let connected = hosts.iter().filter(|h| h.connected()).count();
-    let mut right = Vec::new();
-    if !hosts.is_empty() {
-        right.push(Span::styled(
-            format!(" {connected} of {} connected ", hosts.len()),
-            theme.quiet(),
-        ));
-    }
-    let left = vec![Span::styled(
-        " boxes ",
-        Style::new().add_modifier(Modifier::BOLD),
-    )];
-    draw_box(app, frame, area, left, right, false);
     let inner = Rect::new(
         area.x + 2,
         area.y + 1,
@@ -683,12 +719,7 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let width = usize::from(inner.width).max(1);
     let mut lines = Vec::new();
     if hosts.is_empty() {
-        lines.extend(sentence(
-            "No boxes. devlanes remote connect <box> mirrors a box's lanes here: its ports, hostnames and synced folders. The box keeps running them; this view only shows them.",
-            width,
-            Vec::new(),
-            Style::new(),
-        ));
+        lines.extend(empty_lines(theme, width));
     }
     for (index, host) in hosts.iter().enumerate() {
         if index > 0 {
@@ -700,8 +731,52 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
     let max = lines.len().saturating_sub(height);
     app.boxes.max_scroll.set(max);
     let scroll = app.boxes.scroll.min(max);
+    let connected = hosts.iter().filter(|h| h.connected()).count();
+    let mut right = Vec::new();
+    if !hosts.is_empty() {
+        let more = if max > 0 { " · j k for more" } else { "" };
+        right.push(Span::styled(
+            format!(" {connected} of {} connected{more} ", hosts.len()),
+            theme.quiet(),
+        ));
+    }
+    let left = vec![Span::styled(
+        " boxes ",
+        Style::new().add_modifier(Modifier::BOLD),
+    )];
+    draw_box(app, frame, area, left, right, false);
     let shown: Vec<Line> = lines.into_iter().skip(scroll).take(height).collect();
     frame.render_widget(Paragraph::new(shown), inner);
+}
+
+/// No box yet: what connecting one does, laid out like the welcome's keys.
+fn empty_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
+    let command = "devlanes remote connect <box>";
+    let mut lines = vec![
+        Line::styled(
+            "no boxes connected",
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Line::from(""),
+    ];
+    lines.extend(sentence(
+        "mirrors a box's lanes here: their ports, hostnames and synced folders",
+        width,
+        vec![
+            Span::raw("  "),
+            Span::styled(command, theme.key()),
+            Span::raw("   "),
+        ],
+        theme.quiet(),
+    ));
+    lines.push(Line::from(""));
+    lines.extend(sentence(
+        "The box keeps running them; this view is read-only.",
+        width,
+        Vec::new(),
+        theme.quiet(),
+    ));
+    lines
 }
 
 /// A box's glyph and tone by link state.
@@ -828,13 +903,13 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
         lines.extend(fact("box", &about.join(" · "), plain));
     }
     // A port that cannot be served comes with a `proxy_port_in_use` warning below.
-    if let Some(proxy) = &host.proxy
-        && let Some(port) = proxy.box_port.filter(|_| proxy.open)
-    {
-        let text = format!("this machine also serves HTTPS on {port} for the box's URLs");
+    if let Some(text) = proxy_line(host).filter(|_| host.proxy.as_ref().is_some_and(|p| p.open)) {
         lines.extend(fact("proxy", &text, plain));
     }
-    if let Some(names) = suffixes(host) {
+    // `.localhost` is what every machine routes; only a configured TLD is news.
+    if host.suffixes.iter().any(|s| s != "localhost")
+        && let Some(names) = suffixes(host)
+    {
         lines.extend(fact(
             "names",
             &format!("hostnames under {names} are routed here"),
@@ -847,25 +922,26 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
             .iter()
             .filter(|p| p.state.as_deref() == Some("bound"))
             .count();
-        let held = host.ports.len() - bound;
         let lanes = registry.lanes.len();
-        let mut parts = vec![
-            format!("{lanes} {}", if lanes == 1 { "lane" } else { "lanes" }),
-            format!("{bound} {} here", if bound == 1 { "port" } else { "ports" }),
-        ];
-        if held > 0 {
-            parts.push(format!("{held} not bound"));
-        }
         let routes = host.routes.len();
-        parts.push(format!(
-            "{routes} {}",
-            if routes == 1 { "hostname" } else { "hostnames" }
-        ));
+        let ports = match host.ports.len() {
+            0 => "no ports bound here".to_owned(),
+            1 => format!("{bound} of 1 port bound here"),
+            n => format!("{bound} of {n} ports bound here"),
+        };
+        let parts = [
+            format!("{lanes} {}", if lanes == 1 { "lane" } else { "lanes" }),
+            ports,
+            format!(
+                "{routes} {} routed",
+                if routes == 1 { "hostname" } else { "hostnames" }
+            ),
+        ];
         lines.extend(fact("mirror", &parts.join(" · "), plain));
     }
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
         let label = if index == 0 { "skipped" } else { "" };
-        let text = format!("{}: {}", clean(&skipped.lane), clean(&skipped.reason));
+        let text = format!("{}: {}", clean(&skipped.lane), skip_reason(app, skipped));
         lines.extend(fact(label, &text, theme.tone(Tone::Attention)));
     }
     for (index, refused) in host.skipped_hosts.iter().enumerate() {
@@ -892,7 +968,9 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
         let text = format!("{}:{}  {state}", clean(&sync.lane), clean(&sync.unit));
         lines.extend(fact(label, &text, theme.tone(tone)));
     }
-    for warning in &host.warnings {
+    // The daemon's warnings mark commands with backticks; this page has no
+    // code style for them.
+    for warning in host.warnings.iter().map(|w| w.replace('`', "")) {
         let first = vec![
             Span::raw("  "),
             Span::styled(
@@ -900,7 +978,12 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
                 theme.tone(Tone::Attention),
             ),
         ];
-        lines.extend(sentence(warning, width, first, theme.tone(Tone::Attention)));
+        lines.extend(sentence(
+            &warning,
+            width,
+            first,
+            theme.tone(Tone::Attention),
+        ));
     }
     lines
 }
