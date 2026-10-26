@@ -419,15 +419,25 @@ impl Inner {
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut knock = Knock::default();
         let mut cpu_seen: HashMap<String, u64> = HashMap::new();
+        // Wakes have their own task, and each runs on its own, so a tick busy
+        // freezing a lane (runner and container calls can take seconds) never
+        // holds back a request waiting for another lane.
+        let engine = self.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    () = engine.shutdown.cancelled() => return,
+                    reference = wakes.recv() => {
+                        let Some(reference) = reference else { return };
+                        let engine = engine.clone();
+                        tokio::spawn(async move { engine.wake_reference(&reference).await });
+                    }
+                }
+            }
+        });
         loop {
             tokio::select! {
                 () = self.shutdown.cancelled() => return,
-                // Each wake runs on its own, so a slow freeze or container call
-                // never holds back a request waiting for its lane.
-                Some(reference) = wakes.recv() => {
-                    let engine = self.clone();
-                    tokio::spawn(async move { engine.wake_reference(&reference).await });
-                }
                 _ = tick.tick() => self.idle_tick(&mut knock, &mut cpu_seen).await,
             }
         }

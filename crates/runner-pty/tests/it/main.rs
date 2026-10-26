@@ -643,11 +643,35 @@ fn ps_column(pids: &[u32], column: &str) -> BTreeMap<u32, String> {
         .collect()
 }
 
-/// Reports whether every PID in `pids` is alive and stopped by a signal (state `T`).
+/// Reports whether every PID in `pids` is alive and frozen: stopped by a signal
+/// (state `T`), or, on Linux, blocked in `vfork` (state `D`) for a child that
+/// was stopped before it could exec. dash forks commands with `vfork`, so a
+/// freeze that lands mid-fork leaves the shell waiting there, not stopped.
 fn all_stopped(pids: &[u32]) -> bool {
-    let states = ps_column(pids, "stat");
-    pids.iter()
-        .all(|pid| states.get(pid).is_some_and(|stat| stat.starts_with('T')))
+    let output = std::process::Command::new("ps")
+        .args(["-A", "-o", "pid=,ppid=,stat="])
+        .output()
+        .expect("run ps");
+    let table: Vec<(u32, u32, String)> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let pid = fields.next()?.parse().ok()?;
+            let ppid = fields.next()?.parse().ok()?;
+            Some((pid, ppid, fields.next()?.to_owned()))
+        })
+        .collect();
+    let stopped = |stat: &str| stat.starts_with('T');
+    pids.iter().all(|pid| {
+        table.iter().any(|(p, _, stat)| {
+            *p == *pid
+                && (stopped(stat)
+                    || (stat.starts_with('D')
+                        && table
+                            .iter()
+                            .any(|(_, parent, child)| parent == pid && stopped(child))))
+        })
+    })
 }
 
 /// Reports whether no PID in `pids` is stopped.
