@@ -1,14 +1,14 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox   acme@4:api-gateway runs on hetzner: ssh hetzner, then devlanes restart acme@4:a…  M monitor   D daemon   B boxes · 3 issues
- lanes  1 acme@0  2 acme@4                                                                                                                                                      1-9 or [ ] switch lanes
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                    on hetzner: devlanes restart acme@4:api-gateway  M monitor   D daemon   B boxes · 3 issues
+ lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
 ┌ @4 · 6/7 up ─────────────────────────────────┐┌ api-gateway  ready · https://gateway.acme-4.localhost:8443 ────────────────────────────────────────────────────────────────────────────── on hetzner ┐
-│ ▾ services                                 6 ││ state     ready on the box                                                                                                                           │
-│   ● api-gateway                              ││ ports     default 24100  mirrored here                                                                                                               │
-│   ● web-app                                  ││                          last connection failed: nothing on the box accepted it: connection refused                                                  │
-│   ◉ wrk-email                                ││ hosts     https://gateway.acme-4.localhost:8443                                                                                                      │
-│   ● api-admin                                ││                                                                                                                                                      │
-│   · web-docs                                 ││ Runs on hetzner and is read-only here. On the box (ssh hetzner), devlanes logs acme@4:api-gateway shows its output there.                            │
+│ ▾ services                                 6 ││ ! r does not restart it here. On hetzner: ssh hetzner, then devlanes restart acme@4:api-gateway                                                      │
+│   ● api-gateway                              ││                                                                                                                                                      │
+│   ● web-app                                  ││ state     ready on the box                                                                                                                           │
+│   ◉ wrk-email                                ││ ports     default 24100  mirrored here                                                                                                               │
+│   ● api-admin                                ││                          last try: nothing on the box accepted it (connection refused)                                                               │
+│   · web-docs                                 ││ hosts     https://gateway.acme-4.localhost:8443                                                                                                      │
 │   ● ext-build                                ││                                                                                                                                                      │
-│                                              ││                                                                                                                                                      │
+│                                              ││ Read-only here. Its output stays on hetzner: ssh hetzner, then devlanes logs acme@4:api-gateway                                                      │
 │ ▾ tasks                                    1 ││                                                                                                                                                      │
 │   ■ migrate                            ended ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -61,16 +61,16 @@
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 158 bold, 159-166 dim, 170 bold, 171-177 dim, 181 bold, 182-187 dim, 188-198 yellow
-1: 0-6 dim, 8-9 dim, 10-15 green, 17-26 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
+1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 68-107 dim, 109-186 darkgray, 188-197 dim, 199 darkgray
-3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-75 dim, 199 darkgray
-4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 50-59 dim, 75-87 green, 199 darkgray
-5: 0 darkgray, 4-12 green, 47-48 darkgray, 50-59 dim, 75-148 red, 199 darkgray
-6: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 50-59 dim, 199 darkgray
-7: 0 darkgray, 4-5 green, 6-14 dim blue, 47-48 darkgray, 199 darkgray
-8: 0 darkgray, 4-5 dim, 6-13 dim green, 47-48 darkgray, 50-170 dim, 199 darkgray
+3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 199 darkgray
+4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 199 darkgray
+5: 0 darkgray, 4-12 green, 47-48 darkgray, 50-75 dim, 199 darkgray
+6: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 50-59 dim, 75-87 green, 199 darkgray
+7: 0 darkgray, 4-5 green, 6-14 dim blue, 47-48 darkgray, 50-59 dim, 75-135 red, 199 darkgray
+8: 0 darkgray, 4-5 dim, 6-13 dim green, 47-48 darkgray, 50-59 dim, 199 darkgray
 9: 0 darkgray, 4-14 green, 47-48 darkgray, 199 darkgray
-10: 0 darkgray, 47-48 darkgray, 199 darkgray
+10: 0 darkgray, 47-48 darkgray, 50-144 dim, 199 darkgray
 11: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 199 darkgray
 12: 0 darkgray, 4-12 dim, 41-45 dim, 47-48 darkgray, 199 darkgray
 13: 0 darkgray, 47-48 darkgray, 199 darkgray

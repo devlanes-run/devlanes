@@ -468,7 +468,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "box-lane",
-            what: "a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the box's command in the footer",
+            what: "a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the pane says what to run on the box",
             setup: |f| {
                 f.connect_boxes();
                 f.lane("acme@4 @hetzner");
@@ -508,7 +508,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "box-refused",
-            what: "r on a box service: nothing restarts here; the header names the command for the box",
+            what: "r on a box service: nothing restarts; the pane's first line says why and what to run on the box",
             setup: |f| {
                 f.connect_boxes();
                 f.unit("acme@4 @hetzner", "api-gateway");

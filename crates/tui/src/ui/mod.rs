@@ -442,9 +442,6 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     // The view buttons, right-aligned.
     let badge = daemon_badge(app);
     let boxes_badge = boxes_badge(app);
-    // Below 100 columns the badge's words would crowd out the message, so
-    // the buttons of other views drop their labels; their keys stay.
-    let compact = (badge.is_some() || boxes_badge.is_some()) && width < 100;
     let mut buttons: Vec<(Vec<Span<'static>>, KeyCode)> = Vec::new();
     // `B boxes` only once this machine knows a box; B works either way.
     let boxes = (!app.boxes.hosts.is_empty() || app.view == View::Boxes).then_some((
@@ -452,6 +449,10 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         "boxes",
         View::Boxes,
     ));
+    // Below 100 columns a badge's words, or a third button, would crowd out
+    // the message, so the buttons of other views drop their labels; their
+    // keys stay.
+    let compact = (badge.is_some() || boxes_badge.is_some() || boxes.is_some()) && width < 100;
     let views = [
         Some(('M', "monitor", View::Monitor)),
         Some(('D', "daemon", View::Daemon)),
@@ -1352,10 +1353,14 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         record(&mut left, &mut x, hint);
     }
     // On a box lane, where its start, stop and logs are, in what is left.
-    if let Some(note) = box_note(app).filter(|_| !typing && !copying) {
+    if !typing && !copying {
         let room = budget.saturating_sub(used);
-        if room > 12 {
-            left.push(Span::styled(clip(&note, room), theme.quiet()));
+        // The longest form that fits with the three spaces hints keep apart.
+        if let Some(note) = box_note(app)
+            .into_iter()
+            .find(|note| text::width(note) + 3 <= room)
+        {
+            left.push(Span::styled(note, theme.quiet()));
         }
     }
     let mut right = Vec::new();
@@ -1366,20 +1371,24 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(spread(left, right, width)), area);
 }
 
-/// The footer's note on a box lane: `read-only: manage it on hetzner (ssh
-/// hetzner)`, or without the ssh command for a box reached by a command.
-fn box_note(app: &App) -> Option<String> {
-    if app.view != View::Project {
-        return None;
-    }
-    let lane = app.selected_lane()?;
-    let (host, _) = app.box_lane(&lane.reference)?;
+/// The footer's note on a box lane, longest first for the room there is:
+/// `read-only: manage it on hetzner (ssh hetzner)` (the ssh part only over
+/// ssh), `read-only: manage it on hetzner`, `read-only`. Empty elsewhere.
+fn box_note(app: &App) -> Vec<String> {
+    let Some(lane) = app.selected_lane().filter(|_| app.view == View::Project) else {
+        return Vec::new();
+    };
+    let Some((host, _)) = app.box_lane(&lane.reference) else {
+        return Vec::new();
+    };
     let name = clean(&host.host);
-    Some(if host.over_ssh() {
-        format!("read-only: manage it on {name} (ssh {name})")
-    } else {
-        format!("read-only: manage it on {name}")
-    })
+    let short = format!("read-only: manage it on {name}");
+    let mut notes = Vec::new();
+    if host.over_ssh() {
+        notes.push(format!("{short} (ssh {name})"));
+    }
+    notes.extend([short, "read-only".to_owned()]);
+    notes
 }
 
 /// The failed action on `target`, if any.

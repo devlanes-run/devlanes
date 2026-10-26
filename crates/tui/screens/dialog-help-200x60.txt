@@ -52,7 +52,7 @@
 │     ● rabbitmq                               ││        │ everywhere                                                                         │                                                        │
 │   ▾ shared                              3 up ││        │   tab  shift+tab    next, previous project (not on the daemon page)                │                                                        │
 │     ● pgbouncer                              ││        │   shift+1-9         project by number                                              │                                                        │
-│     ● postgres                               ││        │   M  D              monitor, daemon; again or esc returns                          │                                                        │
+│     ● postgres                               ││        │   M  D  B           monitor, daemon, boxes; again or esc returns                   │                                                        │
 │     ● redis                                  ││        │   esc               one step back, then the menu: options, help, quit              │                                                        │
 │   ▸ setup                             4 done ││        │   u                 hide the version notice                                        │                                                        │
 │                                              ││        │   q                 quit; asks first while lanes run (tui.on_quit)                 │                                                        │

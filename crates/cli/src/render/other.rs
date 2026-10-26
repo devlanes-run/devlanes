@@ -1928,8 +1928,9 @@ fn old_copy_checks(copies: &Value) -> Vec<Check> {
 
 /// `remote ls`: the generic tree, with each mirrored port's `last_error` on one
 /// line (`last_error: <message> (<reason>, 5m ago)`) and left out when there is none.
-/// The box's whole `registry` is for the TUI and `--json`; the tree has its
-/// mirrored ports and routes already.
+/// The box's `registry`, `box`, `proxy` and `suffixes` are for the TUI and
+/// `--json`: the tree has its mirrored ports, routes and warnings already.
+/// `connected_since_ms` reads `connected_since: 5m ago`.
 pub(super) fn host_list(data: &Value) -> Vec<String> {
     let mut data = data.clone();
     for item in data
@@ -1938,8 +1939,16 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
         .into_iter()
         .flatten()
     {
-        if let Some(fields) = item.as_object_mut() {
-            fields.remove("registry");
+        let Some(fields) = item.as_object_mut() else {
+            continue;
+        };
+        for key in ["registry", "box", "proxy", "suffixes"] {
+            fields.remove(key);
+        }
+        if let Some(since) = fields.remove("connected_since_ms")
+            && let Some(ms) = since.as_u64()
+        {
+            fields.insert("connected_since".into(), Value::String(ago(ms)));
         }
     }
     let ports = data
