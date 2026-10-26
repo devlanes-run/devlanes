@@ -325,7 +325,7 @@ pub fn watch(
     let (events, mut changes) = tokio::sync::mpsc::channel(1);
     let mut watcher =
         notify::recommended_watcher(move |event: Result<notify::Event, notify::Error>| {
-            if event.is_ok() {
+            if event.is_ok_and(|event| changes_worktrees(&event)) {
                 let _ = events.try_send(());
             }
         })?;
@@ -358,6 +358,13 @@ pub fn watch(
         }
     });
     Ok(receiver)
+}
+
+/// Whether a watch event can change the worktree list. inotify (Linux) also
+/// reports files being opened and closed, and the listing itself reads the
+/// common dir, so counting those would relist several times a second forever.
+fn changes_worktrees(event: &notify::Event) -> bool {
+    !event.kind.is_access()
 }
 
 /// Uses origin's symbolic default before falling back to conventional local branches.
@@ -670,6 +677,56 @@ mod tests {
                 "{}",
                 moved.identity
             );
+            Ok::<_, Box<dyn std::error::Error>>(())
+        })
+        .await??;
+        Ok(())
+    }
+
+    #[test]
+    /// Reads never wake the watcher; writes, creates, removes, renames and
+    /// rescans do.
+    fn only_changes_wake_the_watcher() {
+        use notify::{
+            Event, EventKind,
+            event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind, RenameMode},
+        };
+        let wakes = |kind| changes_worktrees(&Event::new(kind));
+        assert!(!wakes(EventKind::Access(AccessKind::Open(AccessMode::Any))));
+        assert!(!wakes(EventKind::Access(AccessKind::Close(
+            AccessMode::Write
+        ))));
+        assert!(wakes(EventKind::Create(CreateKind::Folder)));
+        assert!(wakes(EventKind::Modify(ModifyKind::Name(RenameMode::To))));
+        assert!(wakes(EventKind::Remove(RemoveKind::File)));
+        assert!(wakes(EventKind::Other));
+    }
+
+    /// The watcher's own listing opens files in the common dir, which inotify
+    /// reports; it must not relist until something changes.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_listing_does_not_wake_the_watcher() -> Result<(), Box<dyn std::error::Error>> {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            let dir = tempfile::tempdir()?;
+            let temp = TempPath(dunce::canonicalize(dir.path())?);
+            repository_with_nested_lane(temp.path()).await?;
+            let repository = discover(temp.path(), None)
+                .await?
+                .ok_or("missing repository")?;
+            let mut updates = watch(repository)?;
+            updates.recv().await.ok_or("first listing")??;
+            // A listing woken by the previous one followed it within 100 ms.
+            let again = tokio::time::timeout(Duration::from_secs(1), updates.recv()).await;
+            assert!(again.is_err(), "relisted without a change: {again:?}");
+            let lane = temp.path().join("second");
+            add(temp.path(), &lane, "feat/second").await?;
+            loop {
+                let trees = updates.recv().await.ok_or("listing after add")??;
+                if trees.iter().any(|tree| tree.path == lane) {
+                    break;
+                }
+            }
             Ok::<_, Box<dyn std::error::Error>>(())
         })
         .await??;
