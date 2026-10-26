@@ -896,7 +896,7 @@ async fn local_blocks(engine: &Arc<Inner>) -> Vec<(PortBlock, String)> {
 ///
 /// The TLD only counts once it passes the special-use check, so a box can never
 /// get public names routed (and certificates minted) on this machine.
-pub(super) fn route_suffixes(engine: &Inner) -> Vec<String> {
+pub(crate) fn route_suffixes(engine: &Inner) -> Vec<String> {
     let mut suffixes = vec!["localhost".to_owned()];
     suffixes.extend(engine.resolver_zone().map(|zone| zone.name().to_owned()));
     suffixes

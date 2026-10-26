@@ -73,6 +73,14 @@ infra:
 
 Hidden units stay on the box: their ports are not mirrored and the box refuses streams to them. Everything else that is running or starting is mirrored.
 
+### Ports outside the config
+
+A server you run on the box without a `devlanes.yaml` entry, such as `python -m http.server 8000` in an ssh shell, is not mirrored until you expose it on the box: `devlanes expose 8000` makes it the unit `port-8000` of the current lane, and `--host files` adds `https://files.<lane domain>`. It lasts until `devlanes expose --remove 8000`, `devlanes stop` of the lane or a restart of the box daemon. [Exposed ports](../remote.md#exposed-ports) has the details.
+
+### URLs to give out
+
+On the box, `devlanes url print web` prints the box's URL and, in a terminal, `on <client>: <url>` for each connected client, the URL that opens there, or why the unit does not open there (a port taken on that machine, a lane it skips). Agents working on the box read the same from `devlanes url print web --json` under `clients`; the bundled devlanes skill tells them to give you the client's URL, or to ask you to run `devlanes remote connect <box>` when no client is connected.
+
 ### Windows boxes
 
 A Windows machine is a box through Windows' own OpenSSH Server, an optional feature. In an elevated PowerShell on the box:
@@ -170,7 +178,8 @@ Synced folders land under `%USERPROFILE%\.devlanes\sync`. Windows keeps only a r
 ```sh
 devlanes remote ls                                  # connected, reconnecting or needs_auth (with the error), failed
 devlanes url ls                                     # the box's hostnames next to your local ones
-devlanes status --json | jq .clients                # on the box: who is connected
+devlanes status --json | jq .clients                # on the box: who is connected and what each mirrors
+devlanes url print web                              # on the box: the URL each connected client opens
 curl -sS https://api.acme.localhost/healthz          # from the client, once the box lane is ready
 ```
 

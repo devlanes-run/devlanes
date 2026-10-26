@@ -7,7 +7,8 @@
 //!
 //! - one control stream: protocol check, features, client identity, box info,
 //!   registry snapshot, registry events and pings (every 10 s, dead after 20 s
-//!   without a pong);
+//!   without a pong), and with [`MIRROR_REPORT`] the client's reports of what
+//!   it mirrors ([`Session::report`], [`RegistrySource::report`]);
 //! - data streams to registered endpoints ([`Session::open`]);
 //! - sync subscriptions ([`Session::subscribe_sync`]). With [`SYNC_ZSTD`], the
 //!   box compresses file chunks and the client its input values where zstd
@@ -62,5 +63,6 @@ pub use transport::{
     BoxDuplex, BoxError, Duplex, EXIT_DAEMON_STOPPED, Joined, Transport, TransportError, stdio,
 };
 pub use wire::{
-    BoxInfo, DialTarget, FEATURES, PROTOCOL_VERSION, Prefixed, RejectReason, SYNC_ZSTD, WireError,
+    BoxInfo, DialTarget, EXPOSED_UNITS, FEATURES, MIRROR_REPORT, PROTOCOL_VERSION, Prefixed,
+    RejectReason, SYNC_ZSTD, WireError,
 };

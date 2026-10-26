@@ -3,7 +3,8 @@
 This repository runs its dev services with devlanes. A per-user daemon owns the processes; the `devlanes` CLI talks to it.
 
 - Start this worktree's lane with `devlanes start`. It waits for ready or failure.
-- Never background a process with `&` or `nohup`. Use `devlanes exec --name NAME -- COMMAND` instead.
+- Never background a process with `&` or `nohup`. Use `devlanes exec --name NAME -- COMMAND` instead, and `devlanes expose 8000 --host docs` to route a port it serves.
+- When the user works on another machine connected to this one, give them the reachable `url` from `clients` in `devlanes url print UNIT --json`; with no clients, tell them to run `devlanes remote connect BOX` on their machine.
 - Lanes are `project@N` or `project@branch`; units are `LANE:UNIT`. Globs and `+tags` select several units.
 - Inspect with `devlanes status`, `devlanes wait UNIT --timeout 180s`, `devlanes debug errors` and `devlanes debug why UNIT`.
 - Read logs with `devlanes logs UNIT --tail 100`, `--head 50` or `--grep RE`, and continue with `--cursor`. Follow logs only with `--timeout`.

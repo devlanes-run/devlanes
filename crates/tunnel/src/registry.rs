@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use devlanes_client::{Client, Frame, Paths};
 use devlanes_proto::{
     Context, Control, Event, Method, Outcome, RpcError,
-    remote::{REGISTRY_CHANGE_EVENT, REGISTRY_SNAPSHOT_EVENT, RegistryParams, RemoteClient},
+    remote::{
+        MirrorReport, REGISTRY_CHANGE_EVENT, REGISTRY_SNAPSHOT_EVENT, RegistryParams, RemoteClient,
+        ReportParams,
+    },
 };
 use devlanes_transport::{
     BoxError, ClientInfo, RegistryEvent, RegistryFeed, RegistrySnapshot, RegistrySource,
@@ -17,12 +20,36 @@ use serde::Deserialize;
 pub(crate) struct DaemonRegistry {
     paths: Paths,
     client: RemoteClient,
+    /// The connection mirror reports go over, opened on the first one; the
+    /// feed's own connection is busy streaming.
+    reports: tokio::sync::Mutex<Option<Client>>,
 }
 
 impl DaemonRegistry {
     /// Reads the daemon behind `paths`; `client` describes this tunnel to `status`.
     pub(crate) fn new(paths: Paths, client: RemoteClient) -> Self {
-        Self { paths, client }
+        Self {
+            paths,
+            client,
+            reports: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// Sends one `remote.report`, over the kept connection or a new one.
+    async fn send_report(&self, params: &serde_json::Value) -> Result<(), devlanes_client::Error> {
+        let mut connection = self.reports.lock().await;
+        let daemon = match &mut *connection {
+            Some(daemon) => daemon,
+            None => connection.insert(Client::connect(&self.paths).await?),
+        };
+        let sent = daemon
+            .request(Method::RemoteReport, params.clone(), Context::default())
+            .await;
+        if sent.is_err() {
+            // A broken connection is opened again for the next report.
+            *connection = None;
+        }
+        sent.map(|_| ())
     }
 }
 
@@ -109,6 +136,33 @@ impl RegistrySource for DaemonRegistry {
         })
         .boxed();
         Ok(RegistryFeed { snapshot, updates })
+    }
+
+    /// Passes the report to the box daemon with `remote.report`, bounded, for
+    /// the `status` entry the feed listed. A report that does not decode or
+    /// does not arrive is dropped: the next change sends a fresh one, and
+    /// `status` shows the last one that arrived meanwhile.
+    async fn report(&self, client: &ClientInfo, report: serde_json::Value) {
+        let report: MirrorReport = match serde_json::from_value(report) {
+            Ok(report) => report,
+            Err(error) => {
+                tracing::debug!(%error, "dropping a malformed mirror report");
+                return;
+            }
+        };
+        if client.id.is_empty() {
+            return;
+        }
+        let params = ReportParams {
+            id: client.id.clone(),
+            report: report.bounded(),
+        };
+        let Ok(params) = serde_json::to_value(params) else {
+            return;
+        };
+        if let Err(error) = self.send_report(&params).await {
+            tracing::debug!(%error, "the box daemon did not take a mirror report");
+        }
     }
 }
 
@@ -221,6 +275,46 @@ mod tests {
         ));
         let message = result.expect_err("unknown change").to_string();
         assert!(message.contains("remote.registry.change"), "{message}");
+    }
+
+    /// A mirror report goes to the box daemon as `remote.report` with the
+    /// client's id, bounded; a malformed one is dropped without a request.
+    #[tokio::test]
+    async fn mirror_reports_go_to_the_daemon_bounded() -> crate::test_daemon::TestResult {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            let dir = tempfile::tempdir()?;
+            let paths = crate::test_daemon::home(dir.path())?;
+            let daemon = crate::test_daemon::answer_one(&paths, |_| Outcome::Ok {
+                data: json!({"stored": true}),
+            })
+            .await?;
+            let registry = DaemonRegistry::new(paths, RemoteClient::default());
+            let client = ClientInfo {
+                id: "0123abcd".into(),
+                ..ClientInfo::default()
+            };
+            registry
+                .report(&client, json!({"ports": "not a list"}))
+                .await;
+            let ports: Vec<_> = (0..devlanes_proto::remote::MAX_REPORT_PORTS + 3)
+                .map(|port| json!({"port": port, "lane": "app@0", "unit": "web", "state": "bound"}))
+                .collect();
+            registry
+                .report(&client, json!({"alias": "box\u{1b}", "ports": ports}))
+                .await;
+            drop(registry);
+            let request = daemon.await??;
+            assert_eq!(request.method, Method::RemoteReport);
+            let params: ReportParams = serde_json::from_value(request.params)?;
+            assert_eq!(params.id, "0123abcd");
+            assert_eq!(params.report.alias, "box");
+            assert_eq!(
+                params.report.ports.len(),
+                devlanes_proto::remote::MAX_REPORT_PORTS
+            );
+            Ok(())
+        })
+        .await?
     }
 
     /// A box daemon from before `remote.registry` answers `unknown_method`,

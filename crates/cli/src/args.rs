@@ -200,6 +200,20 @@ The daemon owns the process: logs, stop, attach and status work on it by its\n\
         #[command(subcommand)]
         command: UrlCommand,
     },
+    /// Make a port of the lane reachable as a unit, optionally under a hostname
+    #[command(
+        long_about = "Make a port of the lane reachable as a unit, optionally under a hostname.\n\n\
+Something devlanes did not start, such as `python -m http.server 8000`, becomes\n\
+the unit port-8000 of the lane: status lists it, --host routes a hostname to it\n\
+through the proxy, and connected clients (devlanes remote connect) mirror it\n\
+like any other unit. devlanes only forwards connections; whatever listens on\n\
+the port is yours to run.\n\n\
+Exposed ports are kept in memory until devlanes expose --remove, a stop of the\n\
+whole lane, lane clean or a daemon restart.",
+        after_help = EXPOSE_AFTER,
+        args_conflicts_with_subcommands = true
+    )]
+    Expose(ExposeArgs),
     /// Start, stop and inspect the project's containers
     Infra {
         #[command(subcommand)]
@@ -513,7 +527,7 @@ pub enum ExportShell {
 
 #[derive(Debug, Subcommand)]
 pub enum UrlCommand {
-    /// Print a service's URL, for scripts
+    /// Print a service's URL, for scripts; on a box, a terminal also gets the URL each connected client opens
     Print {
         /// Service whose URL to print ([lane:]unit) [default: pick from a list]
         #[arg(value_name = "UNIT")]
@@ -526,6 +540,39 @@ pub enum UrlCommand {
         unit: Option<String>,
     },
     /// List routed hostnames with their lane, unit, port and state
+    Ls,
+}
+
+const EXPOSE_AFTER: &str = "\
+Examples:
+  devlanes expose 8000                  the lane's unit port-8000
+  devlanes expose 8000 --host files     https://files.<lane domain>
+  devlanes expose ls                    exposed ports of this project
+  devlanes expose --remove 8000";
+
+#[derive(Debug, Args)]
+pub struct ExposeArgs {
+    #[command(subcommand)]
+    pub command: Option<ExposeCommand>,
+    /// Loopback port to expose [default without --remove: list the exposed ports]
+    #[arg(value_name = "PORT")]
+    pub port: Option<u16>,
+    /// Route this hostname to the port: one label such as files becomes files.<lane domain>; a full name must be under the lane's domain, localhost or the configured TLD
+    #[arg(
+        long,
+        value_name = "NAME",
+        requires = "port",
+        conflicts_with = "remove"
+    )]
+    pub host: Option<String>,
+    /// Stop exposing PORT
+    #[arg(long, requires = "port")]
+    pub remove: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ExposeCommand {
+    /// List exposed ports with their lane, hostname and URL
     Ls,
 }
 
@@ -1035,6 +1082,15 @@ impl Cli {
                 }
                 UrlCommand::Ls => (Method::Hosts, json!({})),
             },
+            Some(Command::Expose(args)) => (
+                Method::Expose,
+                serde_json::to_value(devlanes_proto::ExposeParams {
+                    port: args.port.filter(|_| args.command.is_none()),
+                    host: args.host.clone(),
+                    remove: args.remove,
+                    all: false,
+                })?,
+            ),
             Some(Command::Env { command }) => match command {
                 EnvCommand::Show { unit, explain } => {
                     (Method::Env, json!({"unit": unit, "explain": explain}))

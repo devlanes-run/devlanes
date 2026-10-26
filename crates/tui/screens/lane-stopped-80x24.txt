@@ -1,25 +1,25 @@
  devlanes  1 acme   2 billing   3 shop   starting feat/c…  M monitor   D daemon
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  +1 m… 1-9 or [ ] switch lanes
 ┌ @2 · 0/2 up ─────────────────┐┌ fix/cache @2 · not running ──────────────────┐
-│ ▾ services                 2 ││ Not running. s starts the lane with its      │
+│ ▾ services                 3 ││ Not running. s starts the lane with its      │
 │   · api-gateway              ││ default profile, p picks profiles.           │
 │   · web-app                  ││                                              │
-│                              ││ branch    fix/cache                          │
-│ ▾ tasks                    7 ││ worktree  /work/acme-cache                   │
-│   · migrate          not run ││ services  0 of 2 up                          │
-│   · seed             not run ││           · api-gateway      stopped         │
-│   · lint             not run ││           · web-app          stopped         │
-│   · typecheck        not run ││ tasks     7 not run                          │
-│   · test-e2e         not run ││ config    changed since the lane started; r  │
-│   · codegen          not run ││           restarts with it                   │
-│   · clean-cache      not run ││                                              │
-│                              ││ lanes in acme                                │
-│ ▾ infra                      ││   main @0                  1 failed · 1 star…│
-│   ▾ shared              3 up ││   feat/checkout @1         starting · 4 of 8…│
-│     ● pgbouncer              ││ ▌ fix/cache @2             not running · con…│
-│     ● postgres               ││   spike/old-search @3      worktree missing  │
-│     ● redis                  ││                                              │
-│                              ││ … z shows the rest                           │
+│   ▾ exposed        1 running ││ branch    fix/cache                          │
+│     ◉ port-8000        :8000 ││ worktree  /work/acme-cache                   │
+│                              ││ services  0 of 2 up                          │
+│ ▾ tasks                    7 ││           · api-gateway      stopped         │
+│   · migrate          not run ││           · web-app          stopped         │
+│   · seed             not run ││ tasks     7 not run                          │
+│   · lint             not run ││ config    changed since the lane started; r  │
+│   · typecheck        not run ││           restarts with it                   │
+│   · test-e2e         not run ││                                              │
+│   · codegen          not run ││ lanes in acme                                │
+│   · clean-cache      not run ││   main @0                  1 failed · 1 star…│
+│                              ││   feat/checkout @1         starting · 4 of 8…│
+│ ▾ infra                      ││ ▌ fix/cache @2             not running · con…│
+│   ▾ shared              3 up ││   spike/old-search @3      worktree missing  │
+│     ● pgbouncer              ││                                              │
+│     ● postgres               ││ … z shows the rest                           │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
  s start lane   S start all   p start with profiles       ? all keys   q quit
 
@@ -30,21 +30,21 @@
 3: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 79 darkgray
 4: 0 darkgray, 4-5 dim, 6-16 dim blue, 31-32 darkgray, 79 darkgray
 5: 0 darkgray, 4-5 dim, 6-12 dim green, 31-32 darkgray, 79 darkgray
-6: 0 darkgray, 31-32 darkgray, 34-43 dim, 79 darkgray
-7: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-8: 0 darkgray, 4-12 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-9: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
-10: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
-11: 0 darkgray, 4-14 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-12: 0 darkgray, 4-13 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-13: 0 darkgray, 4-12 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-14: 0 darkgray, 4-16 dim, 23-29 dim, 31-32 darkgray, 79 darkgray
-15: 0 darkgray, 31-32 darkgray, 34-46 bold, 79 darkgray
-16: 0 darkgray, 2-3 dim, 31-32 darkgray, 34-35 bold, 61-68 red, 69-71 dim, 79 darkgray
-17: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-35 bold, 69-78 dim, 79 darkgray
-18: 0 darkgray, 6-7 green, 8-16 dim magenta, 31-32 darkgray, 34-35 bold, 61-78 dim, 79 darkgray
-19: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-35 bold, 61-76 yellow, 79 darkgray
-20: 0 darkgray, 6-7 green, 8-12 cyan, 31-32 darkgray, 79 darkgray
-21: 0 darkgray, 31-32 darkgray, 34-51 dim, 79 darkgray
+6: 0 darkgray, 4-5 dim, 21-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+7: 0 darkgray, 6-7 green, 8-16 magenta, 25-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+8: 0 darkgray, 31-32 darkgray, 34-43 dim, 79 darkgray
+9: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
+10: 0 darkgray, 4-12 dim, 23-29 dim, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
+11: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+12: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+13: 0 darkgray, 4-14 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+14: 0 darkgray, 4-13 dim, 23-29 dim, 31-32 darkgray, 79 darkgray
+15: 0 darkgray, 4-12 dim, 23-29 dim, 31-32 darkgray, 34-46 bold, 79 darkgray
+16: 0 darkgray, 4-16 dim, 23-29 dim, 31-32 darkgray, 34-35 bold, 61-68 red, 69-71 dim, 79 darkgray
+17: 0 darkgray, 31-32 darkgray, 34-35 bold, 69-78 dim, 79 darkgray
+18: 0 darkgray, 2-3 dim, 31-32 darkgray, 34-35 bold, 61-78 dim, 79 darkgray
+19: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-35 bold, 61-76 yellow, 79 darkgray
+20: 0 darkgray, 6-7 green, 8-16 dim magenta, 31-32 darkgray, 79 darkgray
+21: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-51 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-15 dim, 16 bold, 17-29 dim, 30 bold, 31-53 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

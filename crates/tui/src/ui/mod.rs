@@ -1226,6 +1226,9 @@ fn hints(app: &App) -> Vec<Hint> {
             let Some(unit) = app.selected_unit() else {
                 return vec![filter];
             };
+            if tree::role(unit) == Role::Exposed {
+                return vec![("o", "open in browser", ch('o')), filter];
+            }
             let task = tree::role(unit) != Role::Service && tree::role(unit) != Role::Exec;
             match unit.state.as_str() {
                 ORPHANED => vec![("x", "end it", ch('x')), ("n", "next problem", ch('n'))],

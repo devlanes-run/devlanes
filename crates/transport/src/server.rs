@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+use serde_json::Value;
 use tokio::net::TcpStream;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
@@ -19,8 +21,8 @@ use crate::session::Timing;
 use crate::sync::{self, SyncSource};
 use crate::transport::{BoxDuplex, BoxError, Duplex};
 use crate::wire::{
-    self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, OpenReply,
-    OpenRequest, PROTOCOL_VERSION, RejectReason, SYNC_ZSTD, WireError, negotiate,
+    self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, MIRROR_REPORT,
+    OpenReply, OpenRequest, PROTOCOL_VERSION, RejectReason, SYNC_ZSTD, WireError, negotiate,
 };
 
 /// Connects to an authorized endpoint on the box.
@@ -279,6 +281,16 @@ where
     let mut deadline = Instant::now() + idle_limit;
     let mut updates = feed.updates;
     let mut tasks = JoinSet::new();
+    // Handed over by one task, latest first, so a slow source never holds up
+    // pings and a burst of reports costs one hand-over.
+    let reports = watch::Sender::new(None::<Value>);
+    if peer.has_feature(MIRROR_REPORT) {
+        tasks.spawn(forward_reports(
+            reports.subscribe(),
+            context.services.registry.clone(),
+            peer.clone(),
+        ));
+    }
     loop {
         tokio::select! {
             stream = mux.accept() => match stream {
@@ -291,6 +303,10 @@ where
                 Some((ClientControl::Ping { nonce }, _)) => {
                     deadline = Instant::now() + idle_limit;
                     send_control(&mut control, &BoxControl::Pong { nonce }, timing).await?;
+                }
+                Some((ClientControl::Mirror { report }, _)) => {
+                    // Without the feature nobody forwards it; the client should not send it.
+                    reports.send_replace(Some(report));
                 }
                 None => return Ok(()),
             },
@@ -320,6 +336,20 @@ where
                 deadline = alive_until;
             }
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+        }
+    }
+}
+
+/// Hands each newest mirror report of `client` to `source` until the session ends.
+async fn forward_reports(
+    mut reports: watch::Receiver<Option<Value>>,
+    source: Arc<dyn RegistrySource>,
+    client: ClientInfo,
+) {
+    while reports.changed().await.is_ok() {
+        let report = reports.borrow_and_update().clone();
+        if let Some(report) = report {
+            source.report(&client, report).await;
         }
     }
 }

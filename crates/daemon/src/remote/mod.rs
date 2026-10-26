@@ -11,14 +11,22 @@
 //! credentials after a first success) waits in `needs_auth` for the next
 //! `connect`, keeping listeners and routes.
 //!
+//! Client and box exchange [`report`]s of what the client mirrors: the client
+//! sends one after its mirror changed, and the box keeps the latest per client.
+//!
 //! Box side: `remote.registry` ([`feed`]) streams what a tunnel's client
-//! mirrors, `status` lists the tunnels serving clients and `sync.status` lists
+//! mirrors, `status` lists the tunnels serving clients with their reports,
+//! `url` and `hosts` add the URLs each client opens, and `sync.status` lists
 //! the sync entries a tunnel may stream.
 
 mod feed;
 mod identity;
 mod mirror;
+mod report;
 mod sync;
+
+pub(crate) use mirror::route_suffixes;
+pub(crate) use report::UnitTarget;
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -1439,6 +1447,10 @@ impl Inner {
                         Ok(()) => {
                             ports.failed.remove(port);
                             ports.open.insert(*port);
+                            // Their mirror reports say which port URLs open on.
+                            for conn in conns {
+                                conn.mark_changed();
+                            }
                         }
                         Err(error) => {
                             ports.failed.insert(*port);
@@ -1475,6 +1487,7 @@ impl Inner {
                     changed
                 };
                 if changed {
+                    conn.mark_changed();
                     tracing::warn!(host = %conn.name, port, %message, "cannot serve the box's https port");
                     self.bus.emit(
                         wire::WARNING_EVENT,
@@ -1713,6 +1726,8 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
             inner.reconcile_box_ports().await;
             // The mirror stamps the box's HTTPS port on its routes.
             conn.wake.notify_one();
+            // A new session's box has no report of this mirror yet.
+            conn.mark_changed();
             if let Some(task) = syncing.take() {
                 task.abort();
             }
@@ -1739,6 +1754,8 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
 /// Emits [`wire::MIRROR_EVENT`] for `conn` after [`HostConn::mark_changed`],
 /// at most once per [`MIRROR_EVENT_EVERY`]: the wakes of one burst share a
 /// single event, which goes out once the burst has had that long to settle.
+/// The live session gets the mirror report then too; the transport sends it
+/// only when it differs from the session's last one and the box takes reports.
 async fn announce_changes(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
     use futures_util::FutureExt as _;
     loop {
@@ -1756,9 +1773,37 @@ async fn announce_changes(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
         let Some(inner) = engine.upgrade() else {
             return;
         };
+        if let Some(session) = conn.session() {
+            let report = inner.mirror_report_of(&conn).await;
+            match serde_json::to_value(report) {
+                Ok(report) => {
+                    session.report(report);
+                }
+                Err(error) => {
+                    tracing::debug!(%error, host = %conn.name, "cannot encode the mirror report")
+                }
+            }
+        }
         inner
             .bus
             .emit(wire::MIRROR_EVENT, json!({"host": conn.name}));
+    }
+}
+
+impl Inner {
+    /// `conn`'s mirror report with this machine's HTTPS port, and whether it
+    /// serves the box's: the same port, or the box's extra port opened here.
+    async fn mirror_report_of(&self, conn: &HostConn) -> wire::MirrorReport {
+        let own = self.integ.routes.https_port();
+        let theirs = lock(&conn.info).https_port;
+        let serves = match (theirs, own) {
+            (Some(theirs), Some(own)) if theirs != own => {
+                self.remote.box_ports.lock().await.open.contains(&theirs)
+            }
+            (Some(_), Some(_)) => true,
+            _ => false,
+        };
+        conn.mirror_report(own, serves)
     }
 }
 

@@ -15,6 +15,8 @@ mod large_sync;
 mod lifecycle;
 #[path = "remote_ssh.rs"]
 mod real_ssh;
+#[path = "remote_report.rs"]
+mod report;
 #[path = "remote_view.rs"]
 mod view;
 

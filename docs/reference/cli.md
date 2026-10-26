@@ -469,7 +469,7 @@ devlanes url [OPTIONS] <COMMAND>
 
 ### devlanes url print
 
-Print a service's URL, for scripts
+Print a service's URL, for scripts; on a box, a terminal also gets the URL each connected client opens
 
 ```text
 devlanes url print [OPTIONS] [UNIT]
@@ -493,6 +493,44 @@ List routed hostnames with their lane, unit, port and state
 
 ```text
 devlanes url ls [OPTIONS]
+```
+
+### devlanes expose
+
+Make a port of the lane reachable as a unit, optionally under a hostname.
+
+Something devlanes did not start, such as `python -m http.server 8000`, becomes
+the unit port-8000 of the lane: status lists it, --host routes a hostname to it
+through the proxy, and connected clients (devlanes remote connect) mirror it
+like any other unit. devlanes only forwards connections; whatever listens on
+the port is yours to run.
+
+Exposed ports are kept in memory until devlanes expose --remove, a stop of the
+whole lane, lane clean or a daemon restart.
+
+```text
+devlanes expose [OPTIONS] [PORT]
+       devlanes expose <COMMAND>
+```
+
+- `[PORT]`: Loopback port to expose [default without --remove: list the exposed ports]
+- `--host <NAME>`: Route this hostname to the port: one label such as files becomes files.<lane domain>; a full name must be under the lane's domain, localhost or the configured TLD
+- `--remove`: Stop exposing PORT
+
+```text
+Examples:
+  devlanes expose 8000                  the lane's unit port-8000
+  devlanes expose 8000 --host files     https://files.<lane domain>
+  devlanes expose ls                    exposed ports of this project
+  devlanes expose --remove 8000
+```
+
+### devlanes expose ls
+
+List exposed ports with their lane, hostname and URL
+
+```text
+devlanes expose ls [OPTIONS]
 ```
 
 ### devlanes infra

@@ -366,6 +366,93 @@ async fn a_closed_registry_feed_ends_the_session() -> TestResult {
     .await
 }
 
+/// A shared registry whose source passes each mirror report to the test.
+struct ReportingRegistry {
+    inner: SharedRegistry,
+    reports: mpsc::UnboundedSender<(String, Value)>,
+}
+
+#[async_trait]
+impl RegistrySource for ReportingRegistry {
+    /// The shared registry's feed.
+    async fn subscribe(&self, client: &ClientInfo) -> Result<RegistryFeed, BoxError> {
+        self.inner.subscribe(client).await
+    }
+
+    /// Hands the report to the test with the client's id.
+    async fn report(&self, client: &ClientInfo, report: Value) {
+        let _ = self.reports.send((client.id.clone(), report));
+    }
+}
+
+/// A box serving [`ReportingRegistry`] with `features`, and the reports it receives.
+fn reporting_box(
+    features: &[&str],
+) -> (
+    MemoryTransport,
+    mpsc::UnboundedReceiver<(String, Value)>,
+    JoinHandle<()>,
+) {
+    let (transport, mut listener) = memory_transport();
+    let (reports, received) = mpsc::unbounded_channel();
+    let services = BoxServices {
+        registry: Arc::new(ReportingRegistry {
+            inner: SharedRegistry::new(RegistrySnapshot::default(), 4),
+            reports,
+        }),
+        dialer: Arc::new(LoopbackDialer),
+        sync: Arc::new(TestSync),
+    };
+    let mut options = ServeOptions::new("box");
+    options.timing = fast_timing();
+    options.features = names(features);
+    let task = tokio::spawn(async move {
+        while let Some(link) = listener.accept().await {
+            let services = services.clone();
+            let options = options.clone();
+            tokio::spawn(async move {
+                let _ = serve(link, services, options).await;
+            });
+        }
+    });
+    (transport, received, task)
+}
+
+/// With `mirror_report` on both ends a client's reports reach the box's
+/// registry source in order, a repeat of the last one is not sent again, and
+/// a box without the feature gets none and keeps the session.
+#[tokio::test]
+async fn mirror_reports_reach_the_box_only_when_negotiated() -> TestResult {
+    bounded(async {
+        let (transport, mut received, task) = reporting_box(devlanes_transport::FEATURES);
+        let mut options = session_options();
+        options.client_id = "0123abcd".into();
+        let session = Session::connect(&transport, options).await?;
+        assert!(session.report(json!({"ports": [1]})));
+        let (id, report) = received.recv().await.ok_or("no report")?;
+        assert_eq!((id.as_str(), report), ("0123abcd", json!({"ports": [1]})));
+        assert!(session.report(json!({"ports": [1]})));
+        assert!(session.report(json!({"ports": [2]})));
+        let (_, report) = received.recv().await.ok_or("no second report")?;
+        assert_eq!(report, json!({"ports": [2]}), "the repeat was not sent");
+        task.abort();
+
+        let (transport, mut received, task) = reporting_box(&[]);
+        let session = Session::connect(&transport, session_options()).await?;
+        assert!(!session.report(json!({"ports": [1]})));
+        // Two ping rounds: the session outlives an unsent report.
+        tokio::time::sleep(fast_timing().ping_interval * 3).await;
+        assert_eq!(session.end(), None);
+        assert!(
+            received.try_recv().is_err(),
+            "a box without the feature got a report"
+        );
+        task.abort();
+        Ok(())
+    })
+    .await
+}
+
 #[tokio::test]
 async fn registered_port_is_dialed() -> TestResult {
     bounded(async {

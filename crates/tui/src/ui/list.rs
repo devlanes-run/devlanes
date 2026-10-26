@@ -360,7 +360,7 @@ fn unit_line(
     let role = tree::role(unit);
     // Tasks and setup steps keep the default color: they don't run long.
     let color = match role {
-        tree::Role::Service | tree::Role::Exec => unit.color.as_deref(),
+        tree::Role::Service | tree::Role::Exec | tree::Role::Exposed => unit.color.as_deref(),
         _ => None,
     };
     let task = matches!(
@@ -408,6 +408,20 @@ fn unit_line(
         clean(tree::short_name(unit)),
         quiet,
     );
+    // An exposed port is known by where it answers: its hostname, or its
+    // port where the hostname would cut the name.
+    if role == tree::Role::Exposed && right.is_empty() {
+        let port = unit.ports.get("default").map(|port| format!(":{port}"));
+        let host = unit
+            .public_url
+            .as_deref()
+            .and_then(|url| url.strip_prefix("https://"))
+            .map(clean)
+            .filter(|host| spans_width(&left) + text::width(host) + 2 <= width);
+        if let Some(at) = host.or(port) {
+            right.push(Span::styled(at, theme.quiet()));
+        }
+    }
     row(left, joined(right, theme.quiet()), width)
 }
 

@@ -205,6 +205,19 @@ One `devlanes.yaml` at the repository root, one service per app, `run_script` po
 
 If an app has its own `devlanes.yaml` in a subdirectory, that directory is the project root for devlanes when you run it there; a repository can hold several independent projects that way, each with its own name, lanes and ports.
 
+## Exposed ports
+
+A port the config knows nothing about, such as a docs server run with `devlanes exec` or a process started outside devlanes, can still get a hostname and show up as a unit:
+
+```sh
+devlanes exec --name docs -- python -m http.server 8000
+devlanes expose 8000 --host docs      # unit port-8000, https://docs.<lane domain>
+devlanes expose ls
+devlanes expose --remove 8000
+```
+
+The lane lists the port as the unit `port-8000` of kind `exposed`, `running` while it is listed, whether or not something answers there; devlanes runs nothing for it and only forwards connections. `--host` takes one label, which goes under the lane's domain (`docs` becomes `docs.acme-2.localhost`), or a full name under the lane's domain, `localhost` or `hostnames.tld`. Wildcards, a hostname another lane or service routes and a port a configured unit has are refused. `devlanes url print port-8000` prints the URL, and connected clients mirror the port like any other unit ([remote](../remote.md#exposed-ports)). Exposed ports are not saved: `--remove`, a stop of the whole lane, `lane clean` and a daemon restart end them. A daemon that exits when idle (`daemon.exit_when_idle`) stays up while a port is exposed.
+
 ## Agents and CI
 
 ```sh

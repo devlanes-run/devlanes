@@ -47,6 +47,7 @@ Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged.
 | Restart after a code change | `devlanes restart api` |
 | Run a configured task | `devlanes run --list`, then `devlanes run migrate` |
 | Ad-hoc long-running command | `devlanes exec --name storybook -- pnpm storybook` |
+| Route a port the config does not know | `devlanes expose 8000 --host docs`, `devlanes expose --remove 8000` |
 | URL of a service | `devlanes url print web` |
 | Environment of a unit | `devlanes env show api`, or `eval "$(devlanes env export api)"` |
 | Tests against the stack | `devlanes with -- pnpm test:e2e` |
@@ -112,6 +113,14 @@ devlanes restart api
 devlanes with -- pnpm test
 devlanes stop --mine
 ```
+
+## Ports outside the config
+
+An `exec` command gets no port or hostname from devlanes. When it serves one, such as `devlanes exec --name docs -- python -m http.server 8000`, run `devlanes expose 8000 --host docs`: the lane lists the port as unit `port-8000`, `https://docs.<lane domain>` routes to it, and machines connected with `devlanes remote connect` mirror it. It lasts until `devlanes expose --remove 8000`, a stop of the whole lane or a daemon restart. `devlanes expose ls` lists the exposed ports.
+
+## Working on a remote machine
+
+When the user works on another machine connected to this one with `devlanes remote connect`, the URLs devlanes prints here are this machine's, and the user opens services on theirs. Before giving the user a URL, run `devlanes url print UNIT --json`. Its `clients` list has one entry per connected machine: with `reachable: true`, give the user that entry's `url`; with `reachable: false`, its `reason` says why the unit does not open there (a port in use there, a lane or hostname that machine does not mirror). An empty `clients` list means no machine is connected: tell the user to run `devlanes remote connect BOX` on their machine, where BOX is the `alias` of an earlier `clients` entry when you saw one, else this machine's name from `hostname`.
 
 ## Daemon and sandboxes
 

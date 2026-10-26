@@ -7,8 +7,10 @@
 //! - the registry is the daemon's `remote.registry` feed: a snapshot, then
 //!   each change; it carries ports, hostnames and states, never environments
 //!   or secrets, and a feed that ends or breaks ends the session;
-//! - data streams dial loopback ports of running, non-hidden services and
-//!   containers, nothing else;
+//! - the client's mirror reports go to the daemon with `remote.report`, which
+//!   keeps the latest one with the client's `status` entry;
+//! - data streams dial loopback ports of running, non-hidden services,
+//!   containers and exposed ports, nothing else;
 //! - syncs stream `sync.status` entries; the client never chooses a path.
 
 mod registry;

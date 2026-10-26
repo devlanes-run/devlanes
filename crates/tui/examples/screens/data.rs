@@ -86,6 +86,20 @@ fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
     }
 }
 
+/// A port exposed with `devlanes expose`, as the daemon lists it.
+fn exposed(lane: &str, port: u16, host: Option<&str>) -> UnitSummary {
+    let mut unit = unit(lane, &format!("port-{port}"), "running", "exposed");
+    unit.role = Some("exposed".into());
+    unit.autostart = false;
+    unit.pty = false;
+    unit.ports = BTreeMap::from([("default".to_owned(), port)]);
+    unit.public_url = host.map(|host| format!("https://{host}"));
+    unit.urls = std::iter::once(format!("http://127.0.0.1:{port}"))
+        .chain(unit.public_url.clone())
+        .collect();
+    unit
+}
+
 /// Containers by name, host port and whether they are shared project infra.
 fn containers(list: &[(&str, u16, bool)]) -> Vec<ContainerSummary> {
     list.iter()
@@ -296,6 +310,7 @@ pub fn lanes() -> Vec<LaneSummary> {
         units: vec![
             unit("acme@2", "api-gateway", "idle", "service"),
             unit("acme@2", "web-app", "idle", "service"),
+            exposed("acme@2", 8000, Some("files.acme-2.localhost")),
         ],
         ..LaneSummary::default()
     };
@@ -688,6 +703,8 @@ pub fn metrics() -> Metrics {
     for (seed, unit) in lanes()
         .iter()
         .flat_map(|lane| lane.units.iter())
+        // An exposed port has no process for the sampler to measure.
+        .filter(|u| u.kind != "exposed")
         .filter(|u| {
             matches!(u.state.as_str(), "ready" | "running" | "starting") || u.state == ORPHANED
         })
