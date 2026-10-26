@@ -477,6 +477,9 @@ pub struct Attached {
     /// the daemon's redraw at the new size, never through a locally cut grid
     /// or a blank one.
     pub held: Option<vt100::Screen>,
+    /// `unit` names an infra container and the screen shows its Docker logs:
+    /// nothing to type into and no stored history behind the scrollback.
+    pub container: bool,
 }
 
 impl Attached {
@@ -491,6 +494,9 @@ impl Attached {
 pub const MIN_PTY: (u16, u16) = (20, 5);
 /// A resize settles this long before the stream is reopened for a fresh screen.
 const RESIZE_SETTLE_MS: u64 = 200;
+/// Lines of a container's Docker log shown when it is selected; older ones
+/// stay with Docker (`docker logs`). Half the pane's scrollback.
+const CONTAINER_TAIL: usize = 1000;
 
 /// Inputs to [`App::update`].
 #[derive(Debug)]
@@ -520,6 +526,12 @@ pub enum Msg {
     AttachOpened {
         generation: u64,
         result: Result<AttachResult, ApiError>,
+    },
+    /// [`Effect::FollowContainer`] got its stream, or why not. Its lines then
+    /// arrive as [`Msg::AttachOutput`], its end as [`Msg::AttachClosed`].
+    ContainerLogsOpened {
+        generation: u64,
+        result: Result<(), ApiError>,
     },
     AttachOutput {
         generation: u64,
@@ -626,6 +638,15 @@ pub enum Effect {
         columns: u16,
         rows: u16,
         interactive: bool,
+    },
+    /// Follows the Docker logs of infra container `container` as seen from
+    /// `lane`, replacing any attached stream: its last `tail` lines, then new
+    /// ones, written into the pane like a unit's output.
+    FollowContainer {
+        generation: u64,
+        lane: String,
+        container: String,
+        tail: usize,
     },
     /// Sends [`Msg::ResizeSettled`] with `token` after a short pause.
     SettleResize {
@@ -1316,6 +1337,32 @@ impl App {
                     }
                 }
             }
+            Msg::ContainerLogsOpened { generation, result } => {
+                let Some(attached) = self.attached_mut(generation) else {
+                    return effects;
+                };
+                match result {
+                    Ok(()) => attached.state = AttachState::Live,
+                    Err(error) => {
+                        let mut worded = words::api(&error);
+                        let old = worded.code.as_deref() == Some("unknown_method");
+                        if old {
+                            worded.summary =
+                                "this daemon cannot show container logs; restart it after upgrading devlanes"
+                                    .into();
+                        }
+                        let what = format!(
+                            "show logs of container {} in {}",
+                            attached.unit, attached.lane
+                        );
+                        attached.state = AttachState::Failed(worded.clone());
+                        // An older daemon is no failure of this container; the pane says so.
+                        if !old {
+                            self.report(&what, None, worded);
+                        }
+                    }
+                }
+            }
             Msg::StreamError { generation, error } => {
                 // A lost connection is reported once by the subscription, and an
                 // intentional daemon stop or restart is not an error at all.
@@ -1330,7 +1377,11 @@ impl App {
                 attached.held = None;
                 attached.state = AttachState::Failed(worded.clone());
                 if !expected {
-                    let what = format!("terminal of {}", unit_ref(&attached.lane, &attached.unit));
+                    let what = if attached.container {
+                        format!("logs of container {} in {}", attached.unit, attached.lane)
+                    } else {
+                        format!("terminal of {}", unit_ref(&attached.lane, &attached.unit))
+                    };
                     self.report(&what, None, worded);
                 }
             }
@@ -1883,7 +1934,7 @@ impl App {
                 let is_attached = self
                     .attached
                     .as_ref()
-                    .is_some_and(|a| a.lane == unit.lane && a.unit == unit.name);
+                    .is_some_and(|a| a.lane == unit.lane && a.unit == unit.name && !a.container);
                 match lane.units.iter_mut().find(|u| u.name == unit.name) {
                     Some(existing) => *existing = unit,
                     None => {
@@ -2660,20 +2711,26 @@ impl App {
 
     // ---- attach -----------------------------------------------------------
 
-    /// Attaches to the selected unit and detaches from anything else. An
-    /// orphaned unit has no stream; the pane explains it instead.
+    /// Attaches to the selected unit, or follows the selected container's
+    /// logs, and detaches from anything else. An orphaned unit has no stream;
+    /// the pane explains it instead.
     fn sync_attach(&mut self, effects: &mut Vec<Effect>) {
         let lane = self.selected.as_ref().map(|s| s.lane.clone());
+        let container = match self.selected_id() {
+            Some(RowId::Container(name)) => Some(name.clone()),
+            _ => None,
+        };
         let wanted = self
             .selected_unit()
             .filter(|unit| !is_orphaned(unit))
-            .map(|unit| unit.name.clone())
+            .map(|unit| (unit.name.clone(), false))
+            .or(container.map(|name| (name, true)))
             .zip(lane)
-            .map(|(unit, lane)| (lane, unit));
+            .map(|((name, container), lane)| (lane, name, container));
         let current = self
             .attached
             .as_ref()
-            .map(|a| (a.lane.clone(), a.unit.clone()));
+            .map(|a| (a.lane.clone(), a.unit.clone(), a.container));
         if wanted == current {
             return;
         }
@@ -2682,11 +2739,42 @@ impl App {
         }
         self.focus = Focus::List;
         self.want_terminal = false;
-        let Some((lane, unit)) = wanted else {
+        let Some((lane, name, container)) = wanted else {
             return;
         };
-        // Browsing only watches; focusing the pane or zooming takes the size.
-        self.open_attach(lane, unit, false, effects);
+        if container {
+            self.open_container(lane, name, effects);
+        } else {
+            // Browsing only watches; focusing the pane or zooming takes the size.
+            self.open_attach(lane, name, false, effects);
+        }
+    }
+
+    /// Follows the Docker logs of infra container `name`, replacing the
+    /// current stream. The grid is the pane's size, as a unit's would be.
+    fn open_container(&mut self, lane: String, name: String, effects: &mut Vec<Effect>) {
+        if self.attached.take().is_some() {
+            effects.push(Effect::Detach);
+        }
+        let (columns, rows) = self.attach_size();
+        self.generation += 1;
+        self.attached = Some(Attached {
+            generation: self.generation,
+            lane: lane.clone(),
+            unit: name.clone(),
+            state: AttachState::Opening,
+            screen: TerminalScreen::new(rows, columns),
+            mode: PaneMode::Live,
+            interactive: false,
+            held: None,
+            container: true,
+        });
+        effects.push(Effect::FollowContainer {
+            generation: self.generation,
+            lane,
+            container: name,
+            tail: CONTAINER_TAIL,
+        });
     }
 
     /// Opens a new stream on `lane:unit`, replacing the current one.
@@ -2711,6 +2799,7 @@ impl App {
             mode: PaneMode::Live,
             interactive,
             held: None,
+            container: false,
         });
         effects.push(Effect::Attach {
             generation: self.generation,
@@ -2738,10 +2827,16 @@ impl App {
             return;
         };
         let (lane, unit) = (attached.lane.clone(), attached.unit.clone());
+        let container = attached.container;
         let held = attached.held.take().or_else(|| {
             matches!(attached.mode, PaneMode::Live).then(|| attached.screen.screen().clone())
         });
-        self.open_attach(lane, unit, interactive, effects);
+        // A container's logs are read-only: a reopen only redraws them at the new size.
+        if container {
+            self.open_container(lane, unit, effects);
+        } else {
+            self.open_attach(lane, unit, interactive, effects);
+        }
         if let Some(attached) = self.attached.as_mut() {
             attached.held = held;
         }
@@ -3232,6 +3327,10 @@ impl App {
             self.set_notice(notice);
             return;
         };
+        if attached.container {
+            self.set_notice("container logs are read-only: docker exec types into it".into());
+            return;
+        }
         match (&attached.state, attached.interactive) {
             (AttachState::Live, true) => self.focus = Focus::Terminal,
             (AttachState::Live | AttachState::Opening, false) => {
@@ -3697,8 +3796,8 @@ impl App {
         };
         if matches!(id, RowId::Section(_) | RowId::Group(..)) {
             self.toggle_fold(&id, effects);
-        } else if self.selected_unit().is_some() {
-            // A unit that does not run says why in a notice.
+        } else if self.selected_unit().is_some() || matches!(id, RowId::Container(_)) {
+            // A unit that does not run, or a container, says why in a notice.
             self.focus_terminal(effects);
         }
     }
@@ -4548,7 +4647,11 @@ impl App {
         match &mut attached.mode {
             PaneMode::Copy(_) => {}
             PaneMode::Live => {
-                if attached.screen.scroll_by(delta) && attached.state != AttachState::Opening {
+                // A container's older lines stay with Docker; devlanes stores none.
+                if attached.screen.scroll_by(delta)
+                    && attached.state != AttachState::Opening
+                    && !attached.container
+                {
                     attached.mode = PaneMode::Logs(LogView {
                         loading: true,
                         ..LogView::default()
@@ -5263,7 +5366,8 @@ impl App {
 
     /// The listed state of the attached unit.
     pub fn attached_unit(&self) -> Option<&UnitSummary> {
-        let attached = self.attached.as_ref()?;
+        // A container may share its name with a unit; its stream is not that unit's.
+        let attached = self.attached.as_ref().filter(|a| !a.container)?;
         self.lanes
             .iter()
             .find(|lane| lane.reference == attached.lane)?

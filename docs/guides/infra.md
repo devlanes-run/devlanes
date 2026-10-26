@@ -312,3 +312,5 @@ devlanes env show --explain    # what infra.* resolved to, through global_env
 docker compose -p acme ps      # the shared project by name
 docker ps --filter label=dev.devlanes.project=acme
 ```
+
+In the TUI, selecting a container under `infra` shows the same Docker logs in the pane, with the scrollback and copy keys a service has. devlanes does not store them; older lines stay with Docker.

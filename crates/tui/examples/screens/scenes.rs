@@ -160,6 +160,20 @@ impl Fake {
                     bytes: data::screen(&unit_name(&unit)),
                 },
             ],
+            Effect::FollowContainer {
+                generation,
+                container,
+                ..
+            } => vec![
+                Msg::ContainerLogsOpened {
+                    generation,
+                    result: Ok(()),
+                },
+                Msg::AttachOutput {
+                    generation,
+                    bytes: data::container_logs(&container),
+                },
+            ],
             Effect::FetchLogs {
                 generation,
                 query,

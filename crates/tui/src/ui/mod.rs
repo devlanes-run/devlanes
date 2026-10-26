@@ -1103,7 +1103,14 @@ fn hints(app: &App) -> Vec<Hint> {
             ("p", "profiles", ch('p')),
             filter,
         ],
-        Some(RowId::Container(_) | RowId::Gap(_)) => vec![filter, ("n", "next problem", ch('n'))],
+        Some(RowId::Container(_)) => vec![
+            ("pgup", "scroll back", KeyCode::PageUp),
+            ("c", "select text", ch('c')),
+            ("z", "zoom", ch('z')),
+            filter,
+            ("n", "next problem", ch('n')),
+        ],
+        Some(RowId::Gap(_)) => vec![filter, ("n", "next problem", ch('n'))],
         Some(RowId::Task(_)) => vec![("s", "run", ch('s')), filter],
         Some(RowId::Unit(_)) => {
             let Some(unit) = app.selected_unit() else {
