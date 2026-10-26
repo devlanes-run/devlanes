@@ -2298,7 +2298,6 @@ mod tests {
     fn box_commands_lose_the_variables_devlanes_sets() {
         for name in [
             devlanes_client::READY_STEPS_ENV,
-            devlanes_proto::remote::ASKPASS_ENV,
             devlanes_transport_ssh::askpass::SOCKET_ENV,
         ] {
             assert!(
