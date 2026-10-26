@@ -64,6 +64,8 @@ devlanes-start-gate = { path = "../start-gate" }
 # Only for the `needs ssh` test against a real box.
 devlanes-transport-ssh = { path = "../transport-ssh" }
 devlanes-tunnel = { path = "../tunnel" }
+# Holds the state database's write lock in a test, to delay a record.
+diesel.workspace = true
 dunce.workspace = true
 # A TLS client for the box HTTPS port test.
 rustls.workspace = true

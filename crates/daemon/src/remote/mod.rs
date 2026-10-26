@@ -62,6 +62,9 @@ const CONNECT_WAIT: Duration = Duration::from_secs(150);
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a local spawn waits for box mirrors to release its ports.
 const RELEASE_WAIT: Duration = Duration::from_secs(3);
+/// How long `connect` waits for a connection's record; longer than the
+/// store's 5 s busy timeout, after which the write fails and is only logged.
+const RECORD_WAIT: Duration = Duration::from_secs(10);
 
 /// Stream ids for prompts start far above the engine's own attach ids, so both
 /// can share one client connection.
@@ -329,6 +332,9 @@ pub(crate) struct HostConn {
     /// The `proxy_port_in_use` message while the proxy cannot serve the box's
     /// HTTPS port.
     proxy_port: Mutex<Option<String>>,
+    /// Set once [`watch_link`] wrote a connection of this link to
+    /// `remote_hosts`, which makes the box wanted.
+    recorded: watch::Sender<bool>,
 }
 
 impl HostConn {
@@ -464,6 +470,17 @@ impl HostConn {
             }
         };
         let _ = tokio::time::timeout(limit, wait).await;
+    }
+
+    /// Waits, at most [`RECORD_WAIT`], until a connected link's connection is
+    /// in `remote_hosts`, so a daemon restarted right after `connect` reports
+    /// it connected still restores the box. Returns at once when not connected.
+    async fn record_written(&self) {
+        if self.session().is_none() {
+            return;
+        }
+        let mut recorded = self.recorded.subscribe();
+        let _ = tokio::time::timeout(RECORD_WAIT, recorded.wait_for(|done| *done)).await;
     }
 
     /// `remote.state` payload for the current state, with the command that
@@ -691,7 +708,8 @@ fn sync_destination(home: &Path, host: &str, entry: &SyncEntry) -> Result<PathBu
 impl Inner {
     /// `connect`: creates (or reuses) the box's link, then streams `remote.state`
     /// events until the CLI detaches. The connection lives in the daemon either way;
-    /// `background` only returns once the first attempt settled.
+    /// `background` only returns once the first attempt settled and, when it
+    /// connected, the connection is recorded.
     pub(crate) async fn connect_method(
         self: &Arc<Self>,
         value: Value,
@@ -720,8 +738,11 @@ impl Inner {
             if let Some(error) = conn.stuck() {
                 return Err(error);
             }
+            conn.record_written().await;
             return Ok(conn.status_json());
         }
+        // Later `connected` events come from `watch_link` after the record.
+        conn.record_written().await;
         let first = Event {
             seq: 0,
             event: wire::STATE_EVENT.into(),
@@ -863,6 +884,7 @@ impl Inner {
             serial: self.remote.next_serial.fetch_add(1, Ordering::Relaxed),
             info: Mutex::new(BoxInfo::default()),
             proxy_port: Mutex::new(None),
+            recorded: watch::Sender::new(false),
         });
         let watcher = tokio::spawn(watch_link(Arc::downgrade(self), conn.clone()));
         *lock(&conn.watch_task) = Some(watcher);
@@ -1434,15 +1456,15 @@ fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
 }
 
 /// Publishes state changes, records successful connects and restarts syncs on
-/// every new session.
+/// every new session. A connection is recorded before it is published, so a
+/// `connect` that saw it connected can rely on a restarted daemon restoring it.
 async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
     let mut state = conn.state.clone();
     let mut syncing: Option<JoinHandle<()>> = None;
     loop {
         let session = live(&state.borrow_and_update());
         let Some(inner) = engine.upgrade() else { break };
-        inner.bus.emit(wire::STATE_EVENT, conn.state_json());
-        if let Some(session) = session {
+        if let Some(session) = &session {
             let record = devlanes_state::RemoteHost {
                 name: conn.name.clone(),
                 transport: conn.kind.to_owned(),
@@ -1456,6 +1478,10 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
             if let Err(error) = inner.store.upsert_remote_host(record).await {
                 tracing::warn!(%error, host = %conn.name, "cannot record remote host");
             }
+            conn.recorded.send_replace(true);
+        }
+        inner.bus.emit(wire::STATE_EVENT, conn.state_json());
+        if let Some(session) = session {
             *lock(&conn.info) = session.box_info().clone();
             let findings = label_warnings(session.server());
             let known = {
@@ -1646,6 +1672,95 @@ mod tests {
         .is_ok();
         assert!(retrying, "the link retries: {:?}", *link.state().borrow());
         link.shutdown().await;
+        Ok(())
+    }
+
+    /// A connection to `box` whose link state is whatever the test sends.
+    fn conn_with(state: watch::Receiver<LinkState>) -> Arc<HostConn> {
+        Arc::new(HostConn {
+            name: "box".into(),
+            kind: "memory",
+            state,
+            registry: ClientRegistry::default(),
+            link: tokio::sync::Mutex::new(None),
+            cancel: CancellationToken::new(),
+            board: Arc::default(),
+            view: Mutex::new(mirror::View::default()),
+            wake: tokio::sync::Notify::new(),
+            mirror_task: Mutex::new(None),
+            watch_task: Mutex::new(None),
+            syncs: Mutex::new(BTreeMap::new()),
+            hashes: Mutex::new(HashMap::new()),
+            warnings: Mutex::new(BTreeMap::new()),
+            serial: 0,
+            info: Mutex::new(BoxInfo::default()),
+            proxy_port: Mutex::new(None),
+            recorded: watch::Sender::new(false),
+        })
+    }
+
+    /// A live session to an in-memory box with an empty registry.
+    async fn session() -> Result<BoxSession, Box<dyn std::error::Error>> {
+        let (client_io, box_io) = tokio::io::duplex(64 * 1024);
+        let services = devlanes_transport::BoxServices {
+            registry: Arc::new(devlanes_transport::SharedRegistry::new(
+                devlanes_transport::RegistrySnapshot::default(),
+                4,
+            )),
+            dialer: Arc::new(devlanes_transport::LoopbackDialer),
+            sync: Arc::new(devlanes_transport::NoSync),
+        };
+        tokio::spawn(devlanes_transport::serve(
+            box_io,
+            services,
+            devlanes_transport::ServeOptions::new("box"),
+        ));
+        Ok(BoxSession::establish(Box::new(client_io), SessionOptions::new("client")).await?)
+    }
+
+    /// A daemon is idle only with no box it would cut off: restoring, or a box
+    /// that is connected, reconnecting or waiting for a sign-in, keeps it up;
+    /// a box whose link failed for good or stopped does not.
+    #[tokio::test]
+    async fn only_failed_and_stopped_boxes_leave_the_daemon_idle()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let remotes = Remotes::default();
+        assert!(remotes.is_idle(), "no box");
+        remotes.restoring.store(true, Ordering::Relaxed);
+        assert!(!remotes.is_idle(), "restoring");
+        remotes.restoring.store(false, Ordering::Relaxed);
+
+        let (state, receiver) = watch::channel(LinkState::Connecting { attempt: 1 });
+        lock(&remotes.hosts).insert("box".into(), conn_with(receiver));
+        let session = session().await?;
+        let busy = [
+            LinkState::Connecting { attempt: 1 },
+            LinkState::Connected(session.clone()),
+            LinkState::Retrying {
+                delay: Duration::from_secs(1),
+                error: "Connection reset by peer".into(),
+            },
+            LinkState::NeedsAuth {
+                error: "Permission denied (password).".into(),
+            },
+        ];
+        for link in busy {
+            let shown = describe(&link);
+            state.send_replace(link);
+            assert!(!remotes.is_idle(), "{shown}");
+        }
+        let done = [
+            LinkState::Failed {
+                error: "devlanes is not installed".into(),
+            },
+            LinkState::Stopped,
+        ];
+        for link in done {
+            let shown = describe(&link);
+            state.send_replace(link);
+            assert!(remotes.is_idle(), "{shown}");
+        }
+        session.close();
         Ok(())
     }
 

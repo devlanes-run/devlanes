@@ -75,7 +75,8 @@ impl Ctx<'_> {
         let sgr = match state {
             "ready" | "running" | "ok" | "applied" | "exited" => "32",
             "failed" | "fail" | "error" => "31",
-            "starting" | "stopping" | "warn" | "reconnecting" | "unassigned" | "orphaned" => "33",
+            "starting" | "stopping" | "warn" | "reconnecting" | "sign_in_needed" | "needs_auth"
+            | "unassigned" | "orphaned" => "33",
             // Queued, idle, throttled, frozen and stopped units are dim.
             _ => "2",
         };

@@ -8,7 +8,7 @@ use devlanes_state::{
 use crate::{lane, project, schema};
 
 #[tokio::test]
-/// Migration 009 keeps the boxes of earlier daemons, none of them wanted, and
+/// Migration 010 keeps the boxes of earlier daemons, none of them wanted, and
 /// its down script keeps the rows.
 async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
     use diesel::{migration::MigrationSource, prelude::*};
@@ -20,7 +20,7 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
     c.applied_migrations().expect("ledger");
     let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
         .expect("migrations");
-    c.run_migrations(&migrations[..8]).expect("v8");
+    c.run_migrations(&migrations[..9]).expect("v9");
     diesel::insert_into(schema::remote_hosts::table)
         .values((
             schema::remote_hosts::name.eq("box"),
@@ -46,18 +46,18 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
             .expect("want")
     );
     store.close().await.expect("close");
-    // Later migrations go first; 009 is the one under test.
-    while c.applied_migrations().expect("ledger").len() > 9 {
+    // Later migrations go first; 010 is the one under test.
+    while c.applied_migrations().expect("ledger").len() > 10 {
         c.revert_last_migration(MIGRATIONS)
             .expect("down a later migration");
     }
-    c.revert_last_migration(MIGRATIONS).expect("down 009");
+    c.revert_last_migration(MIGRATIONS).expect("down 010");
     let names: Vec<String> = schema::remote_hosts::table
         .select(schema::remote_hosts::name)
         .load(&mut c)
         .expect("hosts after down");
     assert_eq!(names, ["box"]);
-    c.run_pending_migrations(MIGRATIONS).expect("redo 009");
+    c.run_pending_migrations(MIGRATIONS).expect("redo 010");
 }
 
 #[tokio::test]

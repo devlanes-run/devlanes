@@ -538,6 +538,7 @@ mod tests {
         };
         assert_eq!(class(ErrorCode::ServiceIdle), Some("info"));
         assert_eq!(class(ErrorCode::ServiceStarting), Some("warning"));
+        assert_eq!(class(ErrorCode::BoxSignInNeeded), Some("warning"));
         assert_eq!(class(ErrorCode::UpstreamFailed), Some("error"));
         assert!(STYLE.contains(".severity-error"));
     }

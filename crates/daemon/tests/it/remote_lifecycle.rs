@@ -17,6 +17,7 @@ use devlanes_proto::{
     remote::{PROMPT_EVENT, STATE_EVENT},
 };
 use devlanes_state::Store;
+use diesel::{Connection, SqliteConnection, connection::SimpleConnection};
 use serde_json::json;
 use tokio::net::TcpStream;
 
@@ -26,8 +27,9 @@ use super::{
 use crate::{LIMIT, cx, eventually, repo, temp};
 
 // Port ranges: these tests take 21500-21999, which no other test in this
-// binary uses (see `remote_boxes.rs`), and 20000-20999 for boxes that run
-// nothing, so nothing binds them.
+// binary uses (see `remote_boxes.rs`), and 20000-20999, the start of the
+// default pool other tests bind in, only for boxes and clients that bind
+// nothing.
 
 /// Whether the store under the client home `home` still wants box `name`.
 async fn wanted(home: &Path, name: &str) -> bool {
@@ -39,8 +41,8 @@ async fn wanted(home: &Path, name: &str) -> bool {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A box connected before a client daemon restart is connected again by the
-/// next daemon, as a box that connected before, without any `connect`. After
-/// `disconnect` it is no longer wanted, so the daemon after that leaves it.
+/// next daemon, as a box that connected before, without any `connect`, and
+/// mirrors its ports again. `disconnect` makes it unwanted.
 async fn a_restart_restores_wanted_boxes() {
     if !ipv6_loopback().await {
         eprintln!("skipping a_restart_restores_wanted_boxes: no IPv6 loopback");
@@ -65,9 +67,8 @@ async fn a_restart_restores_wanted_boxes() {
         assert!(mirrored.is_some(), "echo mirrored before the restart");
         assert_eq!(
             *client.controls.handed_out.lock().expect("handed out"),
-            [false]
+            [("box".to_owned(), false)]
         );
-        client.recorded("box").await;
         client.stop().await;
 
         let client = ClientSide::start(&tmp, "client", "21625-21749", &side).await;
@@ -82,7 +83,7 @@ async fn a_restart_restores_wanted_boxes() {
         );
         assert_eq!(
             *client.controls.handed_out.lock().expect("handed out"),
-            [true],
+            [("box".to_owned(), true)],
             "a restored box counts as connected before"
         );
 
@@ -97,11 +98,124 @@ async fn a_restart_restores_wanted_boxes() {
             .expect("disconnect");
         let home = client.h.home.clone();
         client.stop().await;
-        assert!(
-            !wanted(&home, "box").await,
-            "a disconnected box is not restored"
-        );
+        assert!(!wanted(&home, "box").await, "disconnect clears wanted");
 
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Of two connected boxes, the one disconnected before a client daemon
+/// restart stays disconnected, and the other is restored. The restore opens
+/// wanted boxes in name order, so `box` would be handed out before `zbox`.
+async fn a_restart_leaves_a_disconnected_box_alone() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let first = BoxSide::start(&tmp, "box", "20250-20374").await;
+        let second = BoxSide::start(&tmp, "zbox", "20375-20499").await;
+        let boxes = [("box", &first), ("zbox", &second)];
+        let client = ClientSide::start_with(&tmp, "client", "20500-20624", &boxes, None).await;
+        client.connect("box").await;
+        client.connect("zbox").await;
+        client
+            .h
+            .call(
+                Method::Disconnect,
+                json!({"host": "box"}),
+                Context::default(),
+            )
+            .await
+            .expect("disconnect");
+        client.stop().await;
+
+        let client = ClientSide::start_with(&tmp, "client", "20500-20624", &boxes, None).await;
+        let restored = eventually(SOON, || async {
+            (client.host_named("zbox").await["state"] == "connected").then_some(())
+        })
+        .await;
+        assert!(
+            restored.is_some(),
+            "zbox is restored: {}",
+            client.host_named("zbox").await
+        );
+        assert_eq!(
+            *client.controls.handed_out.lock().expect("handed out"),
+            [("zbox".to_owned(), true)],
+            "only zbox is opened"
+        );
+        let host = client.host().await;
+        assert_eq!(host["state"], "disconnected", "{host}");
+
+        client.stop().await;
+        first.stop().await;
+        second.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `connect --background` answers only once the connection is recorded, so a
+/// daemon stopped right after it restores the box. A write lock on the
+/// client's database holds the record back while the box is connected.
+async fn a_background_connect_waits_for_the_record() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "20625-20749").await;
+        let client = ClientSide::start(&tmp, "client", "20750-20874", &side).await;
+        let db = client.h.home.join("state.db");
+        let mut writer =
+            SqliteConnection::establish(db.to_str().expect("path")).expect("connection");
+        writer
+            .batch_execute("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;")
+            .expect("write lock");
+
+        let (session, _frames) = Session::local(9_304);
+        let engine = client.h.engine.clone();
+        let connecting = tokio::spawn(async move {
+            let request = Request {
+                id: 1,
+                method: Method::Connect,
+                params: json!({"host": "box", "background": true}),
+                context: Context::default(),
+            };
+            engine.handle(request, session).await
+        });
+        // The box lists the client once its session is up; the client's
+        // record of it is what waits on the lock.
+        let served = eventually(SOON, || async {
+            let status = side
+                .h
+                .call(Method::Status, json!({"all": true}), Context::default())
+                .await
+                .ok()?;
+            status["clients"]
+                .as_array()
+                .is_some_and(|c| !c.is_empty())
+                .then_some(())
+        })
+        .await;
+        assert!(served.is_some(), "the box serves the client");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            !connecting.is_finished(),
+            "connect answered before the connection was recorded"
+        );
+        writer.batch_execute("COMMIT;").expect("release");
+        drop(writer);
+        let connected = connecting.await.expect("connect task").expect("connect");
+        assert_eq!(connected["state"], "connected", "{connected}");
+        client.stop().await;
+
+        let client = ClientSide::start(&tmp, "client", "20750-20874", &side).await;
+        let restored = eventually(SOON, || async {
+            (client.host().await["state"] == "connected").then_some(())
+        })
+        .await;
+        assert!(restored.is_some(), "restored: {}", client.host().await);
+        client.stop().await;
         side.stop().await;
     })
     .await
@@ -136,6 +250,12 @@ async fn an_unanswered_prompt_waits_for_sign_in() {
         })
         .await;
         assert!(served.is_some(), "web is routed to the box");
+        // Bound before the link drops, so the check below proves it survives.
+        let mirrored = eventually(SOON, || async {
+            client.mirrored().await.contains(&echo_port).then_some(())
+        })
+        .await;
+        assert!(mirrored.is_some(), "echo mirrored before the sign-in");
 
         // The box now asks for a password, and no CLI is attached to answer.
         client.controls.sign_in.store(true, Ordering::SeqCst);
@@ -241,16 +361,15 @@ async fn an_unanswered_prompt_waits_for_sign_in() {
 async fn a_disconnect_during_the_restore_wins() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start(&tmp, "box", "20000-20249").await;
-        let client = ClientSide::start(&tmp, "client", "20250-20499", &side).await;
+        let side = BoxSide::start(&tmp, "box", "20000-20124").await;
+        let client = ClientSide::start(&tmp, "client", "20125-20249", &side).await;
         client.connect("box").await;
-        client.recorded("box").await;
         client.stop().await;
 
         let controls = Arc::new(Controls::default());
         controls.open.arm();
         let client =
-            ClientSide::start_controlled(&tmp, "client", "20250-20499", &side, controls.clone())
+            ClientSide::start_controlled(&tmp, "client", "20125-20249", &side, controls.clone())
                 .await;
         controls.open.reached().await;
         let (session, _frames) = Session::local(9_302);
@@ -297,17 +416,16 @@ async fn a_disconnect_during_the_restore_wins() {
 async fn a_connect_during_the_restore_answers_the_next_prompt() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start(&tmp, "box", "20500-20749").await;
-        let client = ClientSide::start(&tmp, "client", "20750-20999", &side).await;
+        let side = BoxSide::start(&tmp, "box", "20875-20937").await;
+        let client = ClientSide::start(&tmp, "client", "20938-20999", &side).await;
         client.connect("box").await;
-        client.recorded("box").await;
         client.stop().await;
 
         let controls = Arc::new(Controls::default());
         controls.sign_in.store(true, Ordering::SeqCst);
         controls.unanswered.arm();
         let client =
-            ClientSide::start_controlled(&tmp, "client", "20750-20999", &side, controls.clone())
+            ClientSide::start_controlled(&tmp, "client", "20938-20999", &side, controls.clone())
                 .await;
         controls.unanswered.reached().await;
 
@@ -323,9 +441,30 @@ async fn a_connect_during_the_restore_answers_the_next_prompt() {
             };
             engine.handle(request, attached).await
         });
+        // The CLI is registered once it gets its first state, so the held
+        // attempt may fail now.
+        let first = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match frames.recv().await {
+                    Some(Frame::Control(Control::Event(event))) if event.event == STATE_EVENT => {
+                        break event.data["state"].as_str().map(str::to_owned);
+                    }
+                    Some(_) => {}
+                    None => break None,
+                }
+            }
+        })
+        .await;
+        let Ok(Some(first)) = first else {
+            panic!(
+                "connect sent no first state within 10 s (ended: {})",
+                connecting.is_finished()
+            );
+        };
+        controls.unanswered.release();
         let engine = client.h.engine.clone();
         let mut prompts = 0;
-        let mut states = Vec::new();
+        let mut states = vec![first];
         loop {
             tokio::select! {
                 result = &mut connecting => {
@@ -343,11 +482,6 @@ async fn a_connect_during_the_restore_answers_the_next_prompt() {
                     }
                     Some(Frame::Control(Control::Event(event))) if event.event == STATE_EVENT => {
                         let state = event.data["state"].as_str().unwrap_or_default().to_owned();
-                        // The CLI is registered once it gets its first state,
-                        // so the held attempt may fail now.
-                        if states.is_empty() {
-                            controls.unanswered.release();
-                        }
                         states.push(state.clone());
                         if state == "connected" {
                             break;

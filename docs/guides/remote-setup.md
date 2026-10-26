@@ -91,7 +91,7 @@ devlanes remote disconnect hetzner
 
 Passphrase, one-time-password and host-key prompts appear in the terminal running `remote connect`, prefixed with the box name; type `yes` to a host-key question even though the input is hidden.
 
-The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an upgrade): the new daemon connects every box you connected and did not disconnect, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
+The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an upgrade): the new daemon connects every box that connected since you last ran `remote disconnect` for it, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
 
 ### Unattended reconnects
 
@@ -99,14 +99,15 @@ Reconnects after sleep, after a network change and after a daemon restart usuall
 
 ```sh
 devlanes remote ls
-#   host: hetzner
+# items:
 #   state: needs_auth
 #   error: ssh to hetzner failed (255): … Permission denied (publickey).
+#   host: hetzner
 #   fix: devlanes remote connect hetzner
-devlanes remote connect hetzner     # answers the prompts here and resumes
+devlanes remote connect hetzner     # shows SSH prompts in this terminal, then reconnects
 ```
 
-While it waits and the daemon keeps running, the box's ports stay bound and its hostnames answer with a [sign-in needed](../errors/box-sign-in-needed.md) page; after a daemon restart they appear once the box connects. `status --json` lists it under `hosts` with the same `fix`. A box that never connected is different: on the first `remote connect`, credentials rejected when you answered the prompt fail it for good, as before.
+While it waits and the daemon keeps running, the box's ports stay bound and its hostnames answer with a [sign-in needed](../errors/box-sign-in-needed.md) page; after a daemon restart they appear once the box connects. `status --json` lists it under `hosts` with the same `fix`. A box that never connected is different: on the first `remote connect`, rejected credentials fail it for good, unless ssh asked something nobody answered.
 
 ### Several boxes
 
@@ -165,8 +166,8 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | `linger off` | Linux box without `loginctl enable-linger` | run it on the box |
 | `ssh to hetzner failed (255): Permission denied` | no agent or key for the daemon's ssh | load the key, `devlanes daemon restart`, connect again |
 | `needs_auth` in `remote ls`, a sign-in needed page in the browser | a reconnect asked for a password, passphrase or host key with no `remote connect` attached, or ssh rejected credentials that worked before | `devlanes remote connect hetzner` in a terminal; load the key into an agent so later reconnects need no prompt |
-| `hetzner needs you to sign in again: … Host key verification failed` | the box's host key changed | check the new key, `ssh-keygen -R hetzner`, then `devlanes remote connect hetzner` |
-| a box connects again after a daemon restart | it was connected when the daemon stopped, and only `remote disconnect` ends that | `devlanes remote disconnect hetzner` when you no longer want it |
+| `box hetzner needs you to sign in again: … Host key verification failed` | the box's host key changed | check the new key, `ssh-keygen -R hetzner`, then `devlanes remote connect hetzner` |
+| a box connects again after a daemon restart | you connected it and have not run `remote disconnect` for it since | `devlanes remote disconnect hetzner` when you no longer want it |
 | `no ssh client found` | Windows without OpenSSH Client | add the optional feature, or put `ssh.exe` on `PATH` |
 
 ## Limits
