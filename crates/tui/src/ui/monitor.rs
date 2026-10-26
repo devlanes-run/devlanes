@@ -1216,6 +1216,13 @@ fn table_box(page: &Page, frame: &mut Frame, area: Rect) {
             .max(1),
         width,
     };
+    // Too short to reserve a line for pinned rows: a selected one takes the
+    // only line, so the selection never goes out of sight.
+    if reserved == 0 && draw.selected >= scrolling {
+        let rect = Rect::new(body.x, body.y, body.width, 1);
+        draw.row(frame, rect, draw.selected, &page.rows[draw.selected]);
+        return;
+    }
     let offset = view.offset.min(scrolling.saturating_sub(height));
     for (dy, (row_index, row)) in page
         .rows
@@ -1257,11 +1264,13 @@ fn table_box(page: &Page, frame: &mut Frame, area: Rect) {
 /// What drawing one table row needs besides the row.
 struct Draw<'a> {
     page: &'a Page<'a>,
+    /// The columns every row lines up with.
     layout: &'a Layout,
     /// The selected row's index in `page.rows`.
     selected: usize,
     /// The largest memory of a row in view, which fills a memory bar.
     largest: u64,
+    /// The table's inner width, which a selected row's background fills.
     width: usize,
 }
 
@@ -1443,6 +1452,8 @@ fn entry_line(
                 }
                 None => spans.push(Span::styled(format!("{:>width$} ", "-"), theme.quiet())),
             },
+            // The daemon's row already says devlanes in its name.
+            Column::Lane if entry.kind == "dmn" => spans.push(Span::raw(" ".repeat(width + 1))),
             Column::Lane => spans.push(Span::styled(
                 format!("{:<width$} ", short_group(&entry.lane, width)),
                 theme.quiet(),
@@ -1929,6 +1940,45 @@ mod tests {
         assert_eq!(bytes_fine(518_936_576), "494.9M");
         assert_eq!(bytes_fine(11 << 30), "11.0G");
         assert_eq!(format_bytes(518_412_288), "494M");
+    }
+
+    #[test]
+    fn the_total_adds_parts_read_at_different_moments_of_a_second() {
+        use crate::api::LaneMetrics;
+        const BASE: u64 = 1_000_000_000;
+        // The lane is read 100 ms into each second and the shared container
+        // 900 ms in; in the newest second only the lane was read yet.
+        let lane: Vec<(u64, f64, u64)> = (0..=10)
+            .map(|s| (BASE + s * 1000 + 100, 10.0, 1000))
+            .collect();
+        let shared: Vec<(u64, f64, u64)> =
+            (0..10).map(|s| (BASE + s * 1000 + 900, 5.0, 500)).collect();
+        let mut app = App::new(120, 40);
+        app.metrics = Some(Metrics {
+            units: vec![UnitMetrics {
+                lane: "acme (shared)".into(),
+                unit: "postgres".into(),
+                kind: "container".into(),
+                shared: true,
+                history: shared,
+                ..UnitMetrics::default()
+            }],
+            lanes: vec![LaneMetrics {
+                lane: "acme@0".into(),
+                history: lane,
+                ..LaneMetrics::default()
+            }],
+            ..Metrics::default()
+        });
+        let page = Page {
+            app: &app,
+            theme: &app.theme,
+            metrics: app.metrics.as_ref(),
+            rows: Vec::new(),
+            now: BASE + 10_100,
+        };
+        assert_eq!(page.total_columns(false, 11), [Some(1500.0); 11]);
+        assert_eq!(page.total_columns(true, 11), [Some(15.0); 11]);
     }
 
     #[test]

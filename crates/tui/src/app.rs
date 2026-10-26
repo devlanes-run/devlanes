@@ -125,6 +125,13 @@ pub struct LanePhases {
 const MAX_DAEMON_LOG: usize = 2000;
 /// Daemon facts refresh every this many one-second ticks while the tab is visible.
 const DAEMON_REFRESH_TICKS: u8 = 3;
+/// What the daemon page asks `metrics` for, for the daemon's `usage` fact:
+/// it reads only the newest values, so a minute of history is enough, where
+/// the monitor's query sends every unit's whole graph range.
+const DAEMON_PAGE_METRICS: MetricsQuery = MetricsQuery {
+    range_ms: 60_000,
+    points: 0,
+};
 /// Doctor refreshes this often while the daemon view is closed, for its badge.
 const DOCTOR_BACKGROUND_TICKS: u8 = 60;
 
@@ -2918,7 +2925,7 @@ impl App {
             });
             if !self.daemon.stopped {
                 effects.push(Effect::FetchDaemon);
-                effects.push(Effect::FetchMetrics(self.metrics_query()));
+                effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
             }
         }
         if view == View::Monitor && self.view != View::Monitor {
@@ -5006,8 +5013,7 @@ impl App {
                 self.daemon.ticks = 0;
                 if self.connection == Connection::Online && self.daemon.busy.is_none() {
                     effects.push(Effect::FetchDaemon);
-                    // For the daemon's own usage among the facts.
-                    effects.push(Effect::FetchMetrics(self.metrics_query()));
+                    effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
                 }
             }
         }

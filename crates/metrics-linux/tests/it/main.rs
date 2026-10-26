@@ -409,8 +409,21 @@ mod linux {
             assert!(samples[0].footprint_bytes > 0, "{samples:?}");
         }
 
-        // A unit that tracks the daemon's PID does not count it.
+        // A unit that tracks the daemon's PID counts neither the daemon nor, through
+        // it, the daemon's other children.
         let child_identity = process_identity(child.0.id()).expect("child identity");
+        let samples = source
+            .sample_blocking(&[target(vec![me])], Some(me))
+            .expect("sample");
+        assert!(
+            samples
+                .iter()
+                .all(|sample| !matches!(sample.subject, Subject::Process { .. })),
+            "{samples:?}"
+        );
+        assert_eq!(samples.len(), 1, "only the daemon: {samples:?}");
+
+        // A child the unit tracks itself still counts, as a unit leader would.
         let samples = source
             .sample_blocking(&[target(vec![me, child_identity])], Some(me))
             .expect("sample");

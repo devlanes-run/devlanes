@@ -31,7 +31,8 @@ struct State {
 /// which catches children forked since the daemon's last descendant snapshot.
 /// Only processes owned by the daemon's uid are considered. A process claimed by
 /// several targets counts for the first one. The request's daemon process is
-/// read by PID alone, without its descendants, and never counts for a unit.
+/// read by PID alone, without its descendants. It never counts for a unit, and
+/// the descendant walk does not pass through it.
 #[derive(Debug, Clone)]
 pub struct MacosSource {
     state: Arc<Mutex<State>>,
@@ -106,16 +107,11 @@ fn collect(
     daemon: Option<ProcessIdentity>,
 ) -> Result<Vec<Sample>, Error> {
     // Without units only the daemon is read, so the process-table scan is skipped.
-    let mut owners = if units.is_empty() {
+    let owners = if units.is_empty() {
         HashMap::new()
     } else {
-        membership(units)?
+        membership(units, daemon.map(|daemon| daemon.pid))?
     };
-    if let Some(daemon) = daemon {
-        // The daemon gets its own sample; a unit that reaches it through a shared
-        // session or a tracked PID must not count it as well.
-        owners.remove(&daemon.pid);
-    }
     let ts_ms = unix_ms(SystemTime::now());
     let now = Instant::now();
     let mach_now = ffi::mach_now();
@@ -216,11 +212,16 @@ fn percent(cpu_ns: u64, wall_ns: u128) -> f64 {
     cpu_ns as f64 / wall_ns as f64 * 100.0
 }
 
-/// Maps each member PID to the index of the target that owns it.
-fn membership(units: &[UnitTarget]) -> Result<HashMap<u32, usize>, Error> {
+/// Maps each member PID to the index of the target that owns it. The `daemon`
+/// PID is never a member, and its children join a unit only through their own
+/// session or tracking, not as its descendants.
+fn membership(units: &[UnitTarget], daemon: Option<u32>) -> Result<HashMap<u32, usize>, Error> {
     let uid = ffi::current_uid();
+    // Leaving the daemon out of the table keeps it from being a member and the
+    // descendant walk from reaching its other children (git, docker) through it.
     let table: HashMap<u32, ShortInfo> = ffi::list_pids()?
         .into_iter()
+        .filter(|&pid| Some(pid) != daemon)
         .filter_map(|pid| ffi::short_info(pid).map(|info| (pid, info)))
         .filter(|(_, info)| info.uid == uid && !info.zombie)
         .collect();

@@ -75,10 +75,26 @@ pub(crate) type SystemPoint = (u64, Option<f64>, Option<u64>, Option<&'static st
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DaemonProcess {
     pub identity: ProcessIdentity,
-    /// When the engine started (Unix ms); peaks count from here.
+    /// When the engine started (Unix ms).
     pub started_at_ms: u64,
     /// `(cpu, memory)` from the last tick, `None` when that tick could not read it.
     pub latest: Option<(f64, u64)>,
+    /// Highest `(cpu, memory)` of every tick so far, each maximised on its own.
+    /// Kept apart from the history, which forgets ticks older than its horizon.
+    pub peak: Option<(f64, u64)>,
+}
+
+impl DaemonProcess {
+    /// Stores one tick's reading as [`Self::latest`] and raises [`Self::peak`]
+    /// with it.
+    fn observe(&mut self, reading: Option<(f64, u64)>) {
+        self.latest = reading;
+        if let Some((cpu, memory)) = reading {
+            self.peak = Some(self.peak.map_or((cpu, memory), |(peak_cpu, peak_memory)| {
+                (peak_cpu.max(cpu), peak_memory.max(memory))
+            }));
+        }
+    }
 }
 
 /// One reading of the whole machine.
@@ -329,9 +345,11 @@ impl Inner {
             state.history.record_all(&container_samples);
             state.history.record_all(&daemon_samples);
             if let Some(daemon) = &mut state.daemon {
-                daemon.latest = daemon_samples
-                    .last()
-                    .map(|sample| (sample.cpu_percent, sample.footprint_bytes));
+                daemon.observe(
+                    daemon_samples
+                        .last()
+                        .map(|sample| (sample.cpu_percent, sample.footprint_bytes)),
+                );
             }
             state.containers = containers;
             for target in &targets {
@@ -481,6 +499,7 @@ impl Inner {
             identity,
             started_at_ms: now_ms().saturating_sub(uptime),
             latest: None,
+            peak: None,
         });
         Some(daemon.identity)
     }
@@ -664,14 +683,13 @@ impl Inner {
 fn daemon_entry(state: &MetricsState, view: &View) -> Option<Value> {
     let daemon = state.daemon?;
     let series = state.history.series(&Subject::Daemon)?;
-    let peak = peak_since(series, daemon.started_at_ms);
     let mut entry = json!({
         "pid": daemon.identity.pid,
         "started_at_ms": daemon.started_at_ms,
         "cpu_percent": daemon.latest.map(|l| l.0),
         "memory_bytes": daemon.latest.map(|l| l.1),
-        "peak_cpu_percent": peak.0,
-        "peak_memory_bytes": peak.1,
+        "peak_cpu_percent": daemon.peak.map(|p| p.0),
+        "peak_memory_bytes": daemon.peak.map(|p| p.1),
         "history": view.history(Some(series)),
     });
     if view.windows {
@@ -992,8 +1010,8 @@ mod tests {
         assert_eq!(pressure_level("unknown"), None);
     }
 
-    /// The `daemon` entry waits for the first reading and carries peaks since
-    /// the daemon started.
+    /// The `daemon` entry waits for the first reading and carries the peaks of
+    /// every tick, not only those the history still holds.
     #[test]
     fn daemon_entry_needs_a_reading() {
         let mut state = MetricsState::default();
@@ -1004,21 +1022,26 @@ mod tests {
             windows: false,
         };
         assert!(daemon_entry(&state, &view).is_none());
-        state.daemon = Some(DaemonProcess {
+        let mut daemon = DaemonProcess {
             identity: process(42, 42),
             started_at_ms: 2_000,
-            latest: Some((1.5, 300)),
-        });
-        assert!(daemon_entry(&state, &view).is_none(), "no series yet");
-        for (ts_ms, cpu_percent, footprint_bytes) in [(1_000, 90.0, 900), (3_000, 1.5, 300)] {
-            state.history.record(&Sample {
-                subject: Subject::Daemon,
-                cpu_percent,
-                footprint_bytes,
-                rss_bytes: footprint_bytes,
-                ts_ms,
-            });
+            latest: None,
+            peak: None,
+        };
+        // CPU and memory peak on different ticks; a tick without a reading
+        // clears `latest` and keeps the peaks.
+        for reading in [Some((90.0, 300)), None, Some((1.5, 900)), Some((1.5, 300))] {
+            daemon.observe(reading);
         }
+        state.daemon = Some(daemon);
+        assert!(daemon_entry(&state, &view).is_none(), "no series yet");
+        state.history.record(&Sample {
+            subject: Subject::Daemon,
+            cpu_percent: 1.5,
+            footprint_bytes: 300,
+            rss_bytes: 300,
+            ts_ms: 3_000,
+        });
         let entry = daemon_entry(&state, &view).expect("entry");
         assert_eq!(entry["pid"], 42);
         assert_eq!(entry["started_at_ms"], 2_000);
@@ -1028,10 +1051,10 @@ mod tests {
         );
         assert_eq!(
             (&entry["peak_cpu_percent"], &entry["peak_memory_bytes"]),
-            (&json!(1.5), &json!(300)),
-            "the point before the start does not count"
+            (&json!(90.0), &json!(900)),
+            "peaks outlast the history"
         );
-        assert_eq!(entry["history"].as_array().map(Vec::len), Some(2));
+        assert_eq!(entry["history"].as_array().map(Vec::len), Some(1));
         assert!(entry.get("windows").is_none());
     }
 

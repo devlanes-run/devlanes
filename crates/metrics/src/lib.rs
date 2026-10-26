@@ -4,9 +4,10 @@
 //!
 //! Collectors (`devlanes-metrics-macos`, `-linux`, `-docker`) implement
 //! [`MetricsSource`] and emit leaf samples ([`Subject::Process`],
-//! [`Subject::Container`], [`Subject::DockerVm`], [`Subject::Daemon`]). The daemon rolls leaves up with
-//! [`aggregate`], records everything in [`History`], feeds unit totals to
-//! [`RunTracker`] and persists [`RollupRecord`]s.
+//! [`Subject::Container`], [`Subject::DockerVm`], [`Subject::Daemon`]). The
+//! daemon rolls leaves up with [`aggregate`], records everything in
+//! [`History`], feeds unit totals to [`RunTracker`] and persists
+//! [`RollupRecord`]s.
 //!
 //! ```
 //! use devlanes_core::{LaneId, ProjectId};

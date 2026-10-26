@@ -144,7 +144,9 @@ pub struct SystemMetrics {
 /// The devlanes daemon's own process, kept out of every lane and total.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DaemonMetrics {
+    /// The daemon's process id.
     pub pid: Option<u32>,
+    /// When the daemon started (Unix ms), for its uptime.
     pub started_at_ms: Option<u64>,
     /// Its readings in a unit row's shape: lane `devlanes`, unit `daemon`,
     /// kind `daemon`.

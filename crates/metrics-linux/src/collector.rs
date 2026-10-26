@@ -35,8 +35,8 @@ struct State {
 /// Membership per unit is: members of the target's sessions, tracked processes
 /// whose `starttime` still matches, and live descendants (by parent PID) of
 /// either. A process claimed by several targets counts for the first one. The
-/// request's daemon process is read by PID alone, without its descendants, and
-/// never counts for a unit.
+/// request's daemon process is read by PID alone, without its descendants. It
+/// never counts for a unit, and the descendant walk does not pass through it.
 #[derive(Debug, Clone)]
 pub struct LinuxSource {
     state: Arc<Mutex<State>>,
@@ -161,8 +161,14 @@ fn process_table() -> Result<HashMap<u32, ProcStat>, Error> {
     Ok(table)
 }
 
-/// Maps each member PID to the index of the target that owns it.
-fn membership(units: &[UnitTarget], table: &HashMap<u32, ProcStat>) -> HashMap<u32, usize> {
+/// Maps each member PID to the index of the target that owns it. The `daemon`
+/// PID is never a member, and its children join a unit only through their own
+/// session or tracking, not as its descendants.
+fn membership(
+    units: &[UnitTarget],
+    table: &HashMap<u32, ProcStat>,
+    daemon: Option<u32>,
+) -> HashMap<u32, usize> {
     let mut sessions: HashMap<u32, usize> = HashMap::new();
     for (index, target) in units.iter().enumerate() {
         for &sid in &target.sessions {
@@ -174,21 +180,25 @@ fn membership(units: &[UnitTarget], table: &HashMap<u32, ProcStat>) -> HashMap<u
     }
     let mut owners: HashMap<u32, usize> = table
         .iter()
+        .filter(|&(&pid, _)| Some(pid) != daemon)
         .filter_map(|(&pid, stat)| sessions.get(&stat.session).map(|&index| (pid, index)))
         .collect();
     for (index, target) in units.iter().enumerate() {
         for identity in &target.processes {
             // A different starttime means the PID now names an unrelated process.
-            if table
-                .get(&identity.pid)
-                .is_some_and(|stat| stat.starttime == identity.start_time)
+            if Some(identity.pid) != daemon
+                && table
+                    .get(&identity.pid)
+                    .is_some_and(|stat| stat.starttime == identity.start_time)
             {
                 owners.entry(identity.pid).or_insert(index);
             }
         }
     }
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-    for (&pid, stat) in table {
+    // Leaving the daemon out of the tree keeps the walk from reaching it, and
+    // so from reaching its other children (git, docker) through it.
+    for (&pid, stat) in table.iter().filter(|&(&pid, _)| Some(pid) != daemon) {
         children.entry(stat.ppid).or_default().push(pid);
     }
     let mut queue: VecDeque<(u32, usize)> = owners.iter().map(|(&pid, &i)| (pid, i)).collect();
@@ -210,18 +220,13 @@ fn collect(
     daemon: Option<ProcessIdentity>,
 ) -> Result<Vec<Sample>, Error> {
     // Without units only the daemon is read, so `/proc` is not scanned.
-    let (table, mut owners) = if units.is_empty() {
+    let (table, owners) = if units.is_empty() {
         (HashMap::new(), HashMap::new())
     } else {
         let table = process_table()?;
-        let owners = membership(units, &table);
+        let owners = membership(units, &table, daemon.map(|daemon| daemon.pid));
         (table, owners)
     };
-    if let Some(daemon) = daemon {
-        // The daemon gets its own sample; a unit that reaches it through a shared
-        // session or a tracked PID must not count it as well.
-        owners.remove(&daemon.pid);
-    }
     // A different starttime means the daemon's PID now names an unrelated process.
     let daemon = daemon.and_then(|daemon| {
         read_stat(daemon.pid)
@@ -230,6 +235,11 @@ fn collect(
             .filter(|stat| stat.starttime == daemon.start_time && !stat.is_exited())
             .map(|stat| (daemon.pid, stat))
     });
+    if owners.is_empty() && daemon.is_none() {
+        state.previous.clear();
+        state.pss.clear();
+        return Ok(Vec::new());
+    }
     let mut cycle = Cycle {
         uptime: procfs::parse_uptime(&fs::read_to_string("/proc/uptime")?)?,
         now: Instant::now(),
