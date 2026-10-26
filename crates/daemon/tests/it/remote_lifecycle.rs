@@ -67,6 +67,7 @@ async fn a_restart_restores_wanted_boxes() {
             *client.controls.handed_out.lock().expect("handed out"),
             [false]
         );
+        client.recorded("box").await;
         client.stop().await;
 
         let client = ClientSide::start(&tmp, "client", "21625-21749", &side).await;
@@ -243,6 +244,7 @@ async fn a_disconnect_during_the_restore_wins() {
         let side = BoxSide::start(&tmp, "box", "20000-20249").await;
         let client = ClientSide::start(&tmp, "client", "20250-20499", &side).await;
         client.connect("box").await;
+        client.recorded("box").await;
         client.stop().await;
 
         let controls = Arc::new(Controls::default());
@@ -298,6 +300,7 @@ async fn a_connect_during_the_restore_answers_the_next_prompt() {
         let side = BoxSide::start(&tmp, "box", "20500-20749").await;
         let client = ClientSide::start(&tmp, "client", "20750-20999", &side).await;
         client.connect("box").await;
+        client.recorded("box").await;
         client.stop().await;
 
         let controls = Arc::new(Controls::default());

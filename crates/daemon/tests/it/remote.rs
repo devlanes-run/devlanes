@@ -564,6 +564,22 @@ impl ClientSide {
         assert_eq!(connected["state"], "connected", "{connected}");
     }
 
+    /// Waits until the daemon recorded the connection to box `name`, which it
+    /// does in the background after the link connected. A daemon stopped
+    /// before that does not restore the box.
+    async fn recorded(&self, name: &str) {
+        let recorded = eventually(SOON, || async {
+            let host = self.host_named(name).await;
+            host["last_connected_ms"].is_number().then_some(())
+        })
+        .await;
+        assert!(
+            recorded.is_some(),
+            "the connection was recorded: {}",
+            self.host_named(name).await
+        );
+    }
+
     /// Box ports this client mirrors.
     async fn mirrored(&self) -> Vec<u16> {
         self.host().await["ports"]
