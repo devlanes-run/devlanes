@@ -338,7 +338,18 @@ pub(crate) struct HostConn {
     /// Set once [`watch_link`] wrote a connection of this link to
     /// `remote_hosts`, which makes the box wanted.
     recorded: watch::Sender<bool>,
+    /// When the live session started (Unix ms); `None` while not connected.
+    connected_since: Mutex<Option<u64>>,
+    /// Woken when the registry, the mirror view or a sync changed;
+    /// [`announce_changes`] turns bursts of wakes into one [`wire::MIRROR_EVENT`].
+    changed: tokio::sync::Notify,
+    /// [`announce_changes`], waited for on close.
+    announce_task: Mutex<Option<JoinHandle<()>>>,
 }
+
+/// Shortest time between two [`wire::MIRROR_EVENT`]s for one box: a start on
+/// the box changes many units, and each reconcile would announce it again.
+const MIRROR_EVENT_EVERY: Duration = Duration::from_millis(250);
 
 impl HostConn {
     /// The live session, if connected.
@@ -547,6 +558,91 @@ impl HostConn {
         if let Some(watcher) = watcher {
             let _ = watcher.await;
         }
+        let announcer = lock(&self.announce_task).take();
+        if let Some(announcer) = announcer {
+            let _ = announcer.await;
+        }
+    }
+
+    /// Asks for a [`wire::MIRROR_EVENT`]: what `host.list` shows of the box
+    /// changed.
+    fn mark_changed(&self) {
+        self.changed.notify_one();
+    }
+
+    /// The `host.list` entry: [`HostConn::status_json`] plus what a client
+    /// needs to show the box without asking anything else. Routes get the
+    /// `url` to open here (`https_port` is this machine's proxy port) and their
+    /// `state`, and while the link has not ended the entry carries the box's
+    /// `registry` (lanes and units with states, ports and hostnames), its
+    /// handshake info under `box`, `connected_since_ms`, the name `suffixes`
+    /// box hostnames must end in and the extra HTTPS port opened for the box
+    /// (`proxy.box_port`, `open` when it is served).
+    fn list_json(
+        &self,
+        https_port: Option<u16>,
+        suffixes: &[String],
+        box_port_open: bool,
+    ) -> Value {
+        let mut value = self.status_json();
+        let routes: Vec<Value> = lock(&self.view)
+            .routes
+            .iter()
+            .map(|route| {
+                // Wildcards have no single address to open.
+                let url = (!route.host.contains('*'))
+                    .then(|| devlanes_resolve::https_url(&route.host, https_port));
+                json!({
+                    "host": route.host,
+                    "port": route.port,
+                    "lane": route.lane,
+                    "unit": route.unit,
+                    "url": url,
+                    "state": crate::routes::route_state(&route.status),
+                })
+            })
+            .collect();
+        let info = lock(&self.info).clone();
+        let label = self
+            .session()
+            .map(|session| session.server().to_owned())
+            .unwrap_or_default();
+        let version = label
+            .strip_prefix("devlanes ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .map(str::to_owned);
+        let box_port = info.https_port.filter(|port| Some(*port) != https_port);
+        let Some(map) = value.as_object_mut() else {
+            return value;
+        };
+        map.insert("routes".into(), json!(routes));
+        map.insert(
+            "connected_since_ms".into(),
+            json!(*lock(&self.connected_since)),
+        );
+        if self.ended() {
+            return value;
+        }
+        map.insert("registry".into(), json!(self.registry.current().snapshot()));
+        map.insert(
+            "box".into(),
+            json!({
+                "version": version,
+                "label": (!label.is_empty()).then_some(label),
+                "https_port": info.https_port,
+                "ports_range": info.ports_range,
+            }),
+        );
+        map.insert("suffixes".into(), json!(suffixes));
+        map.insert(
+            "proxy".into(),
+            json!({
+                "https_port": https_port,
+                "box_port": box_port,
+                "open": box_port.is_some() && box_port_open,
+            }),
+        );
+        value
     }
 }
 
@@ -945,11 +1041,16 @@ impl Inner {
             info: Mutex::new(BoxInfo::default()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
+            connected_since: Mutex::new(None),
+            changed: tokio::sync::Notify::new(),
+            announce_task: Mutex::new(None),
         });
         let watcher = tokio::spawn(watch_link(Arc::downgrade(self), conn.clone()));
         *lock(&conn.watch_task) = Some(watcher);
         let mirror = tokio::spawn(mirror::run(Arc::downgrade(self), conn.clone()));
         *lock(&conn.mirror_task) = Some(mirror);
+        let announcer = tokio::spawn(announce_changes(Arc::downgrade(self), conn.clone()));
+        *lock(&conn.announce_task) = Some(announcer);
         Ok((conn, guard))
     }
 
@@ -1015,9 +1116,13 @@ impl Inner {
         Ok(json!({"disconnected": names}))
     }
 
-    /// `remote ls`: boxes known from `remote_hosts` plus live connection state.
+    /// `remote ls`: boxes known from `remote_hosts` plus live connection state,
+    /// with each live box's registry and mirror view ([`HostConn::list_json`]).
     /// A wanted box the restore could not open is `failed` with its error.
     pub(crate) async fn host_list(self: &Arc<Self>) -> Result<Value, RpcError> {
+        let https_port = self.integ.routes.https_port();
+        let suffixes = mirror::route_suffixes(self);
+        let open_ports = self.remote.box_ports.lock().await.open.clone();
         let stored = self.store.remote_hosts().await.unwrap_or_default();
         let restore_errors = lock(&self.remote.restore_errors).clone();
         let mut items: BTreeMap<String, Value> = BTreeMap::new();
@@ -1037,7 +1142,10 @@ impl Inner {
             items.insert(host.name.clone(), item);
         }
         for conn in self.remote.all() {
-            let mut status = conn.status_json();
+            let box_port_open = lock(&conn.info)
+                .https_port
+                .is_some_and(|port| open_ports.contains(&port));
+            let mut status = conn.list_json(https_port, &suffixes, box_port_open);
             if let (Some(stored), Some(map)) = (items.get(&conn.name), status.as_object_mut()) {
                 for key in ["address", "daemon_version", "last_connected_ms"] {
                     if let Some(value) = stored.get(key) {
@@ -1543,6 +1651,15 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
     loop {
         let session = live(&state.borrow_and_update());
         let Some(inner) = engine.upgrade() else { break };
+        {
+            let mut since = lock(&conn.connected_since);
+            match &session {
+                Some(_) => {
+                    since.get_or_insert_with(now_ms);
+                }
+                None => *since = None,
+            }
+        }
         if let Some(session) = &session {
             let record = devlanes_state::RemoteHost {
                 name: conn.name.clone(),
@@ -1605,6 +1722,32 @@ async fn watch_link(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
     }
     if let Some(task) = syncing {
         task.abort();
+    }
+}
+
+/// Emits [`wire::MIRROR_EVENT`] for `conn` after [`HostConn::mark_changed`],
+/// at most once per [`MIRROR_EVENT_EVERY`]: the wakes of one burst share a
+/// single event, which goes out once the burst has had that long to settle.
+async fn announce_changes(engine: std::sync::Weak<Inner>, conn: Arc<HostConn>) {
+    use futures_util::FutureExt as _;
+    loop {
+        tokio::select! {
+            () = conn.cancel.cancelled() => return,
+            () = conn.changed.notified() => {}
+        }
+        tokio::select! {
+            () = conn.cancel.cancelled() => return,
+            () = tokio::time::sleep(MIRROR_EVENT_EVERY) => {}
+        }
+        // A wake during the pause is covered by this event: a client reading
+        // `host.list` after it sees that change too.
+        let _ = conn.changed.notified().now_or_never();
+        let Some(inner) = engine.upgrade() else {
+            return;
+        };
+        inner
+            .bus
+            .emit(wire::MIRROR_EVENT, json!({"host": conn.name}));
     }
 }
 
@@ -1775,6 +1918,9 @@ mod tests {
             info: Mutex::new(BoxInfo::default()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
+            connected_since: Mutex::new(None),
+            changed: tokio::sync::Notify::new(),
+            announce_task: Mutex::new(None),
         })
     }
 

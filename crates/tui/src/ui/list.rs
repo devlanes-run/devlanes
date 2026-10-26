@@ -56,7 +56,18 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         .power
         .as_ref()
         .map(|power| Span::styled(format!(" {}", clean(&power.level)), theme.quiet()));
+    let on_box = app.box_lane(&lane.reference);
     match lane.index {
+        // A box lane goes by its reference on the box: `acme@1 on hetzner`.
+        _ if on_box.is_some() && app.project_lanes().len() < 2 => {
+            if let Some((host, box_lane)) = &on_box {
+                name.push(Span::styled(clean(box_lane), bold));
+                name.push(Span::styled(
+                    format!(" on {}", clean(&host.host)),
+                    theme.quiet(),
+                ));
+            }
+        }
         Some(index) if app.project_lanes().len() > 1 => {
             let counts = tree::counts(lane);
             name.push(Span::styled(format!("@{index}"), bold));

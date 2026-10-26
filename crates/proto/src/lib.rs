@@ -957,6 +957,11 @@ pub mod remote {
     pub const STATE_EVENT: &str = "remote.state";
     /// `{host, code, ...}` for mirroring problems such as a skipped lane or a busy port.
     pub const WARNING_EVENT: &str = "remote.warning";
+    /// `{host}` on a client daemon, at most a few times a second, when what
+    /// `host.list` says about the box changed apart from its link state (which
+    /// [`STATE_EVENT`] reports): its registry, mirrored ports, routes or syncs.
+    /// Clients fetch `host.list` again.
+    pub const MIRROR_EVENT: &str = "remote.mirror.changed";
 
     /// The relay variable devlanes' ssh sets for askpass runs on Windows
     /// (devlanes-transport-ssh's `SOCKET_ENV`). A `devlanes.exe` started under

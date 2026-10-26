@@ -991,7 +991,7 @@ async fn help_lists_clean_and_the_daemon_page() -> TestResult {
         "restart, stop or start the daemon",
         "clean every lane whose worktree is gone",
         "hide the version notice",
-        "monitor, daemon; again or esc returns",
+        "monitor, daemon, boxes; again or esc returns",
     ] {
         assert!(text.contains(expected), "missing {expected:?}:\n{text}");
     }

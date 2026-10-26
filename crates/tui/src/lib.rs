@@ -1,5 +1,6 @@
 //! The devlanes terminal UI: a daemon client like the CLI, with a lane tree,
-//! a live terminal pane for one unit, a resource monitor and a daemon tab.
+//! a live terminal pane for one unit, a resource monitor, a daemon tab and a
+//! read-only view of the boxes this machine connects to.
 //!
 //! Quitting closes connections and units keep running in the daemon, unless
 //! the user chooses to stop the project's lanes on the way out.
@@ -8,6 +9,7 @@ pub mod api;
 pub mod app;
 pub mod banner;
 pub mod blockcopy;
+pub mod boxes;
 pub mod daemonlog;
 pub mod doctor;
 pub mod exit_summary;
@@ -163,7 +165,12 @@ async fn open(
     .await;
     drop(guard);
     let app = result?;
-    let lane = app.selected.as_ref().map(|selected| selected.lane.as_str());
+    // A box's lane is the box's to report; the summary is this machine's.
+    let lane = app
+        .selected
+        .as_ref()
+        .map(|selected| selected.lane.as_str())
+        .filter(|lane| app.box_lane(lane).is_none());
     exit_summary::print(api.as_ref(), &app.theme, lane).await;
     Ok(app)
 }

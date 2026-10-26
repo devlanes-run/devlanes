@@ -81,7 +81,7 @@ Node and Python services get the CA through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_
 
 ## TUI
 
-Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every lane of the project, the state of each unit and a live terminal for the selected one. Closing the TUI leaves everything running.
+Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every lane of the project, the state of each unit and a live terminal for the selected one. Closing the TUI leaves everything running. `M` opens the resource monitor and `D` the daemon page; with [remote boxes](remote.md#in-the-tui) connected, their projects follow the local ones, read-only, and `B` shows each box's connection.
 
 ## Coding agents
 

@@ -503,6 +503,11 @@ pub trait DaemonApi: Send + Sync {
     async fn task_list(&self, _lane: String) -> Result<Vec<TaskInfo>, ApiError> {
         Ok(Vec::new())
     }
+    /// `host.list`: the boxes this machine connects to, with their lanes and
+    /// what is mirrored ([`crate::boxes::parse`] reads it).
+    async fn host_list(&self) -> Result<Value, ApiError> {
+        Ok(json!({"items": []}))
+    }
     /// `infra.logs` with `follow` for one infra container of `lane`: its last
     /// `tail` lines, then new ones, as `log` events until the stream is dropped.
     async fn follow_container(
@@ -1115,6 +1120,12 @@ impl DaemonApi for ClientApi {
             .shared_request(Method::TaskList, json!({}), self.context(Some(lane), false))
             .await?;
         from_value::<TaskListResult>(value).map(|list| list.items)
+    }
+
+    /// Calls `host.list` on the shared connection.
+    async fn host_list(&self) -> Result<Value, ApiError> {
+        self.shared_request(Method::HostList, json!({}), self.context(None, false))
+            .await
     }
 
     /// `$DEVLANES_HOME/logs/daemon.log`.

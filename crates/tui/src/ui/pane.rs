@@ -25,7 +25,7 @@ use crate::tree::{self, Role, RowId};
 use crate::words::{self, STDERR_TAIL, Worded};
 
 /// Width of the label column in facts.
-const LABEL: usize = 10;
+pub(super) const LABEL: usize = 10;
 
 /// The pane's box and its content.
 pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
@@ -39,6 +39,11 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         );
         return;
     };
+    // A box's lane has no terminal or logs here: its details instead.
+    if let Some((host, box_lane)) = app.box_lane(&lane.reference) {
+        super::boxes::pane(app, host, &box_lane, lane, frame, boxed, area);
+        return;
+    }
     let width = usize::from(area.width).max(1);
     let theme = &app.theme;
     match app.selected_id().cloned() {
@@ -149,7 +154,7 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
 
 /// `Gateway API  api-gateway`: the label bold, the second name when it
 /// differs, dim.
-fn title(label: &str, name: &str, app: &App) -> Vec<Span<'static>> {
+pub(super) fn title(label: &str, name: &str, app: &App) -> Vec<Span<'static>> {
     let mut spans = vec![Span::styled(
         clean(label),
         Style::new().add_modifier(Modifier::BOLD),
@@ -176,7 +181,7 @@ fn render_header(
 }
 
 /// [`render_header`] with a right-hand title.
-fn render_box(
+pub(super) fn render_box(
     app: &App,
     frame: &mut Frame,
     boxed: Rect,
@@ -219,7 +224,7 @@ fn render_box(
 }
 
 /// `a · b` spans from parts.
-fn dotted(app: &App, parts: Vec<Span<'static>>) -> Vec<Span<'static>> {
+pub(super) fn dotted(app: &App, parts: Vec<Span<'static>>) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for part in parts {
         if !spans.is_empty() {
@@ -232,7 +237,7 @@ fn dotted(app: &App, parts: Vec<Span<'static>>) -> Vec<Span<'static>> {
 
 /// Lines in the content area, one column in; the last row says when more
 /// did not fit.
-fn details(frame: &mut Frame, mut lines: Vec<Line<'static>>, area: Rect, app: &App) {
+pub(super) fn details(frame: &mut Frame, mut lines: Vec<Line<'static>>, area: Rect, app: &App) {
     let height = usize::from(area.height);
     let width = usize::from(area.width);
     if height > 0 && lines.len() > height {
@@ -246,7 +251,7 @@ fn details(frame: &mut Frame, mut lines: Vec<Line<'static>>, area: Rect, app: &A
 }
 
 /// `label     value`, the value wrapped under itself.
-fn field(
+pub(super) fn field(
     theme: &Theme,
     label: &str,
     value: &str,
@@ -272,7 +277,7 @@ fn field(
 }
 
 /// A sentence, wrapped, with an indent after the first line.
-fn sentence(
+pub(super) fn sentence(
     text: &str,
     width: usize,
     first: Vec<Span<'static>>,
@@ -296,7 +301,7 @@ fn sentence(
 }
 
 /// A banner: a glyph and one sentence, then indented detail lines.
-fn banner(
+pub(super) fn banner(
     theme: &Theme,
     glyph: Glyph,
     tone: Tone,
@@ -494,7 +499,7 @@ fn container_mode_text(app: &App, attached: &Attached) -> Option<Vec<Span<'stati
 
 /// `ready · https://api.acme.localhost`, `failed · exit 1`, `❄ frozen · :41000`
 /// for the title: the state, then the first URL, else the first port.
-fn unit_facts_title(app: &App, unit: &UnitSummary) -> Vec<Span<'static>> {
+pub(super) fn unit_facts_title(app: &App, unit: &UnitSummary) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let look = unit_look(theme, unit, app.spin);
     let idle = matches!(look.word.as_str(), "frozen" | "throttled");

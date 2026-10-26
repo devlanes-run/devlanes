@@ -13,6 +13,7 @@ macro_rules! assert_screen {
     }};
 }
 
+mod boxes;
 mod containers;
 mod daemon;
 mod errors;
@@ -1180,9 +1181,10 @@ async fn resync_and_unreadable_events_requery_status() -> TestResult {
             data,
         })
     };
+    // Missed events may have been about boxes too.
     assert!(matches!(
         app.update(event(events::RESYNC, json!({}))).as_slice(),
-        [Effect::Refresh]
+        [Effect::FetchBoxes, Effect::Refresh]
     ));
     assert!(matches!(
         app.update(event(events::UNIT_CHANGED, json!({"unit": "garbage"})))
@@ -1391,7 +1393,7 @@ async fn status_is_queried_after_the_subscription_opens() -> TestResult {
     assert!(matches!(app.start().as_slice(), [Effect::Subscribe]));
     let effects = app.update(Msg::Subscribed(Ok(())));
     assert!(
-        matches!(effects.as_slice(), [Effect::Refresh]),
+        matches!(effects.as_slice(), [Effect::Refresh, Effect::FetchBoxes]),
         "{effects:?}"
     );
     // A daemon that refuses subscriptions can still answer status.

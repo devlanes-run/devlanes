@@ -1911,8 +1911,20 @@ fn old_copy_checks(copies: &Value) -> Vec<Check> {
 
 /// `remote ls`: the generic tree, with each mirrored port's `last_error` on one
 /// line (`last_error: <message> (<reason>, 5m ago)`) and left out when there is none.
+/// The box's whole `registry` is for the TUI and `--json`; the tree has its
+/// mirrored ports and routes already.
 pub(super) fn host_list(data: &Value) -> Vec<String> {
     let mut data = data.clone();
+    for item in data
+        .get_mut("items")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(fields) = item.as_object_mut() {
+            fields.remove("registry");
+        }
+    }
     let ports = data
         .get_mut("items")
         .and_then(Value::as_array_mut)

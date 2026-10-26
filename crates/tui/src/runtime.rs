@@ -691,6 +691,11 @@ impl Executor {
                     deliver(&sender, Msg::Tasks { lane, result }).await;
                 });
             }
+            Effect::FetchBoxes => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::Boxes(api.host_list().await)).await;
+                });
+            }
             Effect::FetchLogs {
                 generation,
                 lane,

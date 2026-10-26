@@ -48,6 +48,8 @@ struct Fake {
     queue: VecDeque<Msg>,
     /// What `status` answers; a scene may swap it, as [`idle`] does.
     lanes: fn() -> Vec<devlanes_proto::LaneSummary>,
+    /// What `host.list` answers: no boxes until a scene connects them.
+    boxes: serde_json::Value,
 }
 
 impl Fake {
@@ -61,6 +63,7 @@ impl Fake {
             app,
             queue: VecDeque::new(),
             lanes: data::lanes,
+            boxes: json!({"items": []}),
         };
         for effect in fake.app.start() {
             fake.answer(effect);
@@ -112,6 +115,17 @@ impl Fake {
     /// Selects the whole-lane row of `lane`.
     fn lane(&mut self, lane: &str) {
         self.select(lane, RowId::WholeLane);
+    }
+
+    /// Connects the fake's boxes: `host.list` lists them from now on, and a
+    /// `remote.mirror.changed` makes the TUI ask.
+    fn connect_boxes(&mut self) {
+        self.boxes = data::boxes();
+        self.send(Msg::Event(Event {
+            seq: 1,
+            event: devlanes_proto::remote::MIRROR_EVENT.into(),
+            data: json!({"host": "hetzner"}),
+        }));
     }
 
     /// Types `text` one key at a time.
@@ -215,6 +229,7 @@ impl Fake {
                 result: Ok(data::tasks(&lane)),
                 lane,
             }],
+            Effect::FetchBoxes => vec![Msg::Boxes(Ok(self.boxes.clone()))],
             // The file starts as USER_CONFIG; a save writes its changes over it.
             Effect::Settings(request) => {
                 let mut source = USER_CONFIG.to_owned();
@@ -450,6 +465,68 @@ fn scenes() -> Vec<Scene> {
             name: "project-config-error",
             what: "a project whose devlanes.yaml does not load (Shift+2)",
             setup: |f| f.key(KeyCode::Char('@')),
+        },
+        Scene {
+            name: "box-lane",
+            what: "a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the box's command in the footer",
+            setup: |f| {
+                f.connect_boxes();
+                f.lane("acme@4 @hetzner");
+            },
+        },
+        Scene {
+            name: "box-unit",
+            what: "a box service: state, its port in use here (relayed), the URL that opens it here",
+            setup: |f| {
+                f.connect_boxes();
+                f.unit("acme@4 @hetzner", "web-app");
+            },
+        },
+        Scene {
+            name: "box-unit-sync",
+            what: "a box service with a synced folder and a hostname this machine does not route",
+            setup: |f| {
+                f.connect_boxes();
+                f.unit("acme@4 @hetzner", "ext-build");
+            },
+        },
+        Scene {
+            name: "box-lane-skipped",
+            what: "a box lane that is not mirrored because a local lane serves its hostnames",
+            setup: |f| {
+                f.connect_boxes();
+                f.unit("acme@0 @hetzner", "api-gateway");
+            },
+        },
+        Scene {
+            name: "box-reconnecting",
+            what: "a box reached by a command while its link reconnects: the lane as last reported, a failed service",
+            setup: |f| {
+                f.connect_boxes();
+                f.unit("shop@0 @devbox", "checkout-api");
+            },
+        },
+        Scene {
+            name: "box-refused",
+            what: "r on a box service: nothing restarts here; the header names the command for the box",
+            setup: |f| {
+                f.connect_boxes();
+                f.unit("acme@4 @hetzner", "api-gateway");
+                f.key(KeyCode::Char('r'));
+            },
+        },
+        Scene {
+            name: "boxes",
+            what: "the boxes view (B): link state, errors and fixes, box info, proxy port, skipped lanes and hostnames, syncs, warnings",
+            setup: |f| {
+                f.connect_boxes();
+                f.shifted('B');
+            },
+        },
+        Scene {
+            name: "boxes-empty",
+            what: "the boxes view before any box connected",
+            setup: |f| f.shifted('B'),
         },
         Scene {
             name: "unit-failed",
