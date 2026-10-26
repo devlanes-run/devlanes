@@ -24,6 +24,6 @@ The proxy avoids an error page when it can do so without sending a request twice
 
 Error responses carry `x-devlanes-error` with the error name and are not cached. Browsers get HTML; clients that do not ask for `text/html`, such as curl and `fetch()`, get the same content as Markdown. The "Open an issue" link fills in only the error ID and the devlanes version.
 
-The service's recent output on `service-failed` pages and the routed hostnames on `unknown-host` pages are shown only to clients on this machine, not to other devices when `proxy.lan` is on.
+The service's recent output on `service-failed` pages and the routed hostnames on `unknown-host` pages are shown only to clients on this machine, not to other devices when `proxy.lan` is on. The hostnames also need a request for `localhost`, an IP address or a `.localhost` name.
 
 Responses forwarded from a service carry `Via: 1.1 devlanes`; `proxy.via: false` in the user config turns the header off.

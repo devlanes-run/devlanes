@@ -466,6 +466,16 @@ async fn unknown_host_suggests_routes() -> Result {
         )
         .await?;
         assert!(text(response).await?.contains("localhost and IP addresses"));
+        // A DNS-rebinding page arrives from loopback with its own domain as Host.
+        let response = request(
+            TcpStream::connect(running.address).await?,
+            "rebind.example.invalid",
+            "/",
+            &[],
+        )
+        .await?;
+        assert_eq!(response.status(), 404);
+        assert!(!text(response).await?.contains("app.acme-1.localhost"));
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await?

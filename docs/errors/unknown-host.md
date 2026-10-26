@@ -19,7 +19,7 @@ Over HTTPS the browser shows a certificate error instead of this page, because t
 - The request went to `localhost` or `127.0.0.1` without a lane hostname.
 - Another server, such as Caddy or nginx, was meant to answer, but the daemon holds the port.
 
-For clients on this machine, the page lists the routed hostnames and suggests the closest one.
+For clients on this machine requesting `localhost`, an IP address or a `.localhost` name, the page lists the routed hostnames and suggests the closest one. Other names get no list, so a website that re-resolves its domain to 127.0.0.1 cannot read your projects and branches.
 
 ## Fix
 

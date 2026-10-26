@@ -714,9 +714,14 @@ impl Proxy {
 
     /// The unknown-host page. Clients on this machine also get the routed hostnames to
     /// pick from; LAN peers do not, since hostnames reveal projects and branches.
+    ///
+    /// The list also needs a host no website can be the origin of: `localhost`, an IP or a
+    /// `.localhost` name. A DNS-rebinding page arrives from loopback too, with its own
+    /// domain as Host, and could otherwise read the list same-origin.
     fn unknown_host(&self, host: &str, peer: IpAddr, format: Format) -> Response<Body> {
         let snapshot = self.routes.snapshot.load();
-        let known = if is_loopback(peer) {
+        let bare = host == "localhost" || host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok();
+        let known = if is_loopback(peer) && (bare || host.ends_with(".localhost")) {
             snapshot
                 .table
                 .routes()
@@ -729,7 +734,6 @@ impl Proxy {
         } else {
             Vec::new()
         };
-        let bare = host == "localhost" || host.trim_matches(['[', ']']).parse::<IpAddr>().is_ok();
         let hint = if bare {
             "localhost and IP addresses reach the proxy, not a service. Use the service's hostname."
         } else {
