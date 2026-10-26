@@ -382,6 +382,134 @@ async fn start_pipeline_order_and_idempotence() {
     .expect("timeout");
 }
 
+const ENTRIES: &str = r#"project: entries
+infra:
+  containers:
+    db: { image: "postgres:16", ports: { pg: 5432 }, per_lane: true }
+  setup:
+    database: "echo setup-db"
+  teardown:
+    database: "echo teardown-db"
+services:
+  api: { run: "sleep" }
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+/// `run infra.setup.<name>` runs one entry and records it as done, so the next
+/// start skips it; `run infra.teardown.<name>` clears that record.
+async fn run_infra_entries_keep_the_setup_record() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", ENTRIES);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        let ran = h
+            .call(
+                Method::Run,
+                json!({"task": "infra.setup.database"}),
+                cx(&main),
+            )
+            .await
+            .expect("run setup entry");
+        assert_eq!(ran["unit"], "setup.database");
+        assert_eq!(ran["exit_code"], 0);
+        assert_eq!(h.runner.journal.entries(), ["echo setup-db"]);
+
+        assert!(start(&h, cx(&main), json!({})).await.ready);
+        assert_eq!(
+            h.runner.journal.entries(),
+            ["echo setup-db", "sleep"],
+            "the start found the entry done"
+        );
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+
+        let detached = h
+            .call(
+                Method::Run,
+                json!({"task": "infra.teardown.database", "detach": true}),
+                cx(&main),
+            )
+            .await
+            .expect("run teardown entry");
+        assert_eq!(detached["unit"], "teardown.database");
+        assert_eq!(detached["detached"], true);
+        let torn = eventually(Duration::from_secs(5), || async {
+            h.runner
+                .journal
+                .entries()
+                .contains(&"echo teardown-db".to_owned())
+                .then_some(())
+        })
+        .await;
+        assert!(torn.is_some(), "{:?}", h.runner.journal.entries());
+        // The record clears once the entry exits, after its spawn.
+        let cleared = eventually(Duration::from_secs(5), || async {
+            let lanes = status(&h, cx(&main), json!({})).await;
+            lanes[0]
+                .units
+                .iter()
+                .any(|u| u.name == "teardown.database" && u.state == "exited")
+                .then_some(())
+        })
+        .await;
+        assert!(cleared.is_some());
+
+        assert!(start(&h, cx(&main), json!({})).await.ready);
+        assert_eq!(
+            h.runner.journal.entries(),
+            [
+                "echo setup-db",
+                "sleep",
+                "echo teardown-db",
+                "echo setup-db",
+                "sleep"
+            ],
+            "teardown cleared the record"
+        );
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// An entry the config does not define is `not_found`, listing the entries.
+async fn run_infra_entry_not_found_lists_entries() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", ENTRIES);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        let error = h
+            .call(Method::Run, json!({"task": "infra.setup.nope"}), cx(&main))
+            .await
+            .expect_err("unknown entry");
+        assert_eq!((error.code.as_str(), error.exit_code), ("not_found", 3));
+        assert_eq!(
+            error.data["candidates"],
+            json!(["infra.setup.database", "infra.teardown.database"])
+        );
+        assert!(h.runner.journal.entries().is_empty());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// A failed service skips `after: services` tasks and reports its log tail.
 async fn after_services_skip_on_failure() {

@@ -717,7 +717,7 @@ impl LanePhase for SetupPhase {
                     return (name, Err(RpcError::new("not_found", json!({}), 3)));
                 };
                 let result = engine
-                    .run_command(&project, &lane, "setup", command, &actor, &cancel)
+                    .run_command(&project, &lane, "setup", command, &actor, &cancel, None)
                     .await;
                 (name, result)
             }
@@ -1564,7 +1564,10 @@ impl Inner {
             .collect()
     }
 
-    /// Runs one `infra.setup`/`infra.teardown` entry to completion.
+    /// Runs one `infra.setup`/`infra.teardown` entry to completion; with a
+    /// `session` (`devlanes run infra.setup.<name>` in the foreground) its
+    /// output streams there as `log` events.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn run_command(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -1573,6 +1576,7 @@ impl Inner {
         command: &ResolvedCommand,
         actor: &Actor,
         cancel: &CancellationToken,
+        session: Option<&Session>,
     ) -> Result<(ExitOutcome, UnitHost), RpcError> {
         let extra = lane.st().setup_env.clone();
         let name = format!("{phase}.{}", command.name);
@@ -1584,7 +1588,14 @@ impl Inner {
             "setup"
         };
         let (host, _) = self.spawn_unit(project, lane, request).await?;
-        let outcome = finish(&host, command.timeout, cancel).await;
+        let outcome = match session {
+            Some(session) => {
+                let follower = stream_logs(host.clone(), session.clone());
+                let (exit, ()) = tokio::join!(finish(&host, command.timeout, cancel), follower);
+                exit
+            }
+            None => finish(&host, command.timeout, cancel).await,
+        };
         Ok((outcome, host))
     }
 
@@ -1664,31 +1675,32 @@ impl Inner {
                                 outcome.code = None;
                                 break;
                             }
-                            let step_outcome =
-                                if let Some(entry) = step.strip_prefix("infra.setup.") {
-                                    self.step_command(
-                                        project, lane, resolved, "setup", entry, actor, cancel,
-                                    )
-                                    .await?
-                                } else if let Some(entry) = step.strip_prefix("infra.teardown.") {
-                                    self.step_command(
-                                        project, lane, resolved, "teardown", entry, actor, cancel,
-                                    )
-                                    .await?
-                                } else {
-                                    self.run_task(
-                                        project,
-                                        lane,
-                                        resolved,
-                                        step,
-                                        "step",
-                                        actor,
-                                        session,
-                                        cancel,
-                                        depth + 1,
-                                    )
-                                    .await?
-                                };
+                            let step_outcome = if let Some(entry) =
+                                step.strip_prefix("infra.setup.")
+                            {
+                                self.step_command(
+                                    project, lane, resolved, "setup", entry, actor, cancel, None,
+                                )
+                                .await?
+                            } else if let Some(entry) = step.strip_prefix("infra.teardown.") {
+                                self.step_command(
+                                    project, lane, resolved, "teardown", entry, actor, cancel, None,
+                                )
+                                .await?
+                            } else {
+                                self.run_task(
+                                    project,
+                                    lane,
+                                    resolved,
+                                    step,
+                                    "step",
+                                    actor,
+                                    session,
+                                    cancel,
+                                    depth + 1,
+                                )
+                                .await?
+                            };
                             leftovers.extend(step_outcome.leftovers.iter().cloned());
                             if step_outcome.code != Some(0) {
                                 outcome = step_outcome;
@@ -1762,9 +1774,10 @@ impl Inner {
         self.task_event(reference, task, state, code, reason);
     }
 
-    /// Runs a setup/teardown entry as a task step and updates its done-record.
+    /// Runs a setup/teardown entry as a task step, or on its own through `run`,
+    /// and updates its done-record; `session` streams its output.
     #[allow(clippy::too_many_arguments)]
-    async fn step_command(
+    pub(crate) async fn step_command(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
@@ -1773,6 +1786,7 @@ impl Inner {
         entry: &str,
         actor: &Actor,
         cancel: &CancellationToken,
+        session: Option<&Session>,
     ) -> Result<TaskOutcome, RpcError> {
         let commands = if phase == "setup" {
             &resolved.setup
@@ -1787,7 +1801,7 @@ impl Inner {
             )
         })?;
         let (outcome, host) = self
-            .run_command(project, lane, phase, command, actor, cancel)
+            .run_command(project, lane, phase, command, actor, cancel, session)
             .await?;
         // An interrupted entry did not do its work, whatever `ignore_errors` says.
         let ok = !cancel.is_cancelled() && (outcome.code == Some(0) || command.ignore_errors);
@@ -2800,7 +2814,7 @@ impl Inner {
             if let Ok(resolved) = self.resolve_full(project, lane).await {
                 for (name, command) in &resolved.teardown {
                     let result = self
-                        .run_command(project, lane, "teardown", command, &actor, &cancel)
+                        .run_command(project, lane, "teardown", command, &actor, &cancel, None)
                         .await;
                     teardown.push(match result {
                         Ok((outcome, _)) => json!({"entry": name, "exit_code": outcome.code, "ignored": command.ignore_errors}),

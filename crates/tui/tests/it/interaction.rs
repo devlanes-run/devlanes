@@ -112,6 +112,47 @@ async fn clicks_select_rows_and_fold_sections_and_groups() -> TestResult {
 }
 
 #[tokio::test]
+/// A setup step shows its entry name under `setup`, and s runs that entry
+/// through `run` instead of starting a unit by that name.
+async fn setup_steps_show_their_entry_and_run_with_s() -> TestResult {
+    let api = FakeApi::with_lanes(big_lane(2));
+    let (mut app, _) = loaded(&api, 100, 30).await;
+    let setup = RowId::Group(Section::Infra, "setup".into());
+    let index = row_of(&app, &setup).ok_or("no setup group")?;
+    let (y, _, arrow) = place(&app, index)?;
+    app.update(click(arrow, y));
+    let step = RowId::Unit("setup.db".into());
+    let index = row_of(&app, &step).ok_or("no setup step")?;
+    let (y, text, _) = place(&app, index)?;
+    app.update(click(text, y));
+    let buffer = crate::errors::render(&app)?;
+    let line = crate::errors::row(&buffer, y);
+    assert!(
+        line.contains(" db ") && !line.contains("setup.db"),
+        "{line:?}"
+    );
+    let effects = app.update(key(KeyCode::Char('s')));
+    let [Effect::Run { lane, params, .. }] = effects.as_slice() else {
+        return Err(format!("unexpected {effects:?}").into());
+    };
+    assert_eq!(
+        (lane.as_str(), params.task.as_str()),
+        ("acme@0", "infra.setup.db")
+    );
+    app.update(Msg::RunDone {
+        lane: "acme@0".into(),
+        task: "infra.setup.db".into(),
+        result: Ok(json!({"unit": "setup.db", "detached": true})),
+    });
+    assert_eq!(
+        app.selected_id(),
+        Some(&step),
+        "the run's unit stays selected"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_double_click_on_a_running_unit_types_into_it() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
     let (mut app, _) = loaded(&api, 100, 30).await;

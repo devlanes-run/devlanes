@@ -348,7 +348,7 @@ fn render_unit(
         app,
         frame,
         boxed,
-        title(unit.label(), &unit.name, app),
+        title(tree::short_name(unit), &unit.name, app),
         unit_facts_title(app, unit),
         right,
     );
@@ -800,7 +800,7 @@ fn members_table(
                 .units
                 .iter()
                 .find(|u| u.name == *name)
-                .map(|u| text::width(u.label())),
+                .map(|u| text::width(tree::short_name(u))),
             RowId::Task(name) | RowId::Container(name) => Some(text::width(name)),
             _ => None,
         })
@@ -827,7 +827,7 @@ fn members_table(
                 (
                     look.glyph,
                     look.tone,
-                    clean(unit.label()),
+                    clean(tree::short_name(unit)),
                     look.word,
                     unit.cpu_percent,
                     unit.memory_bytes,

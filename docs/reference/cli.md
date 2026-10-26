@@ -201,7 +201,7 @@ need --yes when no terminal can prompt.
 devlanes run [OPTIONS] [TASK]
 ```
 
-- `[TASK]`: Task to run, as named under tasks: in devlanes.yaml [default: pick from a list]
+- `[TASK]`: Task to run, as named under tasks: in devlanes.yaml, or one infra entry as infra.setup.NAME or infra.teardown.NAME [default: pick from a list]
 - `--list`: List the tasks and the script sources they use
 - `--detach`: Start the task in the background and return
 

@@ -4198,27 +4198,26 @@ impl App {
             return;
         };
         let verb = method_verb(method);
+        // `(unit, what run takes)`: a setup step's unit `setup.db` runs as `infra.setup.db`.
         let task = match &row {
-            RowId::Task(name) => Some(name.clone()),
-            RowId::Unit(name)
-                if lane
-                    .units
-                    .iter()
-                    .any(|u| u.name == *name && tree::role(u) == tree::Role::Task) =>
-            {
-                Some(name.clone())
-            }
+            RowId::Task(name) => Some((name.clone(), name.clone())),
+            RowId::Unit(name) => lane
+                .units
+                .iter()
+                .find(|u| u.name == *name)
+                .and_then(tree::run_name)
+                .map(|run| (name.clone(), run)),
             _ => None,
         };
-        if let Some(task) = task {
+        if let Some((unit, task)) = task {
             let running = lane
                 .units
                 .iter()
-                .any(|u| u.name == task && is_active(&u.state));
+                .any(|u| u.name == unit && is_active(&u.state));
             match method {
                 Method::Stop if running => {}
                 Method::Stop => {
-                    self.set_notice(format!("{task} is not running"));
+                    self.set_notice(format!("{unit} is not running"));
                     return;
                 }
                 _ => {
@@ -4369,15 +4368,16 @@ impl App {
         effects: &mut Vec<Effect>,
     ) {
         self.pending_end(&lane);
+        let unit = tree::run_unit(&task).to_owned();
         let target = Target::Unit {
             lane: lane.clone(),
-            unit: task.clone(),
+            unit: unit.clone(),
         };
         match result {
             Ok(value) => {
                 self.target_errors.remove(&target);
                 self.set_notice(format!("started {task} in {lane}"));
-                self.select(Selected::unit(&lane, &task), effects);
+                self.select(Selected::unit(&lane, &unit), effects);
                 let interactive = value.get("interactive").and_then(Value::as_bool) == Some(true);
                 if interactive {
                     // Reopens the task's stream as interactive; focus follows once it is live.

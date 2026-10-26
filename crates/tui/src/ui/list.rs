@@ -366,7 +366,7 @@ fn unit_line(
         item,
         color,
         (look.glyph, look.tone),
-        clean(unit.label()),
+        clean(tree::short_name(unit)),
         quiet,
     );
     row(left, joined(right, theme.quiet()), width)

@@ -92,7 +92,7 @@ infra:
     database: docker compose exec -T postgres dropdb -U postgres --if-exists --force ${{ lane.db_name }}
 ```
 
-`setup` entries run once per lane, after its containers are healthy, and are recorded as done; later starts skip them. They run concurrently, so an entry must not depend on another one. A failure (without `ignore_errors`) stops the start and names the entry. `teardown` runs on `devlanes lane clean`, in order, and never on `stop`. Tasks can reuse entries as steps: `steps: [infra.teardown.database, infra.setup.database, migrate, seed]`.
+`setup` entries run once per lane, after its containers are healthy, and are recorded as done; later starts skip them. They run concurrently, so an entry must not depend on another one. A failure (without `ignore_errors`) stops the start and names the entry. `teardown` runs on `devlanes lane clean`, in order, and never on `stop`. Tasks can reuse entries as steps: `steps: [infra.teardown.database, infra.setup.database, migrate, seed]`. `devlanes run infra.setup.database` runs one entry again on its own and records it as done; `s` on the entry in the TUI does the same.
 
 Entries take only `run`, written out in full (`docker compose exec ...`, `curl ...`), so the command in the config is the command that runs. A script from `package.json` or a justfile belongs in a task, which can call setup entries as steps.
 

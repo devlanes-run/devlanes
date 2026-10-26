@@ -363,7 +363,7 @@ pub struct LogArgs {
 
 #[derive(Debug, Args)]
 pub struct RunArgs {
-    /// Task to run, as named under tasks: in devlanes.yaml [default: pick from a list]
+    /// Task to run, as named under tasks: in devlanes.yaml, or one infra entry as infra.setup.NAME or infra.teardown.NAME [default: pick from a list]
     #[arg(conflicts_with = "list", value_name = "TASK")]
     pub task: Option<String>,
     /// List the tasks and the script sources they use
