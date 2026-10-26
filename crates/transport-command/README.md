@@ -13,9 +13,6 @@ async fn connect() -> Result<Session, Box<dyn std::error::Error>> {
         ["docker", "exec", "-i", "acme", "devlanes", "tunnel", "--stdio"],
         CommandOptions::new("acme"),
     );
-    let opened = transport.open().await?;
-    println!("before the tunnel: {}", String::from_utf8_lossy(&opened.header));
-    drop(opened);
     Ok(Session::connect(&transport, SessionOptions::new("devlanes 0.1.0")).await?)
 }
 ```
@@ -34,7 +31,7 @@ A connect fails for good when the program cannot start, when the box speaks anot
 
 The command gets this process's environment and no terminal. A prompt it shows has nobody to answer it, so it fails or hangs until the preamble wait ends.
 
-On Windows each command runs in a kill-on-close job, so whatever it starts ends with it, and with the daemon. It shares the daemon's hidden console, or gets a windowless one when there is none. A program without a directory is looked up on `PATH` as `.exe` or `.com`; batch files need `cmd /c`.
+Whatever the command starts ends with it. On Unix it leads a process group of its own, which is killed when the stream or `run` drops it; a program that moves to another group or session leaves it. On Windows each command runs in a kill-on-close job, which also ends with the daemon. It shares the daemon's hidden console, or gets a windowless one when there is none. A program without a directory is looked up on `PATH` with `.exe`, then `.com` added, unless it already ends in one of them; batch files need `cmd /c`.
 
 `src/bin/fake-box.rs` is a stand-in box for this crate's tests; it is not shipped.
 

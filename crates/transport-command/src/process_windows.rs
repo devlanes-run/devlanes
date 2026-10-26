@@ -174,8 +174,20 @@ fn environment(
 
 /// Resolves a program without a directory on `PATH`, since `CreateProcessW`
 /// does not search it for an application name; one with a directory is used
-/// as given. `NotFound` names what was looked for. Blocking.
+/// as given. A name ending in `.exe` or `.com` is looked for as it is. Any
+/// other name gets `.exe`, then `.com` appended, in each directory in turn,
+/// so a dotted name such as `kubectl-1.31` finds `kubectl-1.31.exe`; a name
+/// that already has another extension is also tried as it is, last.
+/// `NotFound` names the first name looked for. Blocking.
 fn locate(program: &OsStr) -> io::Result<PathBuf> {
+    let dirs = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .unwrap_or_default();
+    locate_in(program, &dirs)
+}
+
+/// [`locate`] with `dirs` as `PATH`.
+fn locate_in(program: &OsStr, dirs: &[PathBuf]) -> io::Result<PathBuf> {
     let path = Path::new(program);
     if path
         .parent()
@@ -183,14 +195,24 @@ fn locate(program: &OsStr) -> io::Result<PathBuf> {
     {
         return Ok(path.to_path_buf());
     }
-    let names: Vec<PathBuf> = if path.extension().is_some() {
-        vec![path.to_path_buf()]
-    } else {
-        vec![path.with_extension("exe"), path.with_extension("com")]
+    let extension = path.extension().and_then(OsStr::to_str);
+    let names: Vec<PathBuf> = match extension {
+        Some(ext) if ext.eq_ignore_ascii_case("exe") || ext.eq_ignore_ascii_case("com") => {
+            vec![path.to_path_buf()]
+        }
+        _ => {
+            let appended = |ext: &str| {
+                let mut name = program.to_os_string();
+                name.push(ext);
+                PathBuf::from(name)
+            };
+            let mut names = vec![appended(".exe"), appended(".com")];
+            if path.extension().is_some() {
+                names.push(path.to_path_buf());
+            }
+            names
+        }
     };
-    let dirs = std::env::var_os("PATH")
-        .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .unwrap_or_default();
     dirs.iter()
         .filter(|dir| dir.is_absolute())
         .flat_map(|dir| names.iter().map(move |name| dir.join(name)))
@@ -257,5 +279,42 @@ mod tests {
                 .contains("devlanes-no-such-program.exe is not on PATH"),
             "{missing}"
         );
+    }
+
+    /// A dotted name without `.exe` or `.com` gets `.exe` appended, not its
+    /// last part replaced; `.exe` names and other files are found as they are.
+    #[test]
+    fn dotted_names_get_exe_appended() {
+        let dir = std::env::temp_dir().join(format!("devlanes-locate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        for file in ["acme-1.31.exe", "tool.EXE", "run.sh"] {
+            std::fs::write(dir.join(file), b"").expect("file");
+        }
+        let dirs = [dir.clone()];
+        let found = |name: &str| {
+            locate_in(OsStr::new(name), &dirs).map(|path| path.file_name().map(OsStr::to_os_string))
+        };
+        assert_eq!(
+            found("acme-1.31").expect("dotted"),
+            Some("acme-1.31.exe".into())
+        );
+        assert_eq!(
+            found("acme-1.31.exe").expect("as given"),
+            Some("acme-1.31.exe".into())
+        );
+        assert_eq!(
+            found("tool.EXE").expect("any case"),
+            Some("tool.EXE".into())
+        );
+        assert_eq!(
+            found("run.sh").expect("as given last"),
+            Some("run.sh".into())
+        );
+        let missing = found("acme-1.30").expect_err("missing");
+        assert!(
+            missing.to_string().contains("acme-1.30.exe is not on PATH"),
+            "{missing}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

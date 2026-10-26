@@ -546,16 +546,20 @@ fn tail(bytes: &[u8]) -> String {
 
 /// `ssh` running `<program> tunnel --stdio` over the master at `ctl`.
 ///
-/// As the openssh crate ran commands: batch mode, no terminal, and the
+/// The master holds the connection and its authentication, so this client
+/// reads no ssh config (`-F none`): a `Host *` or `Match all` block would
+/// otherwise still apply to it, and its `RemoteCommand`, `RequestTTY` or
+/// `ControlMaster` would break the tunnel. Batch mode, no terminal, and the
 /// destination `none` on the discard port, so a dead master makes this fail
-/// at once instead of opening a connection of its own, and no `Host` block of
-/// the user's config (`RemoteCommand`, `RequestTTY`) applies. ssh joins the
-/// words after the destination into one command for the box's shell, so the
+/// at once instead of opening a connection of its own. ssh joins the words
+/// after the destination into one command for the box's shell, so the
 /// program is quoted for it.
 fn tunnel_argv(ssh_program: &Path, ctl: &Path, program: &str) -> Vec<OsString> {
     let mut argv: Vec<OsString> = vec![ssh_program.into(), "-S".into(), ctl.into()];
     argv.extend(
         [
+            "-F",
+            "none",
             "-o",
             "BatchMode=yes",
             "-T",
@@ -745,6 +749,8 @@ mod tests {
                 "ssh",
                 "-S",
                 "/tmp/h/run/ssh/m-0123456789abcdef",
+                "-F",
+                "none",
                 "-o",
                 "BatchMode=yes",
                 "-T",

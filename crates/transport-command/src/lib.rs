@@ -617,16 +617,25 @@ async fn read_ready(stream: &mut CommandStream, line: &str) -> Result<Vec<u8>, P
 }
 
 /// Waits for `process` to exit and collects the tail of `stderr`, giving
-/// stderr [`STDERR_GRACE`] to close after the exit.
+/// stderr [`STDERR_GRACE`] to close after the exit. stderr is read inside
+/// this future rather than in a task of its own, so a stop or drop that
+/// drops it also closes the pipe instead of leaving a reader behind.
 async fn finish(process: &mut process::Process, stderr: process::ErrorReader) -> Exit {
-    let mut collecting = tokio::spawn(collect_tail(stderr));
-    let status = process.wait().await;
-    let stderr = match tokio::time::timeout(STDERR_GRACE, &mut collecting).await {
-        Ok(Ok(bytes)) => bytes,
-        _ => {
-            collecting.abort();
-            Vec::new()
+    let collecting = collect_tail(stderr);
+    let waiting = process.wait();
+    tokio::pin!(collecting, waiting);
+    let mut collected = None;
+    let status = loop {
+        tokio::select! {
+            status = &mut waiting => break status,
+            bytes = &mut collecting, if collected.is_none() => collected = Some(bytes),
         }
+    };
+    let stderr = match collected {
+        Some(bytes) => bytes,
+        None => tokio::time::timeout(STDERR_GRACE, collecting)
+            .await
+            .unwrap_or_default(),
     };
     Exit {
         status: status.map_err(|error| error.to_string()),

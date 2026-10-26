@@ -10,6 +10,13 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# The stand-in box command of the integration tests; not shipped.
+[[bin]]
+name = "fake-box"
+path = "src/bin/fake-box.rs"
+test = false
+doc = false
+
 [dependencies]
 async-trait.workspace = true
 devlanes-transport = { path = "../transport" }
@@ -17,10 +24,13 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 
+# Each command leads a process group, killed with it.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
 # Every command starts inside a kill-on-close job, as ssh.exe did before.
 [target.'cfg(windows)'.dependencies]
 devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
 devlanes-sys = { path = "../sys" }
-tempfile.workspace = true
