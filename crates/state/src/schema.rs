@@ -165,6 +165,7 @@ diesel::table! {
         address -> Text,
         daemon_version -> Nullable<Text>,
         last_connected -> Nullable<BigInt>,
+        wanted -> Integer,
     }
 }
 diesel::table! {
