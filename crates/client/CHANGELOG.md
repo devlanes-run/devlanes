@@ -1,5 +1,13 @@
 # devlanes-client
 
+## 0.6.0 — 2026-10-26
+
+### Patch changes
+
+- [a7472f6](https://github.com/devlanes-run/devlanes/commit/a7472f6affae0e0d4e86ccfd7a26bb614a6c40b0) Fixed the first `devlanes` command on a busy machine, or one run while another started the daemon, failing with "daemon is unreachable" while the daemon was still starting.
+  
+  The command now waits as long as the daemon makes progress. When one startup step hangs for 30 seconds it fails with "the daemon has not finished starting", names the step and hints `devlanes daemon logs`.
+
 ## 0.4.2 ... 0.5.0 — 2026-10-26
 
 Version bump only, to follow other packages.
