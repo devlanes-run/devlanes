@@ -635,7 +635,7 @@ devlanes certs untrust [OPTIONS]
 
 ### devlanes remote
 
-Connect to boxes over SSH and mirror their lanes here
+Connect to boxes over SSH or a command and mirror their lanes here
 
 ```text
 devlanes remote [OPTIONS] <COMMAND>
@@ -643,19 +643,18 @@ devlanes remote [OPTIONS] <COMMAND>
 
 ### devlanes remote connect
 
-Connect to a box over SSH and mirror its lanes, ports and hostnames here
+Connect to a box over SSH or a command and mirror its lanes, ports and hostnames here
 
 ```text
 devlanes remote connect [OPTIONS] <HOST>
 ```
 
-- `<HOST>`: SSH destination, as in ~/.ssh/config
+- `<HOST>`: A box name from remote.boxes in the user config, else an SSH destination as in ~/.ssh/config
 - `--background`: Return once connected instead of staying attached for prompts
-- `--install`: If devlanes is missing on the box, install this machine's release there (HTTPS download, checksum verified, never replaces an existing binary)
 
 ### devlanes remote disconnect
 
-Disconnect from a box and remove its mirrored ports and hostnames
+Disconnect from a box, remove its mirrored ports and hostnames, and stop reconnecting it after daemon restarts
 
 ```text
 devlanes remote disconnect [OPTIONS] [HOST]

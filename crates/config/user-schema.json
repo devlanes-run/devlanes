@@ -77,12 +77,12 @@
       "properties": {
         "exit_when_idle": {
           "default": true,
-          "description": "Stop the daemon about 30 seconds after the last TUI closes when no service, task or start is running; the next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits; one installed with `devlanes daemon install` keeps running.",
+          "description": "Stop the daemon about 30 seconds after the last TUI closes when no service, task or start is running and no remote box is connected, reconnecting or waiting for a sign-in; the next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits; one installed with `devlanes daemon install` keeps running.",
           "examples": [
             true,
             false
           ],
-          "markdownDescription": "Stop the daemon about 30 seconds after the last TUI closes when no service, task or start is running; the next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits; one installed with `devlanes daemon install` keeps running.",
+          "markdownDescription": "Stop the daemon about 30 seconds after the last TUI closes when no service, task or start is running and no remote box is connected, reconnecting or waiting for a sign-in; the next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits; one installed with `devlanes daemon install` keeps running.",
           "type": "boolean"
         }
       },
@@ -130,12 +130,12 @@
         "remote_hosts_retention": {
           "$ref": "#/$defs/ConfigDuration",
           "default": "7776000000ms",
-          "description": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner.",
+          "description": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner. A box connected with `devlanes remote connect` and not disconnected since is never deleted, so the daemon can connect it again after a restart.",
           "examples": [
             "90d",
             "180d"
           ],
-          "markdownDescription": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner."
+          "markdownDescription": "How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner. A box connected with `devlanes remote connect` and not disconnected since is never deleted, so the daemon can connect it again after a restart."
         },
         "retention": {
           "$ref": "#/$defs/ConfigDuration",
@@ -451,6 +451,175 @@
             false
           ],
           "markdownDescription": "Add `Via: 1.1 devlanes.run` to every response the proxy forwards from a service (`1.1 devlanes.run (remote)` for lanes on a remote box), so a client can tell that devlanes sat in between. Defaults to true; set false if a client or test compares response headers exactly.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RemoteBox": {
+      "additionalProperties": false,
+      "description": "A box reached by a command: `devlanes remote connect <name>` runs it, and its standard input and output must reach `devlanes tunnel --stdio` inside the box.",
+      "examples": [
+        {
+          "command": [
+            "docker",
+            "exec",
+            "-i",
+            "acme",
+            "devlanes",
+            "tunnel",
+            "--stdio"
+          ]
+        },
+        {
+          "command": [
+            "wsl.exe",
+            "-d",
+            "Ubuntu",
+            "devlanes",
+            "tunnel",
+            "--stdio"
+          ]
+        }
+      ],
+      "markdownDescription": "A box reached by a command: `devlanes remote connect <name>` runs it, and its standard input and output must reach `devlanes tunnel --stdio` inside the box.",
+      "properties": {
+        "command": {
+          "description": "The program and its arguments, as a list; no shell runs it, so write each argument as its own item. It must end up running `devlanes tunnel --stdio` in the box, with standard input and output passed through and no terminal (`docker exec -i`, not `-it`). It runs again for every reconnect. It cannot prompt: the daemon runs it with nobody to answer, so sign in to the tool it uses beforehand.",
+          "examples": [
+            [
+              "docker",
+              "exec",
+              "-i",
+              "acme",
+              "devlanes",
+              "tunnel",
+              "--stdio"
+            ],
+            [
+              "kubectl",
+              "exec",
+              "-i",
+              "acme-0",
+              "--",
+              "devlanes",
+              "tunnel",
+              "--stdio"
+            ]
+          ],
+          "items": {
+            "description": "The program and its arguments, as a list; no shell runs it, so write each argument as its own item. It must end up running `devlanes tunnel --stdio` in the box, with standard input and output passed through and no terminal (`docker exec -i`, not `-it`). It runs again for every reconnect. It cannot prompt: the daemon runs it with nobody to answer, so sign in to the tool it uses beforehand.",
+            "examples": [
+              "docker",
+              "exec",
+              "-i",
+              "acme",
+              "devlanes",
+              "tunnel",
+              "--stdio",
+              "kubectl",
+              "exec",
+              "-i",
+              "acme-0",
+              "--",
+              "devlanes",
+              "tunnel",
+              "--stdio"
+            ],
+            "markdownDescription": "The program and its arguments, as a list; no shell runs it, so write each argument as its own item. It must end up running `devlanes tunnel --stdio` in the box, with standard input and output passed through and no terminal (`docker exec -i`, not `-it`). It runs again for every reconnect. It cannot prompt: the daemon runs it with nobody to answer, so sign in to the tool it uses beforehand.",
+            "type": "string"
+          },
+          "markdownDescription": "The program and its arguments, as a list; no shell runs it, so write each argument as its own item. It must end up running `devlanes tunnel --stdio` in the box, with standard input and output passed through and no terminal (`docker exec -i`, not `-it`). It runs again for every reconnect. It cannot prompt: the daemon runs it with nobody to answer, so sign in to the tool it uses beforehand.",
+          "type": "array"
+        }
+      },
+      "required": [
+        "command"
+      ],
+      "type": "object"
+    },
+    "RemoteConfig": {
+      "additionalProperties": false,
+      "description": "`devlanes remote connect` settings: boxes reached by a command, and this machine as a box for other machines.",
+      "examples": [
+        {
+          "start_daemon": false
+        },
+        {
+          "boxes": {
+            "acme": {
+              "command": [
+                "docker",
+                "exec",
+                "-i",
+                "acme",
+                "devlanes",
+                "tunnel",
+                "--stdio"
+              ]
+            }
+          }
+        }
+      ],
+      "markdownDescription": "`devlanes remote connect` settings: boxes reached by a command, and this machine as a box for other machines.",
+      "properties": {
+        "boxes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/RemoteBox",
+            "description": "A box reached by a command: `devlanes remote connect <name>` runs it, and its standard input and output must reach `devlanes tunnel --stdio` inside the box.",
+            "examples": [
+              {
+                "command": [
+                  "docker",
+                  "exec",
+                  "-i",
+                  "acme",
+                  "devlanes",
+                  "tunnel",
+                  "--stdio"
+                ]
+              },
+              {
+                "command": [
+                  "wsl.exe",
+                  "-d",
+                  "Ubuntu",
+                  "devlanes",
+                  "tunnel",
+                  "--stdio"
+                ]
+              }
+            ],
+            "markdownDescription": "A box reached by a command: `devlanes remote connect <name>` runs it, and its standard input and output must reach `devlanes tunnel --stdio` inside the box."
+          },
+          "default": {},
+          "description": "Boxes that `devlanes remote connect <name>` reaches by running a command on this machine instead of SSH, keyed by the name you connect with: a container (`docker exec -i`, `kubectl exec -i`), a WSL distribution or a codespace. A name listed here is never used as an `ssh` destination; any other name is. The daemon reads this at each `remote connect`, so no restart is needed; a box that is already connected keeps its command until `devlanes remote disconnect`.",
+          "examples": [
+            {
+              "acme": {
+                "command": [
+                  "docker",
+                  "exec",
+                  "-i",
+                  "acme",
+                  "devlanes",
+                  "tunnel",
+                  "--stdio"
+                ]
+              }
+            }
+          ],
+          "markdownDescription": "Boxes that `devlanes remote connect <name>` reaches by running a command on this machine instead of SSH, keyed by the name you connect with: a container (`docker exec -i`, `kubectl exec -i`), a WSL distribution or a codespace. A name listed here is never used as an `ssh` destination; any other name is. The daemon reads this at each `remote connect`, so no restart is needed; a box that is already connected keeps its command until `devlanes remote disconnect`.",
+          "type": "object"
+        },
+        "start_daemon": {
+          "default": true,
+          "description": "Start the devlanes daemon when a client connects with `devlanes remote connect` and none is running here; defaults to true. Set false to keep the daemon under your own control: a client that connects while it is stopped then reports that the box daemon is not running and keeps retrying until it runs. Start it with `devlanes daemon start`, but a daemon started on demand exits about 30 seconds after the last TUI or connected client leaves while nothing runs, so run `devlanes daemon install` or set `daemon.exit_when_idle: false` to keep it running. An invalid value here counts as false. Read at each connection, so no restart is needed.",
+          "examples": [
+            true,
+            false
+          ],
+          "markdownDescription": "Start the devlanes daemon when a client connects with `devlanes remote connect` and none is running here; defaults to true. Set false to keep the daemon under your own control: a client that connects while it is stopped then reports that the box daemon is not running and keeps retrying until it runs. Start it with `devlanes daemon start`, but a daemon started on demand exits about 30 seconds after the last TUI or connected client leaves while nothing runs, so run `devlanes daemon install` or set `daemon.exit_when_idle: false` to keep it running. An invalid value here counts as false. Read at each connection, so no restart is needed.",
           "type": "boolean"
         }
       },
@@ -1297,6 +1466,35 @@
         }
       ],
       "markdownDescription": "Ports of the daemon's HTTP/HTTPS proxy, which serves every `hosts` entry, and whether other devices on the network may connect to it."
+    },
+    "remote": {
+      "$ref": "#/$defs/RemoteConfig",
+      "default": {
+        "boxes": {},
+        "start_daemon": true
+      },
+      "description": "`devlanes remote connect`: boxes this machine reaches with a command instead of SSH (`boxes`), and, for this machine as a box, whether a connecting client starts its daemon (`start_daemon`).",
+      "examples": [
+        {
+          "start_daemon": false
+        },
+        {
+          "boxes": {
+            "acme": {
+              "command": [
+                "docker",
+                "exec",
+                "-i",
+                "acme",
+                "devlanes",
+                "tunnel",
+                "--stdio"
+              ]
+            }
+          }
+        }
+      ],
+      "markdownDescription": "`devlanes remote connect`: boxes this machine reaches with a command instead of SSH (`boxes`), and, for this machine as a box, whether a connecting client starts its daemon (`start_daemon`)."
     },
     "start": {
       "$ref": "#/$defs/StartConfig",

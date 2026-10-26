@@ -258,14 +258,14 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | Path | Type | Description | Example |
 | --- | --- | --- | --- |
 | `daemon` | object | The daemon's lifetime: whether it stops on its own once the last TUI closes and nothing runs. | `{"exit_when_idle":false}` |
-| `daemon.exit_when_idle` | boolean | Stop the daemon about 30 seconds after the last TUI closes when no service, task or start is running; the next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits; one installed with `devlanes daemon install` keeps running. | `true` |
+| `daemon.exit_when_idle` | boolean | Stop the daemon about 30 seconds after the last TUI closes when no service, task or start is running and no remote box is connected, reconnecting or waiting for a sign-in; the next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits; one installed with `devlanes daemon install` keeps running. | `true` |
 
 ### history
 
 | Path | Type | Description | Example |
 | --- | --- | --- | --- |
 | `history` | object | How long the database keeps records of finished service and task runs, and of remote boxes that no longer connect. | `{"remote_hosts_retention":"90d","retention":"7d"}` |
-| `history.remote_hosts_retention` | duration | How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner. | `90d` |
+| `history.remote_hosts_retention` | duration | How long a remote box stays listed by `devlanes remote ls` after its last successful connection; defaults to `90d` and must be longer than `0s`. A record without a connection time is never deleted by age, and `state.max_size` can delete records sooner. A box connected with `devlanes remote connect` and not disconnected since is never deleted, so the daemon can connect it again after a restart. | `90d` |
 | `history.retention` | duration | How long records of finished service and task runs (start and end times, exit status) are kept after the run ends; defaults to `7d` and must be longer than `0s`. A run that still has log index entries or a metrics summary in the database stays until those expire, and `state.max_size` can delete runs sooner. | `7d` |
 
 ### hostnames
@@ -322,6 +322,15 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 | `proxy.https_port` | integer | Port the HTTPS proxy listens on; defaults to 443. When the port is taken or not allowed (low ports on Linux need extra permission), the daemon falls back to 8443 and service URLs carry the port. | `443` |
 | `proxy.lan` | boolean | Accept connections from other devices on the network; defaults to false, which refuses every peer that is not this machine. Those devices must still resolve the hostnames to this machine and trust the CA. | `false` |
 | `proxy.via` | boolean | Add `Via: 1.1 devlanes.run` to every response the proxy forwards from a service (`1.1 devlanes.run (remote)` for lanes on a remote box), so a client can tell that devlanes sat in between. Defaults to true; set false if a client or test compares response headers exactly. | `true` |
+
+### remote
+
+| Path | Type | Description | Example |
+| --- | --- | --- | --- |
+| `remote` | object | `devlanes remote connect`: boxes this machine reaches with a command instead of SSH (`boxes`), and, for this machine as a box, whether a connecting client starts its daemon (`start_daemon`). | `{"start_daemon":false}` |
+| `remote.boxes` | map of object | Boxes that `devlanes remote connect <name>` reaches by running a command on this machine instead of SSH, keyed by the name you connect with: a container (`docker exec -i`, `kubectl exec -i`), a WSL distribution or a codespace. A name listed here is never used as an `ssh` destination; any other name is. The daemon reads this at each `remote connect`, so no restart is needed; a box that is already connected keeps its command until `devlanes remote disconnect`. | `{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}` |
+| `remote.boxes.<name>.command` | list of string | The program and its arguments, as a list; no shell runs it, so write each argument as its own item. It must end up running `devlanes tunnel --stdio` in the box, with standard input and output passed through and no terminal (`docker exec -i`, not `-it`). It runs again for every reconnect. It cannot prompt: the daemon runs it with nobody to answer, so sign in to the tool it uses beforehand. | `["docker","exec","-i","acme","devlanes","tunnel","--stdio"]` |
+| `remote.start_daemon` | boolean | Start the devlanes daemon when a client connects with `devlanes remote connect` and none is running here; defaults to true. Set false to keep the daemon under your own control: a client that connects while it is stopped then reports that the box daemon is not running and keeps retrying until it runs. Start it with `devlanes daemon start`, but a daemon started on demand exits about 30 seconds after the last TUI or connected client leaves while nothing runs, so run `devlanes daemon install` or set `daemon.exit_when_idle: false` to keep it running. An invalid value here counts as false. Read at each connection, so no restart is needed. | `true` |
 
 ### start
 
