@@ -292,6 +292,9 @@ impl Client {
     /// Like [`Client::connect_or_spawn`], with `remove_env` dropped from a spawned
     /// daemon's environment, such as the SSH variables of a tunnel's login session.
     pub async fn connect_or_spawn_without(paths: &Paths, remove_env: &[&str]) -> Result<Self> {
+        // Read before the attempt too: a daemon that removes its marker while
+        // this hello waits has just begun to accept, and is worth one more try.
+        let was_starting = marker_exists(paths).await;
         match Self::connect(paths).await {
             Ok(client) => return Ok(client),
             Err(error) if error.is_not_running() => {}
@@ -305,7 +308,9 @@ impl Client {
             // only after reconciling, so an unanswered hello while it holds the
             // lock and its starting marker is one still starting. Without the
             // marker it has started and hangs, which the timeout reports.
-            Err(Error::Timeout) if starting(paths).await => {
+            Err(Error::Timeout)
+                if (was_starting && lock_held(paths).await) || starting(paths).await =>
+            {
                 tracing::debug!("a daemon holds the lock but does not answer yet; waiting");
                 return Self::connect_while_starting(paths).await;
             }
@@ -388,9 +393,14 @@ impl Client {
     async fn connect_while_starting(paths: &Paths) -> Result<Self> {
         let deadline = Instant::now() + STARTING_WAIT_LIMIT;
         loop {
+            // A marker gone during an attempt was removed right before the
+            // first accept, so the next attempt is answered.
+            let was_starting = marker_exists(paths).await;
             let error = match Self::connect(paths).await {
                 Ok(client) => return Ok(client),
-                Err(Error::Timeout) if !marker_exists(paths).await => return Err(Error::Timeout),
+                Err(Error::Timeout) if !was_starting && !marker_exists(paths).await => {
+                    return Err(Error::Timeout);
+                }
                 Err(error) if error.is_not_running() || matches!(error, Error::Timeout) => error,
                 Err(error) => return Err(error),
             };
@@ -1238,6 +1248,24 @@ mod tests {
                 "starting {starting}: {elapsed:?}"
             );
         }
+        // The marker goes while a hello waits, as when the daemon begins to
+        // accept: one more attempt, then the timeout of a daemon that hangs.
+        let removal = tokio::spawn({
+            let marker = marker.clone();
+            async move {
+                tokio::time::sleep(CONNECT_TIMEOUT / 2).await;
+                std::fs::remove_file(&marker).expect("marker removed");
+            }
+        });
+        let begun = Instant::now();
+        let ended = Client::connect_while_starting(&paths).await.map(drop);
+        assert!(matches!(ended, Err(Error::Timeout)), "{ended:?}");
+        let elapsed = begun.elapsed();
+        assert!(
+            elapsed >= CONNECT_TIMEOUT * 2 && elapsed < CONNECT_TIMEOUT * 3,
+            "marker removed mid-attempt: {elapsed:?}"
+        );
+        removal.await.expect("removal");
         silent.abort();
         release(file);
     }
