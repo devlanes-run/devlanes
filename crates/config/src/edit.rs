@@ -463,6 +463,26 @@ history:
         );
     }
 
+    /// A command box is set and removed by its name; an empty command is refused.
+    #[test]
+    fn command_boxes_are_set_by_name() {
+        let command = json!([
+            "docker", "exec", "-i", "acme", "devlanes", "tunnel", "--stdio"
+        ]);
+        let text = set("", "remote.boxes.acme.command", command);
+        let config = crate::parse_user(&text).expect("valid");
+        assert_eq!(config.remote.boxes["acme"].command[0], "docker");
+        let empty = edit_user_source(&text, "remote.boxes.acme.command", Some(&json!([])));
+        assert!(
+            empty
+                .expect_err("rejected")
+                .message
+                .starts_with("remote.boxes.acme.command: must list the program"),
+        );
+        let text = edit_user_source(&text, "remote.boxes.acme", None).expect("edit");
+        assert_eq!(text, "");
+    }
+
     #[test]
     fn files_on_disk_are_created_and_edited_in_place() {
         let dir = tempfile::tempdir().expect("tempdir");

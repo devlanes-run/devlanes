@@ -72,8 +72,9 @@ pub struct UserConfig {
     /// The daemon's lifetime: whether it stops on its own once the last TUI closes and
     /// nothing runs.
     pub daemon: DaemonConfig,
-    /// Settings for this machine as a box that other machines reach with
-    /// `devlanes remote connect`.
+    /// `devlanes remote connect`: boxes this machine reaches with a command
+    /// instead of ssh (`boxes`), and, for this machine as a box, whether a
+    /// connecting client starts its daemon (`start_daemon`).
     pub remote: RemoteConfig,
 }
 
@@ -409,11 +410,20 @@ impl Default for DaemonConfig {
     }
 }
 
-/// This machine as a box for `devlanes remote connect` from another machine.
+/// `devlanes remote connect` settings: boxes reached by a command, and this machine as
+/// a box for other machines.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"start_daemon":false}]))]
+#[schemars(extend("examples" = [{"start_daemon":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
 pub struct RemoteConfig {
+    /// Boxes that `devlanes remote connect <name>` reaches by running a command on this
+    /// machine instead of ssh, keyed by the name you connect with: a container
+    /// (`docker exec -i`, `kubectl exec -i`), a WSL distribution or a codespace. A name
+    /// listed here is never used as an ssh destination; any other name is. The daemon
+    /// reads this at each `remote connect`, so no restart is needed; a box that is
+    /// already connected keeps its command until `devlanes remote disconnect`.
+    #[schemars(extend("examples" = [{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}]))]
+    pub boxes: std::collections::BTreeMap<String, RemoteBox>,
     /// Start the devlanes daemon when a client connects with `devlanes remote connect`
     /// and none is running here; defaults to true. Set false to keep the daemon under
     /// your own control: a client that connects while it is stopped then reports that
@@ -427,9 +437,54 @@ pub struct RemoteConfig {
 }
 
 impl Default for RemoteConfig {
-    /// Connections start the daemon unless turned off.
+    /// Connections start the daemon unless turned off; no command boxes.
     fn default() -> Self {
-        Self { start_daemon: true }
+        Self {
+            boxes: std::collections::BTreeMap::new(),
+            start_daemon: true,
+        }
+    }
+}
+
+/// A box reached by a command: `devlanes remote connect <name>` runs it, and its
+/// standard input and output must reach `devlanes tunnel --stdio` inside the box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("examples" = [{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]},{"command":["wsl.exe","-d","Ubuntu","devlanes","tunnel","--stdio"]}]))]
+pub struct RemoteBox {
+    /// The program and its arguments, as a list; no shell runs it, so write each argument
+    /// as its own item. It must end up running `devlanes tunnel --stdio` in the box, with
+    /// standard input and output passed through and no terminal (`docker exec -i`, not
+    /// `-it`). It runs again for every reconnect. It cannot prompt: the daemon runs it
+    /// with nobody to answer, so sign in to the tool it uses beforehand.
+    #[schemars(extend("examples" = [["docker","exec","-i","acme","devlanes","tunnel","--stdio"],["kubectl","exec","-i","acme-0","--","devlanes","tunnel","--stdio"]]))]
+    pub command: Vec<String>,
+}
+
+impl RemoteConfig {
+    /// Rejects box names that `remote connect` and dotted setting keys cannot
+    /// name, and commands without a program.
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (name, entry) in &self.boxes {
+            let plain = !name.is_empty()
+                && !name.starts_with('-')
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            if !plain {
+                return Err(ConfigError::plain(format!(
+                    "remote.boxes.{name}: a box name may only hold letters, digits, `-` and `_`, \
+                     and cannot start with `-`"
+                )));
+            }
+            if entry.command.first().is_none_or(String::is_empty) {
+                return Err(ConfigError::plain(format!(
+                    "remote.boxes.{name}.command: must list the program and its arguments, \
+                     such as [docker, exec, -i, {name}, devlanes, tunnel, --stdio]"
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1100,6 +1155,7 @@ impl UserConfig {
         }
         self.startup.validate()?;
         self.lanes.validate()?;
+        self.remote.validate()?;
         Ok(())
     }
 

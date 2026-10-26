@@ -14,7 +14,9 @@ use devlanes_core::{
     contrib::{CA_BUNDLE_ENV, CA_CERT_ENV, Contributor, ScriptRunner},
 };
 use devlanes_daemon::integrations::ExitDetails;
-use devlanes_daemon::integrations::{RemoteConnector, RemotePrompt, RemotePrompter};
+use devlanes_daemon::integrations::{
+    RemoteConnector, RemotePrompt, RemotePrompter, RemoteTransport,
+};
 use devlanes_daemon::{
     Engine, EngineOptions, Handler,
     integrations::{
@@ -163,7 +165,7 @@ pub async fn engine(
     integ.ca_permitted = ca_permitted;
     integ.presets = presets();
     integ.launch_checks = vec![Arc::new(DistinctTauriIdentifiers)];
-    integ.remote = Arc::new(SshConnector {
+    integ.remote = Arc::new(BoxConnector {
         home: paths.home.clone(),
         exe: std::env::current_exe().ok(),
     });
@@ -916,23 +918,44 @@ fn listener_status(bound: &Value, health: &[devlanes_proxy::ListenerHealth]) -> 
     status
 }
 
-/// `connect` over system OpenSSH, with ssh's prompts relayed to the attached CLI.
-struct SshConnector {
-    /// `$DEVLANES_HOME`; control sockets live in its `run/ssh`.
+/// `connect`: the box's command from `remote.boxes` when the user config has
+/// one, otherwise system OpenSSH with ssh's prompts relayed to the attached CLI.
+struct BoxConnector {
+    /// `$DEVLANES_HOME`: its `config.yaml` holds the commands, and ssh
+    /// control sockets live in its `run/ssh`.
     home: PathBuf,
     /// This binary, which ssh runs as `askpass`; without it ssh runs in batch mode.
     exe: Option<PathBuf>,
 }
 
-impl RemoteConnector for SshConnector {
-    /// One SSH transport (and ControlMaster) per box; Windows has no
-    /// ControlMaster and runs one `ssh.exe` per session.
-    fn transport(
+#[async_trait]
+impl RemoteConnector for BoxConnector {
+    /// Reads the user config at each call, so a command added or changed
+    /// there applies to the next `connect`. A command gets no prompts: it
+    /// runs without a terminal and nobody answers it. One SSH transport (and
+    /// ControlMaster) per box otherwise; Windows has no ControlMaster and runs
+    /// one `ssh.exe` per session.
+    async fn transport(
         &self,
         host: &str,
         prompts: Arc<dyn RemotePrompter>,
         connected_before: bool,
-    ) -> Result<Arc<dyn devlanes_transport::Transport>, RpcError> {
+    ) -> Result<RemoteTransport, RpcError> {
+        let (home, name) = (self.home.clone(), host.to_owned());
+        let command =
+            tokio::task::spawn_blocking(move || crate::user_config::box_command(&home, &name))
+                .await
+                .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))??;
+        if let Some(command) = command {
+            let mut options = devlanes_transport_command::CommandOptions::new(host);
+            options.connected_before = connected_before;
+            return Ok(RemoteTransport {
+                transport: Arc::new(devlanes_transport_command::CommandTransport::new(
+                    command, options,
+                )),
+                kind: "command",
+            });
+        }
         let mut options = devlanes_transport_ssh::SshOptions::new(&self.home);
         options.connected_before = connected_before;
         options.askpass = self
@@ -942,9 +965,10 @@ impl RemoteConnector for SshConnector {
                 exe,
                 relay: Arc::new(PromptBridge(prompts)),
             });
-        Ok(Arc::new(devlanes_transport_ssh::SshTransport::new(
-            host, options,
-        )))
+        Ok(RemoteTransport {
+            transport: Arc::new(devlanes_transport_ssh::SshTransport::new(host, options)),
+            kind: "ssh",
+        })
     }
 }
 
@@ -2257,6 +2281,61 @@ fn docker_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Answers no prompt, like a daemon with no CLI attached.
+    struct Unattended;
+
+    #[async_trait]
+    impl RemotePrompter for Unattended {
+        async fn ask(&self, _prompt: RemotePrompt) -> Option<String> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    /// A box with a command in the user config gets the command transport,
+    /// read at each call; any other name is an ssh destination.
+    async fn boxes_with_a_command_are_not_ssh_destinations() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let connector = BoxConnector {
+            home: temp.path().to_path_buf(),
+            exe: None,
+        };
+        let pick = |host: &'static str| {
+            let connector = &connector;
+            async move { connector.transport(host, Arc::new(Unattended), false).await }
+        };
+        let before = pick("acme").await.expect("ssh");
+        assert_eq!(before.kind, "ssh");
+        std::fs::write(
+            temp.path().join("config.yaml"),
+            "remote:\n  boxes:\n    acme:\n      command: [devlanes-no-such-program, tunnel]\n",
+        )
+        .expect("write");
+        let acme = pick("acme").await.expect("command");
+        assert_eq!(acme.kind, "command");
+        assert_eq!(pick("hetzner").await.expect("ssh").kind, "ssh");
+        // The command runs for real: a program that does not exist stops the link.
+        let Err(error) = acme.transport.connect().await else {
+            panic!("a missing program connected");
+        };
+        assert!(error.is_permanent(), "{error}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("cannot run `devlanes-no-such-program` for acme"),
+            "{error}"
+        );
+        std::fs::write(
+            temp.path().join("config.yaml"),
+            "remote:\n  boxes:\n    acme:\n      command: []\n",
+        )
+        .expect("write");
+        let Err(error) = pick("acme").await else {
+            panic!("an empty command connected");
+        };
+        assert_eq!(error.code, "config_error");
+    }
 
     #[test]
     /// A failed compose command keeps its command line, status and stderr tail.

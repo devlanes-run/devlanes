@@ -617,6 +617,56 @@ fn remote_start_daemon_defaults_to_true() {
             .start_daemon
     );
     assert!(parse_user("remote: { start_daemon: maybe }").is_err());
+}
+
+/// Command boxes need a name `remote connect` can take and a program; the
+/// rest of the command is passed as written.
+#[test]
+fn remote_boxes_need_a_name_and_a_program() {
+    let config = parse_user(
+        "remote:\n  boxes:\n    acme_2:\n      command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]\n",
+    )
+    .expect("valid");
+    assert_eq!(
+        config.remote.boxes["acme_2"].command,
+        [
+            "docker", "exec", "-i", "acme", "devlanes", "tunnel", "--stdio"
+        ]
+    );
+    assert!(
+        config.remote.start_daemon,
+        "the box setting keeps its default"
+    );
+    for (source, message) in [
+        (
+            "remote: { boxes: { acme: { command: [] } } }",
+            "remote.boxes.acme.command: must list the program",
+        ),
+        (
+            "remote: { boxes: { acme: { command: [''] } } }",
+            "remote.boxes.acme.command: must list the program",
+        ),
+        (
+            "remote: { boxes: { acme.box: { command: [ssh] } } }",
+            "remote.boxes.acme.box: a box name may only hold",
+        ),
+        (
+            "remote: { boxes: { -acme: { command: [ssh] } } }",
+            "remote.boxes.-acme: a box name",
+        ),
+        ("remote: { boxes: { acme: {} } }", "missing field `command`"),
+        (
+            "remote: { boxes: { acme: { command: [ssh], shell: true } } }",
+            "unknown field `shell`",
+        ),
+    ] {
+        let error = parse_user(source).expect_err(source);
+        assert!(
+            error.message.contains(message),
+            "{source}: {}",
+            error.message
+        );
+    }
     assert!(parse_user("remote: { start: false }").is_err());
 }
 

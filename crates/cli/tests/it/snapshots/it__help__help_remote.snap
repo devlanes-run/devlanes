@@ -2,12 +2,12 @@
 source: crates/cli/tests/it/help.rs
 expression: long_help(path)
 ---
-Connect to boxes over SSH and mirror their lanes here
+Connect to boxes over SSH or a command and mirror their lanes here
 
 Usage: devlanes remote [OPTIONS] <COMMAND>
 
 Commands:
-  connect     Connect to a box over SSH and mirror its lanes, ports and hostnames here
+  connect     Connect to a box over SSH or a command and mirror its lanes, ports and hostnames here
   disconnect  Disconnect from a box, remove its mirrored ports and hostnames, and stop reconnecting it after daemon restarts
   ls          List known boxes and their connection state
   sync        List the synced folders of running lanes

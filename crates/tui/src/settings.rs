@@ -1943,6 +1943,12 @@ mod tests {
             assert!(keys.contains(&key), "{key} missing from {keys:?}");
         }
         assert!(!keys.contains(&"hostnames.dns_provider"));
+        // Boxes are keyed by name with free-form commands, which the page
+        // cannot edit; `devlanes config set` and the file can.
+        assert!(
+            !keys.iter().any(|key| key.starts_with("remote.boxes")),
+            "{keys:?}"
+        );
         assert!(categories[0].items[0].key.starts_with("tui."));
         let resolver = categories[1]
             .items

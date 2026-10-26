@@ -119,3 +119,10 @@ daemon:
 # with daemon.exit_when_idle: false) so the daemon keeps running between connections.
 remote:
   start_daemon: true
+  # Boxes devlanes remote connect reaches by running a command here instead of ssh,
+  # by the name you connect with: `devlanes remote connect acme` runs this command.
+  # It must run `devlanes tunnel --stdio` in the box with stdin and stdout passed
+  # through; see docs/guides/remote-command.md.
+  boxes:
+    acme:
+      command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]

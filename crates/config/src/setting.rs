@@ -19,7 +19,8 @@ pub enum Applies {
 
 /// When a change to the dotted user config `key` takes effect. `start`, `tui`,
 /// `terminal` and `remote` are read by each command (`devlanes tunnel` reads
-/// `remote` at each client connection); everything else by the daemon.
+/// `remote` at each client connection, the daemon reads `remote.boxes` at each
+/// `remote connect`); everything else by the daemon.
 pub fn applies(key: &str) -> Applies {
     let section = key.split('.').next().unwrap_or(key);
     match key {
@@ -39,10 +40,12 @@ pub fn user_keys() -> Vec<String> {
 }
 
 /// Fails unless `key` names a section or setting of the user config, with
-/// the closest known key when it looks like a typo.
+/// the closest known key when it looks like a typo. Under a section keyed by
+/// name (`remote.boxes`) any name counts, so `remote.boxes.acme.command` is a
+/// setting.
 pub fn check_user_key(key: &str) -> Result<(), ConfigError> {
     let keys = user_keys();
-    if keys.iter().any(|known| known == key) {
+    if keys.iter().any(|known| known == key) || in_named_section(key) {
         return Ok(());
     }
     // A typo keeps its depth: `tui.them` means a setting, not the `tui` section.
@@ -176,6 +179,34 @@ pub fn to_yaml(value: &Value) -> Result<String, ConfigError> {
     Ok(text)
 }
 
+/// Whether the schema has `key` once a section keyed by name, whose entries
+/// are `additionalProperties`, takes any name for its segment.
+fn in_named_section(key: &str) -> bool {
+    let schema = crate::user_schema();
+    let mut node = &schema;
+    let mut named = false;
+    for segment in key.split('.') {
+        if let Some((_, property)) = properties(node, &schema)
+            .into_iter()
+            .find(|(name, _)| *name == segment)
+        {
+            node = property;
+            continue;
+        }
+        match resolve(node, &schema)
+            .get("additionalProperties")
+            .filter(|entry| entry.is_object())
+        {
+            Some(entry) if !segment.is_empty() => {
+                node = entry;
+                named = true;
+            }
+            _ => return false,
+        }
+    }
+    named
+}
+
 /// Adds the keys under `node`'s properties.
 fn collect(node: &Value, root: &Value, prefix: &str, out: &mut Vec<String>) {
     for (name, property) in properties(node, root) {
@@ -257,6 +288,13 @@ mod tests {
             check_user_key("zzz").expect_err("unknown").message,
             "unknown setting `zzz`"
         );
+        // Boxes are keyed by name, and only their own settings exist.
+        assert!(check_user_key("remote.boxes").is_ok());
+        assert!(check_user_key("remote.boxes.acme").is_ok());
+        assert!(check_user_key("remote.boxes.acme.command").is_ok());
+        assert!(check_user_key("remote.boxes.acme.comand").is_err());
+        assert!(check_user_key("remote.boxes..command").is_err());
+        assert!(check_user_key("tui.theme.dark").is_err());
         // A section is no suggestion for a mistyped setting.
         assert!(
             !check_user_key("tui.colr")
@@ -304,6 +342,16 @@ mod tests {
             Value::Null
         );
         assert!(user_setting(&config, "tui.colour").is_err());
+        let boxes = crate::parse_user("remote:\n  boxes:\n    acme:\n      command: [wsl.exe]\n")
+            .expect("valid");
+        assert_eq!(
+            user_setting(&boxes, "remote.boxes.acme.command").expect("known"),
+            json!(["wsl.exe"])
+        );
+        assert_eq!(
+            user_setting(&boxes, "remote.boxes.other").expect("known"),
+            Value::Null
+        );
         let whole = effective_user_value(&UserConfig::default());
         assert_eq!(whole["proxy"]["https_port"], json!(443));
         assert!(whole["terminal"].is_object());

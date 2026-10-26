@@ -54,13 +54,15 @@ pub fn tunnel_start_daemon(paths: &Paths) -> (bool, String) {
     start_daemon_of(lenient_file(&file(paths)))
 }
 
-/// [`tunnel_start_daemon`] for a lenient load's result.
+/// [`tunnel_start_daemon`] for a lenient load's result. Problems with the
+/// boxes this machine connects to (`remote.boxes`) do not concern it as a box.
 #[cfg(unix)]
 fn start_daemon_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (bool, String) {
     let remote: Vec<ConfigError> = problems
         .into_iter()
         .filter(|problem| {
-            problem.message.starts_with("remote.") || problem.message.starts_with("remote:")
+            (problem.message.starts_with("remote.") || problem.message.starts_with("remote:"))
+                && !problem.message.starts_with("remote.boxes")
         })
         .collect();
     if remote.is_empty() {
@@ -72,6 +74,28 @@ fn start_daemon_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (bool,
         warnings(&remote)
     );
     (false, stderr)
+}
+
+/// The command of box `name` from `remote.boxes` in the user config of the
+/// devlanes home `home`, or `None` when it has none and `name` is an ssh
+/// destination. Read leniently, so an unrelated bad key does not block
+/// connecting; a problem under `remote.boxes` fails as a `config_error`
+/// instead, since dropping the entry would send the name to ssh. Blocking.
+pub fn box_command(home: &Path, name: &str) -> Result<Option<Vec<String>>, RpcError> {
+    let (config, problems) = lenient_file(&home.join("config.yaml"));
+    if let Some(problem) = problems
+        .iter()
+        .find(|problem| problem.message.starts_with("remote.boxes"))
+    {
+        let mut error = config_error(problem);
+        error.data["message"] = json!(problem.message.trim_end_matches("; the default applies"));
+        return Err(error);
+    }
+    Ok(config
+        .remote
+        .boxes
+        .get(name)
+        .map(|entry| entry.command.clone()))
 }
 
 /// The user config for settings that only change how output looks or whether
@@ -413,6 +437,11 @@ mod tests {
             start_daemon_of(parse("tui:\n  theme: neon\n")),
             (true, String::new())
         );
+        // The boxes this machine connects to are not about it as a box.
+        assert_eq!(
+            start_daemon_of(parse("remote:\n  boxes:\n    acme:\n      command: []\n")),
+            (true, String::new())
+        );
         for source in [
             "remote:\n  start_daemon: flase\n",
             "remote:\n  start_deamon: false\n",
@@ -426,6 +455,42 @@ mod tests {
                 "{stderr}"
             );
         }
+    }
+
+    /// A box with a command gets it; other names are ssh destinations; a bad
+    /// entry under `remote.boxes` refuses to connect instead of trying ssh,
+    /// while a bad key elsewhere does not get in the way.
+    #[test]
+    fn box_commands_come_from_the_user_config() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path();
+        assert_eq!(box_command(home, "acme").expect("no file"), None);
+        let path = home.join("config.yaml");
+        std::fs::write(
+            &path,
+            "tui:\n  theme: neon\nremote:\n  boxes:\n    acme:\n      command: [wsl.exe, -d, Ubuntu]\n",
+        )
+        .expect("write");
+        assert_eq!(
+            box_command(home, "acme").expect("valid box"),
+            Some(vec![
+                "wsl.exe".to_owned(),
+                "-d".to_owned(),
+                "Ubuntu".to_owned()
+            ])
+        );
+        assert_eq!(box_command(home, "hetzner").expect("valid"), None);
+        std::fs::write(
+            &path,
+            "remote:\n  boxes:\n    acme:\n      comand: [wsl.exe]\n",
+        )
+        .expect("write");
+        let error = box_command(home, "acme").expect_err("misspelt key");
+        assert_eq!(error.code, "config_error");
+        assert_eq!(error.data["line"], 4, "{error:?}");
+        let message = error.data["message"].as_str().unwrap_or_default();
+        assert!(message.starts_with("remote.boxes.acme"), "{message}");
+        assert!(!message.contains("the default applies"), "{message}");
     }
 
     /// The refusal renders like other config errors, on stderr in every output

@@ -30,8 +30,8 @@ use std::{
 use devlanes_daemon::{
     Engine, EngineOptions, Handler, Options, Server, Session,
     integrations::{
-        Integrations, RemoteConnector, RemotePrompt, RemotePrompter, RouteEntry, RouteSink,
-        RouteStatus,
+        Integrations, RemoteConnector, RemotePrompt, RemotePrompter, RemoteTransport, RouteEntry,
+        RouteSink, RouteStatus,
     },
 };
 use devlanes_ipc::Frame;
@@ -247,15 +247,6 @@ impl Gate {
         }
     }
 
-    /// [`Gate::pass`] from synchronous code on a multi-threaded runtime.
-    fn pass_blocking(&self) {
-        if self.armed.load(Ordering::SeqCst) {
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(self.pass());
-            });
-        }
-    }
-
     /// Resolves once a caller waits at the gate.
     async fn reached(&self) {
         self.reached.notified().await;
@@ -280,6 +271,8 @@ struct Controls {
     open: Gate,
     /// Holds an attempt whose password prompt got no answer before it fails.
     unanswered: Gate,
+    /// Boxes reached by a command rather than ssh.
+    commands: std::sync::Mutex<std::collections::BTreeSet<String>>,
 }
 
 /// A connector handing out each test box's memory transport by box name.
@@ -288,15 +281,19 @@ struct MemoryConnector {
     controls: Arc<Controls>,
 }
 
+#[async_trait::async_trait]
 impl RemoteConnector for MemoryConnector {
-    /// The in-memory pipe to the test box named `host`.
-    fn transport(
+    /// The in-memory pipe to the test box named `host`, recorded in
+    /// `remote_hosts` as `memory`, or as `command` for a box in
+    /// [`Controls::commands`], as the composition root does for a box with a
+    /// configured command.
+    async fn transport(
         &self,
         host: &str,
         prompts: Arc<dyn RemotePrompter>,
         connected_before: bool,
-    ) -> Result<Arc<dyn Transport>, RpcError> {
-        self.controls.open.pass_blocking();
+    ) -> Result<RemoteTransport, RpcError> {
+        self.controls.open.pass().await;
         match self.boxes.get(host) {
             Some(transport) => {
                 self.controls
@@ -304,20 +301,28 @@ impl RemoteConnector for MemoryConnector {
                     .lock()
                     .expect("handed out")
                     .push((host.to_owned(), connected_before));
-                Ok(Arc::new(SignIn {
-                    host: host.to_owned(),
-                    inner: transport.clone(),
-                    prompts,
-                    controls: self.controls.clone(),
-                }))
+                Ok(RemoteTransport {
+                    transport: Arc::new(SignIn {
+                        host: host.to_owned(),
+                        inner: transport.clone(),
+                        prompts,
+                        controls: self.controls.clone(),
+                    }),
+                    kind: if self
+                        .controls
+                        .commands
+                        .lock()
+                        .expect("commands")
+                        .contains(host)
+                    {
+                        "command"
+                    } else {
+                        "memory"
+                    },
+                })
             }
             None => Err(RpcError::new("bad_request", json!({"host": host}), 2)),
         }
-    }
-
-    /// Recorded in `remote_hosts`.
-    fn kind(&self) -> &'static str {
-        "memory"
     }
 
     /// `127.0.0.1` belongs to the box's services on this shared machine.
