@@ -1234,11 +1234,10 @@ impl Inner {
         Ok(json!({"stopped": stopped, "terminated": terminated}))
     }
 
-    /// Fills the lane's infra namespace and Compose env (`COMPOSE_PROJECT_NAME`
-    /// and the rest) when no start or `infra up` did since the daemon began:
-    /// `run` reaches infra entries and `infra.*` expressions on such a lane
-    /// too, after a daemon restart for one. Starts nothing; a lane without
-    /// infra, or Docker being down, leaves things as they are.
+    /// Fills the lane's Compose env (`COMPOSE_PROJECT_NAME` and the rest) when
+    /// no start or `infra up` did since the daemon began: `run` reaches infra
+    /// entries on such a lane too, after a daemon restart for one. Starts
+    /// nothing; a lane without infra, or Docker being down, leaves it empty.
     async fn ensure_infra_env(self: &Arc<Self>, project: &Arc<ProjectRt>, lane: &Arc<LaneRt>) {
         if !lane.st().setup_env.is_empty() {
             return;
@@ -1256,14 +1255,12 @@ impl Inner {
         };
         match self.integ.infra.namespace(&spec).await {
             Ok(up) => {
+                // Only the env: the namespace and containers make status list
+                // the lane's infra as up, which nothing here checked.
                 let mut st = lane.st();
                 // A start that finished meanwhile knows better.
                 if st.setup_env.is_empty() {
                     st.setup_env = up.setup_env;
-                    st.infra_ns.get_or_insert(up.namespace);
-                    if st.infra_containers.is_empty() {
-                        st.infra_containers = up.containers;
-                    }
                 }
             }
             Err(error) => {
