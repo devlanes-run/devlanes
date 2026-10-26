@@ -7,14 +7,14 @@ End-to-end tests that run the real `devlanes` binary as separate processes again
 ```sh
 cargo nextest run --profile e2e                                           # hermetic tests
 cargo nextest run --profile e2e --run-ignored only -E 'test(/^docker_/)'  # needs Docker
-DEVLANES_E2E_DUMP=1 cargo nextest run --profile e2e --no-capture -E 'test(with_)'
+cargo nextest run --profile e2e --no-capture -E 'test(with_)'             # with every daemon log
 ```
 
 The default nextest profile in `.config/nextest.toml` leaves this crate out, so `cargo nextest run --workspace` never builds the binaries from inside a test.
 
 On Windows, tests that need something Windows lacks (POSIX signals) are left out or ignored, with the reason in the attribute. Windows needs Git for Windows (`git` and its `sh` on `PATH`), and `curl.exe` and `tar.exe` from System32.
 
-`DEVLANES_E2E_DUMP=1` prints the end of each test's daemon log on teardown. A test that panics (a failed `assert!`) prints it without the variable; one that returns an error does not.
+Each lab prints the end of its daemon log to stderr on teardown: the last 400 lines from before `daemon stop` and the last 40 written after it. nextest shows that output only for a failing test, or for every test with `--no-capture`.
 
 ## Binaries
 
