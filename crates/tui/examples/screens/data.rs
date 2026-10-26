@@ -257,6 +257,7 @@ fn starting() -> LaneSummary {
         unit(reference, "stub-stripe", "ready", "service"),
         unit(reference, "setup.db", "exited", "task"),
         unit(reference, "migrate", "running", "task"),
+        exposed(reference, 8000, Some("files.acme-1.localhost")),
     ];
     units[6].role = Some("setup".into());
     units[6].exit_code = Some(0);
@@ -310,7 +311,6 @@ pub fn lanes() -> Vec<LaneSummary> {
         units: vec![
             unit("acme@2", "api-gateway", "idle", "service"),
             unit("acme@2", "web-app", "idle", "service"),
-            exposed("acme@2", 8000, Some("files.acme-2.localhost")),
         ],
         ..LaneSummary::default()
     };
@@ -406,7 +406,8 @@ pub fn idle_lanes() -> Vec<LaneSummary> {
                 unit.exit_code = Some(0);
                 continue;
             }
-            if unit.state == "idle" {
+            // An exposed port has no process to throttle or freeze.
+            if unit.state == "idle" || unit.kind == "exposed" {
                 continue;
             }
             unit.state = "ready".into();

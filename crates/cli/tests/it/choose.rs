@@ -102,6 +102,31 @@ fn commands_without_their_argument_ask() {
 }
 
 #[test]
+/// An exposed port is offered where its URL is the point, never where a
+/// process would be: attach, logs, restart, why or wait.
+fn exposed_ports_are_offered_for_urls_only() {
+    let mut lane = lane();
+    lane.units.push(
+        serde_json::from_value(json!({
+            "name": "port-8000", "lane": "acme@0", "state": "running", "pid": null,
+            "exit_code": null, "ports": {"default": 8000}, "actor": {"kind": "human"},
+            "reason": null, "kind": "exposed", "role": "exposed",
+            "urls": ["http://127.0.0.1:8000", "https://files.acme.localhost:8443"],
+        }))
+        .expect("exposed unit"),
+    );
+    let offers = |kind| {
+        unit_options(kind, &lane)
+            .iter()
+            .any(|option| option.value == "port-8000")
+    };
+    assert!(offers(ChoiceKind::Url));
+    for kind in [ChoiceKind::Running, ChoiceKind::Unit, ChoiceKind::Target] {
+        assert!(!offers(kind), "{kind:?}");
+    }
+}
+
+#[test]
 fn options_follow_the_kind() {
     let lane = lane();
     let values = |kind| -> Vec<String> {

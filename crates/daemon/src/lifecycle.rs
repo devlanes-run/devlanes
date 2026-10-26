@@ -3138,6 +3138,8 @@ impl Inner {
             st.infra_containers.clear();
             st.peaks.clear();
             st.moves_to = None;
+            // Also one added while the clean ran its tasks and teardown.
+            st.exposed.clear();
             st.present
         };
         self.bus

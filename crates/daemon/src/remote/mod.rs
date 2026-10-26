@@ -25,8 +25,7 @@ mod mirror;
 mod report;
 mod sync;
 
-pub(crate) use mirror::route_suffixes;
-pub(crate) use report::UnitTarget;
+pub(crate) use report::{HIDDEN, UnitTarget};
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},

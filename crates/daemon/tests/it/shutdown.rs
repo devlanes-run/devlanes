@@ -88,7 +88,9 @@ async fn an_exposed_port_keeps_the_engine_from_going_idle() {
         h.call(Method::Expose, json!({"port": 8000}), cx(&main))
             .await
             .expect("expose");
-        // Watched once, so only what runs or is exposed keeps it up.
+        // `idle` counts only once it saw a subscriber: a TUI watches while
+        // `idle` runs, then leaves, so from then on only what runs or is
+        // exposed keeps the engine up.
         let wait = Duration::from_millis(800);
         let tui = h.engine.subscribe();
         assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());

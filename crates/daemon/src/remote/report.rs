@@ -102,11 +102,15 @@ pub(crate) struct UnitTarget<'a> {
     pub unit: &'a str,
     /// The hostname its URL uses, when it has one.
     pub host: Option<&'a str>,
-    /// The port its URL uses without a hostname.
+    /// Its port, which its URL uses without a hostname, and a client opens
+    /// directly when the hostname does not open there.
     pub port: Option<u16>,
-    /// Hidden units are never mirrored.
-    pub hidden: bool,
+    /// Why no client mirrors the unit at all (hidden, a task), if so.
+    pub unmirrored: Option<&'a str>,
 }
+
+/// [`UnitTarget::unmirrored`] of a hidden unit.
+pub(crate) const HIDDEN: &str = "the unit is hidden, so it is never mirrored";
 
 impl Inner {
     /// For each connected client that sent a mirror report, the URL it opens
@@ -123,6 +127,34 @@ impl Inner {
             })
             .collect()
     }
+
+    /// Why no client mirrors unit `unit` of box lane `lane`, if so, as the
+    /// registry clients get says: it is hidden, a task, or not listed (an
+    /// exec unit, an exposure of another unit's port). `None` without any
+    /// reporting client, whose URLs nobody asks for.
+    pub(crate) fn route_unmirrored(&self) -> impl Fn(&str, &str) -> Option<&'static str> {
+        let reporting = lock(&self.remote.clients)
+            .values()
+            .any(|(_, client)| client.mirror.is_some());
+        let registry = reporting.then(|| self.registry_now(true));
+        move |lane, unit| {
+            let registry = registry.as_ref()?;
+            let listed = registry
+                .units()
+                .find(|info| lane_ref(&info.key.lane) == lane && info.key.name == unit);
+            match listed {
+                Some(info) if info.mirrorable() => None,
+                Some(info) if info.hidden => Some(HIDDEN),
+                Some(_) => Some("tasks are never mirrored"),
+                None => Some("the unit is not mirrored"),
+            }
+        }
+    }
+}
+
+/// `project@index` for a box lane key.
+fn lane_ref(lane: &devlanes_transport::LaneKey) -> String {
+    format!("{}@{}", lane.project, lane.lane)
 }
 
 /// The name a client goes by in output: its host name, else its id.
@@ -134,10 +166,11 @@ fn client_label(client: &RemoteClient) -> String {
         .unwrap_or_else(|| "a client".to_owned())
 }
 
-/// The URL `client` opens `target` at, from its `report`. A hostname is
-/// reachable unless its lane or the name is skipped there, through the
-/// client's proxy on the box's HTTPS port (`box_port`) when it serves that
-/// one, else its own. A plain port is reachable once the client bound it.
+/// The URL `client` opens `target` at, from its `report`. A hostname opens
+/// through the client's proxy on the box's HTTPS port (`box_port`) when the
+/// client serves that one, else on its own, unless its lane or the name is
+/// skipped there or that proxy serves no HTTPS. A port opens once the client
+/// bound it, which also stands in for a hostname that does not open there.
 fn client_url(
     client: &RemoteClient,
     report: &MirrorReport,
@@ -155,8 +188,8 @@ fn client_url(
         })
     };
     let unreachable = |reason: String| entry(None, Some(reason));
-    if target.hidden {
-        return unreachable("the unit is hidden, so it is never mirrored".into());
+    if let Some(reason) = target.unmirrored {
+        return unreachable(reason.to_owned());
     }
     if let Some(skipped) = report.skipped_lanes.iter().find(|s| s.lane == target.lane) {
         return unreachable(format!(
@@ -164,49 +197,58 @@ fn client_url(
             skipped.reason
         ));
     }
-    let url = match (target.host, target.port) {
-        (Some(host), _) => {
-            if report
-                .skipped_hosts
-                .iter()
-                .any(|skipped| skipped.eq_ignore_ascii_case(host))
-            {
-                return unreachable(format!(
-                    "{host} is not routed there: it is outside the names that machine routes"
-                ));
-            }
-            let port = if report.serves_box_port {
+    // The loopback URL of the unit's port there, or why it does not open.
+    let raw = |port: u16| -> Result<String, String> {
+        let mirrored = report
+            .ports
+            .iter()
+            .find(|mirrored| mirrored.port == port && mirrored.unit == target.unit);
+        match mirrored {
+            Some(MirroredPort {
+                address: Some(address),
+                ..
+            }) if address.contains(':') => Ok(format!("http://[{address}]:{port}")),
+            Some(MirroredPort {
+                address: Some(address),
+                ..
+            }) => Ok(format!("http://{address}:{port}")),
+            Some(mirrored) => Err(port_reason(mirrored)),
+            None => Err(format!(
+                "port {port} is not mirrored there: it is mirrored while the unit runs"
+            )),
+        }
+    };
+    match (target.host, target.port) {
+        (Some(host), port) => {
+            let https = if report.serves_box_port {
                 box_port
             } else {
                 report.https_port
             };
-            devlanes_resolve::https_url(host, port)
-        }
-        (None, Some(port)) => {
-            let mirrored = report
-                .ports
+            let skipped = report
+                .skipped_hosts
                 .iter()
-                .find(|mirrored| mirrored.port == port && mirrored.unit == target.unit);
-            match mirrored {
-                Some(MirroredPort {
-                    address: Some(address),
-                    ..
-                }) if address.contains(':') => format!("http://[{address}]:{port}"),
-                Some(MirroredPort {
-                    address: Some(address),
-                    ..
-                }) => format!("http://{address}:{port}"),
-                Some(mirrored) => return unreachable(port_reason(mirrored)),
-                None => {
-                    return unreachable(format!(
-                        "port {port} is not mirrored there: it is mirrored while the unit runs"
-                    ));
+                .any(|skipped| skipped.eq_ignore_ascii_case(host));
+            let refusal = match https {
+                _ if skipped => format!(
+                    "{host} is not routed there: it is outside the names that machine routes"
+                ),
+                None => "that machine's proxy serves no HTTPS".to_owned(),
+                Some(https) => {
+                    return entry(Some(devlanes_resolve::https_url(host, Some(https))), None);
                 }
+            };
+            match port.map(raw) {
+                Some(Ok(url)) => entry(Some(url), None),
+                _ => unreachable(refusal),
             }
         }
-        (None, None) => return unreachable("the unit has no port or hostname".into()),
-    };
-    entry(Some(url), None)
+        (None, Some(port)) => match raw(port) {
+            Ok(url) => entry(Some(url), None),
+            Err(reason) => unreachable(reason),
+        },
+        (None, None) => unreachable("the unit has no port or hostname".into()),
+    }
 }
 
 /// Why a mirrored port that is not bound cannot be opened on the client.
@@ -240,7 +282,7 @@ mod tests {
             unit: "web",
             host,
             port,
-            hidden: false,
+            unmirrored: None,
         }
     }
 
@@ -338,6 +380,7 @@ mod tests {
         );
         let refused = MirrorReport {
             skipped_hosts: vec!["api.example.com".into()],
+            https_port: Some(443),
             ..MirrorReport::default()
         };
         let foreign = target(Some("api.example.com"), None);
@@ -346,12 +389,37 @@ mod tests {
             false
         );
         let hidden = UnitTarget {
-            hidden: true,
+            unmirrored: Some(HIDDEN),
             ..target(None, Some(3000))
         };
-        assert_eq!(
-            client_url(&client(), &MirrorReport::default(), &hidden, None)["reachable"],
-            false
-        );
+        let url = client_url(&client(), &MirrorReport::default(), &hidden, None);
+        assert_eq!(url["reason"], HIDDEN, "{url}");
+    }
+
+    /// A hostname of a client whose proxy serves no HTTPS does not open
+    /// there; the unit's bound port stands in for it, also for a hostname the
+    /// client skips.
+    #[test]
+    fn a_hostname_that_does_not_open_falls_back_to_the_port() {
+        let routed = target(Some("web.acme-1.localhost"), Some(3000));
+        let plain = MirrorReport::default();
+        let url = client_url(&client(), &plain, &routed, Some(8443));
+        assert_eq!(url["reachable"], false, "{url}");
+        assert_eq!(url["reason"], "that machine's proxy serves no HTTPS");
+        let bound = MirrorReport {
+            ports: vec![mirrored("bound", Some("127.0.0.1"), None)],
+            skipped_hosts: vec!["web.acme-1.localhost".into()],
+            https_port: Some(443),
+            ..MirrorReport::default()
+        };
+        let url = client_url(&client(), &bound, &routed, None);
+        assert_eq!(url["url"], "http://127.0.0.1:3000", "{url}");
+        let no_https = MirrorReport {
+            skipped_hosts: Vec::new(),
+            https_port: None,
+            ..bound
+        };
+        let url = client_url(&client(), &no_https, &routed, None);
+        assert_eq!(url["url"], "http://127.0.0.1:3000", "{url}");
     }
 }

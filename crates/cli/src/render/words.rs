@@ -588,13 +588,17 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             text(data, "message"),
             Some(lane_command(["expose", "ls"], &text(data, "lane"))),
         ),
-        "port_taken" | "host_taken" | "invalid_host" => (text(data, "message"), None),
+        "port_taken" | "port_reserved" | "host_taken" | "invalid_host" => {
+            (text(data, "message"), None)
+        }
         "host_not_allowed" => (
             text(data, "message"),
-            Some(Hint(format!(
-                "devlanes expose <port> --host {}",
-                text(data, "suggestion")
-            ))),
+            Some(Hint::command([
+                "expose".to_owned(),
+                display_value(&data["port"]),
+                "--host".to_owned(),
+                text(data, "suggestion"),
+            ])),
         ),
         "response_too_large" => (
             format!(

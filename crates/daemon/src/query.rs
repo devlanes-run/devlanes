@@ -976,7 +976,7 @@ impl Inner {
             unit: &unit_name,
             host: host.as_deref(),
             port: Some(port),
-            hidden,
+            unmirrored: hidden.then_some(crate::remote::HIDDEN),
         });
         Ok(json!({
             "lane": reference,

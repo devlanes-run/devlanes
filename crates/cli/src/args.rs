@@ -203,13 +203,13 @@ The daemon owns the process: logs, stop, attach and status work on it by its\n\
     /// Make a port of the lane reachable as a unit, optionally under a hostname
     #[command(
         long_about = "Make a port of the lane reachable as a unit, optionally under a hostname.\n\n\
-Something devlanes did not start, such as `python -m http.server 8000`, becomes\n\
-the unit port-8000 of the lane: status lists it, --host routes a hostname to it\n\
-through the proxy, and connected clients (devlanes remote connect) mirror it\n\
-like any other unit. devlanes only forwards connections; whatever listens on\n\
-the port is yours to run.\n\n\
+A port devlanes does not know, such as one python -m http.server 8000 serves,\n\
+becomes the unit port-8000 of the lane: status lists it, --host routes a\n\
+hostname under the lane's domain to it through the proxy, and connected\n\
+clients (devlanes remote connect) mirror it like any other unit. devlanes only\n\
+forwards connections; whatever listens on the port is yours to run.\n\n\
 Exposed ports are kept in memory until devlanes expose --remove, a stop of the\n\
-whole lane, lane clean or a daemon restart.",
+whole lane (devlanes with's own stop keeps them), lane clean or a daemon restart.",
         after_help = EXPOSE_AFTER,
         args_conflicts_with_subcommands = true
     )]
@@ -527,7 +527,7 @@ pub enum ExportShell {
 
 #[derive(Debug, Subcommand)]
 pub enum UrlCommand {
-    /// Print a service's URL, for scripts; on a box, a terminal also gets the URL each connected client opens
+    /// Print a service's URL, for scripts; on a box, a terminal also shows each connected client's URL
     Print {
         /// Service whose URL to print ([lane:]unit) [default: pick from a list]
         #[arg(value_name = "UNIT")]
@@ -554,10 +554,10 @@ Examples:
 pub struct ExposeArgs {
     #[command(subcommand)]
     pub command: Option<ExposeCommand>,
-    /// Loopback port to expose [default without --remove: list the exposed ports]
+    /// Loopback port to expose, or with --remove to stop exposing [default: list the exposed ports]
     #[arg(value_name = "PORT")]
     pub port: Option<u16>,
-    /// Route this hostname to the port: one label such as files becomes files.<lane domain>; a full name must be under the lane's domain, localhost or the configured TLD
+    /// Route this hostname to the port: one label such as files becomes files.<lane domain>; a full name must be under the lane's domain
     #[arg(
         long,
         value_name = "NAME",

@@ -728,7 +728,7 @@ fn exposed_lines(app: &App, lane: &str, unit: &UnitSummary, width: usize) -> Vec
         plain,
     );
     lines.extend(sentence(
-        &format!("devlanes expose --remove {port} --lane {lane} removes it."),
+        &format!("Remove it with devlanes expose --remove {port} --lane {lane}."),
         width,
         Vec::new(),
         theme.quiet(),

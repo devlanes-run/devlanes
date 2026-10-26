@@ -235,10 +235,18 @@ fn row_line(app: &App, lane: &LaneSummary, item: &Row, width: usize) -> Line<'st
     match &item.id {
         RowId::Gap(_) | RowId::WholeLane => Line::from(""),
         RowId::Section(section) => {
+            // Exposed ports run nothing: the services count, like the lane's
+            // `n/m up`, leaves them out; their group counts them.
+            let members: Vec<RowId> = item
+                .members
+                .iter()
+                .filter(|id| !exposed_row(lane, id))
+                .cloned()
+                .collect();
             let summary = match section {
                 Section::Infra if item.folded != Some(true) => Vec::new(),
-                _ if item.folded == Some(true) => members_summary(app, lane, &item.members),
-                _ => vec![Span::styled(item.members.len().to_string(), theme.quiet())],
+                _ if item.folded == Some(true) => members_summary(app, lane, &members),
+                _ => vec![Span::styled(members.len().to_string(), theme.quiet())],
             };
             header(section.name().into(), summary)
         }
@@ -291,6 +299,16 @@ fn row_line(app: &App, lane: &LaneSummary, item: &Row, width: usize) -> Line<'st
             row(left, joined(right, theme.quiet()), width)
         }
     }
+}
+
+/// Whether row `id` of `lane` is an exposed port.
+fn exposed_row(lane: &LaneSummary, id: &RowId) -> bool {
+    let RowId::Unit(name) = id else {
+        return false;
+    };
+    lane.units
+        .iter()
+        .any(|unit| unit.name == *name && tree::role(unit) == tree::Role::Exposed)
 }
 
 /// A unit, task or container: the glyph, then the name at its depth in the
