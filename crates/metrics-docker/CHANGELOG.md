@@ -1,6 +1,6 @@
 # devlanes-metrics-docker
 
-## 0.4.1 — 2026-10-26
+## 0.4.1 ... 0.5.0 — 2026-10-26
 
 Version bump only, to follow other packages.
 

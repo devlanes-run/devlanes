@@ -1,5 +1,23 @@
 # devlanes-tui
 
+## 0.6.0 — 2026-10-26
+
+### Minor changes
+
+- [8015a60](https://github.com/devlanes-run/devlanes/commit/8015a60fe48fae958e0fd0c22e0aa260c7c3acbc) Added idle lanes: after `lanes.freeze_after` (default 15m) without activity, devlanes freezes a lane's processes and its own containers, and the next request, connection or command resumes them.
+  
+  On macOS and Windows, `lanes.throttle_after` (default 5m) first runs an idle lane at background priority. Set `services.<name>.keep_awake: true` on workers that must keep running. `0s` turns either setting off. See `docs/guides/lifecycle.md`.
+
+### Patch changes
+
+- [ccb763b](https://github.com/devlanes-run/devlanes/commit/ccb763b1808ffaa61af47dd781c70cca0644aa88) Fixed `devlanes` and `devlanes ui` showing "No projects yet" when opened in a repository with a devlanes.yaml that no other command had run in; the project now opens as a tab.
+- [94453b9](https://github.com/devlanes-run/devlanes/commit/94453b9363165ffe038e4e55ef40287ba4e35e1e) Fixed the monitor (`M`) erasing the graph history of units, lanes and containers once they stopped or were cleaned.
+  
+  They stay in the table as stopped until their samples leave the graph. A stopped lane no longer counts toward the monitor's current CPU and memory, and `status` no longer shows the last reading of a unit that failed.
+- [a7472f6](https://github.com/devlanes-run/devlanes/commit/a7472f6affae0e0d4e86ccfd7a26bb614a6c40b0) Fixed the first `devlanes` command on a busy machine, or one run while another started the daemon, failing with "daemon is unreachable" while the daemon was still starting.
+  
+  The command now waits as long as the daemon makes progress. When one startup step hangs for 30 seconds it fails with "the daemon has not finished starting", names the step and hints `devlanes daemon logs`.
+
 ## 0.5.0 — 2026-10-26
 
 ### Minor changes

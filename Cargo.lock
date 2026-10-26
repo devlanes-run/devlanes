@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1078,7 +1078,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-client"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "devlanes-core",
@@ -1099,7 +1099,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-config"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "devlanes-core",
  "devlanes-preset-next",
@@ -1126,7 +1126,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-daemon"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1206,7 +1206,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-env-direnv"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1219,7 +1219,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-env-mise"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1232,7 +1232,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-git"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "devlanes-core",
  "dunce",
@@ -1245,14 +1245,14 @@ dependencies = [
 
 [[package]]
 name = "devlanes-hosts-helper"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "devlanes-infra-compose"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "devlanes-sys-windows",
  "serde",
@@ -1265,7 +1265,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-infra-docker"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "bollard",
  "bytes",
@@ -1281,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-ipc"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "bytes",
  "devlanes-proto",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-logs"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "devlanes-proto",
  "devlanes-sys-windows",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-metrics"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1327,7 +1327,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-metrics-docker"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bollard",
@@ -1342,7 +1342,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-metrics-linux"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-platform-bun"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-platform-deno"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1428,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-platform-node"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-platform-python"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1448,7 +1448,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-platform-rust"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1458,7 +1458,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-preset-next"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1471,7 +1471,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-preset-tauri"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1486,7 +1486,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-preset-vite"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1499,7 +1499,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-preset-wrangler"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-proto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "devlanes-version",
  "serde",
@@ -1527,7 +1527,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-proxy"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1553,7 +1553,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolve"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "devlanes-config",
@@ -1585,7 +1585,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolver-hosts"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "devlanes-hosts-helper",
@@ -1609,7 +1609,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-run-script-cargo"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1623,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-run-script-deno"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1637,7 +1637,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-run-script-just"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1651,7 +1651,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-run-script-make"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1663,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-run-script-npm"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1677,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-run-script-python"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1691,7 +1691,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-runner-pty"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-runner-windows"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-start-gate"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "async-trait",
  "devlanes-core",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-state"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "devlanes-core",
  "diesel",
@@ -1775,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-sys"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "devlanes-core",
  "devlanes-sys-windows",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-sys-windows"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "devlanes-sys-windows",
  "rcgen",
@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-term"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "base64 0.22.1",
  "devlanes-proto",
@@ -1923,7 +1923,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "ab_glyph",
  "async-trait",
@@ -1957,7 +1957,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tunnel"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-trait",
  "bytes",

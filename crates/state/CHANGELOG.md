@@ -1,5 +1,9 @@
 # devlanes-state
 
+## 0.6.0 — 2026-10-26
+
+Version bump only, to follow other packages.
+
 ## 0.5.0 — 2026-10-26
 
 ### Minor changes
