@@ -240,12 +240,15 @@ fn a_tunnel_carries_every_byte() -> Result<()> {
             .and_then(port),
         "the box's api port",
     )?;
-    // The lab's own environment, so the tunnel reaches the lab's daemon.
+    // Only the lab's own environment, as its commands get it, so the tunnel
+    // reaches the lab's daemon: an inherited `XDG_RUNTIME_DIR` would move the
+    // socket it looks for on Linux.
     let env: Vec<(OsString, OsString)> = boxed
         .command(boxed.repo(), &[])?
         .get_envs()
         .filter_map(|(name, value)| Some((name.to_os_string(), value?.to_os_string())))
         .collect();
+    let inherited: Vec<OsString> = std::env::vars_os().map(|(name, _)| name).collect();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
@@ -254,6 +257,8 @@ fn a_tunnel_carries_every_byte() -> Result<()> {
     for (name, argv) in tunnel_commands(fakes.path())? {
         let mut options = CommandOptions::new(format!("box via {name}"));
         options.env = env.clone();
+        // Removed before `env` is set, so this leaves exactly `env`.
+        options.env_remove = inherited.clone();
         let transport = CommandTransport::new(argv, options);
         let echoed = runtime.block_on(async {
             tokio::time::timeout(CONNECT, async {
