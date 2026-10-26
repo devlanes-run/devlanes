@@ -386,60 +386,6 @@ fn client_url_line(client: &Value) -> String {
     }
 }
 
-/// `expose`: what the lane exposes after an add or remove, or every exposed
-/// port for the list.
-pub(super) fn expose(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
-    let lane = text(data, "lane");
-    let listing = data.get("items").is_some();
-    let items = if listing {
-        list(data, "items")
-    } else {
-        list(data, "exposed")
-    };
-    if items.is_empty() {
-        return vec![if listing {
-            "no exposed ports; devlanes expose <port> adds one".into()
-        } else {
-            format!("{lane} exposes no ports")
-        }];
-    }
-    if cx.agent() {
-        return items
-            .iter()
-            .map(|item| {
-                format!(
-                    "exposed {}:{} port={} url={}",
-                    text(item, "lane"),
-                    text(item, "unit"),
-                    display_value(&item["port"]),
-                    text(item, "url")
-                )
-            })
-            .collect();
-    }
-    let rows: Vec<Vec<String>> = items
-        .iter()
-        .map(|item| {
-            let url = text(item, "url");
-            vec![
-                if listing {
-                    format!("{}:{}", text(item, "lane"), text(item, "unit"))
-                } else {
-                    text(item, "unit")
-                },
-                display_value(&item["port"]),
-                cx.link(&url, &url),
-            ]
-        })
-        .collect();
-    if listing {
-        return table(&rows, "");
-    }
-    let mut lines = vec![format!("{lane} exposes:")];
-    lines.extend(table(&rows, "  "));
-    lines
-}
-
 /// `top`: CPU and memory per lane and unit, or the run's peaks.
 pub(super) fn metrics(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let cpu = |value: Option<f64>| value.map_or("–".into(), percent);

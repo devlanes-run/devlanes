@@ -8,23 +8,23 @@
 │   … web-app                           queued ││ x stops the start. Select a unit to watch its output.                │
 │   … wrk-email                         queued ││                                                                      │
 │   ● stub-stripe                              ││ branch    feat/checkout                                              │
-│   ▾ exposed                        1 running ││ worktree  /work/acme-checkout                                        │
-│     ◉ port-8000       files.acme-1.localhost ││ profile   web                                                        │
-│                                              ││ ports     41100-41199                                                │
-│ ▾ tasks                                    7 ││ services  2 of 6 up                                                  │
-│   ⠋ migrate          running · runs at start ││           ⠋ api-orders       starting                                │
-│   · seed                             not run ││           ⠋ api-users        starting                                │
-│   · lint                             not run ││           … web-app          queued                                  │
-│   · typecheck                        not run ││           … wrk-email        queued                                  │
-│   · test-e2e                         not run ││ tasks     1 running, 6 not run                                       │
-│   · codegen                          not run ││ setup     1 of 1 done                                                │
-│   · clean-cache                      not run ││ infra     postgres :5432 (shared), redis :6379 (shared)              │
-│                                              ││                                                                      │
-│ ▾ infra                                      ││ lanes in acme                                                        │
-│   ▾ shared                              3 up ││   main @0                  1 failed · 1 starting · 34 up             │
-│     ● pgbouncer                              ││ ▌ feat/checkout @1         starting · 4 of 8 ready                   │
-│     ● postgres                               ││   fix/cache @2             not running · config changed              │
-│     ● redis                                  ││   spike/old-search @3      worktree missing                          │
+│                                              ││ worktree  /work/acme-checkout                                        │
+│ ▾ tasks                                    7 ││ profile   web                                                        │
+│   ⠋ migrate          running · runs at start ││ ports     41100-41199                                                │
+│   · seed                             not run ││ services  2 of 6 up                                                  │
+│   · lint                             not run ││           ⠋ api-orders       starting                                │
+│   · typecheck                        not run ││           ⠋ api-users        starting                                │
+│   · test-e2e                         not run ││           … web-app          queued                                  │
+│   · codegen                          not run ││           … wrk-email        queued                                  │
+│   · clean-cache                      not run ││ tasks     1 running, 6 not run                                       │
+│                                              ││ setup     1 of 1 done                                                │
+│ ▾ infra                                      ││ infra     postgres :5432 (shared), redis :6379 (shared)              │
+│   ▾ shared                              3 up ││                                                                      │
+│     ● pgbouncer                              ││ lanes in acme                                                        │
+│     ● postgres                               ││   main @0                  1 failed · 1 starting · 34 up             │
+│     ● redis                                  ││ ▌ feat/checkout @1         starting · 4 of 8 ready                   │
+│   ▾ external                               1 ││   fix/cache @2             not running · config changed              │
+│     · pgadmin       pgadmin.acme-1.localhost ││   spike/old-search @3      worktree missing                          │
 │   ▸ setup                             1 done ││                                                                      │
 │                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip      │
 │                                              ││ switch lanes. devlanes lane new <branch> adds one.                   │
@@ -50,23 +50,23 @@
 7: 0 darkgray, 4-5 dim, 6-12 dim green, 40-45 dim, 47-48 darkgray, 50-102 dim, 119 darkgray
 8: 0 darkgray, 4-5 dim, 6-14 dim magenta, 40-45 dim, 47-48 darkgray, 119 darkgray
 9: 0 darkgray, 4-5 green, 6-16 darkgray, 47-48 darkgray, 50-59 dim, 119 darkgray
-10: 0 darkgray, 4-5 dim, 37-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
-11: 0 darkgray, 6-7 green, 8-16 magenta, 24-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
-12: 0 darkgray, 47-48 darkgray, 50-59 dim, 119 darkgray
-13: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
-14: 0 darkgray, 30-45 dim, 47-48 darkgray, 119 darkgray
-15: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 119 darkgray
-16: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-84 dim, 119 darkgray
-17: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-84 dim, 119 darkgray
-18: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
-19: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
-20: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
-21: 0 darkgray, 47-48 darkgray, 119 darkgray
-22: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-62 bold, 119 darkgray
-23: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 119 darkgray
-24: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 50-51 bold, 85-99 dim, 119 darkgray
-25: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-51 bold, 77-104 dim, 119 darkgray
-26: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-51 bold, 77-92 yellow, 119 darkgray
+10: 0 darkgray, 47-48 darkgray, 50-59 dim, 119 darkgray
+11: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
+12: 0 darkgray, 30-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
+13: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
+14: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 119 darkgray
+15: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 119 darkgray
+16: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-84 dim, 119 darkgray
+17: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-84 dim, 119 darkgray
+18: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
+19: 0 darkgray, 47-48 darkgray, 50-59 dim, 119 darkgray
+20: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
+21: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 119 darkgray
+22: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 50-62 bold, 119 darkgray
+23: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 119 darkgray
+24: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-51 bold, 85-99 dim, 119 darkgray
+25: 0 darkgray, 4-5 dim, 45 dim, 47-48 darkgray, 50-51 bold, 77-104 dim, 119 darkgray
+26: 0 darkgray, 6-7 dim, 8-14 cyan, 22-45 dim, 47-48 darkgray, 50-51 bold, 77-92 yellow, 119 darkgray
 27: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 119 darkgray
 28: 0 darkgray, 47-48 darkgray, 50-112 dim, 119 darkgray
 29: 0 darkgray, 47-48 darkgray, 50-99 dim, 119 darkgray

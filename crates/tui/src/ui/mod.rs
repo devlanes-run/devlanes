@@ -307,6 +307,14 @@ pub(crate) fn unit_look(theme: &Theme, unit: &UnitSummary, spin: u64) -> Look {
             Tone::Attention,
             unit.pid.map(|pid| format!("pid {pid}")),
         ),
+        // devlanes runs nothing for it and never checks whether it answers.
+        (devlanes_proto::EXTERNAL_KIND, _) => look(
+            theme.glyph(Glyph::Stopped),
+            Tone::Quiet,
+            "external",
+            Tone::Quiet,
+            None,
+        ),
         (_, true) => look(
             theme.glyph(Glyph::Stopped),
             Tone::Quiet,
@@ -1226,7 +1234,7 @@ fn hints(app: &App) -> Vec<Hint> {
             let Some(unit) = app.selected_unit() else {
                 return vec![filter];
             };
-            if tree::role(unit) == Role::Exposed {
+            if tree::role(unit) == Role::External {
                 return vec![("o", "open in browser", ch('o')), filter];
             }
             let task = tree::role(unit) != Role::Service && tree::role(unit) != Role::Exec;

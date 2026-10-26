@@ -2,6 +2,7 @@ mod dogfood;
 
 mod artifacts;
 mod diagnostics;
+mod external;
 mod merging;
 mod reference_docs;
 mod references;

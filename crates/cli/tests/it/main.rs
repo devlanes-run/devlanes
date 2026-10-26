@@ -115,9 +115,6 @@ fn entire_command_inventory_builds_actions() {
         (&["url", "open", "api"], Some(Method::Url)),
         (&["url", "print", "api"], Some(Method::Url)),
         (&["url", "ls"], Some(Method::Hosts)),
-        (&["expose", "8000", "--host", "files"], Some(Method::Expose)),
-        (&["expose", "--remove", "8000"], Some(Method::Expose)),
-        (&["expose", "ls"], Some(Method::Expose)),
         (&["env", "show", "--explain", "api"], Some(Method::Env)),
         (&["env", "export", "api"], Some(Method::Env)),
         (&["env", "shell", "api"], Some(Method::Env)),
@@ -211,34 +208,6 @@ fn infra_logs_sends_the_container_tail_and_follow() {
         (&followed["tail"], &followed["follow"]),
         (&json!(5), &json!(true))
     );
-}
-
-#[test]
-/// `expose` adds with a port, removes with `--remove`, and lists without a
-/// port or with `ls`; `--host` and `--remove` need a port.
-fn expose_sends_the_port_host_and_removal() {
-    let params = |args: &[&str]| {
-        let cli = Cli::try_parse_from(args).expect("parses");
-        request(action(&cli, &runtime(&cli, OutputMode::Plain))).params
-    };
-    assert_eq!(
-        params(&["devlanes", "expose", "8000", "--host", "files"]),
-        json!({"port": 8000, "host": "files"})
-    );
-    assert_eq!(
-        params(&["devlanes", "expose", "--remove", "8000"]),
-        json!({"port": 8000, "remove": true})
-    );
-    assert_eq!(params(&["devlanes", "expose", "ls"]), json!({}));
-    assert_eq!(params(&["devlanes", "expose"]), json!({}));
-    for refused in [
-        &["devlanes", "expose", "--host", "files"][..],
-        &["devlanes", "expose", "--remove"],
-        &["devlanes", "expose", "8000", "--host", "files", "--remove"],
-        &["devlanes", "expose", "ls", "8000"],
-    ] {
-        assert!(Cli::try_parse_from(refused).is_err(), "{refused:?}");
-    }
 }
 
 #[test]

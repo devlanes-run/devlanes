@@ -10,7 +10,7 @@
 //! - the client's mirror reports go to the daemon with `remote.report`, which
 //!   keeps the latest one with the client's `status` entry;
 //! - data streams dial loopback ports of running, non-hidden services,
-//!   containers and exposed ports, nothing else;
+//!   containers and `infra.external` ports, nothing else;
 //! - syncs stream `sync.status` entries; the client never chooses a path.
 
 mod registry;

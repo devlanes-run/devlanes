@@ -75,7 +75,17 @@ Hidden units stay on the box: their ports are not mirrored and the box refuses s
 
 ### Ports outside the config
 
-A server you run on the box without a `devlanes.yaml` entry, such as `python -m http.server 8000` in an ssh shell, is not mirrored until you expose it on the box: `devlanes expose 8000` makes it the unit `port-8000` of the current lane, and `--host files` adds `https://files.<lane domain>`. It lasts until `devlanes expose --remove 8000`, `devlanes stop` of the lane or a restart of the box daemon. [Exposed ports](../remote.md#exposed-ports) has the details.
+A server you run on the box outside devlanes, such as `python -m http.server 8000` in an ssh shell, is not mirrored until the box's config declares it. Add it to `devlanes.local.yaml` next to the project's `devlanes.yaml` on the box:
+
+```yaml
+infra:
+  external:
+    files:
+      address: 127.0.0.1:8000
+      hosts: "files.${{ lane.domain }}"
+```
+
+The box's lanes then list the unit `files`, and clients mirror port 8000 and `https://files.<lane domain>` while a lane of the project runs. [External ports](../remote.md#external-ports) has the details.
 
 ### URLs to give out
 

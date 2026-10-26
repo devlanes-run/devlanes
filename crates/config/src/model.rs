@@ -693,6 +693,15 @@ pub struct InfraConfig {
     #[serde(default)]
     #[schemars(extend("examples" = [{"cerbos":{"image":"ghcr.io/cerbos/cerbos:0.40.0","ports":{"http":3592},"per_lane":true}}]))]
     pub containers: IndexMap<String, ContainerConfig>,
+    /// Servers devlanes does not run, such as a pgAdmin, a docs server or a tool you
+    /// start yourself, keyed by name. Each is listed as a unit of kind `external` in
+    /// every lane, its hostnames are routed by the proxy, and machines connected with
+    /// `devlanes remote connect` mirror its port while a lane of the project runs.
+    /// devlanes never allocates, starts or checks the port. Declare personal ones in
+    /// `devlanes.local.yaml`.
+    #[serde(default)]
+    #[schemars(extend("examples" = [{"pgadmin":{"address":"127.0.0.1:5050","hosts":"pgadmin.${{ lane.domain }}"}}]))]
+    pub external: IndexMap<String, ExternalConfig>,
     /// Named commands that prepare each lane's data, such as creating its database in a
     /// shared Postgres. They run once per lane after the containers are ready, all at the
     /// same time, and are recorded as done so later starts skip them; a failure stops the
@@ -746,6 +755,70 @@ pub struct ContainerConfig {
     /// `cmd` (run on the host). If it does not pass within its timeout (default 60s), the
     /// start fails.
     pub ready: Option<ReadyConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("examples" = [{"address":"127.0.0.1:5050","hosts":"pgadmin.${{ lane.domain }}"},{"address":"[::1]:8000","hidden":true}]))]
+/// A server devlanes does not run, reached on a loopback port. Every lane of the project
+/// lists it as a unit of kind `external`, the proxy routes its hostnames to the port, and
+/// machines connected with `devlanes remote connect` mirror it while a lane of the
+/// project runs. The port is the same in every lane and devlanes never allocates it.
+pub struct ExternalConfig {
+    /// Where the server listens: `127.0.0.1:<port>` or `[::1]:<port>`. Only loopback
+    /// addresses are accepted. The port must not be one devlanes allocates to a service or
+    /// container of the project, and a new port block never includes it. Required.
+    #[schemars(extend("examples" = ["127.0.0.1:5050","[::1]:8000"]))]
+    pub address: Option<String>,
+    /// Hostnames the devlanes HTTPS proxy routes to the port, so `https://<host>` reaches the
+    /// server. One entry or a list; an entry is a hostname or a mapping with `host` and
+    /// optional `fallback` and `host_header`. Evaluated for each lane with `lane`,
+    /// `project`, `infra` and `env`, so keep them under `${{ lane.domain }}` to give each
+    /// lane its own name; the first non-wildcard host becomes the unit's URL.
+    #[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}",["docs.${{ lane.domain }}"]]))]
+    pub hosts: Option<Hosts>,
+    /// Keep the port and hostnames off machines connected with `devlanes remote connect`:
+    /// they are not mirrored there and cannot be reached from there. This machine still
+    /// routes them. Defaults to false.
+    #[schemars(extend("examples" = [false,true]))]
+    pub hidden: Option<bool>,
+}
+
+impl ExternalConfig {
+    /// The port of `address`, when it is `127.0.0.1:<port>` or `[::1]:<port>` with a port
+    /// from 1 to 65535; otherwise why not.
+    pub fn port(&self) -> Result<u16, String> {
+        let address = self
+            .address
+            .as_deref()
+            .ok_or_else(|| "address is required, such as `127.0.0.1:5050`".to_owned())?;
+        let parsed: std::net::SocketAddr = address.parse().map_err(|_| {
+            format!(
+                "`{address}` is not an address with a port; write `127.0.0.1:<port>` or `[::1]:<port>`"
+            )
+        })?;
+        let loopback = match parsed.ip() {
+            std::net::IpAddr::V4(ip) => ip == std::net::Ipv4Addr::LOCALHOST,
+            std::net::IpAddr::V6(ip) => ip == std::net::Ipv6Addr::LOCALHOST,
+        };
+        if !loopback {
+            return Err(format!(
+                "`{address}` is not a loopback address; devlanes only routes and mirrors `127.0.0.1:<port>` or `[::1]:<port>`"
+            ));
+        }
+        if parsed.port() == 0 {
+            return Err(format!("`{address}` needs a port from 1 to 65535"));
+        }
+        Ok(parsed.port())
+    }
+
+    /// Whether `address` names the IPv6 loopback.
+    pub fn is_ipv6(&self) -> bool {
+        self.address
+            .as_deref()
+            .and_then(|address| address.parse::<std::net::SocketAddr>().ok())
+            .is_some_and(|address| address.is_ipv6())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

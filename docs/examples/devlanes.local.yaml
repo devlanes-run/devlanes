@@ -16,3 +16,9 @@ services:
     hosts: "scratch.${{ lane.domain }}"
 profiles:
   default: [+essential, user-web]
+infra:
+  external:
+    # A server this machine runs outside devlanes, routed and mirrored like a unit.
+    pgadmin:
+      address: 127.0.0.1:5050
+      hosts: "pgadmin.${{ lane.domain }}"

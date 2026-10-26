@@ -30,6 +30,8 @@ When no daemon runs on the box, the connection starts one. Set `remote.start_dae
 
 ## Mirroring
 
+A client mirrors what the box's devlanes runs or declares: services, containers and [external ports](#external-ports). A server you start on the box by hand, outside devlanes, is not reachable from the client until the box's config declares it.
+
 Every allocated port of the box's running, non-hidden services and containers is bound on `127.0.0.1` and `::1` under the same number. A stopped unit's ports are bound once it starts. `psql -p 20012`, debugger ports, gRPC and websockets work unchanged. When a local process already holds a port, that port is not mirrored and `remote ls` says so, for example `port 5432 is in use on this machine by postgres (pid 812); not mirrored`. When another connected box's mirror holds it, the message names that box and its unit instead: `port 20012 is in use on this machine by box hetzner (acme@0:api); not mirrored`. It is tried again when the box's lanes change. The box's hostnames keep working through a private relay port.
 
 Both machines allocate ports from the same default pool, so while a box is connected, new port blocks on this machine skip every port its lanes hold, stopped units included. A port that already belongs to a local lane's block stays local: it is not mirrored (`port 20004 is allocated to local lane acme@0; not mirrored`). Lanes allocated on both machines before they first connected often overlap like this. Two boxes know nothing of each other's ports, so lanes on both can get the same numbers, and only one box's can be mirrored. While two connected boxes have overlapping `ports.range` values, both get a `ports_range_overlap` warning in `remote connect` and `remote ls`, which goes away when one of them disconnects; giving each box its own `ports.range` in its user config keeps them apart. A local service with a literal `PORT` that the box mirrors refuses to start and names the box.
@@ -71,18 +73,20 @@ on desktop, not reachable: port 20012 is in use there by postgres (pid 812)
 
 A hostname opens on the client through its proxy, on the box's HTTPS port when the client serves that one and on its own otherwise, unless the client skips the lane or the name or its proxy serves no HTTPS. A unit without a hostname, or whose hostname does not open there, opens at `http://127.0.0.1:<port>` (or `[::1]`) once the client bound its port. Hidden units and tasks open nowhere. `--json` adds the same as `clients: [{client, id, alias, url, reachable, reason}]`, an empty list when no client reports. `devlanes url ls` adds a line per client counting the hostnames that open there, and `clients` to each route in `--json`. Clients of releases without reports are listed in `status` but get no URLs.
 
-## Exposed ports
+## External ports
 
-`devlanes expose <port>` on the box makes a port of the current lane (or `--lane`) a unit, `port-<port>` of kind `exposed`, for something devlanes did not start or cannot describe in the config, such as `python -m http.server 8000` run with `devlanes exec`. Clients mirror it like any unit: the port is bound under the same number, and with `--host` the hostname is routed by both proxies.
+A server devlanes does not run, such as `python -m http.server 8000` started with `devlanes exec` or a pgAdmin you run yourself, reaches clients once the box's config declares it under `infra.external`. Put it in `devlanes.yaml` when the whole team runs it, or in `devlanes.local.yaml` on the box when only you do ([per-machine overrides](guides/ports-and-env.md#per-machine-overrides)):
 
-```sh
-devlanes expose 8000                  # acme@0:port-8000, http://127.0.0.1:8000 on clients
-devlanes expose 8000 --host files     # also https://files.<lane domain>
-devlanes expose ls                    # exposed ports of this project
-devlanes expose --remove 8000
+```yaml
+# devlanes.local.yaml on the box
+infra:
+  external:
+    docs:
+      address: 127.0.0.1:8000
+      hosts: "docs.${{ lane.domain }}"
 ```
 
-The box dials an exposed port only while it is listed, and a connection to it fails like any unit's when nothing listens there. Exposed ports live in the box daemon's memory: `devlanes expose --remove`, a stop of the whole lane (`devlanes stop`; the stop that ends `devlanes with` keeps them), `lane clean` and a daemon restart end them. A port another unit has, hidden ones included, is never sent as an exposed port, and a hidden unit's port stays refused even when an exposure lists it. Clients of releases without exposed ports are not sent them and cannot dial them. [Exposed ports](guides/services.md#exposed-ports) covers the hostname rules, which are the same on a single machine.
+Every lane of the project lists `docs` as a unit of kind `external`, and the box's proxy routes `docs.<lane domain>` to the port. While a lane of the project runs something, clients mirror the port under the same number and route the hostnames like a service's; while none does, the port is only kept free on the client. The box dials the port only then, whether or not anything listens there, and a connection fails like any unit's when nothing does. `hidden: true` on the entry keeps it on the box. Clients of releases without external ports are not sent them and cannot dial them. [External ports](guides/infra.md#external-ports) covers the address and hostname rules, which are the same on a single machine.
 
 ## Hidden
 
@@ -95,6 +99,10 @@ services:
     hidden: true        # not mirrored, and the box refuses streams to its ports
 infra:
   hidden: [postgres]    # containers by name
+  external:
+    pgadmin:
+      address: 127.0.0.1:5050
+      hidden: true      # an external port is hidden on its own entry
 ```
 
 Hidden units still show in `devlanes status` on the box.
@@ -135,7 +143,7 @@ The checks are split between the processes:
 
 - The client daemon checks the protocol version in the handshake and stops on a mismatch. A different release with the same protocol, linger off on a Linux box, and a Windows box daemon that stays inside the ssh session become warnings from the box's version label.
 - The box daemon builds the registry from the same lanes as `status --all` and the same routes as `hosts`, and streams it to the tunnel: a full copy, then each change. A tunnel that falls behind gets a fresh full copy. The tunnel passes it on to the client. When the box daemon stops or sends something the tunnel cannot read, the session ends and the client reconnects, so it never mirrors a registry the box stopped reporting.
-- The tunnel authorizes every stream: the port must belong to a running service or container that is not hidden, or to an exposed port. It then dials loopback on the box. It passes each mirror report to the box daemon, which keeps it bounded in size.
+- The tunnel authorizes every stream: the port must belong to a running service or container, or to an external port of a project that runs a lane, and no hidden unit may have it. It then dials loopback on the box. It passes each mirror report to the box daemon, which keeps it bounded in size.
 - The client daemon decides what is bound and routed. Local lanes win: a box port inside a local port block is not bound, and a box lane with a hostname a local lane serves is skipped whole. Between boxes, the one connected first keeps a hostname both serve. Box hostnames outside `.localhost` and `hostnames.tld` are refused. It compares the box's HTTPS port from the handshake with its own, and the box's `ports.range` with those of the other connected boxes.
 - For a sync, the client sends the list of files it holds and the box compares it with its source, so only differences cross the link.
 

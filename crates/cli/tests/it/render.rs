@@ -213,6 +213,25 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             ]),
         ),
         ("status_one_lane", Method::Status, page(vec![status_lane])),
+        // An `infra.external` entry: no process, its own state word.
+        ("status_external", Method::Status, {
+            let mut pgadmin = unit("pgadmin", "external");
+            pgadmin["kind"] = json!("external");
+            pgadmin["role"] = json!("external");
+            pgadmin["pid"] = Value::Null;
+            pgadmin["started_at_ms"] = Value::Null;
+            pgadmin["ports"] = json!({"default": 5050});
+            pgadmin["urls"] = json!([
+                "http://127.0.0.1:5050",
+                "https://pgadmin.acme-2.localhost:8443"
+            ]);
+            page(vec![lane(
+                Some(2),
+                "feat/billing",
+                "running",
+                vec![unit("api", "ready"), pgadmin],
+            )])
+        }),
         // An idle lane keeps `state`; `power` adds the level and since when.
         ("status_idle", Method::Status, {
             let idle = |level: &str, minutes: u64| {
@@ -422,26 +441,6 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "proxy": {"https": {"bound": true, "port": 443, "fallback_reason": null}},
                 "truncated": false, "next_cursor": null,
             }),
-        ),
-        (
-            "expose",
-            Method::Expose,
-            json!({"lane": "acme@2", "exposed": [
-                {"lane": "acme@2", "unit": "port-8000", "port": 8000, "host": "files.acme-2.localhost", "url": "https://files.acme-2.localhost", "since_ms": 1},
-                {"lane": "acme@2", "unit": "port-9229", "port": 9229, "url": "http://127.0.0.1:9229", "since_ms": 2},
-            ]}),
-        ),
-        (
-            "expose_none",
-            Method::Expose,
-            json!({"lane": "acme@2", "exposed": []}),
-        ),
-        (
-            "expose_list",
-            Method::Expose,
-            json!({"items": [
-                {"lane": "acme@2", "unit": "port-8000", "port": 8000, "host": "files.acme-2.localhost", "url": "https://files.acme-2.localhost", "since_ms": 1},
-            ], "truncated": false, "next_cursor": null}),
         ),
         (
             "hosts",

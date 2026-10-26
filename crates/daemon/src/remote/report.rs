@@ -130,7 +130,7 @@ impl Inner {
 
     /// Why no client mirrors unit `unit` of box lane `lane`, if so, as the
     /// registry clients get says: it is hidden, a task, or not listed (an
-    /// exec unit, an exposure of another unit's port). `None` without any
+    /// exec unit). `None` without any
     /// reporting client, whose URLs nobody asks for.
     pub(crate) fn route_unmirrored(&self) -> impl Fn(&str, &str) -> Option<&'static str> {
         let reporting = lock(&self.remote.clients)

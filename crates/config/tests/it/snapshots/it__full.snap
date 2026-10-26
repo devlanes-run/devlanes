@@ -96,6 +96,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
         "ready": null
       }
     },
+    "external": {},
     "setup": {
       "database": "psql \"postgres://postgres:postgres@127.0.0.1:${{ infra.postgres.port }}/postgres\" -c \"CREATE DATABASE ${{ lane.db_name }}\"",
       "vhost": {

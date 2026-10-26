@@ -1,15 +1,15 @@
-//! Mirror reports and `devlanes expose`: what a client tells the box it
-//! mirrors reaches the box's `status`, `url` and `hosts`; exposed ports are
-//! routed on the box, mirrored to clients that list `exposed_units` and gone
-//! after removal, a whole-lane stop or a daemon restart. A child of `remote`,
-//! whose box and client harness it reuses.
+//! Mirror reports and `infra.external`: what a client tells the box it
+//! mirrors reaches the box's `status`, `url` and `hosts`; external ports are
+//! routed where they are declared, mirrored to clients that list
+//! `external_units` while a lane of their project runs, and kept out of port
+//! blocks. A child of `remote`, whose box and client harness it reuses.
 
 use std::{net::Ipv6Addr, sync::Arc};
 
 use devlanes_pki::CertificateAuthority;
 use devlanes_proto::{Context, Method};
 use devlanes_transport::{
-    DialTarget, EXPOSED_UNITS, FEATURES, MIRROR_REPORT, OpenError, RejectReason, Session,
+    DialTarget, EXTERNAL_UNITS, FEATURES, MIRROR_REPORT, OpenError, RejectReason, Session,
     SessionOptions, UnitKind,
 };
 use serde_json::{Value, json};
@@ -288,8 +288,8 @@ async fn plain_server(body: &'static str) -> (u16, JoinHandle<()>) {
     (port, task)
 }
 
-/// The box lane's units of kind `exposed`.
-async fn exposed_units(h: &Harness, cwd: &std::path::Path) -> Vec<Value> {
+/// The units of kind `external` of the lanes of `cwd`'s project.
+async fn external_units(h: &Harness, cwd: &std::path::Path) -> Vec<Value> {
     let status = h
         .call(Method::Status, json!({}), cx(cwd))
         .await
@@ -299,8 +299,36 @@ async fn exposed_units(h: &Harness, cwd: &std::path::Path) -> Vec<Value> {
         .into_iter()
         .flatten()
         .flat_map(|lane| lane["units"].as_array().cloned().unwrap_or_default())
-        .filter(|unit| unit["kind"] == "exposed")
+        .filter(|unit| unit["kind"] == "external")
         .collect()
+}
+
+/// The lane summary of `cwd`'s lane.
+async fn lane_of(h: &Harness, cwd: &std::path::Path) -> Value {
+    let status = h
+        .call(Method::Status, json!({}), cx(cwd))
+        .await
+        .expect("status");
+    status["items"][0].clone()
+}
+
+/// Whether `session`'s registry lists a unit of kind external.
+fn lists_external(session: &Session) -> bool {
+    session
+        .registry()
+        .current()
+        .units()
+        .any(|unit| unit.key.kind == UnitKind::External)
+}
+
+/// How `session`'s box answers an open of `port`: the refusal, or `None` when
+/// the box dialed it.
+async fn refusal(session: &Session, port: u16) -> Option<RejectReason> {
+    match session.open(DialTarget::Port { port }).await {
+        Err(OpenError::Rejected { reason, .. }) => Some(reason),
+        Ok(_) => None,
+        Err(error) => panic!("unexpected open failure: {error}"),
+    }
 }
 
 /// Whether the box routes `host` itself.
@@ -314,139 +342,137 @@ async fn routes(h: &Harness, host: &str) -> bool {
         .is_some_and(|items| items.iter().any(|item| item["host"] == host))
 }
 
+/// A box project with one service and two external entries, `files` routed
+/// and `vault` hidden, on the ports the test puts in place of `FILES_PORT`
+/// and `VAULT_PORT`.
+const EXTERNAL: &str = r#"project: extapp
+services:
+  echo:
+    run: tcp-echo
+infra:
+  external:
+    files:
+      address: "127.0.0.1:FILES_PORT"
+      hosts: "files.${{ lane.domain }}"
+    vault:
+      address: "127.0.0.1:VAULT_PORT"
+      hidden: true
+"#;
+
 #[tokio::test(flavor = "multi_thread")]
-/// `expose <port> --host files` on the box: the lane lists `port-<port>`, the
-/// box's proxy routes `files.<domain>`, and a client with `exposed_units`
-/// mirrors and routes it to whatever listens there, while a client without
-/// the feature never sees or dials it. Hostnames outside the lane's domain,
-/// another unit's port, the proxy's port and a taken hostname are refused.
-/// `--remove` and a whole-lane stop take it away on both machines; a hidden
-/// unit that later takes the port wins over the exposure; `lane clean` drops it.
-async fn exposed_ports_are_routed_mirrored_and_removed() {
+/// External entries on the box: every lane lists them, the box routes their
+/// hostnames while nothing runs, and a client with `external_units` mirrors
+/// and routes `files` to whatever listens there only while a lane of the
+/// project runs. A client without the feature never sees or dials them, and
+/// the hidden `vault` is refused to everyone. On the client, its own entry is
+/// routed by its proxy.
+async fn external_ports_are_routed_and_mirrored_while_a_lane_runs() {
     if !ipv6_loopback().await {
-        eprintln!("skipping exposed_ports_are_routed_mirrored_and_removed: no IPv6 loopback");
+        eprintln!(
+            "skipping external_ports_are_routed_and_mirrored_while_a_lane_runs: no IPv6 loopback"
+        );
         return;
     }
     tokio::time::timeout(LIMIT * 2, async {
         let tmp = temp();
-        let main = repo(&tmp.path, "exposerepo", BOX);
+        let (port, server) = plain_server("hello-external").await;
+        let (vault, vault_server) = plain_server("hello-vault").await;
+        let config = EXTERNAL
+            .replace("FILES_PORT", &port.to_string())
+            .replace("VAULT_PORT", &vault.to_string());
+        let main = repo(&tmp.path, "extrepo", &config);
         let side = BoxSide::start(&tmp, "box", "18500-18699").await;
         side.h
-            .call(Method::Start, json!({"units": ["echo"]}), cx(&main))
+            .call(Method::LaneList, json!({}), cx(&main))
             .await
-            .expect("box start");
-        let echo = box_port(&side.h, 0, "echo").await;
-        let (port, server) = plain_server("hello-exposed").await;
-        let expose = |params: Value| side.h.call(Method::Expose, params, cx(&main));
-
-        let added = expose(json!({"port": port, "host": "files"}))
-            .await
-            .expect("expose");
-        let unit = format!("port-{port}");
-        assert_eq!(added["lane"], "boxapp@0", "{added}");
-        assert_eq!(added["exposed"][0]["unit"], unit, "{added}");
-        assert_eq!(added["exposed"][0]["host"], "files.boxapp.localhost");
-        let listed = exposed_units(&side.h, &main).await;
-        assert_eq!(listed.len(), 1, "{listed:?}");
-        assert_eq!(listed[0]["name"], unit);
+            .expect("lane list");
+        let listed = external_units(&side.h, &main).await;
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert_eq!(listed[0]["name"], "files");
+        assert_eq!(listed[0]["state"], "external");
         assert_eq!(listed[0]["ports"]["default"], port);
+        assert_eq!(listed[1]["hidden"], true, "{listed:?}");
         assert!(
-            routes(&side.h, "files.boxapp.localhost").await,
-            "routed on the box"
+            routes(&side.h, "files.extapp.localhost").await,
+            "routed on the box while nothing runs"
         );
-        let own = url(&side.h, &main, &unit).await;
-        assert_eq!(own["url"], "https://files.boxapp.localhost", "{own}");
-
-        // Refused before anything binds it; the box's lane block ends well below.
-        let other = 18698;
-        for (params, code) in [
-            (
-                json!({"port": other, "host": "files.example.com"}),
-                "host_not_allowed",
-            ),
-            // Below a routed suffix, but not the lane's domain.
-            (
-                json!({"port": other, "host": "docs.localhost"}),
-                "host_not_allowed",
-            ),
-            // The proxy's own port (the default user config's 443).
-            (json!({"port": 443}), "port_reserved"),
-            (
-                json!({"port": other, "host": "*.boxapp.localhost"}),
-                "invalid_host",
-            ),
-            (json!({"port": echo}), "port_taken"),
-            (json!({"port": other, "host": "web"}), "host_taken"),
-            (json!({"port": other, "remove": true}), "not_exposed"),
-        ] {
-            let refused = expose(params.clone()).await.expect_err("refused");
-            assert_eq!(refused.code, code, "{params}: {refused:?}");
-        }
+        let own = url(&side.h, &main, "files").await;
+        assert_eq!(own["url"], "https://files.extapp.localhost", "{own}");
 
         let client = ClientSide::start(&tmp, "client", "18700-18899", &side).await;
         client.connect("box").await;
+        // Nothing runs on the box yet: listed, kept free, not dialable.
+        let current = direct(&side, "c0ffee00", FEATURES).await;
+        let files = current
+            .registry()
+            .current()
+            .units()
+            .find(|unit| unit.key.kind == UnitKind::External && unit.key.name == "files")
+            .cloned()
+            .expect("files is listed");
+        assert_eq!(files.state, "stopped", "{files:?}");
+        assert_eq!(refusal(&current, port).await, Some(RejectReason::NotRunning));
+        current.close();
+
+        side.h
+            .call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("box start");
         let mirrored = eventually(SOON, || async {
             client.mirrored().await.contains(&port).then_some(())
         })
         .await;
         assert!(mirrored.is_some(), "mirrored: {}", client.host().await);
         let answered = eventually(SOON, || async {
-            http_get(client.proxy_port, "files.boxapp.localhost")
+            http_get(client.proxy_port, "files.extapp.localhost")
                 .await
-                .filter(|response| response.contains("hello-exposed"))
+                .filter(|response| response.contains("hello-external"))
         })
         .await;
         assert!(answered.is_some(), "routed through the client's proxy");
+        assert!(
+            !client.mirrored().await.contains(&vault),
+            "a hidden entry is not mirrored: {}",
+            client.host().await
+        );
+        let current = direct(&side, "c0ffee01", FEATURES).await;
+        assert_eq!(refusal(&current, vault).await, Some(RejectReason::Hidden));
+        assert_eq!(refusal(&current, port).await, None, "files is dialable");
+        current.close();
 
         // An older client never gets the unit kind it would reject, nor dials it.
-        let old = direct(&side, "0ld0c11e", &features_without(EXPOSED_UNITS)).await;
-        assert!(
-            !old.registry()
-                .current()
-                .units()
-                .any(|unit| unit.key.kind == UnitKind::Exposed),
-            "an old client got an exposed unit"
-        );
-        match old.open(DialTarget::Port { port }).await {
-            Err(OpenError::Rejected { reason, .. }) => {
-                assert_eq!(reason, RejectReason::NotRegistered);
-            }
-            Ok(_) => panic!("an old client dialed an exposed port"),
-            Err(error) => panic!("unexpected open failure: {error}"),
-        }
+        let old = direct(&side, "0ld0c11e", &features_without(EXTERNAL_UNITS)).await;
+        assert!(!lists_external(&old), "an old client got an external unit");
+        assert_eq!(refusal(&old, port).await, Some(RejectReason::NotRegistered));
         old.close();
 
-        expose(json!({"port": port, "remove": true}))
+        // The client's own entry goes through its own proxy.
+        let (local, local_server) = plain_server("hello-local").await;
+        let mine = repo(
+            &tmp.path,
+            "minerepo",
+            &format!(
+                "project: mine\ninfra:\n  external:\n    docs:\n      address: 127.0.0.1:{local}\n      hosts: docs.mine.localhost\n"
+            ),
+        );
+        client
+            .h
+            .call(Method::LaneList, json!({}), cx(&mine))
             .await
-            .expect("remove");
-        assert!(exposed_units(&side.h, &main).await.is_empty());
-        assert!(!routes(&side.h, "files.boxapp.localhost").await);
-        let unmirrored = eventually(SOON, || async {
-            (!client.mirrored().await.contains(&port)).then_some(())
+            .expect("client lane list");
+        let answered = eventually(SOON, || async {
+            http_get(client.proxy_port, "docs.mine.localhost")
+                .await
+                .filter(|response| response.contains("hello-local"))
         })
         .await;
-        assert!(
-            unmirrored.is_some(),
-            "removal unmirrors: {}",
-            client.host().await
-        );
+        assert!(answered.is_some(), "routed by the client's proxy");
 
-        // A whole-lane stop takes exposed ports with it.
-        expose(json!({"port": port})).await.expect("expose again");
-        let mirrored = eventually(SOON, || async {
-            client.mirrored().await.contains(&port).then_some(())
-        })
-        .await;
-        assert!(
-            mirrored.is_some(),
-            "mirrored again: {}",
-            client.host().await
-        );
+        // Once the box's lane stops, the client lets the port go.
         side.h
             .call(Method::Stop, json!({}), cx(&main))
             .await
             .expect("box stop");
-        assert!(exposed_units(&side.h, &main).await.is_empty());
         let unmirrored = eventually(SOON, || async {
             (!client.mirrored().await.contains(&port)).then_some(())
         })
@@ -457,61 +483,9 @@ async fn exposed_ports_are_routed_mirrored_and_removed() {
             client.host().await
         );
 
-        // A hidden unit that takes an exposed port later wins: the exposure
-        // leaves the feed and the port is refused as hidden.
-        expose(json!({"port": port})).await.expect("expose once more");
-        let hidden = repo(
-            &tmp.path,
-            "hiddenrepo",
-            &format!(
-                "project: hiddenapp\nservices:\n  vault:\n    run: sleep\n    hidden: true\n    env:\n      PORT: {port}\n"
-            ),
-        );
-        side.h
-            .call(Method::Start, json!({}), cx(&hidden))
-            .await
-            .expect("hidden start");
-        let unmirrored = eventually(SOON, || async {
-            (!client.mirrored().await.contains(&port)).then_some(())
-        })
-        .await;
-        assert!(
-            unmirrored.is_some(),
-            "a hidden unit's port is not mirrored: {}",
-            client.host().await
-        );
-        let current = direct(&side, "c0ffee00", FEATURES).await;
-        assert!(
-            !current
-                .registry()
-                .current()
-                .units()
-                .any(|unit| unit.key.kind == UnitKind::Exposed),
-            "the exposure of a hidden unit's port was sent"
-        );
-        match current.open(DialTarget::Port { port }).await {
-            Err(OpenError::Rejected { reason, .. }) => assert_eq!(reason, RejectReason::Hidden),
-            Ok(_) => panic!("a hidden unit's port was dialed through an exposure"),
-            Err(error) => panic!("unexpected open failure: {error}"),
-        }
-        current.close();
-
-        // `lane clean` drops what the lane exposes.
-        assert_eq!(exposed_units(&side.h, &main).await.len(), 1);
-        let mut clean = cx(&main);
-        clean.yes = true;
-        side.h
-            .call(Method::LaneClean, json!({}), clean)
-            .await
-            .expect("lane clean");
-        let listed = side
-            .h
-            .call(Method::Expose, json!({"all": true}), Context::default())
-            .await
-            .expect("list");
-        assert_eq!(listed["items"], json!([]), "{listed}");
-
         server.abort();
+        vault_server.abort();
+        local_server.abort();
         client.stop().await;
         side.stop().await;
     })
@@ -519,38 +493,85 @@ async fn exposed_ports_are_routed_mirrored_and_removed() {
     .expect("timeout");
 }
 
+/// A project whose `api` service gets the first port of its block, and whose
+/// `tool` entry listens on `TOOL_PORT`, replaced by the test.
+const TOOL: &str = "project: PROJECT\nlanes: { block_size: 4 }\nservices:\n  api: { run: sleep, ready: started }\ninfra:\n  external:\n    tool: { address: '127.0.0.1:TOOL_PORT' }\n";
+
 #[tokio::test(flavor = "multi_thread")]
-/// Exposed ports live in the daemon's memory: one that restarts on the same
-/// home has none, and `expose` without a port lists them.
-async fn a_daemon_restart_forgets_exposed_ports() {
+/// New port blocks of every project skip external ports, also inside the
+/// pool; a block from before the entry existed that hands its port to a
+/// service makes the lane fail with a config error naming both.
+async fn external_ports_stay_out_of_port_blocks() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let main = repo(&tmp.path, "restartrepo", BOX);
-        let home = tmp.path.join("box");
-        let h = engine_with(&home, "18900-18999", None, None).await;
-        h.call(Method::LaneList, json!({}), cx(&main))
+        let h = engine_with(&tmp.path.join("home"), "18900-18999", None, None).await;
+        let config = |project: &str, port: u16| {
+            TOOL.replace("PROJECT", project)
+                .replace("TOOL_PORT", &port.to_string())
+        };
+        // The first port of the pool would start the first block.
+        let first = repo(&tmp.path, "firstrepo", &config("first", 18900));
+        h.call(Method::LaneList, json!({}), cx(&first))
             .await
             .expect("lane list");
-        h.call(Method::Expose, json!({"port": 8000}), cx(&main))
-            .await
-            .expect("expose");
-        let listed = h
-            .call(Method::Expose, json!({}), cx(&main))
-            .await
-            .expect("list");
-        assert_eq!(listed["items"][0]["unit"], "port-8000", "{listed}");
-        assert_eq!(
-            listed["items"][0]["url"], "http://127.0.0.1:8000",
-            "{listed}"
-        );
-        h.close().await;
+        let block = |lane: &Value| {
+            let block = &lane["port_block"];
+            (
+                block[0].as_u64().unwrap_or_default(),
+                block[1].as_u64().unwrap_or_default(),
+            )
+        };
+        let lane = lane_of(&h, &first).await;
+        let (start, end) = block(&lane);
+        assert!(start > 18900, "the block skips the external port: {lane}");
+        let tool = external_units(&h, &first).await;
+        assert_eq!(tool.len(), 1, "{tool:?}");
+        assert_eq!(tool[0]["state"], "external");
+        assert_eq!(tool[0]["ports"]["default"], 18900);
 
-        let h = engine_with(&home, "18900-18999", None, None).await;
-        let listed = h
-            .call(Method::Expose, json!({}), cx(&main))
+        // Another project's block skips it too, wherever it lands.
+        let other = repo(
+            &tmp.path,
+            "otherrepo",
+            "project: other\nservices:\n  web: { run: sleep, ready: started }\n",
+        );
+        h.call(Method::LaneList, json!({}), cx(&other))
             .await
-            .expect("list after restart");
-        assert_eq!(listed["items"], json!([]), "{listed}");
+            .expect("lane list");
+        let (other_start, other_end) = block(&lane_of(&h, &other).await);
+        assert!(
+            !(other_start..=other_end).contains(&18900) && other_start > end,
+            "{other_start}-{other_end} after {start}-{end}"
+        );
+
+        // A lane whose service already has the port an entry now names.
+        let late = repo(
+            &tmp.path,
+            "laterepo",
+            "project: late\nlanes: { block_size: 4 }\nservices:\n  api: { run: sleep, ready: started }\n",
+        );
+        h.call(Method::LaneList, json!({}), cx(&late))
+            .await
+            .expect("lane list");
+        let api = lane_of(&h, &late).await["units"][0]["ports"]["default"]
+            .as_u64()
+            .and_then(|port| u16::try_from(port).ok())
+            .expect("api's port");
+        std::fs::write(late.join("devlanes.yaml"), config("late", api)).expect("edit config");
+        let refused = h
+            .call(Method::Start, json!({}), cx(&late))
+            .await
+            .expect_err("the start is refused");
+        assert_eq!(refused.code, "config_error", "{refused:?}");
+        let message = refused.data["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains(&format!(
+                "infra.external.tool.address: port {api} is also services.api's port in late@0"
+            )),
+            "{message}"
+        );
+        let reason = &lane_of(&h, &late).await["reason"];
+        assert_eq!(reason["code"], "config_error", "{reason}");
         h.close().await;
     })
     .await

@@ -205,18 +205,9 @@ One `devlanes.yaml` at the repository root, one service per app, `run_script` po
 
 If an app has its own `devlanes.yaml` in a subdirectory, that directory is the project root for devlanes when you run it there; a repository can hold several independent projects that way, each with its own name, lanes and ports.
 
-## Exposed ports
+## Servers devlanes does not run
 
-A port the config knows nothing about, such as a docs server run with `devlanes exec` or a process started outside devlanes, can still get a hostname and show up as a unit:
-
-```sh
-devlanes exec --name docs -- python -m http.server 8000
-devlanes expose 8000 --host docs      # unit port-8000, https://docs.<lane domain>
-devlanes expose ls
-devlanes expose --remove 8000
-```
-
-The lane lists the port as the unit `port-8000` of kind `exposed`, `running` while it is listed, whether or not something answers there; devlanes runs nothing for it and only forwards connections. `--host` takes one label, which goes under the lane's domain (`docs` becomes `docs.acme-2.localhost`), or a full name below the lane's domain (`v2.docs.acme-2.localhost`). Refused are wildcards, a hostname another service or lane routes (wildcard routes of other lanes included) or one under another lane's domain, a port that belongs to a configured service, container or another lane's exposed port, and the ports devlanes listens on itself (the proxy's and the DNS server's). `devlanes url print port-8000` prints the URL, and connected clients mirror the port like any other unit ([remote](../remote.md#exposed-ports)). Exposed ports are not saved: `--remove`, a stop of the whole lane, `lane clean` and a daemon restart end them; the stop that ends `devlanes with` keeps them, as it keeps the rest of what the lane saved. A daemon that exits when idle (`daemon.exit_when_idle`) stays up while a port is exposed.
+A server started with `devlanes exec`, or outside devlanes, gets no hostname and is not mirrored to connected machines. To route one, declare its port under `infra.external`, in `devlanes.local.yaml` when only you run it: [external ports](infra.md#external-ports).
 
 ## Agents and CI
 

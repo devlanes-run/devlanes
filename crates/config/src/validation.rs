@@ -4,7 +4,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// A problem that does not stop loading, such as an unused template or an ignored setting.
 #[derive(Debug, Clone, Serialize)]
@@ -533,6 +533,14 @@ fn validate_inner<E: Extensions>(
         .chain(config.infra.per_lane.iter().flatten())
         .chain(config.infra.exclude.iter().flatten());
     for name in infra_names {
+        if config.infra.external.contains_key(name) && !known.contains(name) {
+            return Err(fail(
+                "infra",
+                format!(
+                    "`{name}` is an infra.external entry; set its own `hidden` or `hosts` under infra.external.{name}"
+                ),
+            ));
+        }
         if can_validate_infra && !known.contains(name) {
             return Err(fail(
                 "infra",
@@ -562,6 +570,7 @@ fn validate_inner<E: Extensions>(
             readiness(&format!("infra.containers.{name}.ready"), ready)?;
         }
     }
+    external(config, can_validate_infra.then_some(&known))?;
     for (phase, entries) in [
         ("setup", &config.infra.setup),
         ("teardown", &config.infra.teardown),
@@ -617,6 +626,92 @@ fn validate_inner<E: Extensions>(
     crate::expression::validate_constants(config)?;
     validate_port_capacity(config, preset_ports)?;
     Ok(report)
+}
+
+/// Checks `infra.external`: a loopback address per entry, a port no other entry and no
+/// literal service `PORT` uses, hostnames like service hosts but without `port` (the entry
+/// has one) and with expressions over `lane`, `project`, `infra` and `env` only (what a
+/// lane evaluates them with), and a name no service, task or container of the lane has.
+/// `containers` lists the container and Compose service names when all of them are known.
+fn external<E: Extensions>(
+    config: &ProjectConfig<E>,
+    containers: Option<&HashSet<String>>,
+) -> Result<(), ConfigError> {
+    let mut ports: BTreeMap<u16, &str> = BTreeMap::new();
+    for (name, entry) in &config.infra.external {
+        let path = format!("infra.external.{name}");
+        let other = if config.services.contains_key(name) {
+            Some("a service")
+        } else if config.tasks.contains_key(name) {
+            Some("a task")
+        } else if containers.is_some_and(|known| known.contains(name)) {
+            Some("a container")
+        } else {
+            None
+        };
+        if let Some(other) = other {
+            return Err(fail(
+                &path,
+                format!("`{name}` is also {other}; units of a lane need distinct names"),
+            ));
+        }
+        let port = entry
+            .port()
+            .map_err(|why| fail(&format!("{path}.address"), why))?;
+        if let Some(first) = ports.insert(port, name) {
+            return Err(fail(
+                &format!("{path}.address"),
+                format!(
+                    "port {port} is also infra.external.{first}'s; each entry needs its own port"
+                ),
+            ));
+        }
+        let hosts_path = format!("{path}.hosts");
+        hosts(&hosts_path, entry.hosts.iter().flatten())?;
+        for host in entry.hosts.iter().flatten() {
+            let template = match host {
+                crate::HostConfig::Route(route) if route.port.is_some() => {
+                    return Err(fail(
+                        &hosts_path,
+                        "an external entry has one port, so its routes take no `port`",
+                    ));
+                }
+                crate::HostConfig::Route(route) => &route.host,
+                crate::HostConfig::Name(host) => host,
+            };
+            let Templated::Expression(text) = template else {
+                continue;
+            };
+            for reference in crate::references(text).map_err(|e| fail(&hosts_path, e.message))? {
+                let root = reference.split('.').next().unwrap_or_default();
+                if !matches!(root, "lane" | "project" | "infra" | "env") {
+                    return Err(fail(
+                        &hosts_path,
+                        format!(
+                            "`{reference}` is not defined for an external entry; use `lane`, `project`, `infra` or `env`"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    for (name, service) in &config.services {
+        let literal = match service.env.get("PORT") {
+            Some(Templated::Literal(crate::Scalar::Integer(port))) => u16::try_from(*port).ok(),
+            Some(Templated::Literal(crate::Scalar::String(port))) => port.trim().parse().ok(),
+            _ => None,
+        };
+        if let Some(external) = literal.and_then(|port| ports.get(&port)) {
+            return Err(fail(
+                &format!("services.{name}.env.PORT"),
+                format!(
+                    "port {} is infra.external.{external}'s; an external port cannot be a service's too",
+                    literal.unwrap_or_default()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Rejects unit names that would share one log folder on Windows, which

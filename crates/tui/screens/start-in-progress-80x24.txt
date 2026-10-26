@@ -8,18 +8,18 @@
 │   … web-app           queued ││           start at a time                    │
 │   … wrk-email         queued ││ x stops the start. Select a unit to watch its│
 │   ● stub-stripe              ││ output.                                      │
-│   ▾ exposed        1 running ││                                              │
-│     ◉ port-8000        :8000 ││ branch    feat/checkout                      │
-│                              ││ worktree  /work/acme-checkout                │
-│ ▾ tasks                    7 ││ profile   web                                │
-│   ⠋ migrate          running ││ ports     41100-41199                        │
-│   · seed             not run ││ services  2 of 6 up                          │
-│   · lint             not run ││           ⠋ api-orders       starting        │
-│   · typecheck        not run ││           ⠋ api-users        starting        │
-│   · test-e2e         not run ││           … web-app          queued          │
-│   · codegen          not run ││           … wrk-email        queued          │
-│   · clean-cache      not run ││ tasks     1 running, 6 not run               │
-│                              ││ … z shows the rest                           │
+│                              ││                                              │
+│ ▾ tasks                    7 ││ branch    feat/checkout                      │
+│   ⠋ migrate          running ││ worktree  /work/acme-checkout                │
+│   · seed             not run ││ profile   web                                │
+│   · lint             not run ││ ports     41100-41199                        │
+│   · typecheck        not run ││ services  2 of 6 up                          │
+│   · test-e2e         not run ││           ⠋ api-orders       starting        │
+│   · codegen          not run ││           ⠋ api-users        starting        │
+│   · clean-cache      not run ││           … web-app          queued          │
+│                              ││           … wrk-email        queued          │
+│ ▾ infra                      ││ tasks     1 running, 6 not run               │
+│   ▾ shared              3 up ││ … z shows the rest                           │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
  x stop lane   r restart lane   p start with profiles     ? all keys   q quit
 
@@ -34,17 +34,17 @@
 7: 0 darkgray, 4-5 dim, 6-12 dim green, 24-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
 8: 0 darkgray, 4-5 dim, 6-14 dim magenta, 24-29 dim, 31-32 darkgray, 34-78 dim, 79 darkgray
 9: 0 darkgray, 4-5 green, 6-16 darkgray, 31-32 darkgray, 34-40 dim, 79 darkgray
-10: 0 darkgray, 4-5 dim, 21-29 dim, 31-32 darkgray, 79 darkgray
-11: 0 darkgray, 6-7 green, 8-16 magenta, 25-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+10: 0 darkgray, 31-32 darkgray, 79 darkgray
+11: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
 12: 0 darkgray, 31-32 darkgray, 34-43 dim, 79 darkgray
-13: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-14: 0 darkgray, 31-32 darkgray, 34-43 dim, 79 darkgray
-15: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-16: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 79 darkgray
-17: 0 darkgray, 4-14 dim, 23-29 dim, 31-32 darkgray, 79 darkgray
-18: 0 darkgray, 4-13 dim, 23-29 dim, 31-32 darkgray, 44-45 dim, 63-68 dim, 79 darkgray
-19: 0 darkgray, 4-12 dim, 23-29 dim, 31-32 darkgray, 44-45 dim, 63-68 dim, 79 darkgray
-20: 0 darkgray, 4-16 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
-21: 0 darkgray, 31-32 darkgray, 34-51 dim, 79 darkgray
+13: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+14: 0 darkgray, 4-9 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+15: 0 darkgray, 4-14 dim, 23-29 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+16: 0 darkgray, 4-13 dim, 23-29 dim, 31-32 darkgray, 79 darkgray
+17: 0 darkgray, 4-12 dim, 23-29 dim, 31-32 darkgray, 79 darkgray
+18: 0 darkgray, 4-16 dim, 23-29 dim, 31-32 darkgray, 44-45 dim, 63-68 dim, 79 darkgray
+19: 0 darkgray, 31-32 darkgray, 44-45 dim, 63-68 dim, 79 darkgray
+20: 0 darkgray, 2-3 dim, 31-32 darkgray, 34-43 dim, 79 darkgray
+21: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-51 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-14 dim, 15 bold, 16-31 dim, 32 bold, 33-55 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

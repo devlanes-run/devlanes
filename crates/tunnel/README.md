@@ -67,7 +67,7 @@ The tunnel offers the `extension` sync to the client that ran `devlanes remote c
 ## Behaviour
 
 - The registry is the daemon's `remote.registry` feed: a snapshot, then each change, built from the same lanes as `status --all` and the same routes as `hosts`. It carries ports, hostnames and states, never environments or secrets. Hidden services and containers are listed but never mirrored; tasks are listed with their state only. A feed that ends or sends something malformed ends the session, and a daemon older than the tunnel is reported with the fix (`devlanes daemon restart`).
-- Data streams only dial loopback ports of running services and containers that are not hidden, and ports exposed with `devlanes expose`, which only clients listing `exposed_units` get.
+- Data streams only dial loopback ports of running services, containers and `infra.external` ports that are not hidden. External ports go only to clients listing `external_units`, and only while their project runs a lane.
 - A client's mirror reports go to the daemon with `remote.report`, bounded in size, and `status` shows the latest one with the client.
 - A client cannot send the box daemon requests: remote is mirroring only.
 - Syncs stream the entries the daemon lists in `sync.status`; the client names an entry, never a path. It then sends the files it holds in batches and an end marker. Each batch is compared with the source on arrival and only its outcome is kept; after the marker the box sends new and changed files, then deletions. A client that leaves before the marker leaves nothing behind, so its next subscription starts over. Files over 256 MiB are skipped, and one client follows at most 16 syncs.

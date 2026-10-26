@@ -243,7 +243,7 @@ fn merge_profile(base: &mut ProfileConfig, overlay: ProfileConfig) {
     *base = ProfileConfig::Object(merged);
 }
 
-/// Merge infra maps including individual container declarations.
+/// Merge infra maps including individual container and external declarations.
 fn merge_infra(base: &mut InfraConfig, overlay: InfraConfig) {
     replace!(
         base,
@@ -264,6 +264,9 @@ fn merge_infra(base: &mut InfraConfig, overlay: InfraConfig) {
         merge_option(&mut base.ready, overlay.ready, merge_ready);
         base.ports.extend(overlay.ports);
         base.env.extend(overlay.env);
+    });
+    merge_map(&mut base.external, overlay.external, |base, overlay| {
+        replace!(base, overlay, address, hosts, hidden);
     });
 }
 

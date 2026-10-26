@@ -2711,11 +2711,9 @@ impl Inner {
                     lane.st().profiles = record.profiles.clone();
                 }
             }
-            // A lane stopped by hand starts from its default next time, and
-            // what `devlanes expose` added goes with the stop.
+            // A lane stopped by hand starts from its default next time.
             Some(record) if whole => {
                 lane.st().profiles = Vec::new();
-                lane.st().exposed.clear();
                 self.save_desired(lane, &record, DesiredState::Stopped, Vec::new(), Vec::new())
                     .await;
             }
@@ -2742,7 +2740,6 @@ impl Inner {
         if owns_lane {
             lane.st().busy = None;
         }
-        // Also republishes the routes, without the exposed hostnames.
         self.emit_lane(project, lane);
         let st = lane.st();
         let mut stopped: Vec<UnitSummary> = targets
@@ -3138,8 +3135,6 @@ impl Inner {
             st.infra_containers.clear();
             st.peaks.clear();
             st.moves_to = None;
-            // Also one added while the clean ran its tasks and teardown.
-            st.exposed.clear();
             st.present
         };
         self.bus

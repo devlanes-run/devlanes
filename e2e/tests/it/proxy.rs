@@ -74,11 +74,12 @@ fn https_reaches_each_lane_by_hostname() -> Result<()> {
     Ok(())
 }
 
-/// A port `devlanes expose --host` names, here an `exec` unit's server, is
-/// routed by the proxy under the lane's domain and listed as the lane's unit
-/// `port-<port>`; `expose --remove` takes the route and the unit away again.
+/// A port `devlanes.local.yaml` declares in `infra.external`, here an `exec`
+/// unit's server, is listed as a unit of kind `external` and routed by the
+/// proxy under the lane's domain; taking the entry out of the file takes the
+/// route and the unit away again.
 #[test]
-fn an_exposed_port_is_routed_by_its_hostname() -> Result<()> {
+fn an_external_port_is_routed_by_its_hostname() -> Result<()> {
     if devlanes_e2e::curl()
         .arg("--version")
         .stdout(Stdio::null())
@@ -98,7 +99,7 @@ fn an_exposed_port_is_routed_by_its_hostname() -> Result<()> {
         &[
             "exec",
             "--name",
-            "docs",
+            "docs-server",
             "--",
             "fixture-server",
             "--port",
@@ -110,16 +111,29 @@ fn an_exposed_port_is_routed_by_its_hostname() -> Result<()> {
         devlanes_e2e::COMMAND_TIMEOUT,
         || Ok(devlanes_e2e::listening(served).then_some(())),
     )?;
-    let exposed = lab.json(lab.repo(), &["expose", &served_text, "--host", "docs"])?;
-    let host = need(exposed["exposed"][0]["host"].as_str(), "exposed host")?.to_owned();
-    assert_eq!(host, "docs.fixture-two.localhost", "{exposed}");
-    let unit_name = format!("port-{served}");
-    let lanes = lab.lanes(lab.repo())?;
-    let listed = need(
-        lane(&lanes, "fixture-two@0").and_then(|l| unit(l, &unit_name)),
-        "exposed unit",
+    let local = lab.repo().join("devlanes.local.yaml");
+    std::fs::write(
+        &local,
+        format!(
+            "infra:\n  external:\n    docs:\n      address: 127.0.0.1:{served}\n      hosts: \"docs.${{{{ lane.domain }}}}\"\n"
+        ),
     )?;
-    assert_eq!(listed["kind"], "exposed", "{listed}");
+    let host = "docs.fixture-two.localhost";
+    // The daemon reloads the config once its watcher sees the new file.
+    let listed = lab.eventually(
+        "the external unit to be listed",
+        devlanes_e2e::COMMAND_TIMEOUT,
+        || {
+            let lanes = lab.lanes(lab.repo())?;
+            Ok(lane(&lanes, "fixture-two@0")
+                .and_then(|l| unit(l, "docs"))
+                .cloned())
+        },
+    )?;
+    let lanes = lab.lanes(lab.repo())?;
+    assert_eq!(listed["kind"], "external", "{listed}");
+    assert_eq!(listed["state"], "external", "{listed}");
+    assert_eq!(listed["ports"]["default"], served, "{listed}");
 
     let routes = lab.json(lab.repo(), &["url", "ls", "--json"])?;
     let https = &routes["proxy"]["https"];
@@ -145,7 +159,7 @@ fn an_exposed_port_is_routed_by_its_hostname() -> Result<()> {
     // The answer comes from the exec unit's process, not from a service.
     let reflected: Value = serde_json::from_str(body)?;
     let docs = need(
-        lane(&lanes, "fixture-two@0").and_then(|l| unit(l, "docs")),
+        lane(&lanes, "fixture-two@0").and_then(|l| unit(l, "docs-server")),
         "exec unit",
     )?;
     assert_eq!(
@@ -154,18 +168,22 @@ fn an_exposed_port_is_routed_by_its_hostname() -> Result<()> {
         "{host} must reach the exec unit"
     );
 
-    lab.json(lab.repo(), &["expose", "--remove", &served_text])?;
+    std::fs::remove_file(&local)?;
+    lab.eventually(
+        "the external unit to go",
+        devlanes_e2e::COMMAND_TIMEOUT,
+        || {
+            let lanes = lab.lanes(lab.repo())?;
+            let gone = lane(&lanes, "fixture-two@0")
+                .and_then(|l| unit(l, "docs"))
+                .is_none();
+            Ok(gone.then_some(()))
+        },
+    )?;
     let routes = lab.json(lab.repo(), &["url", "ls", "--json"])?;
     let still = routes["items"]
         .as_array()
-        .is_some_and(|items| items.iter().any(|item| item["host"] == host.as_str()));
+        .is_some_and(|items| items.iter().any(|item| item["host"] == host));
     assert!(!still, "removed but still routed: {routes}");
-    let lanes = lab.lanes(lab.repo())?;
-    assert!(
-        lane(&lanes, "fixture-two@0")
-            .and_then(|l| unit(l, &unit_name))
-            .is_none(),
-        "removed but still listed"
-    );
     Ok(())
 }

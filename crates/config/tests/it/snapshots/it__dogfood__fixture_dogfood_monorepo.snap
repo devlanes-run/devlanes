@@ -93,6 +93,7 @@ expression: config
       "rabbitmq"
     ],
     "containers": {},
+    "external": {},
     "setup": {
       "vhost": {
         "run": "docker compose exec -T rabbitmq rabbitmqctl add_vhost ${{ lane.vhost }} || true\ndocker compose exec -T rabbitmq rabbitmqctl set_permissions -p ${{ lane.vhost }} acme '.*' '.*' '.*'\n",

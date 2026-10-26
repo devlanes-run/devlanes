@@ -32,7 +32,7 @@ pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Additive protocol features this build implements, listed by both ends in the
 /// handshake. A side uses a feature only when the other side lists it too.
-pub const FEATURES: &[&str] = &[SYNC_ZSTD, MIRROR_REPORT, EXPOSED_UNITS];
+pub const FEATURES: &[&str] = &[SYNC_ZSTD, MIRROR_REPORT, EXTERNAL_UNITS];
 
 /// Sync chunks from the box and input values from the client may travel
 /// compressed with zstd; each end lists it when it can decompress them.
@@ -44,10 +44,10 @@ pub const SYNC_ZSTD: &str = "sync_zstd";
 /// session on the unknown control message, so the client sends none then.
 pub const MIRROR_REPORT: &str = "mirror_report";
 
-/// The registry may carry units of kind [`crate::UnitKind::Exposed`]. A
+/// The registry may carry units of kind [`crate::UnitKind::External`]. A
 /// client without it would reject the snapshot, so the box's registry source
 /// leaves them out for that client.
-pub const EXPOSED_UNITS: &str = "exposed_units";
+pub const EXTERNAL_UNITS: &str = "external_units";
 
 /// Names in both lists, sorted and without repeats: the features a session uses.
 pub(crate) fn negotiate(ours: &[String], theirs: &[String]) -> Vec<String> {

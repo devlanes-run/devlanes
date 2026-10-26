@@ -17,8 +17,9 @@ use crate::text::{self, clean};
 use crate::theme::{Glyph, Tone};
 use crate::tree::{self, ContainerTone, Row, RowId, Section};
 
-/// Unit states the glyph says on its own; the lane title names an idle lane's level.
-const SILENT: [&str; 7] = [
+/// Unit states the glyph says on its own; the lane title names an idle lane's
+/// level, and the `external` group its units' state.
+const SILENT: [&str; 8] = [
     "ready",
     "running",
     "frozen",
@@ -26,6 +27,7 @@ const SILENT: [&str; 7] = [
     "stopped",
     "idle",
     "not run",
+    "external",
 ];
 
 /// The list box and its rows.
@@ -235,21 +237,18 @@ fn row_line(app: &App, lane: &LaneSummary, item: &Row, width: usize) -> Line<'st
     match &item.id {
         RowId::Gap(_) | RowId::WholeLane => Line::from(""),
         RowId::Section(section) => {
-            // Exposed ports run nothing: the services count, like the lane's
-            // `n/m up`, leaves them out; their group counts them.
-            let members: Vec<RowId> = item
-                .members
-                .iter()
-                .filter(|id| !exposed_row(lane, id))
-                .cloned()
-                .collect();
             let summary = match section {
                 Section::Infra if item.folded != Some(true) => Vec::new(),
-                _ if item.folded == Some(true) => members_summary(app, lane, &members),
-                _ => vec![Span::styled(members.len().to_string(), theme.quiet())],
+                _ if item.folded == Some(true) => members_summary(app, lane, &item.members),
+                _ => vec![Span::styled(item.members.len().to_string(), theme.quiet())],
             };
             header(section.name().into(), summary)
         }
+        // Every member reads `external`, which the group's name already says.
+        RowId::Group(_, name) if name == tree::EXTERNAL => header(
+            clean(name),
+            vec![Span::styled(item.members.len().to_string(), theme.quiet())],
+        ),
         RowId::Group(_, name) => header(clean(name), members_summary(app, lane, &item.members)),
         RowId::Unit(name) => match lane.units.iter().find(|u| u.name == *name) {
             Some(unit) => unit_line(app, lane, unit, item, width),
@@ -299,16 +298,6 @@ fn row_line(app: &App, lane: &LaneSummary, item: &Row, width: usize) -> Line<'st
             row(left, joined(right, theme.quiet()), width)
         }
     }
-}
-
-/// Whether row `id` of `lane` is an exposed port.
-fn exposed_row(lane: &LaneSummary, id: &RowId) -> bool {
-    let RowId::Unit(name) = id else {
-        return false;
-    };
-    lane.units
-        .iter()
-        .any(|unit| unit.name == *name && tree::role(unit) == tree::Role::Exposed)
 }
 
 /// A unit, task or container: the glyph, then the name at its depth in the
@@ -378,7 +367,7 @@ fn unit_line(
     let role = tree::role(unit);
     // Tasks and setup steps keep the default color: they don't run long.
     let color = match role {
-        tree::Role::Service | tree::Role::Exec | tree::Role::Exposed => unit.color.as_deref(),
+        tree::Role::Service | tree::Role::Exec | tree::Role::External => unit.color.as_deref(),
         _ => None,
     };
     let task = matches!(
@@ -416,8 +405,10 @@ fn unit_line(
         }
     }
     // The name takes the family color; a unit that does not run, or a
-    // hidden one, is dimmed. A throttled unit's glyph is quiet, yet it runs.
-    let quiet = (look.tone == Tone::Quiet && unit.power.is_none()) || unit.hidden;
+    // hidden one, is dimmed. A throttled unit's glyph is quiet, yet it runs,
+    // and an external port's, yet it may answer.
+    let quiet = (look.tone == Tone::Quiet && unit.power.is_none() && role != tree::Role::External)
+        || unit.hidden;
     let left = leaf(
         app,
         item,
@@ -426,9 +417,9 @@ fn unit_line(
         clean(tree::short_name(unit)),
         quiet,
     );
-    // An exposed port is known by where it answers: its hostname, or its
+    // An external port is known by where it answers: its hostname, or its
     // port where the hostname would cut the name.
-    if role == tree::Role::Exposed && right.is_empty() {
+    if role == tree::Role::External && right.is_empty() {
         let port = unit.ports.get("default").map(|port| format!(":{port}"));
         let host = unit
             .public_url

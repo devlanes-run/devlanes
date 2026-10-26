@@ -535,25 +535,25 @@ async fn drive_starts_with_the_profiles_checked_in_the_picker() -> TestResult {
 }
 
 #[tokio::test]
-/// An exposed port has no process: `s`, `x` and `r` on it send nothing and
-/// say how to remove it, and nothing attaches to it.
-async fn keys_on_an_exposed_port_only_say_how_to_remove_it() -> TestResult {
-    let mut exposed = unit("acme@0", "port-8000", "running");
-    exposed.kind = "exposed".into();
-    exposed.role = Some("exposed".into());
-    exposed.ports = std::collections::BTreeMap::from([("default".to_owned(), 8000)]);
+/// An `infra.external` entry has no process: `s`, `x` and `r` on it send
+/// nothing and say devlanes does not run it, and nothing attaches to it.
+async fn keys_on_an_external_port_only_say_devlanes_does_not_run_it() -> TestResult {
+    let mut external = unit("acme@0", "pgadmin", "external");
+    external.kind = "external".into();
+    external.role = Some("external".into());
+    external.ports = std::collections::BTreeMap::from([("default".to_owned(), 5050)]);
     let api = FakeApi::with_lanes(vec![lane(
         "acme",
         Some(0),
         "main",
         "running",
-        vec![unit("acme@0", "api", "ready"), exposed],
+        vec![unit("acme@0", "api", "ready"), external],
     )]);
     let mut app = App::new(120, 30);
     app.update(Msg::Status(DaemonApi::status(&api).await));
     let mut effects = Vec::new();
     app.select(
-        devlanes_tui::app::Selected::unit("acme@0", "port-8000"),
+        devlanes_tui::app::Selected::unit("acme@0", "pgadmin"),
         &mut effects,
     );
     assert!(
@@ -575,7 +575,7 @@ async fn keys_on_an_exposed_port_only_say_how_to_remove_it() -> TestResult {
             .map(|n| n.text.clone())
             .unwrap_or_default();
         assert!(
-            notice.contains("devlanes expose --remove 8000 --lane acme@0"),
+            notice.contains("pgadmin is declared in infra.external"),
             "{code}: {notice}"
         );
     }

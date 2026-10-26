@@ -406,13 +406,8 @@ fn render_unit(
         details(frame, orphan_lines(theme, unit, width), area, app);
         return;
     }
-    if tree::role(unit) == Role::Exposed {
-        details(
-            frame,
-            exposed_lines(app, &lane.reference, unit, width),
-            area,
-            app,
-        );
+    if tree::role(unit) == Role::External {
+        details(frame, external_lines(app, unit, width), area, app);
         return;
     }
     let card = failure_card(app, lane, unit, width);
@@ -714,37 +709,28 @@ fn unit_facts(app: &App, unit: &UnitSummary, width: usize) -> Vec<Line<'static>>
     lines
 }
 
-/// A port `devlanes expose` made a unit: what it is and how it goes away.
-fn exposed_lines(app: &App, lane: &str, unit: &UnitSummary, width: usize) -> Vec<Line<'static>> {
+/// An `infra.external` entry: what it is and where it is reached.
+fn external_lines(app: &App, unit: &UnitSummary, width: usize) -> Vec<Line<'static>> {
     let theme = &app.theme;
     let plain = Style::new();
     let port = unit.ports.get("default").copied().unwrap_or_default();
     let mut lines = sentence(
         &format!(
-            "An exposed port: connections go to whatever listens on port {port}. devlanes runs nothing for it."
+            "Declared in infra.external: devlanes routes it to port {port} but runs nothing there, so start the server yourself."
         ),
         width,
         Vec::new(),
         plain,
     );
-    lines.extend(sentence(
-        &format!("Remove it with devlanes expose --remove {port} --lane {lane}."),
-        width,
-        Vec::new(),
-        theme.quiet(),
-    ));
+    let mirror = if unit.hidden {
+        "Hidden: machines connected with devlanes remote connect never get it."
+    } else {
+        "Machines connected with devlanes remote connect mirror it while a lane of the project runs."
+    };
+    lines.extend(sentence(mirror, width, Vec::new(), theme.quiet()));
     lines.push(Line::from(""));
     for url in unit.urls.iter().rev() {
         lines.extend(field(theme, "url", url, width, plain));
-    }
-    if let Some(since) = unit.started_at_ms {
-        lines.extend(field(
-            theme,
-            "exposed",
-            &format!("since {}", clock(since)),
-            width,
-            plain,
-        ));
     }
     lines
 }
@@ -1148,12 +1134,8 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
         }
     }
     lines.extend(phase_lines(app, lane, width));
-    // An exposed port runs nothing, so it leaves an idle lane not running.
     if lane.state == "idle"
-        && lane
-            .units
-            .iter()
-            .all(|u| !crate::app::is_active(&u.state) || tree::role(u) == Role::Exposed)
+        && lane.units.iter().all(|u| !crate::app::is_active(&u.state))
         && !missing
     {
         lines.extend(sentence(

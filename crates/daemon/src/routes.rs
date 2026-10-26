@@ -149,20 +149,21 @@ impl Inner {
                     RouteStatus::Ready,
                 )
             });
-            // Listed means routed: whether something listens shows in the request.
-            let exposed_units: Vec<(u16, String, &str)> = st
-                .exposed
-                .iter()
-                .filter_map(|(port, exposed)| {
-                    let host = exposed.host.as_deref()?;
-                    Some((*port, crate::model::Exposed::unit(*port), host))
+            // Declared means routed: whether something listens shows in the request.
+            let external_routes = view.externals.iter().flat_map(|external| {
+                external.routes.iter().map(|route| {
+                    (
+                        route.host.as_str(),
+                        &external.name,
+                        external.port,
+                        route.fallback,
+                        route.host_header_upstream,
+                        RouteStatus::Ready,
+                    )
                 })
-                .collect();
-            let exposed_routes = exposed_units
-                .iter()
-                .map(|(port, unit, host)| (*host, unit, *port, false, false, RouteStatus::Ready));
+            });
             for (host, unit, port, fallback, host_header_upstream, status) in
-                service_routes.chain(infra_routes).chain(exposed_routes)
+                service_routes.chain(infra_routes).chain(external_routes)
             {
                 let host = match devlanes_config::normalize_host(host) {
                     Ok(host) => host,
@@ -304,10 +305,22 @@ impl Inner {
                         .view
                         .as_ref()
                         .and_then(|view| {
-                            view.routes
+                            let host = &warning.data["host"];
+                            let service = view
+                                .routes
                                 .iter()
-                                .find(|route| route.host == warning.data["host"])
-                                .map(|route| format!("services.{}.hosts", route.service))
+                                .find(|route| route.host == *host)
+                                .map(|route| format!("services.{}.hosts", route.service));
+                            service.or_else(|| {
+                                view.externals
+                                    .iter()
+                                    .find(|external| {
+                                        external.routes.iter().any(|route| route.host == *host)
+                                    })
+                                    .map(|external| {
+                                        format!("infra.external.{}.hosts", external.name)
+                                    })
+                            })
                         })
                         .unwrap_or_else(|| "infra.hosts".into()),
                     _ => "lanes".into(),

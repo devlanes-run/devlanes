@@ -416,9 +416,9 @@ fn scenes() -> Vec<Scene> {
             setup: |f| f.lane("acme@2"),
         },
         Scene {
-            name: "unit-exposed",
-            what: "a port exposed with devlanes expose: listed under exposed, the pane says what it is and how it goes away",
-            setup: |f| f.unit("acme@1", "port-8000"),
+            name: "unit-external",
+            what: "an infra.external entry: listed under infra, the pane says devlanes routes it but runs nothing for it",
+            setup: |f| f.unit("acme@1", "pgadmin"),
         },
         Scene {
             name: "lane-missing-worktree",

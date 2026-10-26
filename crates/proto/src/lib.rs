@@ -222,15 +222,6 @@ pub enum Method {
     /// client with that id is listed.
     #[serde(rename = "remote.report")]
     RemoteReport,
-    /// Exposes a loopback port of the context's lane as a unit of kind
-    /// `exposed` named `port-<port>`, optionally routed under a hostname
-    /// ([`ExposeParams`]); with `remove`, takes it away again; with neither
-    /// `port` nor `remove`, lists the lanes' exposed ports. Kept in memory
-    /// until removed, a whole-lane stop or clean, or the daemon exits. Reply
-    /// `{lane, exposed: [ExposedPort]}` for the lane, or `{items:
-    /// [ExposedPort]}` for the list.
-    #[serde(rename = "expose")]
-    Expose,
     /// Sent by `devlanes certs trust --hosts` and `certs untrust --hosts` after changing the
     /// helper: the daemon drops its sudo backoff and reapplies `/etc/hosts` now.
     #[serde(rename = "hosts.retry")]
@@ -419,45 +410,9 @@ pub struct ExecParams {
     pub pty: bool,
 }
 
-/// `expose` parameters: a port of the lane to expose or remove. Without
-/// `port` and `remove`, the request lists the exposed ports instead.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExposeParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub port: Option<u16>,
-    /// A hostname to route to the port: one label (`api`) becomes
-    /// `api.<lane domain>`; a full name must lie under the lane's domain,
-    /// `localhost` or the configured TLD.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-    /// Remove the exposure of `port` instead of adding it.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub remove: bool,
-    /// List the exposed ports of every lane, not only the context's project.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub all: bool,
-}
-
-/// A port exposed with `devlanes expose`, listed by `expose` and as a unit of
-/// kind `exposed` in its lane's summary.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ExposedPort {
-    /// Canonical lane reference, `project@index`.
-    pub lane: String,
-    /// The unit's name, `port-<port>`.
-    pub unit: String,
-    pub port: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host: Option<String>,
-    /// `https://<host>` (with the proxy's HTTPS port unless it is 443) when
-    /// routed, else `http://127.0.0.1:<port>`.
-    pub url: String,
-    /// When it was exposed (Unix ms).
-    pub since_ms: u64,
-}
-
-/// Unit kind of a port exposed with `devlanes expose`.
-pub const EXPOSED_KIND: &str = "exposed";
+/// Kind, role and state of an `infra.external` entry's unit: a port devlanes
+/// routes and mirrors but does not run anything for.
+pub const EXTERNAL_KIND: &str = "external";
 
 /// Existing clients default to terminal-backed units when the field is absent.
 fn default_true() -> bool {
@@ -550,8 +505,8 @@ pub struct UnitSummary {
     pub urls: Vec<String>,
     pub actor: Actor,
     pub reason: Option<RpcError>,
-    /// `service`, `task`, `exec` or `exposed` (a port `devlanes expose` made
-    /// reachable, with no process of its own); clients group and filter on it.
+    /// `service`, `task`, `exec` or `external` (an `infra.external` entry: a
+    /// port devlanes routes but runs nothing for); clients group and filter on it.
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
@@ -602,7 +557,7 @@ pub struct UnitSummary {
     pub pty: bool,
     /// What the unit is: `service`, `task`, `setup` or `teardown` (an
     /// `infra.setup` or `infra.teardown` entry, listed as kind `task`), `exec`
-    /// or `exposed`. Absent from older daemons; clients then fall back to `kind`.
+    /// or `external`. Absent from older daemons; clients then fall back to `kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Where the unit is declared in `devlanes.yaml`, counted from 0 within its

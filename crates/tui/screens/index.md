@@ -82,13 +82,13 @@ a lane with nothing running: every service listed, s starts it
 - 120x40: [txt](lane-stopped-120x40.txt) · [png](lane-stopped-120x40.png) · [ansi](lane-stopped-120x40.ansi)
 - 80x24: [txt](lane-stopped-80x24.txt) · [png](lane-stopped-80x24.png) · [ansi](lane-stopped-80x24.ansi)
 
-## unit-exposed
+## unit-external
 
-a port exposed with devlanes expose: listed under exposed, the pane says what it is and how it goes away
+an infra.external entry: listed under infra, the pane says devlanes routes it but runs nothing for it
 
-- 200x60: [txt](unit-exposed-200x60.txt) · [png](unit-exposed-200x60.png) · [ansi](unit-exposed-200x60.ansi)
-- 120x40: [txt](unit-exposed-120x40.txt) · [png](unit-exposed-120x40.png) · [ansi](unit-exposed-120x40.ansi)
-- 80x24: [txt](unit-exposed-80x24.txt) · [png](unit-exposed-80x24.png) · [ansi](unit-exposed-80x24.ansi)
+- 200x60: [txt](unit-external-200x60.txt) · [png](unit-external-200x60.png) · [ansi](unit-external-200x60.ansi)
+- 120x40: [txt](unit-external-120x40.txt) · [png](unit-external-120x40.png) · [ansi](unit-external-120x40.ansi)
+- 80x24: [txt](unit-external-80x24.txt) · [png](unit-external-80x24.png) · [ansi](unit-external-80x24.ansi)
 
 ## lane-missing-worktree
 

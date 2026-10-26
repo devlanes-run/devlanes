@@ -78,6 +78,7 @@ expression: config
         }
       }
     },
+    "external": {},
     "setup": {},
     "teardown": {}
   },

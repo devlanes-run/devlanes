@@ -202,6 +202,69 @@
       },
       "type": "object"
     },
+    "ExternalConfig": {
+      "additionalProperties": false,
+      "description": "A server devlanes does not run, reached on a loopback port. Every lane of the project lists it as a unit of kind `external`, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane and devlanes never allocates it.",
+      "examples": [
+        {
+          "address": "127.0.0.1:5050",
+          "hosts": "pgadmin.${{ lane.domain }}"
+        },
+        {
+          "address": "[::1]:8000",
+          "hidden": true
+        }
+      ],
+      "markdownDescription": "A server devlanes does not run, reached on a loopback port. Every lane of the project lists it as a unit of kind `external`, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane and devlanes never allocates it.",
+      "properties": {
+        "address": {
+          "description": "Where the server listens: `127.0.0.1:<port>` or `[::1]:<port>`. Only loopback addresses are accepted. The port must not be one devlanes allocates to a service or container of the project, and a new port block never includes it. Required.",
+          "examples": [
+            "127.0.0.1:5050",
+            "[::1]:8000"
+          ],
+          "markdownDescription": "Where the server listens: `127.0.0.1:<port>` or `[::1]:<port>`. Only loopback addresses are accepted. The port must not be one devlanes allocates to a service or container of the project, and a new port block never includes it. Required.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hidden": {
+          "description": "Keep the port and hostnames off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
+          "examples": [
+            false,
+            true
+          ],
+          "markdownDescription": "Keep the port and hostnames off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "hosts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Hosts",
+              "description": "",
+              "examples": [],
+              "markdownDescription": ""
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Hostnames the devlanes HTTPS proxy routes to the port, so `https://<host>` reaches the server. One entry or a list; an entry is a hostname or a mapping with `host` and optional `fallback` and `host_header`. Evaluated for each lane with `lane`, `project`, `infra` and `env`, so keep them under `${{ lane.domain }}` to give each lane its own name; the first non-wildcard host becomes the unit's URL.",
+          "examples": [
+            "pgadmin.${{ lane.domain }}",
+            [
+              "docs.${{ lane.domain }}"
+            ]
+          ],
+          "markdownDescription": "Hostnames the devlanes HTTPS proxy routes to the port, so `https://<host>` reaches the server. One entry or a list; an entry is a hostname or a mapping with `host` and optional `fallback` and `host_header`. Evaluated for each lane with `lane`, `project`, `infra` and `env`, so keep them under `${{ lane.domain }}` to give each lane its own name; the first non-wildcard host becomes the unit's URL."
+        }
+      },
+      "type": "object"
+    },
     "HostConfig": {
       "anyOf": [
         {
@@ -740,6 +803,35 @@
             "array",
             "null"
           ]
+        },
+        "external": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ExternalConfig",
+            "description": "A server devlanes does not run, reached on a loopback port. Every lane of the project lists it as a unit of kind `external`, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane and devlanes never allocates it.",
+            "examples": [
+              {
+                "address": "127.0.0.1:5050",
+                "hosts": "pgadmin.${{ lane.domain }}"
+              },
+              {
+                "address": "[::1]:8000",
+                "hidden": true
+              }
+            ],
+            "markdownDescription": "A server devlanes does not run, reached on a loopback port. Every lane of the project lists it as a unit of kind `external`, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane and devlanes never allocates it."
+          },
+          "default": {},
+          "description": "Servers devlanes does not run, such as a pgAdmin, a docs server or a tool you start yourself, keyed by name. Each is listed as a unit of kind `external` in every lane, its hostnames are routed by the proxy, and machines connected with `devlanes remote connect` mirror its port while a lane of the project runs. devlanes never allocates, starts or checks the port. Declare personal ones in `devlanes.local.yaml`.",
+          "examples": [
+            {
+              "pgadmin": {
+                "address": "127.0.0.1:5050",
+                "hosts": "pgadmin.${{ lane.domain }}"
+              }
+            }
+          ],
+          "markdownDescription": "Servers devlanes does not run, such as a pgAdmin, a docs server or a tool you start yourself, keyed by name. Each is listed as a unit of kind `external` in every lane, its hostnames are routed by the proxy, and machines connected with `devlanes remote connect` mirror its port while a lane of the project runs. devlanes never allocates, starts or checks the port. Declare personal ones in `devlanes.local.yaml`.",
+          "type": "object"
         },
         "hidden": {
           "description": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
@@ -3037,6 +3129,7 @@
         "containers": {},
         "env": {},
         "exclude": null,
+        "external": {},
         "hidden": null,
         "hosts": {},
         "per_lane": null,

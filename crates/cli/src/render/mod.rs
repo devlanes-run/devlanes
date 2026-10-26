@@ -196,7 +196,6 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::TaskList => other::tasks(data, cx),
         Method::Env => other::env(data),
         Method::Url => other::url(data, cx),
-        Method::Expose => other::expose(data, cx),
         Method::Metrics => other::metrics(data, cx),
         Method::Subscribe => other::events_page(data),
         Method::InfraUp | Method::InfraStatus | Method::InfraDown => other::infra(method, data),

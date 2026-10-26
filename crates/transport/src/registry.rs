@@ -36,8 +36,8 @@ pub struct LaneInfo {
     pub domain: Option<String>,
 }
 
-/// Whether a unit is a managed process, a container, a task run or an exposed
-/// port.
+/// Whether a unit is a managed process, a container, a task run or an
+/// external port.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnitKind {
@@ -47,10 +47,10 @@ pub enum UnitKind {
     Container,
     /// A task run, listed for its state only: never mirrored or dialable.
     Task,
-    /// A port someone exposed on the box with `devlanes expose`, with no
-    /// process the box daemon runs; sent only to clients with
-    /// [`crate::EXPOSED_UNITS`].
-    Exposed,
+    /// A port the box's config declares in `infra.external`, served by
+    /// something the box daemon does not run; sent only to clients with
+    /// [`crate::EXTERNAL_UNITS`].
+    External,
 }
 
 impl UnitKind {
@@ -287,12 +287,12 @@ impl Registry {
 
     /// Decides whether the box may dial `target`.
     ///
-    /// Only ports advertised by a non-hidden service, container or exposed
-    /// port that is running pass, so a connected client cannot use the box as
+    /// Only ports advertised by a non-hidden service, container or external
+    /// port that is serving pass, so a connected client cannot use the box as
     /// a pivot to arbitrary local services, nor reach whatever took over the
     /// port of a stopped unit. Tasks never advertise ports. A port any hidden
-    /// unit advertises stays refused whatever else lists it, so an exposed
-    /// port can never open a hidden unit's.
+    /// unit advertises stays refused whatever else lists it, so no other unit
+    /// on the same port can open a hidden unit's.
     pub fn authorize(&self, target: &DialTarget) -> Result<AuthorizedTarget, RejectReason> {
         let DialTarget::Port { port } = *target;
         let advertising: Vec<&UnitInfo> = self
@@ -321,10 +321,14 @@ impl Registry {
 }
 
 /// Unit states whose ports may be dialed: services that started or are starting
-/// (their port may already answer), running containers, and services a previous
-/// box daemon left running (`orphaned`), which the box's own proxy routes too.
+/// (their port may already answer), running containers, services a previous
+/// box daemon left running (`orphaned`), which the box's own proxy routes too,
+/// and external ports while their project runs a lane (`external`).
 pub fn serving(state: &str) -> bool {
-    matches!(state, "ready" | "starting" | "running" | "orphaned")
+    matches!(
+        state,
+        "ready" | "starting" | "running" | "orphaned" | "external"
+    )
 }
 
 /// A target that passed [`Registry::authorize`]; only this crate constructs it.
@@ -651,30 +655,45 @@ mod tests {
         Ok(())
     }
 
-    /// An exposed port is mirrored and dialable like a service's, and goes by
-    /// `exposed` on the wire.
+    /// An external port in state `external` is mirrored and dialable like a
+    /// running service's, and goes by `external` on the wire; in any other
+    /// state (its project runs no lane) it is only kept free.
     #[test]
-    fn exposed_ports_are_mirrored_and_dialable() {
-        let mut exposed = unit("port-8000", 8000, false);
-        exposed.key.kind = UnitKind::Exposed;
+    fn external_ports_are_mirrored_and_dialable() {
+        let mut external = unit("pgadmin", 5050, false);
+        external.key.kind = UnitKind::External;
+        external.state = "external".into();
         let registry = Registry::from_snapshot(RegistrySnapshot {
             lanes: Vec::new(),
-            units: vec![exposed.clone()],
+            units: vec![external.clone()],
         });
-        assert!(exposed.mirrorable());
-        assert!(registry.mirrored_ports().contains_key(&8000));
-        let target = registry.authorize(&DialTarget::Port { port: 8000 });
-        assert_eq!(target.map(|t| t.port()), Ok(8000));
-        let encoded = serde_json::to_value(&exposed.key).expect("encodes");
-        assert_eq!(encoded["kind"], "exposed");
+        assert!(external.mirrorable());
+        assert!(registry.mirrored_ports().contains_key(&5050));
+        let target = registry.authorize(&DialTarget::Port { port: 5050 });
+        assert_eq!(target.map(|t| t.port()), Ok(5050));
+        let encoded = serde_json::to_value(&external.key).expect("encodes");
+        assert_eq!(encoded["kind"], "external");
+
+        let mut idle = external.clone();
+        idle.state = "stopped".into();
+        let registry = Registry::from_snapshot(RegistrySnapshot {
+            lanes: Vec::new(),
+            units: vec![idle],
+        });
+        assert!(registry.mirrored_ports().is_empty());
+        assert!(registry.advertised_ports().contains(&5050));
+        assert_eq!(
+            registry.authorize(&DialTarget::Port { port: 5050 }),
+            Err(RejectReason::NotRunning)
+        );
 
         // A hidden unit on the same port wins, whatever lists it too.
         let registry = Registry::from_snapshot(RegistrySnapshot {
             lanes: Vec::new(),
-            units: vec![exposed, unit("vault", 8000, true)],
+            units: vec![external, unit("vault", 5050, true)],
         });
         assert_eq!(
-            registry.authorize(&DialTarget::Port { port: 8000 }),
+            registry.authorize(&DialTarget::Port { port: 5050 }),
             Err(RejectReason::Hidden)
         );
     }

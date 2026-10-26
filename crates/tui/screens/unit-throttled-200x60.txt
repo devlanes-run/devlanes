@@ -8,23 +8,23 @@
 │   z web-app                                  ││ ✓ connected to redis                                                                                                                                 │
 │   z wrk-email                                ││ listening on :41000                                                                                                                                  │
 │   z stub-stripe                              ││ 10:42:00 GET /v1/orders/1000 200 3ms                                                                                                                 │
-│   ▾ exposed                        1 running ││ 10:42:11 GET /v1/orders/1017 200 4ms                                                                                                                 │
-│     ◉ port-8000       files.acme-1.localhost ││ 10:42:22 GET /v1/orders/1034 200 5ms                                                                                                                 │
-│                                              ││ 10:42:33 GET /v1/orders/1051 200 6ms                                                                                                                 │
-│ ▾ tasks                                    7 ││ 10:42:44 GET /v1/orders/1068 404 7ms                                                                                                                 │
-│   ✓ migrate             done · runs at start ││ 10:42:55 GET /v1/orders/1085 200 3ms                                                                                                                 │
-│   · seed                             not run ││ 10:42:06 GET /v1/orders/1102 200 4ms                                                                                                                 │
-│   · lint                             not run ││ 10:42:17 GET /v1/orders/1119 200 5ms                                                                                                                 │
-│   · typecheck                        not run ││ 10:42:28 GET /v1/orders/1136 200 6ms                                                                                                                 │
-│   · test-e2e                         not run ││ 10:42:39 GET /v1/orders/1153 200 7ms                                                                                                                 │
-│   · codegen                          not run ││ 10:43:50 GET /v1/orders/1170 200 3ms                                                                                                                 │
-│   · clean-cache                      not run ││ 10:43:01 GET /v1/orders/1187 200 4ms                                                                                                                 │
-│                                              ││ 10:43:12 GET /v1/orders/1204 200 5ms                                                                                                                 │
-│ ▾ infra                                      ││ 10:43:23 GET /v1/orders/1221 404 6ms                                                                                                                 │
-│   ▾ shared                              3 up ││ 10:43:34 GET /v1/orders/1238 200 7ms                                                                                                                 │
-│     ● pgbouncer                              ││ 10:43:45 GET /v1/orders/1255 200 3ms                                                                                                                 │
-│     ● postgres                               ││ 10:43:56 GET /v1/orders/1272 200 4ms                                                                                                                 │
-│     ● redis                                  ││ 10:43:07 GET /v1/orders/1289 200 5ms                                                                                                                 │
+│                                              ││ 10:42:11 GET /v1/orders/1017 200 4ms                                                                                                                 │
+│ ▾ tasks                                    7 ││ 10:42:22 GET /v1/orders/1034 200 5ms                                                                                                                 │
+│   ✓ migrate             done · runs at start ││ 10:42:33 GET /v1/orders/1051 200 6ms                                                                                                                 │
+│   · seed                             not run ││ 10:42:44 GET /v1/orders/1068 404 7ms                                                                                                                 │
+│   · lint                             not run ││ 10:42:55 GET /v1/orders/1085 200 3ms                                                                                                                 │
+│   · typecheck                        not run ││ 10:42:06 GET /v1/orders/1102 200 4ms                                                                                                                 │
+│   · test-e2e                         not run ││ 10:42:17 GET /v1/orders/1119 200 5ms                                                                                                                 │
+│   · codegen                          not run ││ 10:42:28 GET /v1/orders/1136 200 6ms                                                                                                                 │
+│   · clean-cache                      not run ││ 10:42:39 GET /v1/orders/1153 200 7ms                                                                                                                 │
+│                                              ││ 10:43:50 GET /v1/orders/1170 200 3ms                                                                                                                 │
+│ ▾ infra                                      ││ 10:43:01 GET /v1/orders/1187 200 4ms                                                                                                                 │
+│   ▾ shared                              3 up ││ 10:43:12 GET /v1/orders/1204 200 5ms                                                                                                                 │
+│     ● pgbouncer                              ││ 10:43:23 GET /v1/orders/1221 404 6ms                                                                                                                 │
+│     ● postgres                               ││ 10:43:34 GET /v1/orders/1238 200 7ms                                                                                                                 │
+│     ● redis                                  ││ 10:43:45 GET /v1/orders/1255 200 3ms                                                                                                                 │
+│   ▾ external                               1 ││ 10:43:56 GET /v1/orders/1272 200 4ms                                                                                                                 │
+│     · pgadmin       pgadmin.acme-1.localhost ││ 10:43:07 GET /v1/orders/1289 200 5ms                                                                                                                 │
 │   ▸ setup                             1 done ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -70,23 +70,23 @@
 7: 0 darkgray, 4-5 dim, 6-12 green, 47-48 darkgray, 50 color2, 199 darkgray
 8: 0 darkgray, 4-5 dim, 6-14 magenta, 47-48 darkgray, 50-68 bold, 199 darkgray
 9: 0 darkgray, 4-5 dim, 6-16 darkgray, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-10: 0 darkgray, 4-5 dim, 37-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-11: 0 darkgray, 6-7 green, 8-16 magenta, 24-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-12: 0 darkgray, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-13: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-57 dim, 79-81 color3, 199 darkgray
-14: 0 darkgray, 4-5 green, 26-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-15: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-16: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-17: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-18: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-19: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-20: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-21: 0 darkgray, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-22: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-57 dim, 79-81 color3, 199 darkgray
-23: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-24: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-25: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-26: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+10: 0 darkgray, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+11: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+12: 0 darkgray, 4-5 green, 26-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+13: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color3, 199 darkgray
+14: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+15: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+16: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+17: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+18: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+19: 0 darkgray, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+20: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+21: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+22: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 50-57 dim, 79-81 color3, 199 darkgray
+23: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+24: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+25: 0 darkgray, 4-5 dim, 45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
+26: 0 darkgray, 6-7 dim, 8-14 cyan, 22-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
 27: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 199 darkgray
 28: 0 darkgray, 47-48 darkgray, 199 darkgray
 29: 0 darkgray, 47-48 darkgray, 199 darkgray

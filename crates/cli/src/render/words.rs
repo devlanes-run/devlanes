@@ -583,23 +583,6 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 }),
             )
         }
-        // `expose` refusals; the daemon words each one.
-        "not_exposed" => (
-            text(data, "message"),
-            Some(lane_command(["expose", "ls"], &text(data, "lane"))),
-        ),
-        "port_taken" | "port_reserved" | "host_taken" | "invalid_host" => {
-            (text(data, "message"), None)
-        }
-        "host_not_allowed" => (
-            text(data, "message"),
-            Some(Hint::command([
-                "expose".to_owned(),
-                display_value(&data["port"]),
-                "--host".to_owned(),
-                text(data, "suggestion"),
-            ])),
-        ),
         "response_too_large" => (
             format!(
                 "the answer is larger than the {} MiB message limit; ask for less: a smaller --tail or --budget, or one unit at a time",

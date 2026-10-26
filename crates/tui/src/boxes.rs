@@ -374,7 +374,7 @@ impl BoxHost {
             }
             let kind = match unit.key.kind.as_str() {
                 "task" => "task",
-                devlanes_proto::EXPOSED_KIND => devlanes_proto::EXPOSED_KIND,
+                devlanes_proto::EXTERNAL_KIND => devlanes_proto::EXTERNAL_KIND,
                 _ => "service",
             };
             units.push(UnitSummary {

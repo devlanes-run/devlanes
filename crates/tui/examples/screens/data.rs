@@ -86,10 +86,10 @@ fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
     }
 }
 
-/// A port exposed with `devlanes expose`, as the daemon lists it.
-fn exposed(lane: &str, port: u16, host: Option<&str>) -> UnitSummary {
-    let mut unit = unit(lane, &format!("port-{port}"), "running", "exposed");
-    unit.role = Some("exposed".into());
+/// An `infra.external` entry, as the daemon lists it in every lane.
+fn external(lane: &str, name: &str, port: u16, host: Option<&str>) -> UnitSummary {
+    let mut unit = unit(lane, name, "external", "external");
+    unit.role = Some("external".into());
     unit.autostart = false;
     unit.pty = false;
     unit.ports = BTreeMap::from([("default".to_owned(), port)]);
@@ -257,7 +257,7 @@ fn starting() -> LaneSummary {
         unit(reference, "stub-stripe", "ready", "service"),
         unit(reference, "setup.db", "exited", "task"),
         unit(reference, "migrate", "running", "task"),
-        exposed(reference, 8000, Some("files.acme-1.localhost")),
+        external(reference, "pgadmin", 5050, Some("pgadmin.acme-1.localhost")),
     ];
     units[6].role = Some("setup".into());
     units[6].exit_code = Some(0);
@@ -406,8 +406,8 @@ pub fn idle_lanes() -> Vec<LaneSummary> {
                 unit.exit_code = Some(0);
                 continue;
             }
-            // An exposed port has no process to throttle or freeze.
-            if unit.state == "idle" || unit.kind == "exposed" {
+            // An external port has no process to throttle or freeze.
+            if unit.state == "idle" || unit.kind == "external" {
                 continue;
             }
             unit.state = "ready".into();
@@ -704,8 +704,6 @@ pub fn metrics() -> Metrics {
     for (seed, unit) in lanes()
         .iter()
         .flat_map(|lane| lane.units.iter())
-        // An exposed port has no process for the sampler to measure.
-        .filter(|u| u.kind != "exposed")
         .filter(|u| {
             matches!(u.state.as_str(), "ready" | "running" | "starting") || u.state == ORPHANED
         })

@@ -910,7 +910,7 @@ impl Inner {
         Ok(json!({"lane": reference, "unit": name, "env": env.values}))
     }
 
-    /// `url`: the public URL of a service or exposed port (internal URL
+    /// `url`: the public URL of a service or `infra.external` entry (internal URL
     /// without hosts). On a box, `clients` adds the URL each connected client
     /// that reports its mirror opens it at, or why it cannot.
     pub(crate) async fn url_method(
@@ -952,18 +952,23 @@ impl Inner {
                     ))
                 }
                 None => st
-                    .exposed
+                    .view
                     .iter()
-                    .find(|(port, _)| crate::model::Exposed::unit(**port) == name)
-                    .map(|(port, exposed)| {
-                        let summary =
-                            crate::model::exposed_summary(&st, &reference, *port, exposed);
+                    .flat_map(|view| &view.externals)
+                    .find(|external| external.name == name)
+                    .map(|external| {
+                        let summary = crate::model::external_summary(&st, &reference, external);
+                        let host = external
+                            .routes
+                            .iter()
+                            .find(|route| route.url.is_some())
+                            .map(|route| route.host.clone());
                         (
                             summary.name,
                             summary.urls,
-                            exposed.host.clone(),
-                            *port,
-                            false,
+                            host,
+                            external.port,
+                            external.hidden,
                         )
                     }),
             };

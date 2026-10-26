@@ -76,6 +76,7 @@ fn render(project: &Value, user: &Value) -> String {
         text(&project["$id"])
     ));
     sections(&mut page, project);
+    page.push_str(LOCAL_OVERRIDES);
     page.push_str("## User config\n\n");
     page.push_str(&format!(
         "`config.yaml` in the devlanes home (`~/.devlanes`, or `$DEVLANES_HOME`), for \
@@ -85,6 +86,26 @@ fn render(project: &Value, user: &Value) -> String {
     sections(&mut page, user);
     page
 }
+
+/// How `devlanes.local.yaml` merges, from `crates/config/src/loader.rs`; the
+/// schema cannot say it.
+const LOCAL_OVERRIDES: &str = "## Local overrides\n\n\
+`devlanes.local.yaml` next to `devlanes.yaml` holds the changes one developer wants on \
+their machine only, such as a service turned off or a server they run themselves. It takes \
+the same keys, every one optional, and stays out of Git: add it to `.gitignore`. A lane \
+reads the file in its own worktree, else the primary worktree's.\n\n\
+```yaml\n\
+# devlanes.local.yaml\n\
+services:\n  web:\n    autostart: false\n\
+infra:\n  external:\n    pgadmin:\n      address: 127.0.0.1:5050\n      hosts: \"pgadmin.${{ lane.domain }}\"\n\
+```\n\n\
+It is merged over `devlanes.yaml` before templates are expanded. Mappings merge by key at \
+every level (services, tasks, templates, profiles, the top-level `tags`, `infra.containers`, \
+`infra.external`, `infra.setup`, `infra.teardown`, every `env`, `lanes.vars`), and a key the \
+local file leaves out keeps its value. Lists and single values replace. `run`, `run_script` \
+and a task's `steps` drop each other, and so do the `ready` checks. A service only in the \
+local file needs `run` or `run_script`, and `project` must be set in `devlanes.yaml`. \
+[Per-machine overrides](../guides/ports-and-env.md#per-machine-overrides) has the details.\n\n";
 
 /// One `###` section with a table per top-level key of `schema`.
 fn sections(page: &mut String, schema: &Value) {

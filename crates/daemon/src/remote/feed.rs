@@ -4,8 +4,8 @@
 //! same routes as `hosts` (this machine's own lanes only): assigned lanes, their
 //! services, tasks and started containers, with ports, hostnames, hidden flags
 //! and states, never environments or secrets. Tasks carry their state only.
-//! Ports exposed with `devlanes expose` go only to clients listing
-//! `exposed_units`. `remote.report` keeps what each client mirrors.
+//! `infra.external` ports go only to clients listing `external_units`.
+//! `remote.report` keeps what each client mirrors.
 
 use std::{sync::Arc, time::Duration};
 
@@ -16,7 +16,7 @@ use devlanes_proto::{
     },
 };
 use devlanes_transport::{
-    EXPOSED_UNITS, HostHeader, HostInfo, LaneInfo, LaneKey, PortInfo, Registry, RegistryEvent,
+    EXTERNAL_UNITS, HostHeader, HostInfo, LaneInfo, LaneKey, PortInfo, Registry, RegistryEvent,
     RegistrySnapshot, UnitInfo, UnitKey, UnitKind,
 };
 use serde_json::{Value, json};
@@ -45,14 +45,14 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let args: RegistryParams = params(value)?;
         // Older clients reject a unit kind they do not know.
-        let exposed = args.features.iter().any(|name| name == EXPOSED_UNITS);
+        let external = args.features.iter().any(|name| name == EXTERNAL_UNITS);
         let listed = args.client.map(|client| ClientGuard::add(self, client));
         // The tunnel's reports name it, so only this request's entry takes them.
         let serial = listed.as_ref().map(|guard| guard.serial);
         // Subscribed before the snapshot is built, so no change falls between them.
         let mut changes = self.bus.subscribe();
         let disconnected = session.disconnected();
-        let mut current = self.registry_now(exposed);
+        let mut current = self.registry_now(external);
         if send_snapshot(session, &current, serial).await.is_err() {
             return Ok(json!({}));
         }
@@ -80,7 +80,7 @@ impl Inner {
                     },
                 }
             }
-            let next = self.registry_now(exposed);
+            let next = self.registry_now(external);
             let sent = if lagged {
                 send_snapshot(session, &next, serial).await
             } else {
@@ -94,11 +94,11 @@ impl Inner {
     }
 
     /// The registry as of now, from `status --all`'s lanes and this machine's
-    /// routes; exposed ports only with `exposed`.
-    pub(super) fn registry_now(&self, exposed: bool) -> Registry {
+    /// routes; external ports only with `external`.
+    pub(super) fn registry_now(&self, external: bool) -> Registry {
         let lanes = self.summaries(&self.all_lanes(), None);
         let routes = self.local_route_entries();
-        build(lanes, &routes, exposed)
+        build(lanes, &routes, external)
     }
 
     /// `remote.report`: keeps a client's mirror report, bounded, with its
@@ -218,9 +218,11 @@ async fn send_changes(session: &Session, changes: Vec<RegistryEvent>) -> Result<
 
 /// Maps lane summaries and routes to the registry: assigned lanes, their
 /// services and started containers with ports, hostnames and hidden flags,
-/// their tasks with state only, and with `exposed` (a client listing
-/// [`EXPOSED_UNITS`]) their exposed ports. Exec units are left out.
-pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], exposed: bool) -> Registry {
+/// their tasks with state only, and with `external` (a client listing
+/// [`EXTERNAL_UNITS`]) their `infra.external` ports, in state `external` while
+/// a lane of the project runs something and `stopped` otherwise, so they are
+/// mirrored only meanwhile. Exec units are left out.
+pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], external: bool) -> Registry {
     let hosts_of = |lane: &str, unit: &str| -> Vec<HostInfo> {
         routes
             .iter()
@@ -246,20 +248,16 @@ pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], exposed: boo
             })
             .collect()
     };
-    // An exposure whose port another unit (hidden ones and tasks included)
-    // also has would be mirrored under that unit's number: leave it out, so
-    // only that unit's own settings decide.
-    let taken: std::collections::BTreeSet<u16> = lanes
+    // Projects with a lane whose service, task or exec unit runs.
+    let running: std::collections::BTreeSet<String> = lanes
         .iter()
-        .flat_map(|lane| {
-            let units = lane
-                .units
-                .iter()
-                .filter(|unit| unit.kind != devlanes_proto::EXPOSED_KIND)
-                .flat_map(|unit| unit.ports.values());
-            units.chain(lane.containers.iter().flat_map(|c| c.ports.values()))
+        .filter(|lane| {
+            lane.units.iter().any(|unit| {
+                unit.kind != devlanes_proto::EXTERNAL_KIND
+                    && devlanes_transport::serving(&unit.state)
+            })
         })
-        .copied()
+        .map(|lane| lane.project.clone())
         .collect();
     let mut snapshot = RegistrySnapshot::default();
     for lane in lanes {
@@ -275,13 +273,16 @@ pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], exposed: boo
             domain: lane.domain.clone(),
         });
         for unit in &lane.units {
-            let kind = match unit.kind.as_str() {
-                "" | "service" => UnitKind::Service,
-                "task" => UnitKind::Task,
-                devlanes_proto::EXPOSED_KIND
-                    if exposed && !unit.ports.values().any(|port| taken.contains(port)) =>
-                {
-                    UnitKind::Exposed
+            let (kind, state) = match unit.kind.as_str() {
+                "" | "service" => (UnitKind::Service, unit.state.clone()),
+                "task" => (UnitKind::Task, unit.state.clone()),
+                devlanes_proto::EXTERNAL_KIND if external => {
+                    let state = if running.contains(&lane.project) {
+                        devlanes_proto::EXTERNAL_KIND
+                    } else {
+                        "stopped"
+                    };
+                    (UnitKind::External, state.to_owned())
                 }
                 _ => continue,
             };
@@ -293,7 +294,7 @@ pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], exposed: boo
                     name: unit.name.clone(),
                 },
                 hidden: unit.hidden,
-                state: unit.state.clone(),
+                state,
                 ports: if endpoints {
                     ports(&unit.ports)
                 } else {
@@ -366,17 +367,27 @@ mod tests {
                  "kind": "task"},
                 {"name": "shell", "lane": "app@1", "state": "running", "pid": 4, "exit_code": null,
                  "ports": {}, "urls": [], "actor": {"kind": "human"}, "reason": null, "kind": "exec"},
-                {"name": "port-8000", "lane": "app@1", "state": "running", "pid": null, "exit_code": null,
-                 "ports": {"default": 8000}, "urls": [], "actor": {"kind": "human"}, "reason": null,
-                 "kind": "exposed"},
-                {"name": "port-4101", "lane": "app@1", "state": "running", "pid": null, "exit_code": null,
-                 "ports": {"default": 4101}, "urls": [], "actor": {"kind": "human"}, "reason": null,
-                 "kind": "exposed"}
+                {"name": "pgadmin", "lane": "app@1", "state": "external", "pid": null, "exit_code": null,
+                 "ports": {"default": 5050}, "urls": [], "actor": {"kind": "human"}, "reason": null,
+                 "kind": "external"},
+                {"name": "vault", "lane": "app@1", "state": "external", "pid": null, "exit_code": null,
+                 "ports": {"default": 8200}, "urls": [], "actor": {"kind": "human"}, "reason": null,
+                 "kind": "external", "hidden": true}
             ],
             "containers": [{"name": "db", "ports": {"5432": 4102}, "hidden": false}]
         }, {
             "reference": "app@feature", "project": "app", "index": null, "branch": null,
             "path": "/v", "state": "unassigned", "config_changed": false, "units": []
+        }, {
+            "reference": "idle@0", "project": "idle", "index": 0, "branch": "main",
+            "path": "/i", "state": "idle", "config_changed": false, "units": [
+                {"name": "api", "lane": "idle@0", "state": "idle", "pid": null, "exit_code": null,
+                 "ports": {"default": 4200}, "urls": [], "actor": {"kind": "human"}, "reason": null,
+                 "kind": "service"},
+                {"name": "docs", "lane": "idle@0", "state": "external", "pid": null, "exit_code": null,
+                 "ports": {"default": 8000}, "urls": [], "actor": {"kind": "human"}, "reason": null,
+                 "kind": "external"}
+            ]
         }]))
         .expect("lane summaries");
         let route = |host: &str, unit: &str, port: u16| RouteEntry {
@@ -396,29 +407,40 @@ mod tests {
         let routes = [
             route("web.app-1.localhost", "web", 4100),
             route("migrate.app-1.localhost", "migrate", 4104),
-            route("files.app-1.localhost", "port-8000", 8000),
+            route("pgadmin.app-1.localhost", "pgadmin", 5050),
         ];
-        let with_exposed = build(lanes.clone(), &routes, true);
-        let exposed: Vec<_> = with_exposed
+        let with_external = build(lanes.clone(), &routes, true);
+        let external: Vec<_> = with_external
             .units()
-            .filter(|u| u.key.kind == UnitKind::Exposed)
+            .filter(|u| u.key.kind == UnitKind::External)
             .collect();
-        assert_eq!(
-            exposed.len(),
-            1,
-            "the exposure of hidden admin's port is left out: {exposed:?}"
+        assert_eq!(external.len(), 3, "{external:?}");
+        let pgadmin = external
+            .iter()
+            .find(|u| u.key.name == "pgadmin")
+            .expect("pgadmin is listed");
+        assert_eq!(pgadmin.state, "external", "its project runs a lane");
+        assert_eq!(pgadmin.hosts[0].host, "pgadmin.app-1.localhost");
+        let docs = external
+            .iter()
+            .find(|u| u.key.name == "docs")
+            .expect("docs is listed");
+        assert_eq!(docs.state, "stopped", "its project runs nothing");
+        let mirrored = with_external.mirrored_ports();
+        assert!(mirrored.contains_key(&5050));
+        assert!(
+            !mirrored.contains_key(&8200) && !mirrored.contains_key(&8000),
+            "hidden vault and idle docs are not mirrored: {mirrored:?}"
         );
-        let port = exposed[0];
-        assert_eq!(port.key.name, "port-8000");
-        assert_eq!(port.hosts[0].host, "files.app-1.localhost");
-        assert!(with_exposed.mirrored_ports().contains_key(&8000));
+        assert!(with_external.advertised_ports().contains(&8000));
+        let lanes: Vec<LaneSummary> = lanes.into_iter().filter(|l| l.project == "app").collect();
         let registry = build(lanes, &routes, false);
         assert_eq!(registry.lanes().count(), 1);
         let units: Vec<_> = registry.units().collect();
         assert_eq!(
             units.len(),
             5,
-            "exec skipped, exposed left out without the feature: {units:?}"
+            "exec skipped, external left out without the feature: {units:?}"
         );
         let web = units
             .iter()

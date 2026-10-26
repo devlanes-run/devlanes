@@ -28,7 +28,7 @@ This page covers daily use. Read a reference first when the task is about the co
 
 A lane reference is `project@N` (lane number), `project@branch`, or `N` / `branch` alone inside the repository. Lane 0 is the main checkout.
 
-A unit is a service, task, `exec` command or an exposed port (`port-8000`), referenced as `[lane:]unit`: `api`, `2:api`, `acme@feat/login:web`. Commands that take several units accept globs and tags: `"api-*"`, `+backend`.
+A unit is a service, task, `exec` command or `infra.external` entry, referenced as `[lane:]unit`: `api`, `2:api`, `acme@feat/login:web`. Commands that take several units accept globs and tags: `"api-*"`, `+backend`.
 
 Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged. A reference that matches nothing or several lanes fails with exit 3 and lists the candidates.
 
@@ -47,7 +47,7 @@ Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged.
 | Restart after a code change | `devlanes restart api` |
 | Run a configured task | `devlanes run --list`, then `devlanes run migrate` |
 | Ad-hoc long-running command | `devlanes exec --name storybook -- pnpm storybook` |
-| Route a port the config does not know | `devlanes expose 8000 --host docs`, `devlanes expose --remove 8000` |
+| Route a server devlanes does not run | `infra.external` in `devlanes.local.yaml` ([Ports outside the config](#ports-outside-the-config)) |
 | URL of a service | `devlanes url print web` |
 | Environment of a unit | `devlanes env show api`, or `eval "$(devlanes env export api)"` |
 | Tests against the stack | `devlanes with -- pnpm test:e2e` |
@@ -90,7 +90,8 @@ Failures come first, each with its last log lines and the command that shows mor
 | `ready` | Up and passing its ready check. Use it. |
 | `frozen`, `throttled` | A ready service in a lane that had no activity for a while (agent output shows `ready` with `power=frozen` or `power=throttled`, JSON `state: ready` with a `power` field). Any request, connection or devlanes command on the lane resumes it; no action needed. |
 | `starting`, `queued` | Starting, or waiting for a start slot. `devlanes wait UNIT --timeout 180s`. |
-| `running` | A task or exec in progress. Wait for it or read its logs. An exposed port (kind `exposed`) reads `running` while it is listed; it has no process or logs. |
+| `running` | A task or exec in progress. Wait for it or read its logs. |
+| `external` | An `infra.external` entry: devlanes routes its port and hostnames but runs nothing there, so it has no logs and `start` or `stop` do not apply. Whatever listens on the port is yours to run. |
 | `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code or config and `devlanes restart UNIT`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. |
 | `exited` | A task or exec that ended. `devlanes logs UNIT --tail 50` shows how. |
 | `stopping`, `stopped`, `idle` | Not running. `devlanes start UNIT` when you need it. |
@@ -116,7 +117,17 @@ devlanes stop --mine
 
 ## Ports outside the config
 
-An `exec` command gets no port or hostname from devlanes. When it serves one, such as `devlanes exec --name docs -- python -m http.server 8000`, run `devlanes expose 8000 --host docs`: the lane lists the port as unit `port-8000`, `https://docs.<lane domain>` routes to it, and machines connected with `devlanes remote connect` mirror it. It lasts until `devlanes expose --remove 8000`, a stop of the whole lane or a daemon restart. `devlanes expose ls` lists the exposed ports.
+An `exec` command gets no port or hostname from devlanes, and nothing devlanes neither runs nor declares is reachable from machines connected with `devlanes remote connect`. To give an ad-hoc server, such as `devlanes exec --name docs-server -- python -m http.server 8000`, a hostname or make it reachable from those machines, declare it in `devlanes.local.yaml` next to `devlanes.yaml`. That file holds one developer's changes and stays out of Git; create it when it does not exist, and add it to `.gitignore` if it is not ignored yet:
+
+```yaml
+infra:
+  external:
+    docs:
+      address: 127.0.0.1:8000
+      hosts: "docs.${{ lane.domain }}"
+```
+
+devlanes reads it with `devlanes.yaml`: every lane of the project lists the unit `docs` of kind `external`, `https://docs.<lane domain>` routes to the port, and connected machines mirror it while a lane of the project runs. Only `127.0.0.1:<port>` and `[::1]:<port>` are accepted, and a port devlanes allocated to a unit is a config error, so use a port outside `ports.range` (20000-32767 by default), such as a tool's usual 8000. Put the entry in `devlanes.yaml` instead when the whole team runs that server, and add `hidden: true` to keep it off connected machines. Remove the entry when the server is gone.
 
 ## Working on a remote machine
 
