@@ -913,6 +913,16 @@ impl Drop for ForgetCode {
     }
 }
 
+/// Clears a flag when dropped, however the code holding it ends.
+struct ClearOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for ClearOnDrop<'_> {
+    /// Sets the flag to false.
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Relaxed);
+    }
+}
+
 /// Removes a tunnel from the box's client list when its registry feed ends.
 struct ClientGuard {
     engine: Arc<Inner>,
@@ -1464,8 +1474,10 @@ impl Inner {
         self.remote.restoring.store(true, Ordering::Relaxed);
         let engine = self.clone();
         let task = tokio::spawn(async move {
+            // Also on a panic or an abort, which would otherwise keep the
+            // daemon from ever exiting on idle.
+            let _restored = ClearOnDrop(&engine.remote.restoring);
             engine.restore_wanted().await;
-            engine.remote.restoring.store(false, Ordering::Relaxed);
         });
         *lock(&self.remote.restore) = Some(task);
     }
@@ -2190,7 +2202,13 @@ mod tests {
         assert!(remotes.is_idle(), "no box");
         remotes.restoring.store(true, Ordering::Relaxed);
         assert!(!remotes.is_idle(), "restoring");
-        remotes.restoring.store(false, Ordering::Relaxed);
+        // A restore that panics still ends the restoring state.
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _restored = ClearOnDrop(&remotes.restoring);
+            panic!("restore failed");
+        }));
+        assert!(panicked.is_err());
+        assert!(remotes.is_idle(), "restoring ended with the panic");
         // A code someone is about to type keeps the daemon up.
         lock(&remotes.codes)
             .mint(std::time::Instant::now())
