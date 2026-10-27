@@ -30,13 +30,22 @@ const CHUNK: usize = 1024 * 1024;
 /// Syncs one client may follow at once; each holds a watcher and a task here.
 const MAX_SUBSCRIPTIONS: usize = 16;
 
+/// The entries the box offered clients when it was asked after registry
+/// change `.0`; `None` before the first answer.
+type Offered = (u64, Option<Arc<Vec<SyncEntry>>>);
+
 /// [`SyncSource`] for the entries the box daemon lists in `sync.status`.
 pub(crate) struct DaemonSync {
     paths: Paths,
     slots: Arc<Semaphore>,
-    /// Bumped on every registry change a session reports, which makes each
-    /// follow check that its entry is still offered.
+    /// Counts the registry changes a session reports.
     changes: watch::Sender<u64>,
+    /// What the box offers, asked once per registry change for every follow
+    /// at once ([`look_up_offers`]), so each follow can check that its entry
+    /// is still offered.
+    offered: Arc<watch::Sender<Offered>>,
+    /// Starts [`look_up_offers`] with the first follow.
+    looking_up: std::sync::Once,
 }
 
 impl DaemonSync {
@@ -46,6 +55,8 @@ impl DaemonSync {
             paths,
             slots: Arc::new(Semaphore::new(MAX_SUBSCRIPTIONS)),
             changes: watch::Sender::new(0),
+            offered: Arc::new(watch::Sender::new((0, None))),
+            looking_up: std::sync::Once::new(),
         }
     }
 
@@ -66,7 +77,18 @@ impl DaemonSync {
                 "this client already follows {MAX_SUBSCRIPTIONS} syncs on the box"
             ))
         })?;
+        self.looking_up.call_once(|| {
+            tokio::spawn(look_up_offers(
+                self.paths.clone(),
+                self.changes.subscribe(),
+                self.offered.clone(),
+            ));
+        });
         let wanted = (lane, unit, index);
+        // Taken before this follow's own lookup, so an answer to a change
+        // during it is checked and older answers are not.
+        let since = *self.changes.borrow();
+        let offered = self.offered.subscribe();
         let entry = entries(&self.paths)
             .await?
             .into_iter()
@@ -78,13 +100,31 @@ impl DaemonSync {
                 ))
             })?;
         let (revoke, revoked) = watch::channel(false);
-        tokio::spawn(revoke_when_withdrawn(
-            self.paths.clone(),
-            self.changes.subscribe(),
-            wanted,
-            revoke,
-        ));
+        tokio::spawn(revoke_when_withdrawn(offered, since, wanted, revoke));
         follow_entry(&entry, read_only_modes, input, permit, revoked)
+    }
+}
+
+/// Asks the box daemon what it offers after each registry change in
+/// `changes` while a follow listens on `offered`, once for all of them; a
+/// burst of changes during one answer costs one more. Ends with the
+/// [`DaemonSync`], which holds the sender of `changes`.
+async fn look_up_offers(
+    paths: Paths,
+    mut changes: watch::Receiver<u64>,
+    offered: Arc<watch::Sender<Offered>>,
+) {
+    while changes.changed().await.is_ok() {
+        let change = *changes.borrow_and_update();
+        if offered.receiver_count() == 0 {
+            continue;
+        }
+        match entries(&paths).await {
+            Ok(listed) => {
+                offered.send_replace((change, Some(Arc::new(listed))));
+            }
+            Err(error) => tracing::debug!(%error, "cannot check the followed sync entries"),
+        }
     }
 }
 
@@ -111,33 +151,35 @@ fn offers(entry: &SyncEntry, wanted: &(String, String, usize)) -> bool {
 }
 
 /// Sets `revoke` once the box no longer offers the `wanted` entry to clients,
-/// checked after each registry change in `changes`, the way a data stream to
-/// a unit that stopped or became hidden is closed. Ends with the follow,
-/// which drops the receiver.
+/// as `offered` says after a registry change later than `since`, the way a
+/// data stream to a unit that stopped or became hidden is closed. Ends with
+/// the follow, which drops the receiver.
 async fn revoke_when_withdrawn(
-    paths: Paths,
-    mut changes: watch::Receiver<u64>,
+    mut offered: watch::Receiver<Offered>,
+    since: u64,
     wanted: (String, String, usize),
     revoke: watch::Sender<bool>,
 ) {
     loop {
         tokio::select! {
             () = revoke.closed() => return,
-            changed = changes.changed() => {
+            changed = offered.changed() => {
                 if changed.is_err() {
                     return;
                 }
             }
         }
-        match entries(&paths).await {
-            Ok(listed) if !listed.iter().any(|entry| offers(entry, &wanted)) => {
-                let (lane, unit, index) = &wanted;
-                tracing::debug!(%lane, %unit, index, "a followed sync entry is no longer offered");
-                let _ = revoke.send(true);
-                return;
+        let withdrawn = match &*offered.borrow_and_update() {
+            (change, Some(listed)) if *change > since => {
+                !listed.iter().any(|entry| offers(entry, &wanted))
             }
-            Ok(_) => {}
-            Err(error) => tracing::debug!(%error, "cannot check a followed sync entry"),
+            _ => false,
+        };
+        if withdrawn {
+            let (lane, unit, index) = &wanted;
+            tracing::debug!(%lane, %unit, index, "a followed sync entry is no longer offered");
+            let _ = revoke.send(true);
+            return;
         }
     }
 }
@@ -505,24 +547,59 @@ mod tests {
         .await?
     }
 
-    /// A follow ends cleanly once a registry change finds its entry no longer
+    /// Follows sync entry 0 of `app@0:web` on `sync` and reads its feed up
+    /// to the end of the first pass.
+    async fn follow_until_ready(
+        sync: &DaemonSync,
+    ) -> Result<SyncFeed, Box<dyn std::error::Error + Send + Sync>> {
+        let (input, receiver) = mpsc::channel(4);
+        let mut feed = sync
+            .follow(
+                "app@0".into(),
+                "web".into(),
+                0,
+                false,
+                SyncInput::from_receiver(receiver),
+            )
+            .await?;
+        input
+            .send(SyncInputEvent::End)
+            .await
+            .map_err(|_| "the follow stopped reading its input")?;
+        loop {
+            match feed.next().await.ok_or("the feed ended before ready")?? {
+                SyncMessage::Manifest(value)
+                    if serde_json::from_value::<SyncManifest>(value.clone())
+                        .is_ok_and(|manifest| matches!(manifest, SyncManifest::Ready)) =>
+                {
+                    return Ok(feed);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Follows end cleanly once a registry change finds their entry no longer
     /// offered (the service became hidden or its lane stopped), and a change
-    /// that keeps it offered leaves the follow running.
+    /// that keeps it offered leaves them running. The box daemon is asked
+    /// once per change, however many follows there are.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_follow_ends_when_its_entry_is_withdrawn() -> crate::test_daemon::TestResult {
-        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         tokio::time::timeout(Duration::from_secs(30), async {
             let dir = tempfile::tempdir()?;
             let source = dir.path().join("src");
             tree(&source, 3);
             let paths = crate::test_daemon::home(dir.path())?;
             let offered = Arc::new(AtomicBool::new(true));
-            let listing = offered.clone();
+            let asked = Arc::new(AtomicUsize::new(0));
+            let (listing, counting) = (offered.clone(), asked.clone());
             let entry = json!({
                 "lane": "app@0", "project": "app", "unit": "web", "index": 0,
                 "from": source, "leaf": "src",
             });
             let daemon = crate::test_daemon::answer_all(&paths, move |_| {
+                counting.fetch_add(1, Ordering::SeqCst);
                 let items = if listing.load(Ordering::SeqCst) {
                     vec![entry.clone()]
                 } else {
@@ -534,45 +611,30 @@ mod tests {
             })
             .await?;
             let sync = DaemonSync::new(paths);
-            let (input, receiver) = mpsc::channel(4);
-            let mut feed = sync
-                .follow(
-                    "app@0".into(),
-                    "web".into(),
-                    0,
-                    false,
-                    SyncInput::from_receiver(receiver),
-                )
-                .await?;
-            input
-                .send(SyncInputEvent::End)
-                .await
-                .map_err(|_| "the follow stopped reading its input")?;
-            loop {
-                match feed.next().await.ok_or("the feed ended before ready")?? {
-                    SyncMessage::Manifest(value)
-                        if serde_json::from_value::<SyncManifest>(value.clone())
-                            .is_ok_and(|manifest| matches!(manifest, SyncManifest::Ready)) =>
-                    {
-                        break;
-                    }
-                    _ => {}
-                }
-            }
+            let mut first = follow_until_ready(&sync).await?;
+            let mut second = follow_until_ready(&sync).await?;
+            assert_eq!(asked.load(Ordering::SeqCst), 2, "one lookup per follow");
 
-            // Still offered: the follow goes on.
+            // Still offered: the follows go on.
             sync.registry_changed();
-            let quiet = tokio::time::timeout(Duration::from_millis(500), feed.next()).await;
+            while asked.load(Ordering::SeqCst) < 3 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let quiet = tokio::time::timeout(Duration::from_millis(500), first.next()).await;
             assert!(
                 quiet.is_err(),
                 "the feed moved: {:?}",
                 quiet.ok().flatten().map(|m| m.is_ok())
             );
+            assert_eq!(asked.load(Ordering::SeqCst), 3, "one lookup for both");
 
             offered.store(false, Ordering::SeqCst);
             sync.registry_changed();
-            let ended = tokio::time::timeout(Duration::from_secs(10), feed.next()).await?;
-            assert!(ended.is_none(), "the feed ends cleanly");
+            for feed in [&mut first, &mut second] {
+                let ended = tokio::time::timeout(Duration::from_secs(10), feed.next()).await?;
+                assert!(ended.is_none(), "the feed ends cleanly");
+            }
+            assert_eq!(asked.load(Ordering::SeqCst), 4, "one lookup for both");
             daemon.abort();
             Ok(())
         })
