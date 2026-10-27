@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                                                                              starting acme@1: task migrate  M monitor   D daemon
+ devlanes  1 acme   2 billing   3 shop                                                                                                            starting acme@1: task migrate  Monitor  Daemon  Boxes
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                                                                                                            1-9 or [ ] switch lanes
 ┌ @1 · 4/8 up · starting ──────────────────────┐┌ feat/checkout @1 · starting · 4 of 8 ready ──────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ▾ services                                 6 ││   ⠋ tasks      running                                                                                                                               │
@@ -23,9 +23,9 @@
 │     ● pgbouncer                              ││ lanes in acme                                                                                                                                        │
 │     ● postgres                               ││   main @0                  1 failed · 1 starting · 34 up                                                                                             │
 │     ● redis                                  ││ ▌ feat/checkout @1         starting · 4 of 8 ready                                                                                                   │
-│   ▸ setup                             1 done ││   fix/cache @2             not running · config changed                                                                                              │
-│                                              ││   spike/old-search @3      worktree missing                                                                                                          │
-│                                              ││                                                                                                                                                      │
+│   ▾ external                               1 ││   fix/cache @2             not running · config changed                                                                                              │
+│     · pgadmin       pgadmin.acme-1.localhost ││   spike/old-search @3      worktree missing                                                                                                          │
+│   ▸ setup                             1 done ││                                                                                                                                                      │
 │                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes lane new <branch> adds one.                                   │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -60,7 +60,7 @@
  x stop lane   r restart lane   p start with profiles   C clean lane   [ ] switch lane   / filter                                                                                 ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 179 bold, 180-187 dim, 191 bold, 192-198 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
 1: 0-6 dim, 8-9 dim, 10-13 red, 15-35 bold reversed, 37-47 dim, 50-51 dim, 52-67 yellow, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 1-24 bold reversed, 25-48 darkgray, 50-62 bold, 66-68 dim, 77-91 dim, 93-199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 65-71 dim, 199 darkgray
@@ -85,9 +85,9 @@
 22: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 50-62 bold, 199 darkgray
 23: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 199 darkgray
 24: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-51 bold, 85-99 dim, 199 darkgray
-25: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
-26: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
-27: 0 darkgray, 47-48 darkgray, 199 darkgray
+25: 0 darkgray, 4-5 dim, 45 dim, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
+26: 0 darkgray, 6-7 dim, 8-14 cyan, 22-45 dim, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
+27: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 199 darkgray
 28: 0 darkgray, 47-48 darkgray, 50-163 dim, 199 darkgray
 29: 0 darkgray, 47-48 darkgray, 199 darkgray
 30: 0 darkgray, 47-48 darkgray, 199 darkgray

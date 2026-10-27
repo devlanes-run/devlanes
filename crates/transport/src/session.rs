@@ -11,13 +11,14 @@ use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::mux::{self, MuxClient, MuxError, MuxStream};
+use crate::pairing::PairingClient;
 use crate::registry::ClientRegistry;
-use crate::rpc::{RpcCall, RpcCallError};
 use crate::sync::SyncSubscription;
 use crate::transport::{BoxDuplex, Transport, TransportError};
 use crate::wire::{
-    self, BoxControl, Channel, ClientControl, DialTarget, OpenReply, OpenRequest, PROTOCOL_VERSION,
-    Prefixed, RejectReason, WireError,
+    self, BoxControl, BoxInfo, Channel, ClientControl, DialTarget, FEATURES, MIRROR_REPORT,
+    OpenReply, OpenRequest, PROTOCOL_VERSION, PairingReason, Prefixed, RejectReason, SYNC_ZSTD,
+    Secret, WireError, negotiate,
 };
 
 /// Liveness and handshake limits shared by both ends.
@@ -46,24 +47,39 @@ impl Default for Timing {
 pub struct SessionOptions {
     /// Version label sent to the box for diagnostics.
     pub client: String,
+    /// Random id of this machine, kept across restarts, by which the box lists it.
+    pub client_id: String,
+    /// This machine's host name, shown next to the id on the box.
+    pub client_name: String,
+    /// Features this client implements; defaults to [`FEATURES`].
+    pub features: Vec<String>,
     /// Ping and handshake limits.
     pub timing: Timing,
     /// State replaced by each session's snapshot; share it across reconnects.
     pub registry: ClientRegistry,
     /// Limit for one whole attempt in a [`crate::Link`]: transport connect
-    /// (including SSH prompts) plus handshake.
+    /// plus handshake, including the time a person takes to answer SSH
+    /// prompts and the pairing code prompt.
     pub connect_timeout: Duration,
+    /// The remote token for the box and the person with a pairing code;
+    /// without one the client sends no token and cannot pair.
+    pub pairing: Option<Arc<dyn PairingClient>>,
 }
 
 impl SessionOptions {
-    /// Default timing, a fresh registry and a 3-minute attempt limit, enough for a
-    /// person to answer SSH prompts.
+    /// Default timing, this build's features, no identity, no pairing, a fresh
+    /// registry and a 3-minute attempt limit, enough for a person to answer
+    /// SSH prompts.
     pub fn new(client: impl Into<String>) -> Self {
         Self {
             client: client.into(),
+            client_id: String::new(),
+            client_name: String::new(),
+            features: FEATURES.iter().map(|name| (*name).to_owned()).collect(),
             timing: Timing::default(),
             registry: ClientRegistry::new(),
             connect_timeout: Duration::from_secs(180),
+            pairing: None,
         }
     }
 }
@@ -115,9 +131,9 @@ pub enum SessionError {
     Handshake(&'static str),
     /// Client and box speak different protocol revisions.
     #[error(
-        "the box runs {server} (protocol {remote}) but this client speaks protocol {local}. \
-         Install the matching devlanes release on the box, then run `devlanes daemon restart` \
-         there when its managed processes may stop. Box daemons are never upgraded automatically"
+        "{} but this client speaks protocol {local}. Install the same release on both machines, \
+         then run `devlanes daemon restart` on the box",
+        box_protocol(server, *remote)
     )]
     IncompatibleProtocol {
         /// This client's revision.
@@ -131,6 +147,21 @@ pub enum SessionError {
     /// as the stderr of a remote `devlanes tunnel --stdio` that exited.
     #[error("box closed the connection: {0}")]
     Closed(String),
+    /// The box serves only paired clients and nobody gave a pairing code.
+    #[error("{}", needs_pairing_text(*.0))]
+    NeedsPairing(PairingReason),
+    /// The box takes no connections (`remote.allow_connections: false` there);
+    /// the text is the box's reason.
+    #[error("{0}")]
+    Refused(String),
+    /// The box refused the pairing code.
+    #[error("{message}")]
+    PairingRefused {
+        /// The box's reason.
+        message: String,
+        /// How long the box refuses every code.
+        retry_after: Option<Duration>,
+    },
     /// The session already ended.
     #[error("{0}")]
     Ended(SessionEnd),
@@ -141,8 +172,44 @@ impl SessionError {
     pub fn is_permanent(&self) -> bool {
         match self {
             Self::Transport(error) => error.is_permanent(),
-            Self::IncompatibleProtocol { .. } => true,
+            // Retrying cannot help until someone changes the box's config.
+            Self::IncompatibleProtocol { .. } | Self::Refused(_) => true,
             _ => false,
+        }
+    }
+
+    /// Reports whether a person has to sign in again before reconnecting.
+    pub fn is_needs_auth(&self) -> bool {
+        matches!(self, Self::Transport(error) if error.is_needs_auth())
+    }
+
+    /// Reports whether a person has to pair this client with the box (with a
+    /// new code) before reconnecting.
+    pub fn is_needs_pairing(&self) -> bool {
+        matches!(self, Self::NeedsPairing(_) | Self::PairingRefused { .. })
+    }
+}
+
+/// The box's side of a protocol mismatch: its version label when it sent
+/// one (a welcome of another revision), else the revision alone, which is
+/// all a box's refusal before pairing says.
+fn box_protocol(server: &str, remote: u32) -> String {
+    if server.is_empty() {
+        format!("the box speaks protocol {remote}")
+    } else {
+        format!("the box runs {server} (protocol {remote})")
+    }
+}
+
+/// What [`SessionError::NeedsPairing`] says for `reason`.
+fn needs_pairing_text(reason: PairingReason) -> &'static str {
+    match reason {
+        PairingReason::Missing => {
+            "the box needs a pairing code from `devlanes daemon pair` on the box"
+        }
+        PairingReason::Invalid => {
+            "the box no longer accepts this machine's pairing and needs a new code from \
+             `devlanes daemon pair` on the box"
         }
     }
 }
@@ -183,11 +250,13 @@ pub struct Session {
 
 struct Inner {
     mux: MuxClient,
-    server: String,
+    welcome: Welcome,
     registry: ClientRegistry,
     timing: Timing,
     end: watch::Receiver<Option<SessionEnd>>,
     cancel: CancellationToken,
+    /// The latest mirror report, which the control task sends once.
+    report: watch::Sender<Option<Value>>,
 }
 
 impl Drop for Inner {
@@ -200,10 +269,19 @@ impl Drop for Inner {
 impl fmt::Debug for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Session")
-            .field("server", &self.inner.server)
+            .field("server", &self.inner.welcome.server)
+            .field("features", &self.inner.welcome.features)
             .field("end", &*self.inner.end.borrow())
             .finish()
     }
+}
+
+/// What the box's welcome told this session.
+struct Welcome {
+    server: String,
+    /// Features both ends list.
+    features: Vec<String>,
+    box_info: BoxInfo,
 }
 
 impl Session {
@@ -223,25 +301,30 @@ impl Session {
     pub async fn establish(io: BoxDuplex, options: SessionOptions) -> Result<Self, SessionError> {
         let mux = mux::client(io);
         match handshake(&mux, &options).await {
-            Ok((control, server)) => {
+            Ok((control, welcome)) => {
                 let (end_tx, end) = watch::channel(None);
                 let cancel = CancellationToken::new();
+                let report = watch::Sender::new(None);
                 tokio::spawn(run_control(
                     control,
-                    options.registry.clone(),
-                    options.timing,
-                    cancel.clone(),
-                    end_tx,
-                    mux.clone(),
+                    Control {
+                        registry: options.registry.clone(),
+                        timing: options.timing,
+                        cancel: cancel.clone(),
+                        end_tx,
+                        mux: mux.clone(),
+                        reports: report.subscribe(),
+                    },
                 ));
                 Ok(Self {
                     inner: Arc::new(Inner {
                         mux,
-                        server,
+                        welcome,
                         registry: options.registry,
                         timing: options.timing,
                         end,
                         cancel,
+                        report,
                     }),
                 })
             }
@@ -254,7 +337,22 @@ impl Session {
 
     /// The box's version label from the handshake.
     pub fn server(&self) -> &str {
-        &self.inner.server
+        &self.inner.welcome.server
+    }
+
+    /// Features both ends list, which this session may use.
+    pub fn features(&self) -> &[String] {
+        &self.inner.welcome.features
+    }
+
+    /// Whether both ends list `feature`.
+    pub fn has_feature(&self, feature: &str) -> bool {
+        self.features().iter().any(|name| name == feature)
+    }
+
+    /// What the box reported about itself in the handshake.
+    pub fn box_info(&self) -> &BoxInfo {
+        &self.inner.welcome.box_info
     }
 
     /// The registry this session keeps up to date.
@@ -280,26 +378,29 @@ impl Session {
         }
     }
 
-    /// Starts a forwarded daemon request that may stream replies and take input.
-    pub async fn call(&self, request: Value) -> Result<RpcCall, SessionError> {
-        let channel = self.open_stream(&OpenRequest::Rpc { request }).await?;
-        Ok(RpcCall::new(channel))
-    }
-
-    /// Sends a request without input and returns its first reply.
-    ///
-    /// Use [`Session::call`] for requests that stream several replies.
-    pub async fn request(&self, request: Value) -> Result<Value, RpcCallError> {
-        let mut call = self.call(request).await?;
-        call.finish_input().await?;
-        let value = call.next().await.ok_or(RpcCallError::NoValue)??;
-        Ok(value)
-    }
-
     /// Starts a sync subscription; the request is opaque to the transport.
     pub async fn subscribe_sync(&self, request: Value) -> Result<SyncSubscription, SessionError> {
         let channel = self.open_stream(&OpenRequest::Sync { request }).await?;
-        Ok(SyncSubscription::new(channel))
+        Ok(SyncSubscription::new(channel, self.has_feature(SYNC_ZSTD)))
+    }
+
+    /// Tells the box what this client mirrors of it, when both ends list
+    /// [`MIRROR_REPORT`]; false otherwise. The report is opaque to the
+    /// transport. A report equal to the last one of this session is not sent
+    /// again, and reports given faster than the control stream takes them
+    /// replace each other, so callers may report after every change.
+    pub fn report(&self, report: Value) -> bool {
+        if !self.has_feature(MIRROR_REPORT) {
+            return false;
+        }
+        self.inner.report.send_if_modified(|current| {
+            if current.as_ref() == Some(&report) {
+                return false;
+            }
+            *current = Some(report);
+            true
+        });
+        true
     }
 
     /// Returns the end reason once the session ended.
@@ -337,25 +438,66 @@ impl Session {
     }
 }
 
-/// Opens the control stream, checks the protocol and applies the first snapshot.
+/// Opens the control stream, checks the protocol, pairs when the box asks for
+/// it, negotiates features and applies the first snapshot.
+///
+/// Each exchange with the box has the handshake limit. Asking a person for a
+/// pairing code does not: the [`PairingClient`] bounds it, and a
+/// [`crate::Link`] bounds the whole attempt.
 async fn handshake(
     mux: &MuxClient,
     options: &SessionOptions,
-) -> Result<(Channel<MuxStream>, String), SessionError> {
+) -> Result<(Channel<MuxStream>, Welcome), SessionError> {
     let limit = options.timing.handshake_timeout;
-    let exchange = async {
+    let token = match &options.pairing {
+        Some(pairing) => pairing.token().await,
+        None => None,
+    };
+    let (mut control, first) = within(mux, limit, async {
         let mut control = wire::channel(mux.open().await?);
         let hello = OpenRequest::Control {
             protocol: PROTOCOL_VERSION,
             client: options.client.clone(),
+            features: options.features.clone(),
+            client_id: options.client_id.clone(),
+            client_name: options.client_name.clone(),
+            token: token.map(Secret),
         };
         wire::send(&mut control, &hello).await?;
-        let server = match wire::recv::<_, BoxControl>(&mut control).await? {
-            Some((BoxControl::Welcome { protocol, server }, _)) if protocol == PROTOCOL_VERSION => {
-                server
-            }
+        let first = wire::recv::<_, BoxControl>(&mut control).await?;
+        Ok((control, first))
+    })
+    .await?;
+    let first = match first {
+        Some((BoxControl::PairingRequired { reason }, _)) => {
+            pair(mux, &mut control, options, reason).await?;
+            None
+        }
+        other => Some(other),
+    };
+    let welcome = within(mux, limit, async {
+        let first = match first {
+            Some(first) => first,
+            None => wire::recv::<_, BoxControl>(&mut control).await?,
+        };
+        let welcome = match first {
             Some((
-                BoxControl::Welcome { protocol, server }
+                BoxControl::Welcome {
+                    protocol,
+                    server,
+                    features,
+                    box_info,
+                },
+                _,
+            )) if protocol == PROTOCOL_VERSION => Welcome {
+                server,
+                features: negotiate(&options.features, &features),
+                box_info,
+            },
+            Some((
+                BoxControl::Welcome {
+                    protocol, server, ..
+                }
                 | BoxControl::Incompatible { protocol, server },
                 _,
             )) => {
@@ -365,6 +507,9 @@ async fn handshake(
                     server,
                 });
             }
+            Some((BoxControl::Refused { message }, _)) => {
+                return Err(SessionError::Refused(message));
+            }
             Some(_) => return Err(SessionError::Handshake("expected welcome")),
             None => return Err(SessionError::Handshake("box closed the control stream")),
         };
@@ -373,17 +518,79 @@ async fn handshake(
             Some(_) => return Err(SessionError::Handshake("expected registry snapshot")),
             None => return Err(SessionError::Handshake("box closed the control stream")),
         }
-        Ok((control, server))
+        Ok(welcome)
+    })
+    .await?;
+    Ok((control, welcome))
+}
+
+/// Answers the box's request to pair: asks the [`PairingClient`] for a code,
+/// sends it and keeps the token the box sends back. Without a code the
+/// session needs pairing; a refused code says why.
+async fn pair(
+    mux: &MuxClient,
+    control: &mut Channel<MuxStream>,
+    options: &SessionOptions,
+    reason: PairingReason,
+) -> Result<(), SessionError> {
+    let Some(pairing) = &options.pairing else {
+        return Err(SessionError::NeedsPairing(reason));
     };
+    let Some(code) = pairing
+        .code(reason)
+        .await
+        .filter(|code| !code.trim().is_empty())
+    else {
+        return Err(SessionError::NeedsPairing(reason));
+    };
+    let token = within(mux, options.timing.handshake_timeout, async {
+        let message = ClientControl::Pair { code: Secret(code) };
+        wire::send(control, &message).await?;
+        match wire::recv::<_, BoxControl>(control).await? {
+            Some((BoxControl::Paired { token }, _)) => Ok(token.0),
+            Some((
+                BoxControl::PairingRefused {
+                    message,
+                    retry_after_ms,
+                },
+                _,
+            )) => Err(SessionError::PairingRefused {
+                message,
+                retry_after: retry_after_ms.map(Duration::from_millis),
+            }),
+            Some(_) => Err(SessionError::Handshake("expected the pairing answer")),
+            None => Err(SessionError::Handshake("box closed the control stream")),
+        }
+    })
+    .await?;
+    // The box has the pairing now; losing the token only costs a new code
+    // on the next connection, so this session goes on.
+    if let Err(error) = pairing.store(token).await {
+        tracing::warn!(%error, "cannot keep the box's remote token");
+    }
+    Ok(())
+}
+
+/// Runs one handshake exchange within `limit`. A failure other than the
+/// box's own answer (a protocol mismatch, a refusal, a refused pairing code) is replaced
+/// by the pipe's error when the pipe died, which usually says why.
+async fn within<T>(
+    mux: &MuxClient,
+    limit: Duration,
+    exchange: impl std::future::Future<Output = Result<T, SessionError>>,
+) -> Result<T, SessionError> {
     match timeout(limit, exchange).await {
         Err(_) => Err(SessionError::HandshakeTimeout),
-        Ok(Err(error @ SessionError::IncompatibleProtocol { .. })) => Err(error),
-        // A closed control stream usually means the pipe died; its error says why.
+        Ok(Err(
+            error @ (SessionError::IncompatibleProtocol { .. }
+            | SessionError::Refused(_)
+            | SessionError::PairingRefused { .. }),
+        )) => Err(error),
         Ok(Err(error)) => match mux.failure_within(FAILURE_GRACE).await {
             Some(reason) => Err(SessionError::Closed(reason)),
             None => Err(error),
         },
-        Ok(Ok(established)) => Ok(established),
+        Ok(Ok(value)) => Ok(value),
     }
 }
 
@@ -398,15 +605,28 @@ async fn lost(mux: &MuxClient) -> SessionEnd {
     }
 }
 
-/// Applies registry changes and pings until the session ends.
-async fn run_control(
-    mut control: Channel<MuxStream>,
+/// What the control task of one session works with.
+struct Control {
     registry: ClientRegistry,
     timing: Timing,
     cancel: CancellationToken,
     end_tx: watch::Sender<Option<SessionEnd>>,
     mux: MuxClient,
-) {
+    /// Mirror reports to send, latest only.
+    reports: watch::Receiver<Option<Value>>,
+}
+
+/// Applies registry changes, pings and sends mirror reports until the
+/// session ends.
+async fn run_control(mut control: Channel<MuxStream>, parts: Control) {
+    let Control {
+        registry,
+        timing,
+        cancel,
+        end_tx,
+        mux,
+        mut reports,
+    } = parts;
     let mut ticker =
         tokio::time::interval_at(Instant::now() + timing.ping_interval, timing.ping_interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -446,6 +666,17 @@ async fn run_control(
                     Err(_) => break SessionEnd::PingTimeout,
                 }
             }
+            Ok(()) = reports.changed() => {
+                let report = reports.borrow_and_update().clone();
+                let Some(report) = report else { continue };
+                let message = ClientControl::Mirror { report };
+                // A stalled write is as dead as a stalled ping.
+                match timeout(timing.ping_timeout, wire::send(&mut control, &message)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => break SessionEnd::Failed(error.to_string()),
+                    Err(_) => break SessionEnd::PingTimeout,
+                }
+            }
             () = sleep_until_opt(deadline) => {
                 let silent_since = outstanding.map(|(_, sent)| sent.max(mux.last_inbound()));
                 if silent_since.is_some_and(|since| since + timing.ping_timeout > Instant::now()) {
@@ -478,25 +709,22 @@ mod tests {
     use crate::server::{BoxServices, LoopbackDialer, ServeError, ServeOptions, serve};
     use crate::sync::NoSync;
 
-    struct NoRpc;
-
-    #[async_trait::async_trait]
-    impl crate::rpc::RpcHandler for NoRpc {
-        async fn call(
-            &self,
-            _request: Value,
-            _input: crate::rpc::RpcInput,
-        ) -> Result<crate::rpc::RpcReplyStream, crate::rpc::RpcError> {
-            Err(crate::rpc::RpcError::new("unused"))
-        }
-    }
-
     fn services() -> BoxServices {
         BoxServices {
             registry: Arc::new(SharedRegistry::new(RegistrySnapshot::default(), 4)),
-            rpc: Arc::new(NoRpc),
             dialer: Arc::new(LoopbackDialer),
             sync: Arc::new(NoSync),
+            pairing: Arc::new(crate::NoPairing),
+        }
+    }
+
+    /// A welcome for this protocol without features or box info.
+    fn welcome() -> BoxControl {
+        BoxControl::Welcome {
+            protocol: PROTOCOL_VERSION,
+            server: "box".into(),
+            features: Vec::new(),
+            box_info: BoxInfo::default(),
         }
     }
 
@@ -504,7 +732,7 @@ mod tests {
     async fn data_keeps_a_session_alive_without_pongs() -> Result<(), Box<dyn std::error::Error>> {
         timeout(Duration::from_secs(10), async {
             let (client_io, box_io) = tokio::io::duplex(1024 * 1024);
-            // A box that never answers pings but streams one call's reply for a while,
+            // A box that never answers pings but streams one sync feed for a while,
             // like a large transfer that queues pongs behind data.
             let streaming = Arc::new(std::sync::atomic::AtomicBool::new(true));
             let flag = streaming.clone();
@@ -512,27 +740,25 @@ mod tests {
                 let mut mux = mux::server(Box::new(box_io));
                 let mut control = wire::channel(mux.accept().await.ok_or("no control")?);
                 let _hello = wire::recv::<_, OpenRequest>(&mut control).await?;
-                let welcome = BoxControl::Welcome {
-                    protocol: PROTOCOL_VERSION,
-                    server: "box".into(),
-                };
-                wire::send(&mut control, &welcome).await?;
+                wire::send(&mut control, &welcome()).await?;
                 let snapshot = BoxControl::Snapshot {
                     snapshot: RegistrySnapshot::default(),
                 };
                 wire::send(&mut control, &snapshot).await?;
-                let mut call = wire::channel(mux.accept().await.ok_or("no call")?);
+                let mut feed = wire::channel(mux.accept().await.ok_or("no sync stream")?);
                 let started = Instant::now();
                 while started.elapsed() < Duration::from_millis(800) {
-                    let item = crate::wire::RpcBoxFrame::Item { value: Value::Null };
-                    wire::send(&mut call, &item).await?;
+                    let item = crate::wire::SyncFrame::Manifest {
+                        manifest: Value::Null,
+                    };
+                    wire::send(&mut feed, &item).await?;
                     tokio::time::sleep(Duration::from_millis(20)).await;
                 }
                 flag.store(false, std::sync::atomic::Ordering::SeqCst);
                 // Hold everything open, reading pings without answering, until the
                 // client gives up.
                 while let Ok(Some(_)) = wire::recv::<_, Value>(&mut control).await {}
-                drop(call);
+                drop(feed);
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
             });
             let mut options = SessionOptions::new("client");
@@ -542,8 +768,8 @@ mod tests {
                 handshake_timeout: Duration::from_secs(5),
             };
             let session = Session::establish(Box::new(client_io), options).await?;
-            let mut call = session.call(Value::Null).await?;
-            let reader = tokio::spawn(async move { while let Some(Ok(_)) = call.next().await {} });
+            let mut feed = session.subscribe_sync(Value::Null).await?;
+            let reader = tokio::spawn(async move { while let Some(Ok(_)) = feed.next().await {} });
             while streaming.load(std::sync::atomic::Ordering::SeqCst) {
                 assert_eq!(session.end(), None, "session died while data was flowing");
                 tokio::time::sleep(Duration::from_millis(25)).await;
@@ -567,19 +793,38 @@ mod tests {
             let hello = OpenRequest::Control {
                 protocol: PROTOCOL_VERSION + 1,
                 client: "future".into(),
+                features: Vec::new(),
+                client_id: String::new(),
+                client_name: String::new(),
+                token: None,
             };
             wire::send(&mut control, &hello).await?;
             let reply = wire::recv::<_, BoxControl>(&mut control).await?;
-            assert!(matches!(
-                reply,
-                Some((
-                    BoxControl::Incompatible {
-                        protocol: PROTOCOL_VERSION,
-                        ..
-                    },
-                    _
-                ))
-            ));
+            // The revision only: no version label before pairing.
+            assert!(
+                matches!(
+                    &reply,
+                    Some((
+                        BoxControl::Incompatible {
+                            protocol: PROTOCOL_VERSION,
+                            server,
+                        },
+                        _
+                    )) if server.is_empty()
+                ),
+                "{reply:?}"
+            );
+            let error = SessionError::IncompatibleProtocol {
+                local: PROTOCOL_VERSION + 1,
+                remote: PROTOCOL_VERSION,
+                server: String::new(),
+            };
+            assert!(
+                error
+                    .to_string()
+                    .starts_with(&format!("the box speaks protocol {PROTOCOL_VERSION} but")),
+                "{error}"
+            );
             let result = server.await?;
             assert!(matches!(result, Err(ServeError::IncompatibleClient { .. })));
             Ok(())
@@ -641,6 +886,274 @@ mod tests {
         .await?
     }
 
+    /// A box gate that serves `TOKEN` and trades `CODE` for it.
+    #[derive(Default)]
+    struct OneCode {
+        claims: std::sync::atomic::AtomicU32,
+    }
+
+    const TOKEN: &str = "dl_rt_test";
+    const CODE: &str = "ABCD-EFGH";
+
+    #[async_trait::async_trait]
+    impl crate::PairingGate for OneCode {
+        async fn check(
+            &self,
+            _: &crate::ClientInfo,
+            token: Option<&str>,
+        ) -> Result<crate::PairingCheck, crate::BoxError> {
+            Ok(match token {
+                Some(TOKEN) => crate::PairingCheck::Allowed,
+                Some(_) => crate::PairingCheck::Required(PairingReason::Invalid),
+                None => crate::PairingCheck::Required(PairingReason::Missing),
+            })
+        }
+
+        async fn claim(
+            &self,
+            _: &crate::ClientInfo,
+            code: &str,
+        ) -> Result<crate::PairingClaim, crate::BoxError> {
+            self.claims
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(if code == CODE {
+                crate::PairingClaim::Paired {
+                    token: TOKEN.into(),
+                }
+            } else {
+                crate::PairingClaim::Refused {
+                    message: "the code is wrong".into(),
+                    retry_after: Some(Duration::from_secs(5)),
+                }
+            })
+        }
+    }
+
+    /// A client holding `token` that answers every code question with `code`.
+    #[derive(Default)]
+    struct Holder {
+        token: std::sync::Mutex<Option<String>>,
+        code: Option<&'static str>,
+        asked: std::sync::Mutex<Vec<PairingReason>>,
+    }
+
+    impl Holder {
+        /// Why the box asked for codes so far.
+        fn asked(&self) -> Vec<PairingReason> {
+            self.asked
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl PairingClient for Holder {
+        async fn token(&self) -> Option<String> {
+            self.token.lock().ok()?.clone()
+        }
+
+        async fn code(&self, reason: PairingReason) -> Option<String> {
+            self.asked.lock().ok()?.push(reason);
+            self.code.map(str::to_owned)
+        }
+
+        async fn store(&self, token: String) -> Result<(), crate::BoxError> {
+            *self.token.lock().map_err(|_| "poisoned")? = Some(token);
+            Ok(())
+        }
+    }
+
+    /// A box with one lane behind `gate`, served once on a fresh pipe.
+    fn paired_box(
+        gate: Arc<OneCode>,
+    ) -> (
+        BoxDuplex,
+        tokio::task::JoinHandle<Result<(), crate::ServeError>>,
+    ) {
+        let (client_io, box_io) = tokio::io::duplex(64 * 1024);
+        let snapshot = RegistrySnapshot {
+            lanes: vec![crate::LaneInfo {
+                key: crate::LaneKey {
+                    project: "acme".into(),
+                    lane: "0".into(),
+                },
+                index: 0,
+                domain: None,
+            }],
+            units: Vec::new(),
+        };
+        let services = BoxServices {
+            registry: Arc::new(SharedRegistry::new(snapshot, 4)),
+            pairing: gate,
+            ..services()
+        };
+        let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+        (Box::new(client_io), server)
+    }
+
+    /// Options with `holder` as the pairing client.
+    fn holding(holder: &Arc<Holder>) -> SessionOptions {
+        let mut options = SessionOptions::new("client");
+        options.pairing = Some(holder.clone());
+        options
+    }
+
+    /// A client without a token is asked for a code, gets the box's token for
+    /// it and keeps it; the next session presents the token and is not asked.
+    #[tokio::test]
+    async fn a_code_is_traded_for_a_token_that_later_sessions_present()
+    -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let gate = Arc::new(OneCode::default());
+            let holder = Arc::new(Holder {
+                code: Some(CODE),
+                ..Holder::default()
+            });
+            let (io, server) = paired_box(gate.clone());
+            let session = Session::establish(io, holding(&holder)).await?;
+            assert_eq!(session.registry().current().lanes().count(), 1);
+            assert_eq!(holder.token().await.as_deref(), Some(TOKEN));
+            assert_eq!(holder.asked(), [PairingReason::Missing]);
+            session.close();
+            server.abort();
+
+            let (io, server) = paired_box(gate.clone());
+            let again = Session::establish(io, holding(&holder)).await?;
+            assert_eq!(holder.asked().len(), 1, "a held token needs no code");
+            assert_eq!(gate.claims.load(std::sync::atomic::Ordering::SeqCst), 1);
+            again.close();
+            server.abort();
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Without a code, with a wrong one and with a token the box does not
+    /// accept, the session needs pairing, the box ends it, and the client
+    /// never sees the box's registry.
+    #[tokio::test]
+    async fn an_unpaired_client_learns_nothing_about_the_box()
+    -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let cases: [(Option<&str>, Option<&'static str>); 3] = [
+                (None, None),
+                (None, Some("WRNG-CODE")),
+                (Some("dl_rt_old"), None),
+            ];
+            for (token, code) in cases {
+                let gate = Arc::new(OneCode::default());
+                let holder = Arc::new(Holder {
+                    token: std::sync::Mutex::new(token.map(str::to_owned)),
+                    code,
+                    ..Holder::default()
+                });
+                let (io, server) = paired_box(gate);
+                let options = holding(&holder);
+                let registry = options.registry.clone();
+                let Err(error) = Session::establish(io, options).await else {
+                    panic!("an unpaired client connected");
+                };
+                assert!(error.is_needs_pairing(), "{error:?}");
+                assert!(!error.is_permanent(), "{error:?}");
+                assert_eq!(registry.current().lanes().count(), 0);
+                let served = server.await?;
+                match (token, code) {
+                    (_, Some(_)) => {
+                        assert!(
+                            matches!(&error, SessionError::PairingRefused { retry_after, .. }
+                                if *retry_after == Some(Duration::from_secs(5))),
+                            "{error:?}"
+                        );
+                        assert!(error.to_string().contains("the code is wrong"), "{error}");
+                        assert!(
+                            matches!(served, Err(crate::ServeError::PairingRefused { .. })),
+                            "{served:?}"
+                        );
+                    }
+                    (Some(_), None) => {
+                        assert!(matches!(
+                            error,
+                            SessionError::NeedsPairing(PairingReason::Invalid)
+                        ));
+                        assert!(error.to_string().contains("no longer accepts"), "{error}");
+                    }
+                    (None, None) => {
+                        assert!(matches!(
+                            error,
+                            SessionError::NeedsPairing(PairingReason::Missing)
+                        ));
+                        assert!(
+                            matches!(served, Err(crate::ServeError::NotPaired { .. })),
+                            "{served:?}"
+                        );
+                    }
+                }
+                assert_eq!(holder.token().await.as_deref(), token, "nothing stored");
+            }
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Until the welcome the box answers nothing but the control stream: a
+    /// data stream an unpaired client opens while the box waits for its code
+    /// is reset unanswered, and pairing still works afterwards.
+    #[tokio::test]
+    async fn streams_before_the_welcome_are_reset() -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let (client_io, box_io) = tokio::io::duplex(64 * 1024);
+            let services = BoxServices {
+                pairing: Arc::new(OneCode::default()),
+                ..services()
+            };
+            let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+            let mux = mux::client(Box::new(client_io));
+            let mut control = wire::channel(mux.open().await?);
+            let hello = OpenRequest::Control {
+                protocol: PROTOCOL_VERSION,
+                client: "c".into(),
+                features: Vec::new(),
+                client_id: "dl_cid_x".into(),
+                client_name: "laptop".into(),
+                token: None,
+            };
+            wire::send(&mut control, &hello).await?;
+            let first = wire::recv::<_, BoxControl>(&mut control).await?;
+            assert!(
+                matches!(first, Some((BoxControl::PairingRequired { .. }, _))),
+                "{first:?}"
+            );
+            let mut data = wire::channel(mux.open().await?);
+            // The box may reset the stream before this arrives.
+            let _ = wire::send(
+                &mut data,
+                &OpenRequest::Data {
+                    target: DialTarget::Port { port: 9 },
+                },
+            )
+            .await;
+            let reply = timeout(
+                Duration::from_secs(5),
+                wire::recv::<_, OpenReply>(&mut data),
+            )
+            .await?;
+            assert!(!matches!(reply, Ok(Some(_))), "answered: {reply:?}");
+            let pair = ClientControl::Pair {
+                code: Secret(CODE.into()),
+            };
+            wire::send(&mut control, &pair).await?;
+            let paired = wire::recv::<_, BoxControl>(&mut control).await?;
+            assert!(
+                matches!(paired, Some((BoxControl::Paired { .. }, _))),
+                "{paired:?}"
+            );
+            server.abort();
+            Ok(())
+        })
+        .await?
+    }
+
     #[tokio::test]
     async fn client_reports_incompatible_box_as_permanent() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -654,6 +1167,8 @@ mod tests {
                 let reply = BoxControl::Welcome {
                     protocol: PROTOCOL_VERSION + 1,
                     server: "devlanes 9.0.0".into(),
+                    features: Vec::new(),
+                    box_info: BoxInfo::default(),
                 };
                 wire::send(&mut control, &reply).await?;
                 // Hold the stream until the client gives up.
@@ -666,8 +1181,37 @@ mod tests {
                 panic!("handshake with an incompatible box succeeded");
             };
             assert!(error.is_permanent());
-            assert!(error.to_string().contains("never upgraded automatically"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("Install the same release on both machines")
+            );
             fake_box.abort();
+            Ok(())
+        })
+        .await?
+    }
+
+    /// A box that takes no connections turns the client away before the
+    /// welcome with its reason, which the client keeps as a permanent error,
+    /// and the client learns nothing about the box.
+    #[tokio::test]
+    async fn a_refusing_box_is_permanent_and_says_why() -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let (client_io, box_io) = tokio::io::duplex(64 * 1024);
+            let reason =
+                "the box does not accept connections. Set remote.allow_connections to true there";
+            let server = tokio::spawn(crate::refuse(box_io, reason.into(), Timing::default()));
+            let options = SessionOptions::new("client");
+            let registry = options.registry.clone();
+            let Err(error) = Session::establish(Box::new(client_io), options).await else {
+                panic!("a refusing box served the client");
+            };
+            assert!(matches!(&error, SessionError::Refused(_)), "{error:?}");
+            assert!(error.is_permanent(), "{error:?}");
+            assert_eq!(error.to_string(), reason);
+            assert_eq!(registry.current().lanes().count(), 0);
+            server.await??;
             Ok(())
         })
         .await?

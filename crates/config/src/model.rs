@@ -684,8 +684,8 @@ pub struct InfraConfig {
     #[serde(default)]
     #[schemars(extend("examples" = [{"s3mock":"s3.${{ lane.domain }}"}]))]
     pub hosts: IndexMap<String, Hosts>,
-    /// Containers whose ports are not mirrored to machines connected with
-    /// `devlanes remote connect`.
+    /// Containers that machines connected with `devlanes remote connect` never see, mirror
+    /// or reach.
     #[schemars(extend("examples" = [["postgres"]]))]
     pub hidden: Option<Vec<String>>,
     /// Docker containers run without a Compose file, keyed by name and reached as
@@ -693,6 +693,13 @@ pub struct InfraConfig {
     #[serde(default)]
     #[schemars(extend("examples" = [{"cerbos":{"image":"ghcr.io/cerbos/cerbos:0.40.0","ports":{"http":3592},"per_lane":true}}]))]
     pub containers: IndexMap<String, ContainerConfig>,
+    /// Servers you run yourself on a loopback port, such as pgAdmin, keyed by name. Every
+    /// lane lists them, the proxy routes their hostnames, and machines connected with
+    /// `devlanes remote connect` mirror them while a lane of the project runs. devlanes
+    /// never starts or checks them. Put personal ones in `devlanes.local.yaml`.
+    #[serde(default)]
+    #[schemars(extend("examples" = [{"pgadmin":{"address":"127.0.0.1:5050","hosts":"pgadmin.${{ lane.domain }}"}}]))]
+    pub external: IndexMap<String, ExternalConfig>,
     /// Named commands that prepare each lane's data, such as creating its database in a
     /// shared Postgres. They run once per lane after the containers are ready, all at the
     /// same time, and are recorded as done so later starts skip them; a failure stops the
@@ -746,6 +753,161 @@ pub struct ContainerConfig {
     /// `cmd` (run on the host). If it does not pass within its timeout (default 60s), the
     /// start fails.
     pub ready: Option<ReadyConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("examples" = [{"address":"127.0.0.1:5050","hosts":"pgadmin.${{ lane.domain }}"},{"address":"[::1]:8000","hidden":true}]))]
+/// A server you run yourself on a loopback port. Every lane of the project lists it, the
+/// proxy routes its hostnames to the port, and machines connected with `devlanes remote
+/// connect` mirror it while a lane of the project runs. The port is the same in every lane.
+pub struct ExternalConfig {
+    /// Where the server listens, `127.0.0.1:<port>` or `[::1]:<port>`. Only loopback
+    /// addresses work. A port that devlanes or a lane already uses is an error. Required.
+    #[schemars(extend("examples" = ["127.0.0.1:5050","[::1]:8000"]))]
+    pub address: Option<String>,
+    /// Hostnames the devlanes HTTPS proxy routes to the port. One entry or a list. An entry
+    /// is a hostname, or a mapping with `host` and optional `fallback` and `host_header`.
+    /// Expressions can use `lane`, `project`, `infra` and `env`. Put the names under
+    /// `${{ lane.domain }}` so each lane gets its own. The first host without a wildcard
+    /// becomes the unit's URL.
+    #[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}",["docs.${{ lane.domain }}"]]))]
+    pub hosts: Option<ExternalHosts>,
+    /// Keep the entry away from machines connected with `devlanes remote connect`. They
+    /// never see, mirror or reach it. This machine still routes its hostnames. Defaults to
+    /// false.
+    #[schemars(extend("examples" = [false,true]))]
+    pub hidden: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}",["pgadmin.${{ lane.domain }}",{"host":"*.pgadmin.${{ lane.domain }}","fallback":true}]]))]
+/// HTTPS hostnames the devlanes proxy routes to an `infra.external` port: one hostname or
+/// route mapping, or a list of them.
+pub enum ExternalHosts {
+    /// A single hostname or route.
+    #[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}"]))]
+    One(ExternalHost),
+    /// Several hostnames or routes, in order.
+    #[schemars(extend("examples" = [["pgadmin.${{ lane.domain }}","pg.${{ lane.domain }}"]]))]
+    Many(Vec<ExternalHost>),
+}
+
+impl std::ops::Deref for ExternalHosts {
+    type Target = [ExternalHost];
+
+    /// The entries as a list, whichever form was written.
+    fn deref(&self) -> &[ExternalHost] {
+        match self {
+            Self::One(host) => std::slice::from_ref(host),
+            Self::Many(hosts) => hosts,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}",{"host":"*.pgadmin.${{ lane.domain }}","fallback":true}]))]
+/// HTTPS hostname of an `infra.external` entry: a plain hostname, or a mapping with `host`
+/// plus `fallback` or `host_header`. The entry has one port, so a route names none.
+pub enum ExternalHost {
+    /// Hostname routed to the entry's port. Dot-separated labels of letters, digits and
+    /// inner hyphens, with an optional leading `*.` wildcard. Case and a trailing dot are
+    /// ignored.
+    #[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}"]))]
+    Name(Templated<String>),
+    /// Hostname with route options.
+    #[schemars(extend("examples" = [{"host":"*.pgadmin.${{ lane.domain }}","fallback":true}]))]
+    Route(ExternalHostRoute),
+}
+
+impl ExternalHost {
+    /// The hostname, plain or of the route.
+    pub fn host(&self) -> &Templated<String> {
+        match self {
+            Self::Name(host) => host,
+            Self::Route(route) => &route.host,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("examples" = [{"host":"*.pgadmin.${{ lane.domain }}","fallback":true},{"host":"pgadmin.${{ lane.domain }}","host_header":"upstream"}]))]
+/// Hostname route of an `infra.external` entry with options: catch-all behaviour or a
+/// rewritten Host header.
+pub struct ExternalHostRoute {
+    /// Hostname to route, evaluated for each lane. A leading `*.` makes a wildcard that
+    /// matches any depth below it but not the name itself. Quote it in YAML. Labels hold
+    /// letters, digits and inner hyphens. Case and a trailing dot are ignored.
+    #[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}","*.pgadmin.${{ lane.domain }}"]))]
+    pub host: Templated<String>,
+    /// Make this route a catch-all: it is used only when no other route, exact or wildcard,
+    /// matches the requested hostname. Defaults to false.
+    #[schemars(extend("examples" = [true,false]))]
+    pub fallback: Option<Templated<bool>>,
+    /// Host header the server receives. Defaults to `preserve`, the hostname the browser
+    /// asked for. `upstream` sends the address devlanes connects to, such as
+    /// `127.0.0.1:5050`, for servers that only accept their own address.
+    pub host_header: Option<HostHeader>,
+}
+
+impl ExternalConfig {
+    /// `address` when it is `127.0.0.1:<port>` or `[::1]:<port>` with a port from 1 to
+    /// 65535 and no IPv6 scope; otherwise why not.
+    pub fn socket_address(&self) -> Result<std::net::SocketAddr, String> {
+        let address = self
+            .address
+            .as_deref()
+            .ok_or_else(|| "address is required, such as `127.0.0.1:5050`".to_owned())?;
+        let parsed: std::net::SocketAddr = match address.parse() {
+            Ok(parsed) => parsed,
+            // `localhost:5050` and the like: a name, which devlanes would have to resolve.
+            Err(_) => {
+                return Err(match address.rsplit_once(':') {
+                    Some((host, port))
+                        if !host.is_empty()
+                            && !host.contains(':')
+                            && port.parse::<u16>().is_ok_and(|port| port > 0) =>
+                    {
+                        format!(
+                            "`{address}` names a host. Write `127.0.0.1:{port}` or `[::1]:{port}`"
+                        )
+                    }
+                    _ => format!(
+                        "`{address}` is not an address with a port. Write `127.0.0.1:<port>` or `[::1]:<port>`"
+                    ),
+                });
+            }
+        };
+        let loopback = match parsed {
+            std::net::SocketAddr::V4(v4) => *v4.ip() == std::net::Ipv4Addr::LOCALHOST,
+            std::net::SocketAddr::V6(v6) => {
+                if v6.scope_id() != 0 {
+                    return Err(format!(
+                        "`{address}` has an IPv6 scope id. Write `[::1]:{}`",
+                        v6.port()
+                    ));
+                }
+                *v6.ip() == std::net::Ipv6Addr::LOCALHOST
+            }
+        };
+        if !loopback {
+            return Err(format!(
+                "`{address}` is not a loopback address. Use `127.0.0.1:<port>` or `[::1]:<port>`"
+            ));
+        }
+        if parsed.port() == 0 {
+            return Err(format!("`{address}` needs a port from 1 to 65535"));
+        }
+        Ok(parsed)
+    }
+
+    /// The port of [`Self::socket_address`].
+    pub fn port(&self) -> Result<u16, String> {
+        self.socket_address().map(|address| address.port())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

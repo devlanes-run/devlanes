@@ -38,6 +38,19 @@ pub(crate) struct LocalRoutes {
     pub warnings: Vec<LaneWarning>,
 }
 
+/// A route's state as `hosts` and `host.list` name it.
+pub(crate) fn route_state(status: &RouteStatus) -> &'static str {
+    match status {
+        RouteStatus::Ready => "ready",
+        RouteStatus::Idle => "idle",
+        RouteStatus::Starting => "starting",
+        RouteStatus::Failed { .. } => "failed",
+        RouteStatus::Reconnecting => "reconnecting",
+        RouteStatus::SignInNeeded => "sign_in_needed",
+        RouteStatus::PairingNeeded => "pairing_needed",
+    }
+}
+
 /// The owner of a claimed hostname.
 struct Claim {
     reference: String,
@@ -52,7 +65,9 @@ impl Inner {
         self.with_remote_routes(self.local_routes().entries)
     }
 
-    /// Appends mirrored routes whose hostnames no local route claims.
+    /// Appends mirrored routes whose hostnames no local route claims, in connect
+    /// order, so the box connected first keeps a name two boxes claim until the
+    /// later one's mirror skips that lane.
     fn with_remote_routes(&self, mut routes: Vec<RouteEntry>) -> Vec<RouteEntry> {
         let key = |route: &RouteEntry| {
             let host = route.host.trim_end_matches('.').to_ascii_lowercase();
@@ -135,8 +150,21 @@ impl Inner {
                     RouteStatus::Ready,
                 )
             });
+            // Declared means routed: whether something listens shows in the request.
+            let external_routes = view.externals.iter().flat_map(|external| {
+                external.routes.iter().map(|route| {
+                    (
+                        route.host.as_str(),
+                        &external.name,
+                        external.port,
+                        route.fallback,
+                        route.host_header_upstream,
+                        RouteStatus::Ready,
+                    )
+                })
+            });
             for (host, unit, port, fallback, host_header_upstream, status) in
-                service_routes.chain(infra_routes)
+                service_routes.chain(infra_routes).chain(external_routes)
             {
                 let host = match devlanes_config::normalize_host(host) {
                     Ok(host) => host,
@@ -198,6 +226,13 @@ impl Inner {
                     unit: unit.clone(),
                     certificate_names: vec![view.domain.clone()],
                     remote: false,
+                    box_https_port: None,
+                    // Unit names are unique in a lane, so this is the entry's route.
+                    address: view
+                        .externals
+                        .iter()
+                        .find(|external| external.name == *unit)
+                        .map(|external| external.address.ip()),
                 });
             }
         }
@@ -277,10 +312,22 @@ impl Inner {
                         .view
                         .as_ref()
                         .and_then(|view| {
-                            view.routes
+                            let host = &warning.data["host"];
+                            let service = view
+                                .routes
                                 .iter()
-                                .find(|route| route.host == warning.data["host"])
-                                .map(|route| format!("services.{}.hosts", route.service))
+                                .find(|route| route.host == *host)
+                                .map(|route| format!("services.{}.hosts", route.service));
+                            service.or_else(|| {
+                                view.externals
+                                    .iter()
+                                    .find(|external| {
+                                        external.routes.iter().any(|route| route.host == *host)
+                                    })
+                                    .map(|external| {
+                                        format!("infra.external.{}.hosts", external.name)
+                                    })
+                            })
                         })
                         .unwrap_or_else(|| "infra.hosts".into()),
                     _ => "lanes".into(),
@@ -296,23 +343,31 @@ impl Inner {
             .collect()
     }
 
-    /// `hosts`: every route with its lane, unit, port and state.
+    /// `hosts`: every route with its lane, unit, port and state, and for this
+    /// machine's own routes the URL each reporting client opens it at.
     pub(crate) fn hosts(&self) -> Value {
         let https_port = self.integ.routes.https_port();
+        let unmirrored = self.route_unmirrored();
         let items: Vec<Value> = self
             .route_entries()
             .into_iter()
             .map(|route| {
-                let state = match &route.status {
-                    RouteStatus::Ready => "ready",
-                    RouteStatus::Idle => "idle",
-                    RouteStatus::Starting => "starting",
-                    RouteStatus::Failed { .. } => "failed",
-                    RouteStatus::Reconnecting => "reconnecting",
-                };
+                let state = route_state(&route.status);
                 // Wildcards have no single address to open.
                 let url = (!route.host.contains('*'))
                     .then(|| devlanes_resolve::https_url(&route.host, https_port));
+                // Clients mirror only this machine's own lanes.
+                let clients = if route.remote || url.is_none() {
+                    Vec::new()
+                } else {
+                    self.client_urls(&crate::remote::UnitTarget {
+                        lane: &route.lane,
+                        unit: &route.unit,
+                        host: Some(&route.host),
+                        port: Some(route.port),
+                        unmirrored: unmirrored(&route.lane, &route.unit),
+                    })
+                };
                 json!({
                     "host": route.host,
                     "url": url,
@@ -323,6 +378,7 @@ impl Inner {
                     "fallback": route.fallback,
                     "host_header_upstream": route.host_header_upstream,
                     "state": state,
+                    "clients": clients,
                 })
             })
             .collect();

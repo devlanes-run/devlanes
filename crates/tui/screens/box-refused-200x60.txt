@@ -1,0 +1,122 @@
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                            on hetzner: devlanes restart acme@4:api-gateway  Monitor  Daemon  Boxes · 3 issues
+ lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
+┌ @4 · 6/7 up ─────────────────────────────────┐┌ api-gateway  ready · https://gateway.acme-4.localhost:8443 ────────────────────────────────────────────────────────────────────────────── on hetzner ┐
+│ ▾ services                                 6 ││ ! r does not restart it here. On hetzner: ssh hetzner, then devlanes restart acme@4:api-gateway                                                      │
+│   ● api-gateway                              ││                                                                                                                                                      │
+│   ● web-app                                  ││ state     ready on the box                                                                                                                           │
+│   ◉ wrk-email                                ││ ports     default 24100  mirrored here                                                                                                               │
+│   ● api-admin                                ││                          last try: nothing on the box accepted it (connection refused)                                                               │
+│   · web-docs                                 ││ hosts     https://gateway.acme-4.localhost:8443                                                                                                      │
+│   ● ext-build                                ││                                                                                                                                                      │
+│                                              ││ Read-only here. On hetzner: ssh hetzner, then devlanes logs acme@4:api-gateway                                                                       │
+│ ▾ tasks                                    1 ││                                                                                                                                                      │
+│   ■ migrate                            ended ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│ ▾ infra                                      ││                                                                                                                                                      │
+│   ▾ containers                          1 up ││                                                                                                                                                      │
+│     ● postgres                               ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ o open in browser   z zoom   / filter   B boxes   read-only: manage it on hetzner (ssh hetzner)                                                                                  ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold, 184-187 dim, 188-198 yellow
+1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
+2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 68-107 dim, 109-186 darkgray, 188-197 dim, 199 darkgray
+3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 199 darkgray
+4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 199 darkgray
+5: 0 darkgray, 4-12 green, 47-48 darkgray, 50-75 dim, 199 darkgray
+6: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 50-59 dim, 75-87 green, 199 darkgray
+7: 0 darkgray, 4-5 green, 6-14 dim blue, 47-48 darkgray, 50-59 dim, 75-135 red, 199 darkgray
+8: 0 darkgray, 4-5 dim, 6-13 dim green, 47-48 darkgray, 50-59 dim, 199 darkgray
+9: 0 darkgray, 4-14 green, 47-48 darkgray, 199 darkgray
+10: 0 darkgray, 47-48 darkgray, 50-127 dim, 199 darkgray
+11: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 199 darkgray
+12: 0 darkgray, 4-12 dim, 41-45 dim, 47-48 darkgray, 199 darkgray
+13: 0 darkgray, 47-48 darkgray, 199 darkgray
+14: 0 darkgray, 2-3 dim, 47-48 darkgray, 199 darkgray
+15: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 199 darkgray
+16: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 199 darkgray
+17: 0 darkgray, 47-48 darkgray, 199 darkgray
+18: 0 darkgray, 47-48 darkgray, 199 darkgray
+19: 0 darkgray, 47-48 darkgray, 199 darkgray
+20: 0 darkgray, 47-48 darkgray, 199 darkgray
+21: 0 darkgray, 47-48 darkgray, 199 darkgray
+22: 0 darkgray, 47-48 darkgray, 199 darkgray
+23: 0 darkgray, 47-48 darkgray, 199 darkgray
+24: 0 darkgray, 47-48 darkgray, 199 darkgray
+25: 0 darkgray, 47-48 darkgray, 199 darkgray
+26: 0 darkgray, 47-48 darkgray, 199 darkgray
+27: 0 darkgray, 47-48 darkgray, 199 darkgray
+28: 0 darkgray, 47-48 darkgray, 199 darkgray
+29: 0 darkgray, 47-48 darkgray, 199 darkgray
+30: 0 darkgray, 47-48 darkgray, 199 darkgray
+31: 0 darkgray, 47-48 darkgray, 199 darkgray
+32: 0 darkgray, 47-48 darkgray, 199 darkgray
+33: 0 darkgray, 47-48 darkgray, 199 darkgray
+34: 0 darkgray, 47-48 darkgray, 199 darkgray
+35: 0 darkgray, 47-48 darkgray, 199 darkgray
+36: 0 darkgray, 47-48 darkgray, 199 darkgray
+37: 0 darkgray, 47-48 darkgray, 199 darkgray
+38: 0 darkgray, 47-48 darkgray, 199 darkgray
+39: 0 darkgray, 47-48 darkgray, 199 darkgray
+40: 0 darkgray, 47-48 darkgray, 199 darkgray
+41: 0 darkgray, 47-48 darkgray, 199 darkgray
+42: 0 darkgray, 47-48 darkgray, 199 darkgray
+43: 0 darkgray, 47-48 darkgray, 199 darkgray
+44: 0 darkgray, 47-48 darkgray, 199 darkgray
+45: 0 darkgray, 47-48 darkgray, 199 darkgray
+46: 0 darkgray, 47-48 darkgray, 199 darkgray
+47: 0 darkgray, 47-48 darkgray, 199 darkgray
+48: 0 darkgray, 47-48 darkgray, 199 darkgray
+49: 0 darkgray, 47-48 darkgray, 199 darkgray
+50: 0 darkgray, 47-48 darkgray, 199 darkgray
+51: 0 darkgray, 47-48 darkgray, 199 darkgray
+52: 0 darkgray, 47-48 darkgray, 199 darkgray
+53: 0 darkgray, 47-48 darkgray, 199 darkgray
+54: 0 darkgray, 47-48 darkgray, 199 darkgray
+55: 0 darkgray, 47-48 darkgray, 199 darkgray
+56: 0 darkgray, 47-48 darkgray, 199 darkgray
+57: 0 darkgray, 47-48 darkgray, 199 darkgray
+58: 0-199 darkgray
+59: 1 bold, 2-20 dim, 21 bold, 22-29 dim, 30 bold, 31-40 dim, 41 bold, 42-95 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

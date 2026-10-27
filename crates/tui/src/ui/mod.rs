@@ -5,6 +5,8 @@
 //! reaches the buffer (see [`crate::text`]), so long or hostile text cannot
 //! spill into another widget or move the real terminal's cursor.
 
+mod boxes;
+mod connect;
 pub(crate) mod daemon;
 mod dialog;
 mod list;
@@ -43,7 +45,7 @@ pub fn render(app: &App, frame: &mut Frame) {
     render_header(app, frame, layout.header);
     match app.view {
         View::Project => {
-            if app.lanes.is_empty() {
+            if app.lanes.is_empty() && app.boxes.lanes.is_empty() {
                 render_welcome(app, frame, layout.body);
             } else {
                 if let Some(bar) = layout.lane_bar {
@@ -57,6 +59,7 @@ pub fn render(app: &App, frame: &mut Frame) {
         }
         View::Monitor => monitor::render(app, frame, layout.body),
         View::Daemon => daemon::render(app, frame, layout.body),
+        View::Boxes => boxes::render(app, frame, layout.body),
     }
     render_footer(app, frame, layout.footer);
     if let Some(dialog) = &app.dialog {
@@ -305,6 +308,14 @@ pub(crate) fn unit_look(theme: &Theme, unit: &UnitSummary, spin: u64) -> Look {
             Tone::Attention,
             unit.pid.map(|pid| format!("pid {pid}")),
         ),
+        // devlanes runs nothing for it and never checks whether it answers.
+        (devlanes_proto::EXTERNAL_KIND, _) => look(
+            theme.glyph(Glyph::Stopped),
+            Tone::Quiet,
+            "external",
+            Tone::Quiet,
+            None,
+        ),
         (_, true) => look(
             theme.glyph(Glyph::Stopped),
             Tone::Quiet,
@@ -433,47 +444,34 @@ fn severity(lane: &LaneSummary) -> u8 {
 }
 
 /// ` devlanes   1 acme ●   2 shop ·` on the left, the message, then
-/// `M monitor   D daemon` on the right.
+/// `Monitor  Daemon  Boxes` on the right, each label's first letter its key.
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let width = usize::from(area.width);
-    // The view buttons, right-aligned.
-    let badge = daemon_badge(app);
-    // Below 100 columns the badge's words would crowd out the message, so
-    // the buttons of other views drop their labels; their keys stay.
-    let compact = badge.is_some() && width < 100;
-    let mut buttons: Vec<(Vec<Span<'static>>, KeyCode)> = Vec::new();
-    for (key, label, view) in [
-        ('M', "monitor", View::Monitor),
-        ('D', "daemon", View::Daemon),
-    ] {
-        let active = app.view == view;
-        let label_style = if active {
-            theme
-                .focus()
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-        } else {
-            theme.quiet()
-        };
-        let mut spans = vec![Span::styled(key.to_string(), theme.key())];
-        if active || !compact {
-            spans.push(Span::styled(format!(" {label}"), label_style));
-        }
-        // `D daemon · 1 issue`, `D daemon · update`: a count alone said nothing.
-        if view == View::Daemon
-            && let Some((text, tone)) = &badge
-        {
-            spans.push(Span::styled(format!(" · {text}"), theme.tone(*tone)));
-        }
-        buttons.push((spans, KeyCode::Char(key)));
-    }
-    let buttons_width: usize = buttons.iter().map(|(s, _)| spans_width(s)).sum::<usize>() + 3 + 1;
+    let tabs = project_tabs(app);
+    let message = header_message(app);
+    // What the left side needs in full: the brand, every tab, the shown
+    // lane's chip, and the message up to 32 columns.
+    let wanted = 9
+        + tabs.iter().map(|(_, s)| spans_width(s) + 1).sum::<usize>()
+        + 2
+        + shown_chip_width(app)
+        + message
+            .as_ref()
+            .map_or(0, |(spans, _)| spans_width(spans).min(32) + 4);
+    // The view buttons, right-aligned: in full when they fit next to that,
+    // else Monitor, then Daemon, then Boxes drop to their key letter.
+    let buttons = (0..=3)
+        .map(|letters| view_buttons(app, letters))
+        .find(|buttons| wanted + buttons_width(buttons) <= width)
+        .unwrap_or_else(|| view_buttons(app, 3));
+    let buttons_width = buttons_width(&buttons);
     let mut x = area.right().saturating_sub(buttons_width as u16);
     let mut right: Vec<Span> = Vec::new();
     for (index, (spans, key)) in buttons.into_iter().enumerate() {
         if index > 0 {
-            right.push(Span::raw("   "));
-            x += 3;
+            right.push(Span::raw("  "));
+            x += 2;
         }
         let w = spans_width(&spans) as u16;
         hit(
@@ -496,58 +494,20 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     );
     let mut used = 9;
     let projects = app.projects();
-    // One project needs no tabs: its name, then its lanes on this same row.
     let single = projects.len() <= 1;
     let current = app.project().map(str::to_owned);
-    let tabs: Vec<(String, Vec<Span<'static>>)> = projects
-        .iter()
-        .enumerate()
-        .map(|(index, name)| {
-            let lanes: Vec<&LaneSummary> =
-                app.lanes.iter().filter(|l| l.project == *name).collect();
-            let worst = lanes.iter().max_by_key(|lane| severity(lane)).copied();
-            let (glyph, tone) =
-                worst.map_or(("", Tone::Quiet), |lane| lane_glyph(theme, lane, app.spin));
-            let active = app.view == View::Project && current.as_deref() == Some(name.as_str());
-            let number = if index < 9 && !single {
-                format!("{} ", index + 1)
-            } else {
-                String::new()
-            };
-            let glyph = if needs_glyph(theme) && !glyph.is_empty() {
-                format!("{glyph} ")
-            } else {
-                String::new()
-            };
-            // The active tab is one yellow block; the others' names take the
-            // color of their worst lane.
-            let spans = if single {
-                vec![Span::styled(
-                    format!(" {}{glyph} ", clean(name)),
-                    Style::new().add_modifier(Modifier::BOLD),
-                )]
-            } else if active {
-                vec![Span::styled(
-                    format!(" {number}{} {glyph}", clean(name)),
-                    theme.tab(),
-                )]
-            } else {
-                vec![
-                    Span::raw(" "),
-                    Span::styled(number, theme.quiet()),
-                    Span::styled(clean(name), state_style(theme, tone)),
-                    Span::raw(format!(" {glyph}")),
-                ]
-            };
-            (name.clone(), spans)
-        })
-        .collect();
     // The message takes what is left; tabs come first and scroll to keep the
     // shown project in view.
-    let message = header_message(app);
-    let room = width.saturating_sub(buttons_width + used);
     // Each tab pads itself; one space separates them.
     let tab_widths: Vec<usize> = tabs.iter().map(|(_, s)| spans_width(s) + 1).collect();
+    // Tabs that already fold (`›`) leave a message 24 columns, so a notice
+    // such as why a box lane's key did nothing still shows.
+    let folds = used + tab_widths.iter().sum::<usize>() + 2 > width.saturating_sub(buttons_width);
+    let reserve = match &message {
+        Some((spans, _)) if folds => spans_width(spans).min(24) + 4,
+        _ => 0,
+    };
+    let room = width.saturating_sub(buttons_width + used + reserve);
     let active = current
         .as_ref()
         .and_then(|c| projects.iter().position(|p| p == c))
@@ -562,7 +522,7 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     }
     for (index, (name, spans)) in tabs.into_iter().enumerate().skip(first) {
         let w = tab_widths[index];
-        if used + w + 2 > width.saturating_sub(buttons_width) {
+        if used + w + 2 > width.saturating_sub(buttons_width + reserve) {
             left.push(Span::styled(" ›", theme.quiet()));
             used += 2;
             break;
@@ -603,12 +563,122 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         middle.extend(line.spans);
         middle.push(Span::raw("  "));
     } else {
-        middle.push(Span::raw(" ".repeat(free + 4)));
+        // At least one space after a folded tab strip's `›`; the buttons'
+        // trailing pad gives way for it.
+        middle.push(Span::raw(
+            " ".repeat(width.saturating_sub(used + buttons_width).max(1)),
+        ));
     }
     let mut spans = left;
     spans.extend(middle);
     spans.extend(right);
     frame.render_widget(Paragraph::new(fit(spans, width)), area);
+}
+
+/// The width of the view buttons: two spaces between them, one after the
+/// last.
+fn buttons_width(buttons: &[(Vec<Span<'static>>, KeyCode)]) -> usize {
+    buttons.iter().map(|(s, _)| spans_width(s)).sum::<usize>()
+        + 2 * buttons.len().saturating_sub(1)
+        + 1
+}
+
+/// The view buttons `Monitor  Daemon  Boxes` with their badges; the first
+/// `letters` of them, unless open, show only their key letter.
+fn view_buttons(app: &App, letters: usize) -> Vec<(Vec<Span<'static>>, KeyCode)> {
+    let theme = &app.theme;
+    let badge = daemon_badge(app);
+    let boxes_badge = boxes_badge(app);
+    let mut buttons: Vec<(Vec<Span<'static>>, KeyCode)> = Vec::new();
+    let views = [
+        ('M', "onitor", View::Monitor),
+        ('D', "aemon", View::Daemon),
+        ('B', "oxes", View::Boxes),
+    ];
+    for (index, (key, rest, view)) in views.into_iter().enumerate() {
+        let compact = index < letters;
+        let active = app.view == view;
+        let label_style = if active {
+            theme
+                .focus()
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+        } else {
+            theme.quiet()
+        };
+        // The key letter keeps the key color, underlined with the rest of an
+        // open view's label.
+        let key_style = if active {
+            theme.key().add_modifier(Modifier::UNDERLINED)
+        } else {
+            theme.key()
+        };
+        let mut spans = vec![Span::styled(key.to_string(), key_style)];
+        if active || !compact {
+            spans.push(Span::styled(rest.to_owned(), label_style));
+        }
+        // `Daemon · 1 issue`, `Daemon · update`: a count alone said nothing.
+        let view_badge = match view {
+            View::Daemon => badge.as_ref(),
+            View::Boxes => boxes_badge.as_ref(),
+            _ => None,
+        };
+        if let Some((text, tone)) = view_badge {
+            spans.push(Span::styled(format!(" · {text}"), theme.tone(*tone)));
+        }
+        buttons.push((spans, KeyCode::Char(key)));
+    }
+    buttons
+}
+
+/// Each project's tab in the top bar, by project name. One project needs
+/// no tabs: its name, then its lanes on the same row.
+fn project_tabs(app: &App) -> Vec<(String, Vec<Span<'static>>)> {
+    let theme = &app.theme;
+    let projects = app.projects();
+    let single = projects.len() <= 1;
+    let current = app.project().map(str::to_owned);
+    projects
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let lanes: Vec<&LaneSummary> = app.all_lanes().filter(|l| l.project == *name).collect();
+            let worst = lanes.iter().max_by_key(|lane| severity(lane)).copied();
+            let (glyph, tone) =
+                worst.map_or(("", Tone::Quiet), |lane| lane_glyph(theme, lane, app.spin));
+            let active = app.view == View::Project && current.as_deref() == Some(name.as_str());
+            let number = if index < 9 && !single {
+                format!("{} ", index + 1)
+            } else {
+                String::new()
+            };
+            let glyph = if needs_glyph(theme) && !glyph.is_empty() {
+                format!("{glyph} ")
+            } else {
+                String::new()
+            };
+            // The active tab is one yellow block; the others' names take the
+            // color of their worst lane.
+            let spans = if single {
+                vec![Span::styled(
+                    format!(" {}{glyph} ", clean(name)),
+                    Style::new().add_modifier(Modifier::BOLD),
+                )]
+            } else if active {
+                vec![Span::styled(
+                    format!(" {number}{} {glyph}", clean(name)),
+                    theme.tab(),
+                )]
+            } else {
+                vec![
+                    Span::raw(" "),
+                    Span::styled(number, theme.quiet()),
+                    Span::styled(clean(name), state_style(theme, tone)),
+                    Span::raw(format!(" {glyph}")),
+                ]
+            };
+            (name.clone(), spans)
+        })
+        .collect()
 }
 
 /// Failing and warning doctor checks, plus a daemon that runs another
@@ -644,6 +714,33 @@ fn daemon_badge(app: &App) -> Option<(String, Tone)> {
     Some((text, tone))
 }
 
+/// Boxes whose link is down or that have warnings: the count and tone of the
+/// boxes button's badge. A box only remembered, with no link, is no issue.
+fn boxes_badge(app: &App) -> Option<(String, Tone)> {
+    let hosts = &app.boxes.hosts;
+    let down = |state: &str| {
+        matches!(
+            state,
+            "reconnecting" | "needs_auth" | "needs_pairing" | "failed"
+        )
+    };
+    let issues = hosts
+        .iter()
+        .filter(|h| down(&h.state) || !h.warnings.is_empty())
+        .count();
+    let text = match issues {
+        0 => return None,
+        1 => "1 issue".to_owned(),
+        n => format!("{n} issues"),
+    };
+    let tone = if hosts.iter().any(|h| h.state == "failed") {
+        Tone::Failure
+    } else {
+        Tone::Attention
+    };
+    Some((text, tone))
+}
+
 /// The one message the top bar shows, the first that applies.
 fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
     let theme = &app.theme;
@@ -658,7 +755,7 @@ fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
     }
     if app.daemon.stopped {
         return plain(
-            "daemon stopped: S on the daemon page starts it".into(),
+            "daemon stopped. S on the daemon page starts it".into(),
             Tone::Quiet,
         );
     }
@@ -768,6 +865,21 @@ fn render_lane_bar(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = vec![Span::styled(" lanes ", theme.quiet())];
     spans.extend(lane_chips(app, area, 7, budget).0);
     frame.render_widget(Paragraph::new(spread(spans, hint, width)), area);
+}
+
+/// The columns the shown lane's chip takes in the top bar, with its padding
+/// and a `‹` before it; 0 when the bar shows project tabs instead.
+fn shown_chip_width(app: &App) -> usize {
+    let lanes = app.project_lanes();
+    if app.projects().len() > 1 || app.view != View::Project || lanes.len() < 2 {
+        return 0;
+    }
+    let current = app.selected.as_ref().map(|s| s.lane.as_str());
+    let active = lanes
+        .iter()
+        .position(|lane| current == Some(lane.reference.as_str()))
+        .unwrap_or(0);
+    spans_width(&lane_chip(app, lanes[active], &lanes, active)) + 4
 }
 
 /// The project's lane chips from column `used` of `area`, up to column
@@ -1049,6 +1161,40 @@ fn hints(app: &App) -> Vec<Hint> {
             }
             return hints;
         }
+        View::Boxes => {
+            let mut hints = Vec::new();
+            if let Some(host) = app.boxes.selected_host() {
+                // A reconnecting box waits for its next try, so Enter only
+                // shows how it goes.
+                let enter = match host.state.as_str() {
+                    "connected" => "disconnect",
+                    "needs_auth" => "sign in",
+                    "needs_pairing" => "type code",
+                    "connecting" | "reconnecting" => "show",
+                    _ => "connect",
+                };
+                hints.push(("enter", enter, KeyCode::Enter));
+                if !matches!(
+                    host.state.as_str(),
+                    "connected" | "disconnected" | "stopped"
+                ) {
+                    hints.push(("d", "disconnect", ch('d')));
+                }
+            }
+            if app.boxes.selected_client().is_some() {
+                hints.push(("x", "revoke", ch('x')));
+            }
+            hints.extend([("n", "new box", ch('n')), ("p", "pairing code", ch('p'))]);
+            let clients = app.boxes.clients.list.as_ref();
+            if clients.and_then(|list| list.allow_connections) == Some(false) {
+                hints.push(("o", "options", ch('o')));
+            }
+            if app.boxes.hosts.len() + app.boxes.clients.count() > 1 {
+                hints.push(("j k", "select", ch('j')));
+            }
+            hints.push(("esc", "back", KeyCode::Esc));
+            return hints;
+        }
         View::Project => {}
     }
     if app.filter.as_ref().is_some_and(|f| f.editing) {
@@ -1092,6 +1238,31 @@ fn hints(app: &App) -> Vec<Hint> {
     };
     let filter = ("/", "filter", ch('/'));
     let switch = ("[ ]", "switch lane", ch(']'));
+    // A box lane is read-only: what helps here, and the footer's note says
+    // where the rest happens.
+    if app.box_lane(&lane.reference).is_some() {
+        return match app.selected_id() {
+            Some(RowId::Section(_) | RowId::Group(..)) => {
+                vec![
+                    ("enter", "fold", KeyCode::Enter),
+                    filter,
+                    ("B", "boxes", ch('B')),
+                ]
+            }
+            Some(RowId::WholeLane) | None => vec![
+                ("o", "open in browser", ch('o')),
+                switch,
+                filter,
+                ("B", "boxes", ch('B')),
+            ],
+            _ => vec![
+                ("o", "open in browser", ch('o')),
+                ("z", "zoom", ch('z')),
+                filter,
+                ("B", "boxes", ch('B')),
+            ],
+        };
+    }
     match app.selected_id() {
         Some(RowId::WholeLane) => {
             let missing = lane
@@ -1144,6 +1315,9 @@ fn hints(app: &App) -> Vec<Hint> {
             let Some(unit) = app.selected_unit() else {
                 return vec![filter];
             };
+            if tree::role(unit) == Role::External {
+                return vec![("o", "open in browser", ch('o')), filter];
+            }
             let task = tree::role(unit) != Role::Service && tree::role(unit) != Role::Exec;
             match unit.state.as_str() {
                 ORPHANED => vec![("x", "end it", ch('x')), ("n", "next problem", ch('n'))],
@@ -1270,12 +1444,43 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
     for hint in shown {
         record(&mut left, &mut x, hint);
     }
+    // On a box lane, where its start, stop and logs are, in what is left.
+    if !typing && !copying {
+        let room = budget.saturating_sub(used);
+        // The longest form that fits with the three spaces hints keep apart.
+        if let Some(note) = box_note(app)
+            .into_iter()
+            .find(|note| text::width(note) + 3 <= room)
+        {
+            left.push(Span::styled(note, theme.quiet()));
+        }
+    }
     let mut right = Vec::new();
     let mut rx = area.right().saturating_sub(fixed_width as u16);
     for hint in fixed {
         record(&mut right, &mut rx, hint);
     }
     frame.render_widget(Paragraph::new(spread(left, right, width)), area);
+}
+
+/// The footer's note on a box lane, longest first for the room there is:
+/// `read-only: manage it on hetzner (ssh hetzner)` (the ssh part only over
+/// ssh), `read-only: manage it on hetzner`, `read-only`. Empty elsewhere.
+fn box_note(app: &App) -> Vec<String> {
+    let Some(lane) = app.selected_lane().filter(|_| app.view == View::Project) else {
+        return Vec::new();
+    };
+    let Some((host, _)) = app.box_lane(&lane.reference) else {
+        return Vec::new();
+    };
+    let name = clean(&host.host);
+    let short = format!("read-only: manage it on {name}");
+    let mut notes = Vec::new();
+    if host.over_ssh() {
+        notes.push(format!("{short} (ssh {name})"));
+    }
+    notes.extend([short, "read-only".to_owned()]);
+    notes
 }
 
 /// The failed action on `target`, if any.

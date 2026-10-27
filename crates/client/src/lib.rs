@@ -203,6 +203,10 @@ pub struct Client {
     /// True when this connection's `connect_or_spawn` started the daemon; `devlanes with`
     /// stops only a daemon it started itself.
     pub spawned: bool,
+    /// Windows: the daemon this connection started could not leave the
+    /// caller's job, which refuses breakaway, so it ends when that job closes
+    /// if the job kills its processes on close (an ssh session's does).
+    pub spawned_in_job: bool,
     next_id: u64,
     pending: VecDeque<Frame>,
     pending_bytes: usize,
@@ -274,6 +278,7 @@ impl Client {
                 connection,
                 peer,
                 spawned: false,
+                spawned_in_job: false,
                 next_id: 1,
                 pending: VecDeque::new(),
                 pending_bytes: 0,
@@ -344,7 +349,7 @@ impl Client {
                 error
             }
         })?;
-        let lines = start_daemon(paths, remove_env, begun).await?;
+        let (lines, in_job) = start_daemon(paths, remove_env, begun).await?;
         let Answer {
             line: message,
             step,
@@ -381,6 +386,7 @@ impl Client {
         // binding its endpoint or in any of its steps.
         let mut client = Self::connect_while_starting(paths).await?;
         client.spawned = spawned;
+        client.spawned_in_job = spawned && in_job;
         Ok(client)
     }
 
@@ -621,6 +627,9 @@ const DAEMON_ENV: &[&str] = &[
     "TERM",
     // Local ssh to boxes (`remote connect`) authenticates through the agent.
     "SSH_AUTH_SOCK",
+    // `kubectl exec` boxes (`remote.boxes.<name>.command`) find their cluster
+    // through it, as `DOCKER_*` does for `docker exec` ones. A path, not a secret.
+    "KUBECONFIG",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
@@ -724,9 +733,14 @@ type ReadyLines = tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>;
 /// Most lines the readiness reader holds before the client takes them.
 const READY_LINES_QUEUED: usize = 16;
 
-/// Spawns `devlanes daemon run` and returns the lines of its readiness pipe.
+/// Spawns `devlanes daemon run` and returns the lines of its readiness pipe
+/// and `false`: Unix has no jobs to stay inside.
 #[cfg(unix)]
-async fn start_daemon(paths: &Paths, remove_env: &[&str], begun: Instant) -> Result<ReadyLines> {
+async fn start_daemon(
+    paths: &Paths,
+    remove_env: &[&str],
+    begun: Instant,
+) -> Result<(ReadyLines, bool)> {
     let mut command = Command::new(std::env::current_exe()?);
     // The daemon outlives this shell and serves every later one, so it keeps
     // only what it needs itself; services get each request's client env.
@@ -755,7 +769,7 @@ async fn start_daemon(paths: &Paths, remove_env: &[&str], begun: Instant) -> Res
     );
     // Tokio reaps the child after this handle is dropped; never kill a potentially live daemon.
     drop(child);
-    Ok(read_lines(stdout))
+    Ok((read_lines(stdout), false))
 }
 
 /// Whether the reader goes on after `read`: only a whole step line has more
@@ -816,7 +830,8 @@ fn read_lines_blocking(pipe: impl std::io::Read + Send + 'static) -> std::io::Re
     Ok(lines)
 }
 
-/// Spawns `devlanes daemon run` and returns the lines of its readiness pipe.
+/// Spawns `devlanes daemon run` and returns the lines of its readiness pipe
+/// and whether the daemon started inside this process's job.
 ///
 /// The daemon inherits only the readiness pipe (as stdout, so
 /// `DEVLANES_READY_FD=1` holds) and NUL: a shell reading this command's output,
@@ -828,7 +843,11 @@ fn read_lines_blocking(pipe: impl std::io::Read + Send + 'static) -> std::io::Re
 /// breakaway fails the spawn with access denied, and the daemon then starts
 /// inside it (`doctor` reports a job that kills on close).
 #[cfg(windows)]
-async fn start_daemon(paths: &Paths, remove_env: &[&str], begun: Instant) -> Result<ReadyLines> {
+async fn start_daemon(
+    paths: &Paths,
+    remove_env: &[&str],
+    begun: Instant,
+) -> Result<(ReadyLines, bool)> {
     use std::ffi::{OsStr, OsString};
     use std::os::windows::io::AsHandle;
 
@@ -880,12 +899,12 @@ async fn start_daemon(paths: &Paths, remove_env: &[&str], begun: Instant) -> Res
             ..CreationFlags::default()
         },
     };
-    let child = match spawn::spawn(&spec(true)) {
+    let (child, in_job) = match spawn::spawn(&spec(true)) {
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             tracing::debug!("the terminal's job refuses breakaway; the daemon starts inside it");
-            spawn::spawn(&spec(false))?
+            (spawn::spawn(&spec(false))?, true)
         }
-        result => result?,
+        result => (result?, false),
     };
     // Only the daemon may hold the writing end, or the reader never sees its end.
     drop(writer);
@@ -896,7 +915,7 @@ async fn start_daemon(paths: &Paths, remove_env: &[&str], begun: Instant) -> Res
     );
     // Dropping the handle leaves the daemon running.
     drop(child);
-    Ok(read_lines_blocking(reader)?)
+    Ok((read_lines_blocking(reader)?, in_job))
 }
 
 /// The end of a spawned daemon's readiness pipe.
@@ -1330,6 +1349,7 @@ mod tests {
             ("SSH_CONNECTION", "1.2.3.4"),
             ("LC_ALL", "C"),
             ("DOCKER_HOST", "unix:///var/run/docker.sock"),
+            ("KUBECONFIG", "/tmp/kube/config"),
             ("DEVLANES_HOME", "/tmp/dl"),
             ("XDG_CONFIG_HOME", "/tmp/xdg"),
             ("https_proxy", "http://proxy.example.invalid"),
@@ -1349,6 +1369,7 @@ mod tests {
                 "PATH",
                 "LC_ALL",
                 "DOCKER_HOST",
+                "KUBECONFIG",
                 "DEVLANES_HOME",
                 "XDG_CONFIG_HOME",
                 "https_proxy",

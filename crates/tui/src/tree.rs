@@ -48,6 +48,8 @@ pub enum RowId {
 
 /// Exec units, after the services.
 pub const AD_HOC: &str = "ad-hoc";
+/// `infra.external` entries, after the containers.
+pub const EXTERNAL: &str = "external";
 /// The lane's own containers.
 pub const CONTAINERS: &str = "containers";
 /// The project's shared containers, in every lane.
@@ -107,6 +109,9 @@ pub enum Role {
     Exec,
     Setup,
     Teardown,
+    /// An `infra.external` entry: a port devlanes routes but runs nothing
+    /// for, so there is nothing to control.
+    External,
 }
 
 /// The role of a unit: the daemon's `role`, else (older daemons) the kind,
@@ -118,7 +123,11 @@ pub fn role(unit: &UnitSummary) -> Role {
         Some("setup") => return Role::Setup,
         Some("teardown") => return Role::Teardown,
         Some("exec") => return Role::Exec,
+        Some(devlanes_proto::EXTERNAL_KIND) => return Role::External,
         _ => {}
+    }
+    if unit.kind == devlanes_proto::EXTERNAL_KIND {
+        return Role::External;
     }
     if unit.name.starts_with("setup.") {
         Role::Setup
@@ -139,7 +148,7 @@ pub fn run_name(unit: &UnitSummary) -> Option<String> {
     match role(unit) {
         Role::Task => Some(unit.name.clone()),
         Role::Setup | Role::Teardown => Some(format!("infra.{}", unit.name)),
-        Role::Service | Role::Exec => None,
+        Role::Service | Role::Exec | Role::External => None,
     }
 }
 
@@ -272,7 +281,8 @@ pub fn tree(
     }
 
     // Infra: the lane's own containers, the project's shared ones (hidden
-    // ones too, drawn dimmed), then the setup and teardown steps.
+    // ones too, drawn dimmed), the `infra.external` entries, then the setup
+    // and teardown steps.
     let mut infra = Vec::new();
     let shown = |c: &&ContainerSummary| filter.is_none_or(|f| matches(f, &c.name, &c.name, &[]));
     let own: Vec<&ContainerSummary> = lane
@@ -292,6 +302,19 @@ pub fn tree(
                 .iter()
                 .map(|c| Node::leaf(RowId::Container(c.name.clone())))
                 .collect(),
+            folded_by_default: false,
+        });
+    }
+    let external: Vec<Node> = lane
+        .units
+        .iter()
+        .filter(|u| role(u) == Role::External && keep(u))
+        .map(|u| Node::leaf(RowId::Unit(u.name.clone())))
+        .collect();
+    if !external.is_empty() {
+        infra.push(Node {
+            id: RowId::Group(Section::Infra, EXTERNAL.into()),
+            children: external,
             folded_by_default: false,
         });
     }
@@ -576,6 +599,7 @@ mod tests {
                 unit("api-users", "idle", "service"),
                 unit("api-auth", "failed", "service"),
                 unit("shell", "running", "exec"),
+                unit("pgadmin", "external", "external"),
                 unit("migrate", "exited", "task"),
                 unit("setup.db", "exited", "task"),
             ],
@@ -594,10 +618,15 @@ mod tests {
                 "tasks",
                 "  migrate",
                 "infra",
+                "  [external]",
+                "    pgadmin",
                 "  [setup]",
             ]
         );
         assert!(!rows.iter().any(|row| row.id == RowId::WholeLane));
+        // An external port runs nothing, so it does not make an idle lane live.
+        let idle = self::lane(vec![unit("pgadmin", "external", "external")], "idle");
+        assert!(!lane_is_live(&idle));
     }
 
     #[test]

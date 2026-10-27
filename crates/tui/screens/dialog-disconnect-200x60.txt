@@ -1,0 +1,122 @@
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                       starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 of 3 connected ┐
+│ ● hetzner                                                                                                                                                                            connected · ssh │
+│   link      connected since 2026-10-14 15:32                                                                                                                                                         │
+│   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999                                                                                                                                  │
+│   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed                                                                                                                                   │
+│   skipped   acme@0: acme@0 on this machine serves its hostnames                                                                                                                                      │
+│             ext.example.com (acme@4:ext-build): not under .localhost                                                                                                                                 │
+│   syncs     acme@4:ext-build  up to date, following changes                                                                                                                                          │
+│   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same release on both.                                                                                                            │
+│   ! the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.                                                                                             │
+│   ! this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.                                                                                           │
+│                                                                                                                                                                                                      │
+│ ⠋ devbox                                                                                                                                                                      reconnecting · command │
+│   link      next try in 8s                                                                                                                                                                           │
+│   error     docker exec exited 1: Error response from daemon: container devbox is not running                                                                                                        │
+│   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767                                                                                                                                 │
+│   proxy     this machine serves its hostnames on 8443 and on 9443, which its URLs use                                                                                                                │
+│   mirror    1 lane · no ports bound here · 0 hostnames routed                                                                                                                                        │
+│                                                                                                                                                                                                      │
+│ ! gpu                                                                                                                                                                          needs a sign-in · ssh │
+│   link      waiting for you to sign in again, with ports and hostnames kept                                                                                                                          │
+│   error     ssh to gpu failed (255): Permission denied (publickey).                                                                                                                                  │
+│   fix       enter signs in again                                                                                                                                                                     │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                            ┌ disconnect hetzner ────────────────────────┐                                                                            │
+│                                                                            │ Disconnect hetzner?                        │                                                                            │
+│                                                                            │                                            │                                                                            │
+│                                                                            │ Its ports and hostnames stop working here. │                                                                            │
+│                                                                            │ Its lanes keep running on the box.         │                                                                            │
+│                                                                            │                                            │                                                                            │
+│                                                                            │ y disconnect   n cancel                    │                                                                            │
+│                                                                            └────────────────────────────────────────────┘                                                                            │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. Press p for a pairing code.                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ enter disconnect   n new box   p pairing code   j k select   esc back                                                                                                            ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
+1: 0-180 bold, 181-198 bold dim, 199 bold
+2: 0 bold, 2-3 reversed, 4-10 bold reversed, 11-197 reversed, 199 bold
+3: 0 bold, 4-13 dim, 199 bold
+4: 0 bold, 4-13 dim, 199 bold
+5: 0 bold, 4-13 dim, 199 bold
+6: 0 bold, 4-13 dim, 14-64 yellow, 199 bold
+7: 0 bold, 4-13 dim, 14-69 yellow, 199 bold
+8: 0 bold, 4-13 dim, 14-60 green, 199 bold
+9: 0 bold, 4-90 yellow, 199 bold
+10: 0 bold, 4-105 yellow, 199 bold
+11: 0 bold, 4-107 yellow, 199 bold
+12: 0 bold, 199 bold
+13: 0 bold, 4-9 bold, 188-197 dim, 199 bold
+14: 0 bold, 4-13 dim, 14-27 yellow, 199 bold
+15: 0 bold, 4-13 dim, 14-94 yellow, 199 bold
+16: 0 bold, 4-13 dim, 199 bold
+17: 0 bold, 4-13 dim, 199 bold
+18: 0 bold, 4-13 dim, 199 bold
+19: 0 bold, 199 bold
+20: 0 bold, 2-3 yellow, 4-6 bold, 177-191 yellow, 192-197 dim, 199 bold
+21: 0 bold, 4-13 dim, 14-76 yellow, 199 bold
+22: 0 bold, 4-13 dim, 14-68 yellow, 199 bold
+23: 0 bold, 4-13 dim, 14-33 bold, 199 bold
+24: 0 bold, 199 bold
+25: 0 bold, 199 bold
+26: 0 bold, 77-122 bold, 199 bold
+27: 0 bold, 77 bold, 79-97 bold, 122 bold, 199 bold
+28: 0 bold, 77 bold, 122 bold, 199 bold
+29: 0 bold, 77 bold, 122 bold, 199 bold
+30: 0 bold, 77 bold, 122 bold, 199 bold
+31: 0 bold, 77 bold, 122 bold, 199 bold
+32: 0 bold, 77 bold, 79 bold, 80-90 dim, 94 bold, 95-101 dim, 122 bold, 199 bold
+33: 0 bold, 77-122 bold, 199 bold
+34: 0 bold, 199 bold
+35: 0 bold, 199 bold
+36: 0 bold, 199 bold
+37: 0 bold, 199 bold
+38: 0 bold, 199 bold
+39: 0 bold, 199 bold
+40: 0 bold, 199 bold
+41: 0 bold, 199 bold
+42: 0 bold, 199 bold
+43: 0 bold, 199 bold
+44: 0 bold, 199 bold
+45: 0 bold, 199 bold
+46: 0 bold, 199 bold
+47: 0 bold, 199 bold
+48: 0 bold, 199 bold
+49: 0 bold, 199 bold
+50: 0 bold, 199 bold
+51: 0 bold, 199 bold
+52: 0 bold, 199 bold
+53: 0 bold, 199 bold
+54: 0 bold, 199 bold
+55: 0-199 bold
+56: 0 darkgray, 1-14 bold, 15-199 darkgray
+57: 0 darkgray, 2-64 dim, 199 darkgray
+58: 0-199 darkgray
+59: 1-5 bold, 6-19 dim, 20 bold, 21-31 dim, 32 bold, 33-48 dim, 49-51 bold, 52-61 dim, 62-64 bold, 65-72 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

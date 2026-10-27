@@ -284,7 +284,12 @@ fn plugin_commands_pass_with_a_missing_or_old_devlanes() {
     let system = [system32.as_path()];
     let in_powershell = |program: &Path, command: &str| {
         let mut child = Command::new(program);
-        child.args(["-NoProfile", "-NonInteractive", "-Command", command]);
+        devlanes_testing::no_window(&mut child).args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ]);
         child
     };
 
@@ -302,7 +307,9 @@ fn plugin_commands_pass_with_a_missing_or_old_devlanes() {
         "Claude Code in Git Bash",
         || {
             let mut child = Command::new(&sh);
-            child.arg("-c").arg(&claude);
+            devlanes_testing::no_window(&mut child)
+                .arg("-c")
+                .arg(&claude);
             child
         },
         &claude_payload,
@@ -333,7 +340,9 @@ fn plugin_commands_pass_with_a_missing_or_old_devlanes() {
         || {
             // What Codex's hook runner starts when the session has no shell.
             let mut child = Command::new(system32.join("cmd.exe"));
-            child.arg("/C").raw_arg(format!("\"{codex}\""));
+            devlanes_testing::no_window(&mut child)
+                .arg("/C")
+                .raw_arg(format!("\"{codex}\""));
             child
         },
         &codex_payload,
@@ -346,7 +355,7 @@ fn plugin_commands_pass_with_a_missing_or_old_devlanes() {
 #[cfg(windows)]
 fn git_sh() -> std::path::PathBuf {
     let mut git = Command::new("git");
-    git.arg("--exec-path");
+    devlanes_testing::no_window(&mut git).arg("--exec-path");
     let (code, stdout, stderr) = run_with_stdin(git, "");
     assert_eq!(code, Some(0), "git --exec-path: {stderr}");
     Path::new(stdout.trim())

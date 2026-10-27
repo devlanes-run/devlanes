@@ -1,4 +1,4 @@
- devlanes  1 acme ✕   2 billing !   3 shop ●                                                                                                 starting feat/checkout: 4 of 8 ready  M monitor   D daemon
+ devlanes  1 acme ✕   2 billing !   3 shop ●                                                                                               starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
  lanes  1 main ✕  2 feat/checkout ⠋ 4/8  3 fix/cache ·  4 spike/old-search !                                                                                                    1-9 or [ ] switch lanes
 ┌ @0 · 34/38 up ───────────────────────────────┐┌ Gateway API  api-gateway · ready · https://gateway.acme.localhost ─────────────────────────────────────────────────── watching · enter types into it ┐
 │ ▾ services                                34 ││ > @acme/api-gateway@2.4.0 dev                                                                                                                        │
@@ -60,7 +60,7 @@
  enter type into it   x stop   r restart   o open in browser   c select text   z zoom   / filter                                                                                  ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-8 bold, 10-19 bold reversed, 22-23 dim, 36-37 dim, 179 bold, 180-187 dim, 191 bold, 192-198 dim
+0: 1-8 bold, 10-19 bold reversed, 22-23 dim, 36-37 dim, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
 1: 0-6 dim, 7-16 bold reversed, 18-19 dim, 41-51 dim, 56-57 dim, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0-1 dim, 2-3 bold dim, 4-49 dim, 50-60 bold dim, 61-199 dim
 3: 0 dim, 2-3 dim, 44-45 dim, 47-48 dim, 50-78 dim, 199 dim

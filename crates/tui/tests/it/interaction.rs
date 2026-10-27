@@ -253,7 +253,7 @@ async fn tabs_chips_and_footer_hints_are_clickable() -> TestResult {
     assert_eq!(app.project(), Some("shop"));
     let text = draw(&app)?.backend().to_string();
     let top = text.lines().next().ok_or("no top bar")?.trim_matches('"');
-    let monitor = column(top, "M monitor").ok_or("no monitor button")?;
+    let monitor = column(top, "Monitor").ok_or("no monitor button")?;
     app.update(click(monitor, 0));
     assert_eq!(app.view, devlanes_tui::app::View::Monitor);
     // shop has one lane, so no lane bar: the list starts under the top bar.

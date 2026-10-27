@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/clients.rs
+expression: text
+---
+" devlanes  1 acme   2 shop                   ✕ 1 failed  Monitor  Daemon  Boxes "
+"┌ boxes ───────────────────────────────────────────────────────────────────────┐"
+"│ no boxes yet                                                                 │"
+"│                                                                              │"
+"│   n   connect to a box by its SSH name or a command                          │"
+"│                                                                              │"
+"│ A box is another machine that runs devlanes. Its projects show up in the top │"
+"│ bar. Their ports and hostnames work on this machine.                         │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+"┌ this machine ──────────────────────────────────────── 2 connected · 2 paired ┐"
+"│ remote.require_pairing is false, so clients connect without a code.          │"
+"│ ● laptop   dl_cid_3f2a9c1e  connected for 2h 14m  2 pairings                 │"
+"│ ● tablet   dl_cid_e5d8a1c4  connected for 5m      not paired                 │"
+"│ · desktop  dl_cid_7c41e0a9  last seen 3d ago      paired                     │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" x revoke   n new box   p pairing code   j k select       ? all keys   q quit   "

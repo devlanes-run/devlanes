@@ -73,7 +73,7 @@ infra:
 
 `hosts` also change the default readiness check to `tcp` on the service's port.
 
-Tenant-style subdomains (`*.pages-2.localhost`) are fine as long as the lane index is in the label: `"*.pages-${{ lane.index }}.localhost"` in the full example. Browsers reject a wildcard directly under a TLD (`*.localhost`), and so does devlanes.
+Tenant-style subdomains (`*.pages-2.localhost`) are fine as long as the lane index is in the label: `"*.pages-${{ lane.index }}.localhost"` in the full example. Browsers reject a wildcard directly under a TLD (`*.localhost`), and devlanes refuses one that a [remote box](../remote.md) sends.
 
 ## Programs that cannot resolve *.localhost
 

@@ -213,6 +213,25 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             ]),
         ),
         ("status_one_lane", Method::Status, page(vec![status_lane])),
+        // An `infra.external` entry: no process, its own state word.
+        ("status_external", Method::Status, {
+            let mut pgadmin = unit("pgadmin", "external");
+            pgadmin["kind"] = json!("external");
+            pgadmin["role"] = json!("external");
+            pgadmin["pid"] = Value::Null;
+            pgadmin["started_at_ms"] = Value::Null;
+            pgadmin["ports"] = json!({"default": 5050});
+            pgadmin["urls"] = json!([
+                "http://127.0.0.1:5050",
+                "https://pgadmin.acme-2.localhost:8443"
+            ]);
+            page(vec![lane(
+                Some(2),
+                "feat/billing",
+                "running",
+                vec![unit("api", "ready"), pgadmin],
+            )])
+        }),
         // An idle lane keeps `state`; `power` adds the level and since when.
         ("status_idle", Method::Status, {
             let idle = |level: &str, minutes: u64| {
@@ -397,6 +416,31 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             "url",
             Method::Url,
             json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost", "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost"]}),
+        ),
+        (
+            "url_clients",
+            Method::Url,
+            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost:8443",
+            "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost:8443"],
+            "clients": [
+                {"client": "laptop", "id": "0123abcd", "alias": "hetzner", "url": "https://web.acme-2.localhost", "reachable": true, "reason": null},
+                {"client": "desktop", "id": "4567ef01", "alias": "hetzner", "url": null, "reachable": false,
+                 "reason": "port 20101 is in use there by postgres (pid 812)"},
+            ]}),
+        ),
+        (
+            "hosts_clients",
+            Method::Hosts,
+            json!({
+                "items": [
+                    {"host": "api.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready",
+                     "clients": [{"client": "laptop", "url": "https://api.acme-2.localhost:9443", "reachable": true, "reason": null}]},
+                    {"host": "web.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": false, "state": "ready",
+                     "clients": [{"client": "laptop", "url": null, "reachable": false, "reason": "the lane is not mirrored there"}]},
+                ],
+                "proxy": {"https": {"bound": true, "port": 443, "fallback_reason": null}},
+                "truncated": false, "next_cursor": null,
+            }),
         ),
         (
             "hosts",
@@ -2021,6 +2065,16 @@ fn daemon_errors_are_worded_with_hints() {
             2,
         ),
         RpcError::new(
+            "name_taken",
+            json!({"name": "pgadmin", "kind": "external", "lane": "acme@2"}),
+            2,
+        ),
+        RpcError::new(
+            "external_unit",
+            json!({"unit": "pgadmin", "lane": "acme@2"}),
+            2,
+        ),
+        RpcError::new(
             "response_too_large",
             json!({"limit_bytes": 16_777_216, "message": "a message exceeded the 16 MiB frame limit"}),
             1,
@@ -2140,4 +2194,464 @@ fn http_ready_timeouts_name_the_last_answer() {
     failed acme@2:web
       did not become ready before the timeout; last answer 302 (use a `ready.http.path` that answers 2xx, set `ready.http.host` if the app routes by hostname, or set `ready.http.status: 302`)
     ");
+}
+
+/// `remote ls` shows a port's last failed open on one line and nothing for a
+/// port without one; the `open_failed` warning names the port and unit.
+#[test]
+fn failed_opens_are_one_line() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let hosts = json!({"items": [{
+        "host": "hetzner", "state": "connected", "transport": "ssh",
+        "ports": [
+            {"port": 20101, "lane": "acme@0", "unit": "web", "kind": "service",
+             "addresses": ["127.0.0.1"], "conflicts": [], "relay": null,
+             "last_error": {"reason": "not_running", "at_ms": now,
+                            "message": "the unit is not running on the box"}},
+            {"port": 20102, "lane": "acme@0", "unit": "api", "kind": "service",
+             "addresses": ["127.0.0.1"], "conflicts": [], "relay": null, "last_error": null},
+        ],
+    }], "truncated": false, "next_cursor": null});
+    let text = render_text(Method::HostList, &hosts);
+    assert!(
+        text.contains("last_error: the unit is not running on the box (not_running, just now)"),
+        "{text}"
+    );
+    assert_eq!(text.matches("last_error").count(), 3, "{text}");
+    let event = Event {
+        seq: 1,
+        event: "remote.warning".into(),
+        data: json!({"host": "hetzner", "code": "open_failed", "port": 20101, "lane": "acme@0",
+            "unit": "web", "reason": "not_running",
+            "message": "the unit is not running on the box"}),
+    };
+    let line = runtime(OutputMode::Agent)
+        .reporter()
+        .event(Method::Subscribe, &event)
+        .expect("event")
+        .stdout;
+    assert_eq!(
+        line,
+        "warn hetzner: a connection to port 20101 of acme@0:web failed because the unit is not running on the box\n"
+    );
+}
+
+/// `remote ls` leaves what the TUI reads (the box's registry, handshake
+/// info, proxy ports and name suffixes) to `--json`; a route shows the URL
+/// that opens it here, and the connection its age.
+#[test]
+fn box_registries_stay_out_of_remote_ls() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let hosts = json!({"items": [{
+        "host": "hetzner", "state": "connected", "transport": "ssh", "ports": [],
+        "connected_since_ms": now - 5 * 60_000,
+        "routes": [{"host": "web.acme-1.localhost", "port": 20101, "lane": "acme@1",
+                    "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
+        "registry": {"lanes": [{"key": {"project": "acme", "lane": "1"}, "index": 1}],
+                     "units": [{"key": {"lane": {"project": "acme", "lane": "1"},
+                                        "kind": "service", "name": "registered-only"}}]},
+        "box": {"version": "0.0.1", "label": "devlanes 0.0.1", "https_port": 7443,
+                "ports_range": "24000-24999"},
+        "proxy": {"https_port": 443, "box_port": 7443, "open": true},
+        "suffixes": ["localhost", "tld-only-in-json"],
+    }], "truncated": false, "next_cursor": null});
+    let text = render_text(Method::HostList, &hosts);
+    for hidden in [
+        "registry",
+        "registered-only",
+        "7443",
+        "24000-24999",
+        "tld-only-in-json",
+        "connected_since_ms",
+    ] {
+        assert!(!text.contains(hidden), "{hidden}: {text}");
+    }
+    assert!(text.contains("https://web.acme-1.localhost"), "{text}");
+    assert!(text.contains("connected_since: 5m ago"), "{text}");
+}
+
+/// A box waiting for a sign-in shows its state, the error and the command
+/// that resumes it in `remote ls`, and `connect` failing that way says so.
+#[test]
+fn boxes_that_need_a_sign_in_name_the_command() {
+    let hosts = json!({"items": [{
+        "host": "hetzner", "state": "needs_auth", "transport": "ssh",
+        "error": "ssh to hetzner failed (255): Permission denied (publickey).",
+        "fix": "devlanes remote connect hetzner", "ports": [],
+    }], "truncated": false, "next_cursor": null});
+    let text = render_text(Method::HostList, &hosts);
+    assert!(text.contains("needs_auth"), "{text}");
+    assert!(text.contains("Permission denied (publickey)"), "{text}");
+    assert!(text.contains("devlanes remote connect hetzner"), "{text}");
+
+    let error = RpcError::new(
+        "remote_needs_auth",
+        json!({"host": "hetzner", "message": "Permission denied (publickey).",
+               "fix": "devlanes remote connect hetzner"}),
+        4,
+    );
+    let rendered = runtime(OutputMode::Agent).reporter().error(&error, None);
+    assert!(
+        rendered
+            .stderr
+            .contains("box hetzner needs you to sign in again: Permission denied (publickey)."),
+        "{}",
+        rendered.stderr
+    );
+    assert!(
+        rendered.stderr.contains("devlanes remote connect hetzner"),
+        "{}",
+        rendered.stderr
+    );
+}
+
+/// A box waiting for pairing shows its state, the box's reason and both
+/// commands in `remote ls`; after wrong codes, the wait comes from the time
+/// the box takes codes again, and is left out once that passed.
+#[test]
+fn boxes_that_need_pairing_name_both_commands() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let host = |retry_at: u64| {
+        json!({"items": [{
+            "host": "hetzner", "state": "needs_pairing", "transport": "ssh",
+            "error": "the box no longer accepts this machine's pairing and needs a new code from `devlanes daemon pair` on the box",
+            "fix": "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>",
+            "pairing_retry_at_ms": retry_at, "ports": [],
+        }], "truncated": false, "next_cursor": null})
+    };
+    let text = render_text(Method::HostList, &host(now + 3 * 60_000 - 5));
+    assert!(text.contains("state: needs_pairing"), "{text}");
+    assert!(text.contains("no longer accepts"), "{text}");
+    assert!(
+        text.contains(
+            "fix: devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("pairing_paused: the box takes codes again in 3 minutes"),
+        "{text}"
+    );
+    assert!(!text.contains("pairing_retry_at_ms"), "{text}");
+    let later = render_text(Method::HostList, &host(now - 1));
+    assert!(!later.contains("pairing_paused"), "{later}");
+}
+
+/// `daemon pair` in each mode: the code with what to run on the client for a
+/// person, one line saying what to ask the user for an agent, the code alone
+/// when piped, and the daemon's data for `--json`. A box that pairs nobody
+/// says so; one paused by wrong codes refuses with the wait.
+#[test]
+fn daemon_pair_prints_the_code_in_every_mode() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let data = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000});
+    let render = |mode: OutputMode, data: &Value| {
+        runtime(mode)
+            .reporter()
+            .result(&Report::new(Method::RemotePair, data))
+            .expect("render")
+            .stdout
+    };
+    let human = render(OutputMode::Human, &data);
+    assert_eq!(
+        human,
+        "pairing code: K7QM-3XWD\n\
+         it works once and expires in 10 minutes\n\
+         on your other machine, run: devlanes remote connect <box> --code K7QM-3XWD\n"
+    );
+    let agent = render(OutputMode::Agent, &data);
+    assert_eq!(
+        agent,
+        "pairing code K7QM-3XWD valid_for=10m single_use: ask the user to run \
+         `devlanes remote connect <box> --code K7QM-3XWD` on their machine. <box> is this \
+         machine's SSH host or remote.boxes name.\n"
+    );
+    assert_eq!(render(OutputMode::Plain, &data), "K7QM-3XWD\n");
+    let json: Value = serde_json::from_str(&render(OutputMode::Json, &data)).expect("json output");
+    assert_eq!(json["code"], "K7QM-3XWD");
+
+    let open = json!({"code": "K7QM-3XWD", "expires_at_ms": now + 10 * 60_000,
+                      "require_pairing": false});
+    let human = render(OutputMode::Human, &open);
+    assert!(
+        human.contains("remote.require_pairing is false here, so clients connect without a code"),
+        "{human}"
+    );
+    assert!(
+        render(OutputMode::Agent, &open).contains("remote.require_pairing is false here"),
+        "the agent hears it too"
+    );
+
+    let paused = runtime(OutputMode::Agent)
+        .reporter()
+        .error(
+            &RpcError::new(
+                "pairing_paused",
+                json!({"message": "the box paused pairing after 5 wrong codes in 10 minutes",
+                       "retry_after_ms": 4 * 60_000 - 5}),
+                4,
+            ),
+            None,
+        )
+        .stderr;
+    assert!(
+        paused.contains("pairing is paused for 4 minutes after 5 wrong codes"),
+        "{paused}"
+    );
+}
+
+/// A box that takes no connections names itself in the client's error, and
+/// `daemon pair` on such a box says why it gives no code and how to allow
+/// connections.
+#[test]
+fn connections_off_reads_plainly_on_both_ends() {
+    let error = |code: &str, data: serde_json::Value| {
+        runtime(OutputMode::Human)
+            .reporter()
+            .error(&RpcError::new(code, data, 4), None)
+            .stderr
+    };
+    let client = error(
+        "remote_failed",
+        json!({"host": "hetzner",
+               "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
+    );
+    assert!(
+        client.contains(
+            "box hetzner does not accept connections. Set remote.allow_connections to true there"
+        ),
+        "{client}"
+    );
+    assert!(!client.contains("remote ls"), "no extra hint: {client}");
+    let other = error(
+        "remote_failed",
+        json!({"host": "hetzner", "message": "connecting to the box timed out"}),
+    );
+    assert!(
+        other.contains("remote hetzner: connecting to the box timed out"),
+        "{other}"
+    );
+    let pair = error(
+        "connections_off",
+        json!({"message": "this machine does not accept connections because remote.allow_connections is false",
+               "invalid": false}),
+    );
+    assert!(
+        pair.contains(
+            "this machine does not accept connections because remote.allow_connections is false"
+        ),
+        "{pair}"
+    );
+    assert!(
+        pair.contains("devlanes config set remote.allow_connections true"),
+        "{pair}"
+    );
+    let invalid = error(
+        "connections_off",
+        json!({"message": "this machine does not accept connections because the remote settings in its user config are invalid",
+               "invalid": true}),
+    );
+    assert!(invalid.contains("devlanes doctor"), "{invalid}");
+}
+
+/// `daemon clients` lists each client with a short id that `revoke` takes,
+/// whether it is paired, its connection or when it was last seen, and what
+/// it mirrors; `revoke` says whom it revoked.
+#[test]
+fn daemon_clients_and_revoke_name_each_client() {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let id = format!("dl_cid_{}", "ab12".repeat(16));
+    let clients = json!({"items": [
+        {"id": id, "name": "laptop", "paired": true, "pairings": 1,
+         "paired_at_ms": now - 86_400_000,
+         "last_seen_ms": now, "connections": [{"address": "203.0.113.4",
+         "since_ms": now - 5 * 60_000, "mirror": {"ports": 4, "bound": 3, "skipped_lanes": 0}}]},
+        {"id": format!("dl_cid_{}", "cd34".repeat(16)), "name": "desk", "paired": true,
+         "pairings": 2, "paired_at_ms": now - 86_400_000, "last_seen_ms": now - 3 * 3_600_000,
+         "connections": []},
+    ]});
+    let text = render_text(Method::RemoteClients, &clients);
+    assert!(
+        text.contains(
+            "laptop  dl_cid_ab12ab12  paired      connected for 5m from 203.0.113.4  mirrors 3 of 4 ports"
+        ),
+        "{text}"
+    );
+    assert!(
+        text.contains("desk    dl_cid_cd34cd34  2 pairings  last seen 3h ago"),
+        "{text}"
+    );
+    let unseen = json!({"items": [{"id": id, "name": "laptop", "paired": true, "pairings": 1,
+        "paired_at_ms": now, "last_seen_ms": null, "connections": []}]});
+    assert!(
+        render_text(Method::RemoteClients, &unseen).contains("not seen yet"),
+        "a pairing that never connected"
+    );
+    assert!(
+        text.contains(&format!("client laptop id={id} paired=true connections=1")),
+        "{text}"
+    );
+    let empty = render_text(Method::RemoteClients, &json!({"items": []}));
+    assert!(
+        empty.contains("no paired or connected clients\nto pair one, run: devlanes daemon pair\n"),
+        "{empty}"
+    );
+
+    let revoked = json!({"revoked": [{"id": id, "name": "laptop"}], "ended": 1});
+    let text = render_text(Method::RemoteRevoke, &revoked);
+    assert!(
+        text.contains("revoked laptop (dl_cid_ab12ab12) and ended 1 connection"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("revoked laptop id={id} ended=1")),
+        "{text}"
+    );
+}
+
+/// A box that needs pairing says what to run on the box and gives the
+/// client command as the only hint, with the wait after wrong codes from a
+/// time; an ambiguous client lists the matching ids, and one that is
+/// connected without pairing is named as such.
+#[test]
+fn pairing_errors_say_what_to_run() {
+    let error = |code: &str, data: Value| {
+        runtime(OutputMode::Agent)
+            .reporter()
+            .error(&RpcError::new(code, data, 4), None)
+            .stderr
+    };
+    let message = "the box needs a pairing code from `devlanes daemon pair` on the box";
+    let needs = error(
+        "remote_needs_pairing",
+        json!({"host": "hetzner", "message": message,
+               "fix": "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"}),
+    );
+    assert!(
+        needs.contains("box hetzner needs a pairing code from `devlanes daemon pair` on the box"),
+        "{needs}"
+    );
+    assert!(
+        needs.contains("devlanes remote connect hetzner --code <code>"),
+        "{needs}"
+    );
+    assert_eq!(
+        needs.matches("devlanes daemon pair").count(),
+        1,
+        "the message names the box command once: {needs}"
+    );
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .expect("clock");
+    let paused = error(
+        "remote_needs_pairing",
+        json!({"host": "hetzner", "message": "the box paused pairing after 5 wrong codes in 10 minutes",
+               "retry_at_ms": now + 7 * 60_000 - 5}),
+    );
+    assert!(
+        paused.contains(
+            "box hetzner paused pairing after 5 wrong codes in 10 minutes. The box takes codes again in 7 minutes"
+        ),
+        "{paused}"
+    );
+    let unpaired = error(
+        "client_not_found",
+        json!({"client": "laptop", "unpaired": true, "candidates": []}),
+    );
+    assert!(
+        unpaired.contains(
+            "laptop has no pairing to revoke because remote.require_pairing is false here"
+        ),
+        "{unpaired}"
+    );
+    let missing = error(
+        "client_not_found",
+        json!({"client": "tablet", "candidates": [{"id": "dl_cid_ab", "name": "laptop"}]}),
+    );
+    assert!(
+        missing.contains("no paired client is called tablet"),
+        "{missing}"
+    );
+    assert!(missing.contains("devlanes daemon clients"), "{missing}");
+    let ambiguous = error(
+        "client_ambiguous",
+        json!({"client": "laptop", "candidates": [{"id": "dl_cid_ab", "name": "laptop"},
+                                                  {"id": "dl_cid_cd", "name": "laptop"}]}),
+    );
+    assert!(
+        ambiguous.contains(
+            "laptop matches several paired clients, so give one of their ids: dl_cid_ab, dl_cid_cd"
+        ),
+        "{ambiguous}"
+    );
+}
+
+/// Warnings about another box name it; the proxy port and range overlap
+/// warnings say what to do.
+#[test]
+fn box_collision_warnings_name_the_other_box() {
+    let line = |data: serde_json::Value| {
+        let event = Event {
+            seq: 1,
+            event: "remote.warning".into(),
+            data,
+        };
+        runtime(OutputMode::Agent)
+            .reporter()
+            .event(Method::Subscribe, &event)
+            .expect("event")
+            .stdout
+    };
+    assert_eq!(
+        line(
+            json!({"host": "beta", "code": "lane_skipped", "lane": "acme@0",
+            "hosts": ["web.acme.localhost"], "box": "alpha"})
+        ),
+        "warn beta: lane acme@0 is not mirrored because box alpha already serves web.acme.localhost. Run devlanes lane clean for that lane on alpha, or disconnect alpha\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "beta", "code": "lane_skipped", "lane": "acme@0",
+            "hosts": ["web.acme.localhost"], "box": null, "local_lanes": ["acme@0"]})
+        ),
+        "warn beta: lane acme@0 is not mirrored because lane acme@0 on this machine already serves web.acme.localhost. Stopped lanes keep their hostnames, so run devlanes lane clean acme@0 to free them\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "beta", "code": "port_in_use", "port": 20004, "box": "alpha",
+            "held_by": "acme@0:db", "message": "…"})
+        ),
+        "warn beta: port 20004 is not mirrored because box alpha already mirrors it for acme@0:db\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "hetzner", "code": "proxy_port_in_use", "port": 8443,
+            "own_port": 443, "holder": "in use by nginx, pid 812", "message": "…"})
+        ),
+        "warn hetzner: this machine cannot use the box's HTTPS port 8443 (in use by nginx, pid 812). Open its hostnames on port 443.\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "beta", "code": "ports_range_overlap", "range": "20000-32767",
+            "overlaps": ["box alpha (20000-29999)", "box gamma (30000-32767)"],
+            "message": "…"})
+        ),
+        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767), so their lanes can get the same ports. Give one box a different ports.range\n"
+    );
 }

@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                             M monitor   D daemon
+ devlanes  1 acme   2 billing   3 shop                                                           Monitor  Daemon  Boxes
  lanes  1 main  2 feat/gift-cards                                                               1-9 or [ ] switch lanes
 ┌ @0 · 2/3 up ─────────────────────────────────┐┌ storefront  ready ─────────────────────────── watching · enter types ┐
 │ ▾ services                                 3 ││ > @acme/api-gateway@2.4.0 dev                                        │
@@ -40,7 +40,7 @@
  enter type into it   x stop   r restart   o open in browser   c select text   z zoom             ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 99 bold, 100-107 dim, 111 bold, 112-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 7-14 bold reversed, 16-32 dim, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-59 bold, 60-61 dim, 62-66 green, 68-94 darkgray, 96-117 dim, 119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-78 dim, 119 darkgray

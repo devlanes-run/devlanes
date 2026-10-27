@@ -72,7 +72,48 @@ fn request(owner: BlockOwner, count: usize) -> AllocationRequest {
             .collect(),
         reserved: BTreeSet::new(),
         avoid: BTreeSet::new(),
+        never: BTreeSet::new(),
     }
+}
+
+#[tokio::test]
+/// `never` ports go to no name: a new pool block skips them, and a fixed or
+/// kept block that covers one gives new names the other offsets while a name
+/// that already has that offset keeps it.
+async fn never_ports_go_to_no_new_name() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::open(dir.path().join("state.db"))
+        .await
+        .expect("store");
+    let project = project(&store, "demo").await;
+    let first = lane(&store, project.id, 0).await;
+    let pool = PortPool::default();
+    // A new block never covers the pool's first port.
+    let mut fresh = request(BlockOwner::Lane(first.id), 2);
+    fresh.never = BTreeSet::from([pool.start]);
+    let allocation = store.allocate(fresh).await.expect("allocation");
+    assert!(allocation.block.start > pool.start, "{allocation:?}");
+
+    // A fixed block over the pool's start: the port's offset is skipped.
+    let second = lane(&store, project.id, 1).await;
+    let start = pool.start + 500;
+    let mut fixed = request(BlockOwner::Lane(second.id), 1);
+    fixed.fixed_start = Some(start);
+    fixed.fixed_size = Some(10);
+    let kept = store.allocate(fixed.clone()).await.expect("fixed");
+    let api = PortName::new("service-000", "default");
+    let api_offset = kept.offsets[&api];
+    // The lowest free offset, which the new name would get otherwise.
+    let natural = if api_offset == 0 { 1 } else { 0 };
+    fixed.never = BTreeSet::from([start + api_offset, start + natural]);
+    fixed.names.insert(PortName::new("service-new", "default"));
+    let grown = store.allocate(fixed).await.expect("grown");
+    assert_eq!(
+        grown.offsets[&api], api_offset,
+        "the old name keeps its port"
+    );
+    let new = grown.offsets[&PortName::new("service-new", "default")];
+    assert!(new != natural && new != api_offset, "{grown:?}");
 }
 
 #[tokio::test]

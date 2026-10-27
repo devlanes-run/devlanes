@@ -2,6 +2,7 @@ mod dogfood;
 
 mod artifacts;
 mod diagnostics;
+mod external;
 mod merging;
 mod reference_docs;
 mod references;
@@ -306,7 +307,7 @@ fn structural_validation() {
         ),
         (
             "project: demo\ninfra: { hidden: [missing] }",
-            "infra: unknown container or Compose service `missing`",
+            "infra.hidden: unknown container or Compose service `missing`",
         ),
         (
             "project: demo\nservices: { api: { run: a, ready: { tcp: true, log: ready } } }",
@@ -603,6 +604,180 @@ fn user_tld_validation() {
         Some(HostsFile::Never)
     ));
     assert_eq!(issues.len(), 1, "{issues:?}");
+}
+
+/// A box starts its daemon for connecting clients unless `remote.start_daemon` is false.
+#[test]
+fn remote_start_daemon_defaults_to_true() {
+    assert!(parse_user("{}").expect("defaults").remote.start_daemon);
+    assert!(parse_user("remote: {}").expect("empty").remote.start_daemon);
+    assert!(
+        !parse_user("remote: { start_daemon: false }")
+            .expect("off")
+            .remote
+            .start_daemon
+    );
+    assert!(parse_user("remote: { start_daemon: maybe }").is_err());
+}
+
+/// A box serves only paired clients unless `remote.require_pairing` is false.
+#[test]
+fn remote_require_pairing_defaults_to_true() {
+    assert!(parse_user("{}").expect("defaults").remote.require_pairing);
+    assert!(
+        parse_user("remote: {}")
+            .expect("empty")
+            .remote
+            .require_pairing
+    );
+    assert!(
+        !parse_user("remote: { require_pairing: false }")
+            .expect("off")
+            .remote
+            .require_pairing
+    );
+    assert!(parse_user("remote: { require_pairing: maybe }").is_err());
+}
+
+/// Other machines may connect unless `remote.allow_connections` is false.
+#[test]
+fn remote_allow_connections_defaults_to_true() {
+    assert!(parse_user("{}").expect("defaults").remote.allow_connections);
+    assert!(
+        !parse_user("remote: { allow_connections: false }")
+            .expect("off")
+            .remote
+            .allow_connections
+    );
+    assert!(parse_user("remote: { allow_connections: maybe }").is_err());
+}
+
+/// The box settings keep their values when `remote` is valid; a problem under
+/// `remote` other than in `remote.boxes` refuses connections, turns starting
+/// off and pairing on and comes back, while a problem elsewhere is not theirs.
+#[test]
+fn box_settings_fall_to_the_safe_side() {
+    let settings = |source: &str| {
+        let (config, problems) = devlanes_config::parse_user_lenient("config.yaml", source);
+        let (settings, remote) = devlanes_config::box_settings(&config, problems);
+        (
+            settings.allow_connections,
+            settings.start_daemon,
+            settings.require_pairing,
+            remote.len(),
+        )
+    };
+    assert_eq!(settings(""), (true, true, true, 0));
+    assert_eq!(
+        settings("remote:\n  start_daemon: false\n  require_pairing: false\n"),
+        (true, false, false, 0)
+    );
+    assert_eq!(
+        settings("remote:\n  allow_connections: false\n"),
+        (false, true, true, 0)
+    );
+    assert_eq!(
+        settings("remote:\n  require_pairing: false\ntui:\n  theme: neon\n"),
+        (true, true, false, 0)
+    );
+    assert_eq!(
+        settings("remote:\n  require_pairing: false\n  boxes:\n    acme:\n      command: []\n"),
+        (true, true, false, 0)
+    );
+    for source in [
+        "remote:\n  start_daemon: flase\n",
+        "remote:\n  require_pairing: false\n  requre_pairing: false\n",
+        "remote:\n  allow_conections: false\n",
+        "remote: 5\n",
+    ] {
+        assert_eq!(settings(source), (false, false, true, 1), "{source}");
+    }
+}
+
+/// A config that loses every setting at once (not YAML, or too many problems
+/// to keep any) also loses `remote`, so connections are refused, starting is
+/// off and pairing on.
+#[test]
+fn box_settings_fall_to_the_safe_side_when_the_whole_file_fails() {
+    let settings = |source: &str| {
+        let (config, problems) = devlanes_config::parse_user_lenient("config.yaml", source);
+        let (settings, remote) = devlanes_config::box_settings(&config, problems);
+        (
+            settings.allow_connections,
+            settings.start_daemon,
+            settings.require_pairing,
+            remote,
+        )
+    };
+    let (allow, start, pairing, remote) =
+        settings("remote:\n  start_daemon: false\n  require_pairing: [\n");
+    assert_eq!(
+        (allow, start, pairing, remote.len()),
+        (false, false, true, 1)
+    );
+
+    let mut many = String::from("remote:\n  start_daemon: true\n  require_pairing: false\n");
+    for key in 0..80 {
+        many.push_str(&format!("unknown_{key}: 1\n"));
+    }
+    let (allow, start, pairing, remote) = settings(&many);
+    assert_eq!((allow, start, pairing), (false, false, true));
+    let messages: Vec<&str> = remote.iter().map(|p| p.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["config.yaml: too many problems to keep any setting; every default applies"]
+    );
+}
+
+/// Command boxes need a name `remote connect` can take and a program; the
+/// rest of the command is passed as written.
+#[test]
+fn remote_boxes_need_a_name_and_a_program() {
+    let config = parse_user(
+        "remote:\n  boxes:\n    acme_2:\n      command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]\n",
+    )
+    .expect("valid");
+    assert_eq!(
+        config.remote.boxes["acme_2"].command,
+        [
+            "docker", "exec", "-i", "acme", "devlanes", "tunnel", "--stdio"
+        ]
+    );
+    assert!(
+        config.remote.start_daemon,
+        "the box setting keeps its default"
+    );
+    for (source, message) in [
+        (
+            "remote: { boxes: { acme: { command: [] } } }",
+            "remote.boxes.acme.command: must list the program",
+        ),
+        (
+            "remote: { boxes: { acme: { command: [''] } } }",
+            "remote.boxes.acme.command: must list the program",
+        ),
+        (
+            "remote: { boxes: { acme.box: { command: [ssh] } } }",
+            "remote.boxes.acme.box: a box name may only hold",
+        ),
+        (
+            "remote: { boxes: { -acme: { command: [ssh] } } }",
+            "remote.boxes.-acme: a box name",
+        ),
+        ("remote: { boxes: { acme: {} } }", "missing field `command`"),
+        (
+            "remote: { boxes: { acme: { command: [ssh], shell: true } } }",
+            "unknown field `shell`",
+        ),
+    ] {
+        let error = parse_user(source).expect_err(source);
+        assert!(
+            error.message.contains(message),
+            "{source}: {}",
+            error.message
+        );
+    }
+    assert!(parse_user("remote: { start: false }").is_err());
 }
 
 /// Startup pacing parses typed percentages and derives windows from the core count.

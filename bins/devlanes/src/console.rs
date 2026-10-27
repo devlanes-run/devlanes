@@ -52,7 +52,13 @@ pub fn read_tty(prompt: &str, kind: &str) -> Option<String> {
             if !refused {
                 return Some("\n".into());
             }
-            eprintln!("devlanes: cancelled: {MINTTY}");
+            // A pairing code can come with the command instead.
+            let code = if kind == "code" {
+                ", or pass the code with --code"
+            } else {
+                ""
+            };
+            eprintln!("devlanes: cancelled: {MINTTY}{code}");
             return None;
         }
     }

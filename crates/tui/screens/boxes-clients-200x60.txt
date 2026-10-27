@@ -1,0 +1,122 @@
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                       starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 of 3 connected ┐
+│ ● hetzner                                                                                                                                                                            connected · ssh │
+│   link      connected since 2026-10-14 15:32                                                                                                                                                         │
+│   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999                                                                                                                                  │
+│   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed                                                                                                                                   │
+│   skipped   acme@0: acme@0 on this machine serves its hostnames                                                                                                                                      │
+│             ext.example.com (acme@4:ext-build): not under .localhost                                                                                                                                 │
+│   syncs     acme@4:ext-build  up to date, following changes                                                                                                                                          │
+│   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same release on both.                                                                                                            │
+│   ! the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.                                                                                             │
+│   ! this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.                                                                                           │
+│                                                                                                                                                                                                      │
+│ ⠋ devbox                                                                                                                                                                      reconnecting · command │
+│   link      next try in 8s                                                                                                                                                                           │
+│   error     docker exec exited 1: Error response from daemon: container devbox is not running                                                                                                        │
+│   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767                                                                                                                                 │
+│   proxy     this machine serves its hostnames on 8443 and on 9443, which its URLs use                                                                                                                │
+│   mirror    1 lane · no ports bound here · 0 hostnames routed                                                                                                                                        │
+│                                                                                                                                                                                                      │
+│ ! gpu                                                                                                                                                                          needs a sign-in · ssh │
+│   link      waiting for you to sign in again, with ports and hostnames kept                                                                                                                          │
+│   error     ssh to gpu failed (255): Permission denied (publickey).                                                                                                                                  │
+│   fix       enter signs in again                                                                                                                                                                     │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 connected · 3 paired ┐
+│ ● laptop     dl_cid_3f2a9c1e  203.0.113.24  connected for 2h 14m  2 pairings  mirrors 5 of 6 ports, 1 lane skipped                                                                                   │
+│ · ci-runner  dl_cid_0b9e44d1                last seen 1h ago      paired                                                                                                                             │
+│ · desktop    dl_cid_7c41e0a9                last seen 3d ago      paired                                                                                                                             │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ x revoke   n new box   p pairing code   j k select   esc back                                                                                                                    ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
+1: 0 darkgray, 1-7 bold, 8-180 darkgray, 181-198 dim, 199 darkgray
+2: 0 darkgray, 2-3 green, 4-10 bold, 183-191 green, 192-197 dim, 199 darkgray
+3: 0 darkgray, 4-13 dim, 199 darkgray
+4: 0 darkgray, 4-13 dim, 199 darkgray
+5: 0 darkgray, 4-13 dim, 199 darkgray
+6: 0 darkgray, 4-13 dim, 14-64 yellow, 199 darkgray
+7: 0 darkgray, 4-13 dim, 14-69 yellow, 199 darkgray
+8: 0 darkgray, 4-13 dim, 14-60 green, 199 darkgray
+9: 0 darkgray, 4-90 yellow, 199 darkgray
+10: 0 darkgray, 4-105 yellow, 199 darkgray
+11: 0 darkgray, 4-107 yellow, 199 darkgray
+12: 0 darkgray, 199 darkgray
+13: 0 darkgray, 4-9 bold, 188-197 dim, 199 darkgray
+14: 0 darkgray, 4-13 dim, 14-27 yellow, 199 darkgray
+15: 0 darkgray, 4-13 dim, 14-94 yellow, 199 darkgray
+16: 0 darkgray, 4-13 dim, 199 darkgray
+17: 0 darkgray, 4-13 dim, 199 darkgray
+18: 0 darkgray, 4-13 dim, 199 darkgray
+19: 0 darkgray, 199 darkgray
+20: 0 darkgray, 2-3 yellow, 4-6 bold, 177-191 yellow, 192-197 dim, 199 darkgray
+21: 0 darkgray, 4-13 dim, 14-76 yellow, 199 darkgray
+22: 0 darkgray, 4-13 dim, 14-68 yellow, 199 darkgray
+23: 0 darkgray, 4-13 dim, 14-33 bold, 199 darkgray
+24: 0 darkgray, 199 darkgray
+25: 0 darkgray, 199 darkgray
+26: 0 darkgray, 199 darkgray
+27: 0 darkgray, 199 darkgray
+28: 0 darkgray, 199 darkgray
+29: 0 darkgray, 199 darkgray
+30: 0 darkgray, 199 darkgray
+31: 0 darkgray, 199 darkgray
+32: 0 darkgray, 199 darkgray
+33: 0 darkgray, 199 darkgray
+34: 0 darkgray, 199 darkgray
+35: 0 darkgray, 199 darkgray
+36: 0 darkgray, 199 darkgray
+37: 0 darkgray, 199 darkgray
+38: 0 darkgray, 199 darkgray
+39: 0 darkgray, 199 darkgray
+40: 0 darkgray, 199 darkgray
+41: 0 darkgray, 199 darkgray
+42: 0 darkgray, 199 darkgray
+43: 0 darkgray, 199 darkgray
+44: 0 darkgray, 199 darkgray
+45: 0 darkgray, 199 darkgray
+46: 0 darkgray, 199 darkgray
+47: 0 darkgray, 199 darkgray
+48: 0 darkgray, 199 darkgray
+49: 0 darkgray, 199 darkgray
+50: 0 darkgray, 199 darkgray
+51: 0 darkgray, 199 darkgray
+52: 0 darkgray, 199 darkgray
+53: 0-199 darkgray
+54: 0-175 bold, 176-186 bold green, 187-197 bold dim, 198-199 bold
+55: 0 bold, 1-3 reversed, 4-14 bold reversed, 15-198 reversed, 199 bold
+56: 0 bold, 2-3 dim, 4-14 bold, 15-79 dim, 199 bold
+57: 0 bold, 2-3 dim, 4-14 bold, 15-79 dim, 199 bold
+58: 0-199 bold
+59: 1 bold, 2-11 dim, 12 bold, 13-23 dim, 24 bold, 25-40 dim, 41-43 bold, 44-53 dim, 54-56 bold, 57-64 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

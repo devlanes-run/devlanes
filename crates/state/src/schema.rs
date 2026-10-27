@@ -165,6 +165,23 @@ diesel::table! {
         address -> Text,
         daemon_version -> Nullable<Text>,
         last_connected -> Nullable<BigInt>,
+        wanted -> Integer,
+    }
+}
+diesel::table! {
+    remote_pairings (token_sha256) {
+        token_sha256 -> Text,
+        client_id -> Text,
+        name -> Text,
+        paired_at -> BigInt,
+        last_seen -> Nullable<BigInt>,
+    }
+}
+diesel::table! {
+    remote_tokens (host) {
+        host -> Text,
+        token -> Text,
+        paired_at -> BigInt,
     }
 }
 diesel::table! {
@@ -191,5 +208,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     metric_rollups,
     run_summaries,
     remote_hosts,
+    remote_pairings,
+    remote_tokens,
     startup_peaks,
 );

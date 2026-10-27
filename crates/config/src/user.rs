@@ -72,6 +72,9 @@ pub struct UserConfig {
     /// The daemon's lifetime: whether it stops on its own once the last TUI closes and
     /// nothing runs.
     pub daemon: DaemonConfig,
+    /// Settings for `devlanes remote connect`: boxes reached by a command, and how this
+    /// machine serves clients when it is a box.
+    pub remote: RemoteConfig,
 }
 
 /// What a plain `devlanes start`, or `s` on a lane in the TUI, starts. Changes apply
@@ -388,10 +391,11 @@ impl Default for UpdatesConfig {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"exit_when_idle":false}]))]
 pub struct DaemonConfig {
-    /// Stop the daemon about 30 seconds after the last TUI closes when no service, task
-    /// or start is running; the next devlanes command starts it again. Containers keep
-    /// running either way. Defaults to true. Only a daemon a command started on demand
-    /// exits; one installed with `devlanes daemon install` keeps running.
+    /// Stop the daemon about 30 seconds after the last TUI closes, once nothing runs or
+    /// starts, no box or client is connected or waiting to reconnect, and no pairing code
+    /// is outstanding. The next devlanes command starts it again. Containers keep running
+    /// either way. Defaults to true. Only a daemon a command started on demand exits. One
+    /// installed with `devlanes daemon install` keeps running.
     #[schemars(extend("examples" = [true,false]))]
     pub exit_when_idle: bool,
 }
@@ -402,6 +406,91 @@ impl Default for DaemonConfig {
         Self {
             exit_when_idle: true,
         }
+    }
+}
+
+/// Settings for `devlanes remote connect`: boxes reached by a command, and how this
+/// machine serves clients when it is a box.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+#[schemars(extend("examples" = [{"allow_connections":false},{"start_daemon":false},{"require_pairing":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
+pub struct RemoteConfig {
+    /// Boxes that `devlanes remote connect <name>` reaches by running a command instead of
+    /// SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace.
+    /// Names not listed here are SSH destinations. Changes apply at the next
+    /// `remote connect`.
+    #[schemars(extend("examples" = [{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}]))]
+    pub boxes: std::collections::BTreeMap<String, RemoteBox>,
+    /// Let other machines connect to this one with `devlanes remote connect`. Defaults to
+    /// true. When false, every client is turned away and `devlanes daemon pair` gives no
+    /// codes. Connecting from this machine to a box still works. Clients already
+    /// connected stay until they disconnect. An invalid value counts as false.
+    #[schemars(extend("examples" = [true,false]))]
+    pub allow_connections: bool,
+    /// Start the devlanes daemon here when a client connects and it is not running.
+    /// Defaults to true. When false, a client keeps retrying until you run
+    /// `devlanes daemon start` here. An invalid value counts as false.
+    #[schemars(extend("examples" = [true,false]))]
+    pub start_daemon: bool,
+    /// Serve only clients paired with this machine. Defaults to true. A client's first
+    /// connection needs a one-time code from `devlanes daemon pair`, and
+    /// `devlanes daemon revoke` removes a pairing. Set false to serve every client that
+    /// reaches this machine over SSH or its command. An invalid value counts as true.
+    #[schemars(extend("examples" = [true,false]))]
+    pub require_pairing: bool,
+}
+
+impl Default for RemoteConfig {
+    /// Connections are allowed, start the daemon and need pairing unless
+    /// turned off; no command boxes.
+    fn default() -> Self {
+        Self {
+            boxes: std::collections::BTreeMap::new(),
+            allow_connections: true,
+            start_daemon: true,
+            require_pairing: true,
+        }
+    }
+}
+
+/// A box that `devlanes remote connect <name>` reaches by running a command. The command
+/// must run `devlanes tunnel --stdio` in the box.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[schemars(extend("examples" = [{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]},{"command":["wsl.exe","-d","Ubuntu","devlanes","tunnel","--stdio"]}]))]
+pub struct RemoteBox {
+    /// The program and its arguments as a list, one item per argument. No shell runs it.
+    /// It must run `devlanes tunnel --stdio` in the box with its input and output passed
+    /// through and no terminal, so use `docker exec -i`, not `-it`. It runs again for every
+    /// reconnect and cannot ask for input, so sign in to its tool first.
+    #[schemars(extend("examples" = [["docker","exec","-i","acme","devlanes","tunnel","--stdio"],["kubectl","exec","-i","acme-0","--","devlanes","tunnel","--stdio"]]))]
+    pub command: Vec<String>,
+}
+
+impl RemoteConfig {
+    /// Rejects box names that `remote connect` and dotted setting keys cannot
+    /// name, and commands without a program.
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (name, entry) in &self.boxes {
+            let plain = !name.is_empty()
+                && !name.starts_with('-')
+                && name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            if !plain {
+                return Err(ConfigError::plain(format!(
+                    "remote.boxes.{name}: a box name may only hold letters, digits, `-` and `_`, \
+                     and cannot start with `-`"
+                )));
+            }
+            if entry.command.first().is_none_or(String::is_empty) {
+                return Err(ConfigError::plain(format!(
+                    "remote.boxes.{name}.command: must list the program and its arguments, \
+                     such as [docker, exec, -i, {name}, devlanes, tunnel, --stdio]"
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -420,7 +509,9 @@ pub struct HistoryConfig {
     /// How long a remote box stays listed by `devlanes remote ls` after its last
     /// successful connection; defaults to `90d` and must be longer than `0s`. A record
     /// without a connection time is never deleted by age, and `state.max_size` can
-    /// delete records sooner.
+    /// delete records sooner. A box connected with `devlanes remote connect` and not
+    /// disconnected since is never deleted, so the daemon can connect it again after
+    /// a restart.
     #[schemars(extend("examples" = ["90d","180d"]))]
     pub remote_hosts_retention: ConfigDuration,
 }
@@ -1070,6 +1161,7 @@ impl UserConfig {
         }
         self.startup.validate()?;
         self.lanes.validate()?;
+        self.remote.validate()?;
         Ok(())
     }
 
@@ -1224,6 +1316,60 @@ pub fn load_user_lenient(path: impl AsRef<Path>) -> (UserConfig, Vec<ConfigError
         Ok(source) => parse_user_lenient(&path.display().to_string(), &source),
         Err(error) => (UserConfig::default(), vec![ConfigError::io(path, error)]),
     }
+}
+
+/// What this machine reads from `remote` as a box for other machines, as
+/// `devlanes tunnel --stdio` applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxSettings {
+    /// `remote.allow_connections`.
+    pub allow_connections: bool,
+    /// `remote.start_daemon`.
+    pub start_daemon: bool,
+    /// `remote.require_pairing`.
+    pub require_pairing: bool,
+}
+
+/// [`BoxSettings`] from a lenient load ([`load_user_lenient`],
+/// [`parse_user_lenient`]), with the load's problems that concern this
+/// machine as a box: those under `remote`, except `remote.boxes`, which is
+/// about the boxes this machine connects to, and a failure of the whole file
+/// (unreadable, not YAML, or too many problems to keep any setting), which
+/// loses `remote` with everything else. With any such problem every setting
+/// falls to the safe side instead of its default: connections are refused,
+/// so a mistyped `allow_connections: false` keeps clients out, starting is
+/// off, so a mistyped `start_daemon: false` does not start a daemon the user
+/// meant to keep stopped, and pairing is required, so a mistyped
+/// `require_pairing: false` cannot let unpaired clients in.
+pub fn box_settings(
+    config: &UserConfig,
+    problems: Vec<ConfigError>,
+) -> (BoxSettings, Vec<ConfigError>) {
+    let remote: Vec<ConfigError> = problems
+        .into_iter()
+        .filter(|problem| {
+            let message = &problem.message;
+            // A lenient load ends each per-key problem this way; any other
+            // problem is about the whole file.
+            !message.ends_with("; the default applies")
+                || ((message.starts_with("remote.") || message.starts_with("remote:"))
+                    && !message.starts_with("remote.boxes"))
+        })
+        .collect();
+    let settings = if remote.is_empty() {
+        BoxSettings {
+            allow_connections: config.remote.allow_connections,
+            start_daemon: config.remote.start_daemon,
+            require_pairing: config.remote.require_pairing,
+        }
+    } else {
+        BoxSettings {
+            allow_connections: false,
+            start_daemon: false,
+            require_pairing: true,
+        }
+    };
+    (settings, remote)
 }
 
 /// Keys dropped before giving up and using the defaults for everything.

@@ -101,6 +101,37 @@ pub(crate) struct InfraRoute {
     pub url: Option<String>,
 }
 
+/// One `infra.external` entry as this lane sees it: the same port in every
+/// lane of the project, hostnames evaluated for this lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExternalInfo {
+    pub name: String,
+    /// The declared address, the only one devlanes dials for it.
+    pub address: std::net::SocketAddr,
+    pub port: u16,
+    /// `http://127.0.0.1:<port>` or `http://[::1]:<port>`, as the address names it.
+    pub url: String,
+    pub hidden: bool,
+    pub routes: Vec<ExternalRoute>,
+}
+
+/// One hostname of an [`ExternalInfo`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExternalRoute {
+    pub host: String,
+    pub fallback: bool,
+    pub host_header_upstream: bool,
+    /// `https://host` through the proxy; `None` for wildcard hosts.
+    pub url: Option<String>,
+}
+
+impl ExternalInfo {
+    /// The URL a browser opens: the first hostname that is not a wildcard.
+    pub(crate) fn public_url(&self) -> Option<String> {
+        self.routes.iter().find_map(|route| route.url.clone())
+    }
+}
+
 /// Synchronous layout of a lane, available while it is idle.
 #[derive(Debug, Clone)]
 pub(crate) struct LaneView {
@@ -114,6 +145,8 @@ pub(crate) struct LaneView {
     pub routes: Vec<RouteSpec>,
     /// Routes to containers from `infra.hosts`.
     pub infra_routes: Vec<InfraRoute>,
+    /// `infra.external` entries, in declaration order.
+    pub externals: Vec<ExternalInfo>,
     pub lane_env: EnvMap,
     /// The lane's `services` expression namespace.
     pub services_namespace: Value,
@@ -869,8 +902,8 @@ pub(crate) fn apply_phase_reason(lane: &LaneSt, summary: &mut UnitSummary) {
 }
 
 /// Sets `UnitSummary.order`: where the unit is declared in its list of the
-/// lane's config (`services`, `tasks`, `infra.setup` or `infra.teardown`). A
-/// replica `name.N` takes its service's place.
+/// lane's config (`services`, `tasks`, `infra.setup`, `infra.teardown` or
+/// `infra.external`). A replica `name.N` takes its service's place.
 pub(crate) fn apply_order(lane: &LaneSt, summary: &mut UnitSummary) {
     let Some(config) = lane.config.loaded() else {
         return;
@@ -890,6 +923,9 @@ pub(crate) fn apply_order(lane: &LaneSt, summary: &mut UnitSummary) {
             .and_then(|entry| config.infra.teardown.get_index_of(entry)),
         _ if summary.kind == "task" => config.tasks.get_index_of(name),
         _ if summary.kind == "service" => service,
+        _ if summary.kind == devlanes_proto::EXTERNAL_KIND => {
+            config.infra.external.get_index_of(name)
+        }
         _ => None,
     };
     summary.order = index.and_then(|index| u32::try_from(index).ok());
@@ -1018,8 +1054,35 @@ pub(crate) fn idle_summary(lane: &str, service: &ServiceInfo) -> UnitSummary {
     }
 }
 
-/// Builds a lane summary; units list configured services (idle or live) then
-/// one-shot units.
+/// Summary of an `infra.external` entry: kind, role and state `external`
+/// whether or not anything listens on its port, which devlanes never checks.
+pub(crate) fn external_summary(
+    lane: &LaneSt,
+    reference: &str,
+    external: &ExternalInfo,
+) -> UnitSummary {
+    let public_url = external.public_url();
+    let mut urls = vec![external.url.clone()];
+    urls.extend(public_url.clone());
+    UnitSummary {
+        color: Some(derived_color(lane, &external.name)),
+        name: external.name.clone(),
+        lane: reference.to_owned(),
+        state: devlanes_proto::EXTERNAL_KIND.into(),
+        ports: BTreeMap::from([("default".to_owned(), external.port)]),
+        urls,
+        kind: devlanes_proto::EXTERNAL_KIND.into(),
+        role: Some(devlanes_proto::EXTERNAL_KIND.into()),
+        hidden: external.hidden,
+        public_url,
+        // No process, so no terminal to size.
+        pty: false,
+        ..UnitSummary::default()
+    }
+}
+
+/// Builds a lane summary; units list configured services (idle or live),
+/// one-shot units, then `infra.external` entries.
 pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
     let reference = lane.reference(project);
     let mut units = Vec::new();
@@ -1046,6 +1109,9 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         if !units.iter().any(|summary| &summary.name == name) {
             units.push(unit_summary(&reference, name, unit));
         }
+    }
+    for external in lane.view.iter().flat_map(|view| &view.externals) {
+        units.push(external_summary(lane, &reference, external));
     }
     let power = lane.power.as_ref().map(|power| power.level.word());
     for summary in &mut units {

@@ -144,6 +144,11 @@ pub struct AllocationRequest {
     /// mirrored ports. A new pool block never covers them; a kept block or a fixed
     /// start ignores them, because local lanes win over mirrors.
     pub avoid: BTreeSet<u16>,
+    /// Ports no name may get, in any block, such as `infra.external` ports: a
+    /// new pool block never covers them, and in a kept or fixed block the
+    /// offsets that land on them are skipped for new names. A name that already
+    /// has such an offset keeps it; the caller reports that.
+    pub never: BTreeSet<u16>,
 }
 
 /// Stable names include removed services until GC. `previous` signals a port change.

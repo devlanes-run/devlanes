@@ -55,10 +55,17 @@ impl EventBus {
             event: name.to_owned(),
             data,
         };
-        if recent.len() == RECENT {
-            recent.pop_front();
+        // A nudge to fetch `host.list` or `remote.clients` again says nothing
+        // on its own, and a busy box would push everything else out of
+        // `debug events`.
+        if name != devlanes_proto::remote::MIRROR_EVENT
+            && name != devlanes_proto::remote::CLIENTS_EVENT
+        {
+            if recent.len() == RECENT {
+                recent.pop_front();
+            }
+            recent.push_back(event.clone());
         }
-        recent.push_back(event.clone());
         let _ = self.sender.send(event);
     }
 

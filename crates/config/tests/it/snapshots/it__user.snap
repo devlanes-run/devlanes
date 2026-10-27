@@ -77,5 +77,11 @@ expression: user
   },
   "daemon": {
     "exit_when_idle": true
+  },
+  "remote": {
+    "boxes": {},
+    "allow_connections": true,
+    "start_daemon": true,
+    "require_pairing": true
   }
 }

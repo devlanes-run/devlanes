@@ -58,6 +58,9 @@ error: api is a configured service of acme@2; give exec another --name, or run t
 hint: devlanes start acme@2:api
 error: seed is a configured task of acme@2; give exec another --name, or run the configured task
 hint: devlanes run seed --lane acme@2
+error: pgadmin is already an infra.external port of acme@2, so give exec another --name
+error: acme@2:pgadmin is an infra.external port that devlanes does not run
+hint: devlanes url print acme@2:pgadmin
 error: the answer is larger than the 16 MiB message limit; ask for less: a smaller --tail or --budget, or one unit at a time
 error: the connection to the daemon closed before the answer arrived
 error: lane acme@2 has no running service to freeze

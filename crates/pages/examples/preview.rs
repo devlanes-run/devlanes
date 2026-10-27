@@ -50,6 +50,12 @@ fn main() -> io::Result<()> {
             ErrorCode::BoxReconnecting => page
                 .unit(Some("acme@2"), Some("web"))
                 .hint("Start it on my-box: devlanes start --lane acme@2"),
+            ErrorCode::BoxSignInNeeded => page
+                .unit(Some("acme@2"), Some("web"))
+                .hint("Sign in to my-box again: devlanes remote connect my-box"),
+            ErrorCode::BoxPairingNeeded => page.unit(Some("acme@2"), Some("web")).hint(
+                "Pair with my-box again: run devlanes daemon pair on my-box, then devlanes remote connect my-box --code <code>",
+            ),
             _ => page.unit(Some("acme@2"), Some("web")),
         };
         fs::write(dir.join(format!("{code}.html")), page.render(Format::Html))?;

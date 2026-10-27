@@ -156,6 +156,22 @@ pub fn empty_git_config() -> Result<tempfile::TempPath, Error> {
         .into_temp_path())
 }
 
+/// Starts `command` with `CREATE_NO_WINDOW` on Windows, replacing any creation
+/// flags set before; does nothing elsewhere. A test run started without a
+/// console (some agents and IDEs start it detached) would otherwise open a
+/// window for every console program a test starts. With the flag the program
+/// gets a hidden console, which the programs it starts share.
+pub fn no_window(command: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        /// `CREATE_NO_WINDOW` from `winbase.h`.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

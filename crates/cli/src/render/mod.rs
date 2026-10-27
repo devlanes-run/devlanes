@@ -75,7 +75,8 @@ impl Ctx<'_> {
         let sgr = match state {
             "ready" | "running" | "ok" | "applied" | "exited" => "32",
             "failed" | "fail" | "error" => "31",
-            "starting" | "stopping" | "warn" | "reconnecting" | "unassigned" | "orphaned" => "33",
+            "starting" | "stopping" | "warn" | "reconnecting" | "sign_in_needed" | "needs_auth"
+            | "pairing_needed" | "needs_pairing" | "unassigned" | "orphaned" => "33",
             // Queued, idle, throttled, frozen and stopped units are dim.
             _ => "2",
         };
@@ -194,7 +195,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::Run => other::run(data, cx),
         Method::TaskList => other::tasks(data, cx),
         Method::Env => other::env(data),
-        Method::Url => other::url(data),
+        Method::Url => other::url(data, cx),
         Method::Metrics => other::metrics(data, cx),
         Method::Subscribe => other::events_page(data),
         Method::InfraUp | Method::InfraStatus | Method::InfraDown => other::infra(method, data),
@@ -203,6 +204,10 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::DaemonStatus => other::daemon_status(data),
         Method::DaemonShutdown => other::daemon_shutdown(data),
         Method::DaemonResetState => other::reset_state(data),
+        Method::HostList => other::host_list(data),
+        Method::RemotePair => other::daemon_pair(data, cx),
+        Method::RemoteClients => other::daemon_clients(data, cx),
+        Method::RemoteRevoke => other::daemon_revoke(data, cx),
         _ => tree(data),
     }
 }

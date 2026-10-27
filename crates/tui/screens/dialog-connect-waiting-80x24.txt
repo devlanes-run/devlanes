@@ -1,0 +1,50 @@
+ devlanes  1 acme  ›  starting feat/checkout: 4 of 8 r…  M  D  Boxes · 3 issues
+┌ boxes ────────────────────────────────────── 1 of 3 connected · j k for more ┐
+│ ⠋ devbox                                              reconnecting · command │
+│   link      next try in 8s                                                   │
+│   error     docker exec exited 1: Error response from daemon: container      │
+│             devbox is not running                                            │
+│   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767         │
+│   prox┌ connect devbox ─────────────────────────────────────────────┐ich its │
+│       │ ⠋ next try in 4s                                            │        │
+│   mirr│ docker exec exited 1: Error response from daemon: container │        │
+│       │ devbox is not running                                       │        │
+│ ! gpu │                                                             │n · ssh │
+│   link│ The daemon keeps connecting if you close this.              │s kept  │
+│   erro│                                                             │        │
+│   fix │ esc close                                                   │        │
+│       └─────────────────────────────────────────────────────────────┘        │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. Press p for a pairing code.              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ enter show   d disconnect   n new box   p pairing code … ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 18-19 dim, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
+1: 0-45 bold, 46-78 bold dim, 79 bold
+2: 0 bold, 2-3 reversed, 4-9 bold reversed, 10-77 reversed, 79 bold
+3: 0 bold, 4-13 dim, 14-27 yellow, 79 bold
+4: 0 bold, 4-13 dim, 14-72 yellow, 79 bold
+5: 0 bold, 4-13 dim, 14-34 yellow, 79 bold
+6: 0 bold, 4-13 dim, 79 bold
+7: 0 bold, 4-7 dim, 8-70 bold, 79 bold
+8: 0 bold, 4-7 dim, 8 bold, 70 bold, 79 bold
+9: 0 bold, 4-7 dim, 8 bold, 10-68 yellow, 70 bold, 79 bold
+10: 0 bold, 8 bold, 10-30 yellow, 70 bold, 79 bold
+11: 0 bold, 2-3 yellow, 4-6 bold, 8 bold, 70 bold, 71 yellow, 72-77 dim, 79 bold
+12: 0 bold, 4-7 dim, 8 bold, 10-55 dim, 70 bold, 71-76 yellow, 79 bold
+13: 0 bold, 4-7 dim, 8 bold, 70 bold, 79 bold
+14: 0 bold, 4-7 dim, 8 bold, 10-12 bold, 13-18 dim, 70 bold, 79 bold
+15: 0 bold, 8-70 bold, 79 bold
+16: 0 bold, 79 bold
+17: 0 bold, 79 bold
+18: 0 bold, 79 bold
+19: 0-79 bold
+20: 0 darkgray, 1-14 bold, 15-79 darkgray
+21: 0 darkgray, 2-64 dim, 79 darkgray
+22: 0-79 darkgray
+23: 1-5 bold, 6-13 dim, 14 bold, 15-28 dim, 29 bold, 30-40 dim, 41 bold, 42-56 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

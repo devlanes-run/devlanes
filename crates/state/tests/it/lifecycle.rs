@@ -5,7 +5,175 @@ use devlanes_state::{
     Error, RemoteHost, RollupRow, SCHEMA_VERSION, Store, TaskRunInput, UnitRunInput,
 };
 
-use crate::{lane, project};
+use crate::{lane, project, schema};
+
+#[tokio::test]
+/// Migration 010 keeps the boxes of earlier daemons, none of them wanted, and
+/// adds empty pairing tables; its down script drops those and keeps the hosts.
+async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
+    use diesel::{migration::MigrationSource, prelude::*};
+    use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
+    const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("directory");
+    let path = dir.path().join("hosts.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("connection");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    c.run_migrations(&migrations[..9]).expect("v9");
+    diesel::insert_into(schema::remote_hosts::table)
+        .values((
+            schema::remote_hosts::name.eq("box"),
+            schema::remote_hosts::transport.eq("ssh"),
+            schema::remote_hosts::address.eq("box.example.invalid"),
+            schema::remote_hosts::last_connected.eq(Some(5_i64)),
+        ))
+        .execute(&mut c)
+        .expect("legacy host");
+    let store = Store::open(&path).await.expect("upgrade");
+    assert_eq!(
+        store.schema_version().await.expect("version"),
+        SCHEMA_VERSION
+    );
+    let hosts = store.remote_hosts().await.expect("hosts");
+    assert_eq!(hosts.len(), 1);
+    assert_eq!(hosts[0].last_connected, Some(5));
+    assert!(!hosts[0].wanted, "an earlier daemon's box is not restored");
+    assert!(
+        store
+            .set_remote_host_wanted("box".into(), true)
+            .await
+            .expect("want")
+    );
+    assert!(store.remote_pairings().await.expect("pairings").is_empty());
+    assert_eq!(store.remote_token("box".into()).await.expect("token"), None);
+    store
+        .set_remote_token("box".into(), "dl_rt_x".into(), 1)
+        .await
+        .expect("token");
+    store.close().await.expect("close");
+    // Later migrations go first; 010 is the one under test.
+    while c.applied_migrations().expect("ledger").len() > 10 {
+        c.revert_last_migration(MIGRATIONS)
+            .expect("down a later migration");
+    }
+    c.revert_last_migration(MIGRATIONS).expect("down 010");
+    let names: Vec<String> = schema::remote_hosts::table
+        .select(schema::remote_hosts::name)
+        .load(&mut c)
+        .expect("hosts after down");
+    assert_eq!(names, ["box"]);
+    let gone = diesel::sql_query("SELECT host FROM remote_tokens").execute(&mut c);
+    assert!(gone.is_err(), "down drops the pairing tables");
+    c.run_pending_migrations(MIGRATIONS).expect("redo 010");
+}
+
+#[tokio::test]
+/// A box keeps a client's pairings side by side, the newest `keep` of them,
+/// and drops the oldest beyond that; a connection updates the name and last
+/// seen time of the pairing it used, and deleting a client removes all of
+/// its pairings. A client keeps one token per box, replaced when it pairs
+/// again. A reset removes both.
+async fn pairings_and_tokens_round_trip() {
+    use devlanes_state::RemotePairing;
+    let store = Store::open(":memory:").await.expect("store");
+    let pairing = |client: &str, hash: &str, at: i64| RemotePairing {
+        client_id: client.into(),
+        name: "laptop".into(),
+        token_sha256: hash.into(),
+        paired_at: at,
+        last_seen: Some(at),
+    };
+    let add = |pairing: RemotePairing| store.add_remote_pairing(pairing, 2);
+    assert!(
+        add(pairing("dl_cid_a", "one", 1))
+            .await
+            .expect("pair")
+            .is_empty()
+    );
+    assert!(
+        add(pairing("dl_cid_a", "two", 2))
+            .await
+            .expect("second")
+            .is_empty()
+    );
+    assert!(
+        add(pairing("dl_cid_b", "other", 2))
+            .await
+            .expect("other")
+            .is_empty()
+    );
+    let dropped = add(pairing("dl_cid_a", "three", 3)).await.expect("third");
+    assert_eq!(dropped, [pairing("dl_cid_a", "one", 1)], "the oldest goes");
+    let hashes = |pairings: Vec<RemotePairing>| -> Vec<String> {
+        pairings.into_iter().map(|p| p.token_sha256).collect()
+    };
+    assert_eq!(
+        hashes(
+            store
+                .remote_pairings_of("dl_cid_a".into())
+                .await
+                .expect("of a")
+        ),
+        ["three", "two"]
+    );
+    assert!(
+        store
+            .touch_remote_pairing("two".into(), "desk".into(), 9)
+            .await
+            .expect("touch")
+    );
+    assert!(
+        !store
+            .touch_remote_pairing("one".into(), "x".into(), 9)
+            .await
+            .expect("touch a dropped pairing")
+    );
+    let touched = store
+        .remote_pairings_of("dl_cid_a".into())
+        .await
+        .expect("of a")
+        .into_iter()
+        .find(|p| p.token_sha256 == "two")
+        .expect("two");
+    assert_eq!(
+        (touched.name.as_str(), touched.last_seen, touched.paired_at),
+        ("desk", Some(9), 2)
+    );
+    assert_eq!(
+        store
+            .delete_remote_pairings(vec!["dl_cid_a".into(), "dl_cid_c".into()])
+            .await
+            .expect("delete"),
+        2
+    );
+    assert_eq!(
+        hashes(store.remote_pairings().await.expect("all")),
+        ["other"],
+        "another client keeps its pairing"
+    );
+
+    store
+        .set_remote_token("box".into(), "dl_rt_1".into(), 1)
+        .await
+        .expect("token");
+    store
+        .set_remote_token("box".into(), "dl_rt_2".into(), 2)
+        .await
+        .expect("token again");
+    assert_eq!(
+        store
+            .remote_token("box".into())
+            .await
+            .expect("get")
+            .as_deref(),
+        Some("dl_rt_2")
+    );
+    add(pairing("dl_cid_a", "four", 4)).await.expect("pair");
+    store.reset().await.expect("reset");
+    assert_eq!(store.remote_token("box".into()).await.expect("get"), None);
+    assert!(store.remote_pairings().await.expect("list").is_empty());
+}
 
 #[tokio::test]
 /// Replacement writes clear nullable fields and history records preserve every value.
@@ -154,6 +322,7 @@ async fn all_lifecycle_write_models_round_trip_and_replace() {
         address: "example.invalid".into(),
         daemon_version: Some("0.1.0".into()),
         last_connected: Some(123),
+        wanted: true,
     };
     store.upsert_remote_host(host.clone()).await.expect("host");
     host.daemon_version = None;
@@ -162,7 +331,22 @@ async fn all_lifecycle_write_models_round_trip_and_replace() {
         .upsert_remote_host(host.clone())
         .await
         .expect("replace host");
+    assert_eq!(store.remote_hosts().await.expect("hosts"), [host.clone()]);
+    assert!(
+        store
+            .set_remote_host_wanted("box".into(), false)
+            .await
+            .expect("disconnect")
+    );
+    host.wanted = false;
     assert_eq!(store.remote_hosts().await.expect("hosts"), [host]);
+    assert!(
+        !store
+            .set_remote_host_wanted("unknown".into(), true)
+            .await
+            .expect("unknown host"),
+        "no row for an unknown host"
+    );
     assert!(matches!(
         store.reset().await,
         Err(Error::ActiveRuns { units: 1, .. })
@@ -407,6 +591,7 @@ async fn history_retention_and_reset() {
             address: "box.example".into(),
             daemon_version: Some("0.1.0".into()),
             last_connected: Some(1),
+            wanted: true,
         })
         .await
         .expect("host");

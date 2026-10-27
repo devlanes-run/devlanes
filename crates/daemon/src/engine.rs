@@ -317,6 +317,9 @@ pub(crate) fn mutating(method: &Method) -> bool {
             | Method::InfraDown
             | Method::Connect
             | Method::Disconnect
+            | Method::RemotePair
+            | Method::RemotePairingClaim
+            | Method::RemoteRevoke
             | Method::HostsRetry
             | Method::DebugFreeze
             | Method::DebugThaw
@@ -415,6 +418,9 @@ impl Inner {
                     "path": self.opts.home.join("config.yaml"),
                     "warnings": self.opts.user.warnings(),
                 },
+                // What `devlanes tunnel` tells connected clients about this box.
+                "https_port": self.integ.routes.https_port(),
+                "ports_range": self.opts.user.ports.range,
             }))),
             Method::DaemonShutdown => Ok(json!({"stopping": true})),
             Method::DaemonResetState => self.reset_state(&context).await,
@@ -457,8 +463,15 @@ impl Inner {
             Method::DebugThaw => self.debug_thaw_method(&context).await,
             Method::Url => self.url_method(params, &context).await,
             Method::Metrics => self.metrics_method(params, &context).await,
-            Method::Subscribe => self.remote_subscribe(params, &session).await,
-            Method::SyncStatus => self.sync_status_method().await,
+            Method::Subscribe => self.subscribe_method(params, &session).await,
+            Method::RemoteRegistry => self.remote_registry(params, &session).await,
+            Method::RemoteReport => self.remote_report(params),
+            Method::RemotePair => self.pair_method().await,
+            Method::RemotePairingVerify => self.verify_pairing(params).await,
+            Method::RemotePairingClaim => self.claim_pairing(params).await,
+            Method::RemoteClients => self.clients_method().await,
+            Method::RemoteRevoke => self.revoke_method(params).await,
+            Method::SyncStatus => self.sync_status_method(params).await,
             Method::Connect => self.connect_method(params, &session).await,
             Method::Disconnect => self.disconnect_method(params).await,
             Method::HostList => self.host_list().await,

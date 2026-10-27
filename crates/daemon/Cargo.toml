@@ -30,11 +30,14 @@ async-trait.workspace = true
 base64.workspace = true
 dunce.workspace = true
 futures-util.workspace = true
+getrandom.workspace = true
 globset = "0.4"
 indexmap = "2"
 jiff = "0.2"
 serde.workspace = true
 regex = "1"
+sha2.workspace = true
+subtle.workspace = true
 strip-ansi-escapes = "0.2"
 vt100 = "0.18"
 bytes.workspace = true
@@ -47,7 +50,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["r
 
 [target.'cfg(unix)'.dependencies]
 fs2 = "0.4"
-rustix = { version = "1", features = ["process", "fs", "stdio"] }
+rustix = { version = "1", features = ["process", "fs", "stdio", "system"] }
 
 [target.'cfg(windows)'.dependencies]
 devlanes-shell-windows = { path = "../shell-windows" }
@@ -55,6 +58,7 @@ devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
 devlanes-client = { path = "../client" }
+devlanes-pki = { path = "../pki" }
 devlanes-proxy = { path = "../proxy" }
 devlanes-resolver-hosts = { path = "../resolver-hosts", features = ["fake"] }
 devlanes-runner-pty = { path = "../runner-pty" }
@@ -62,6 +66,11 @@ devlanes-start-gate = { path = "../start-gate" }
 # Only for the `needs ssh` test against a real box.
 devlanes-transport-ssh = { path = "../transport-ssh" }
 devlanes-tunnel = { path = "../tunnel" }
+# Holds the state database's write lock in a test, to delay a record.
+diesel.workspace = true
 dunce.workspace = true
+# A TLS client for the box HTTPS port test.
+rustls.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tokio-rustls.workspace = true

@@ -69,6 +69,22 @@ jobs:
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-access-key: ${{ secrets.KACHE_S3_ACCESS_KEY }}
           s3-secret-key: ${{ secrets.KACHE_S3_SECRET_KEY }}
+      # Test homes, repositories and the daemons' temporary files go to the
+      # runner's work drive, next to the checkout and target, instead of the
+      # profile's AppData\Local\Temp on the system drive. RUNNER_TEMP itself
+      # grants other accounts access, and devlanes refuses a home others
+      # can reach, so they get a subdirectory as private as a profile's temp.
+      - name: Use the runner's temp directory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'tmp'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          icacls $dir /inheritance:r /grant:r "*${user}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "TMP=$dir" >> $env:GITHUB_ENV
+          "TEMP=$dir" >> $env:GITHUB_ENV
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: nextest
@@ -124,12 +140,41 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    env:
+      PSSCRIPTANALYZER_VERSION: 1.25.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The PowerShell Gallery sometimes fails a download ("Source Location ...
+      # is not valid"), so the module is cached and only fetched, with retries,
+      # when the cache misses.
+      - name: Locate the user module directory
+        id: modules
+        run: |
+          $dir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Modules'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.modules.outputs.dir }}\PSScriptAnalyzer
+          key: psscriptanalyzer-${{ env.PSSCRIPTANALYZER_VERSION }}
       - name: Install PSScriptAnalyzer
-        run: Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          MODULES: ${{ steps.modules.outputs.dir }}
+        run: |
+          for ($attempt = 1; ; $attempt++) {
+            try {
+              Save-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Repository PSGallery -Path $env:MODULES -Force -ErrorAction Stop
+              break
+            } catch {
+              if ($attempt -ge 4) { throw }
+              Write-Warning "PSScriptAnalyzer download failed (attempt $attempt): $_"
+              Start-Sleep -Seconds (15 * $attempt)
+            }
+          }
       - run: ./packaging/scripts/check.ps1
   e2e:
     strategy:
@@ -154,6 +199,18 @@ jobs:
           s3-region: ${{ vars.KACHE_S3_REGION }}
           s3-access-key: ${{ secrets.KACHE_S3_ACCESS_KEY }}
           s3-secret-key: ${{ secrets.KACHE_S3_SECRET_KEY }}
+      # As in the rust job.
+      - name: Use the runner's temp directory
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'tmp'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          icacls $dir /inheritance:r /grant:r "*${user}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F'
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "TMP=$dir" >> $env:GITHUB_ENV
+          "TEMP=$dir" >> $env:GITHUB_ENV
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: nextest

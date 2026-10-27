@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 devlanes-core = { path = "../core" }
-diesel = { version = "2.3", default-features = false, features = ["sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel.workspace = true
 diesel_migrations = { version = "2.3", features = ["sqlite"] }
 libsqlite3-sys = { version = "0.38", features = ["bundled"] }
 percent-encoding = "2"

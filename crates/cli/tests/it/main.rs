@@ -157,8 +157,15 @@ fn entire_command_inventory_builds_actions() {
             &["remote", "connect", "box", "--background"],
             Some(Method::Connect),
         ),
+        (
+            &["remote", "connect", "box", "--code", "K7QM-3XWD"],
+            Some(Method::Connect),
+        ),
         (&["remote", "disconnect", "box"], Some(Method::Disconnect)),
         (&["remote", "ls"], Some(Method::HostList)),
+        (&["daemon", "pair"], Some(Method::RemotePair)),
+        (&["daemon", "clients"], Some(Method::RemoteClients)),
+        (&["daemon", "revoke", "laptop"], Some(Method::RemoteRevoke)),
         (
             &["debug", "events", "-f", "--timeout", "30s"],
             Some(Method::Subscribe),
@@ -260,6 +267,11 @@ fn positional_lanes_and_hosts_do_not_collide_with_global_flags() {
     assert_eq!(request.params["host"], "box");
     // Remote is mirroring only: no command runs on a box from here.
     assert!(Cli::try_parse_from(["devlanes", "status", "--host", "box"]).is_err());
+    // `remote` holds what a client does; a box pairs its clients under `daemon`.
+    for box_side in [&["pair"][..], &["clients"], &["revoke", "laptop"]] {
+        let args = ["devlanes", "remote"].iter().chain(box_side).copied();
+        assert!(Cli::try_parse_from(args).is_err(), "{box_side:?}");
+    }
 }
 
 /// Agents get bounded, terminal-free variants: streams need --timeout, attach points

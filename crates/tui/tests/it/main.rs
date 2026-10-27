@@ -13,6 +13,9 @@ macro_rules! assert_screen {
     }};
 }
 
+mod boxes;
+mod clients;
+mod connect;
 mod containers;
 mod daemon;
 mod errors;
@@ -349,7 +352,9 @@ async fn help_lists_every_key_with_this_screen_first() -> TestResult {
         "next, previous problem",
         "filter by name or +tag",
         "reverse the sort",
-        "clean every lane whose worktree is gone",
+        "clean the lanes whose worktree is gone",
+        "revoke the selected client",
+        "hide the version notice; quit",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
@@ -1180,9 +1185,10 @@ async fn resync_and_unreadable_events_requery_status() -> TestResult {
             data,
         })
     };
+    // Missed events may have been about boxes too.
     assert!(matches!(
         app.update(event(events::RESYNC, json!({}))).as_slice(),
-        [Effect::Refresh]
+        [Effect::FetchBoxes, Effect::Refresh]
     ));
     assert!(matches!(
         app.update(event(events::UNIT_CHANGED, json!({"unit": "garbage"})))
@@ -1391,7 +1397,7 @@ async fn status_is_queried_after_the_subscription_opens() -> TestResult {
     assert!(matches!(app.start().as_slice(), [Effect::Subscribe]));
     let effects = app.update(Msg::Subscribed(Ok(())));
     assert!(
-        matches!(effects.as_slice(), [Effect::Refresh]),
+        matches!(effects.as_slice(), [Effect::Refresh, Effect::FetchBoxes]),
         "{effects:?}"
     );
     // A daemon that refuses subscriptions can still answer status.
@@ -1560,7 +1566,7 @@ async fn drive_loop_resyncs_and_quits_without_stopping() -> TestResult {
             // ends the loop without another frame, so a slower machine would
             // otherwise snapshot an earlier one.
             backend.wait_for("┌ api  ready").await;
-            backend.wait_for("D daemon · 2 issues").await;
+            backend.wait_for("Daemon · 2 issues").await;
             keys_tx.send(press('q')).await.ok();
             // Returned, so the input stays open: the loop must end on q, not
             // because the stream ended.

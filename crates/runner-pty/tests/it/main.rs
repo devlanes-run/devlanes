@@ -859,7 +859,7 @@ async fn frozen_unit_never_reports_exit() -> Result<(), Error> {
     .await
 }
 
-/// Throttling uses the macOS background band (scheduling priority 4) and is
+/// Throttling uses the macOS background band (scheduling priority 4 at most) and is
 /// undone by `Normal`; from `Frozen` it also resumes the tree. Other systems
 /// refuse it and leave the unit as it was.
 #[tokio::test]
@@ -869,21 +869,29 @@ async fn throttle_round_trip() -> Result<(), Error> {
         let mut cleanup = Cleanup::default();
         cleanup.unit(&unit);
         let leader = unit.identity().pid;
-        let priority = || ps_column(&[leader], "pri").remove(&leader);
+        // `ps` shows the scheduled priority: the base priority minus a CPU
+        // usage penalty that is only aged when the thread runs again. A
+        // sleeping leader keeps its startup penalty, so it can show less than
+        // `MAXPRI_THROTTLE` (4) in the band and less than its startup value
+        // after it; only which side of 4 it is on is reliable.
+        let in_band = || {
+            ps_column(&[leader], "pri")
+                .remove(&leader)
+                .and_then(|pri| pri.parse::<u32>().ok())
+                .map(|pri| pri <= 4)
+        };
 
         if cfg!(target_os = "macos") {
-            let normal = priority().expect("leader priority");
-            // `ps` shows the priority the thread was last scheduled with, which
-            // can lag the policy change while the shell is still starting.
+            assert_eq!(in_band(), Some(false));
             unit.set_power(Power::Throttled).await?;
-            eventually(|| async { priority().as_deref() == Some("4") }).await;
+            eventually(|| async { in_band() == Some(true) }).await;
             unit.set_power(Power::Frozen).await?;
             eventually(|| async { all_stopped(&[leader]) }).await;
             unit.set_power(Power::Throttled).await?;
             eventually(|| async { none_stopped(&[leader]) }).await;
-            eventually(|| async { priority().as_deref() == Some("4") }).await;
+            eventually(|| async { in_band() == Some(true) }).await;
             unit.set_power(Power::Normal).await?;
-            eventually(|| async { priority() == Some(normal.clone()) }).await;
+            eventually(|| async { in_band() == Some(false) }).await;
         } else {
             assert!(matches!(
                 unit.set_power(Power::Throttled).await,

@@ -1,4 +1,4 @@
- devlanes  1 acme┌ keys ──────────────────────────────────────────────────────────────────────────────┐nitor   D daemon
+ devlanes  1 acme┌ keys ──────────────────────────────────────────────────────────────────────────────┐r  Daemon  Boxes
  lanes  1 main  2│ glyphs                                                                             │[ ] switch lanes
 ┌ @0 · 34/38 up ─│   ● ready (check passed)  ◉ running (no ready check)  z throttled         ❄ frozen │────────────────┐
 │ ▾ services     │   · stopped, not run      ⠸ starting, stopping        … queued            ✕ failed │                │
@@ -24,23 +24,23 @@
 │   ✕ wrk-export │   esc  ctrl+]       stop typing (ctrl+] in full-screen programs)                   │ob_8128 took=144│
 │   ◉ wrk-cron   │   z                 zoom the pane                                                  │                │
 │   ◉ wrk-webhook│   pgup pgdn  wheel  scroll; older lines come from stored logs                      │ob_8129 took=157│
-│   ◉ wrk-ledger │   c  v  y           select text, mark, copy (OSC 52)                               │                │
-│   ● stub-stripe│   drag              select text and copy it                                        │ob_8130 took=170│
-│   ● stub-s3    │                                                                                    │                │
-│   ◆ stub-twilio│ monitor (M)                                                                        │ob_8131 took=183│
-│   ● stub-sendgr│   < >               sort by the previous, next column                              │                │
-│   ● stub-segmen│   i                 reverse the sort                                               │ob_8132 took=196│
-│   ● stub-auth0 │   /  e              filter, grouped or flat                                        │                │
-│   ● proxy-edge │   h l               fold, unfold a lane                                            │ob_8133 took=209│
-│   ● docs-search│   z                 detail graphs fill the page                                    │                │
-│   ● ml-ranker  │   c  m              cpu or memory in the big box (memory: a square per core)       │                │
-│   ⠋ ml-embed   │   wheel             scroll the table; the selection stays                          │                │
+│   ◉ wrk-ledger │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy              │                │
+│   ● stub-stripe│                                                                                    │ob_8130 took=170│
+│   ● stub-s3    │ monitor (M)                                                                        │                │
+│   ◆ stub-twilio│   < >               sort by the previous, next column                              │ob_8131 took=183│
+│   ● stub-sendgr│   i                 reverse the sort                                               │                │
+│   ● stub-segmen│   /  e              filter, grouped or flat                                        │ob_8132 took=196│
+│   ● stub-auth0 │   h l  z            fold, unfold a lane; detail graphs fill the page               │                │
+│   ● proxy-edge │   c  m              cpu or memory in the big box (memory: a square per core)       │ob_8133 took=209│
+│   ● docs-search│   s  x  r           start, stop, restart the unit or lane                          │                │
+│   ● ml-ranker  │   enter             open the unit in its project                                   │                │
+│   ⠋ ml-embed   │                                                                                    │                │
 │   ● cache-warm │ …                                                                                  │                │
 └────────────────│ any key closes                                                                     │────────────────┘
  r restart   n ne└────────────────────────────────────────────────────────────────────────────────────┘ keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-16 bold black on yellow, 17-102 bold, 103-107 dim, 111 bold, 112-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-16 bold black on yellow, 17-102 bold, 103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 7-14 bold reversed, 16 dim, 17 bold, 19-24 dim, 102-105 bold, 106-119 dim
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16 darkgray, 17 bold, 21-22 green, 45-46 green, 73-74 dim, 93-94 blue, 102 bold, 103-119 darkgray
 3: 0 darkgray, 2-3 dim, 17 bold, 21-22 dim, 73-74 dim, 93-94 red, 102 bold, 119 darkgray
@@ -67,16 +67,16 @@
 24: 0 darkgray, 4-5 green, 6-13 magenta, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 25: 0 darkgray, 4-5 green, 6-16 magenta, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 26: 0 darkgray, 4-5 green, 6-15 magenta, 17 bold, 19-38 bold, 102 bold, 119 darkgray
-27: 0 darkgray, 4-5 green, 6-16 darkgray, 17 bold, 19-38 bold, 102 bold, 119 darkgray
-28: 0 darkgray, 4-5 green, 6-12 darkgray, 17 bold, 102 bold, 119 darkgray
-29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 17 bold, 19-29 dim, 102 bold, 119 darkgray
+27: 0 darkgray, 4-5 green, 6-16 darkgray, 17 bold, 102 bold, 119 darkgray
+28: 0 darkgray, 4-5 green, 6-12 darkgray, 17 bold, 19-29 dim, 102 bold, 119 darkgray
+29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 30: 0 darkgray, 4-5 green, 6-16 darkgray, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 31: 0 darkgray, 4-5 green, 6-16 darkgray, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 32: 0 darkgray, 4-5 green, 6-15 darkgray, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 33: 0 darkgray, 4-5 green, 6-15 cyan, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 34: 0 darkgray, 4-5 green, 6-16 cyan, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 35: 0 darkgray, 4-14 green, 17 bold, 19-38 bold, 102 bold, 119 darkgray
-36: 0 darkgray, 6-13 green, 17 bold, 19-38 bold, 102 bold, 119 darkgray
+36: 0 darkgray, 6-13 green, 17 bold, 102 bold, 119 darkgray
 37: 0 darkgray, 4-5 green, 6-15 dim blue, 17 bold, 19 dim, 102 bold, 119 darkgray
 38: 0-16 darkgray, 17 bold, 19-32 dim, 102 bold, 103-119 darkgray
 39: 1 bold, 2-12 dim, 13 bold, 14-16 dim, 17-102 bold, 103-110 dim, 111 bold, 112-119 dim

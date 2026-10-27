@@ -17,10 +17,12 @@ mod lane;
 mod listener;
 mod pool;
 mod routes;
+mod scoped;
 mod server;
 
 pub use health::ListenerHealth;
 pub use lane::LaneActivity;
 pub use listener::{BoundListeners, bind_listeners};
 pub use routes::{HostHeader, Rejected, Route, RouteError, RouteState, RouteTable, Upstream};
+pub use scoped::ScopedPorts;
 pub use server::{Proxy, ProxyConfig, ProxyLimits, is_loopback};

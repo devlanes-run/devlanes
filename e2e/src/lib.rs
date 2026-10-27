@@ -19,11 +19,7 @@ use std::{
     net::{SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{
-        Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
+    sync::{Mutex, OnceLock, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -69,6 +65,10 @@ pub enum Error {
 
 /// Default bound for one CLI invocation.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Lines of the daemon log a lab prints from before and after `daemon stop`.
+const LOG_BEFORE_STOP: usize = 400;
+const LOG_AFTER_STOP: usize = 40;
 
 /// First port of the e2e port slots; slots stay inside the default pool's range and
 /// below the Linux and macOS ephemeral ranges.
@@ -306,11 +306,6 @@ pub struct Lab {
     /// Compose projects the guard removes; any also passes the Docker client settings through.
     compose_projects: Vec<String>,
     owned: Mutex<Vec<Owned>>,
-    /// A command found the daemon unreachable or stalled in its start (exit
-    /// 4), or outlived its bound. Tests
-    /// return their errors instead of panicking, so the guard cannot tell a
-    /// failed test otherwise, and the daemon log goes with the home.
-    troubled: AtomicBool,
 }
 
 impl Lab {
@@ -397,7 +392,6 @@ impl Lab {
             deadline,
             compose_projects: Vec::new(),
             owned: Mutex::new(Vec::new()),
-            troubled: AtomicBool::new(false),
         })
     }
 
@@ -546,24 +540,7 @@ impl Lab {
                 stderr: "the test deadline has passed".into(),
             });
         }
-        let output = run_bounded(command, bound).inspect_err(|error| {
-            if matches!(error, Error::Timeout { .. }) {
-                self.troubled.store(true, Ordering::Relaxed);
-            }
-        })?;
-        // Exit 4 also covers answers a test may expect, such as a protocol
-        // mismatch, which need no log.
-        let unreachable = [
-            "unreachable",
-            "start_stalled",
-            "finished starting",
-            "reported nothing",
-        ]
-        .iter()
-        .any(|words| output.stderr.contains(words));
-        if output.code == Some(4) && unreachable {
-            self.troubled.store(true, Ordering::Relaxed);
-        }
+        let output = run_bounded(command, bound)?;
         for value in output.ndjson() {
             self.track_json(&value);
         }
@@ -665,6 +642,7 @@ impl Lab {
     /// which `daemon stop` leaves running), with their process groups, and any
     /// fixture still listening on the slot's ports.
     fn shutdown(&self) {
+        let before = self.daemon_log();
         if self.daemon_running() {
             for args in [
                 &["daemon", "status", "--json"][..],
@@ -684,12 +662,7 @@ impl Lab {
                 thread::sleep(Duration::from_millis(100));
             }
         }
-        if thread::panicking()
-            || self.troubled.load(Ordering::Relaxed)
-            || std::env::var_os("DEVLANES_E2E_DUMP").is_some()
-        {
-            self.dump_daemon_log();
-        }
+        self.dump_daemon_log(&before);
         self.compose_down();
         let owned = self
             .owned
@@ -724,15 +697,42 @@ impl Lab {
         }
     }
 
-    /// Prints the end of the daemon log, which disappears with the home.
-    fn dump_daemon_log(&self) {
-        if let Ok(log) = fs::read_to_string(self.home().join("logs/daemon.log")) {
-            let lines: Vec<&str> = log.lines().collect();
-            let tail = &lines[lines.len().saturating_sub(80)..];
-            eprintln!("--- daemon.log (last {} lines) ---", tail.len());
-            for line in tail {
-                eprintln!("{line}");
-            }
+    /// The daemon log, empty when there is none.
+    fn daemon_log(&self) -> String {
+        fs::read_to_string(self.home().join("logs/daemon.log")).unwrap_or_default()
+    }
+
+    /// Prints the end of the daemon log, which disappears with the home, to
+    /// stderr: the last [`LOG_BEFORE_STOP`] lines of `before`, the log as it
+    /// was before `daemon stop`, then the last [`LOG_AFTER_STOP`] lines
+    /// written since. Every test prints it, since one that returns an error
+    /// does not panic; nextest shows it only for tests that fail.
+    fn dump_daemon_log(&self, before: &str) {
+        let after = self.daemon_log();
+        if before.is_empty() && after.is_empty() {
+            return;
+        }
+        let lines: Vec<&str> = before.lines().collect();
+        let tail = &lines[lines.len().saturating_sub(LOG_BEFORE_STOP)..];
+        eprintln!(
+            "--- daemon.log before daemon stop (last {} of {} lines) ---",
+            tail.len(),
+            lines.len()
+        );
+        for line in tail {
+            eprintln!("{line}");
+        }
+        // A log rotated meanwhile no longer starts with `before`.
+        let since = after.strip_prefix(before).unwrap_or(&after);
+        let lines: Vec<&str> = since.lines().collect();
+        let tail = &lines[lines.len().saturating_sub(LOG_AFTER_STOP)..];
+        eprintln!(
+            "--- daemon.log after daemon stop (last {} of {} new lines) ---",
+            tail.len(),
+            lines.len()
+        );
+        for line in tail {
+            eprintln!("{line}");
         }
     }
 }

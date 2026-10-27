@@ -13,8 +13,11 @@ Host devbox
 ```
 
 ```sh
-devlanes remote connect devbox
+devlanes daemon pair                            # in an SSH shell on the box: a one-time code
+devlanes remote connect devbox --code K7QM-3XWD # here, for the first connection
 ```
+
+The first connection pairs this machine with the box ([pairing](../remote.md#pairing)); later ones present the token it got. Pairing keeps the box's lanes from devices that only run the tunnel; anyone who gets a shell as that user can run `devlanes daemon pair` too, so limit the SSH policy to your devices. `devlanes daemon revoke` on the box removes a paired machine.
 
 A device keeps its Tailscale IP when it changes networks, so after sleep or a move to another Wi-Fi the daemon reconnects to the same name and address.
 
@@ -62,7 +65,7 @@ Tailscale SSH needs an `ssh` rule in the policy as well as network access to por
 
 `users` lists the accounts on the box you may log in as, and the `User` in your `Host` entry must be one of them. With `accept`, devlanes needs nothing else: connects and reconnects authenticate without a prompt, with or without anyone at the terminal.
 
-Restarting or upgrading `tailscaled` on the box ends every Tailscale SSH session, and so does a policy change that removes your access. The daemon reconnects afterwards, or reports `Permission denied` when access is gone.
+Restarting or upgrading `tailscaled` on the box ends every Tailscale SSH session, and so does a policy change that removes your access. The daemon reconnects afterwards. When access is gone, the box waits in `needs_auth` with `Permission denied` until you run `devlanes remote connect` again.
 
 On Linux, Tailscale SSH runs commands through `su -l` when it can, which starts a login shell; OpenSSH runs them in a plain non-interactive shell. The box then reads `~/.profile` (or your shell's login files) for devlanes' commands too, so the `PATH` that finds `devlanes`, and that a box daemon started over this connection inherits, comes from those files. Keep them from printing anything, since devlanes reads the command's output.
 
@@ -70,7 +73,7 @@ On Linux, Tailscale SSH runs commands through `su -l` when it can, which starts 
 
 An `ssh` rule with `"action": "check"` asks you to sign in again in a browser before a connection is allowed, and accepts further connections from that device for the rule's `checkPeriod` (12 hours by default; `always` asks every time). The default policy of a new tailnet uses `check` for SSH to your own devices. When a check rule and an accept rule both match a connection, the check rule wins, so adding an `accept` rule next to the default one changes nothing; edit or narrow the default rule instead.
 
-Tailscale sends the sign-in URL as an SSH banner while the connection authenticates, and OpenSSH prints banners to its standard error. devlanes does not pass ssh's standard error to your terminal; it relays only the prompts ssh asks through askpass, so `remote connect` never shows the URL. The attempt waits for a sign-in that nobody can complete. On macOS and Linux devlanes gives up on it after 120 seconds and the daemon tries again with backoff, each time with a new URL.
+Tailscale sends the sign-in URL as an SSH banner while the connection authenticates, and OpenSSH prints banners to its standard error. devlanes does not pass the standard error of `ssh` to your terminal; it relays only the prompts `ssh` asks through askpass, so `remote connect` never shows the URL. The attempt waits for a sign-in that nobody can complete. On macOS and Linux devlanes gives up on it after 120 seconds and the daemon tries again with backoff, each time with a new URL.
 
 Either use `accept` for the box and the account devlanes logs in as (the rule above), or pass the check yourself first:
 
@@ -98,7 +101,7 @@ devlanes exposes nothing on the tailnet, so `tailscale serve`, Funnel and bindin
 ```sh
 tailscale status                                 # both machines online in the tailnet
 ssh devbox true                                  # same name, same account as devlanes uses
-devlanes remote ls                               # connected, reconnecting (with the error), failed
+devlanes remote ls                               # connected, reconnecting, needs_auth or needs_pairing (with the error), failed
 devlanes status --json | jq .clients             # on the box: who is connected
 ```
 

@@ -533,3 +533,119 @@ async fn drive_starts_with_the_profiles_checked_in_the_picker() -> TestResult {
     assert!(header.contains("started acme@0 with"), "{header}");
     Ok(())
 }
+
+#[tokio::test]
+/// An `infra.external` entry has no process: `s`, `x` and `r` on it send
+/// nothing and say devlanes does not run it, and nothing attaches to it.
+async fn keys_on_an_external_port_only_say_devlanes_does_not_run_it() -> TestResult {
+    let mut external = unit("acme@0", "pgadmin", "external");
+    external.kind = "external".into();
+    external.role = Some("external".into());
+    external.ports = std::collections::BTreeMap::from([("default".to_owned(), 5050)]);
+    let api = FakeApi::with_lanes(vec![lane(
+        "acme",
+        Some(0),
+        "main",
+        "running",
+        vec![unit("acme@0", "api", "ready"), external],
+    )]);
+    let mut app = App::new(120, 30);
+    app.update(Msg::Status(DaemonApi::status(&api).await));
+    let mut effects = Vec::new();
+    app.select(
+        devlanes_tui::app::Selected::unit("acme@0", "pgadmin"),
+        &mut effects,
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Attach { .. })),
+        "{effects:?}"
+    );
+    for code in ['s', 'x', 'r'] {
+        app.notice = None;
+        let effects = app.update(key(KeyCode::Char(code)));
+        assert!(
+            !effects
+                .iter()
+                .any(|e| matches!(e, Effect::Control { .. } | Effect::Run { .. })),
+            "{code}: {effects:?}"
+        );
+        let notice = app
+            .notice
+            .as_ref()
+            .map(|n| n.text.clone())
+            .unwrap_or_default();
+        assert!(
+            notice.contains(
+                "pgadmin is an infra.external port, which devlanes does not start or stop"
+            ),
+            "{code}: {notice}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+/// The pane of an entry says what devlanes does with its port: routes its
+/// hostnames when it has some, and keeps a hidden one off connected machines.
+async fn the_pane_of_an_external_entry_says_how_it_is_reached() -> TestResult {
+    let external = |name: &str, port: u16, host: Option<&str>, hidden: bool| {
+        let mut unit = unit("acme@0", name, "external");
+        unit.kind = "external".into();
+        unit.role = Some("external".into());
+        unit.hidden = hidden;
+        unit.ports = std::collections::BTreeMap::from([("default".to_owned(), port)]);
+        unit.public_url = host.map(|host| format!("https://{host}"));
+        unit.urls = std::iter::once(format!("http://127.0.0.1:{port}"))
+            .chain(unit.public_url.clone())
+            .collect();
+        unit
+    };
+    let api = FakeApi::with_lanes(vec![lane(
+        "acme",
+        Some(0),
+        "main",
+        "running",
+        vec![
+            unit("acme@0", "api", "ready"),
+            external("pgadmin", 5050, Some("pgadmin.acme.localhost"), false),
+            external("vault", 8200, None, true),
+        ],
+    )]);
+    let mut app = App::new(160, 30);
+    app.update(Msg::Status(DaemonApi::status(&api).await));
+    let text = |app: &App| -> Result<String, Box<dyn std::error::Error>> {
+        let buffer = render(app)?;
+        Ok((0..buffer.area.height)
+            .map(|y| row(&buffer, y))
+            .collect::<Vec<_>>()
+            .join("\n"))
+    };
+    let mut effects = Vec::new();
+    app.select(
+        devlanes_tui::app::Selected::unit("acme@0", "pgadmin"),
+        &mut effects,
+    );
+    let shown = text(&app)?;
+    assert!(
+        shown.contains("A server on port 5050 from infra.external. The proxy routes"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("mirror it while a lane of the project runs"),
+        "{shown}"
+    );
+    app.select(
+        devlanes_tui::app::Selected::unit("acme@0", "vault"),
+        &mut effects,
+    );
+    let shown = text(&app)?;
+    assert!(
+        shown.contains("A server on port 8200 from infra.external. devlanes does not run it."),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("It is hidden from machines connected with devlanes remote connect."),
+        "{shown}"
+    );
+    Ok(())
+}

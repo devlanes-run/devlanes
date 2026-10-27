@@ -102,6 +102,31 @@ fn commands_without_their_argument_ask() {
 }
 
 #[test]
+/// An `infra.external` entry is offered where its URL is the point, never
+/// where a process would be: attach, logs, restart, why or wait.
+fn external_ports_are_offered_for_urls_only() {
+    let mut lane = lane();
+    lane.units.push(
+        serde_json::from_value(json!({
+            "name": "pgadmin", "lane": "acme@0", "state": "external", "pid": null,
+            "exit_code": null, "ports": {"default": 5050}, "actor": {"kind": "human"},
+            "reason": null, "kind": "external", "role": "external",
+            "urls": ["http://127.0.0.1:5050", "https://pgadmin.acme.localhost:8443"],
+        }))
+        .expect("external unit"),
+    );
+    let offers = |kind| {
+        unit_options(kind, &lane)
+            .iter()
+            .any(|option| option.value == "pgadmin")
+    };
+    assert!(offers(ChoiceKind::Url));
+    for kind in [ChoiceKind::Running, ChoiceKind::Unit, ChoiceKind::Target] {
+        assert!(!offers(kind), "{kind:?}");
+    }
+}
+
+#[test]
 fn options_follow_the_kind() {
     let lane = lane();
     let values = |kind| -> Vec<String> {

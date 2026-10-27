@@ -1,0 +1,708 @@
+//! Several boxes on one client, and boxes whose proxy serves HTTPS on another
+//! port than the client's. A child of `remote`, whose box and client harness it
+//! reuses.
+
+use std::{sync::Arc, time::Duration};
+
+use devlanes_daemon::{Handler, Session};
+use devlanes_ipc::Frame;
+use devlanes_pki::CertificateAuthority;
+use devlanes_proto::{Context, Control, Method, Request};
+use serde_json::{Value, json};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpStream,
+    sync::mpsc,
+    task::JoinHandle,
+};
+
+use super::{BOX, BoxSide, ClientSide, SOON, box_port, http_get, ipv6_loopback};
+use crate::{LIMIT, cx, eventually, repo, temp};
+
+/// A project with one service that takes the literal `port` and binds
+/// nothing, so it can share its number with another box's unit.
+fn fixed_port_project(port: u16) -> String {
+    format!(
+        "project: fixedbox\nlanes:\n  block_size: 1\n  vars:\n    port: {port}\nservices:\n  api:\n    run: sleep\n"
+    )
+}
+
+/// Subscribes to the client's events, as an attached CLI would.
+fn subscribe(client: &ClientSide, id: u64) -> (Session, mpsc::Receiver<Frame>, JoinHandle<()>) {
+    let (session, frames) = Session::local(id);
+    let request = Request {
+        id: 1,
+        method: Method::Subscribe,
+        params: json!({"follow": true}),
+        context: Context::default(),
+    };
+    let engine = client.h.engine.clone();
+    let watching = session.clone();
+    let task = tokio::spawn(async move {
+        let _ = engine.handle(request, watching).await;
+    });
+    (session, frames, task)
+}
+
+/// The `remote.warning` events received within a short while.
+async fn warnings(frames: &mut mpsc::Receiver<Frame>) -> Vec<Value> {
+    let mut found = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(frame) = frames.recv().await {
+            if let Frame::Control(Control::Event(event)) = frame
+                && event.event == "remote.warning"
+            {
+                found.push(event.data);
+            }
+        }
+    })
+    .await;
+    found
+}
+
+/// Whether the `remote ls` entry `host` has a warning containing `text`.
+fn warns(host: &Value, text: &str) -> bool {
+    host["warnings"].as_array().is_some_and(|warnings| {
+        warnings
+            .iter()
+            .any(|w| w.as_str().is_some_and(|w| w.contains(text)))
+    })
+}
+
+// Port ranges: every test in this binary that binds real ports takes its own
+// fixed range, so concurrent tests never hand out the same number. The ones
+// here use 21000-21499, 22000-22999, 27500-27999 and 30000-32767.
+
+#[tokio::test(flavor = "multi_thread")]
+/// Two boxes running the same project: the box connected later skips its lane
+/// with a warning naming the first, a port the first box's mirror holds is
+/// reported with that box, and both boxes learn that their `ports.range`
+/// overlap. The second box's lane is mirrored once the first one stops serving
+/// the hostname, and its port once the first box disconnects, which also
+/// clears the overlap warning.
+async fn two_boxes_with_one_project() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping two_boxes_with_one_project: no IPv6 loopback");
+        return;
+    }
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let alpha_repo = repo(&tmp.path, "alpharepo", BOX);
+        let beta_repo = repo(
+            &tmp.path,
+            "betarepo",
+            &BOX.replace("hello-from-box", "hello-from-beta"),
+        );
+        let alpha = BoxSide::start(&tmp, "alpha", "30000-30499").await;
+        let beta = BoxSide::start(&tmp, "beta", "30400-30899").await;
+        let units = json!({"units": ["web", "echo"]});
+        alpha
+            .h
+            .call(Method::Start, units.clone(), cx(&alpha_repo))
+            .await
+            .expect("alpha start");
+        beta.h
+            .call(Method::Start, units, cx(&beta_repo))
+            .await
+            .expect("beta start");
+        let alpha_echo = box_port(&alpha.h, 0, "echo").await;
+        let fixed_repo = repo(&tmp.path, "fixedrepo", &fixed_port_project(alpha_echo));
+        beta.h
+            .call(Method::Start, json!({}), cx(&fixed_repo))
+            .await
+            .expect("beta fixed start");
+
+        let client = ClientSide::start_with(
+            &tmp,
+            "client",
+            "30900-31399",
+            &[("alpha", &alpha), ("beta", &beta)],
+            None,
+        )
+        .await;
+        let (session, mut frames, events) = subscribe(&client, 9_101);
+        client.connect("alpha").await;
+        let routed = eventually(SOON, || async {
+            http_get(client.proxy_port, "web.boxapp.localhost")
+                .await
+                .filter(|response| response.contains("hello-from-box"))
+        })
+        .await;
+        assert!(routed.is_some(), "alpha's web is routed");
+
+        client.connect("beta").await;
+        let skipped = eventually(SOON, || async {
+            let host = client.host_named("beta").await;
+            host["skipped_lanes"]
+                .as_array()?
+                .iter()
+                .find(|lane| lane["lane"] == "boxapp@0")
+                .cloned()
+        })
+        .await
+        .expect("beta's boxapp lane is skipped");
+        assert_eq!(skipped["box"], "alpha", "{skipped}");
+        assert!(
+            skipped["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("box alpha")),
+            "{skipped}"
+        );
+        let held =
+            format!("port {alpha_echo} is not mirrored because box alpha (boxapp@0:echo) uses it");
+        let found = eventually(SOON, || async {
+            let host = client.host_named("beta").await;
+            warns(&host, &held).then_some(host)
+        })
+        .await;
+        let Some(beta_host) = found else {
+            panic!(
+                "the port conflict names alpha: {}",
+                client.host_named("beta").await
+            );
+        };
+        assert!(
+            warns(&beta_host, "overlaps box alpha (30000-30499)"),
+            "{beta_host}"
+        );
+        let alpha_host = client.host_named("alpha").await;
+        assert!(
+            warns(&alpha_host, "overlaps box beta (30400-30899)"),
+            "the box connected first learns of the overlap too: {alpha_host}"
+        );
+        let response = http_get(client.proxy_port, "web.boxapp.localhost").await;
+        assert!(
+            response.is_some_and(|r| r.contains("hello-from-box")),
+            "the first box keeps the hostname"
+        );
+
+        let seen = warnings(&mut frames).await;
+        assert!(
+            seen.iter().any(|w| w["host"] == "beta"
+                && w["code"] == "lane_skipped"
+                && w["box"] == "alpha"
+                && w["lane"] == "boxapp@0"),
+            "{seen:?}"
+        );
+        assert!(
+            seen.iter().any(|w| w["host"] == "beta"
+                && w["code"] == "port_in_use"
+                && w["box"] == "alpha"
+                && w["held_by"] == "boxapp@0:echo"),
+            "{seen:?}"
+        );
+        for host in ["alpha", "beta"] {
+            assert!(
+                seen.iter()
+                    .any(|w| w["host"] == host && w["code"] == "ports_range_overlap"),
+                "{host}: {seen:?}"
+            );
+        }
+
+        // Alpha drops the hostname from its config: beta's lane is mirrored.
+        tokio::fs::write(
+            alpha_repo.join("devlanes.yaml"),
+            BOX.replace("    hosts: [\"web.${{ lane.domain }}\"]\n", ""),
+        )
+        .await
+        .expect("alpha config");
+        alpha
+            .h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&alpha_repo))
+            .await
+            .expect("alpha reload");
+        let regained = eventually(SOON, || async {
+            http_get(client.proxy_port, "web.boxapp.localhost")
+                .await
+                .filter(|response| response.contains("hello-from-beta"))
+        })
+        .await;
+        assert!(
+            regained.is_some(),
+            "beta's lane is mirrored once alpha stopped serving the hostname: {}",
+            client.host_named("beta").await
+        );
+        assert!(
+            warns(&client.host_named("beta").await, &held),
+            "alpha still mirrors the port"
+        );
+
+        // Without alpha, beta's port is mirrored and the ranges overlap no more.
+        client
+            .h
+            .call(
+                Method::Disconnect,
+                json!({"host": "alpha"}),
+                Context::default(),
+            )
+            .await
+            .expect("disconnect alpha");
+        assert!(
+            !warns(&client.host_named("beta").await, "overlaps"),
+            "{}",
+            client.host_named("beta").await
+        );
+        let bound = eventually(SOON, || async {
+            let host = client.host_named("beta").await;
+            let ports = host["ports"].as_array()?.clone();
+            ports
+                .iter()
+                .any(|port| port["port"] == alpha_echo && port["addresses"] != json!([]))
+                .then_some(())
+        })
+        .await;
+        assert!(bound.is_some(), "{}", client.host_named("beta").await);
+
+        session.close();
+        let _ = events.await;
+        client.stop().await;
+        alpha.stop().await;
+        beta.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// A project serving `shared.mix.localhost`, and with `docs` also
+/// `local.mix.localhost`.
+fn mix_project(project: &str, docs: bool) -> String {
+    let mut config = format!(
+        "project: {project}\nservices:\n  web:\n    run: \"http {project}-web\"\n    hosts: [\"shared.mix.localhost\"]\n"
+    );
+    if docs {
+        config.push_str(&format!(
+            "  docs:\n    run: \"http {project}-docs\"\n    hosts: [\"local.mix.localhost\"]\n"
+        ));
+    }
+    config
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A box lane whose hostnames this machine and an earlier box both serve is
+/// skipped for this machine: local lanes win over every box, so the warning
+/// names no box.
+async fn a_lane_this_machine_and_a_box_both_collide_with_names_this_machine() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping the mixed collision test: no IPv6 loopback");
+        return;
+    }
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let alpha_repo = repo(&tmp.path, "mixalpha", &mix_project("mixa", false));
+        let beta_repo = repo(&tmp.path, "mixbeta", &mix_project("mixb", true));
+        let alpha = BoxSide::start(&tmp, "alpha", "31400-31899").await;
+        let beta = BoxSide::start(&tmp, "beta", "31900-32399").await;
+        alpha
+            .h
+            .call(Method::Start, json!({}), cx(&alpha_repo))
+            .await
+            .expect("alpha start");
+        beta.h
+            .call(Method::Start, json!({}), cx(&beta_repo))
+            .await
+            .expect("beta start");
+        let client = ClientSide::start_with(
+            &tmp,
+            "client",
+            "32400-32767",
+            &[("alpha", &alpha), ("beta", &beta)],
+            None,
+        )
+        .await;
+        let local_repo = repo(
+            &tmp.path,
+            "mixlocal",
+            "project: mixl\nservices:\n  web:\n    run: \"http mixl-web\"\n    hosts: [\"local.mix.localhost\"]\n",
+        );
+        client
+            .h
+            .call(Method::Start, json!({}), cx(&local_repo))
+            .await
+            .expect("local start");
+        let (session, mut frames, events) = subscribe(&client, 9_102);
+        client.connect("alpha").await;
+        let routed = eventually(SOON, || async {
+            http_get(client.proxy_port, "shared.mix.localhost")
+                .await
+                .filter(|response| response.contains("mixa-web"))
+        })
+        .await;
+        assert!(routed.is_some(), "alpha's hostname is routed");
+
+        client.connect("beta").await;
+        let skipped = eventually(SOON, || async {
+            let host = client.host_named("beta").await;
+            host["skipped_lanes"]
+                .as_array()?
+                .iter()
+                .find(|lane| lane["lane"] == "mixb@0")
+                .cloned()
+        })
+        .await
+        .expect("beta's lane is skipped");
+        assert!(skipped["box"].is_null(), "{skipped}");
+        assert_eq!(
+            skipped["reason"], "this machine serves its hostnames",
+            "{skipped}"
+        );
+        assert_eq!(
+            skipped["hosts"],
+            json!(["local.mix.localhost", "shared.mix.localhost"]),
+            "{skipped}"
+        );
+        let seen = warnings(&mut frames).await;
+        assert!(
+            seen.iter().any(|w| w["host"] == "beta"
+                && w["code"] == "lane_skipped"
+                && w["box"].is_null()),
+            "{seen:?}"
+        );
+        for (host, body) in [
+            ("shared.mix.localhost", "mixa-web"),
+            ("local.mix.localhost", "mixl-web"),
+        ] {
+            let response = http_get(client.proxy_port, host).await;
+            assert!(
+                response.as_deref().is_some_and(|r| r.contains(body)),
+                "{host}: {response:?}"
+            );
+        }
+
+        session.close();
+        let _ = events.await;
+        client.stop().await;
+        alpha.stop().await;
+        beta.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Local routes win by pattern, not only by equal names: a box name under a
+/// local wildcard and a box wildcard over a local name both skip their box
+/// lane, while a box name neither covers is routed, and a box name this
+/// machine refuses anyway skips nothing even when a local route has it.
+async fn local_wildcards_and_names_win_over_overlapping_box_names() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping the wildcard collision test: no IPv6 loopback");
+        return;
+    }
+    // Port ranges: 15800-15999, between the pairing tests' 15400-15799 and
+    // 16000-16999.
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let under = repo(
+            &tmp.path,
+            "underrepo",
+            "project: underbox\nservices:\n  api:\n    run: \"http under-api\"\n    hosts: [\"api.wild.localhost\"]\n",
+        );
+        let over = repo(
+            &tmp.path,
+            "overrepo",
+            "project: overbox\nservices:\n  web:\n    run: \"http over-web\"\n    hosts: [\"*.wide.localhost\"]\n",
+        );
+        let apart = repo(
+            &tmp.path,
+            "apartrepo",
+            "project: apartbox\nservices:\n  web:\n    run: \"http apart-web\"\n    hosts: [\"web.apart.localhost\", \"shop.example.com\"]\n",
+        );
+        let side = BoxSide::start(&tmp, "box", "15800-15899").await;
+        for repo in [&under, &over, &apart] {
+            side.h
+                .call(Method::Start, json!({}), cx(repo))
+                .await
+                .expect("box start");
+        }
+        let client = ClientSide::start(&tmp, "client", "15900-15999", &side).await;
+        let local = repo(
+            &tmp.path,
+            "wildlocal",
+            "project: wildlocal\nservices:\n  web:\n    run: \"http local-web\"\n    hosts: [\"*.wild.localhost\", \"exact.wide.localhost\", \"shop.example.com\"]\n",
+        );
+        client
+            .h
+            .call(Method::Start, json!({}), cx(&local))
+            .await
+            .expect("local start");
+        client.connect("box").await;
+
+        let skipped = eventually(SOON, || async {
+            let host = client.host().await;
+            let lanes = host["skipped_lanes"].as_array()?.clone();
+            (lanes.len() == 2).then_some(lanes)
+        })
+        .await;
+        let Some(skipped) = skipped else {
+            panic!("both overlapping lanes are skipped: {}", client.host().await);
+        };
+        for (lane, name) in [
+            ("underbox@0", "api.wild.localhost"),
+            ("overbox@0", "*.wide.localhost"),
+        ] {
+            let entry = skipped
+                .iter()
+                .find(|entry| entry["lane"] == lane)
+                .unwrap_or_else(|| panic!("{lane} skipped: {skipped:?}"));
+            assert_eq!(entry["hosts"], json!([name]), "{entry}");
+            assert_eq!(entry["reason"], "this machine serves its hostnames");
+        }
+        let routed = eventually(SOON, || async {
+            http_get(client.proxy_port, "web.apart.localhost")
+                .await
+                .filter(|response| response.contains("apart-web"))
+        })
+        .await;
+        assert!(routed.is_some(), "a box name nothing local covers is routed");
+        // `shop.example.com` is refused on its own, so the local route of the
+        // same name does not skip apartbox's lane.
+        let host = client.host().await;
+        assert!(
+            host["skipped_hosts"]
+                .as_array()
+                .is_some_and(|hosts| hosts.iter().any(|h| h["host"] == "shop.example.com")),
+            "{host}"
+        );
+        for name in ["api.wild.localhost", "exact.wide.localhost"] {
+            let response = http_get(client.proxy_port, name).await;
+            assert!(
+                response.as_deref().is_some_and(|r| r.contains("local-web")),
+                "{name} stays local: {response:?}"
+            );
+        }
+
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// A local project with one routed HTTP service.
+const LOCAL_WEB: &str = r#"project: localweb
+services:
+  web:
+    run: "http hello-from-local"
+    hosts: ["web.${{ lane.domain }}"]
+"#;
+
+/// The HTTPS port the client reports as its own; nothing listens there.
+const CLIENT_HTTPS: u16 = 1;
+
+/// A TLS client that trusts `ca`.
+fn tls_client(ca: &CertificateAuthority) -> tokio_rustls::TlsConnector {
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca.certificate_der()).expect("root");
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("protocol versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    tokio_rustls::TlsConnector::from(Arc::new(config))
+}
+
+/// One HTTPS GET to `127.0.0.1:<port>` for `host`, as a browser opening
+/// `https://<host>:<port>/` sends it; `None` when the handshake or the request fails.
+async fn tls_get(tls: &tokio_rustls::TlsConnector, port: u16, host: &str) -> Option<String> {
+    let attempt = async {
+        let tcp = TcpStream::connect(("127.0.0.1", port)).await.ok()?;
+        let name = rustls::pki_types::ServerName::try_from(host.to_owned()).ok()?;
+        let mut stream = tls.connect(name, tcp).await.ok()?;
+        let request = format!("GET / HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).await.ok()?;
+        let mut response = Vec::new();
+        // A peer that closes without close_notify still delivered the response.
+        let _ = stream.read_to_end(&mut response).await;
+        Some(String::from_utf8_lossy(&response).into_owned())
+    };
+    tokio::time::timeout(Duration::from_secs(5), attempt)
+        .await
+        .ok()
+        .flatten()
+}
+
+/// Disconnects the box `name` from `client`.
+async fn disconnect(client: &ClientSide, name: &str) {
+    client
+        .h
+        .call(
+            Method::Disconnect,
+            json!({"host": name}),
+            Context::default(),
+        )
+        .await
+        .expect("disconnect");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A box whose proxy serves HTTPS on another port than the client's: the
+/// client serves the box's hostnames on that port too, with its CA, but not
+/// its own lanes' hostnames. Two boxes on that port share it, it stays open
+/// while a box reconnects and closes with the last box, free to open again at
+/// once. A port another process holds is reported with `proxy_port_in_use` and
+/// served once `connect` runs again after it is free.
+async fn box_https_port_is_served_here() {
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let path = tmp.path.join("ca");
+        let ca = Arc::new(
+            tokio::task::spawn_blocking(move || CertificateAuthority::load_or_create(&path))
+                .await
+                .expect("ca task")
+                .expect("ca"),
+        );
+        // In the boxes' ranges, past the blocks their single lanes take.
+        let box_https = 22400;
+        let busy_https = 22900;
+        let squatter = std::net::TcpListener::bind(("127.0.0.1", busy_https)).expect("squatter");
+
+        let box_repo = repo(&tmp.path, "boxrepo", BOX);
+        let side = BoxSide::start_on_https(&tmp, "box", "22000-22499", box_https).await;
+        side.h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&box_repo))
+            .await
+            .expect("box start");
+        let twin_repo = repo(
+            &tmp.path,
+            "twinrepo",
+            &BOX.replace("project: boxapp", "project: twinapp")
+                .replace("hello-from-box", "hello-from-twin"),
+        );
+        let twin = BoxSide::start_on_https(&tmp, "twin", "27500-27999", box_https).await;
+        twin.h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&twin_repo))
+            .await
+            .expect("twin start");
+        let busy = BoxSide::start_on_https(&tmp, "busybox", "22500-22999", busy_https).await;
+        let client = ClientSide::start_with(
+            &tmp,
+            "client",
+            "21000-21499",
+            &[("box", &side), ("twin", &twin), ("busybox", &busy)],
+            Some((CLIENT_HTTPS, ca.clone())),
+        )
+        .await;
+        let local_repo = repo(&tmp.path, "localweb", LOCAL_WEB);
+        client
+            .h
+            .call(Method::Start, json!({}), cx(&local_repo))
+            .await
+            .expect("local start");
+        client.connect("box").await;
+
+        let tls = tls_client(&ca);
+        let reached = eventually(SOON, || async {
+            tls_get(&tls, box_https, "web.boxapp.localhost")
+                .await
+                .filter(|response| response.contains("hello-from-box"))
+        })
+        .await;
+        assert!(reached.is_some(), "the box's URL opens on its own port");
+        assert_eq!(client.host().await["https_port"], box_https);
+        let local = eventually(SOON, || async {
+            http_get(client.proxy_port, "web.localweb.localhost")
+                .await
+                .filter(|response| response.contains("hello-from-local"))
+        })
+        .await;
+        assert!(local.is_some(), "the local lane is routed");
+        let wrong = tls_get(&tls, box_https, "web.localweb.localhost").await;
+        assert!(
+            wrong.is_none_or(|response| !response.contains("hello-from-local")),
+            "a local hostname answered on the box's port"
+        );
+
+        // A second box on the same port shares it.
+        client.connect("twin").await;
+        let twinned = eventually(SOON, || async {
+            tls_get(&tls, box_https, "web.twinapp.localhost")
+                .await
+                .filter(|response| response.contains("hello-from-twin"))
+        })
+        .await;
+        assert!(twinned.is_some(), "both boxes are served on their port");
+
+        // The port stays open while a box reconnects.
+        side.transport.refuse(false);
+        side.transport.last_link().expect("link").sever();
+        let down = eventually(SOON, || async {
+            (client.host().await["state"] == "reconnecting").then_some(())
+        })
+        .await;
+        assert!(down.is_some(), "the box reconnects");
+        assert!(
+            tls_get(&tls, box_https, "web.twinapp.localhost")
+                .await
+                .is_some_and(|response| response.contains("hello-from-twin")),
+            "the port stays open while a box using it reconnects"
+        );
+        side.transport.accept();
+        let back = eventually(SOON, || async {
+            tls_get(&tls, box_https, "web.boxapp.localhost")
+                .await
+                .filter(|response| response.contains("hello-from-box"))
+        })
+        .await;
+        assert!(back.is_some(), "the box is served again after reconnecting");
+
+        // The port stays while one box needs it, and is free once none does.
+        disconnect(&client, "twin").await;
+        assert!(
+            tls_get(&tls, box_https, "web.boxapp.localhost")
+                .await
+                .is_some_and(|response| response.contains("hello-from-box")),
+            "the other box keeps the port"
+        );
+        disconnect(&client, "box").await;
+        assert!(
+            TcpStream::connect(("127.0.0.1", box_https)).await.is_err(),
+            "the port closes with the last box using it"
+        );
+        // On macOS the connections the proxy closed keep the port in TIME_WAIT,
+        // and the proxy sets no SO_REUSEADDR there, so it opens on a later retry.
+        if cfg!(not(target_os = "macos")) {
+            client.connect("box").await;
+            let reopened = eventually(SOON, || async {
+                tls_get(&tls, box_https, "web.boxapp.localhost")
+                    .await
+                    .filter(|response| response.contains("hello-from-box"))
+            })
+            .await;
+            assert!(
+                reopened.is_some(),
+                "the port opens again right after closing: {}",
+                client.host().await
+            );
+        }
+
+        client.connect("busybox").await;
+        let warned = eventually(SOON, || async {
+            let host = client.host_named("busybox").await;
+            warns(
+                &host,
+                &format!("cannot use the box's HTTPS port {busy_https} (in use by"),
+            )
+            .then_some(())
+        })
+        .await;
+        assert!(warned.is_some(), "{}", client.host_named("busybox").await);
+        drop(squatter);
+        // Connecting again retries the port once it is free.
+        client.connect("busybox").await;
+        let host = client.host_named("busybox").await;
+        assert!(!warns(&host, "cannot serve"), "{host}");
+        assert!(
+            TcpStream::connect(("127.0.0.1", busy_https)).await.is_ok(),
+            "the freed port is served"
+        );
+
+        client.stop().await;
+        side.stop().await;
+        twin.stop().await;
+        busy.stop().await;
+    })
+    .await
+    .expect("timeout");
+}

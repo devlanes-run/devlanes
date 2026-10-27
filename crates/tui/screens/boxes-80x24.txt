@@ -1,0 +1,50 @@
+ devlanes  1 acme  ›  starting feat/checkout: 4 of 8 r…  M  D  Boxes · 3 issues
+┌ boxes ────────────────────────────────────── 1 of 3 connected · j k for more ┐
+│ ● hetzner                                                    connected · ssh │
+│   link      connected since 2026-10-14 15:32                                 │
+│   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999          │
+│   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed           │
+│   skipped   acme@0: acme@0 on this machine serves its hostnames              │
+│             ext.example.com (acme@4:ext-build): not under .localhost         │
+│   syncs     acme@4:ext-build  up to date, following changes                  │
+│   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same     │
+│     release on both.                                                         │
+│   ! the box stops your processes at logout. Run loginctl enable-linger or    │
+│     devlanes daemon install there.                                           │
+│   ! this machine cannot use the box's HTTPS port 443 (permission denied).    │
+│     Open its hostnames on port 8443.                                         │
+│                                                                              │
+│ ⠋ devbox                                              reconnecting · command │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ──────────────────────────────────────── 1 connected · 3 paired ┐
+│ ● laptop     dl_cid_3f2a9c1e  connected for 2h 14m  2 pairings               │
+│ · ci-runner  dl_cid_0b9e44d1  last seen 1h ago      paired                   │
+│ · desktop    dl_cid_7c41e0a9  last seen 3d ago      paired                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+ enter disconnect   n new box   p pairing code            ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 18-19 dim, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
+1: 0-45 bold, 46-78 bold dim, 79 bold
+2: 0 bold, 2-3 reversed, 4-10 bold reversed, 11-77 reversed, 79 bold
+3: 0 bold, 4-13 dim, 79 bold
+4: 0 bold, 4-13 dim, 79 bold
+5: 0 bold, 4-13 dim, 79 bold
+6: 0 bold, 4-13 dim, 14-64 yellow, 79 bold
+7: 0 bold, 4-13 dim, 14-69 yellow, 79 bold
+8: 0 bold, 4-13 dim, 14-60 green, 79 bold
+9: 0 bold, 4-73 yellow, 79 bold
+10: 0 bold, 6-21 yellow, 79 bold
+11: 0 bold, 4-74 yellow, 79 bold
+12: 0 bold, 6-35 yellow, 79 bold
+13: 0 bold, 4-74 yellow, 79 bold
+14: 0 bold, 6-37 yellow, 79 bold
+15: 0 bold, 79 bold
+16: 0 bold, 4-9 bold, 68-77 dim, 79 bold
+17: 0-79 bold
+18: 0 darkgray, 1-14 bold, 15-54 darkgray, 56-66 green, 67-77 dim, 79 darkgray
+19: 0 darkgray, 2-3 green, 4-14 bold, 15-31 dim, 54-63 dim, 79 darkgray
+20: 0 darkgray, 2-3 dim, 4-14 bold, 15-59 dim, 79 darkgray
+21: 0 darkgray, 2-3 dim, 4-14 bold, 15-59 dim, 79 darkgray
+22: 0-79 darkgray
+23: 1-5 bold, 6-19 dim, 20 bold, 21-31 dim, 32 bold, 33-48 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

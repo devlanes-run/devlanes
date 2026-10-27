@@ -1,0 +1,82 @@
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox       ✕ 1 failed  M  Daemon  Boxes · 3 issues
+┌ shop@0 on devbox ────────────────────────────┐┌ checkout-api  failed ───────────────────────────────────── on devbox ┐
+│ ▾ services                                 2 ││ ! devbox is reconnecting, so this is its last known state.           │
+│   ● storefront                               ││                                                                      │
+│   ✕ checkout-api                      failed ││ state     failed on the box                                          │
+│                                              ││ ports     default 30001  mirrored once it runs                       │
+│                                              ││                                                                      │
+│                                              ││ Read-only here. On devbox: devlanes logs shop@0:checkout-api         │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
+ o open in browser   z zoom   / filter   B boxes   read-only: manage it on devbox                 ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 58-73 bold black on yellow, 80-89 red, 92 bold, 95 bold, 96-100 dim, 103 bold, 104-107 dim, 108-118 yellow
+1: 0 darkgray, 2-7 bold, 8-17 dim, 19-48 darkgray, 50-61 bold, 62-63 dim, 64-69 red, 71-107 darkgray, 109-117 dim, 119 darkgray
+2: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray
+3: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 119 darkgray
+4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 50-59 dim, 60-76 red, 119 darkgray
+5: 0 darkgray, 47-48 darkgray, 50-59 dim, 75-95 dim, 119 darkgray
+6: 0 darkgray, 47-48 darkgray, 119 darkgray
+7: 0 darkgray, 47-48 darkgray, 50-109 dim, 119 darkgray
+8: 0 darkgray, 47-48 darkgray, 119 darkgray
+9: 0 darkgray, 47-48 darkgray, 119 darkgray
+10: 0 darkgray, 47-48 darkgray, 119 darkgray
+11: 0 darkgray, 47-48 darkgray, 119 darkgray
+12: 0 darkgray, 47-48 darkgray, 119 darkgray
+13: 0 darkgray, 47-48 darkgray, 119 darkgray
+14: 0 darkgray, 47-48 darkgray, 119 darkgray
+15: 0 darkgray, 47-48 darkgray, 119 darkgray
+16: 0 darkgray, 47-48 darkgray, 119 darkgray
+17: 0 darkgray, 47-48 darkgray, 119 darkgray
+18: 0 darkgray, 47-48 darkgray, 119 darkgray
+19: 0 darkgray, 47-48 darkgray, 119 darkgray
+20: 0 darkgray, 47-48 darkgray, 119 darkgray
+21: 0 darkgray, 47-48 darkgray, 119 darkgray
+22: 0 darkgray, 47-48 darkgray, 119 darkgray
+23: 0 darkgray, 47-48 darkgray, 119 darkgray
+24: 0 darkgray, 47-48 darkgray, 119 darkgray
+25: 0 darkgray, 47-48 darkgray, 119 darkgray
+26: 0 darkgray, 47-48 darkgray, 119 darkgray
+27: 0 darkgray, 47-48 darkgray, 119 darkgray
+28: 0 darkgray, 47-48 darkgray, 119 darkgray
+29: 0 darkgray, 47-48 darkgray, 119 darkgray
+30: 0 darkgray, 47-48 darkgray, 119 darkgray
+31: 0 darkgray, 47-48 darkgray, 119 darkgray
+32: 0 darkgray, 47-48 darkgray, 119 darkgray
+33: 0 darkgray, 47-48 darkgray, 119 darkgray
+34: 0 darkgray, 47-48 darkgray, 119 darkgray
+35: 0 darkgray, 47-48 darkgray, 119 darkgray
+36: 0 darkgray, 47-48 darkgray, 119 darkgray
+37: 0 darkgray, 47-48 darkgray, 119 darkgray
+38: 0-119 darkgray
+39: 1 bold, 2-20 dim, 21 bold, 22-29 dim, 30 bold, 31-40 dim, 41 bold, 42-80 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

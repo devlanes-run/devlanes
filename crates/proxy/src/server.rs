@@ -28,7 +28,7 @@ use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
     sync::{OwnedSemaphorePermit, Semaphore, watch},
-    task::JoinSet,
+    task::{JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -138,12 +138,20 @@ struct Routes {
     changes: watch::Sender<u64>,
 }
 
-impl CertificatePolicy for Routes {
+/// Certificate authorization for one listener scope: a scoped listener signs only
+/// the names it routes, so other names fail the handshake as unknown hosts do.
+#[derive(Debug)]
+struct Policy {
+    routes: Arc<Routes>,
+    scope: Option<u16>,
+}
+
+impl CertificatePolicy for Policy {
     /// Certificate SANs and authorization are taken from the same route generation.
     /// The requested name comes first so it becomes the leaf's common name.
     fn lookup(&self, server_name: &str) -> Option<CertificateIdentity> {
-        let snapshot = self.snapshot.load();
-        let route = snapshot.table.lookup(server_name)?;
+        let snapshot = self.routes.snapshot.load();
+        let route = snapshot.table.lookup_in(server_name, self.scope)?;
         let mut names = route.certificate_names.clone();
         if let Some(parent) = route.host.strip_prefix("*.") {
             if parent.contains('.') {
@@ -172,12 +180,15 @@ pub struct Proxy {
     connections: Arc<Semaphore>,
     health: Health,
     pool: Arc<Pool>,
+    /// Set on [`Self::scoped`] handles: the only routes their listeners serve.
+    scope: Option<u16>,
 }
 
 impl Proxy {
     /// Does not bind sockets or start background tasks.
     pub fn new(config: ProxyConfig, routes: RouteTable) -> Self {
         Self {
+            scope: None,
             config,
             routes: Arc::new(Routes {
                 snapshot: ArcSwap::from_pointee(Snapshot {
@@ -205,9 +216,52 @@ impl Proxy {
             .send_modify(|count| *count = count.wrapping_add(1));
     }
 
-    /// The route for a normalized hostname in the current snapshot.
+    /// The route for a normalized hostname in the current snapshot, among the
+    /// routes this handle's listeners serve.
     fn lookup(&self, host: &str) -> Option<Route> {
-        self.routes.snapshot.load().table.lookup(host).cloned()
+        self.routes
+            .snapshot
+            .load()
+            .table
+            .lookup_in(host, self.scope)
+            .cloned()
+    }
+
+    /// A handle on the same routes, limits and connection budget whose listeners
+    /// serve only the routes with `listen_port == Some(port)`; any other host gets
+    /// the unknown-host answer. For a box whose URLs carry its own HTTPS port.
+    pub fn scoped(&self, port: u16) -> Self {
+        Self {
+            scope: Some(port),
+            ..self.clone()
+        }
+    }
+
+    /// Binds `port` on `127.0.0.1` and `::1` only (IPv4 only when this machine
+    /// has no IPv6) and serves TLS with `ca` there for [`Self::scoped`] routes of
+    /// that port until `shutdown`. Never falls back to another port: the routes'
+    /// URLs name this one. Returns the accept loops, which end with their
+    /// sockets closed once `shutdown` is cancelled. Must run inside a Tokio runtime.
+    pub fn listen_scoped(
+        &self,
+        port: u16,
+        ca: Arc<CertificateAuthority>,
+        shutdown: CancellationToken,
+    ) -> io::Result<Vec<JoinHandle<()>>> {
+        let scoped = self.scoped(port);
+        let tls = scoped.tls_config(ca).map_err(io::Error::other)?;
+        let listeners = crate::listener::bind_loopback(port)?;
+        Ok(listeners
+            .listeners()
+            .map(|listener| {
+                let (proxy, tls, shutdown) = (scoped.clone(), tls.clone(), shutdown.clone());
+                tokio::spawn(async move {
+                    if let Err(error) = proxy.serve_tls(listener, tls, shutdown).await {
+                        tracing::warn!(%error, port, "scoped https listener stopped");
+                    }
+                })
+            })
+            .collect())
     }
 
     /// Replaces the default limits; call before cloning the proxy or serving any listener.
@@ -232,12 +286,17 @@ impl Proxy {
         self.routes.snapshot.load().table.clone()
     }
 
-    /// Shares live route authorization with the TLS certificate resolver.
+    /// Shares live route authorization with the TLS certificate resolver; a
+    /// [`Self::scoped`] handle's config signs only the names of its scope.
     pub fn tls_config(
         &self,
         ca: Arc<CertificateAuthority>,
     ) -> Result<Arc<rustls::ServerConfig>, devlanes_pki::Error> {
-        Arc::new(DynamicCertResolver::new(ca, self.routes.clone())).server_config()
+        let policy = Policy {
+            routes: self.routes.clone(),
+            scope: self.scope,
+        };
+        Arc::new(DynamicCertResolver::new(ca, Arc::new(policy))).server_config()
     }
 
     /// Serves HTTP/1 and HTTP/2 until cancellation. The caller owns binding/fallback policy.
@@ -481,6 +540,8 @@ impl Proxy {
             RouteState::Starting => Some(ErrorCode::ServiceStarting),
             RouteState::Failed { .. } => Some(ErrorCode::ServiceFailed),
             RouteState::Reconnecting => Some(ErrorCode::BoxReconnecting),
+            RouteState::SignInNeeded => Some(ErrorCode::BoxSignInNeeded),
+            RouteState::PairingNeeded => Some(ErrorCode::BoxPairingNeeded),
         };
         if let Some(code) = code {
             let mut page = route_page(&route, code);
@@ -766,6 +827,7 @@ impl Proxy {
                 .table
                 .routes()
                 .iter()
+                .filter(|route| crate::routes::in_scope(route, self.scope))
                 .map(|route| KnownHost {
                     host: &route.host,
                     owner: route.owner.as_deref(),

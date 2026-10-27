@@ -3,6 +3,7 @@
 mod allocation;
 mod lifecycle;
 mod models;
+mod pairings;
 mod paths;
 mod queries;
 mod records;
@@ -13,6 +14,7 @@ pub use lifecycle::{
     LogSegmentInput, RemoteHost, RollupRow, RunSummaryRow, STARTUP_PEAKS_PER_SERIES, SetupRecord,
     StartupPeak, TaskRun, TaskRunId, TaskRunInput,
 };
+pub use pairings::RemotePairing;
 pub use records::*;
 pub use retention::*;
 
@@ -31,7 +33,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 /// Highest supported forward-only migration. Newer databases require an upgrade.
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 /// Store failures. Diesel, connection, migration and filesystem failures keep the

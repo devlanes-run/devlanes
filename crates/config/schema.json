@@ -202,6 +202,199 @@
       },
       "type": "object"
     },
+    "ExternalConfig": {
+      "additionalProperties": false,
+      "description": "A server you run yourself on a loopback port. Every lane of the project lists it, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane.",
+      "examples": [
+        {
+          "address": "127.0.0.1:5050",
+          "hosts": "pgadmin.${{ lane.domain }}"
+        },
+        {
+          "address": "[::1]:8000",
+          "hidden": true
+        }
+      ],
+      "markdownDescription": "A server you run yourself on a loopback port. Every lane of the project lists it, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane.",
+      "properties": {
+        "address": {
+          "description": "Where the server listens, `127.0.0.1:<port>` or `[::1]:<port>`. Only loopback addresses work. A port that devlanes or a lane already uses is an error. Required.",
+          "examples": [
+            "127.0.0.1:5050",
+            "[::1]:8000"
+          ],
+          "markdownDescription": "Where the server listens, `127.0.0.1:<port>` or `[::1]:<port>`. Only loopback addresses work. A port that devlanes or a lane already uses is an error. Required.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hidden": {
+          "description": "Keep the entry away from machines connected with `devlanes remote connect`. They never see, mirror or reach it. This machine still routes its hostnames. Defaults to false.",
+          "examples": [
+            false,
+            true
+          ],
+          "markdownDescription": "Keep the entry away from machines connected with `devlanes remote connect`. They never see, mirror or reach it. This machine still routes its hostnames. Defaults to false.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "hosts": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExternalHosts",
+              "description": "",
+              "examples": [],
+              "markdownDescription": ""
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Hostnames the devlanes HTTPS proxy routes to the port. One entry or a list. An entry is a hostname, or a mapping with `host` and optional `fallback` and `host_header`. Expressions can use `lane`, `project`, `infra` and `env`. Put the names under `${{ lane.domain }}` so each lane gets its own. The first host without a wildcard becomes the unit's URL.",
+          "examples": [
+            "pgadmin.${{ lane.domain }}",
+            [
+              "docs.${{ lane.domain }}"
+            ]
+          ],
+          "markdownDescription": "Hostnames the devlanes HTTPS proxy routes to the port. One entry or a list. An entry is a hostname, or a mapping with `host` and optional `fallback` and `host_header`. Expressions can use `lane`, `project`, `infra` and `env`. Put the names under `${{ lane.domain }}` so each lane gets its own. The first host without a wildcard becomes the unit's URL."
+        }
+      },
+      "type": "object"
+    },
+    "ExternalHost": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Templated_string",
+          "description": "",
+          "examples": [],
+          "markdownDescription": ""
+        },
+        {
+          "$ref": "#/$defs/ExternalHostRoute",
+          "description": "",
+          "examples": [],
+          "markdownDescription": ""
+        }
+      ],
+      "description": "HTTPS hostname of an `infra.external` entry: a plain hostname, or a mapping with `host` plus `fallback` or `host_header`. The entry has one port, so a route names none.",
+      "examples": [
+        "pgadmin.${{ lane.domain }}",
+        {
+          "fallback": true,
+          "host": "*.pgadmin.${{ lane.domain }}"
+        }
+      ],
+      "markdownDescription": "HTTPS hostname of an `infra.external` entry: a plain hostname, or a mapping with `host` plus `fallback` or `host_header`. The entry has one port, so a route names none."
+    },
+    "ExternalHostRoute": {
+      "additionalProperties": false,
+      "description": "Hostname route of an `infra.external` entry with options: catch-all behaviour or a rewritten Host header.",
+      "examples": [
+        {
+          "fallback": true,
+          "host": "*.pgadmin.${{ lane.domain }}"
+        },
+        {
+          "host": "pgadmin.${{ lane.domain }}",
+          "host_header": "upstream"
+        }
+      ],
+      "markdownDescription": "Hostname route of an `infra.external` entry with options: catch-all behaviour or a rewritten Host header.",
+      "properties": {
+        "fallback": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Templated_boolean",
+              "description": "",
+              "examples": [],
+              "markdownDescription": ""
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Make this route a catch-all: it is used only when no other route, exact or wildcard, matches the requested hostname. Defaults to false.",
+          "examples": [
+            true,
+            false
+          ],
+          "markdownDescription": "Make this route a catch-all: it is used only when no other route, exact or wildcard, matches the requested hostname. Defaults to false."
+        },
+        "host": {
+          "$ref": "#/$defs/Templated_string",
+          "description": "Hostname to route, evaluated for each lane. A leading `*.` makes a wildcard that matches any depth below it but not the name itself. Quote it in YAML. Labels hold letters, digits and inner hyphens. Case and a trailing dot are ignored.",
+          "examples": [
+            "pgadmin.${{ lane.domain }}",
+            "*.pgadmin.${{ lane.domain }}"
+          ],
+          "markdownDescription": "Hostname to route, evaluated for each lane. A leading `*.` makes a wildcard that matches any depth below it but not the name itself. Quote it in YAML. Labels hold letters, digits and inner hyphens. Case and a trailing dot are ignored."
+        },
+        "host_header": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HostHeader",
+              "description": "",
+              "examples": [],
+              "markdownDescription": ""
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Host header the server receives. Defaults to `preserve`, the hostname the browser asked for. `upstream` sends the address devlanes connects to, such as `127.0.0.1:5050`, for servers that only accept their own address.",
+          "examples": [
+            "preserve",
+            "upstream"
+          ],
+          "markdownDescription": "Host header the server receives. Defaults to `preserve`, the hostname the browser asked for. `upstream` sends the address devlanes connects to, such as `127.0.0.1:5050`, for servers that only accept their own address."
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "type": "object"
+    },
+    "ExternalHosts": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ExternalHost",
+          "description": "",
+          "examples": [],
+          "markdownDescription": ""
+        },
+        {
+          "items": {
+            "$ref": "#/$defs/ExternalHost",
+            "description": "HTTPS hostname of an `infra.external` entry: a plain hostname, or a mapping with `host` plus `fallback` or `host_header`. The entry has one port, so a route names none.",
+            "examples": [
+              "pgadmin.${{ lane.domain }}",
+              {
+                "fallback": true,
+                "host": "*.pgadmin.${{ lane.domain }}"
+              }
+            ],
+            "markdownDescription": "HTTPS hostname of an `infra.external` entry: a plain hostname, or a mapping with `host` plus `fallback` or `host_header`. The entry has one port, so a route names none."
+          },
+          "type": "array"
+        }
+      ],
+      "description": "HTTPS hostnames the devlanes proxy routes to an `infra.external` port: one hostname or route mapping, or a list of them.",
+      "examples": [
+        "pgadmin.${{ lane.domain }}",
+        [
+          "pgadmin.${{ lane.domain }}",
+          {
+            "fallback": true,
+            "host": "*.pgadmin.${{ lane.domain }}"
+          }
+        ]
+      ],
+      "markdownDescription": "HTTPS hostnames the devlanes proxy routes to an `infra.external` port: one hostname or route mapping, or a list of them."
+    },
     "HostConfig": {
       "anyOf": [
         {
@@ -741,22 +934,51 @@
             "null"
           ]
         },
+        "external": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ExternalConfig",
+            "description": "A server you run yourself on a loopback port. Every lane of the project lists it, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane.",
+            "examples": [
+              {
+                "address": "127.0.0.1:5050",
+                "hosts": "pgadmin.${{ lane.domain }}"
+              },
+              {
+                "address": "[::1]:8000",
+                "hidden": true
+              }
+            ],
+            "markdownDescription": "A server you run yourself on a loopback port. Every lane of the project lists it, the proxy routes its hostnames to the port, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs. The port is the same in every lane."
+          },
+          "default": {},
+          "description": "Servers you run yourself on a loopback port, such as pgAdmin, keyed by name. Every lane lists them, the proxy routes their hostnames, and machines connected with `devlanes remote connect` mirror them while a lane of the project runs. devlanes never starts or checks them. Put personal ones in `devlanes.local.yaml`.",
+          "examples": [
+            {
+              "pgadmin": {
+                "address": "127.0.0.1:5050",
+                "hosts": "pgadmin.${{ lane.domain }}"
+              }
+            }
+          ],
+          "markdownDescription": "Servers you run yourself on a loopback port, such as pgAdmin, keyed by name. Every lane lists them, the proxy routes their hostnames, and machines connected with `devlanes remote connect` mirror them while a lane of the project runs. devlanes never starts or checks them. Put personal ones in `devlanes.local.yaml`.",
+          "type": "object"
+        },
         "hidden": {
-          "description": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+          "description": "Containers that machines connected with `devlanes remote connect` never see, mirror or reach.",
           "examples": [
             [
               "postgres"
             ]
           ],
           "items": {
-            "description": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+            "description": "Containers that machines connected with `devlanes remote connect` never see, mirror or reach.",
             "examples": [
               "postgres"
             ],
-            "markdownDescription": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+            "markdownDescription": "Containers that machines connected with `devlanes remote connect` never see, mirror or reach.",
             "type": "string"
           },
-          "markdownDescription": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+          "markdownDescription": "Containers that machines connected with `devlanes remote connect` never see, mirror or reach.",
           "type": [
             "array",
             "null"
@@ -1955,12 +2177,12 @@
               "type": "null"
             }
           ],
-          "description": "Keep this service's ports and hosts off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. The service still runs and works on this machine. Defaults to false.",
+          "description": "Keep this service away from machines connected with `devlanes remote connect`. They never see, mirror or reach it, and do not get its `sync` folders. It still runs on this machine. Defaults to false.",
           "examples": [
             false,
             true
           ],
-          "markdownDescription": "Keep this service's ports and hosts off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. The service still runs and works on this machine. Defaults to false."
+          "markdownDescription": "Keep this service away from machines connected with `devlanes remote connect`. They never see, mirror or reach it, and do not get its `sync` folders. It still runs on this machine. Defaults to false."
         },
         "hosts": {
           "anyOf": [
@@ -3037,6 +3259,7 @@
         "containers": {},
         "env": {},
         "exclude": null,
+        "external": {},
         "hidden": null,
         "hosts": {},
         "per_lane": null,

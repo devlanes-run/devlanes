@@ -11,7 +11,9 @@
 //!   services `web` (an HTTP server with `hosts: web.${{ lane.domain }}` and a
 //!   `sync` of `ext`) and `echo` (TCP echo). `ext` holds `hello.txt`, the
 //!   executable `run.sh`, and names this machine may not hold: `con.txt`,
-//!   `a:b`, `trail.` and both `README.md` and `Readme.md`.
+//!   `a:b`, `trail.` and both `README.md` and `Readme.md`. The box's user config
+//!   sets `remote.require_pairing: false`: these tests check SSH, and pairing
+//!   has its own tests over the in-memory transport.
 
 use std::{
     net::{IpAddr, Ipv4Addr},
@@ -20,9 +22,8 @@ use std::{
     time::Duration,
 };
 
-use devlanes_daemon::integrations::{ConnectOptions, RemoteConnector, RemotePrompter};
+use devlanes_daemon::integrations::{RemoteConnector, RemotePrompter, RemoteTransport};
 use devlanes_proto::{Context, Method, RpcError};
-use devlanes_transport::Transport;
 use devlanes_transport_ssh::{SshOptions, SshTransport};
 use serde_json::{Value, json};
 use tokio::{
@@ -50,16 +51,18 @@ const NO_FILE: &str = "NUL";
 /// loopback only (the box is another machine, so nothing here holds its ports).
 struct EnvConnector;
 
+#[async_trait::async_trait]
 impl RemoteConnector for EnvConnector {
     /// Batch mode: the key in the environment needs no prompt.
-    fn transport(
+    async fn transport(
         &self,
         host: &str,
         _prompts: Arc<dyn RemotePrompter>,
-        _options: ConnectOptions,
-    ) -> Result<Arc<dyn Transport>, RpcError> {
+        connected_before: bool,
+    ) -> Result<RemoteTransport, RpcError> {
         let home = std::env::temp_dir();
         let mut options = SshOptions::new(home);
+        options.connected_before = connected_before;
         if let Some(port) = env("DEVLANES_TEST_SSH_PORT") {
             options.ssh_options.push(format!("Port={port}"));
         }
@@ -77,11 +80,10 @@ impl RemoteConnector for EnvConnector {
                 "StrictHostKeyChecking=yes".to_owned(),
             ]);
         }
-        Ok(Arc::new(SshTransport::new(host, options)))
-    }
-
-    fn kind(&self) -> &'static str {
-        "ssh"
+        Ok(RemoteTransport {
+            transport: Arc::new(SshTransport::new(host, options)),
+            kind: "ssh",
+        })
     }
 
     fn mirror_addresses(&self) -> Vec<IpAddr> {
@@ -161,7 +163,7 @@ async fn ssh_box_mirrors_routes_and_syncs() {
             &tmp.path.join("client"),
             "28500-28999",
             Some(Arc::new(EnvConnector)),
-            Some(Arc::new(ProxyRoutes(proxy))),
+            Some(Arc::new(ProxyRoutes::new(proxy, None, proxy_stop.clone()))),
         )
         .await;
 

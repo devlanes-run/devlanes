@@ -113,3 +113,18 @@ tui:
 # A daemon installed with `devlanes daemon install` never stops on its own.
 daemon:
   exit_when_idle: true
+# On a box: devlanes remote connect from another machine starts this machine's daemon
+# when none runs. false leaves that to you; the client then reports the stopped daemon
+# and retries until it runs. Run `devlanes daemon install` (or `devlanes daemon start`
+# with daemon.exit_when_idle: false) so the daemon keeps running between connections.
+remote:
+  start_daemon: true
+  # On a box: serve only machines paired with `devlanes daemon pair` (the default).
+  require_pairing: true
+  # Boxes devlanes remote connect reaches by running a command here instead of SSH,
+  # by the name you connect with: `devlanes remote connect acme` runs this command.
+  # It must run `devlanes tunnel --stdio` in the box with stdin and stdout passed
+  # through; see docs/guides/remote-command.md.
+  # boxes:
+  #   acme:
+  #     command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]

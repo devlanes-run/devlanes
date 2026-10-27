@@ -15,7 +15,7 @@ use devlanes_core::{
 };
 use devlanes_daemon::integrations::ExitDetails;
 use devlanes_daemon::integrations::{
-    ConnectOptions, RemoteConnector, RemotePrompt, RemotePrompter,
+    RemoteConnector, RemotePrompt, RemotePrompter, RemoteTransport,
 };
 use devlanes_daemon::{
     Engine, EngineOptions, Handler,
@@ -27,7 +27,7 @@ use devlanes_daemon::{
     },
 };
 use devlanes_proto::RpcError;
-use futures_util::stream::BoxStream;
+use futures_util::{future::BoxFuture, stream::BoxStream};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -165,7 +165,7 @@ pub async fn engine(
     integ.ca_permitted = ca_permitted;
     integ.presets = presets();
     integ.launch_checks = vec![Arc::new(DistinctTauriIdentifiers)];
-    integ.remote = Arc::new(SshConnector {
+    integ.remote = Arc::new(BoxConnector {
         home: paths.home.clone(),
         exe: std::env::current_exe().ok(),
     });
@@ -668,8 +668,9 @@ async fn proxy(
         ..devlanes_proxy::ProxyConfig::default()
     };
     let proxy = devlanes_proxy::Proxy::new(config, devlanes_proxy::RouteTable::default());
+    let mut box_ca = None;
     if let (Some(listeners), Some(ca)) = (https, ca) {
-        match proxy.tls_config(ca) {
+        match proxy.tls_config(ca.clone()) {
             Ok(tls) => {
                 status.insert(
                     "https".into(),
@@ -683,6 +684,7 @@ async fn proxy(
                         }
                     });
                 }
+                box_ca = Some(ca);
             }
             Err(error) => {
                 status.insert(
@@ -722,6 +724,9 @@ async fn proxy(
         proxy,
         status: Value::Object(status),
         rejected: Mutex::new(Vec::new()),
+        box_ca,
+        shutdown,
+        box_ports: devlanes_proxy::ScopedPorts::default(),
     }
 }
 
@@ -749,6 +754,12 @@ struct ProxyRoutes {
     status: Value,
     /// Entries the last snapshot dropped: `{host, lane, unit, reason}`.
     rejected: Mutex<Vec<Value>>,
+    /// The CA of the HTTPS listeners, for box ports; `None` without HTTPS.
+    box_ca: Option<Arc<devlanes_pki::CertificateAuthority>>,
+    /// The daemon's shutdown, which also stops box ports.
+    shutdown: CancellationToken,
+    /// Box HTTPS ports being served.
+    box_ports: devlanes_proxy::ScopedPorts,
 }
 
 impl RouteSink for ProxyRoutes {
@@ -763,10 +774,11 @@ impl RouteSink for ProxyRoutes {
         let routes = routes
             .into_iter()
             .map(|entry| {
-                let mut route = devlanes_proxy::Route::new(
-                    entry.host,
-                    devlanes_proxy::Upstream::Local(entry.port),
-                );
+                let upstream = match entry.address {
+                    Some(ip) => devlanes_proxy::Upstream::Address((ip, entry.port).into()),
+                    None => devlanes_proxy::Upstream::Local(entry.port),
+                };
+                let mut route = devlanes_proxy::Route::new(entry.host, upstream);
                 route.fallback = entry.fallback;
                 route.host_header = if entry.host_header_upstream {
                     devlanes_proxy::HostHeader::Upstream
@@ -781,12 +793,15 @@ impl RouteSink for ProxyRoutes {
                         devlanes_proxy::RouteState::Failed { log_tail }
                     }
                     RouteStatus::Reconnecting => devlanes_proxy::RouteState::Reconnecting,
+                    RouteStatus::SignInNeeded => devlanes_proxy::RouteState::SignInNeeded,
+                    RouteStatus::PairingNeeded => devlanes_proxy::RouteState::PairingNeeded,
                 };
                 route.start_hint = entry.start_hint;
                 route.certificate_names = entry.certificate_names;
                 route.owner = Some(entry.lane).filter(|lane| !lane.is_empty());
                 route.unit = Some(entry.unit).filter(|unit| !unit.is_empty());
                 route.remote = entry.remote;
+                route.listen_port = entry.box_https_port;
                 route
             })
             .collect();
@@ -808,21 +823,55 @@ impl RouteSink for ProxyRoutes {
         *self.rejected.lock().unwrap_or_else(|e| e.into_inner()) = rejected;
     }
 
-    /// Bind results plus the accept loops' live health, and the entries the last
-    /// snapshot dropped.
+    /// Bind results plus the accept loops' live health, the entries the last
+    /// snapshot dropped and the box HTTPS ports served (`box_https_ports`:
+    /// `[{port, serving}]`, `serving` as for `https`).
     fn status(&self) -> Value {
-        let mut status = listener_status(&self.status, &self.proxy.listener_health());
+        let health = self.proxy.listener_health();
+        let mut status = listener_status(&self.status, &health);
         let rejected = self
             .rejected
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if let Some(map) = status.as_object_mut()
-            && !rejected.is_empty()
-        {
-            map.insert("rejected".into(), Value::Array(rejected));
+        let box_ports: Vec<Value> = self
+            .box_ports
+            .ports()
+            .into_iter()
+            .map(|(port, running)| {
+                let healthy = health
+                    .iter()
+                    .filter(|listener| listener.tls && listener.address.port() == port)
+                    .all(|listener| listener.running && listener.last_error.is_none());
+                json!({"port": port, "serving": running && healthy})
+            })
+            .collect();
+        if let Some(map) = status.as_object_mut() {
+            if !rejected.is_empty() {
+                map.insert("rejected".into(), Value::Array(rejected));
+            }
+            if !box_ports.is_empty() {
+                map.insert("box_https_ports".into(), json!(box_ports));
+            }
         }
         status
+    }
+
+    /// Serves the routes of boxes using `port` there with the HTTPS listeners' CA.
+    fn open_box_port(&self, port: u16) -> std::io::Result<()> {
+        let Some(ca) = &self.box_ca else {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "this machine serves no HTTPS",
+            ));
+        };
+        self.box_ports
+            .open(&self.proxy, port, ca.clone(), &self.shutdown)
+    }
+
+    /// Stops the listeners of a box port; resolves once they are closed.
+    fn close_box_port(&self, port: u16) -> BoxFuture<'static, ()> {
+        Box::pin(self.box_ports.close(port))
     }
 }
 
@@ -839,9 +888,14 @@ fn listener_status(bound: &Value, health: &[devlanes_proxy::ListenerHealth]) -> 
             entry.insert("serving".into(), Value::Bool(false));
             continue;
         }
+        // Box HTTPS ports are TLS listeners too, on their own ports.
+        let port = entry.get("port").and_then(Value::as_u64);
         let listeners: Vec<&devlanes_proxy::ListenerHealth> = health
             .iter()
-            .filter(|listener| listener.tls == tls)
+            .filter(|listener| {
+                listener.tls == tls
+                    && port.is_none_or(|port| u64::from(listener.address.port()) == port)
+            })
             .collect();
         let serving = !listeners.is_empty()
             && listeners
@@ -866,34 +920,46 @@ fn listener_status(bound: &Value, health: &[devlanes_proxy::ListenerHealth]) -> 
     status
 }
 
-/// `connect` over system OpenSSH, with ssh's prompts relayed to the attached CLI.
-struct SshConnector {
-    /// `$DEVLANES_HOME`; control sockets live in its `run/ssh`.
+/// `connect`: the box's command from `remote.boxes` when the user config has
+/// one, otherwise system OpenSSH with ssh's prompts relayed to the attached CLI.
+struct BoxConnector {
+    /// `$DEVLANES_HOME`: its `config.yaml` holds the commands, and ssh
+    /// control sockets live in its `run/ssh`.
     home: PathBuf,
     /// This binary, which ssh runs as `askpass`; without it ssh runs in batch mode.
     exe: Option<PathBuf>,
 }
 
-impl RemoteConnector for SshConnector {
-    /// One SSH transport (and ControlMaster) per box; Windows has no
-    /// ControlMaster and runs one `ssh.exe` per session.
-    fn transport(
+#[async_trait]
+impl RemoteConnector for BoxConnector {
+    /// Reads the user config at each call, so a command added or changed
+    /// there applies to the next `connect`. A command gets no prompts: it
+    /// runs without a terminal and nobody answers it. One SSH transport (and
+    /// ControlMaster) per box otherwise; Windows has no ControlMaster and runs
+    /// one `ssh.exe` per session.
+    async fn transport(
         &self,
         host: &str,
         prompts: Arc<dyn RemotePrompter>,
-        connect: ConnectOptions,
-    ) -> Result<Arc<dyn devlanes_transport::Transport>, RpcError> {
+        connected_before: bool,
+    ) -> Result<RemoteTransport, RpcError> {
+        let (home, name) = (self.home.clone(), host.to_owned());
+        let command =
+            tokio::task::spawn_blocking(move || crate::user_config::box_command(&home, &name))
+                .await
+                .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))??;
+        if let Some(command) = command {
+            let mut options = devlanes_transport_command::CommandOptions::new(host);
+            options.connected_before = connected_before;
+            return Ok(RemoteTransport {
+                transport: Arc::new(devlanes_transport_command::CommandTransport::new(
+                    command, options,
+                )),
+                kind: "command",
+            });
+        }
         let mut options = devlanes_transport_ssh::SshOptions::new(&self.home);
-        // A box without devlanes gets this client's own release, and only with
-        // `remote connect --install`; otherwise the plan is reported.
-        options.manifest_url = Some(devlanes_version::release_manifest_url(
-            devlanes_version::VERSION,
-        ));
-        options.bootstrap = if connect.install {
-            devlanes_transport_ssh::BootstrapPolicy::Install
-        } else {
-            devlanes_transport_ssh::BootstrapPolicy::Report
-        };
+        options.connected_before = connected_before;
         options.askpass = self
             .exe
             .clone()
@@ -901,9 +967,10 @@ impl RemoteConnector for SshConnector {
                 exe,
                 relay: Arc::new(PromptBridge(prompts)),
             });
-        Ok(Arc::new(devlanes_transport_ssh::SshTransport::new(
-            host, options,
-        )))
+        Ok(RemoteTransport {
+            transport: Arc::new(devlanes_transport_ssh::SshTransport::new(host, options)),
+            kind: "ssh",
+        })
     }
 }
 
@@ -2217,6 +2284,76 @@ fn docker_progress(
 mod tests {
     use super::*;
 
+    /// Answers no prompt, like a daemon with no CLI attached.
+    struct Unattended;
+
+    #[async_trait]
+    impl RemotePrompter for Unattended {
+        async fn ask(&self, _prompt: RemotePrompt) -> Option<String> {
+            None
+        }
+    }
+
+    /// The command transport's list of devlanes' own variables names the
+    /// ones the client and the ssh prompt relay define.
+    #[test]
+    fn box_commands_lose_the_variables_devlanes_sets() {
+        for name in [
+            devlanes_client::READY_STEPS_ENV,
+            devlanes_transport_ssh::askpass::SOCKET_ENV,
+        ] {
+            assert!(
+                devlanes_transport_command::INTERNAL_ENV.contains(&name),
+                "{name}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    /// A box with a command in the user config gets the command transport,
+    /// read at each call; any other name is an ssh destination.
+    async fn boxes_with_a_command_are_not_ssh_destinations() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let connector = BoxConnector {
+            home: temp.path().to_path_buf(),
+            exe: None,
+        };
+        let pick = |host: &'static str| {
+            let connector = &connector;
+            async move { connector.transport(host, Arc::new(Unattended), false).await }
+        };
+        let before = pick("acme").await.expect("ssh");
+        assert_eq!(before.kind, "ssh");
+        std::fs::write(
+            temp.path().join("config.yaml"),
+            "remote:\n  boxes:\n    acme:\n      command: [devlanes-no-such-program, tunnel]\n",
+        )
+        .expect("write");
+        let acme = pick("acme").await.expect("command");
+        assert_eq!(acme.kind, "command");
+        assert_eq!(pick("hetzner").await.expect("ssh").kind, "ssh");
+        // The command runs for real: a program that does not exist stops the link.
+        let Err(error) = acme.transport.connect().await else {
+            panic!("a missing program connected");
+        };
+        assert!(error.is_permanent(), "{error}");
+        assert!(
+            error
+                .to_string()
+                .starts_with("cannot run `devlanes-no-such-program` for acme"),
+            "{error}"
+        );
+        std::fs::write(
+            temp.path().join("config.yaml"),
+            "remote:\n  boxes:\n    acme:\n      command: []\n",
+        )
+        .expect("write");
+        let Err(error) = pick("acme").await else {
+            panic!("an empty command connected");
+        };
+        assert_eq!(error.code, "config_error");
+    }
+
     #[test]
     /// A failed compose command keeps its command line, status and stderr tail.
     fn compose_command_failure_is_structured() {
@@ -2320,6 +2457,8 @@ mod tests {
             unit: unit.into(),
             certificate_names: Vec::new(),
             remote: false,
+            box_https_port: None,
+            address: None,
         }
     }
 
@@ -2334,6 +2473,9 @@ mod tests {
             ),
             status: json!({}),
             rejected: Mutex::new(Vec::new()),
+            box_ca: None,
+            shutdown: CancellationToken::new(),
+            box_ports: devlanes_proxy::ScopedPorts::default(),
         };
         sink.publish(vec![
             entry("web.acme.localhost", "acme@0", "web", 3000),
@@ -2360,6 +2502,47 @@ mod tests {
         assert!(
             sink.status().get("rejected").is_none(),
             "a clean snapshot clears them"
+        );
+    }
+
+    #[test]
+    /// A route naming an address (an `infra.external` entry) goes to exactly
+    /// that address; the others to the port on either loopback.
+    fn routes_with_an_address_dial_only_it() {
+        let sink = ProxyRoutes {
+            proxy: devlanes_proxy::Proxy::new(
+                devlanes_proxy::ProxyConfig::default(),
+                devlanes_proxy::RouteTable::default(),
+            ),
+            status: json!({}),
+            rejected: Mutex::new(Vec::new()),
+            box_ca: None,
+            shutdown: CancellationToken::new(),
+            box_ports: devlanes_proxy::ScopedPorts::default(),
+        };
+        let mut docs = entry("docs.acme.localhost", "acme@0", "docs", 8000);
+        docs.address = Some(std::net::Ipv6Addr::LOCALHOST.into());
+        sink.publish(vec![
+            entry("web.acme.localhost", "acme@0", "web", 3000),
+            docs,
+        ]);
+        let routes = sink.proxy.routes();
+        let upstream = |host: &str| {
+            routes
+                .routes()
+                .iter()
+                .find(|route| route.host == host)
+                .map(|route| route.upstream.clone())
+        };
+        assert_eq!(
+            upstream("docs.acme.localhost"),
+            Some(devlanes_proxy::Upstream::Address(
+                "[::1]:8000".parse().expect("address")
+            ))
+        );
+        assert_eq!(
+            upstream("web.acme.localhost"),
+            Some(devlanes_proxy::Upstream::Local(3000))
         );
     }
 
@@ -2659,6 +2842,19 @@ mod tests {
         let stopped = listener_status(&bound, &[listener(8080, false, None)]);
         assert_eq!(stopped["http"]["serving"], false);
         assert_eq!(listener_status(&bound, &[])["http"]["serving"], false);
+
+        // A closed box HTTPS port stays in the health list but is not the proxy's.
+        let https = json!({"https": {"bound": true, "port": 443}});
+        let tls = |port: u16, running: bool| devlanes_proxy::ListenerHealth {
+            tls: true,
+            ..listener(port, running, None)
+        };
+        let status = listener_status(&https, &[tls(443, true), tls(8443, false)]);
+        assert_eq!(status["https"]["serving"], true);
+        assert_eq!(
+            status["https"]["listeners"].as_array().map(Vec::len),
+            Some(1)
+        );
     }
 
     #[tokio::test]

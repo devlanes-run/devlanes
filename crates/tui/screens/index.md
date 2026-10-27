@@ -82,6 +82,14 @@ a lane with nothing running: every service listed, s starts it
 - 120x40: [txt](lane-stopped-120x40.txt) · [png](lane-stopped-120x40.png) · [ansi](lane-stopped-120x40.ansi)
 - 80x24: [txt](lane-stopped-80x24.txt) · [png](lane-stopped-80x24.png) · [ansi](lane-stopped-80x24.ansi)
 
+## unit-external
+
+an infra.external entry: listed under infra, the pane says devlanes routes it but runs nothing for it
+
+- 200x60: [txt](unit-external-200x60.txt) · [png](unit-external-200x60.png) · [ansi](unit-external-200x60.ansi)
+- 120x40: [txt](unit-external-120x40.txt) · [png](unit-external-120x40.png) · [ansi](unit-external-120x40.ansi)
+- 80x24: [txt](unit-external-80x24.txt) · [png](unit-external-80x24.png) · [ansi](unit-external-80x24.ansi)
+
 ## lane-missing-worktree
 
 a lane whose worktree directory is gone
@@ -137,6 +145,190 @@ a project whose devlanes.yaml does not load (Shift+2)
 - 200x60: [txt](project-config-error-200x60.txt) · [png](project-config-error-200x60.png) · [ansi](project-config-error-200x60.ansi)
 - 120x40: [txt](project-config-error-120x40.txt) · [png](project-config-error-120x40.png) · [ansi](project-config-error-120x40.ansi)
 - 80x24: [txt](project-config-error-80x24.txt) · [png](project-config-error-80x24.png) · [ansi](project-config-error-80x24.ansi)
+
+## box-lane
+
+a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the pane says what to run on the box
+
+- 200x60: [txt](box-lane-200x60.txt) · [png](box-lane-200x60.png) · [ansi](box-lane-200x60.ansi)
+- 120x40: [txt](box-lane-120x40.txt) · [png](box-lane-120x40.png) · [ansi](box-lane-120x40.ansi)
+- 80x24: [txt](box-lane-80x24.txt) · [png](box-lane-80x24.png) · [ansi](box-lane-80x24.ansi)
+
+## box-unit
+
+a box service: state, its port in use here (relayed), the URL that opens it here
+
+- 200x60: [txt](box-unit-200x60.txt) · [png](box-unit-200x60.png) · [ansi](box-unit-200x60.ansi)
+- 120x40: [txt](box-unit-120x40.txt) · [png](box-unit-120x40.png) · [ansi](box-unit-120x40.ansi)
+- 80x24: [txt](box-unit-80x24.txt) · [png](box-unit-80x24.png) · [ansi](box-unit-80x24.ansi)
+
+## box-unit-sync
+
+a box service with a synced folder and a hostname this machine does not route
+
+- 200x60: [txt](box-unit-sync-200x60.txt) · [png](box-unit-sync-200x60.png) · [ansi](box-unit-sync-200x60.ansi)
+- 120x40: [txt](box-unit-sync-120x40.txt) · [png](box-unit-sync-120x40.png) · [ansi](box-unit-sync-120x40.ansi)
+- 80x24: [txt](box-unit-sync-80x24.txt) · [png](box-unit-sync-80x24.png) · [ansi](box-unit-sync-80x24.ansi)
+
+## box-lane-skipped
+
+a box lane that is not mirrored because a local lane serves its hostnames
+
+- 200x60: [txt](box-lane-skipped-200x60.txt) · [png](box-lane-skipped-200x60.png) · [ansi](box-lane-skipped-200x60.ansi)
+- 120x40: [txt](box-lane-skipped-120x40.txt) · [png](box-lane-skipped-120x40.png) · [ansi](box-lane-skipped-120x40.ansi)
+- 80x24: [txt](box-lane-skipped-80x24.txt) · [png](box-lane-skipped-80x24.png) · [ansi](box-lane-skipped-80x24.ansi)
+
+## box-reconnecting
+
+a box reached by a command while its link reconnects: the lane as last reported, a failed service
+
+- 200x60: [txt](box-reconnecting-200x60.txt) · [png](box-reconnecting-200x60.png) · [ansi](box-reconnecting-200x60.ansi)
+- 120x40: [txt](box-reconnecting-120x40.txt) · [png](box-reconnecting-120x40.png) · [ansi](box-reconnecting-120x40.ansi)
+- 80x24: [txt](box-reconnecting-80x24.txt) · [png](box-reconnecting-80x24.png) · [ansi](box-reconnecting-80x24.ansi)
+
+## box-refused
+
+r on a box service: nothing restarts; the pane's first line says why and what to run on the box
+
+- 200x60: [txt](box-refused-200x60.txt) · [png](box-refused-200x60.png) · [ansi](box-refused-200x60.ansi)
+- 120x40: [txt](box-refused-120x40.txt) · [png](box-refused-120x40.png) · [ansi](box-refused-120x40.ansi)
+- 80x24: [txt](box-refused-80x24.txt) · [png](box-refused-80x24.png) · [ansi](box-refused-80x24.ansi)
+
+## boxes
+
+the boxes view (B): link state, errors and fixes, box info, proxy port, skipped lanes and hostnames, syncs, warnings; this machine's clients below; hetzner selected, so enter disconnects
+
+- 200x60: [txt](boxes-200x60.txt) · [png](boxes-200x60.png) · [ansi](boxes-200x60.ansi)
+- 120x40: [txt](boxes-120x40.txt) · [png](boxes-120x40.png) · [ansi](boxes-120x40.ansi)
+- 80x24: [txt](boxes-80x24.txt) · [png](boxes-80x24.png) · [ansi](boxes-80x24.ansi)
+
+## boxes-clients
+
+the boxes view with the selection on this machine's clients (j past the boxes): laptop selected, x revokes
+
+- 200x60: [txt](boxes-clients-200x60.txt) · [png](boxes-clients-200x60.png) · [ansi](boxes-clients-200x60.ansi)
+- 120x40: [txt](boxes-clients-120x40.txt) · [png](boxes-clients-120x40.png) · [ansi](boxes-clients-120x40.ansi)
+- 80x24: [txt](boxes-clients-80x24.txt) · [png](boxes-clients-80x24.png) · [ansi](boxes-clients-80x24.ansi)
+
+## boxes-clients-unpaired
+
+this machine's clients with remote.require_pairing false: the note, and a tablet connected without pairing
+
+- 200x60: [txt](boxes-clients-unpaired-200x60.txt) · [png](boxes-clients-unpaired-200x60.png) · [ansi](boxes-clients-unpaired-200x60.ansi)
+- 120x40: [txt](boxes-clients-unpaired-120x40.txt) · [png](boxes-clients-unpaired-120x40.png) · [ansi](boxes-clients-unpaired-120x40.ansi)
+- 80x24: [txt](boxes-clients-unpaired-80x24.txt) · [png](boxes-clients-unpaired-80x24.png) · [ansi](boxes-clients-unpaired-80x24.ansi)
+
+## boxes-connections-off
+
+the boxes view with remote.allow_connections false: this machine says connections are off
+
+- 200x60: [txt](boxes-connections-off-200x60.txt) · [png](boxes-connections-off-200x60.png) · [ansi](boxes-connections-off-200x60.ansi)
+- 120x40: [txt](boxes-connections-off-120x40.txt) · [png](boxes-connections-off-120x40.png) · [ansi](boxes-connections-off-120x40.ansi)
+- 80x24: [txt](boxes-connections-off-80x24.txt) · [png](boxes-connections-off-80x24.png) · [ansi](boxes-connections-off-80x24.ansi)
+
+## boxes-pairing
+
+the boxes view while hetzner waits for this machine to pair again: the box's reason and both commands
+
+- 200x60: [txt](boxes-pairing-200x60.txt) · [png](boxes-pairing-200x60.png) · [ansi](boxes-pairing-200x60.ansi)
+- 120x40: [txt](boxes-pairing-120x40.txt) · [png](boxes-pairing-120x40.png) · [ansi](boxes-pairing-120x40.ansi)
+- 80x24: [txt](boxes-pairing-80x24.txt) · [png](boxes-pairing-80x24.png) · [ansi](boxes-pairing-80x24.ansi)
+
+## box-pairing
+
+a service of a box that waits for pairing: the last known state, and what to run on the box and here
+
+- 200x60: [txt](box-pairing-200x60.txt) · [png](box-pairing-200x60.png) · [ansi](box-pairing-200x60.ansi)
+- 120x40: [txt](box-pairing-120x40.txt) · [png](box-pairing-120x40.png) · [ansi](box-pairing-120x40.ansi)
+- 80x24: [txt](box-pairing-80x24.txt) · [png](box-pairing-80x24.png) · [ansi](box-pairing-80x24.ansi)
+
+## boxes-empty
+
+the boxes view before any box connected or any client paired: n connects a box, p shows a pairing code
+
+- 200x60: [txt](boxes-empty-200x60.txt) · [png](boxes-empty-200x60.png) · [ansi](boxes-empty-200x60.ansi)
+- 120x40: [txt](boxes-empty-120x40.txt) · [png](boxes-empty-120x40.png) · [ansi](boxes-empty-120x40.ansi)
+- 80x24: [txt](boxes-empty-80x24.txt) · [png](boxes-empty-80x24.png) · [ansi](boxes-empty-80x24.ansi)
+
+## dialog-connect
+
+a new connection (n): a box reached by its SSH name
+
+- 200x60: [txt](dialog-connect-200x60.txt) · [png](dialog-connect-200x60.png) · [ansi](dialog-connect-200x60.ansi)
+- 120x40: [txt](dialog-connect-120x40.txt) · [png](dialog-connect-120x40.png) · [ansi](dialog-connect-120x40.ansi)
+- 80x24: [txt](dialog-connect-80x24.txt) · [png](dialog-connect-80x24.png) · [ansi](dialog-connect-80x24.ansi)
+
+## dialog-connect-command
+
+a new connection reached by a command (shift+tab, space, tab, tab): saved as remote.boxes.acme.command
+
+- 200x60: [txt](dialog-connect-command-200x60.txt) · [png](dialog-connect-command-200x60.png) · [ansi](dialog-connect-command-200x60.ansi)
+- 120x40: [txt](dialog-connect-command-120x40.txt) · [png](dialog-connect-command-120x40.png) · [ansi](dialog-connect-command-120x40.ansi)
+- 80x24: [txt](dialog-connect-command-80x24.txt) · [png](dialog-connect-command-80x24.png) · [ansi](dialog-connect-command-80x24.ansi)
+
+## dialog-connect-code
+
+connecting to a box that asks for a pairing code: the code typed so far
+
+- 200x60: [txt](dialog-connect-code-200x60.txt) · [png](dialog-connect-code-200x60.png) · [ansi](dialog-connect-code-200x60.ansi)
+- 120x40: [txt](dialog-connect-code-120x40.txt) · [png](dialog-connect-code-120x40.png) · [ansi](dialog-connect-code-120x40.ansi)
+- 80x24: [txt](dialog-connect-code-80x24.txt) · [png](dialog-connect-code-80x24.png) · [ansi](dialog-connect-code-80x24.ansi)
+
+## dialog-connect-secret
+
+enter on gpu, which needs a sign-in: ssh asks for the key's passphrase, typed masked
+
+- 200x60: [txt](dialog-connect-secret-200x60.txt) · [png](dialog-connect-secret-200x60.png) · [ansi](dialog-connect-secret-200x60.ansi)
+- 120x40: [txt](dialog-connect-secret-120x40.txt) · [png](dialog-connect-secret-120x40.png) · [ansi](dialog-connect-secret-120x40.ansi)
+- 80x24: [txt](dialog-connect-secret-80x24.txt) · [png](dialog-connect-secret-80x24.png) · [ansi](dialog-connect-secret-80x24.ansi)
+
+## dialog-connect-waiting
+
+enter on devbox while it reconnects: the link's state and its last error
+
+- 200x60: [txt](dialog-connect-waiting-200x60.txt) · [png](dialog-connect-waiting-200x60.png) · [ansi](dialog-connect-waiting-200x60.ansi)
+- 120x40: [txt](dialog-connect-waiting-120x40.txt) · [png](dialog-connect-waiting-120x40.png) · [ansi](dialog-connect-waiting-120x40.ansi)
+- 80x24: [txt](dialog-connect-waiting-80x24.txt) · [png](dialog-connect-waiting-80x24.png) · [ansi](dialog-connect-waiting-80x24.ansi)
+
+## dialog-connect-refused
+
+connecting to a box with remote.allow_connections false: the box's reason, enter tries again
+
+- 200x60: [txt](dialog-connect-refused-200x60.txt) · [png](dialog-connect-refused-200x60.png) · [ansi](dialog-connect-refused-200x60.ansi)
+- 120x40: [txt](dialog-connect-refused-120x40.txt) · [png](dialog-connect-refused-120x40.png) · [ansi](dialog-connect-refused-120x40.ansi)
+- 80x24: [txt](dialog-connect-refused-80x24.txt) · [png](dialog-connect-refused-80x24.png) · [ansi](dialog-connect-refused-80x24.ansi)
+
+## dialog-disconnect
+
+enter on a connected box: asks before disconnecting it
+
+- 200x60: [txt](dialog-disconnect-200x60.txt) · [png](dialog-disconnect-200x60.png) · [ansi](dialog-disconnect-200x60.ansi)
+- 120x40: [txt](dialog-disconnect-120x40.txt) · [png](dialog-disconnect-120x40.png) · [ansi](dialog-disconnect-120x40.ansi)
+- 80x24: [txt](dialog-disconnect-80x24.txt) · [png](dialog-disconnect-80x24.png) · [ansi](dialog-disconnect-80x24.ansi)
+
+## dialog-pair
+
+a pairing code for another machine (p): the code, its countdown and what to run there
+
+- 200x60: [txt](dialog-pair-200x60.txt) · [png](dialog-pair-200x60.png) · [ansi](dialog-pair-200x60.ansi)
+- 120x40: [txt](dialog-pair-120x40.txt) · [png](dialog-pair-120x40.png) · [ansi](dialog-pair-120x40.ansi)
+- 80x24: [txt](dialog-pair-80x24.txt) · [png](dialog-pair-80x24.png) · [ansi](dialog-pair-80x24.ansi)
+
+## dialog-pair-paused
+
+p while 5 wrong codes keep pairing paused: how long it stays paused
+
+- 200x60: [txt](dialog-pair-paused-200x60.txt) · [png](dialog-pair-paused-200x60.png) · [ansi](dialog-pair-paused-200x60.ansi)
+- 120x40: [txt](dialog-pair-paused-120x40.txt) · [png](dialog-pair-paused-120x40.png) · [ansi](dialog-pair-paused-120x40.ansi)
+- 80x24: [txt](dialog-pair-paused-80x24.txt) · [png](dialog-pair-paused-80x24.png) · [ansi](dialog-pair-paused-80x24.ansi)
+
+## dialog-pair-off
+
+p with remote.allow_connections false: no code, and how to turn connections on
+
+- 200x60: [txt](dialog-pair-off-200x60.txt) · [png](dialog-pair-off-200x60.png) · [ansi](dialog-pair-off-200x60.ansi)
+- 120x40: [txt](dialog-pair-off-120x40.txt) · [png](dialog-pair-off-120x40.png) · [ansi](dialog-pair-off-120x40.ansi)
+- 80x24: [txt](dialog-pair-off-80x24.txt) · [png](dialog-pair-off-80x24.png) · [ansi](dialog-pair-off-80x24.ansi)
 
 ## unit-failed
 
@@ -305,6 +497,22 @@ the daemon page (D): facts, doctor checks and the daemon log
 - 200x60: [txt](daemon-200x60.txt) · [png](daemon-200x60.png) · [ansi](daemon-200x60.ansi)
 - 120x40: [txt](daemon-120x40.txt) · [png](daemon-120x40.png) · [ansi](daemon-120x40.ansi)
 - 80x24: [txt](daemon-80x24.txt) · [png](daemon-80x24.png) · [ansi](daemon-80x24.ansi)
+
+## dialog-revoke
+
+revoking laptop (x on a client in the boxes view): asks first, y revokes
+
+- 200x60: [txt](dialog-revoke-200x60.txt) · [png](dialog-revoke-200x60.png) · [ansi](dialog-revoke-200x60.ansi)
+- 120x40: [txt](dialog-revoke-120x40.txt) · [png](dialog-revoke-120x40.png) · [ansi](dialog-revoke-120x40.ansi)
+- 80x24: [txt](dialog-revoke-80x24.txt) · [png](dialog-revoke-80x24.png) · [ansi](dialog-revoke-80x24.ansi)
+
+## dialog-revoke-unpaired
+
+revoking laptop with remote.require_pairing false: it can reconnect without a code
+
+- 200x60: [txt](dialog-revoke-unpaired-200x60.txt) · [png](dialog-revoke-unpaired-200x60.png) · [ansi](dialog-revoke-unpaired-200x60.ansi)
+- 120x40: [txt](dialog-revoke-unpaired-120x40.txt) · [png](dialog-revoke-unpaired-120x40.png) · [ansi](dialog-revoke-unpaired-120x40.ansi)
+- 80x24: [txt](dialog-revoke-unpaired-80x24.txt) · [png](dialog-revoke-unpaired-80x24.png) · [ansi](dialog-revoke-unpaired-80x24.ansi)
 
 ## daemon-targets
 

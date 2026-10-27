@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                       starting feat/checkout: 4 of 8 ready  M monitor   D daemon
+ devlanes  1 acme   2 billing   3 shop                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                            1-9 or [ ] switch lanes
 ┌ @0 · 34/38 up ───────────────────────────────┐┌ wrk-export  failed · exit 1 ─────────────────────────────────────────┐
 │ ▾ services                                34 ││ failed    exited with code 1                                         │
@@ -17,9 +17,9 @@
 │   │   ports.range                    20000-32767│                                                                │   │
 │   │   tls.ca                            devlanes│ default  443                                                   │105│
 │   │   tls.trust                             none│ example  443, 8443                                             │   │
-│   │                                             │                                                                │118│
-│   │                                             │ Applies after saving and a daemon restart.                     │   │
-│   │                                             │                                                                │131│
+│   │   remote.allow_connections              true│                                                                │118│
+│   │   remote.start_daemon                   true│ Applies after saving and a daemon restart.                     │   │
+│   │   remote.require_pairing                true│                                                                │131│
 │   │                                             │                                                                │   │
 │   │                                             │                                                                │144│
 │   │                                             │                                                                │   │
@@ -40,7 +40,7 @@
  r restart   n next problem   pgup scroll back   c select text   / filter                         ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 99 bold, 100-107 dim, 111 bold, 112-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 37-47 dim, 50-51 dim, 52-67 yellow, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16-48 darkgray, 50-59 bold, 60-61 dim, 62-67 red, 68-70 dim, 71-76 red, 78-119 darkgray
 3: 0 darkgray, 2-3 dim, 44-45 dim, 47-48 darkgray, 50-59 dim, 60-77 red, 119 darkgray
@@ -59,9 +59,9 @@
 16: 0 darkgray, 4 bold, 6 bold, 39-49 dim, 50 darkgray, 115 bold, 119 darkgray
 17: 0 darkgray, 4 bold, 6 bold, 42-49 dim, 50 darkgray, 52-60 dim, 115 bold, 119 darkgray
 18: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 52-60 dim, 115 bold, 119 darkgray
-19: 0 darkgray, 4 bold, 50 darkgray, 115 bold, 119 darkgray
-20: 0 darkgray, 4 bold, 50 darkgray, 52-93 dim, 115 bold, 119 darkgray
-21: 0 darkgray, 4 bold, 50 darkgray, 115 bold, 119 darkgray
+19: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 115 bold, 119 darkgray
+20: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 52-93 dim, 115 bold, 119 darkgray
+21: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 115 bold, 119 darkgray
 22: 0 darkgray, 4 bold, 50 darkgray, 115 bold, 119 darkgray
 23: 0 darkgray, 1-3 reversed, 4 bold, 50 darkgray, 115 bold, 119 darkgray
 24: 0 darkgray, 4 bold, 50 darkgray, 115 bold, 119 darkgray

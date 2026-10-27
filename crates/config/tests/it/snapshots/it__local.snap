@@ -31,6 +31,13 @@ expression: "parse_project(base, Some(LOCAL)).expect(\"local with matching base\
     "hosts": {},
     "hidden": null,
     "containers": {},
+    "external": {
+      "pgadmin": {
+        "address": "127.0.0.1:5050",
+        "hosts": "pgadmin.${{ lane.domain }}",
+        "hidden": null
+      }
+    },
     "setup": {},
     "teardown": {}
   },

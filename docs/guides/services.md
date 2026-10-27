@@ -205,6 +205,10 @@ One `devlanes.yaml` at the repository root, one service per app, `run_script` po
 
 If an app has its own `devlanes.yaml` in a subdirectory, that directory is the project root for devlanes when you run it there; a repository can hold several independent projects that way, each with its own name, lanes and ports.
 
+## Servers devlanes does not run
+
+A server started with `devlanes exec`, or outside devlanes, gets no hostname and is not mirrored to connected machines. To route one, declare its port under `infra.external`, in `devlanes.local.yaml` when only you run it: [external ports](infra.md#external-ports).
+
 ## Agents and CI
 
 ```sh

@@ -303,7 +303,7 @@ async fn large_sync_reconnects_send_only_differences() {
             .h
             .call(
                 Method::Connect,
-                json!({"host": "box", "background": true}),
+                client.connect_params("box").await,
                 Context::default(),
             )
             .await

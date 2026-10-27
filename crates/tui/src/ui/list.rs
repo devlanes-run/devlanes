@@ -17,8 +17,9 @@ use crate::text::{self, clean};
 use crate::theme::{Glyph, Tone};
 use crate::tree::{self, ContainerTone, Row, RowId, Section};
 
-/// Unit states the glyph says on its own; the lane title names an idle lane's level.
-const SILENT: [&str; 7] = [
+/// Unit states the glyph says on its own; the lane title names an idle lane's
+/// level, and the `external` group its units' state.
+const SILENT: [&str; 8] = [
     "ready",
     "running",
     "frozen",
@@ -26,6 +27,7 @@ const SILENT: [&str; 7] = [
     "stopped",
     "idle",
     "not run",
+    "external",
 ];
 
 /// The list box and its rows.
@@ -56,7 +58,18 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         .power
         .as_ref()
         .map(|power| Span::styled(format!(" {}", clean(&power.level)), theme.quiet()));
+    let on_box = app.box_lane(&lane.reference);
     match lane.index {
+        // A box lane goes by its reference on the box: `acme@1 on hetzner`.
+        _ if on_box.is_some() && app.project_lanes().len() < 2 => {
+            if let Some((host, box_lane)) = &on_box {
+                name.push(Span::styled(clean(box_lane), bold));
+                name.push(Span::styled(
+                    format!(" on {}", clean(&host.host)),
+                    theme.quiet(),
+                ));
+            }
+        }
         Some(index) if app.project_lanes().len() > 1 => {
             let counts = tree::counts(lane);
             name.push(Span::styled(format!("@{index}"), bold));
@@ -231,6 +244,11 @@ fn row_line(app: &App, lane: &LaneSummary, item: &Row, width: usize) -> Line<'st
             };
             header(section.name().into(), summary)
         }
+        // Every member reads `external`, which the group's name already says.
+        RowId::Group(_, name) if name == tree::EXTERNAL => header(
+            clean(name),
+            vec![Span::styled(item.members.len().to_string(), theme.quiet())],
+        ),
         RowId::Group(_, name) => header(clean(name), members_summary(app, lane, &item.members)),
         RowId::Unit(name) => match lane.units.iter().find(|u| u.name == *name) {
             Some(unit) => unit_line(app, lane, unit, item, width),
@@ -349,7 +367,7 @@ fn unit_line(
     let role = tree::role(unit);
     // Tasks and setup steps keep the default color: they don't run long.
     let color = match role {
-        tree::Role::Service | tree::Role::Exec => unit.color.as_deref(),
+        tree::Role::Service | tree::Role::Exec | tree::Role::External => unit.color.as_deref(),
         _ => None,
     };
     let task = matches!(
@@ -387,8 +405,10 @@ fn unit_line(
         }
     }
     // The name takes the family color; a unit that does not run, or a
-    // hidden one, is dimmed. A throttled unit's glyph is quiet, yet it runs.
-    let quiet = (look.tone == Tone::Quiet && unit.power.is_none()) || unit.hidden;
+    // hidden one, is dimmed. A throttled unit's glyph is quiet, yet it runs,
+    // and an external port's, yet it may answer.
+    let quiet = (look.tone == Tone::Quiet && unit.power.is_none() && role != tree::Role::External)
+        || unit.hidden;
     let left = leaf(
         app,
         item,
@@ -397,6 +417,20 @@ fn unit_line(
         clean(tree::short_name(unit)),
         quiet,
     );
+    // An external port is known by where it answers: its hostname, or its
+    // port where the hostname would cut the name.
+    if role == tree::Role::External && right.is_empty() {
+        let port = unit.ports.get("default").map(|port| format!(":{port}"));
+        let host = unit
+            .public_url
+            .as_deref()
+            .and_then(|url| url.strip_prefix("https://"))
+            .map(clean)
+            .filter(|host| spans_width(&left) + text::width(host) + 2 <= width);
+        if let Some(at) = host.or(port) {
+            right.push(Span::styled(at, theme.quiet()));
+        }
+    }
     row(left, joined(right, theme.quiet()), width)
 }
 

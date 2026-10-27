@@ -1,26 +1,22 @@
-//! System OpenSSH as the pipe: one ControlMaster per box, one channel per session.
+//! System OpenSSH as the pipe: one ControlMaster per box, one channel per
+//! session, each a `ssh -S <control socket>` run through the command transport.
 
-use std::future::Future;
+use std::ffi::OsString;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use devlanes_transport::{BoxDuplex, Joined, Transport, TransportError};
-use openssh::{ChildStdin, ChildStdout, Session, Stdio};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, ReadBuf};
-use tokio::sync::{Mutex, oneshot};
+use devlanes_transport::{BoxDuplex, Prefixed, Transport, TransportError};
+use devlanes_transport_command::{CommandError, CommandOptions, CommandStream, CommandTransport};
+use openssh::{Session, Stdio};
+use tokio::sync::Mutex;
 
 use crate::askpass::{AskpassConfig, AskpassServer};
-use crate::bootstrap::{
-    self, BootstrapPlan, BootstrapPolicy, EXIT_ALREADY_INSTALLED, ManifestError, ReleaseManifest,
-    RemoteProbe,
-};
+use crate::probe::{self, INSTALL_DIR, RemoteProbe, SETUP_GUIDE};
 
 /// macOS `sun_path` holds 104 bytes including the terminator, and ssh binds the
 /// master at the control path plus `.` and 16 random characters before renaming it.
@@ -31,8 +27,8 @@ const MAX_CONTROL_PATH: usize = 104 - 1 - 17;
 /// daemon reconnects through it without new prompts.
 const CONTROL_PERSIST: &str = "ControlPersist=600";
 
-/// Bytes of remote stderr kept for error messages.
-const STDERR_TAIL: usize = 4096;
+/// Bytes of ssh's log kept for error messages.
+const LOG_TAIL: usize = 4096;
 
 /// Distinguishes askpass relays started by one process.
 static NEXT_ASKPASS: AtomicU64 = AtomicU64::new(0);
@@ -57,15 +53,11 @@ pub struct SshOptions {
     pub ssh_options: Vec<String>,
     /// Prompt relay; without it the master runs with `BatchMode=yes`.
     pub askpass: Option<AskpassConfig>,
-    /// Releases the client may install on a box that lacks devlanes.
-    pub manifest: Option<ReleaseManifest>,
-    /// HTTPS URL of the release manifest, fetched when a box lacks devlanes and
-    /// no `manifest` was given.
-    pub manifest_url: Option<String>,
-    /// Release version the fetched manifest must describe: the client's own.
-    pub release_version: String,
-    /// Whether a missing binary is reported or installed.
-    pub bootstrap: BootstrapPolicy,
+    /// The box connected before, such as one a restarted daemon restores:
+    /// failures are classified as after a first successful tunnel. Only
+    /// permanent non-auth failures then stop the link; a box that is gone
+    /// keeps being retried until the caller stops the link.
+    pub connected_before: bool,
 }
 
 impl SshOptions {
@@ -79,10 +71,7 @@ impl SshOptions {
             auth_timeout: Duration::from_secs(120),
             ssh_options: Vec::new(),
             askpass: None,
-            manifest: None,
-            manifest_url: None,
-            release_version: devlanes_version::VERSION.to_owned(),
-            bootstrap: BootstrapPolicy::Report,
+            connected_before: false,
         }
     }
 }
@@ -105,8 +94,12 @@ pub enum SshError {
         status: String,
         /// Tail of ssh's log.
         log: String,
-        /// Whether retrying cannot help, such as rejected credentials.
+        /// Whether retrying cannot help, such as rejected credentials on a
+        /// first connection.
         permanent: bool,
+        /// ssh rejected the credentials or the host key: permanent on a first
+        /// connection, and a person has to sign in again after one.
+        auth: bool,
     },
     /// The master did not finish authenticating in time.
     #[error("ssh to {0} did not authenticate in time")]
@@ -117,41 +110,64 @@ pub enum SshError {
     /// The box answered the probe with unexpected output.
     #[error("unexpected probe output from the box: {0:?}")]
     Probe(String),
-    /// devlanes is missing on the box; the plan says what installing would do.
-    #[error("{}", .0.instructions())]
-    BootstrapRequired(Box<BootstrapPlan>),
-    /// The release manifest is unusable.
+    /// The box's shell cannot run the devlanes found there by that path.
+    #[error(
+        "{shell} on {destination} cannot run devlanes from {program} because the path holds \
+         `%`, `!` or `\"`. Install it in another folder"
+    )]
+    Unquotable {
+        /// The ssh destination.
+        destination: String,
+        /// Where the probe found devlanes.
+        program: String,
+        /// The box's shell, as messages name it.
+        shell: &'static str,
+    },
+    /// devlanes is neither on the box's `PATH` nor in `~/.devlanes/bin`.
+    #[error(
+        "devlanes is not installed on {destination}. Put it on the ssh PATH or in \
+         ~/{INSTALL_DIR} as {SETUP_GUIDE} describes"
+    )]
+    NotInstalled {
+        /// The ssh destination.
+        destination: String,
+        /// Set before the first tunnel opened; afterwards the binary may only
+        /// be missing for a moment, such as during an upgrade on the box.
+        permanent: bool,
+    },
+    /// The tunnel failed: its exit status and stderr, a stopped box daemon
+    /// ([`CommandError::DaemonStopped`]) or output without a preamble line of
+    /// this protocol ([`CommandError::Preamble`]).
     #[error(transparent)]
-    Manifest(#[from] ManifestError),
-    /// Installation was refused because a binary already exists.
-    #[error("devlanes already exists on the box; bootstrap never replaces an installed binary")]
-    AlreadyInstalled,
-    /// The install script failed on the box.
-    #[error("installing devlanes on the box failed: {0}")]
-    Install(String),
+    Tunnel(Box<CommandError>),
 }
 
 impl SshError {
     /// Reports whether reconnecting without user action is pointless.
     pub fn is_permanent(&self) -> bool {
         match self {
-            Self::Master { permanent, .. } => *permanent,
-            Self::ControlPathTooLong(_)
-            | Self::BootstrapRequired(_)
-            | Self::Manifest(_)
-            | Self::AlreadyInstalled
-            | Self::Install(_) => true,
+            Self::Master { permanent, .. } | Self::NotInstalled { permanent, .. } => *permanent,
+            Self::Tunnel(error) => error.is_permanent(),
+            Self::ControlPathTooLong(_) | Self::Unquotable { .. } => true,
             Self::Io(_) | Self::AuthTimeout(_) | Self::Ssh(_) | Self::Probe(_) => false,
         }
+    }
+
+    /// Reports whether ssh rejected the credentials or the host key.
+    pub fn is_auth_failure(&self) -> bool {
+        matches!(self, Self::Master { auth: true, .. })
     }
 }
 
 impl From<SshError> for TransportError {
+    /// Rejected credentials stop a first connection and wait for a sign-in
+    /// after one.
     fn from(error: SshError) -> Self {
-        if error.is_permanent() {
-            TransportError::permanent(error)
-        } else {
-            TransportError::transient(error)
+        match (error.is_permanent(), error.is_auth_failure()) {
+            (true, true) => TransportError::auth_failed(error),
+            (true, false) => TransportError::permanent(error),
+            (false, true) => TransportError::needs_auth(error),
+            (false, false) => TransportError::transient(error),
         }
     }
 }
@@ -193,8 +209,10 @@ pub struct SshTransport {
     destination: String,
     options: SshOptions,
     master: Mutex<Option<Master>>,
-    /// Set after the first tunnel opened: from then on a failing DNS lookup is a
-    /// network blip (sleep, Wi-Fi change), not a misspelt host.
+    /// Set after the first tunnel opened, or from the start with
+    /// [`SshOptions::connected_before`]: from then on a failing DNS lookup is a
+    /// network blip (sleep, Wi-Fi change), not a misspelt host, and rejected
+    /// credentials need a person to sign in again.
     connected: AtomicBool,
 }
 
@@ -203,9 +221,9 @@ impl SshTransport {
     pub fn new(destination: impl Into<String>, options: SshOptions) -> Self {
         Self {
             destination: destination.into(),
-            options,
+            connected: AtomicBool::new(options.connected_before),
             master: Mutex::new(None),
-            connected: AtomicBool::new(false),
+            options,
         }
     }
 
@@ -221,96 +239,56 @@ impl SshTransport {
         self.ensure_probe(master).await.cloned()
     }
 
-    /// Installs devlanes on the box as described by `plan`.
-    ///
-    /// Refuses when a binary exists already; restarting a box daemon is left to the user.
-    pub async fn bootstrap(&self, plan: &BootstrapPlan) -> Result<(), SshError> {
-        let artifact = plan
-            .artifact
-            .as_ref()
-            .ok_or_else(|| SshError::BootstrapRequired(Box::new(plan.clone())))?;
-        artifact.validate()?;
-        let script = bootstrap::install_script(artifact)?;
-        let mut master = self.master.lock().await;
-        let master = self.ensure_master(&mut master).await?;
-        let output = master
-            .session
-            .command("sh")
-            .arg("-c")
-            .arg(&script)
-            .stdin(Stdio::null())
-            .output()
-            .await?;
-        // A new probe must find the installed binary.
-        master.probe = None;
-        match output.status.code() {
-            Some(0) => Ok(()),
-            Some(EXIT_ALREADY_INSTALLED) => Err(SshError::AlreadyInstalled),
-            _ => Err(SshError::Install(tail(&output.stderr))),
-        }
-    }
-
     /// Stops the master, ending every session over it.
     pub async fn close(&self) {
         self.master.lock().await.take();
     }
 
-    /// Opens the tunnel, starting or reusing the master and bootstrapping if allowed.
-    async fn open(&self) -> Result<SshStream, SshError> {
-        let stream = self.open_tunnel().await?;
+    /// Opens the tunnel, starting or reusing the master, and reads up to its
+    /// preamble. The master is free for other connects meanwhile.
+    async fn open(&self) -> Result<Prefixed<CommandStream>, SshError> {
+        let tunnel = self.tunnel().await?;
+        let opened = tunnel.open().await.map_err(|error| match error {
+            // ssh itself did not start, as when the master's launch fails.
+            CommandError::Spawn { source, .. } => SshError::Io(source),
+            other => SshError::Tunnel(Box::new(other)),
+        })?;
         self.connected.store(true, Ordering::Relaxed);
-        Ok(stream)
+        Ok(opened.stream)
     }
 
-    /// The release manifest: the configured one, else the one at `manifest_url`.
-    async fn manifest(&self) -> Result<Option<ReleaseManifest>, ManifestError> {
-        if let Some(manifest) = &self.options.manifest {
-            return Ok(Some(manifest.clone()));
-        }
-        match &self.options.manifest_url {
-            Some(url) => bootstrap::fetch_manifest(url, &self.options.release_version)
-                .await
-                .map(Some),
-            None => Ok(None),
-        }
-    }
-
-    /// [`SshTransport::open`] without the bookkeeping.
-    async fn open_tunnel(&self) -> Result<SshStream, SshError> {
+    /// The tunnel command over a live master, starting one and probing the
+    /// box first when needed.
+    async fn tunnel(&self) -> Result<CommandTransport, SshError> {
         let mut guard = self.master.lock().await;
         let master = self.ensure_master(&mut guard).await?;
-        let probe = self.ensure_probe(master).await?.clone();
-        if let Some(program) = probe.program {
-            return spawn_tunnel(master.session.clone(), &program).await;
-        }
-        let (manifest, manifest_error) = match self.manifest().await {
-            Ok(manifest) => (manifest, None),
-            Err(error) => (None, Some(error.0)),
-        };
-        let plan = BootstrapPlan {
+        let probe = self.ensure_probe(master).await?;
+        let program = probe.program.clone().ok_or_else(|| self.not_installed())?;
+        let command = probe
+            .shell
+            .tunnel_command(&program)
+            .ok_or_else(|| SshError::Unquotable {
+                destination: self.destination.clone(),
+                shell: probe.shell.name(),
+                program,
+            })?;
+        let mut options = CommandOptions::new(&self.destination);
+        options.what = crate::TUNNEL.to_owned();
+        options.preamble_wait = crate::PREAMBLE_WAIT;
+        options.connected_before = self.connected.load(Ordering::Relaxed);
+        Ok(CommandTransport::new(
+            tunnel_argv(&self.options.ssh_program, &master.ctl, &command),
+            options,
+        ))
+    }
+
+    /// [`SshError::NotInstalled`] for this box: permanent until a tunnel once
+    /// opened, like a host name that does not resolve.
+    fn not_installed(&self) -> SshError {
+        SshError::NotInstalled {
             destination: self.destination.clone(),
-            artifact: manifest
-                .as_ref()
-                .and_then(|m| m.select(&probe.platform))
-                .cloned(),
-            platform: probe.platform,
-            manifest_error,
-        };
-        if self.options.bootstrap == BootstrapPolicy::Report || plan.artifact.is_none() {
-            return Err(SshError::BootstrapRequired(Box::new(plan)));
+            permanent: !self.connected.load(Ordering::Relaxed),
         }
-        // `bootstrap` takes the master lock itself.
-        drop(guard);
-        self.bootstrap(&plan).await?;
-        let mut guard = self.master.lock().await;
-        let master = self.ensure_master(&mut guard).await?;
-        let program = self
-            .ensure_probe(master)
-            .await?
-            .program
-            .clone()
-            .ok_or_else(|| SshError::Install("binary not found after install".into()))?;
-        spawn_tunnel(master.session.clone(), &program).await
     }
 
     /// Returns a live master, replacing a dead one.
@@ -334,21 +312,42 @@ impl SshTransport {
             .ok_or_else(|| SshError::Io(io::Error::other("master slot empty after launch")))
     }
 
-    /// Runs the probe once per master.
+    /// Runs the probe once per master, so the box's shell is learnt once too:
+    /// the `sh` probe, then the Windows probe when that calls for it (see
+    /// [`probe::needs_windows_probe`]). Without an answer from the Windows
+    /// probe, as on a Unix box without PowerShell, the `sh` probe's stands,
+    /// also when running the Windows probe failed; an error then carries the
+    /// Windows probe's stderr too.
     async fn ensure_probe<'a>(&self, master: &'a mut Master) -> Result<&'a RemoteProbe, SshError> {
         if master.probe.is_none() {
             let output = master
                 .session
                 .command("sh")
                 .arg("-c")
-                .arg(bootstrap::probe_script(&self.options.remote_program))
+                .arg(probe::probe_script(&self.options.remote_program))
                 .stdin(Stdio::null())
                 .output()
                 .await?;
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let probe = bootstrap::parse_probe(&stdout)
-                .ok_or_else(|| SshError::Probe(stdout.into_owned()))?;
-            master.probe = Some(probe);
+            let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let mut found = probe::parse_probe(&stdout);
+            let mut windows_stderr = None;
+            if probe::needs_windows_probe(found.as_ref()) {
+                let output = master
+                    .session
+                    .raw_command(probe::windows_probe_command(&self.options.remote_program))
+                    .stdin(Stdio::null())
+                    .output()
+                    .await;
+                if let Ok(output) = output {
+                    match probe::parse_probe(&String::from_utf8_lossy(&output.stdout)) {
+                        Some(windows) => found = Some(windows),
+                        None => windows_stderr = Some(output.stderr),
+                    }
+                }
+            }
+            master.probe = Some(found.ok_or_else(|| {
+                SshError::Probe(probe::probe_failure(&stdout, windows_stderr.as_deref()))
+            })?);
         }
         master
             .probe
@@ -511,20 +510,22 @@ fn private_dir(dir: &Path) -> io::Result<()> {
 ///
 /// A name that does not resolve is permanent only before the first successful
 /// connection (a typo); afterwards it is a network change that will pass.
+/// Rejected credentials and host key failures are permanent before the first
+/// connection and need a person to sign in again after it.
 fn master_error(destination: &str, status: ExitStatus, log: &str, first: bool) -> SshError {
     // These need new credentials or known_hosts changes, not time.
-    const PERMANENT: [&str; 3] = [
+    const AUTH: [&str; 3] = [
         "Permission denied",
         "Host key verification failed",
         "REMOTE HOST IDENTIFICATION HAS CHANGED",
     ];
     let log = log.trim();
-    let permanent = PERMANENT.iter().any(|needle| log.contains(needle))
-        || (first && log.contains("Could not resolve hostname"));
+    let auth = AUTH.iter().any(|needle| log.contains(needle));
     SshError::Master {
         destination: destination.to_owned(),
         status: status.to_string(),
-        permanent,
+        permanent: first && (auth || log.contains("Could not resolve hostname")),
+        auth,
         log: tail(log.as_bytes()),
     }
 }
@@ -575,153 +576,41 @@ async fn sweep_legacy_masters(dir: &Path, ssh_program: &Path) {
     }
 }
 
-/// Returns the last [`STDERR_TAIL`] bytes as lossy UTF-8.
+/// Returns the last [`LOG_TAIL`] bytes as lossy UTF-8.
 fn tail(bytes: &[u8]) -> String {
-    let start = bytes.len().saturating_sub(STDERR_TAIL);
+    let start = bytes.len().saturating_sub(LOG_TAIL);
     String::from_utf8_lossy(&bytes[start..]).trim().to_owned()
 }
 
-/// How the remote tunnel process ended.
-struct ExitInfo {
-    status: Result<ExitStatus, String>,
-    stderr: String,
-}
-
-/// Runs `<program> tunnel --stdio` and joins its stdio into a duplex.
-async fn spawn_tunnel(session: Arc<Session>, program: &str) -> Result<SshStream, SshError> {
-    let mut child = session
-        .arc_command(program)
-        .args(["tunnel", "--stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .await?;
-    let missing = || SshError::Io(io::Error::other("tunnel stdio was not piped"));
-    let stdin = child.stdin().take().ok_or_else(missing)?;
-    let stdout = child.stdout().take().ok_or_else(missing)?;
-    let mut stderr = child.stderr().take().ok_or_else(missing)?;
-    let (exit_tx, exit_rx) = oneshot::channel();
-    let (stop_tx, stop_rx) = oneshot::channel::<()>();
-    tokio::spawn(async move {
-        let collect = async move {
-            let mut buf = Vec::new();
-            let _ = (&mut stderr).take(64 * 1024).read_to_end(&mut buf).await;
-            buf
-        };
-        let waiting = async move {
-            let (status, stderr) = tokio::join!(child.wait(), collect);
-            ExitInfo {
-                status: status.map_err(|error| error.to_string()),
-                stderr: tail(&stderr),
-            }
-        };
-        // Dropping the stream drops `stop_tx`; the child has kill_on_drop, so
-        // abandoning `waiting` disconnects the local ssh client.
-        tokio::select! {
-            info = waiting => {
-                let _ = exit_tx.send(info);
-            }
-            _ = stop_rx => {}
-        }
-    });
-    Ok(SshStream {
-        io: Joined::new(stdout, stdin),
-        exit: Some(exit_rx),
-        finished: None,
-        _stop: stop_tx,
-    })
-}
-
-/// The tunnel process's stdio as one duplex.
+/// `ssh` running `command`, the box shell's `<program> tunnel --stdio`
+/// ([`probe::BoxShell::tunnel_command`]), over the master at `ctl`.
 ///
-/// At EOF it waits for the remote exit status, so a crashed or missing
-/// `tunnel` command surfaces as an error carrying its stderr instead of a
-/// bare disconnect.
-pub struct SshStream {
-    io: Joined<ChildStdout, ChildStdin>,
-    exit: Option<oneshot::Receiver<ExitInfo>>,
-    finished: Option<Result<(), String>>,
-    _stop: oneshot::Sender<()>,
-}
-
-impl SshStream {
-    /// Resolves EOF into success or the remote failure.
-    fn poll_eof(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if self.finished.is_none() {
-            let outcome = match self.exit.as_mut() {
-                Some(exit) => match ready!(Pin::new(exit).poll(cx)) {
-                    Ok(info) => describe_exit(info),
-                    Err(_) => Ok(()),
-                },
-                None => Ok(()),
-            };
-            self.exit = None;
-            self.finished = Some(outcome);
-        }
-        match &self.finished {
-            Some(Err(message)) => Poll::Ready(Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                message.clone(),
-            ))),
-            _ => Poll::Ready(Ok(())),
-        }
-    }
-}
-
-/// Turns a tunnel exit into `Ok` for a clean exit or a message otherwise.
-fn describe_exit(info: ExitInfo) -> Result<(), String> {
-    let detail = if info.stderr.is_empty() {
-        String::new()
-    } else {
-        format!(": {}", info.stderr)
-    };
-    match info.status {
-        Ok(status) if status.success() => Ok(()),
-        Ok(status) => Err(format!(
-            "remote `devlanes tunnel --stdio` exited with {status}{detail}"
-        )),
-        Err(error) => Err(format!(
-            "remote `devlanes tunnel --stdio` failed: {error}{detail}"
-        )),
-    }
-}
-
-impl AsyncRead for SshStream {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let this = self.get_mut();
-        if this.finished.is_some() {
-            return this.poll_eof(cx);
-        }
-        let before = buf.filled().len();
-        ready!(Pin::new(&mut this.io).poll_read(cx, buf))?;
-        if buf.filled().len() == before && buf.remaining() > 0 {
-            return this.poll_eof(cx);
-        }
-        Poll::Ready(Ok(()))
-    }
-}
-
-impl AsyncWrite for SshStream {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.get_mut().io).poll_write(cx, buf)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_flush(cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().io).poll_shutdown(cx)
-    }
+/// The master holds the connection and its authentication, so this client
+/// reads no ssh config (`-F none`): a `Host *` or `Match all` block would
+/// otherwise still apply to it, and its `RemoteCommand`, `RequestTTY` or
+/// `ControlMaster` would break the tunnel. Batch mode, no terminal, and the
+/// destination `none` on the discard port, so a dead master makes this fail
+/// at once instead of opening a connection of its own. ssh hands the box's
+/// shell the words after the destination as one command, so `command` goes
+/// as one word, already quoted for that shell.
+fn tunnel_argv(ssh_program: &Path, ctl: &Path, command: &str) -> Vec<OsString> {
+    let mut argv: Vec<OsString> = vec![ssh_program.into(), "-S".into(), ctl.into()];
+    argv.extend(
+        [
+            "-F",
+            "none",
+            "-o",
+            "BatchMode=yes",
+            "-T",
+            "-p",
+            "9",
+            "--",
+            "none",
+            command,
+        ]
+        .map(OsString::from),
+    );
+    argv
 }
 
 #[cfg(test)]
@@ -772,9 +661,47 @@ mod tests {
             };
             assert!(error.is_permanent());
             assert!(error.to_string().contains("Permission denied"));
+            assert!(
+                error.into_needs_auth().is_needs_auth(),
+                "a caller whose prompt went unanswered waits for a sign-in"
+            );
             let env = std::fs::read_to_string(dir.path().join("env"))?;
             assert!(env.contains("require=force"), "{env}");
             assert!(env.contains(".askpass"), "{env}");
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Rejected credentials or a changed host key on a box that connected
+    /// before, in this process or as `connected_before` says, wait for a
+    /// person to sign in instead of stopping the link.
+    #[tokio::test]
+    async fn auth_failures_after_a_connection_need_sign_in()
+    -> Result<(), Box<dyn std::error::Error>> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            for log in [
+                "user@box: Permission denied (publickey).",
+                "Host key verification failed.",
+            ] {
+                let dir = tempfile::tempdir()?;
+                let mut options = SshOptions::new(dir.path());
+                options.ssh_program = fake_ssh(dir.path(), log)?;
+                let transport = SshTransport::new("box", options.clone());
+                transport.connected.store(true, Ordering::Relaxed);
+                let Err(error) = transport.connect().await else {
+                    panic!("fake ssh unexpectedly connected");
+                };
+                assert!(error.is_needs_auth(), "{log}: {error}");
+                assert!(!error.is_permanent(), "{log}: {error}");
+
+                options.connected_before = true;
+                let restored = SshTransport::new("box", options);
+                let Err(error) = restored.connect().await else {
+                    panic!("fake ssh unexpectedly connected");
+                };
+                assert!(error.is_needs_auth(), "{log}: {error}");
+            }
             Ok(())
         })
         .await?
@@ -826,6 +753,76 @@ mod tests {
             Ok(())
         })
         .await?
+    }
+
+    /// A box without devlanes stops the link only before the first tunnel;
+    /// later the binary may be missing for a moment during an upgrade.
+    #[test]
+    fn a_missing_binary_is_permanent_only_before_the_first_connection() {
+        let transport = SshTransport::new("box", SshOptions::new("/tmp/h"));
+        assert!(transport.not_installed().is_permanent());
+        transport.connected.store(true, Ordering::Relaxed);
+        let later = transport.not_installed();
+        assert!(!later.is_permanent());
+        assert!(!TransportError::from(later).is_permanent());
+    }
+
+    /// Tunnels run over the master only, with the command quoted for the
+    /// box's shell as one word: the one a Unix box always ran, or a Windows
+    /// box's cmd.exe or PowerShell form.
+    #[test]
+    fn tunnels_go_over_the_master() {
+        let argv = |command: &str| -> Vec<String> {
+            tunnel_argv(
+                Path::new("ssh"),
+                Path::new("/tmp/h/run/ssh/m-0123456789abcdef"),
+                command,
+            )
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect()
+        };
+        let unix = probe::BoxShell::Sh
+            .tunnel_command("/home/acme/my tools/devlanes")
+            .expect("quotable");
+        assert_eq!(
+            argv(&unix),
+            [
+                "ssh",
+                "-S",
+                "/tmp/h/run/ssh/m-0123456789abcdef",
+                "-F",
+                "none",
+                "-o",
+                "BatchMode=yes",
+                "-T",
+                "-p",
+                "9",
+                "--",
+                "none",
+                "'/home/acme/my tools/devlanes' tunnel --stdio",
+            ]
+        );
+        let windows = probe::BoxShell::Cmd
+            .tunnel_command(r"C:\Users\acme\.devlanes\bin\devlanes.exe")
+            .expect("quotable");
+        assert_eq!(
+            argv(&windows).last().map(String::as_str),
+            Some(r#""C:\Users\acme\.devlanes\bin\devlanes.exe" tunnel --stdio"#)
+        );
+    }
+
+    /// A program cmd.exe would expand stops the link with what to change,
+    /// instead of a tunnel that runs something else.
+    #[test]
+    fn an_unquotable_program_is_permanent() {
+        let error = SshError::Unquotable {
+            destination: "acme".to_owned(),
+            program: r"C:\100%\devlanes.exe".to_owned(),
+            shell: probe::BoxShell::Cmd.name(),
+        };
+        assert!(error.is_permanent());
+        assert!(error.to_string().contains("cmd.exe"), "{error}");
     }
 
     #[test]

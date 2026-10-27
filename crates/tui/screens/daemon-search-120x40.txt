@@ -1,11 +1,11 @@
- devlanes  1 acme   2 billing   3 shop            starting feat/checkout: 4 of 8 ready  M monitor   D daemon · 2 issues
+ devlanes  1 acme   2 billing   3 shop          starting feat/checkout: 4 of 8 ready  Monitor  Daemon · 2 issues  Boxes
 ┌ daemon ────────────────────────────────────┐┌ checks ─────────────────────────────────────── 1 fail · 1 warn · i all ┐
 │version   1.0.0 · pid 4242                  ││fail tls     no CA: no CA has been created yet                          │
 │uptime    7h 38m                            ││             fix: devlanes certs trust                                  │
 │usage     cpu 1.1% · mem 47M                ││warn proxy   https on fallback port 8443: port 443 needs root           │
 │socket    /Users/acme/.devlanes/run/daemon.…││             fix: free the standard port or set proxy ports in          │
 │managed   41 processes · 2 projects         ││             ~/.devlanes/config.yaml                                    │
-│clients   3 event subscribers               ││ok           daemon · sandbox · docker · proxy · hosts                  │
+│subscribers 3                               ││ok           daemon · sandbox · docker · proxy · hosts                  │
 │state     schema 7 · /Users/acme/.devlanes/…││                                                                        │
 └────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘
 ┌ daemon.log ──────────────────────────────── following · all levels · repeats folded · /wrk-export 1 of 40 · 40 lines ┐
@@ -40,14 +40,14 @@
  j k scroll   F pause   w level   / filter   T targets   c copy   i checks   d unfold             ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 88 bold, 89-96 dim, 100 bold, 101-107 bold underlined, 108-118 red
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95-100 bold underlined, 101-111 red, 114 bold, 115-118 dim
 1: 0 darkgray, 1-8 bold, 9-46 darkgray, 47-54 bold, 55-93 darkgray, 95-100 red, 101-103 dim, 104-109 yellow, 110-118 dim, 119 darkgray
 2: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 red, 119 darkgray
 3: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 red, 60-84 dim, 119 darkgray
 4: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 yellow, 119 darkgray
 5: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 yellow, 60-108 dim, 119 darkgray
 6: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 yellow, 60-82 dim, 119 darkgray
-7: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 green, 119 darkgray
+7: 0 darkgray, 1-12 dim, 45-46 darkgray, 47-59 green, 119 darkgray
 8: 0 darkgray, 1-10 dim, 45-46 darkgray, 119 darkgray
 9: 0-119 darkgray
 10: 0-44 bold, 45-118 bold dim, 119 bold

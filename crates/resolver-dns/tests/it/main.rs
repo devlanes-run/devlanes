@@ -178,6 +178,50 @@ async fn shutdown_stops_serving_and_frees_the_port() {
     assert!(rebound.is_ok(), "port is free after shutdown: {rebound:?}");
 }
 
+/// Windows and macOS hand out ephemeral ports of each protocol one after
+/// another. A run of UDP ports that cannot be bound right where the TCP
+/// sequence goes next, as a block Hyper-V reserves for UDP (or, here, ports
+/// this test holds), must not make binding port 0 fail: it took more tries
+/// than the bind makes.
+#[tokio::test]
+async fn an_ephemeral_bind_gets_past_a_run_of_unusable_udp_ports() {
+    let probe = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("probe");
+    let next = probe.local_addr().expect("probe addr").port();
+    drop(probe);
+    // More ports than the bind tries in a row; a port something else holds is skipped.
+    let held: Vec<std::net::UdpSocket> = (1..=64u16)
+        .filter_map(|offset| next.checked_add(offset))
+        .filter_map(|port| std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port)).ok())
+        .collect();
+    let listen = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+    let server = DnsServer::bind(listen, Zone::new("test").expect("zone"))
+        .await
+        .expect("bound past the unusable ports");
+    let port = server.local_addr().expect("addr").port();
+    assert!(
+        held.iter()
+            .all(|socket| socket.local_addr().map(|addr| addr.port()).ok() != Some(port)),
+        "{port}"
+    );
+}
+
+/// A bind failure names the protocol and the address that failed.
+#[tokio::test]
+async fn a_bind_failure_names_the_protocol() {
+    let holder = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).expect("holder");
+    let addr = holder.local_addr().expect("addr");
+    let error = DnsServer::bind(addr, Zone::new("test").expect("zone"))
+        .await
+        .expect_err("held");
+    let message = error.to_string();
+    assert!(
+        message.starts_with(&format!(
+            "cannot bind the DNS server's UDP socket on {addr}"
+        )),
+        "{message}"
+    );
+}
+
 /// On Windows the server listens where NRPT rules point, and a held address
 /// names how to find its holder.
 #[cfg(windows)]

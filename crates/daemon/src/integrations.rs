@@ -10,7 +10,7 @@ use devlanes_core::{
     ExitOutcome, LaunchSpec, OutputChunk, ProcessIdentity, StopPolicy, TerminalSize, Unit,
     contrib::{Contributor, ScriptRunner},
 };
-use futures_util::stream::BoxStream;
+use futures_util::{future::BoxFuture, stream::BoxStream};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
@@ -485,6 +485,13 @@ pub enum RouteStatus {
     },
     /// A mirrored route whose box connection is down and retrying.
     Reconnecting,
+    /// A mirrored route whose box connection waits for a person to sign in
+    /// again with `devlanes remote connect`.
+    SignInNeeded,
+    /// A mirrored route whose box serves only paired clients and took no
+    /// token or code from this machine: a person pairs it again with a code
+    /// from `devlanes daemon pair` on the box.
+    PairingNeeded,
 }
 
 /// One hostname route, independent of the proxy crate's types.
@@ -504,6 +511,14 @@ pub struct RouteEntry {
     pub certificate_names: Vec<String>,
     /// The route mirrors a lane on a remote box.
     pub remote: bool,
+    /// For a box route, the port the box's proxy serves HTTPS on, which the URLs
+    /// the box generated carry. A port opened with [`RouteSink::open_box_port`]
+    /// serves the routes naming it.
+    pub box_https_port: Option<u16>,
+    /// The one loopback address to dial, for an `infra.external` entry that
+    /// names it; otherwise the proxy tries `127.0.0.1`, then `::1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<std::net::IpAddr>,
 }
 
 /// Receives complete routing snapshots.
@@ -526,6 +541,22 @@ pub trait RouteSink: Send + Sync {
             .get("port")
             .and_then(Value::as_u64)
             .and_then(|port| u16::try_from(port).ok())
+    }
+    /// Serves HTTPS on `127.0.0.1` and `::1` at `port` as well, with the local CA,
+    /// for the routes whose `box_https_port` is `port` only; other hosts there
+    /// are unknown. Used when a box's proxy port differs from [`Self::https_port`].
+    fn open_box_port(&self, port: u16) -> std::io::Result<()> {
+        let _ = port;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "this proxy serves no extra ports",
+        ))
+    }
+    /// Stops serving a port [`Self::open_box_port`] opened. The future resolves
+    /// once its listeners are closed, so the port can be opened again right after.
+    fn close_box_port(&self, port: u16) -> BoxFuture<'static, ()> {
+        let _ = port;
+        Box::pin(async {})
     }
 }
 
@@ -826,28 +857,30 @@ pub trait RemotePrompter: Send + Sync {
     async fn ask(&self, prompt: RemotePrompt) -> Option<String>;
 }
 
-/// What `remote connect` asked for beyond the host.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ConnectOptions {
-    /// Install the client's own release on a box that lacks devlanes
-    /// (`--install`); without it a missing binary is only reported.
-    pub install: bool,
+/// A transport to one box, from [`RemoteConnector::transport`].
+pub struct RemoteTransport {
+    /// Opens one pipe to the box per connect.
+    pub transport: Arc<dyn devlanes_transport::Transport>,
+    /// Transport name recorded in `remote_hosts` and shown by `remote ls`,
+    /// such as `ssh` or `command`.
+    pub kind: &'static str,
 }
 
-/// Builds transports to boxes; the composition root wires SSH, tests an in-memory pipe.
+/// Builds transports to boxes; the composition root wires SSH and commands,
+/// tests an in-memory pipe.
+#[async_trait]
 pub trait RemoteConnector: Send + Sync {
     /// A transport to `host`; prompts during authentication go to `prompts`.
-    fn transport(
+    /// `connected_before` is set for a box an earlier daemon connected, which
+    /// this daemon restores: its failures count as after a first connection,
+    /// so rejected credentials wait for a sign-in instead of failing for good,
+    /// and a box that no longer resolves is retried until `remote disconnect`.
+    async fn transport(
         &self,
         host: &str,
         prompts: Arc<dyn RemotePrompter>,
-        options: ConnectOptions,
-    ) -> Result<Arc<dyn devlanes_transport::Transport>, devlanes_proto::RpcError>;
-
-    /// Transport name recorded in `remote_hosts`.
-    fn kind(&self) -> &'static str {
-        "ssh"
-    }
+        connected_before: bool,
+    ) -> Result<RemoteTransport, devlanes_proto::RpcError>;
 
     /// Loopback addresses that mirrored ports bind; each port is bound on all of them.
     fn mirror_addresses(&self) -> Vec<std::net::IpAddr> {
@@ -866,14 +899,15 @@ pub trait RemoteConnector: Send + Sync {
 /// Connector used when no transport is registered: `connect` is unsupported.
 pub struct NoRemote;
 
+#[async_trait]
 impl RemoteConnector for NoRemote {
     /// Refuses with `not_supported_yet`.
-    fn transport(
+    async fn transport(
         &self,
         _: &str,
         _: Arc<dyn RemotePrompter>,
-        _: ConnectOptions,
-    ) -> Result<Arc<dyn devlanes_transport::Transport>, devlanes_proto::RpcError> {
+        _: bool,
+    ) -> Result<RemoteTransport, devlanes_proto::RpcError> {
         Err(devlanes_proto::RpcError::new(
             "not_supported_yet",
             serde_json::json!({"feature": "remote transport"}),

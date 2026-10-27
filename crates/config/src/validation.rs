@@ -4,7 +4,7 @@ use crate::{
 };
 use indexmap::IndexMap;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 /// A problem that does not stop loading, such as an unused template or an ignored setting.
 #[derive(Debug, Clone, Serialize)]
@@ -525,17 +525,50 @@ fn validate_inner<E: Extensions>(
         .collect();
     // Compose service names are only known once the integration resolves the Compose model.
     let can_validate_infra = config.infra.compose.is_none() || compose.is_some();
+    // Each key with the path an error points at, and what it means for an
+    // `infra.external` entry named there.
     let infra_names = config
         .infra
         .hosts
         .keys()
-        .chain(config.infra.hidden.iter().flatten())
-        .chain(config.infra.per_lane.iter().flatten())
-        .chain(config.infra.exclude.iter().flatten());
-    for name in infra_names {
+        .map(|name| {
+            (
+                format!("infra.hosts.{name}"),
+                name,
+                "Set its hostnames in its own `hosts`",
+            )
+        })
+        .chain(config.infra.hidden.iter().flatten().map(|name| {
+            (
+                "infra.hidden".to_owned(),
+                name,
+                "Set `hidden: true` on it instead",
+            )
+        }))
+        .chain(config.infra.per_lane.iter().flatten().map(|name| {
+            (
+                "infra.per_lane".to_owned(),
+                name,
+                "per_lane only takes Compose services",
+            )
+        }))
+        .chain(config.infra.exclude.iter().flatten().map(|name| {
+            (
+                "infra.exclude".to_owned(),
+                name,
+                "exclude only takes Compose services",
+            )
+        }));
+    for (path, name, hint) in infra_names {
+        if config.infra.external.contains_key(name) && !known.contains(name) {
+            return Err(fail(
+                &path,
+                format!("`{name}` is an infra.external entry. {hint}"),
+            ));
+        }
         if can_validate_infra && !known.contains(name) {
             return Err(fail(
-                "infra",
+                &path,
                 format!("unknown container or Compose service `{name}`"),
             ));
         }
@@ -562,6 +595,7 @@ fn validate_inner<E: Extensions>(
             readiness(&format!("infra.containers.{name}.ready"), ready)?;
         }
     }
+    external(config, can_validate_infra.then_some(&known))?;
     for (phase, entries) in [
         ("setup", &config.infra.setup),
         ("teardown", &config.infra.teardown),
@@ -617,6 +651,94 @@ fn validate_inner<E: Extensions>(
     crate::expression::validate_constants(config)?;
     validate_port_capacity(config, preset_ports)?;
     Ok(report)
+}
+
+/// Checks `infra.external`: a loopback address per entry, a port no other entry and no
+/// literal service `PORT` uses, valid hostnames whose expressions use `lane`, `project`,
+/// `infra` and `env` only (what a lane evaluates them with; `infra.<name>` must name a
+/// container, which the reference check does for every expression), and a name no
+/// service, task, container or setup or teardown entry of the lane has.
+/// `containers` lists the container and Compose service names when all of them are known.
+fn external<E: Extensions>(
+    config: &ProjectConfig<E>,
+    containers: Option<&HashSet<String>>,
+) -> Result<(), ConfigError> {
+    let mut ports: BTreeMap<u16, &str> = BTreeMap::new();
+    for (name, entry) in &config.infra.external {
+        let path = format!("infra.external.{name}");
+        // Setup and teardown entries are the units `setup.<entry>` and `teardown.<entry>`.
+        let step = |prefix: &str, entries: &IndexMap<String, InfraCommand>| {
+            name.strip_prefix(prefix)
+                .is_some_and(|entry| entries.contains_key(entry))
+        };
+        let other = if config.services.contains_key(name) {
+            Some("a service")
+        } else if config.tasks.contains_key(name) {
+            Some("a task")
+        } else if containers.is_some_and(|known| known.contains(name)) {
+            Some("a container")
+        } else if step("setup.", &config.infra.setup) {
+            Some("an infra.setup entry's unit")
+        } else if step("teardown.", &config.infra.teardown) {
+            Some("an infra.teardown entry's unit")
+        } else {
+            None
+        };
+        if let Some(other) = other {
+            return Err(fail(
+                &path,
+                format!("`{name}` is also {other}. Give the entry another name"),
+            ));
+        }
+        let port = entry
+            .port()
+            .map_err(|why| fail(&format!("{path}.address"), why))?;
+        if let Some(first) = ports.insert(port, name) {
+            return Err(fail(
+                &format!("{path}.address"),
+                format!("port {port} is already infra.external.{first}'s port"),
+            ));
+        }
+        let hosts_path = format!("{path}.hosts");
+        for host in entry.hosts.iter().flat_map(|hosts| hosts.iter()) {
+            let checked = match host.host() {
+                Templated::Literal(host) => crate::normalize_host(host).map(drop),
+                Templated::Expression(template) => crate::hostname::check_host_template(template),
+            };
+            checked.map_err(|message| fail(&hosts_path, message))?;
+            let Templated::Expression(text) = host.host() else {
+                continue;
+            };
+            for reference in crate::references(text).map_err(|e| fail(&hosts_path, e.message))? {
+                let root = reference.split('.').next().unwrap_or_default();
+                if !matches!(root, "lane" | "project" | "infra" | "env") {
+                    return Err(fail(
+                        &hosts_path,
+                        format!(
+                            "`{reference}` is not defined for an external entry. Use `lane`, `project`, `infra` or `env`"
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    for (name, service) in &config.services {
+        let literal = match service.env.get("PORT") {
+            Some(Templated::Literal(crate::Scalar::Integer(port))) => u16::try_from(*port).ok(),
+            Some(Templated::Literal(crate::Scalar::String(port))) => port.trim().parse().ok(),
+            _ => None,
+        };
+        if let Some(external) = literal.and_then(|port| ports.get(&port)) {
+            return Err(fail(
+                &format!("services.{name}.env.PORT"),
+                format!(
+                    "port {} is already infra.external.{external}'s port",
+                    literal.unwrap_or_default()
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Rejects unit names that would share one log folder on Windows, which

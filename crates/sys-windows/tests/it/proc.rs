@@ -42,7 +42,7 @@ fn boot_id_is_stable() -> io::Result<()> {
 }
 
 /// Listeners on both families are reported with this process's PID and
-/// their port; other PIDs get none of them.
+/// their port; other PIDs get none of them, and the whole table lists them.
 #[test]
 fn listeners_of_this_process() -> io::Result<()> {
     let v4 = TcpListener::bind("127.0.0.1:0")?;
@@ -54,6 +54,11 @@ fn listeners_of_this_process() -> io::Result<()> {
         assert!(found.contains(&(me, addr)), "{addr} in {found:?}");
     }
     assert!(proc::listening_tcp(&[])?.is_empty());
+    let all = proc::tcp_listeners()?;
+    for listener in [&v4, &v6] {
+        let addr = listener.local_addr()?;
+        assert!(all.contains(&(me, addr)), "{addr} in every listener");
+    }
     Ok(())
 }
 

@@ -151,7 +151,16 @@ fn check_layout(app: &mut App) -> Result<Buffer, Box<dyn std::error::Error>> {
         "notice is clipped: {}",
         row(&with_notice, 0)
     );
-    assert!(row(&with_notice, 0).ends_with("M monitor   D daemon "));
+    let buttons = if width < 100 {
+        "M  D  B "
+    } else {
+        "Monitor  Daemon  Boxes "
+    };
+    assert!(
+        row(&with_notice, 0).ends_with(buttons),
+        "{}",
+        row(&with_notice, 0)
+    );
     let layout = app.areas_sized(width, height).ok_or("too small")?;
     assert_boxes(&with_notice, width, height, "notice");
     let pane_text: Vec<String> = (layout.pane_inner.y..layout.pane_inner.bottom())
@@ -745,7 +754,7 @@ async fn drive_shows_a_failed_start_in_the_header_and_on_the_row() -> TestResult
     let backend = crate::daemon::run_keys(
         Arc::clone(&api),
         steps,
-        &["✕ start acme@1:portal fai"],
+        &["✕ start acme@1:portal"],
         |_| true,
     )
     .await?;
@@ -757,11 +766,13 @@ async fn drive_shows_a_failed_start_in_the_header_and_on_the_row() -> TestResult
         api.calls()
     );
     let buffer = backend.buffer().clone();
+    // The view buttons leave the error what is left of the row, cut short.
     assert!(
-        row(&buffer, 0).contains("✕ start acme@1:portal fai"),
+        row(&buffer, 0).contains("✕ start acme@1:portal"),
         "{}",
         row(&buffer, 0)
     );
+    assert!(row(&buffer, 0).contains('…'), "{}", row(&buffer, 0));
     assert_clean(&buffer, "drive");
     assert_boxes(&buffer, 80, 24, "drive");
     Ok(())

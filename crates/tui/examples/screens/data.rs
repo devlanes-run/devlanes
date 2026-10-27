@@ -86,6 +86,20 @@ fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
     }
 }
 
+/// An `infra.external` entry, as the daemon lists it in every lane.
+fn external(lane: &str, name: &str, port: u16, host: Option<&str>) -> UnitSummary {
+    let mut unit = unit(lane, name, "external", "external");
+    unit.role = Some("external".into());
+    unit.autostart = false;
+    unit.pty = false;
+    unit.ports = BTreeMap::from([("default".to_owned(), port)]);
+    unit.public_url = host.map(|host| format!("https://{host}"));
+    unit.urls = std::iter::once(format!("http://127.0.0.1:{port}"))
+        .chain(unit.public_url.clone())
+        .collect();
+    unit
+}
+
 /// Containers by name, host port and whether they are shared project infra.
 fn containers(list: &[(&str, u16, bool)]) -> Vec<ContainerSummary> {
     list.iter()
@@ -243,6 +257,7 @@ fn starting() -> LaneSummary {
         unit(reference, "stub-stripe", "ready", "service"),
         unit(reference, "setup.db", "exited", "task"),
         unit(reference, "migrate", "running", "task"),
+        external(reference, "pgadmin", 5050, Some("pgadmin.acme-1.localhost")),
     ];
     units[6].role = Some("setup".into());
     units[6].exit_code = Some(0);
@@ -391,7 +406,8 @@ pub fn idle_lanes() -> Vec<LaneSummary> {
                 unit.exit_code = Some(0);
                 continue;
             }
-            if unit.state == "idle" {
+            // An external port has no process to throttle or freeze.
+            if unit.state == "idle" || unit.kind == "external" {
                 continue;
             }
             unit.state = "ready".into();
@@ -406,6 +422,263 @@ pub fn idle_lanes() -> Vec<LaneSummary> {
         }
     }
     lanes
+}
+
+/// `host.list` with three boxes: `hetzner` connected with two `acme` lanes
+/// (lane 0 skipped, since this machine serves its hostnames), `devbox`
+/// reconnecting through a command with a `shop` lane, and `gpu` waiting for
+/// a sign-in. Ports sit in the box's range, clear of this machine's blocks.
+pub fn boxes() -> Value {
+    let key = |project: &str, lane: u32| json!({"project": project, "lane": lane.to_string()});
+    let unit = |project: &str,
+                lane: u32,
+                kind: &str,
+                name: &str,
+                state: &str,
+                ports: Value,
+                hosts: Value| {
+        json!({
+            "key": {"lane": key(project, lane), "kind": kind, "name": name},
+            "hidden": false, "state": state, "ports": ports, "hosts": hosts,
+        })
+    };
+    let port = |port: u16| json!([{"name": "default", "port": port}]);
+    let host = |host: &str, port: u16| json!([{"host": host, "port": port, "fallback": false, "host_header": "keep"}]);
+    let mut admin = unit(
+        "acme",
+        4,
+        "service",
+        "api-admin",
+        "ready",
+        port(24_103),
+        json!([]),
+    );
+    admin["hidden"] = json!(true);
+    let mirrored = |port: u16, unit: &str, state: &str, conflicts: Value, relay: Value| {
+        let addresses = if state == "bound" {
+            json!(["127.0.0.1", "::1"])
+        } else {
+            json!([])
+        };
+        json!({
+            "port": port, "lane": "acme@4", "unit": unit, "kind": "service", "state": state,
+            "addresses": addresses,
+            "conflicts": conflicts, "relay": relay, "last_error": null,
+        })
+    };
+    let route = |host: &str, unit: &str, state: &str| {
+        json!({"host": host, "port": 0, "lane": "acme@4", "unit": unit,
+               "url": format!("https://{host}:8443"), "state": state})
+    };
+    let mut gateway = mirrored(24_100, "api-gateway", "bound", json!([]), Value::Null);
+    gateway["last_error"] = json!({
+        "reason": "dial_failed", "at_ms": NOW_MS - 120_000,
+        "message": "nothing on the box accepted it (connection refused)",
+    });
+    let mut db = mirrored(24_110, "postgres", "bound", json!([]), Value::Null);
+    db["kind"] = json!("container");
+    json!({"items": [
+        {
+            "host": "hetzner", "state": "connected", "transport": "ssh",
+            "server": "devlanes 0.9.2 (linger off)", "daemon_version": "devlanes 0.9.2 (linger off)",
+            "address": "hetzner", "last_connected_ms": NOW_MS - 8_040_000,
+            "connected_since_ms": NOW_MS - 8_040_000, "https_port": 443, "lanes": 2,
+            "ports": [
+                gateway,
+                mirrored(24_101, "web-app", "in_use", json!([{
+                    "address": "127.0.0.1", "pid": 9131, "box": null, "holder": "node (pid 9131)",
+                    "message": "port 24101 is not mirrored because node (pid 9131) uses it here",
+                }]), json!(53_001)),
+                mirrored(24_102, "wrk-email", "bound", json!([]), Value::Null),
+                mirrored(24_105, "ext-build", "bound", json!([]), Value::Null),
+                db,
+            ],
+            "routes": [
+                route("gateway.acme-4.localhost", "api-gateway", "ready"),
+                route("app.acme-4.localhost", "web-app", "ready"),
+                route("docs.acme-4.localhost", "web-docs", "idle"),
+            ],
+            "skipped_lanes": [{"lane": "acme@0", "hosts": ["gateway.acme.localhost"], "box": null,
+                               "reason": "this machine serves its hostnames"}],
+            "skipped_hosts": [{"host": "ext.example.com", "lane": "acme@4", "unit": "ext-build"}],
+            "syncs": [{"lane": "acme@4", "unit": "ext-build", "index": 0,
+                       "from": "/home/acme/acme/ext/dist",
+                       "to": "/Users/acme/.devlanes/sync/hetzner/acme/acme@4/dist",
+                       "state": "watching", "written": 214, "removed": 0, "pruned": 0,
+                       "compared": 214, "errors": [], "error": null, "updated_ms": NOW_MS}],
+            "warnings": [
+                format!("the box runs devlanes 0.9.2 and this machine {VERSION}. Install the same release on both."),
+                "the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.",
+                "this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.",
+            ],
+            "registry": {
+                "lanes": [
+                    {"key": key("acme", 0), "index": 0, "domain": "acme.localhost"},
+                    {"key": key("acme", 4), "index": 4, "domain": "acme-4.localhost"},
+                ],
+                "units": [
+                    unit("acme", 0, "service", "api-gateway", "ready", port(24_000), host("gateway.acme.localhost", 24_000)),
+                    unit("acme", 0, "service", "web-app", "ready", port(24_001), json!([])),
+                    unit("acme", 4, "service", "api-gateway", "ready", port(24_100), host("gateway.acme-4.localhost", 24_100)),
+                    unit("acme", 4, "service", "web-app", "ready", port(24_101), host("app.acme-4.localhost", 24_101)),
+                    unit("acme", 4, "service", "wrk-email", "running", port(24_102), json!([])),
+                    admin,
+                    unit("acme", 4, "service", "web-docs", "idle", port(24_104), host("docs.acme-4.localhost", 24_104)),
+                    unit("acme", 4, "service", "ext-build", "ready", port(24_105), host("ext.example.com", 24_105)),
+                    unit("acme", 4, "task", "migrate", "exited", json!([]), json!([])),
+                    unit("acme", 4, "container", "postgres", "running",
+                         json!([{"name": "5432", "port": 24_110}]), json!([])),
+                ],
+            },
+            "box": {"version": "0.9.2", "label": "devlanes 0.9.2 (linger off)",
+                    "https_port": 443, "ports_range": "24000-29999"},
+            "suffixes": ["localhost"],
+            "proxy": {"https_port": 8443, "box_port": 443, "open": false},
+        },
+        {
+            "host": "devbox", "state": "reconnecting", "transport": "command",
+            "retry_in_ms": 8_000,
+            "error": "docker exec exited 1: Error response from daemon: container devbox is not running",
+            "daemon_version": format!("devlanes {VERSION}"), "connected_since_ms": null,
+            "last_connected_ms": NOW_MS - 600_000, "https_port": 9443,
+            "ports": [], "routes": [], "skipped_lanes": [], "skipped_hosts": [], "syncs": [], "warnings": [],
+            "registry": {
+                "lanes": [{"key": key("shop", 0), "index": 0, "domain": "shop.localhost"}],
+                "units": [
+                    unit("shop", 0, "service", "storefront", "ready", port(30_000), json!([])),
+                    unit("shop", 0, "service", "checkout-api", "failed", port(30_001), json!([])),
+                ],
+            },
+            "box": {"version": VERSION, "https_port": 9443, "ports_range": "30000-32767"},
+            "suffixes": ["localhost"],
+            "proxy": {"https_port": 8443, "box_port": 9443, "open": true},
+        },
+        {
+            "host": "gpu", "state": "needs_auth", "transport": "ssh",
+            "error": "ssh to gpu failed (255): Permission denied (publickey).",
+            "fix": "devlanes remote connect gpu", "last_connected_ms": NOW_MS - 86_400_000,
+            "daemon_version": format!("devlanes {VERSION}"),
+            "ports": [], "routes": [], "skipped_lanes": [], "skipped_hosts": [], "syncs": [], "warnings": [],
+            "registry": {"lanes": [], "units": []},
+            "suffixes": ["localhost"],
+        },
+    ], "truncated": false, "next_cursor": null})
+}
+
+/// [`boxes`] after `hetzner` revoked this machine's pairing: its link waits
+/// for a new code, its ports and routes stay, and the routes serve the
+/// pairing page.
+pub fn boxes_pairing() -> Value {
+    let mut list = boxes();
+    let hetzner = list["items"]
+        .as_array_mut()
+        .and_then(|items| items.iter_mut().find(|item| item["host"] == "hetzner"));
+    if let Some(hetzner) = hetzner {
+        hetzner["state"] = json!("needs_pairing");
+        hetzner["error"] = json!(
+            "the box no longer accepts this machine's pairing and needs a new code from `devlanes daemon pair` on the box"
+        );
+        hetzner["fix"] = json!(
+            "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"
+        );
+        hetzner["connected_since_ms"] = Value::Null;
+        for route in hetzner["routes"].as_array_mut().into_iter().flatten() {
+            route["state"] = json!("pairing_needed");
+        }
+    }
+    list
+}
+
+/// `remote.clients` with nobody paired or connected, pairing required.
+pub fn no_clients() -> Value {
+    json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": true})
+}
+
+/// [`no_clients`] on a machine with `remote.allow_connections: false`.
+pub fn no_clients_off() -> Value {
+    json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": false})
+}
+
+/// `remote.pair`'s code, valid for 10 minutes less two seconds, as the TUI
+/// reads it.
+pub fn pair_code() -> Value {
+    json!({"code": "K7QM-3XWD", "expires_at_ms": NOW_MS + 598_000, "valid_ms": 598_000})
+}
+
+/// `remote.pair` while 5 wrong codes keep pairing paused for 4m 12s more.
+pub fn pairing_paused() -> RpcError {
+    RpcError::new(
+        "pairing_paused",
+        json!({"message": "the box paused pairing after 5 wrong codes in 10 minutes",
+               "retry_after_ms": 252_000}),
+        4,
+    )
+}
+
+/// `remote.pair` on a machine with `remote.allow_connections: false`.
+pub fn connections_off() -> RpcError {
+    RpcError::new(
+        "connections_off",
+        json!({"message": "this machine does not accept connections because remote.allow_connections is false",
+               "invalid": false}),
+        4,
+    )
+}
+
+/// `connect`'s answer for a box with `remote.allow_connections: false`.
+pub fn connect_refused(host: &str) -> RpcError {
+    RpcError::new(
+        "remote_failed",
+        json!({"host": host,
+               "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
+        4,
+    )
+}
+
+/// `remote.clients` on this machine as a box, connected clients first as the
+/// daemon sorts them: a laptop connected with two pairings (two box names),
+/// then a CI runner last seen an hour ago and a desktop away for three days.
+pub fn clients() -> Value {
+    json!({
+        "now_ms": NOW_MS,
+        "require_pairing": true,
+        "allow_connections": true,
+        "items": [
+            {"id": "dl_cid_3f2a9c1e5b7d40a8c6e2f1b9d3a7c5e0b8f4d2a6c1e9b7d5f3a0c8e6b4d2f1a9",
+             "name": "laptop", "paired": true, "pairings": 2,
+             "paired_at_ms": NOW_MS - 604_800_000, "last_seen_ms": NOW_MS - 8_040_000,
+             "connections": [{"address": "203.0.113.24", "since_ms": NOW_MS - 8_040_000,
+                              "mirror": {"ports": 6, "bound": 5, "skipped_lanes": 1}}]},
+            {"id": "dl_cid_0b9e44d1c7a35f2e8a6d0c1b9f4e7a2d3c5b8e1f0a9d6c4b2e7f3a1d5c8b0e9f",
+             "name": "ci-runner", "paired": true, "pairings": 1,
+             "paired_at_ms": NOW_MS - 7_200_000, "last_seen_ms": NOW_MS - 3_900_000,
+             "connections": []},
+            {"id": "dl_cid_7c41e0a9b2d85f3c6e1a4d7b0c9f2e5a8d3b6c1f4e7a0d9c2b5e8f1a4d7c0b3e",
+             "name": "desktop", "paired": true, "pairings": 1,
+             "paired_at_ms": NOW_MS - 1_209_600_000, "last_seen_ms": NOW_MS - 266_400_000,
+             "connections": []},
+        ],
+    })
+}
+
+/// [`clients`] on a box with `remote.require_pairing: false`: a tablet is
+/// connected without pairing, listed after the laptop with the connected.
+pub fn clients_unpaired() -> Value {
+    let mut list = clients();
+    list["require_pairing"] = json!(false);
+    if let Some(items) = list["items"].as_array_mut() {
+        items.insert(
+            1,
+            json!({
+                "id": "dl_cid_e5d8a1c4b7f02e6d9a3c8b1f5e4d7a0c2b9f6e3d8a5c1b4f7e0d3a6c9b2f5e8d1",
+                "name": "tablet", "paired": false, "pairings": 0,
+                "paired_at_ms": null, "last_seen_ms": null,
+                "connections": [{"address": "198.51.100.7", "since_ms": NOW_MS - 300_000,
+                                 "mirror": null}],
+            }),
+        );
+    }
+    list
 }
 
 /// The Docker log lines a container's pane shows, as the TUI writes them.

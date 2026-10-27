@@ -635,7 +635,7 @@ devlanes certs untrust [OPTIONS]
 
 ### devlanes remote
 
-Connect to boxes over SSH and mirror their lanes here
+Connect to boxes and mirror their lanes here
 
 ```text
 devlanes remote [OPTIONS] <COMMAND>
@@ -643,15 +643,15 @@ devlanes remote [OPTIONS] <COMMAND>
 
 ### devlanes remote connect
 
-Connect to a box over SSH and mirror its lanes, ports and hostnames here
+Connect to a box and mirror its lanes, ports and hostnames here
 
 ```text
 devlanes remote connect [OPTIONS] <HOST>
 ```
 
-- `<HOST>`: SSH destination, as in ~/.ssh/config
+- `<HOST>`: Box name from remote.boxes in the user config, or an SSH destination
 - `--background`: Return once connected instead of staying attached for prompts
-- `--install`: If devlanes is missing on the box, install this machine's release there (HTTPS download, checksum verified, never replaces an existing binary)
+- `--code <CODE>`: One-time pairing code from devlanes daemon pair on the box
 
 ### devlanes remote disconnect
 
@@ -681,7 +681,7 @@ devlanes remote sync [OPTIONS]
 
 ### devlanes daemon
 
-Run, stop and install the background daemon
+Run, stop and install the background daemon, and pair other machines with it
 
 ```text
 devlanes daemon [OPTIONS] <COMMAND>
@@ -753,6 +753,32 @@ Stop everything and empty the state database; lanes get new numbers and ports (n
 ```text
 devlanes daemon reset-state [OPTIONS]
 ```
+
+### devlanes daemon pair
+
+Print a one-time code that pairs another machine with this one
+
+```text
+devlanes daemon pair [OPTIONS]
+```
+
+### devlanes daemon clients
+
+List the machines paired or connected to this one
+
+```text
+devlanes daemon clients [OPTIONS]
+```
+
+### devlanes daemon revoke
+
+Disconnect a client and delete its pairing
+
+```text
+devlanes daemon revoke [OPTIONS] <CLIENT>
+```
+
+- `<CLIENT>`: Client name or id, as devlanes daemon clients shows it
 
 ### devlanes doctor
 

@@ -28,7 +28,7 @@ This page covers daily use. Read a reference first when the task is about the co
 
 A lane reference is `project@N` (lane number), `project@branch`, or `N` / `branch` alone inside the repository. Lane 0 is the main checkout.
 
-A unit is a service, task or `exec` command, referenced as `[lane:]unit`: `api`, `2:api`, `acme@feat/login:web`. Commands that take several units accept globs and tags: `"api-*"`, `+backend`.
+A unit is a service, task, `exec` command or `infra.external` entry, referenced as `[lane:]unit`: `api`, `2:api`, `acme@feat/login:web`. Commands that take several units accept globs and tags: `"api-*"`, `+backend`.
 
 Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged. A reference that matches nothing or several lanes fails with exit 3 and lists the candidates.
 
@@ -47,6 +47,7 @@ Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged.
 | Restart after a code change | `devlanes restart api` |
 | Run a configured task | `devlanes run --list`, then `devlanes run migrate` |
 | Ad-hoc long-running command | `devlanes exec --name storybook -- pnpm storybook` |
+| Route a server devlanes does not run | `infra.external` in `devlanes.local.yaml` ([Ports outside the config](#ports-outside-the-config)) |
 | URL of a service | `devlanes url print web` |
 | Environment of a unit | `devlanes env show api`, or `eval "$(devlanes env export api)"` |
 | Tests against the stack | `devlanes with -- pnpm test:e2e` |
@@ -90,6 +91,7 @@ Failures come first, each with its last log lines and the command that shows mor
 | `frozen`, `throttled` | A ready service in a lane that had no activity for a while (agent output shows `ready` with `power=frozen` or `power=throttled`, JSON `state: ready` with a `power` field). Any request, connection or devlanes command on the lane resumes it; no action needed. |
 | `starting`, `queued` | Starting, or waiting for a start slot. `devlanes wait UNIT --timeout 180s`. |
 | `running` | A task or exec in progress. Wait for it or read its logs. |
+| `external` | An `infra.external` entry: devlanes routes its port and hostnames but runs nothing there, so it has no logs and `start` or `stop` do not apply. Whatever listens on the port is yours to run. |
 | `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code or config and `devlanes restart UNIT`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. |
 | `exited` | A task or exec that ended. `devlanes logs UNIT --tail 50` shows how. |
 | `stopping`, `stopped`, `idle` | Not running. `devlanes start UNIT` when you need it. |
@@ -112,6 +114,24 @@ devlanes restart api
 devlanes with -- pnpm test
 devlanes stop --mine
 ```
+
+## Ports outside the config
+
+An `exec` command gets no port or hostname from devlanes, and only what devlanes runs or declares is reachable from machines connected with `devlanes remote connect`. To give an ad-hoc server, such as `devlanes exec --name docs-server -- python -m http.server 8000`, a hostname or make it reachable from those machines, declare it in `devlanes.local.yaml` next to `devlanes.yaml`. That file holds one developer's changes and stays out of Git; create it when it does not exist, and add it to `.gitignore` if it is not ignored yet:
+
+```yaml
+infra:
+  external:
+    docs:
+      address: 127.0.0.1:8000
+      hosts: "docs.${{ lane.domain }}"
+```
+
+Every lane then lists the unit `docs` of kind `external`, `https://docs.<lane domain>` routes to the port, and connected machines mirror it while a lane of the project runs. Give it a name no exec unit has (`exec` refuses it), use a port outside `ports.range` (20000-32767 by default), and only `127.0.0.1:<port>` or `[::1]:<port>`. `start`, `stop` and `logs` do not apply. Put it in `devlanes.yaml` when the team runs that server; `hidden: true` keeps it off connected machines.
+
+## Working on a remote machine
+
+When the user works on another machine connected to this one with `devlanes remote connect`, the URLs devlanes prints here are this machine's, and the user opens services on theirs. Before giving the user a URL, run `devlanes url print UNIT --json`. Its `clients` list has one entry per connected machine: with `reachable: true`, give the user that entry's `url`; with `reachable: false`, its `reason` says why the unit does not open there (a port in use there, a lane or hostname that machine does not mirror). An empty `clients` list means no connected machine reports to this one. When `devlanes daemon clients --json` lists the user's machine as paired, tell them to run `devlanes remote connect BOX` on it. Otherwise, unless this machine's user config sets `remote.require_pairing: false`, run `devlanes daemon pair` here and pass on its line: the user runs `devlanes remote connect BOX --code CODE` on their machine, with BOX the name they reach this machine by (SSH host or `remote.boxes` name). A code works once, within 10 minutes. When the user says their machine waits in `needs_pairing`, it needs a new code the same way. Never set `remote.require_pairing: false` unless the user asks for it.
 
 ## Daemon and sandboxes
 

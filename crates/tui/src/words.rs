@@ -463,6 +463,72 @@ pub fn rpc(error: &RpcError) -> Worded {
                 Some("devlanes daemon logs".into()),
             )
         }
+        // A box's reasons mostly start with "the box", which the TUI names.
+        "remote_failed" | "remote_needs_pairing" | "remote_needs_auth" => {
+            let host = field(data, "host");
+            // The daemon marks commands with backticks; the TUI has no code style.
+            let message = message.replace('`', "");
+            let reason = match message.strip_prefix("the box ") {
+                Some(rest) => format!("{host} {rest}"),
+                None if message.is_empty() => format!("cannot connect to {host}"),
+                None => message.clone(),
+            };
+            let summary = match code.as_str() {
+                "remote_needs_auth" => format!("{host} needs you to sign in again"),
+                _ => reason.clone(),
+            };
+            let detail = if code == "remote_needs_auth" && !message.is_empty() {
+                vec![message]
+            } else {
+                rest
+            };
+            (summary, detail, None)
+        }
+        "connections_off" => (
+            if message.is_empty() {
+                "this machine does not accept connections".into()
+            } else {
+                message
+            },
+            rest,
+            Some(
+                if data.get("invalid").and_then(Value::as_bool) == Some(true) {
+                    "devlanes doctor"
+                } else {
+                    "devlanes config set remote.allow_connections true"
+                }
+                .into(),
+            ),
+        ),
+        "pairing_paused" => (
+            "pairing is paused after 5 wrong codes".into(),
+            Vec::new(),
+            None,
+        ),
+        "host_not_connected" => (
+            format!("{} is not connected", known(data, "host")),
+            Vec::new(),
+            None,
+        ),
+        "box_command_missing" => (message, rest, None),
+        "client_identity" => (
+            format!(
+                "cannot read or save this machine's client id in {}",
+                known(data, "path")
+            ),
+            if message.is_empty() {
+                Vec::new()
+            } else {
+                vec![message]
+            },
+            None,
+        ),
+        // The TUI revokes by id, so this is a pairing gone since the list was read.
+        "client_not_found" => (
+            "the client has no pairing here any more".to_owned(),
+            Vec::new(),
+            Some("devlanes daemon clients".into()),
+        ),
         "unsupported" | "unsupported_method" => (
             format!(
                 "the daemon is too old for {}; upgrade and restart it",
@@ -631,6 +697,46 @@ mod tests {
         assert_eq!(
             stalled(None).summary,
             "the daemon reported nothing for 30s after it was launched"
+        );
+    }
+
+    /// A box's reasons name the box instead of saying "the box", lose the
+    /// daemon's backticks, and a turned-off pairing says how to turn it on.
+    #[test]
+    fn remote_errors_name_the_box() {
+        let worded = rpc(&RpcError::new(
+            "remote_failed",
+            json!({"host": "hetzner", "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
+            4,
+        ));
+        assert_eq!(
+            worded.summary,
+            "hetzner does not accept connections. Set remote.allow_connections to true there"
+        );
+        let worded = rpc(&RpcError::new(
+            "remote_needs_pairing",
+            json!({"host": "hetzner", "message": "the pairing code is wrong, expired or already used. Get a new one with `devlanes daemon pair` on the box"}),
+            4,
+        ));
+        assert!(!worded.summary.contains('`'), "{}", worded.summary);
+        let worded = rpc(&RpcError::new(
+            "remote_needs_auth",
+            json!({"host": "gpu", "message": "ssh to gpu failed (255): Permission denied (publickey)."}),
+            4,
+        ));
+        assert_eq!(worded.summary, "gpu needs you to sign in again");
+        assert_eq!(
+            worded.detail,
+            ["ssh to gpu failed (255): Permission denied (publickey)."]
+        );
+        let worded = rpc(&RpcError::new(
+            "connections_off",
+            json!({"message": "this machine does not accept connections because remote.allow_connections is false", "invalid": false}),
+            4,
+        ));
+        assert_eq!(
+            worded.hint.as_deref(),
+            Some("devlanes config set remote.allow_connections true")
         );
     }
 

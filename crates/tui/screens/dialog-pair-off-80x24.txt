@@ -1,0 +1,50 @@
+ devlanes  1 acme   2 billing   3 shop   starting feat/checkout: …  M  D  Boxes
+┌ boxes ───────────────────────────────────────────────────────────────────────┐
+│ no boxes yet                                                                 │
+│                                                                              │
+│   n   connect to a box by its SSH name or a command                          │
+│                                                                              │
+│ A box is another machine that runs devlanes. Its projects show up in the top │
+│ bar. Their ports and hostnames work on this machine.                         │
+│                                                                              │
+│        ┌ pairing code ─────────────────────────────────────────────┐         │
+│        │ Connections to this machine are off.                      │         │
+│        │ Turn on remote.allow_connections to pair another machine. │         │
+│        │                                                           │         │
+│        │ o options   esc close                                     │         │
+│        └───────────────────────────────────────────────────────────┘         │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────┐
+│ Connections to this machine are off. Press o to turn them on.                │
+└──────────────────────────────────────────────────────────────────────────────┘
+ n new box   p pairing code   o options   esc back        ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 68 bold, 71 bold, 74-78 bold underlined
+1: 0 darkgray, 1-7 bold, 8-79 darkgray
+2: 0 darkgray, 2-13 bold, 79 darkgray
+3: 0 darkgray, 79 darkgray
+4: 0 darkgray, 4 bold, 8-52 dim, 79 darkgray
+5: 0 darkgray, 79 darkgray
+6: 0 darkgray, 2-77 dim, 79 darkgray
+7: 0 darkgray, 2-53 dim, 79 darkgray
+8: 0 darkgray, 79 darkgray
+9: 0 darkgray, 9-69 bold, 79 darkgray
+10: 0 darkgray, 9 bold, 11-46 bold, 69 bold, 79 darkgray
+11: 0 darkgray, 9 bold, 69 bold, 79 darkgray
+12: 0 darkgray, 9 bold, 69 bold, 79 darkgray
+13: 0 darkgray, 9 bold, 11 bold, 12-19 dim, 23-25 bold, 26-31 dim, 69 bold, 79 darkgray
+14: 0 darkgray, 9-69 bold, 79 darkgray
+15: 0 darkgray, 79 darkgray
+16: 0 darkgray, 79 darkgray
+17: 0 darkgray, 79 darkgray
+18: 0 darkgray, 79 darkgray
+19: 0-79 darkgray
+20: 0 darkgray, 1-14 bold, 15-79 darkgray
+21: 0 darkgray, 2-62 yellow, 79 darkgray
+22: 0-79 darkgray
+23: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30 bold, 31-41 dim, 42-44 bold, 45-52 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

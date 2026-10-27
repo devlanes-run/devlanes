@@ -74,6 +74,27 @@ infra:
 
 Containers are named `devlanes-<project>-<name>` or `devlanes-<project>-lane<N>-<name>`, bound to `127.0.0.1`, and read as `${{ infra.cerbos.ports.http }}` (`infra.cerbos.port` is the first port). A bare volume name becomes a named volume per project or lane; `/abs` and `./rel` are bind mounts. For a per-lane bind mount that lanes of one folder do not share, use `"${{ lane.data_path }}/<name>:/data"`; devlanes creates the lane data folder before containers start. A running container whose image, command, env, mounts and ports are unchanged is adopted; a changed one is recreated. Readiness is the image's healthcheck, else TCP on the first port, then `ready` if set. Plain containers join Docker's default network, not a Compose network, so address them by host port, not container name.
 
+## External ports
+
+A server devlanes does not run, such as a pgAdmin you start yourself or a docs server started with `devlanes exec`, joins the lanes under `infra.external`:
+
+```yaml
+infra:
+  external:
+    pgadmin:
+      address: 127.0.0.1:5050                   # 127.0.0.1:<port> or [::1]:<port>, nothing else
+      hosts: "pgadmin.${{ lane.domain }}"
+    docs:
+      address: "[::1]:8000"
+      hidden: true                              # never mirrored to connected machines
+```
+
+Every lane of the project lists each entry as a unit of kind and state `external`, with the same port and its own hostnames. `hosts` takes a hostname or a mapping with `host` and optional `fallback` and `host_header`, or a list of them, evaluated for each lane with `lane`, `project`, `infra` and `env`; keep the names under `${{ lane.domain }}`, since a fixed name is claimed by every lane and conflicts like a service's. A hostname that reads `infra.<container>` is routed once the lane's infra runs. The proxy routes the hostnames to exactly the declared address, whether or not anything listens there. devlanes never starts, stops or checks the server, so `start`, `stop`, `restart`, `logs` and `attach` refuse the entry, and `exec` refuses its name; `devlanes url print pgadmin` prints its URL.
+
+The port belongs to the project, not to a lane, and no unit ever gets it: new port blocks of every project skip it, and in a block that covers it the port goes to no new name. A port already in use is a config error naming the entry and what holds it, for the lane that declares the entry: the proxy's HTTPS and HTTP ports and the DNS server's, a port of this lane or of any other lane on the machine (other projects included), such as a service in a block from before the entry existed, a literal `PORT` or a host port a Compose file publishes as written. Ports outside `ports.range` (20000-32767 by default) never collide with allocated ones; literal and Compose ports can still collide anywhere. Two entries cannot share a port, and an entry's name cannot be a service's, task's or container's, or `setup.<entry>` or `teardown.<entry>` of an infra command.
+
+Machines connected with `devlanes remote connect` mirror the port and hostnames while a lane of the project runs a service, task or exec command, or has its containers up ([remote](../remote.md#external-ports)). Declare an entry in `devlanes.yaml` when the team runs that server, or in [devlanes.local.yaml](ports-and-env.md#local-overrides) when only you do.
+
 ## Setup and teardown
 
 ```yaml

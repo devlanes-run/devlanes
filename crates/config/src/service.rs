@@ -290,9 +290,9 @@ service_fields! {
     /// `timeout` every process still running is SIGKILLed. The service then shows as
     /// stopped and is not restarted. Defaults to SIGTERM and 10s.
     stop: StopConfig,
-    /// Keep this service's ports and hosts off machines connected with
-    /// `devlanes remote connect`: they are not mirrored there and cannot be reached from
-    /// there. The service still runs and works on this machine. Defaults to false.
+    /// Keep this service away from machines connected with `devlanes remote connect`. They
+    /// never see, mirror or reach it, and do not get its `sync` folders. It still runs on
+    /// this machine. Defaults to false.
     #[schemars(extend("examples" = [false,true]))]
     hidden: Templated<bool>,
     /// Set false for an on-demand service: a plain `devlanes start` without a `default`

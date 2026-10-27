@@ -89,10 +89,17 @@ pub fn unit_options(kind: ChoiceKind, lane: &LaneSummary) -> Vec<ChoiceOption> {
     }
     for unit in &lane.units {
         let url = crate::render::display_url(&unit.urls).cloned();
+        let external = unit.kind == devlanes_proto::EXTERNAL_KIND;
         let keep = match kind {
-            ChoiceKind::Url => (unit.kind.is_empty() || unit.kind == "service") && url.is_some(),
-            ChoiceKind::Running => matches!(unit.state.as_str(), "ready" | "starting" | "running"),
-            _ => true,
+            ChoiceKind::Url => {
+                (unit.kind.is_empty() || unit.kind == "service" || external) && url.is_some()
+            }
+            // An external port has no process to attach to, wait for, restart
+            // or read logs of; only its URL means something.
+            ChoiceKind::Running => {
+                !external && matches!(unit.state.as_str(), "ready" | "starting" | "running")
+            }
+            _ => !external,
         };
         if keep {
             options.push(ChoiceOption {

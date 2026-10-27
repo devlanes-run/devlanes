@@ -231,10 +231,23 @@ impl Inner {
         input.ca_env = &self.integ.ca_env;
         input.public_https_port = self.integ.routes.https_port();
         input.only = only;
-        devlanes_resolve::resolve_lane(input)
+        let resolved = devlanes_resolve::resolve_lane(input)
             .await
-            .map(Arc::new)
-            .map_err(|error| resolve_error(&error))
+            .map_err(|error| resolve_error(&error))?;
+        // A unit must never be spawned on a port the config leaves to a server
+        // devlanes does not run.
+        let own = crate::external::lane_ports(
+            &reference,
+            resolved
+                .services
+                .values()
+                .map(|service| (service.name.as_str(), service.port, &service.ports)),
+            &infra_ns,
+        );
+        if let Some(error) = self.external_conflict(&config, lane, own) {
+            return Err(error);
+        }
+        Ok(Arc::new(resolved))
     }
 
     /// `projects.<name>.services` for other projects with running lanes: the lane on the

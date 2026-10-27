@@ -1,7 +1,7 @@
 //! The daemon page (`D`) as monitor.md draws it: a facts box and a checks
 //! box (problems first, each with its fix, scrolling when they don't fit),
 //! then `daemon.log` parsed into entries with level colors, folded repeats,
-//! filters and follow. Tab moves the scroll and copy keys between the boxes.
+//! filters and follow. Tab moves the focus between the checks and the log.
 
 use ratatui::{
     Frame,
@@ -85,9 +85,9 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         );
         render_checks(app, frame, rows, &checks);
     }
-    let log = Rect::new(area.x, area.y + top, area.width, area.height - top);
-    if log.height >= 3 {
-        render_log(app, frame, log);
+    let below = Rect::new(area.x, area.y + top, area.width, area.height - top);
+    if below.height >= 3 {
+        render_log(app, frame, below);
     }
 }
 
@@ -183,7 +183,7 @@ fn inside(area: Rect) -> Rect {
 /// `/Users/acme/.devlanes` as `~/.devlanes` when `/Users/acme` is the
 /// user's home (`App::user_home`).
 #[cfg(unix)]
-fn home_short(app: &App, path: &str) -> String {
+pub(crate) fn home_short(app: &App, path: &str) -> String {
     let home = app
         .user_home
         .as_deref()
@@ -198,15 +198,15 @@ fn home_short(app: &App, path: &str) -> String {
 /// `C:\Users\acme\.devlanes` as `~\.devlanes` when `C:\Users\acme` is the
 /// user's profile directory (`App::user_home`), in any case or separator.
 #[cfg(windows)]
-fn home_short(app: &App, path: &str) -> String {
+pub(crate) fn home_short(app: &App, path: &str) -> String {
     app.user_home
         .as_deref()
         .and_then(|home| crate::home::shorten(home, std::path::Path::new(path)))
         .unwrap_or_else(|| path.to_owned())
 }
 
-/// The facts: version and pid, uptime, socket, managed processes, clients,
-/// state. Below 100 columns, two lines.
+/// The facts: version and pid, uptime, socket, managed processes, event
+/// subscribers, state. Below 100 columns, the daemon and socket lines.
 fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
     let theme = &app.theme;
     let view = &app.daemon;
@@ -218,7 +218,8 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
     let line = |label: &str, value: String, style: Style| {
         fit(
             vec![
-                Span::styled(format!("{label:<LABEL$}"), theme.quiet()),
+                // A label longer than the column still gets a space after it.
+                Span::styled(format!("{:<LABEL$}", format!("{label} ")), theme.quiet()),
                 Span::styled(clean(&value), style),
             ],
             width,
@@ -266,7 +267,9 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
         n => Some(format!("{n} {many}")),
     };
     managed.extend(count("projects", "project", "projects"));
-    let clients = count("subscribers", "event subscriber", "event subscribers");
+    let subscribers = doctor
+        .and_then(|doctor| doctor.get("subscribers"))
+        .and_then(serde_json::Value::as_u64);
     let plain = Style::new();
     if !wide {
         let mut first = version;
@@ -291,8 +294,8 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
     if !managed.is_empty() {
         lines.push(line("managed", managed.join(" · "), plain));
     }
-    if let Some(clients) = clients {
-        lines.push(line("clients", clients, plain));
+    if let Some(subscribers) = subscribers {
+        lines.push(line("subscribers", subscribers.to_string(), plain));
     }
     if let Some(doctor) = doctor
         && doctor.get("schema_version").is_some()

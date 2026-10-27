@@ -34,6 +34,8 @@ devlanes gives every service a port from the lane's block and passes it as `PORT
 
 `devlanes config check` validates the file and points at the line of any mistake. [examples/minimal.yaml](examples/minimal.yaml) adds shared Postgres with a database per lane, [examples/devlanes.yaml](examples/devlanes.yaml) shows every form, and the [config reference](reference/config.md) lists each field.
 
+Changes only you want, such as a service turned off on your machine or a server you run yourself, go in `devlanes.local.yaml` next to it, which you keep out of Git ([local overrides](guides/ports-and-env.md#local-overrides)).
+
 ### Coming from another process manager
 
 If the repository already runs its dev processes with mprocs, dekit, process-compose, a Procfile (foreman, overmind, hivemind, honcho), pm2, tmuxinator, tmuxp, `concurrently` or `npm-run-all` in package.json, mise tasks or Docker Compose, install the [devlanes skill](../agent-plugin/README.md) and ask your coding agent to migrate it. The skill's [references/migration.md](../agent-plugin/skills/devlanes/references/migration.md) maps each tool to `devlanes.yaml`: fixed ports become each lane's own port, one-shot commands become tasks, containers become infra, and the agent tells you what devlanes cannot express (restart policies, dependencies between services, `.env` loading).
@@ -81,7 +83,7 @@ Node and Python services get the CA through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_
 
 ## TUI
 
-Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every lane of the project, the state of each unit and a live terminal for the selected one. Closing the TUI leaves everything running.
+Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every lane of the project, the state of each unit and a live terminal for the selected one. Closing the TUI leaves everything running. `M` opens the resource monitor and `D` the daemon page. `B` opens the boxes view, where you connect [remote boxes](remote.md#in-the-tui) and pair other machines with this one. Connected boxes' projects follow the local ones, read-only.
 
 ## Coding agents
 

@@ -1,6 +1,9 @@
 //! An in-memory daemon for TUI tests.
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -9,8 +12,8 @@ use devlanes_proto::{
     Page, RpcError, RunParams, Selection, UnitSummary,
 };
 use devlanes_tui::{
-    ApiError, AttachEvent, AttachInput, AttachSession, DaemonApi, EventStream, Metrics,
-    MetricsQuery,
+    ApiError, AttachEvent, AttachInput, AttachSession, ConnectEvent, ConnectSession, DaemonApi,
+    EventStream, Metrics, MetricsQuery,
     api::{ProfileInfo, ProfileList},
 };
 use serde_json::{Value, json};
@@ -32,7 +35,19 @@ pub struct FakeApi {
     pub home: Option<PathBuf>,
     /// When set, `profile.list` fails with this daemon error.
     pub profiles_error: Option<RpcError>,
-    pub calls: Mutex<Vec<String>>,
+    /// What `host.list` answers; no boxes unless a test sets some.
+    pub boxes: Mutex<Option<Value>>,
+    /// What `remote.clients` answers; unset, the daemon does not know the
+    /// method and the boxes view lists no clients.
+    pub clients: Mutex<Option<Value>>,
+    /// What an attached `connect` asks, in order, as `(kind, prompt)`: each
+    /// waits for its answer, recorded as `answer <stream> <text>`, and the
+    /// link connects after the last one.
+    pub prompts: Mutex<Vec<(String, String)>>,
+    /// What `remote.pair` answers; unset, a code valid for ten minutes.
+    pub pairing: Mutex<Option<Result<Value, RpcError>>>,
+    /// Shared, so a `connect` session records its answers after the call.
+    pub calls: Arc<Mutex<Vec<String>>>,
     pub events: Mutex<Option<mpsc::Sender<Result<Event, ApiError>>>>,
     /// Keeps attach output channels open so streams do not end on their own.
     outputs: Mutex<Vec<mpsc::Sender<AttachEvent>>>,
@@ -215,6 +230,111 @@ impl DaemonApi for FakeApi {
             lane,
             items: profiles(),
         })
+    }
+
+    async fn host_list(&self) -> Result<Value, ApiError> {
+        self.record("host.list".into());
+        let boxes = self.boxes.lock().ok().and_then(|b| b.clone());
+        Ok(boxes.unwrap_or_else(|| json!({"items": []})))
+    }
+
+    async fn remote_clients(&self) -> Result<Value, ApiError> {
+        self.record("remote.clients".into());
+        match self.clients.lock().ok().and_then(|c| c.clone()) {
+            Some(clients) => Ok(clients),
+            None => Err(ApiError::Rpc(RpcError::new(
+                "unknown_method",
+                json!({"method": "remote.clients"}),
+                2,
+            ))),
+        }
+    }
+
+    /// Drops the client with id `client` from what `remote.clients` answers.
+    async fn revoke_client(&self, client: String) -> Result<Value, ApiError> {
+        self.record(format!("remote.revoke {client}"));
+        let mut revoked = Vec::new();
+        let mut ended = 0;
+        if let Ok(mut clients) = self.clients.lock()
+            && let Some(items) = clients
+                .as_mut()
+                .and_then(|c| c.get_mut("items"))
+                .and_then(Value::as_array_mut)
+        {
+            items.retain(|item| {
+                let gone = item["id"] == client.as_str();
+                if gone {
+                    revoked.push(json!({"id": item["id"], "name": item["name"]}));
+                    ended += item["connections"].as_array().map_or(0, Vec::len);
+                }
+                !gone
+            });
+        }
+        Ok(json!({"revoked": revoked, "ended": ended}))
+    }
+
+    /// Plays [`FakeApi::prompts`]: asks each one and waits for its answer,
+    /// then reports the link connected and ends the request.
+    async fn connect(&self, host: String) -> Result<ConnectSession, ApiError> {
+        self.record(format!("connect {host}"));
+        let prompts = self.prompts.lock().map(|p| p.clone()).unwrap_or_default();
+        let (events_tx, events) = mpsc::channel(16);
+        let (answers, mut answers_rx) = mpsc::channel::<(u64, Bytes)>(16);
+        let calls = Arc::clone(&self.calls);
+        tokio::spawn(async move {
+            let event = |name: &str, data: Value| {
+                ConnectEvent::Event(Event {
+                    seq: 0,
+                    event: name.into(),
+                    data,
+                })
+            };
+            let state = |state: &str| {
+                event(
+                    devlanes_proto::remote::STATE_EVENT,
+                    json!({"host": host, "state": state, "attempt": 1}),
+                )
+            };
+            if events_tx.send(state("connecting")).await.is_err() {
+                return;
+            }
+            for (index, (kind, prompt)) in prompts.into_iter().enumerate() {
+                let stream_id = 3 + index as u64;
+                let asked = event(
+                    devlanes_proto::remote::PROMPT_EVENT,
+                    json!({"host": host, "kind": kind, "prompt": prompt, "stream_id": stream_id}),
+                );
+                if events_tx.send(asked).await.is_err() {
+                    return;
+                }
+                let Some((stream, answer)) = answers_rx.recv().await else {
+                    return;
+                };
+                if let Ok(mut calls) = calls.lock() {
+                    calls.push(format!(
+                        "answer {stream} {}",
+                        String::from_utf8_lossy(&answer).trim_end()
+                    ));
+                }
+            }
+            let _ = events_tx.send(state("connected")).await;
+            let done = json!({"host": host, "state": "connected"});
+            let _ = events_tx.send(ConnectEvent::Done(Ok(done))).await;
+        });
+        Ok(ConnectSession { events, answers })
+    }
+
+    async fn disconnect(&self, host: String) -> Result<Value, ApiError> {
+        self.record(format!("disconnect {host}"));
+        Ok(json!({"disconnected": [host]}))
+    }
+
+    async fn pair(&self) -> Result<Value, ApiError> {
+        self.record("remote.pair".into());
+        match self.pairing.lock().ok().and_then(|p| p.clone()) {
+            Some(answer) => answer.map_err(ApiError::Rpc),
+            None => Ok(json!({"code": "K7QM-3XWD", "valid_ms": 600_000})),
+        }
     }
 
     fn daemon_log(&self) -> Option<PathBuf> {

@@ -13,7 +13,7 @@ use bytes::Bytes;
 use devlanes_pki::CertificateAuthority;
 use devlanes_proxy::{
     HostHeader, LaneActivity, Proxy, ProxyConfig, ProxyLimits, Route, RouteState, RouteTable,
-    Upstream,
+    ScopedPorts, Upstream,
 };
 use futures_util::{SinkExt, StreamExt};
 use http_body_util::{BodyExt, Empty, Full};
@@ -575,6 +575,38 @@ async fn starting_requests_wait_for_ready() -> Result {
     .await?
 }
 
+/// A route whose box waits for a sign-in answers with its page at once, even
+/// with a long reconnect wait, naming the box through the daemon's hint.
+#[tokio::test]
+async fn sign_in_pages_do_not_wait() -> Result {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let mut route = Route::new("app.lane.localhost", Upstream::Local(1));
+        route.state = RouteState::SignInNeeded;
+        route.remote = true;
+        route.start_hint = "Sign in to my-box again: devlanes remote connect my-box".into();
+        let limits = ProxyLimits {
+            reconnect_wait: Duration::from_secs(60),
+            ..ProxyLimits::default()
+        };
+        let proxy =
+            Proxy::new(ProxyConfig::default(), RouteTable::new(vec![route])?).with_limits(limits);
+        let running = run_proxy(proxy, None).await?;
+        let response = request(
+            TcpStream::connect(running.address).await?,
+            "app.lane.localhost",
+            "/",
+            &[],
+        )
+        .await?;
+        assert_eq!(response.status(), 503);
+        assert_eq!(response.headers()["x-devlanes-error"], "box-sign-in-needed");
+        let body = text(response).await?;
+        assert!(body.contains("devlanes remote connect my-box"), "{body}");
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await?
+}
+
 /// Refused connections are retried, so a server that comes back within `refused_retry`
 /// gets the request; without retries the client gets the unreachable page.
 #[tokio::test]
@@ -781,6 +813,186 @@ async fn tls_h1_h2_sse_and_unknown_host() -> Result {
             .await
             .is_err()
         );
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await?
+}
+
+/// Opens a scoped port on a free loopback port for `proxy`, whose routes are
+/// then `routes` with `listen_port` set to it where `scoped` says so. A port
+/// taken between finding and binding it is skipped for another one.
+fn open_scoped(
+    proxy: &Proxy,
+    ports: &ScopedPorts,
+    ca: &Arc<CertificateAuthority>,
+    shutdown: &CancellationToken,
+    routes: &[(&str, SocketAddr, bool)],
+) -> Result<u16> {
+    for _ in 0..10 {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port();
+        let table = routes
+            .iter()
+            .map(|(host, upstream, scoped)| {
+                let mut route = Route::new(*host, *upstream);
+                route.listen_port = scoped.then_some(port);
+                route
+            })
+            .collect();
+        proxy.replace_routes(RouteTable::new(table)?);
+        match ports.open(proxy, port, ca.clone(), shutdown) {
+            Ok(()) => return Ok(port),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err("no free port for the scoped listener".into())
+}
+
+/// A scoped listener serves the routes of its port over TLS, with the port the
+/// browser used as `x-forwarded-port`; other names fail the handshake or, over
+/// plain HTTP, get the unknown-host page without being listed. A local exact
+/// route beats a box wildcard there too. Closing waits until the port is free.
+#[tokio::test]
+async fn scoped_listeners_serve_only_their_routes() -> Result {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (_directory, ca) = scoped_ca().await?;
+        let fixture = fixture(false, false).await?;
+        let upstream = fixture.address;
+        let proxy = Proxy::new(ProxyConfig::default(), RouteTable::default());
+        let ports = ScopedPorts::default();
+        let shutdown = CancellationToken::new();
+        let port = open_scoped(
+            &proxy,
+            &ports,
+            &ca,
+            &shutdown,
+            &[
+                ("web.box.localhost", upstream, true),
+                ("web.local.localhost", upstream, false),
+                ("*.shared.localhost", upstream, true),
+                ("web.shared.localhost", upstream, false),
+            ],
+        )?;
+        // Opening it again is a no-op, not a second bind.
+        ports.open(&proxy, port, ca.clone(), &shutdown)?;
+
+        let h1 = tls_client(&ca, b"http/1.1")?;
+        let stream = h1
+            .connect(
+                "web.box.localhost".try_into()?,
+                TcpStream::connect(("127.0.0.1", port)).await?,
+            )
+            .await?;
+        let authority = format!("web.box.localhost:{port}");
+        let response = request(stream, &authority, "/", &[]).await?;
+        assert_eq!(response.status(), 200);
+        let echoed = text(response).await?;
+        assert!(
+            echoed.contains(&format!("x-forwarded-port: {port}\r\n")),
+            "{echoed}"
+        );
+        assert!(echoed.contains("x-forwarded-proto: https\r\n"), "{echoed}");
+        assert!(
+            h1.connect(
+                "web.local.localhost".try_into()?,
+                TcpStream::connect(("127.0.0.1", port)).await?
+            )
+            .await
+            .is_err(),
+            "a route of another scope got a certificate"
+        );
+        assert!(
+            h1.connect(
+                "web.shared.localhost".try_into()?,
+                TcpStream::connect(("127.0.0.1", port)).await?
+            )
+            .await
+            .is_err(),
+            "the box wildcard got a certificate for the local exact route"
+        );
+        assert!(
+            h1.connect(
+                "api.shared.localhost".try_into()?,
+                TcpStream::connect(("127.0.0.1", port)).await?
+            )
+            .await
+            .is_ok(),
+            "the box wildcard serves the names no local route owns"
+        );
+
+        let plain = run_proxy(proxy.scoped(port), None).await?;
+        for host in ["web.local.localhost", "web.shared.localhost"] {
+            let response =
+                request(TcpStream::connect(plain.address).await?, host, "/", &[]).await?;
+            assert_eq!(response.status(), 404, "{host}");
+            assert_eq!(response.headers()["x-devlanes-error"], "unknown-host");
+            let page = text(response).await?;
+            assert!(page.contains("web.box.localhost"), "{page}");
+            assert!(!page.contains("- `web.local.localhost`"), "{page}");
+        }
+        let response = request(
+            TcpStream::connect(plain.address).await?,
+            "api.shared.localhost",
+            "/",
+            &[],
+        )
+        .await?;
+        assert_eq!(response.status(), 200);
+
+        assert_eq!(ports.ports(), [(port, true)]);
+        ports.close(port).await;
+        assert!(ports.ports().is_empty());
+        assert!(
+            TcpStream::connect(("127.0.0.1", port)).await.is_err(),
+            "the scoped listener outlived its close"
+        );
+        // Closed means free: the same port opens again at once. Not on macOS,
+        // where the connections the proxy closed keep the port in TIME_WAIT and
+        // the proxy sets no SO_REUSEADDR.
+        if cfg!(not(target_os = "macos")) {
+            ports.open(&proxy, port, ca.clone(), &shutdown)?;
+            ports.close(port).await;
+        }
+        shutdown.cancel();
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await?
+}
+
+/// A certificate authority in a new temporary directory, which must outlive it.
+async fn scoped_ca() -> Result<(tempfile::TempDir, Arc<CertificateAuthority>)> {
+    tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir()?;
+        let ca = CertificateAuthority::load_or_create(&directory.path().join("ca"))?;
+        Ok((directory, Arc::new(ca)))
+    })
+    .await?
+}
+
+/// Dropping the future `close` returns without polling it still closes the
+/// port: it is out of the map at once and stops accepting soon after.
+#[tokio::test]
+async fn dropping_an_unpolled_close_frees_the_port() -> Result {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (_directory, ca) = scoped_ca().await?;
+        let proxy = Proxy::new(ProxyConfig::default(), RouteTable::default());
+        let ports = ScopedPorts::default();
+        let shutdown = CancellationToken::new();
+        let port = open_scoped(&proxy, &ports, &ca, &shutdown, &[])?;
+        assert_eq!(ports.ports(), [(port, true)]);
+        drop(ports.close(port));
+        assert!(ports.ports().is_empty());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the scoped listener outlived its dropped close"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        shutdown.cancel();
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await?

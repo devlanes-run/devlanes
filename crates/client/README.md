@@ -53,7 +53,8 @@ the daemon listens on the named pipe `\\.\pipe\devlanes-<hash of the user's SID 
 the home>`; no `daemon.socket` pointer is written. Directories are created with an
 access list for the user, SYSTEM and Administrators, and junctions are refused. The
 daemon is spawned with only its readiness pipe inherited, a hidden console of its own,
-and outside the terminal's job when that job allows it.
+and outside the terminal's job when that job allows it; `Client::spawned_in_job` says
+when it did not, as the tunnel reports for an ssh session's job.
 
 ## License
 

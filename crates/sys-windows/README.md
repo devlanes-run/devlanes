@@ -49,7 +49,7 @@ Every call blocks. Async callers use `spawn_blocking`, except for the `pipe` mod
 - `pipe`: `PipeFactory` for server instances with an explicit descriptor, `server_owner` for the client's check.
 - `proc`: `processes`, `process`, `matches`, `Held` (a verified, pinned process), `terminate_verified`, `listening_tcp`, `established_tcp` (every established connection, accepted or not), `boot_id`.
 - `power`: `PowerHandle`, a verified, pinned process opened for one `PowerAccess`: suspend and resume once each, or read and set its `PriorityClass` and `PowerThrottling` (EcoQoS) for efficiency mode. `resume_verified` for processes a crashed daemon left suspended.
-- `job`: `Job` (no breakaway, members, processes verified as members, active count, terminate), `job_of_self`.
+- `job`: `Job` (no breakaway unless `allow_breakaway`, which tests standing in for sshd's session job use; members, processes verified as members, active count, terminate), `job_of_self`.
 - `spawn`: `spawn` (one `CreateProcessW` with handle list, job list or pseudo console), `Environment`, `pipe`.
 - `console`: `Attached` for the console-control helper, `alloc_console` (`AllocConsoleWithOptions`), `enable_vt_output`, `keyboard` (console, mintty or none), `raw_vt_input`, `hidden_input`, `read_console_utf16`, `release_stdout`.
 - `window`: `close_windows` for verified processes, `watch_session_end` for logoff and shutdown, `visible_windows` for tests that check no window appears.

@@ -4,7 +4,6 @@
 use std::io::Write;
 
 use devlanes_cli::Action;
-#[cfg(unix)]
 use devlanes_client::Paths;
 use devlanes_proto::RpcError;
 use serde_json::json;
@@ -26,20 +25,57 @@ pub async fn run(action: Action) -> Result<u8, RpcError> {
 ///
 /// stdout carries only mux frames; failures go straight to stderr (whatever the
 /// output mode, since a JSON error on stdout would corrupt the pipe), and the
-/// client's SSH transport returns that text as the connection error.
-#[cfg(unix)]
+/// client's SSH transport returns that text as the connection error. The user
+/// config's `remote.allow_connections` decides whether clients are served at
+/// all, `remote.start_daemon` whether a stopped daemon is started, and
+/// `remote.require_pairing` whether clients must be paired (see
+/// [`crate::user_config::tunnel_settings`]).
+///
+/// On Windows sshd runs it through cmd.exe or PowerShell with pipes for
+/// stdin and stdout. `main` gives it a console without a window when none
+/// was passed down, as for every command, so nothing it starts (the daemon)
+/// opens a window.
 async fn tunnel() -> Result<u8, RpcError> {
     let result = match Paths::discover() {
-        Ok(paths) => devlanes_tunnel::run_stdio(paths)
-            .await
-            .map_err(|error| error.to_string()),
-        Err(error) => Err(error.to_string()),
+        Ok(paths) => {
+            let read = paths.clone();
+            // The safe side, as for a config with invalid remote settings.
+            let fallback = (
+                devlanes_config::BoxSettings {
+                    allow_connections: false,
+                    start_daemon: false,
+                    require_pairing: true,
+                },
+                "devlanes tunnel: reading the user config failed, so this machine refuses \
+                 connections\n"
+                    .to_owned(),
+            );
+            let (settings, problems) =
+                tokio::task::spawn_blocking(move || crate::user_config::tunnel_settings(&read))
+                    .await
+                    .unwrap_or(fallback);
+            eprint!("{problems}");
+            let served =
+                match crate::user_config::connections_refusal(&settings, !problems.is_empty()) {
+                    Some(reason) => devlanes_tunnel::refuse_stdio(reason).await,
+                    None => {
+                        devlanes_tunnel::run_stdio(
+                            paths,
+                            settings.start_daemon,
+                            settings.require_pairing,
+                        )
+                        .await
+                    }
+                };
+            served.map_err(|error| (error.to_string(), error.exit_code()))
+        }
+        Err(error) => Err((error.to_string(), 1)),
     };
     match result {
         Ok(()) => Ok(0),
-        Err(message) => {
+        Err((message, code)) => {
             eprintln!("devlanes tunnel: {message}");
-            Ok(1)
+            Ok(code)
         }
     }
 }
@@ -65,13 +101,6 @@ async fn askpass(prompt: &str) -> u8 {
             1
         }
     }
-}
-
-/// Refuses on stderr with exit 2: a Windows machine is never a box.
-#[cfg(windows)]
-async fn tunnel() -> Result<u8, RpcError> {
-    eprintln!("devlanes tunnel: not supported on Windows");
-    Ok(2)
 }
 
 /// Answers ssh's prompt when ssh started this process as `SSH_ASKPASS`:

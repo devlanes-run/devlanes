@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                                                                                                             M monitor   D daemon
+ devlanes  1 acme   2 billing   3 shop                                                                                                                                           Monitor  Daemon  Boxes
  lanes  1 main  2 feat/checkout  3 fix/cache  4 spike/old-search                                                                                                                1-9 or [ ] switch lanes
 ┌ @0 frozen · 37/38 up ────────────────────────┐┌ main @0 · frozen · 37 up ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ▾ services                                34 ││ branch    main                                                                                                                                       │
@@ -60,7 +60,7 @@
  x stop lane   r restart lane   p start with profiles   C clean lane   [ ] switch lane   / filter                                                                                 ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 179 bold, 180-187 dim, 191 bold, 192-198 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
 1: 0-6 dim, 7-14 bold reversed, 16-30 dim, 33-43 dim, 46-47 dim, 48-63 yellow, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 1-22 bold reversed, 23-48 darkgray, 50-53 bold, 57-73 dim, 75-199 darkgray
 3: 0 darkgray, 2-3 dim, 44-45 dim, 47-48 darkgray, 50-59 dim, 199 darkgray

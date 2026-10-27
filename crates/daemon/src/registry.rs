@@ -1089,6 +1089,7 @@ impl Inner {
                     names,
                     reserved: needs.reserved.clone(),
                     avoid: self.remote.advertised_ports(),
+                    never: self.external_ports(),
                 })
                 .await;
             let mut st = lane.st();
@@ -1116,6 +1117,7 @@ impl Inner {
                 names,
                 reserved: needs.reserved.clone(),
                 avoid: self.avoided_ports(pool).await,
+                never: self.external_ports(),
             })
             .await
             .map_err(store_error)?;
@@ -1141,6 +1143,7 @@ impl Inner {
                     names: shared,
                     reserved: BTreeSet::new(),
                     avoid: self.avoided_ports(pool).await,
+                    never: self.external_ports(),
                 })
                 .await
                 .map_err(store_error)?;
@@ -1154,6 +1157,7 @@ impl Inner {
     }
 
     /// Ports a new pool block keeps clear of: a connected box's mirrored ports.
+    /// `infra.external` ports go in the request's `never` instead.
     #[cfg(unix)]
     async fn avoided_ports(&self, _pool: PortPool) -> BTreeSet<u16> {
         self.remote.advertised_ports()
@@ -1162,7 +1166,7 @@ impl Inner {
     /// Ports a new pool block keeps clear of: a connected box's mirrored ports
     /// and the Windows reserved port ranges inside `pool`, where no service
     /// could bind. Ranges `netsh` could not list are not avoided; `doctor`
-    /// reports why.
+    /// reports why. `infra.external` ports go in the request's `never` instead.
     #[cfg(windows)]
     async fn avoided_ports(&self, pool: PortPool) -> BTreeSet<u16> {
         let mut avoid = self.remote.advertised_ports();
@@ -1582,6 +1586,31 @@ impl Inner {
             &dotenv,
             self.integ.routes.https_port(),
         );
+        let reference = lane.st().reference(&project.name());
+        let own = crate::external::lane_ports(
+            &reference,
+            layout
+                .services
+                .values()
+                .map(|service| (service.name.as_str(), service.port, &service.ports)),
+            &infra,
+        );
+        if let Some(error) = self.external_conflict(&config, lane, own) {
+            return Err(error);
+        }
+        let externals = crate::external::external_infos(
+            &config,
+            &lane_context(
+                &facts,
+                &layout.domain,
+                layout.port,
+                &layout.vars,
+                &infra,
+                &client_env,
+                &dotenv,
+            ),
+            self.integ.routes.https_port(),
+        );
         Ok(LaneView {
             domain: layout.domain.clone(),
             port: layout.port,
@@ -1590,6 +1619,7 @@ impl Inner {
             services,
             routes: layout.routes.clone(),
             infra_routes,
+            externals,
             lane_env: layout.lane_env().clone(),
             services_namespace: layout.services_namespace(),
         })

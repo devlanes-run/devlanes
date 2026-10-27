@@ -9,6 +9,7 @@ mod idle;
 mod lanes;
 mod lifecycle;
 mod proxy;
+mod remote;
 mod shutdown;
 mod tasks;
 mod tui_zoom;

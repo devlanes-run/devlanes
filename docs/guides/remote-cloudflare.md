@@ -33,13 +33,17 @@ Host acme-box
 `%h` is replaced with the `HostName`. Write the full path to `cloudflared`: the `ssh` that devlanes runs is a child of the local daemon and sees the daemon's `PATH`, which may not include Homebrew's `/opt/homebrew/bin`. `cloudflared access ssh-config --hostname ssh.example.com` prints a block with the path of the `cloudflared` you ran it from. Then:
 
 ```sh
-ssh acme-box true                   # in a terminal first; see below
-devlanes remote connect acme-box
+ssh acme-box                        # in a terminal first, see below; then on the box:
+devlanes daemon pair                # a one-time code for the first connection
+exit
+devlanes remote connect acme-box --code K7QM-3XWD
 ```
+
+The code pairs this machine with the box on its first connection ([pairing](../remote.md#pairing)); later connections present the token it got.
 
 ### Log in before connecting
 
-`cloudflared access ssh` needs an Access token for the hostname. Without one it starts a login: it tries to open a browser, prints the login URL on its stderr and waits until you finish. That works in a terminal but not under devlanes. The `ProxyCommand` runs inside the background daemon with stderr discarded, so the URL never reaches the terminal running `remote connect`, and whether a browser opens depends on the OS and the session the daemon runs in. devlanes relays only the prompts ssh itself asks (passphrase, one-time password, host key), not cloudflared's login. ssh also gives up when the box has not answered within 15 seconds, which is rarely enough to finish a login even when the browser does open.
+`cloudflared access ssh` needs an Access token for the hostname. Without one it starts a login: it tries to open a browser, prints the login URL on its stderr and waits until you finish. That works in a terminal but not under devlanes. The `ProxyCommand` runs inside the background daemon with stderr discarded, so the URL never reaches the terminal running `remote connect`, and whether a browser opens depends on the OS and the session the daemon runs in. devlanes relays only the prompts `ssh` itself asks (passphrase, one-time password, host key), not cloudflared's login. `ssh` also gives up when the box has not answered within 15 seconds, which is rarely enough to finish a login even when the browser does open.
 
 Get the token in a terminal first. `ssh acme-box true` logs in to Access when needed and also checks the host key and your key. `cloudflared access login https://ssh.example.com` gets the token without ssh. cloudflared stores tokens under `~/.cloudflared` (`%USERPROFILE%\.cloudflared` on Windows) and every later run reuses them, including the runs devlanes starts.
 
@@ -86,16 +90,16 @@ devlanes runs the system `ssh`, so certificates work as they do in a terminal. W
 cloudflared access ssh-config --hostname ssh.example.com --short-lived-cert
 ```
 
-It prints a `Match host ssh.example.com exec "... access ssh-gen --hostname %h"` block. Before each connection ssh runs `ssh-gen`, which needs a valid Access token like `access ssh` does and writes a new certificate to `~/.cloudflared`. Since the block matches the hostname, connect with `devlanes remote connect ssh.example.com`, or adapt the block to your alias. On Windows, check the block with `ssh ssh.example.com true` before using it with devlanes.
+It prints a `Match host ssh.example.com exec "... access ssh-gen --hostname %h"` block. Before each connection `ssh` runs `ssh-gen`, which needs a valid Access token like `access ssh` does and writes a new certificate to `~/.cloudflared`. Since the block matches the hostname, connect with `devlanes remote connect ssh.example.com`, or adapt the block to your alias. On Windows, check the block with `ssh ssh.example.com true` before using it with devlanes.
 
-sshd checks a certificate only when ssh authenticates. On macOS and Linux the devlanes connection stays up after its certificate expires, and a new certificate is needed only when it connects again; on Windows every reconnect authenticates. With `ssh-gen` in the `Match exec` line that happens by itself while the token is valid. Certificates you renew some other way must be renewed before they expire: a reconnect with an expired certificate fails with `Permission denied`, and devlanes stops retrying after that.
+sshd checks a certificate only when `ssh` authenticates. On macOS and Linux the devlanes connection stays up after its certificate expires, and a new certificate is needed only when it connects again; on Windows every reconnect authenticates. With `ssh-gen` in the `Match exec` line that happens by itself while the token is valid. Certificates you renew some other way must be renewed before they expire: a reconnect with an expired certificate fails with `Permission denied`, and the box waits in `needs_auth` until you renew the certificate and run `devlanes remote connect` again.
 
 ## Checking
 
 ```sh
 ssh acme-box true                     # Access login, host key and key, in a terminal
 devlanes remote connect acme-box
-devlanes remote ls                    # state; the ssh error while reconnecting
+devlanes remote ls                    # connected, reconnecting, needs_auth or needs_pairing; the SSH error while reconnecting
 devlanes status --json | jq .clients  # on the box: who is connected
 ```
 

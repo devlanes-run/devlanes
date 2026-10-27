@@ -1,0 +1,12 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+https://web.acme-2.localhost:8443
+on laptop: https://web.acme-2.localhost
+on desktop, not reachable: port 20101 is in use there by postgres (pid 812)
+--- plain (exit 0)
+https://web.acme-2.localhost:8443
+--- agent (exit 0)
+https://web.acme-2.localhost:8443

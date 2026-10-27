@@ -32,7 +32,8 @@ use serde::{Deserialize, Serialize};
 use crate::Error;
 
 /// What an installed fake does on every run, in this order: check the arguments,
-/// record them, sleep, print `stderr`, print `stdout` then `stdout_json`, exit.
+/// record them, sleep, print `stderr`, print `stdout` then `stdout_json`, copy
+/// stdin to stdout (`echo_stdin`), run its last argument (`run_with`), exit.
 ///
 /// Printed strings expand `{cwd}` to the canonical working directory (like
 /// `pwd -P`; on Windows the verbatim `\\?\` form `Path::canonicalize` returns) and
@@ -52,6 +53,23 @@ pub struct Behaviour {
     pub stdout: String,
     /// Printed as compact JSON after `stdout`, with every string expanded.
     pub stdout_json: Option<serde_json::Value>,
+    /// Copies stdin to stdout byte for byte until stdin ends, for a fake
+    /// that stands in for a program speaking a protocol over its stdio.
+    pub echo_stdin: bool,
+    /// Windows only: runs the last argument the way Win32-OpenSSH's sshd runs
+    /// a command with this kind of default shell, sharing the fake's streams,
+    /// and exits with its status instead of `exit`. For a fake `ssh` whose
+    /// box is this machine. The kinds, after sshd's own (`w32-doexec.c`):
+    /// `cmd`, the raw line `"<shell>" /c "<command>"`; `powershell` (Windows
+    /// PowerShell) and `bash` (Git Bash), the arguments `-c <command>`;
+    /// `pwsh`, which sshd does not recognise by its path, the raw line
+    /// `"<shell>" -c "<command>"`.
+    pub run_with: Option<String>,
+    /// The shell's executable; cmd.exe and Windows PowerShell default to the
+    /// ones in System32, the others must be given.
+    pub run_shell: Option<PathBuf>,
+    /// Variables set for `run_with`'s shell, on top of the fake's own.
+    pub run_env: Vec<(String, String)>,
     pub exit: u8,
 }
 
@@ -98,6 +116,29 @@ impl Behaviour {
         self
     }
 
+    /// Copies stdin to stdout after printing.
+    pub fn echo_stdin(mut self) -> Self {
+        self.echo_stdin = true;
+        self
+    }
+
+    /// Runs the last argument as sshd would with the `kind` of shell at
+    /// `shell` (see [`Behaviour::run_shell`]), with `env` set for it.
+    pub fn run_with<I, K, V>(mut self, kind: &str, shell: Option<&Path>, env: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.run_with = Some(kind.to_owned());
+        self.run_shell = shell.map(Path::to_path_buf);
+        self.run_env = env
+            .into_iter()
+            .map(|(name, value)| (name.into(), value.into()))
+            .collect();
+        self
+    }
+
     /// The exit code.
     pub fn exit(mut self, code: u8) -> Self {
         self.exit = code;
@@ -114,6 +155,79 @@ pub fn install(dir: &Path, name: &str, behaviour: &Behaviour) -> Result<PathBuf,
     std::fs::copy(binary()?, &program)?;
     std::fs::write(sidecar(&program), serde_json::to_vec(behaviour)?)?;
     Ok(program)
+}
+
+/// A default shell of Win32-OpenSSH's sshd, as [`Behaviour::run_with`]
+/// emulates it.
+#[cfg(windows)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SshdShell {
+    /// cmd.exe, sshd's default.
+    Cmd,
+    /// Windows PowerShell 5.1.
+    WindowsPowerShell,
+    /// PowerShell 7.
+    Pwsh,
+    /// Git for Windows' bash.
+    GitBash,
+}
+
+#[cfg(windows)]
+impl SshdShell {
+    /// Every shell, in that order.
+    pub const ALL: [Self; 4] = [
+        Self::Cmd,
+        Self::WindowsPowerShell,
+        Self::Pwsh,
+        Self::GitBash,
+    ];
+
+    /// The kind [`Behaviour::run_with`] takes.
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Cmd => "cmd",
+            Self::WindowsPowerShell => "powershell",
+            Self::Pwsh => "pwsh",
+            Self::GitBash => "bash",
+        }
+    }
+
+    /// The shell's executable on this machine, `None` when it is not
+    /// installed: cmd.exe and Windows PowerShell from System32, `pwsh.exe`
+    /// from `PATH` (an App Installer alias counts) or `%ProgramFiles%`, and
+    /// `bin\bash.exe` of the Git for Windows that `git --exec-path` names.
+    /// Blocking.
+    pub fn program(self) -> Option<PathBuf> {
+        let system = PathBuf::from(std::env::var_os("SystemRoot")?).join("System32");
+        match self {
+            Self::Cmd => Some(system.join("cmd.exe")),
+            Self::WindowsPowerShell => Some(system.join(r"WindowsPowerShell\v1.0\powershell.exe")),
+            Self::Pwsh => {
+                let on_path = std::env::var_os("PATH")
+                    .map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                let installed = std::env::var_os("ProgramFiles")
+                    .map(|dir| PathBuf::from(dir).join(r"PowerShell\7"));
+                on_path
+                    .into_iter()
+                    .chain(installed)
+                    .map(|dir| dir.join("pwsh.exe"))
+                    .find(|candidate| std::fs::symlink_metadata(candidate).is_ok())
+            }
+            Self::GitBash => {
+                let output = std::process::Command::new("git")
+                    .arg("--exec-path")
+                    .stdin(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .output()
+                    .ok()?;
+                // `<root>/mingw64/libexec/git-core`.
+                let exec = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+                let bash = exec.ancestors().nth(3)?.join(r"bin\bash.exe");
+                bash.is_file().then_some(bash)
+            }
+        }
+    }
 }
 
 /// The behaviour file a fake at `program` reads: its full file name plus

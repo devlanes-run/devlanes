@@ -73,3 +73,116 @@ fn https_reaches_each_lane_by_hostname() -> Result<()> {
     }
     Ok(())
 }
+
+/// A port `devlanes.local.yaml` declares in `infra.external`, here an `exec`
+/// unit's server, is listed as a unit of kind `external` and routed by the
+/// proxy under the lane's domain; taking the entry out of the file takes the
+/// route and the unit away again.
+#[test]
+fn an_external_port_is_routed_by_its_hostname() -> Result<()> {
+    if devlanes_e2e::curl()
+        .arg("--version")
+        .stdout(Stdio::null())
+        .status()
+        .map_or(true, |s| !s.success())
+    {
+        eprintln!("skipped: curl is not installed");
+        return Ok(());
+    }
+    let lab = Lab::new("two-services", BUDGET)?;
+    let started = lab.json(lab.repo(), &["start"])?;
+    assert_eq!(started["ready"], true, "{started}");
+    let served = lab.spare_port(0);
+    let served_text = served.to_string();
+    lab.json(
+        lab.repo(),
+        &[
+            "exec",
+            "--name",
+            "docs-server",
+            "--",
+            "fixture-server",
+            "--port",
+            &served_text,
+        ],
+    )?;
+    lab.eventually(
+        "the exec unit listens",
+        devlanes_e2e::COMMAND_TIMEOUT,
+        || Ok(devlanes_e2e::listening(served).then_some(())),
+    )?;
+    lab.write(
+        "devlanes.local.yaml",
+        &format!(
+            "infra:\n  external:\n    docs:\n      address: 127.0.0.1:{served}\n      hosts: \"docs.${{{{ lane.domain }}}}\"\n"
+        ),
+    )?;
+    let host = "docs.fixture-two.localhost";
+    // The daemon reloads the config once its watcher sees the new file.
+    let listed = lab.eventually(
+        "the external unit to be listed",
+        devlanes_e2e::COMMAND_TIMEOUT,
+        || {
+            let lanes = lab.lanes(lab.repo())?;
+            Ok(lane(&lanes, "fixture-two@0")
+                .and_then(|l| unit(l, "docs"))
+                .cloned())
+        },
+    )?;
+    let lanes = lab.lanes(lab.repo())?;
+    assert_eq!(listed["kind"], "external", "{listed}");
+    assert_eq!(listed["state"], "external", "{listed}");
+    assert_eq!(listed["ports"]["default"], served, "{listed}");
+
+    let routes = lab.json(lab.repo(), &["url", "ls", "--json"])?;
+    let https = &routes["proxy"]["https"];
+    let Some(port) = https["port"].as_u64().filter(|_| https["bound"] == true) else {
+        eprintln!("skipped: the proxy could not bind HTTPS: {https}");
+        return Ok(());
+    };
+    let ca = lab.home().join("ca/ca.pem");
+    let mut curl = devlanes_e2e::curl();
+    curl.args(["-sS", "--max-time", "10", "--cacert"])
+        .arg(&ca)
+        .arg("--resolve")
+        .arg(format!("{host}:{port}:127.0.0.1"))
+        .args(["-w", "\n%{http_code}"])
+        .arg(format!("https://{host}:{port}/healthz"));
+    let output = lab.run(curl, devlanes_e2e::COMMAND_TIMEOUT)?;
+    output.expect_code(0)?;
+    let (body, code) = output
+        .stdout
+        .rsplit_once('\n')
+        .unwrap_or(("", output.stdout.as_str()));
+    assert_eq!(code, "200", "{output}");
+    // The answer comes from the exec unit's process, not from a service.
+    let reflected: Value = serde_json::from_str(body)?;
+    let docs = need(
+        lane(&lanes, "fixture-two@0").and_then(|l| unit(l, "docs-server")),
+        "exec unit",
+    )?;
+    assert_eq!(
+        reflected["pid"].as_i64(),
+        pid(docs).map(i64::from),
+        "{host} must reach the exec unit"
+    );
+
+    lab.write("devlanes.local.yaml", "services: {}\n")?;
+    lab.eventually(
+        "the external unit to go",
+        devlanes_e2e::COMMAND_TIMEOUT,
+        || {
+            let lanes = lab.lanes(lab.repo())?;
+            let gone = lane(&lanes, "fixture-two@0")
+                .and_then(|l| unit(l, "docs"))
+                .is_none();
+            Ok(gone.then_some(()))
+        },
+    )?;
+    let routes = lab.json(lab.repo(), &["url", "ls", "--json"])?;
+    let still = routes["items"]
+        .as_array()
+        .is_some_and(|items| items.iter().any(|item| item["host"] == host));
+    assert!(!still, "removed but still routed: {routes}");
+    Ok(())
+}

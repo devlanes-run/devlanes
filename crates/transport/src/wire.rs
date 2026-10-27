@@ -21,11 +21,81 @@ use crate::registry::{RegistryEvent, RegistrySnapshot};
 /// Wire protocol revision; both ends must match exactly.
 ///
 /// Covers the framing here and the opaque payloads devlanes puts in them
-/// (`devlanes_proto::remote`: sync requests and manifests). Bump it whenever any
-/// of those shapes changes. Revision 2 added sync manifests sent by the client and
+/// (`devlanes_proto::remote`: sync requests and manifests). It changes only for
+/// breaking changes; additive behaviour is a named feature instead (see
+/// [`FEATURES`]). Revision 2 added sync manifests sent by the client and
 /// `not_running` refusals; revision 3 streams the client's manifest in batches as
-/// sync input frames, ended by an explicit marker.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// sync input frames, ended by an explicit marker; revision 4 adds the tunnel
+/// preamble, features, client identity, pairing and box info to the handshake,
+/// task units to the registry, and removes daemon request streams.
+pub const PROTOCOL_VERSION: u32 = 4;
+
+/// Additive protocol features this build implements, listed by both ends in the
+/// handshake. A side uses a feature only when the other side lists it too.
+pub const FEATURES: &[&str] = &[SYNC_ZSTD, MIRROR_REPORT, EXTERNAL_UNITS];
+
+/// Sync chunks from the box and input values from the client may travel
+/// compressed with zstd; each end lists it when it can decompress them.
+pub const SYNC_ZSTD: &str = "sync_zstd";
+
+/// The client tells the box what it mirrors ([`crate::Session::report`]),
+/// and the box hands that to its registry source
+/// ([`crate::RegistrySource::report`]). A box without it would end the
+/// session on the unknown control message, so the client sends none then.
+pub const MIRROR_REPORT: &str = "mirror_report";
+
+/// The registry may carry units of kind [`crate::UnitKind::External`]. A
+/// client without it would reject the snapshot, so the box's registry source
+/// leaves them out for that client.
+pub const EXTERNAL_UNITS: &str = "external_units";
+
+/// Names in both lists, sorted and without repeats: the features a session uses.
+pub(crate) fn negotiate(ours: &[String], theirs: &[String]) -> Vec<String> {
+    let mut shared: Vec<String> = ours
+        .iter()
+        .filter(|name| theirs.contains(name))
+        .cloned()
+        .collect();
+    shared.sort();
+    shared.dedup();
+    shared
+}
+
+/// What the box reports about itself in the handshake. Every field is optional,
+/// so a box that cannot tell leaves it out.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoxInfo {
+    /// Port the box's proxy serves HTTPS on, as in the URLs it generates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub https_port: Option<u16>,
+    /// The box's `ports.range` user setting, such as `20000-29999`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ports_range: Option<String>,
+}
+
+/// Why a box asks a client to pair before it serves it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingReason {
+    /// The client sent no remote token.
+    Missing,
+    /// The box does not accept the client's token: it was revoked, the client
+    /// paired again, or it never belonged to this client id.
+    Invalid,
+}
+
+/// A code or remote token on the wire, kept out of `Debug` output so a logged
+/// message never shows it.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct Secret(pub(crate) String);
+
+impl std::fmt::Debug for Secret {
+    /// Writes a placeholder instead of the value.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
 
 /// Frames above this size are rejected before allocation.
 pub(crate) const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
@@ -227,9 +297,23 @@ pub(crate) fn into_raw<S>(channel: Channel<S>) -> Prefixed<S> {
 #[serde(tag = "open", rename_all = "snake_case")]
 pub(crate) enum OpenRequest {
     /// The single control stream; must be the first stream of a session.
-    Control { protocol: u32, client: String },
-    /// One forwarded daemon request.
-    Rpc { request: Value },
+    Control {
+        protocol: u32,
+        /// Version label, such as `devlanes 0.5.0`.
+        client: String,
+        /// Every feature the client implements.
+        #[serde(default)]
+        features: Vec<String>,
+        /// Random id the client machine keeps across restarts.
+        #[serde(default)]
+        client_id: String,
+        /// The client machine's host name.
+        #[serde(default)]
+        client_name: String,
+        /// The remote token this box gave the client when they paired.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token: Option<Secret>,
+    },
     /// A raw byte stream to a registered endpoint.
     Data { target: DialTarget },
     /// A sync subscription; the request is interpreted by the box's sync source.
@@ -240,18 +324,74 @@ pub(crate) enum OpenRequest {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ClientControl {
-    Ping { nonce: u64 },
+    Ping {
+        nonce: u64,
+    },
+    /// What the client mirrors, opaque to the transport; sent only with
+    /// [`MIRROR_REPORT`].
+    Mirror {
+        report: Value,
+    },
+    /// The one-time code a person got from `devlanes daemon pair` on the box,
+    /// sent once in answer to [`BoxControl::PairingRequired`].
+    Pair {
+        code: Secret,
+    },
 }
 
 /// Messages the box sends on the control stream.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum BoxControl {
-    Welcome { protocol: u32, server: String },
-    Incompatible { protocol: u32, server: String },
-    Snapshot { snapshot: RegistrySnapshot },
-    Event { event: RegistryEvent },
-    Pong { nonce: u64 },
+    Welcome {
+        protocol: u32,
+        /// Version label, such as `devlanes 0.5.0`.
+        server: String,
+        /// Every feature the box implements.
+        #[serde(default)]
+        features: Vec<String>,
+        #[serde(default, rename = "box")]
+        box_info: BoxInfo,
+    },
+    /// The client speaks another protocol revision. Sent before pairing, so
+    /// it names the revision only, never the box's version label.
+    Incompatible {
+        protocol: u32,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        server: String,
+    },
+    /// Sent instead of the welcome when the box takes no connections at all
+    /// (its `remote.allow_connections` is false); the box closes the session
+    /// after it. `message` says why, in words the client shows as they are.
+    Refused {
+        message: String,
+    },
+    /// Sent instead of the welcome to a client the box does not serve yet;
+    /// the client answers with [`ClientControl::Pair`] or leaves.
+    PairingRequired {
+        reason: PairingReason,
+    },
+    /// The code was accepted: the client keeps `token` for later connections.
+    /// The welcome follows.
+    Paired {
+        token: Secret,
+    },
+    /// The code was refused; the box closes the session after it.
+    PairingRefused {
+        message: String,
+        /// How long the box refuses every code, after too many failures.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        retry_after_ms: Option<u64>,
+    },
+    Snapshot {
+        snapshot: RegistrySnapshot,
+    },
+    Event {
+        event: RegistryEvent,
+    },
+    Pong {
+        nonce: u64,
+    },
 }
 
 /// What a data stream connects to on the box.
@@ -270,7 +410,9 @@ pub enum DialTarget {
 pub enum RejectReason {
     /// No unit in the box's registry advertises the target.
     NotRegistered,
-    /// Only hidden units advertise the target.
+    /// A hidden unit advertises the target. The box decides this for its own
+    /// log and sends [`RejectReason::NotRegistered`] instead, so a client
+    /// cannot learn of hidden units by probing ports.
     Hidden,
     /// The unit advertising the target is not running.
     NotRunning,
@@ -289,27 +431,6 @@ pub(crate) enum OpenReply {
     },
 }
 
-/// Client frames on an RPC stream after the request.
-///
-/// EOF without `EndInput` means the client dropped the call, which cancels it:
-/// yamux reports a reset as EOF, so the explicit marker is the only way to
-/// tell "no more input" from "caller is gone".
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum RpcClientFrame {
-    Input { value: Value },
-    EndInput,
-}
-
-/// Box frames on an RPC stream.
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum RpcBoxFrame {
-    Item { value: Value },
-    Error { error: crate::rpc::RpcError },
-    End,
-}
-
 /// Box frames on a sync stream. `Chunk` carries file bytes as the payload.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -321,6 +442,9 @@ pub(crate) enum SyncFrame {
         path: String,
         offset: u64,
         last: bool,
+        /// Raw for boxes without [`SYNC_ZSTD`], which leave it out.
+        #[serde(default, skip_serializing_if = "PayloadEncoding::is_raw")]
+        encoding: PayloadEncoding,
     },
     Delete {
         path: String,
@@ -331,14 +455,42 @@ pub(crate) enum SyncFrame {
     End,
 }
 
+/// How a sync frame carries its data: a chunk's file bytes, or the JSON of a
+/// client input value.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PayloadEncoding {
+    /// As they are: chunk bytes in the payload, input values in the header.
+    #[default]
+    Raw,
+    /// One zstd frame in the payload; `size` is the decompressed length, which
+    /// the receiver allows decompression to produce and nothing more.
+    Zstd { size: u64 },
+}
+
+impl PayloadEncoding {
+    /// Whether the data travels as it is.
+    fn is_raw(&self) -> bool {
+        *self == Self::Raw
+    }
+}
+
 /// Client frames on a sync stream after the request, such as manifest batches.
 ///
-/// As on RPC streams, EOF means the client left; `EndInput` is the only way to
-/// say that no more input follows while still reading.
+/// EOF without `EndInput` means the client left, which cancels the subscription:
+/// yamux reports a reset as EOF, so the explicit marker is the only way to say
+/// that no more input follows while still reading.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum SyncClientFrame {
-    Input { value: Value },
+    Input {
+        /// Null when the payload carries it compressed.
+        #[serde(default)]
+        value: Value,
+        /// Raw for clients without [`SYNC_ZSTD`], which leave it out.
+        #[serde(default, skip_serializing_if = "PayloadEncoding::is_raw")]
+        encoding: PayloadEncoding,
+    },
     EndInput,
 }
 
@@ -355,13 +507,67 @@ mod tests {
             path: "a/b".into(),
             offset: 7,
             last: true,
+            encoding: PayloadEncoding::Zstd { size: 9 },
         };
         send_with_payload(&mut a, &message, Bytes::from_static(&[0, 255, 1])).await?;
-        let Some((SyncFrame::Chunk { path, offset, last }, payload)) = recv(&mut b).await? else {
+        let Some((
+            SyncFrame::Chunk {
+                path,
+                offset,
+                last,
+                encoding,
+            },
+            payload,
+        )) = recv(&mut b).await?
+        else {
             panic!("chunk frame changed kind");
         };
         assert_eq!((path.as_str(), offset, last), ("a/b", 7, true));
+        assert_eq!(encoding, PayloadEncoding::Zstd { size: 9 });
         assert_eq!(payload.as_ref(), &[0, 255, 1]);
+        Ok(())
+    }
+
+    /// Raw chunks look as they did before `sync_zstd`, so either end may lack it.
+    #[test]
+    fn raw_chunks_leave_the_encoding_out() -> Result<(), serde_json::Error> {
+        let raw = SyncFrame::Chunk {
+            path: "a".into(),
+            offset: 0,
+            last: true,
+            encoding: PayloadEncoding::Raw,
+        };
+        let encoded = serde_json::to_value(&raw)?;
+        assert_eq!(
+            encoded,
+            serde_json::json!({"type": "chunk", "path": "a", "offset": 0, "last": true})
+        );
+        let decoded: SyncFrame = serde_json::from_value(encoded)?;
+        assert!(matches!(
+            decoded,
+            SyncFrame::Chunk {
+                encoding: PayloadEncoding::Raw,
+                ..
+            }
+        ));
+        let zstd = SyncFrame::Chunk {
+            path: "a".into(),
+            offset: 0,
+            last: true,
+            encoding: PayloadEncoding::Zstd { size: 5 },
+        };
+        assert_eq!(
+            serde_json::to_value(&zstd)?["encoding"],
+            serde_json::json!({"zstd": {"size": 5}})
+        );
+        let input = SyncClientFrame::Input {
+            value: serde_json::json!({"files": []}),
+            encoding: PayloadEncoding::Raw,
+        };
+        assert_eq!(
+            serde_json::to_value(&input)?,
+            serde_json::json!({"type": "input", "value": {"files": []}})
+        );
         Ok(())
     }
 
@@ -375,6 +581,86 @@ mod tests {
             codec.decode(&mut src),
             Err(WireError::Malformed(_))
         ));
+    }
+
+    #[test]
+    fn negotiation_keeps_features_both_sides_list() {
+        let names = |list: &[&str]| list.iter().map(|name| (*name).to_owned()).collect();
+        let ours: Vec<String> = names(&["b", "a", "c"]);
+        assert_eq!(negotiate(&ours, &names(&["c", "a", "x"])), ["a", "c"]);
+        assert!(negotiate(&ours, &[]).is_empty());
+        assert!(negotiate(&[], &ours).is_empty());
+    }
+
+    /// Fields added in revision 4 have defaults, so a handshake without them
+    /// still decodes far enough to compare protocol revisions.
+    #[test]
+    fn handshake_fields_are_optional() -> Result<(), serde_json::Error> {
+        let hello: OpenRequest = serde_json::from_value(serde_json::json!({
+            "open": "control", "protocol": 3, "client": "devlanes 0.4.0", "later": true
+        }))?;
+        assert!(matches!(
+            hello,
+            OpenRequest::Control { protocol: 3, ref features, ref client_id, .. }
+                if features.is_empty() && client_id.is_empty()
+        ));
+        let welcome: BoxControl = serde_json::from_value(serde_json::json!({
+            "type": "welcome", "protocol": 4, "server": "devlanes 0.5.0"
+        }))?;
+        assert!(matches!(
+            welcome,
+            BoxControl::Welcome { ref box_info, .. } if *box_info == BoxInfo::default()
+        ));
+        let encoded = serde_json::to_value(BoxControl::Welcome {
+            protocol: 4,
+            server: "box".into(),
+            features: vec!["x".into()],
+            box_info: BoxInfo {
+                https_port: Some(8443),
+                ports_range: None,
+            },
+        })?;
+        assert_eq!(encoded["box"], serde_json::json!({"https_port": 8443}));
+        Ok(())
+    }
+
+    /// A hello without a token leaves the field out, and codes and tokens
+    /// never show in `Debug` output.
+    #[test]
+    fn secrets_stay_out_of_debug_output() -> Result<(), serde_json::Error> {
+        let hello = |token: Option<&str>| OpenRequest::Control {
+            protocol: PROTOCOL_VERSION,
+            client: "c".into(),
+            features: Vec::new(),
+            client_id: "dl_cid_x".into(),
+            client_name: "laptop".into(),
+            token: token.map(|token| Secret(token.into())),
+        };
+        assert!(serde_json::to_value(hello(None))?.get("token").is_none());
+        let with = hello(Some("dl_rt_0123"));
+        assert_eq!(serde_json::to_value(&with)?["token"], "dl_rt_0123");
+        assert!(!format!("{with:?}").contains("dl_rt_0123"));
+        let pair = ClientControl::Pair {
+            code: Secret("ABCD-EFGH".into()),
+        };
+        assert!(!format!("{pair:?}").contains("ABCD"));
+        assert_eq!(
+            serde_json::to_value(&pair)?,
+            serde_json::json!({"type": "pair", "code": "ABCD-EFGH"})
+        );
+        let paired: BoxControl =
+            serde_json::from_value(serde_json::json!({"type": "paired", "token": "dl_rt_1"}))?;
+        assert!(!format!("{paired:?}").contains("dl_rt_1"));
+        let required: BoxControl = serde_json::from_value(
+            serde_json::json!({"type": "pairing_required", "reason": "invalid"}),
+        )?;
+        assert!(matches!(
+            required,
+            BoxControl::PairingRequired {
+                reason: PairingReason::Invalid
+            }
+        ));
+        Ok(())
     }
 
     #[tokio::test]

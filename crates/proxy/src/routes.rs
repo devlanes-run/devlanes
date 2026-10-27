@@ -45,6 +45,13 @@ pub enum RouteState {
     },
     /// The route belongs to a remote box whose connection is down and retrying.
     Reconnecting,
+    /// The route belongs to a remote box whose connection waits for a person to
+    /// sign in again; requests get the sign-in page without waiting.
+    SignInNeeded,
+    /// The route belongs to a remote box that no longer accepts this
+    /// machine's pairing, or never did; requests get the pairing page without
+    /// waiting.
+    PairingNeeded,
 }
 
 /// A hostname mapping independent of daemon/configuration types.
@@ -66,6 +73,9 @@ pub struct Route {
     pub unit: Option<String>,
     /// The route belongs to a lane on a remote box, reached through its connection.
     pub remote: bool,
+    /// A port whose scoped listeners ([`crate::Proxy::scoped`]) also serve this route,
+    /// besides the shared ones: a box's own HTTPS port, which its URLs carry.
+    pub listen_port: Option<u16>,
 }
 
 impl Route {
@@ -84,6 +94,7 @@ impl Route {
             owner: None,
             unit: None,
             remote: false,
+            listen_port: None,
         }
     }
 
@@ -177,6 +188,14 @@ impl RouteTable {
 
     /// Looks up a normalized hostname, never a URL or a host:port authority.
     pub fn lookup(&self, host: &str) -> Option<&Route> {
+        self.lookup_in(host, None)
+    }
+
+    /// [`Self::lookup`] for a listener scoped to `scope`: the route that wins on
+    /// every listener, and only when its `listen_port` is that port. `None`
+    /// accepts every route. Picking the winner first keeps a scoped listener from
+    /// serving a box wildcard for a name a more specific local route owns.
+    pub(crate) fn lookup_in(&self, host: &str, scope: Option<u16>) -> Option<&Route> {
         let host = host.trim_end_matches('.').to_ascii_lowercase();
         if host.starts_with("*.") || !valid_pattern(&host) {
             return None;
@@ -184,6 +203,7 @@ impl RouteTable {
         self.routes
             .iter()
             .find(|route| matches_host(&route.host, &host))
+            .filter(|route| in_scope(route, scope))
     }
 
     /// Exposes the snapshot for hosts listings and certificate policies.
@@ -224,6 +244,11 @@ fn normalize(route: &mut Route) -> Result<(), RouteError> {
         }
     }
     Ok(())
+}
+
+/// Whether a listener scoped to `scope` serves `route`; unscoped listeners serve all.
+pub(crate) fn in_scope(route: &Route, scope: Option<u16>) -> bool {
+    scope.is_none_or(|port| route.listen_port == Some(port))
 }
 
 /// Wildcards route subdomains at any depth; TLS adds an exact SAN for deeper names.

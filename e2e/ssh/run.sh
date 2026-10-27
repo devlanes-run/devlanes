@@ -73,8 +73,12 @@ fi
 if [ "$bin" != skip ]; then
   # A running lane on the box for the mirroring test: a TCP echo service and a
   # synced folder. `devlanes start` also starts the box daemon the tunnel uses.
+  # The tests check the SSH transport, so the box serves unpaired clients;
+  # pairing has its own tests in devlanes-daemon and devlanes-e2e.
   docker exec -u devlanes -e HOME=/home/devlanes "$container" sh -c '
     set -eu
+    mkdir -p ~/.devlanes
+    printf "remote:\n  require_pairing: false\n" > ~/.devlanes/config.yaml
     mkdir -p ~/app/ext
     printf "hello from the box\n" > ~/app/ext/hello.txt
     cat > ~/app/devlanes.yaml <<EOF
@@ -101,5 +105,6 @@ export DEVLANES_TEST_SSH_KNOWN_HOSTS=$work/known_hosts
 if [ "$bin" = skip ]; then export DEVLANES_TEST_SSH_ALLOW_MISSING=1; fi
 
 cd "$repo"
-# --nocapture keeps skip reasons visible in CI logs.
-cargo test -p devlanes-transport-ssh --test it -- --ignored --nocapture "$@"
+# --nocapture keeps skip reasons visible in CI logs. The box here is Linux, so the
+# Windows box test is left out.
+cargo test -p devlanes-transport-ssh --test it -- --ignored --nocapture --skip windows_sshd_box "$@"

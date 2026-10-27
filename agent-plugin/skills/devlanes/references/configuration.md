@@ -163,6 +163,17 @@ infra:
 
 Processes reach a container through `${{ infra.postgres.port }}`. Keep databases, brokers and object stores in infra, never as services. A shared container keeps one copy of the data, so give each lane its own database, vhost or bucket with `setup` and `lanes.vars`.
 
+A server devlanes does not run, such as a pgAdmin the developer starts by hand, goes under `infra.external` with its loopback address. Every lane lists it as a unit of kind `external`, the proxy routes its `hosts` to the port, and machines connected with `devlanes remote connect` mirror it. Only `127.0.0.1:<port>` and `[::1]:<port>` are accepted; use a port outside devlanes' `ports.range` (20000-32767 by default), since a port devlanes gave a unit is a config error.
+
+```yaml
+infra:
+  external:
+    pgadmin:
+      address: 127.0.0.1:5050
+      hosts: "pgadmin.${{ lane.domain }}"
+      hidden: false                       # true keeps it off connected machines
+```
+
 ## Setup and teardown
 
 Named commands run once per lane after its containers are healthy, recorded as done and skipped on later starts. `teardown` runs on `devlanes lane clean`.
@@ -286,7 +297,7 @@ For build output another program loads from a fixed path, such as an unpacked br
 
 ## Local overrides and user config
 
-`devlanes.local.yaml` next to `devlanes.yaml` holds personal changes and stays out of Git. It merges by key before templates, for example `services: { web: { autostart: false } }`.
+`devlanes.local.yaml` next to `devlanes.yaml` holds personal changes and stays out of Git (add it to `.gitignore`). It merges by key before templates, for example `services: { web: { autostart: false } }`; lists and single values replace. A lane whose worktree has no such file uses the primary worktree's. Declare an `infra.external` entry for a server only one developer runs here, not in `devlanes.yaml`.
 
 Machine settings live in `~/.devlanes/config.yaml` (or `$DEVLANES_HOME/config.yaml`): `ports.range`, `lanes.data_dir` (root of the lane data folders), `proxy` ports and LAN access, `startup` (how many services start at once), `tls` (devlanes or mkcert CA, trust stores), `hostnames`, `terminal`, log and history retention, `updates.check`. They never go in the project file. Prefer `devlanes config set proxy.https_port 8443` over editing the file: it keeps comments, refuses a value that would not load and says whether the change needs `devlanes daemon restart`. `devlanes config get KEY` prints the value in effect, defaults included, and `devlanes config unset KEY` puts the default back; none of them needs the daemon. An unknown key or invalid value written by hand stops the daemon from starting, with the file and line to fix; `devlanes doctor` checks the file without restarting.
 

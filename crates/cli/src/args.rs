@@ -223,12 +223,12 @@ without the daemon.",
         #[command(subcommand)]
         command: CertsCommand,
     },
-    /// Connect to boxes over SSH and mirror their lanes here
+    /// Connect to boxes and mirror their lanes here
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
     },
-    /// Run, stop and install the background daemon
+    /// Run, stop and install the background daemon, and pair other machines with it
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -558,18 +558,17 @@ pub enum CertsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum RemoteCommand {
-    /// Connect to a box over SSH and mirror its lanes, ports and hostnames here
+    /// Connect to a box and mirror its lanes, ports and hostnames here
     Connect {
-        /// SSH destination, as in ~/.ssh/config
+        /// Box name from remote.boxes in the user config, or an SSH destination
         #[arg(id = "connect_host", value_name = "HOST")]
         host: String,
         /// Return once connected instead of staying attached for prompts
         #[arg(long)]
         background: bool,
-        /// If devlanes is missing on the box, install this machine's release there
-        /// (HTTPS download, checksum verified, never replaces an existing binary)
-        #[arg(long)]
-        install: bool,
+        /// One-time pairing code from devlanes daemon pair on the box
+        #[arg(long, value_name = "CODE")]
+        code: Option<String>,
     },
     /// Disconnect from a box and remove its mirrored ports and hostnames
     Disconnect {
@@ -718,6 +717,16 @@ pub enum DaemonCommand {
     Uninstall,
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
+    /// Print a one-time code that pairs another machine with this one
+    Pair,
+    /// List the machines paired or connected to this one
+    Clients,
+    /// Disconnect a client and delete its pairing
+    Revoke {
+        /// Client name or id, as devlanes daemon clients shows it
+        #[arg(value_name = "CLIENT")]
+        client: String,
+    },
     /// Run the daemon in this process (spawned by the client)
     #[command(hide = true)]
     Run,
@@ -1131,6 +1140,11 @@ impl Cli {
                 DaemonCommand::Status => (Method::DaemonStatus, json!({})),
                 DaemonCommand::Stop => (Method::DaemonShutdown, json!({})),
                 DaemonCommand::ResetState => (Method::DaemonResetState, json!({})),
+                DaemonCommand::Pair => (Method::RemotePair, json!({})),
+                DaemonCommand::Clients => (Method::RemoteClients, json!({})),
+                DaemonCommand::Revoke { client } => {
+                    (Method::RemoteRevoke, json!({"client": client}))
+                }
                 DaemonCommand::Restart => {
                     // The lanes that ran come back with this shell's env, as `lane resume`.
                     context.env = Some(environment());
@@ -1150,10 +1164,10 @@ impl Cli {
                 RemoteCommand::Connect {
                     host,
                     background,
-                    install,
+                    code,
                 } => (
                     Method::Connect,
-                    json!({"host": host, "background": background, "install": install}),
+                    json!({"host": host, "background": background, "code": code}),
                 ),
                 RemoteCommand::Disconnect { host } => (Method::Disconnect, json!({"host": host})),
                 RemoteCommand::Ls => (Method::HostList, json!({})),

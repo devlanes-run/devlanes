@@ -645,18 +645,23 @@ mod tests {
         assert_ne!(u32::from(stat), libc::SZOMB);
     }
 
-    /// Scheduling priority `ps` reports for `pid`; 4 (`MAXPRI_THROTTLE`) in the
-    /// background band. `getpriority(PRIO_DARWIN_PROCESS)` cannot read it back:
-    /// XNU answers with the caller's own state whatever PID is passed.
-    fn priority_of(pid: u32) -> u32 {
+    /// Whether the scheduling priority `ps` reports for `pid` is at most 4
+    /// (`MAXPRI_THROTTLE`), the background band's ceiling. `ps` shows the base
+    /// priority minus a CPU usage penalty that is only aged when the thread
+    /// runs again, so a sleeping process in the band can show less than 4, and
+    /// one out of it less than its normal base. `getpriority(PRIO_DARWIN_PROCESS)`
+    /// can't read the band back: XNU answers with the caller's own state
+    /// whatever PID is passed.
+    fn in_band(pid: u32) -> bool {
         let output = Command::new("/bin/ps")
             .args(["-o", "pri=", "-p", &pid.to_string()])
             .output()
             .expect("run ps");
-        String::from_utf8_lossy(&output.stdout)
+        let priority: u32 = String::from_utf8_lossy(&output.stdout)
             .trim()
             .parse()
-            .expect("priority")
+            .expect("priority");
+        priority <= 4
     }
 
     /// A same-user child can be put in the background band and taken out again,
@@ -681,18 +686,17 @@ mod tests {
         let identity = crate::identity(child.0.id())
             .expect("lookup")
             .expect("child identity");
-        let normal = priority_of(identity.pid);
-        assert_ne!(normal, 4);
+        assert!(!in_band(identity.pid));
         assert_eq!(
             set_background(&identity, true).expect("set"),
             SignalOutcome::Sent
         );
-        assert_eq!(priority_of(identity.pid), 4);
+        assert!(in_band(identity.pid));
         assert_eq!(
             set_background(&identity, false).expect("clear"),
             SignalOutcome::Sent
         );
-        assert_eq!(priority_of(identity.pid), normal);
+        assert!(!in_band(identity.pid));
         let forged = ProcessIdentity {
             start_time: identity.start_time + 1,
             ..identity
@@ -701,7 +705,7 @@ mod tests {
             set_background(&forged, true).expect("mismatch"),
             SignalOutcome::Mismatch
         );
-        assert_eq!(priority_of(identity.pid), normal);
+        assert!(!in_band(identity.pid));
     }
 
     /// Appends one item padded to 8 bytes, with its length and kind filled in.

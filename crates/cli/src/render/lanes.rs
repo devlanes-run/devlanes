@@ -1408,6 +1408,7 @@ pub(super) fn hosts(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         }
         lines.extend(table(&rows, ""));
     }
+    lines.extend(client_route_lines(items));
     if let Some(proxy) = data.get("proxy").filter(|proxy| proxy.is_object()) {
         let listener = |name: &str| -> Option<String> {
             let entry = proxy.get(name)?;
@@ -1435,6 +1436,47 @@ pub(super) fn hosts(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     }
     lines.extend(route_warnings(data).iter().map(|line| cx.warning(line)));
     lines
+}
+
+/// On a box, one line per connected client that reports its mirror: how
+/// many of the routes open there, and on which HTTPS port when it is not the
+/// default: `on laptop: 3 of 4 hostnames reachable (port 8443)`.
+fn client_route_lines(items: &[Value]) -> Vec<String> {
+    // (client, reachable, total, port of a reachable URL), in first-seen order.
+    let mut clients: Vec<(String, usize, usize, Option<String>)> = Vec::new();
+    for client in items.iter().flat_map(|item| list(item, "clients")) {
+        let name = text(client, "client");
+        let index = match clients.iter().position(|(known, ..)| *known == name) {
+            Some(index) => index,
+            None => {
+                clients.push((name, 0, 0, None));
+                clients.len() - 1
+            }
+        };
+        let entry = &mut clients[index];
+        entry.2 += 1;
+        if client.get("reachable").and_then(Value::as_bool) == Some(true) {
+            entry.1 += 1;
+            if entry.3.is_none() {
+                entry.3 = client
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .and_then(|url| url.strip_prefix("https://"))
+                    .and_then(|rest| rest.split('/').next())
+                    .and_then(|authority| authority.rsplit_once(':'))
+                    .map(|(_, port)| clean(port));
+            }
+        }
+    }
+    clients
+        .into_iter()
+        .map(|(name, reachable, total, port)| {
+            let port = port
+                .map(|port| format!(" (port {port})"))
+                .unwrap_or_default();
+            format!("on {name}: {reachable} of {total} hostnames reachable{port}")
+        })
+        .collect()
 }
 
 /// `host_conflict` and `host_rejected` warnings, then the entries the proxy

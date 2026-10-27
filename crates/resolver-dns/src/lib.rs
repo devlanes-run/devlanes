@@ -40,11 +40,31 @@ pub enum DnsError {
         reason: &'static str,
     },
     /// UDP or TCP could not bind.
-    #[error("cannot bind the DNS server on {addr}: {source}")]
+    #[error("cannot bind the DNS server's {protocol} socket on {addr}: {source}")]
     Bind {
-        /// Requested address.
+        /// The address that failed.
         addr: SocketAddr,
+        /// `UDP` or `TCP`.
+        protocol: &'static str,
         /// Underlying error.
+        #[source]
+        source: std::io::Error,
+    },
+    /// Binding port 0 found no port free for both protocols.
+    #[error(
+        "found no port on {ip} free for both UDP and TCP in {attempts} tries; the last, {addr}, \
+         failed for {protocol}: {source}"
+    )]
+    NoSharedPort {
+        /// The requested address.
+        ip: std::net::IpAddr,
+        /// How many ports were tried.
+        attempts: usize,
+        /// The last port tried.
+        addr: SocketAddr,
+        /// The protocol it failed for, `UDP` or `TCP`.
+        protocol: &'static str,
+        /// Why it failed.
         #[source]
         source: std::io::Error,
     },

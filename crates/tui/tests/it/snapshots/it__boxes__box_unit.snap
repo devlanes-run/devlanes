@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/boxes.rs
+expression: draw(&app)?.backend()
+---
+" devlanes  1 acme   2 shop   3 acme @hetzner                      Monitor  Daemon  Boxes · 2 issues "
+"┌ acme@1 on hetzner ───────────────────┐┌ worker  running ───────────────────────────── on hetzner ┐"
+"│ ▾ services                         2 ││ state     running on the box                             │"
+"│   ● web                              ││ ports     default 24101  in use here by postgres (pid    │"
+"│   ◉ worker                           ││                          812)                            │"
+"│                                      ││                                                          │"
+"│ ▾ tasks                            1 ││ Read-only here. On hetzner: ssh hetzner, then devlanes   │"
+"│   ⠋ migrate                  running ││ logs acme@1:worker                                       │"
+"│                                      ││                                                          │"
+"│ ▾ infra                              ││                                                          │"
+"│   ▾ containers                  1 up ││                                                          │"
+"│     ● db                             ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"│                                      ││                                                          │"
+"└──────────────────────────────────────┘└──────────────────────────────────────────────────────────┘"
+" o open in browser   z zoom   / filter   B boxes   read-only                  ? all keys   q quit   "

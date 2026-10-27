@@ -208,6 +208,7 @@ fn plan(
             request
                 .avoid
                 .iter()
+                .chain(&request.never)
                 .filter_map(|port| PortBlock::new(*port, 1).ok()),
         );
     }
@@ -249,7 +250,20 @@ fn plan(
                 .filter(|record| record.project_id == project && record.owner != request.owner)
                 .map(|record| record.block),
         );
-        match ports::allocate_offsets(existing, &request.names, &reserved, &project_blocks) {
+        // An offset is a port in every block of the project, so one that lands
+        // on a `never` port in any of them goes to no new name.
+        let mut taken = reserved.clone();
+        let assigned: BTreeSet<u16> = existing.values().copied().collect();
+        taken.extend((0..block.size).filter(|offset| {
+            !assigned.contains(offset)
+                && project_blocks.iter().any(|other| {
+                    other
+                        .start
+                        .checked_add(*offset)
+                        .is_some_and(|port| request.never.contains(&port))
+                })
+        }));
+        match ports::allocate_offsets(existing, &request.names, &taken, &project_blocks) {
             Ok(offsets) => {
                 return Ok(Allocation {
                     block,

@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                       starting feat/checkout: 4 of 8 ready  M monitor   D daemon
+ devlanes  1 acme   2 billing   3 shop                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                            1-9 or [ ] switch lanes
 ┌ @0 · 34/38 up ───────────────────────────────┐┌ pgbouncer  up · shared · hidden · 6432 ───────────────── docker logs ┐
 │   ● api-catalog                              ││ 2026-10-21 10:40:00.112 UTC [1] LOG:  pgbouncer: checkpoint complete:│
@@ -40,7 +40,7 @@
  pgup scroll back   c select text   z zoom   / filter   n next problem                            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 99 bold, 100-107 dim, 111 bold, 112-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 37-47 dim, 50-51 dim, 52-67 yellow, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16-48 darkgray, 50-58 bold, 59-60 dim, 61-62 green, 63-87 dim, 89-105 darkgray, 107-117 dim, 119 darkgray
 3: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 119 darkgray

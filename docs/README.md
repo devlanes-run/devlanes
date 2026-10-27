@@ -23,11 +23,13 @@ Start with [getting started](getting-started.md). The two references are generat
 - [Remote setup](guides/remote-setup.md): preparing a box and a client for `devlanes remote connect`.
 - [Remote boxes over Tailscale](guides/remote-tailscale.md): MagicDNS names, OpenSSH keys or Tailscale SSH, check mode, Headscale.
 - [Remote boxes through Cloudflare](guides/remote-cloudflare.md): Cloudflare Tunnel with Access and `cloudflared` as `ProxyCommand`, the Cloudflare One Client, session expiry.
+- [Boxes reached by a command](guides/remote-command.md): containers, pods, WSL distributions and codespaces through `docker exec`, `kubectl exec`, `wsl.exe` or `gh codespace ssh` instead of SSH.
 - [Windows](guides/windows.md): requirements, Git for Windows' shell, stops, ports, HTTPS, hostnames and logon start on Windows 11.
 - [WSL](guides/wsl.md): devlanes inside a WSL distro with the browser on Windows: trusting the CA in Windows, opening URLs, systemd, worktrees on Windows drives.
 
 ## Other
 
 - [Remote boxes](remote.md): what mirroring does once connected.
+- [Security](security.md): who can reach the daemon, what the CA signs, what crosses a remote connection and what pairing protects.
 - [Design](design.md): lanes, ports, the daemon and startup order.
 - [Observability](observability.md): spans, diagnostics and plans for tracing.

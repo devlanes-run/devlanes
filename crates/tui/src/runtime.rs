@@ -37,7 +37,7 @@ use tokio::{
 
 use crate::{
     Error, Options,
-    api::{AttachEvent, AttachInput, DaemonApi},
+    api::{AttachEvent, AttachInput, ConnectEvent, DaemonApi},
     app::{App, Effect, Msg},
     input,
     start::{StartExit, StartFrame, StartHandoff},
@@ -382,6 +382,9 @@ fn deliver_blocking(sender: &mpsc::Sender<Msg>, msg: Msg) -> bool {
     sender.blocking_send(msg).is_ok()
 }
 
+/// Where an attached `connect`'s prompt answers go: `(stream_id, answer)`.
+type Answers = mpsc::Sender<(u64, Bytes)>;
+
 /// Owns background tasks and the attached stream's input queue.
 struct Executor {
     api: Arc<dyn DaemonApi>,
@@ -399,6 +402,8 @@ struct Executor {
     in_tmux: bool,
     subscription: Option<JoinHandle<()>>,
     attach: Option<(JoinHandle<()>, mpsc::Sender<AttachInput>)>,
+    /// The attached `connect` and where its prompt answers go.
+    connect: Option<(JoinHandle<()>, Answers)>,
     metrics: Option<JoinHandle<()>>,
     /// The daemon tab's facts request and log read, one of each at a time.
     daemon: Option<JoinHandle<()>>,
@@ -430,6 +435,7 @@ impl Executor {
             in_tmux: options.var("TMUX").is_some(),
             subscription: None,
             attach: None,
+            connect: None,
             metrics: None,
             daemon: None,
             log: None,
@@ -691,6 +697,90 @@ impl Executor {
                     deliver(&sender, Msg::Tasks { lane, result }).await;
                 });
             }
+            Effect::FetchBoxes => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::Boxes(api.host_list().await)).await;
+                });
+            }
+            Effect::FetchClients => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::Clients(api.remote_clients().await)).await;
+                });
+            }
+            Effect::RevokeClient { id, name } => {
+                tokio::spawn(async move {
+                    let result = api.revoke_client(id).await;
+                    deliver(&sender, Msg::Revoked { name, result }).await;
+                });
+            }
+            Effect::Connect { generation, host } => {
+                self.detach_connect();
+                let (answers, answers_rx) = mpsc::channel(ATTACH_INPUT_QUEUE);
+                let task = tokio::spawn(pump_connect(api, sender, generation, host, answers_rx));
+                self.connect = Some((task, answers));
+            }
+            Effect::ConnectAnswer { stream_id, answer } => {
+                // A closed queue means the pump ended, and its end says why.
+                if let Some((_, answers)) = &self.connect
+                    && let Err(mpsc::error::TrySendError::Full(_)) =
+                        answers.try_send((stream_id, Bytes::from(answer.0)))
+                {
+                    self.fail("answer", "too many answers are waiting. Try again".into());
+                }
+            }
+            Effect::ConnectDetach => self.detach_connect(),
+            Effect::LoadBoxCommands => {
+                let home = api.home();
+                tokio::spawn(async move {
+                    let known = tokio::task::spawn_blocking(move || {
+                        let path = home?.join("config.yaml");
+                        path.exists()
+                            .then(|| devlanes_config::load_user_lenient(&path).0.remote.boxes)
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, entry)| (name, entry.command))
+                    .collect();
+                    deliver(&sender, Msg::BoxCommands(known)).await;
+                });
+            }
+            Effect::SaveBoxCommand {
+                generation,
+                host,
+                command,
+            } => {
+                let home = api.home();
+                tokio::spawn(async move {
+                    let result = match home {
+                        Some(home) => tokio::task::spawn_blocking(move || {
+                            devlanes_config::set_user_value(
+                                &home.join("config.yaml"),
+                                &format!("remote.boxes.{host}.command"),
+                                &serde_json::Value::from(command),
+                            )
+                            .map_err(|error| error.message)
+                        })
+                        .await
+                        .unwrap_or_else(|error| Err(error.to_string())),
+                        None => Err("there is no devlanes home to write config.yaml in".into()),
+                    };
+                    deliver(&sender, Msg::BoxSaved { generation, result }).await;
+                });
+            }
+            Effect::Disconnect { host } => {
+                tokio::spawn(async move {
+                    let result = api.disconnect(host.clone()).await;
+                    deliver(&sender, Msg::Disconnected { host, result }).await;
+                });
+            }
+            Effect::Pair => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::Paired(api.pair().await)).await;
+                });
+            }
             Effect::FetchLogs {
                 generation,
                 lane,
@@ -835,6 +925,14 @@ impl Executor {
         }
     }
 
+    /// Stops the `connect` pump; dropping its connection detaches, and the
+    /// daemon keeps the box's connection.
+    fn detach_connect(&mut self) {
+        if let Some((task, _)) = self.connect.take() {
+            task.abort();
+        }
+    }
+
     /// Queues input for the attached stream; a full queue drops the input and says so.
     fn send_attach(&mut self, input: AttachInput) {
         let Some((_, sender)) = &self.attach else {
@@ -857,6 +955,7 @@ impl Drop for Executor {
     /// if the caller's runtime keeps running. This detaches; it stops nothing.
     fn drop(&mut self) {
         self.detach();
+        self.detach_connect();
         if let Some(task) = self.subscription.take() {
             task.abort();
         }
@@ -924,6 +1023,50 @@ async fn pump_attach(
         }
     }
     deliver(&sender, Msg::AttachClosed { generation }).await;
+}
+
+/// Opens `connect` for `host`, then forwards its events to the app and the
+/// app's prompt answers to the daemon until it ends or is aborted.
+async fn pump_connect(
+    api: Arc<dyn DaemonApi>,
+    sender: mpsc::Sender<Msg>,
+    generation: u64,
+    host: String,
+    mut answers: mpsc::Receiver<(u64, Bytes)>,
+) {
+    let mut session = match api.connect(host).await {
+        Ok(session) => session,
+        Err(error) => {
+            let msg = Msg::ConnectDone {
+                generation,
+                result: Err(error),
+            };
+            deliver(&sender, msg).await;
+            return;
+        }
+    };
+    loop {
+        tokio::select! {
+            event = session.events.recv() => {
+                let msg = match event {
+                    Some(ConnectEvent::Event(event)) => Msg::ConnectEvent { generation, event },
+                    Some(ConnectEvent::Done(result)) => Msg::ConnectDone { generation, result },
+                    None => return,
+                };
+                let done = matches!(msg, Msg::ConnectDone { .. });
+                if !deliver(&sender, msg).await || done {
+                    return;
+                }
+            }
+            answer = answers.recv() => match answer {
+                // A closed pump means the stream ended; its end arrives as an event.
+                Some(answer) => {
+                    let _ = session.answers.send(answer).await;
+                }
+                None => return,
+            },
+        }
+    }
 }
 
 /// Follows a container's Docker logs and writes each line to the pane's grid

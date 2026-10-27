@@ -1,0 +1,122 @@
+ devlanes  1 acme   2 billing   3 shop                                                                                                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ no boxes yet                                                                                                                                                                                         │
+│                                                                                                                                                                                                      │
+│   n   connect to a box by its SSH name or a command                                                                                                                                                  │
+│                                                                                                                                                                                                      │
+│ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on this machine.                                                                    │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                 ┌ revoke laptop ──────────────────────────────────────────────────┐                                                                  │
+│                                                                 │ Revoke laptop (dl_cid_3f2a9c1e)?                                │                                                                  │
+│                                                                 │                                                                 │                                                                  │
+│                                                                 │ It deletes the client's 2 pairings and ends its connection now. │                                                                  │
+│                                                                 │ remote.require_pairing is false here, so it can reconnect       │                                                                  │
+│                                                                 │ without a code.                                                 │                                                                  │
+│                                                                 │                                                                 │                                                                  │
+│                                                                 │ y revoke   n cancel                                             │                                                                  │
+│                                                                 └─────────────────────────────────────────────────────────────────┘                                                                  │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 2 connected · 3 paired ┐
+│ remote.require_pairing is false, so clients connect without a code.                                                                                                                                  │
+│ ● laptop     dl_cid_3f2a9c1e  203.0.113.24  connected for 2h 14m  2 pairings  mirrors 5 of 6 ports, 1 lane skipped                                                                                   │
+│ ● tablet     dl_cid_e5d8a1c4  198.51.100.7  connected for 5m      not paired                                                                                                                         │
+│ · ci-runner  dl_cid_0b9e44d1                last seen 1h ago      paired                                                                                                                             │
+│ · desktop    dl_cid_7c41e0a9                last seen 3d ago      paired                                                                                                                             │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ x revoke   n new box   p pairing code   j k select   esc back                                                                                                                    ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194-198 bold underlined
+1: 0 darkgray, 1-7 bold, 8-199 darkgray
+2: 0 darkgray, 2-13 bold, 199 darkgray
+3: 0 darkgray, 199 darkgray
+4: 0 darkgray, 4 bold, 8-52 dim, 199 darkgray
+5: 0 darkgray, 199 darkgray
+6: 0 darkgray, 2-130 dim, 199 darkgray
+7: 0 darkgray, 199 darkgray
+8: 0 darkgray, 199 darkgray
+9: 0 darkgray, 199 darkgray
+10: 0 darkgray, 199 darkgray
+11: 0 darkgray, 199 darkgray
+12: 0 darkgray, 199 darkgray
+13: 0 darkgray, 199 darkgray
+14: 0 darkgray, 199 darkgray
+15: 0 darkgray, 199 darkgray
+16: 0 darkgray, 199 darkgray
+17: 0 darkgray, 199 darkgray
+18: 0 darkgray, 199 darkgray
+19: 0 darkgray, 199 darkgray
+20: 0 darkgray, 199 darkgray
+21: 0 darkgray, 199 darkgray
+22: 0 darkgray, 199 darkgray
+23: 0 darkgray, 199 darkgray
+24: 0 darkgray, 199 darkgray
+25: 0 darkgray, 66-132 bold, 199 darkgray
+26: 0 darkgray, 66 bold, 68-99 bold, 132 bold, 199 darkgray
+27: 0 darkgray, 66 bold, 132 bold, 199 darkgray
+28: 0 darkgray, 66 bold, 132 bold, 199 darkgray
+29: 0 darkgray, 66 bold, 132 bold, 199 darkgray
+30: 0 darkgray, 66 bold, 132 bold, 199 darkgray
+31: 0 darkgray, 66 bold, 132 bold, 199 darkgray
+32: 0 darkgray, 66 bold, 68 bold, 69-75 dim, 79 bold, 80-86 dim, 132 bold, 199 darkgray
+33: 0 darkgray, 66-132 bold, 199 darkgray
+34: 0 darkgray, 199 darkgray
+35: 0 darkgray, 199 darkgray
+36: 0 darkgray, 199 darkgray
+37: 0 darkgray, 199 darkgray
+38: 0 darkgray, 199 darkgray
+39: 0 darkgray, 199 darkgray
+40: 0 darkgray, 199 darkgray
+41: 0 darkgray, 199 darkgray
+42: 0 darkgray, 199 darkgray
+43: 0 darkgray, 199 darkgray
+44: 0 darkgray, 199 darkgray
+45: 0 darkgray, 199 darkgray
+46: 0 darkgray, 199 darkgray
+47: 0 darkgray, 199 darkgray
+48: 0 darkgray, 199 darkgray
+49: 0 darkgray, 199 darkgray
+50: 0 darkgray, 199 darkgray
+51: 0-199 darkgray
+52: 0-175 bold, 176-186 bold green, 187-197 bold dim, 198-199 bold
+53: 0 bold, 2-68 yellow, 199 bold
+54: 0 bold, 1-3 reversed, 4-14 bold reversed, 15-198 reversed, 199 bold
+55: 0 bold, 2-3 green, 4-14 bold, 15-45 dim, 68-79 yellow, 199 bold
+56: 0 bold, 2-3 dim, 4-14 bold, 15-79 dim, 199 bold
+57: 0 bold, 2-3 dim, 4-14 bold, 15-79 dim, 199 bold
+58: 0-199 bold
+59: 1 bold, 2-11 dim, 12 bold, 13-23 dim, 24 bold, 25-40 dim, 41-43 bold, 44-53 dim, 54-56 bold, 57-64 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

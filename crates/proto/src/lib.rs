@@ -208,6 +208,54 @@ pub enum Method {
     Disconnect,
     #[serde(rename = "host.list")]
     HostList,
+    /// Box side, for `devlanes tunnel`: the registry a connected client mirrors,
+    /// streamed as [`remote::REGISTRY_SNAPSHOT_EVENT`] and then
+    /// [`remote::REGISTRY_CHANGE_EVENT`]s until the request's connection
+    /// closes. Params: [`remote::RegistryParams`]. The tunnel's client is
+    /// listed by `status` while the request lasts.
+    #[serde(rename = "remote.registry")]
+    RemoteRegistry,
+    /// Box side, for `devlanes tunnel`: stores a connected client's
+    /// [`remote::MirrorReport`] with its `status` entry, which `status` shows as
+    /// `clients[].mirror` and `url` turns into the URLs that client opens.
+    /// Params: [`remote::ReportParams`]. Reply `{stored}`, false when no
+    /// client with that id is listed.
+    #[serde(rename = "remote.report")]
+    RemoteReport,
+    /// Box side, for `devlanes daemon pair`: a one-time pairing code, valid
+    /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Reply
+    /// `{code, expires_at_ms, retry_after_ms?}`; `retry_after_ms` is set while
+    /// failed attempts keep every code refused.
+    #[serde(rename = "remote.pair")]
+    RemotePair,
+    /// Box side, for `devlanes tunnel`: whether a client's remote token is
+    /// valid ([`remote::VerifyParams`]). Reply `{paired}`, with `reason`
+    /// (`missing` or `invalid`) when not.
+    #[serde(rename = "remote.pairing.verify")]
+    RemotePairingVerify,
+    /// Box side, for `devlanes tunnel`: trades a one-time code for a remote
+    /// token ([`remote::ClaimParams`]). Reply `{token}`. Error
+    /// `pairing_refused` (`{message, retry_after_ms?}`) for a wrong, expired
+    /// or used code, which also invalidates every outstanding code, and while
+    /// too many failures refuse every code.
+    #[serde(rename = "remote.pairing.claim")]
+    RemotePairingClaim,
+    /// Box side, for `devlanes daemon clients` and the TUI: paired and
+    /// connected clients, connected ones first, then by name, `{items: [{id, name, paired, pairings,
+    /// paired_at_ms, last_seen_ms, connections: [{address, since_ms,
+    /// mirror}]}], now_ms}`; a client connected without pairing
+    /// (`remote.require_pairing: false`) has `paired: false` and no times.
+    /// `now_ms` is the daemon's clock, which the times are measured against.
+    /// [`remote::CLIENTS_EVENT`] announces changes.
+    #[serde(rename = "remote.clients")]
+    RemoteClients,
+    /// Box side, for `devlanes daemon revoke`: deletes the pairing of the
+    /// client named by `{client}` (its name, its id or a unique start of the
+    /// id) and ends its sessions. Reply `{revoked: [{id, name}], ended}`.
+    /// Errors `client_not_found` (`{client, candidates}`) and
+    /// `client_ambiguous` (`{client, candidates}`).
+    #[serde(rename = "remote.revoke")]
+    RemoteRevoke,
     /// Sent by `devlanes certs trust --hosts` and `certs untrust --hosts` after changing the
     /// helper: the daemon drops its sudo backoff and reapplies `/etc/hosts` now.
     #[serde(rename = "hosts.retry")]
@@ -396,6 +444,10 @@ pub struct ExecParams {
     pub pty: bool,
 }
 
+/// Kind, role and state of an `infra.external` entry's unit: a port devlanes
+/// routes and mirrors but does not run anything for.
+pub const EXTERNAL_KIND: &str = "external";
+
 /// Existing clients default to terminal-backed units when the field is absent.
 fn default_true() -> bool {
     true
@@ -487,7 +539,8 @@ pub struct UnitSummary {
     pub urls: Vec<String>,
     pub actor: Actor,
     pub reason: Option<RpcError>,
-    /// `service`, `task` or `exec`; clients group and filter on it.
+    /// `service`, `task`, `exec` or `external` (an `infra.external` entry: a
+    /// port devlanes routes but runs nothing for); clients group and filter on it.
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
@@ -537,8 +590,8 @@ pub struct UnitSummary {
     #[serde(default = "pty_default", skip_serializing_if = "is_true")]
     pub pty: bool,
     /// What the unit is: `service`, `task`, `setup` or `teardown` (an
-    /// `infra.setup` or `infra.teardown` entry, listed as kind `task`), or `exec`.
-    /// Absent from older daemons; clients then fall back to `kind`.
+    /// `infra.setup` or `infra.teardown` entry, listed as kind `task`), `exec`
+    /// or `external`. Absent from older daemons; clients then fall back to `kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     /// Where the unit is declared in `devlanes.yaml`, counted from 0 within its
@@ -932,22 +985,84 @@ pub struct UnitPeak {
     pub peak_cpu_percent: Option<f64>,
 }
 
-/// Messages a client daemon exchanges with a box's `devlanes tunnel` over the remote
-/// mux. Remote is mirroring only: these are sync payloads and connection events,
-/// never daemon requests, environments or secrets.
+/// Remote operation: the messages a client daemon exchanges with a box's
+/// `devlanes tunnel` over the remote mux, and the `remote.registry` feed between
+/// that tunnel and its box daemon. Remote is mirroring only: these are sync
+/// payloads, registry updates and connection events, never daemon requests,
+/// environments or secrets.
 pub mod remote {
     use std::path::PathBuf;
 
     use serde::{Deserialize, Serialize};
 
-    /// Event sent to the CLI attached to `connect` when ssh asks for input:
-    /// `{host, prompt, kind: secret|confirm|notify, stream_id}`. The CLI answers with
-    /// one binary frame on `stream_id`; an empty frame cancels.
+    /// Event sent to the CLI attached to `connect` when ssh asks for input, or
+    /// the box asks for a pairing code: `{host, prompt, kind:
+    /// secret|confirm|notify|code, stream_id}`. A `code` is read like a
+    /// `confirm`, shown as typed. The CLI answers with one binary frame on
+    /// `stream_id`; an empty frame cancels.
     pub const PROMPT_EVENT: &str = "remote.prompt";
+
+    /// How a client id starts; 64 lowercase hex digits (256 random bits) follow.
+    pub const CLIENT_ID_PREFIX: &str = "dl_cid_";
+    /// How a remote token starts; 64 lowercase hex digits (256 random bits) follow.
+    pub const TOKEN_PREFIX: &str = "dl_rt_";
+    /// How long a pairing code from `remote.pair` stays valid: 10 minutes.
+    pub const PAIRING_CODE_TTL_MS: u64 = 10 * 60 * 1000;
+
+    /// Whether `text` is `prefix` followed by 64 lowercase hex digits, the
+    /// shape of client ids and remote tokens.
+    pub fn is_random_id(text: &str, prefix: &str) -> bool {
+        text.strip_prefix(prefix).is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+    }
+
+    /// Params of `remote.pairing.verify`. Not `Debug`: it holds a token.
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct VerifyParams {
+        /// The client's id from its handshake.
+        pub id: String,
+        /// The client's host name from its handshake.
+        #[serde(default)]
+        pub name: String,
+        /// The remote token the client presented; absent when it sent none.
+        #[serde(default)]
+        pub token: Option<String>,
+        /// The tunnel's `$SSH_CONNECTION`, for the box's log.
+        #[serde(default)]
+        pub address: Option<String>,
+    }
+
+    /// Params of `remote.pairing.claim`. Not `Debug`: it holds a code.
+    #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct ClaimParams {
+        /// The client's id from its handshake.
+        pub id: String,
+        /// The client's host name from its handshake.
+        #[serde(default)]
+        pub name: String,
+        /// The one-time code the client sent.
+        pub code: String,
+        /// The tunnel's `$SSH_CONNECTION`, for the box's log.
+        #[serde(default)]
+        pub address: Option<String>,
+    }
     /// `{host, state, ...}` whenever a connection changes state.
     pub const STATE_EVENT: &str = "remote.state";
     /// `{host, code, ...}` for mirroring problems such as a skipped lane or a busy port.
     pub const WARNING_EVENT: &str = "remote.warning";
+    /// `{host}` on a client daemon, at most a few times a second, when what
+    /// `host.list` says about the box changed apart from its link state (which
+    /// [`STATE_EVENT`] reports): its registry, mirrored ports, routes or syncs.
+    /// Clients fetch `host.list` again.
+    pub const MIRROR_EVENT: &str = "remote.mirror.changed";
+    /// `{}` on a box daemon when what `remote.clients` lists changed: a client
+    /// connected or left, sent a mirror report, paired or was revoked.
+    /// Clients fetch `remote.clients` again.
+    pub const CLIENTS_EVENT: &str = "remote.clients.changed";
 
     /// The relay variable devlanes' ssh sets for askpass runs on Windows
     /// (devlanes-transport-ssh's `SOCKET_ENV`). A `devlanes.exe` started under
@@ -959,6 +1074,15 @@ pub mod remote {
     /// Largest synced file. The box skips (and reports) bigger ones before reading
     /// them, and the client refuses bigger file headers.
     pub const MAX_SYNC_FILE: u64 = 256 * 1024 * 1024;
+
+    /// `sync.status` parameters.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct SyncStatusParams {
+        /// List only the entries a connected client may follow, as
+        /// `devlanes tunnel` asks: a hidden service's entries stay on the box.
+        #[serde(default)]
+        pub for_clients: bool,
+    }
 
     /// A `services.<name>.sync` entry of a running lane, as listed by `sync.status`.
     ///
@@ -1044,14 +1168,179 @@ pub mod remote {
     }
 
     /// A tunnel registered with its box daemon while it serves a client.
-    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
     pub struct RemoteClient {
         pub pid: u32,
         /// `$SSH_CONNECTION` of the tunnel: client address and port, box address and port.
         #[serde(default)]
         pub ssh: Option<String>,
         pub since_ms: u64,
+        /// Random id the client machine keeps in its `$DEVLANES_HOME`, the same
+        /// across reconnects and restarts; empty when the client sent none.
+        #[serde(default)]
+        pub id: String,
+        /// The client machine's host name; empty when the client sent none.
+        #[serde(default)]
+        pub name: String,
+        /// What the client mirrors of this box, from its latest report; absent
+        /// until a client with the `mirror_report` feature sent one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub mirror: Option<MirrorReport>,
     }
+
+    /// Ports a [`MirrorReport`] lists at most; the box keeps the first ones.
+    pub const MAX_REPORT_PORTS: usize = 1024;
+    /// Skipped lanes and skipped hostnames a [`MirrorReport`] lists at most, each.
+    pub const MAX_REPORT_SKIPPED: usize = 256;
+    /// Longest text a [`MirrorReport`] keeps per field, in bytes.
+    pub const MAX_REPORT_TEXT: usize = 256;
+
+    /// What a client mirrors of one box, sent over the control stream after
+    /// its mirror changed (the `mirror_report` feature) and kept by the box in
+    /// memory with the client's `status` entry. The box shows it and derives
+    /// the URLs that client opens; it never opens anything itself.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct MirrorReport {
+        /// The name the client connects to the box by: its ssh alias or
+        /// `remote.boxes` name, as typed in `devlanes remote connect`.
+        #[serde(default)]
+        pub alias: String,
+        /// The client proxy's HTTPS port; absent when it serves none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub https_port: Option<u16>,
+        /// The client also serves the box's own HTTPS port, so URLs the box
+        /// generated open there unchanged.
+        #[serde(default)]
+        pub serves_box_port: bool,
+        /// Every box port the client mirrors: of running, non-hidden units.
+        #[serde(default)]
+        pub ports: Vec<MirroredPort>,
+        /// Box lanes the client does not mirror, with why.
+        #[serde(default)]
+        pub skipped_lanes: Vec<SkippedLane>,
+        /// Box hostnames the client does not route: outside the names it
+        /// routes to itself, or of a skipped lane.
+        #[serde(default)]
+        pub skipped_hosts: Vec<String>,
+    }
+
+    /// One box port in a [`MirrorReport`].
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct MirroredPort {
+        pub port: u16,
+        /// Box lane reference, `project@index`.
+        pub lane: String,
+        pub unit: String,
+        /// `bound` (listening on the client), `in_use` (something else holds
+        /// the port there), `local_lane` (a local lane's block has it),
+        /// `failed` (the bind failed with nothing holding it) or `unbound`.
+        pub state: String,
+        /// The loopback address it is bound on there, `127.0.0.1` when that
+        /// one is, else `::1`; absent when not bound.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub address: Option<String>,
+        /// What holds the port on the client, for `in_use` (a process or
+        /// another box) and `local_lane` (the lane).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub holder: Option<String>,
+        /// The client's message when the port is not bound.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub message: Option<String>,
+    }
+
+    /// A box lane a client does not mirror.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct SkippedLane {
+        /// Box lane reference, `project@index`.
+        pub lane: String,
+        pub reason: String,
+    }
+
+    impl MirrorReport {
+        /// The report within [`MAX_REPORT_PORTS`], [`MAX_REPORT_SKIPPED`] and
+        /// [`MAX_REPORT_TEXT`], without control characters: the box keeps
+        /// and prints what a client sent, so a client must not be able to
+        /// fill its memory or put terminal escapes in its output.
+        pub fn bounded(mut self) -> Self {
+            self.alias = bounded_text(&self.alias);
+            self.ports.truncate(MAX_REPORT_PORTS);
+            for port in &mut self.ports {
+                port.lane = bounded_text(&port.lane);
+                port.unit = bounded_text(&port.unit);
+                port.state = bounded_text(&port.state);
+                port.address = port.address.as_deref().map(bounded_text);
+                port.holder = port.holder.as_deref().map(bounded_text);
+                port.message = port.message.as_deref().map(bounded_text);
+            }
+            self.skipped_lanes.truncate(MAX_REPORT_SKIPPED);
+            for lane in &mut self.skipped_lanes {
+                lane.lane = bounded_text(&lane.lane);
+                lane.reason = bounded_text(&lane.reason);
+            }
+            self.skipped_hosts.truncate(MAX_REPORT_SKIPPED);
+            for host in &mut self.skipped_hosts {
+                *host = bounded_text(host);
+            }
+            self
+        }
+    }
+
+    /// `text` without control characters, cut on a character boundary to
+    /// [`MAX_REPORT_TEXT`] bytes.
+    pub fn bounded_text(text: &str) -> String {
+        let mut kept = String::new();
+        for c in text.chars().filter(|c| !c.is_control()) {
+            if kept.len() + c.len_utf8() > MAX_REPORT_TEXT {
+                break;
+            }
+            kept.push(c);
+        }
+        kept
+    }
+
+    /// Params of `remote.report`.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct ReportParams {
+        /// The client's id, as in its `remote.registry` request.
+        pub id: String,
+        /// The `client_serial` of that request's snapshots: the report
+        /// updates the client's entry only while that request owns it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub serial: Option<u64>,
+        pub report: MirrorReport,
+    }
+
+    /// Params of `remote.registry`.
+    ///
+    /// The feed reaches clients of other releases, which reject what they do
+    /// not know. A new unit kind, field meaning or event in the feed is sent
+    /// only to a client whose `features` names the feature that brought it.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct RegistryParams {
+        /// The client the tunnel serves, listed by `status` while the request lasts.
+        #[serde(default)]
+        pub client: Option<RemoteClient>,
+        /// Remote protocol features the tunnel and its client both implement.
+        #[serde(default)]
+        pub features: Vec<String>,
+        /// The tunnel requires pairing and the client passed it: the feed
+        /// ends with `client_not_paired` when the client has no pairing (any
+        /// more) once it is listed, so a revoke while the tunnel checked the
+        /// token still ends the session.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        pub paired: bool,
+    }
+
+    /// First event of `remote.registry`, and again whenever the daemon could not
+    /// keep up with its own changes: `{snapshot, client_serial?}`, the whole
+    /// registry in the remote protocol's `RegistrySnapshot` shape, replacing
+    /// what came before, and the serial of the client's `status` entry, which
+    /// its `remote.report`s name ([`ReportParams::serial`]).
+    pub const REGISTRY_SNAPSHOT_EVENT: &str = "remote.registry.snapshot";
+    /// One registry change after the snapshot: `{change}`, a remote protocol
+    /// `RegistryEvent` (`lane_upserted`, `lane_removed`, `unit_upserted`,
+    /// `unit_removed`).
+    pub const REGISTRY_CHANGE_EVENT: &str = "remote.registry.change";
 }
 
 /// Event names. Payloads are JSON objects documented next to each constant.
@@ -1150,6 +1439,42 @@ mod tests {
         assert_eq!(hello.managed_processes, 0);
         assert!(hello.features.is_empty());
         Ok(())
+    }
+
+    /// A mirror report keeps a bounded number of entries, each with bounded
+    /// text and no control characters.
+    #[test]
+    fn mirror_reports_are_bounded() {
+        use remote::{
+            MAX_REPORT_PORTS, MAX_REPORT_SKIPPED, MAX_REPORT_TEXT, MirrorReport, MirroredPort,
+            SkippedLane,
+        };
+        let port = MirroredPort {
+            port: 1,
+            lane: "a@0".into(),
+            unit: "web\u{1b}[31m".into(),
+            state: "in_use".into(),
+            address: None,
+            holder: Some("x".repeat(MAX_REPORT_TEXT * 2)),
+            message: None,
+        };
+        let report = MirrorReport {
+            alias: "box\n".into(),
+            ports: vec![port; MAX_REPORT_PORTS + 5],
+            skipped_lanes: vec![SkippedLane::default(); MAX_REPORT_SKIPPED + 1],
+            skipped_hosts: vec!["h".into(); MAX_REPORT_SKIPPED + 1],
+            ..MirrorReport::default()
+        }
+        .bounded();
+        assert_eq!(report.alias, "box");
+        assert_eq!(report.ports.len(), MAX_REPORT_PORTS);
+        assert_eq!(report.ports[0].unit, "web[31m");
+        assert_eq!(
+            report.ports[0].holder.as_deref().map(str::len),
+            Some(MAX_REPORT_TEXT)
+        );
+        assert_eq!(report.skipped_lanes.len(), MAX_REPORT_SKIPPED);
+        assert_eq!(report.skipped_hosts.len(), MAX_REPORT_SKIPPED);
     }
 
     #[test]

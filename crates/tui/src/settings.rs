@@ -32,7 +32,7 @@ use crate::ui::{fit, spans_width, spread};
 /// here join the first tab.
 const CATEGORIES: [(&str, &[&str]); 4] = [
     ("general", &["tui", "terminal", "updates"]),
-    ("network", &["proxy", "hostnames", "ports", "tls"]),
+    ("network", &["proxy", "hostnames", "ports", "tls", "remote"]),
     ("startup", &["start", "startup"]),
     ("storage", &["logs", "metrics", "history", "state"]),
 ];
@@ -240,6 +240,26 @@ impl Settings {
         self.categories.get(self.tab)?.items.get(self.index)
     }
 
+    /// Opens the tab of setting `key` with it selected; false when no tab
+    /// lists it, which leaves the page as it was.
+    pub fn select(&mut self, key: &str) -> bool {
+        let found = self
+            .categories
+            .iter()
+            .enumerate()
+            .find_map(|(tab, category)| {
+                let index = category.items.iter().position(|item| item.key == key)?;
+                Some((tab, index))
+            });
+        let Some((tab, index)) = found else {
+            return false;
+        };
+        self.tab = tab;
+        self.index = index;
+        self.error = None;
+        true
+    }
+
     /// Applies what the runtime read: the first load, or the file after a save.
     pub fn reply(&mut self, reply: Reply) {
         let Reply::Loaded {
@@ -385,12 +405,12 @@ impl Settings {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => return self.leave(Outcome::Menu, theme),
             KeyCode::Char('R') if !self.restart.is_empty() => return Outcome::RestartDaemon,
-            KeyCode::Up | KeyCode::Char('k') => self.select(self.index.saturating_sub(1)),
-            KeyCode::Down | KeyCode::Char('j') => self.select(self.index + 1),
-            KeyCode::Home | KeyCode::Char('g') => self.select(0),
-            KeyCode::End | KeyCode::Char('G') => self.select(count.saturating_sub(1)),
-            KeyCode::PageUp => self.select(self.index.saturating_sub(page)),
-            KeyCode::PageDown => self.select(self.index + page),
+            KeyCode::Up | KeyCode::Char('k') => self.select_row(self.index.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') => self.select_row(self.index + 1),
+            KeyCode::Home | KeyCode::Char('g') => self.select_row(0),
+            KeyCode::End | KeyCode::Char('G') => self.select_row(count.saturating_sub(1)),
+            KeyCode::PageUp => self.select_row(self.index.saturating_sub(page)),
+            KeyCode::PageDown => self.select_row(self.index + page),
             KeyCode::Right | KeyCode::Char('l') | KeyCode::Tab => self.switch(self.tab + 1),
             KeyCode::Left | KeyCode::Char('h') | KeyCode::BackTab => {
                 self.switch(self.tab + self.categories.len() - 1);
@@ -433,7 +453,7 @@ impl Settings {
                     } else {
                         self.index + 1
                     };
-                    self.select(index);
+                    self.select_row(index);
                 }
             }
             KeyCode::Left | KeyCode::Right => {
@@ -492,7 +512,7 @@ impl Settings {
                 _ => return Outcome::Stay,
             };
             if self.edit.is_none() && self.prompt.is_none() {
-                self.select(self.index.saturating_add_signed(delta));
+                self.select_row(self.index.saturating_add_signed(delta));
             }
             return Outcome::Stay;
         }
@@ -546,7 +566,7 @@ impl Settings {
                     self.begin_edit();
                 }
             } else if self.finish(theme) {
-                self.select(*index);
+                self.select_row(*index);
             }
         }
         Outcome::Stay
@@ -557,7 +577,8 @@ impl Settings {
         self.hits.borrow().rows.len().max(1)
     }
 
-    fn select(&mut self, index: usize) {
+    /// Selects row `index` of the open tab, or its last row.
+    fn select_row(&mut self, index: usize) {
         let count = self
             .categories
             .get(self.tab)
@@ -1873,17 +1894,7 @@ mod tests {
             source: Ok(source.into()),
             error: None,
         });
-        let (tab, index) = settings
-            .categories
-            .iter()
-            .enumerate()
-            .find_map(|(tab, category)| {
-                let index = category.items.iter().position(|item| item.key == key)?;
-                Some((tab, index))
-            })
-            .expect("setting");
-        settings.tab = tab;
-        settings.index = index;
+        assert!(settings.select(key), "no setting {key}");
         settings
     }
 
@@ -1943,6 +1954,12 @@ mod tests {
             assert!(keys.contains(&key), "{key} missing from {keys:?}");
         }
         assert!(!keys.contains(&"hostnames.dns_provider"));
+        // Boxes are keyed by name with free-form commands, which the page
+        // cannot edit; `devlanes config set` and the file can.
+        assert!(
+            !keys.iter().any(|key| key.starts_with("remote.boxes")),
+            "{keys:?}"
+        );
         assert!(categories[0].items[0].key.starts_with("tui."));
         let resolver = categories[1]
             .items
@@ -1954,6 +1971,28 @@ mod tests {
         };
         // The reserved public resolver is not offered.
         assert!(choices.iter().all(|choice| choice.value != "public"));
+        // The tunnel reads it at each connection, so no daemon restart.
+        let start_daemon = categories[1]
+            .items
+            .iter()
+            .find(|item| item.key == "remote.start_daemon")
+            .expect("remote.start_daemon");
+        assert_eq!(start_daemon.kind, Kind::Bool);
+        assert_eq!(start_daemon.applies, Applies::NextCommand);
+        let pairing = categories[1]
+            .items
+            .iter()
+            .find(|item| item.key == "remote.require_pairing")
+            .expect("remote.require_pairing");
+        assert_eq!(pairing.kind, Kind::Bool);
+        assert_eq!(pairing.applies, Applies::NextCommand);
+        let allow = categories[1]
+            .items
+            .iter()
+            .find(|item| item.key == "remote.allow_connections")
+            .expect("remote.allow_connections");
+        assert_eq!(allow.kind, Kind::Bool);
+        assert_eq!(allow.applies, Applies::NextCommand);
         let title = categories[0]
             .items
             .iter()
