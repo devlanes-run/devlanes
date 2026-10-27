@@ -117,7 +117,8 @@ pub struct HostInfo {
 pub struct UnitInfo {
     /// Unit identity.
     pub key: UnitKey,
-    /// Hidden units are listed but never mirrored or dialable.
+    /// Hidden units are never mirrored or dialable, and clients never receive
+    /// them: only the box's own registry lists them, for [`Registry::authorize`].
     pub hidden: bool,
     /// Opaque lifecycle state for display, such as `running`.
     pub state: String,
@@ -145,8 +146,19 @@ impl UnitInfo {
 pub struct RegistrySnapshot {
     /// All lanes.
     pub lanes: Vec<LaneInfo>,
-    /// All units, hidden included.
+    /// All units: hidden ones included on the box, none in what a client
+    /// receives ([`RegistrySnapshot::without_hidden`]).
     pub units: Vec<UnitInfo>,
+}
+
+impl RegistrySnapshot {
+    /// The snapshot a client gets: hidden units left out, so their names,
+    /// ports and hostnames stay on the box. The box keeps them for
+    /// [`Registry::authorize`], where a hidden unit's port stays refused.
+    pub fn without_hidden(mut self) -> Self {
+        self.units.retain(|unit| !unit.hidden);
+        self
+    }
 }
 
 /// An incremental registry change.
@@ -161,6 +173,18 @@ pub enum RegistryEvent {
     UnitUpserted { unit: UnitInfo },
     /// A unit went away.
     UnitRemoved { unit: UnitKey },
+}
+
+impl RegistryEvent {
+    /// The change a client gets, matching [`RegistrySnapshot::without_hidden`]:
+    /// a unit that is or became hidden is removed, which a client that never
+    /// had it ignores.
+    pub fn without_hidden(self) -> Self {
+        match self {
+            Self::UnitUpserted { unit } if unit.hidden => Self::UnitRemoved { unit: unit.key },
+            event => event,
+        }
+    }
 }
 
 /// Registry state built from a snapshot plus applied events.
@@ -594,6 +618,42 @@ mod tests {
             registry.authorize(&DialTarget::Port { port: 20002 }),
             Err(RejectReason::NotRunning)
         );
+    }
+
+    /// What a client gets leaves hidden units out: a snapshot drops them, and
+    /// an upsert of a hidden unit becomes its removal; other changes pass.
+    #[test]
+    fn clients_get_no_hidden_units() {
+        let shown = snapshot_of(vec![unit("web", 20000, false), unit("db", 20001, true)]);
+        let names: Vec<String> = shown
+            .without_hidden()
+            .units
+            .into_iter()
+            .map(|unit| unit.key.name)
+            .collect();
+        assert_eq!(names, ["web"]);
+        let hidden = unit("db", 20001, true);
+        assert_eq!(
+            RegistryEvent::UnitUpserted {
+                unit: hidden.clone()
+            }
+            .without_hidden(),
+            RegistryEvent::UnitRemoved { unit: hidden.key }
+        );
+        let visible = RegistryEvent::UnitUpserted {
+            unit: unit("web", 20000, false),
+        };
+        assert_eq!(visible.clone().without_hidden(), visible);
+        let removed = RegistryEvent::LaneRemoved { lane: lane() };
+        assert_eq!(removed.clone().without_hidden(), removed);
+    }
+
+    /// A snapshot of `units` without lanes.
+    fn snapshot_of(units: Vec<UnitInfo>) -> RegistrySnapshot {
+        RegistrySnapshot {
+            lanes: Vec::new(),
+            units,
+        }
     }
 
     #[test]

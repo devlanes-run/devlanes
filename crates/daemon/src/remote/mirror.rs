@@ -5,9 +5,11 @@
 //!
 //! Local lanes win: a box port inside one of this machine's port blocks is never
 //! bound (its hostnames still route through a relay), and local allocations keep
-//! clear of the box's ports (`Remotes::advertised_ports`). Between boxes, the one
-//! connected first keeps a hostname both serve, and a port another box's mirror
-//! holds is reported with that box.
+//! clear of the box's ports (`Remotes::advertised_ports`). A port something here
+//! holds on any loopback address, or on a wildcard address, is bound on none. A
+//! box lane with a hostname that overlaps a local route, by name or wildcard, is
+//! skipped. Between boxes, the one connected first keeps a hostname both serve,
+//! and a port another box's mirror holds is reported with that box.
 //!
 //! Listeners stay bound while the link reconnects; connections accepted meanwhile
 //! wait briefly for the new session and the proxy shows a reconnecting page.
@@ -411,15 +413,18 @@ impl Mirror {
 
         // A box lane whose hostname this machine or an earlier box already serves
         // is skipped whole: renaming it would break the CORS origins and cookies
-        // the box chose.
+        // the box chose. Patterns count, not only equal names: a box name under
+        // a local wildcard, or a box wildcard over a local name, would take
+        // requests the local lane serves today.
         let mut collisions: BTreeMap<LaneKey, Collision> = BTreeMap::new();
         for unit in &visible {
             for host in &unit.hosts {
                 let name = host.host.to_ascii_lowercase();
-                let owner = if local_hosts.contains(&name) {
+                let owner = if local_hosts.iter().any(|local| overlap(local, &name)) {
                     None
-                } else if let Some((other, _)) =
-                    earlier.iter().find(|(_, hosts)| hosts.contains(&name))
+                } else if let Some((other, _)) = earlier
+                    .iter()
+                    .find(|(_, hosts)| hosts.iter().any(|held| overlap(held, &name)))
                 {
                     Some(other.clone())
                 } else {
@@ -475,6 +480,16 @@ impl Mirror {
         for port in stale {
             released.extend(self.ports.remove(&port).into_iter().flat_map(|m| m.bound));
         }
+        let unbound: BTreeSet<u16> = wanted
+            .keys()
+            .copied()
+            .filter(|port| {
+                self.ports
+                    .get(port)
+                    .is_none_or(|mirror| mirror.bound.len() < self.addresses.len())
+            })
+            .collect();
+        let shadowing = shadowing(unbound).await;
         for (port, unit) in &wanted {
             let mirror = self.ports.entry(*port).or_insert_with(|| PortMirror {
                 unit: unit.key.name.clone(),
@@ -526,104 +541,109 @@ impl Mirror {
                 .copied()
                 .filter(|address| !mirror.bound.iter().any(|b| b.address == *address))
                 .collect();
-            for address in missing {
-                match bind(address, *port) {
-                    Ok(listener) => {
-                        mirror.conflicts.remove(&address);
-                        mirror.bound.push(Bound {
-                            address,
-                            task: tokio::spawn(accept_loop(
-                                listener,
-                                *port,
-                                self.conn.clone(),
-                                self.engine.clone(),
-                            )),
-                        });
+            let attempt = bind_port(&missing, *port, shadowing.get(port).copied());
+            if attempt.held() {
+                // Held on one loopback address, the port stays off the others
+                // too. Closed now, so the holder lookup below cannot find this
+                // daemon's own listener.
+                unbind(std::mem::take(&mut mirror.bound)).await;
+            }
+            for address in &attempt.closed {
+                mirror.conflicts.remove(address);
+            }
+            for (address, listener) in attempt.listeners {
+                mirror.conflicts.remove(&address);
+                mirror.bound.push(Bound {
+                    address,
+                    task: tokio::spawn(accept_loop(
+                        listener,
+                        *port,
+                        self.conn.clone(),
+                        self.engine.clone(),
+                    )),
+                });
+            }
+            for (address, failure) in attempt.failures {
+                let in_use = failure.in_use();
+                // Another box's mirror runs in this daemon, so its pid
+                // would only name devlanes itself.
+                let other_box = match &failure {
+                    BindFailure::Bind(_) if in_use => other_box_holding(engine, &self.conn, *port),
+                    _ => None,
+                };
+                let pid = match &failure {
+                    BindFailure::Shadowed(pid) => Some(*pid),
+                    BindFailure::Bind(_) if in_use && other_box.is_none() => {
+                        engine.integ.ports.holder(*port).await
                     }
-                    // No IPv6 loopback on this machine: nothing to mirror there.
-                    Err(error) if error.kind() == std::io::ErrorKind::AddrNotAvailable => {}
-                    Err(error) => {
-                        let in_use = error.kind() == std::io::ErrorKind::AddrInUse;
-                        // Another box's mirror runs in this daemon, so its pid
-                        // would only name devlanes itself.
-                        let other_box = if in_use {
-                            other_box_holding(engine, &self.conn, *port)
-                        } else {
-                            None
-                        };
-                        let pid = if in_use && other_box.is_none() {
-                            engine.integ.ports.holder(*port).await
-                        } else {
-                            None
-                        };
-                        // This daemon itself: usually another box's mirror that bound
-                        // the port and has not listed it yet. Its reconcile wakes
-                        // this mirror once it has, and the check above names it.
-                        let own = pid == Some(std::process::id());
-                        // What keeps the port when something does: the
-                        // message's subject. A bind that failed for another
-                        // reason has none.
-                        let holder = if let Some((other, unit)) = &other_box {
-                            Some(format!("box {other} ({unit})"))
-                        } else if own {
-                            Some("this devlanes daemon".to_owned())
-                        } else if in_use {
-                            Some(match pid {
-                                Some(pid) => format!("{} (pid {pid})", process_name(pid).await),
-                                None => "another process".to_owned(),
-                            })
-                        } else {
-                            None
-                        };
-                        let message = match &holder {
-                            Some(holder) => format!(
-                                "port {port} is in use on this machine by {holder}; not mirrored"
-                            ),
-                            None => format!(
-                                "port {port} cannot be bound on {address}: {}; not mirrored",
-                                bind_failure(&error)
-                            ),
-                        };
-                        // Reported once per holder: again when another box, or
-                        // something other than a box, holds it now. A port this
-                        // daemon holds is only listed until a wake tells why.
-                        let holder_box = other_box.as_ref().map(|(other, _)| other.as_str());
-                        let known = mirror.conflicts.get(&address);
-                        let report = !own
-                            && known.is_none_or(|known| {
-                                known["box"].as_str() != holder_box
-                                    || known["pid"].as_u64() == Some(u64::from(std::process::id()))
-                            });
-                        if report {
-                            tracing::warn!(host = %self.conn.name, %message, "cannot mirror port");
-                            engine.bus.emit(
-                                wire::WARNING_EVENT,
-                                json!({
-                                    "host": self.conn.name,
-                                    "code": "port_in_use",
-                                    "message": message,
-                                    "port": port,
-                                    "address": address,
-                                    "pid": pid,
-                                    "box": other_box.as_ref().map(|(other, _)| other),
-                                    "held_by": other_box.as_ref().map(|(_, unit)| unit),
-                                    "unit": mirror.unit,
-                                    "lane": mirror.lane,
-                                }),
-                            );
-                        }
-                        mirror.conflicts.insert(
-                            address,
-                            json!({
-                                "address": address,
-                                "pid": pid,
-                                "box": other_box.as_ref().map(|(other, _)| other),
-                                "holder": holder,
-                                "message": message,
-                            }),
-                        );
+                    BindFailure::Bind(_) => None,
+                };
+                // This daemon itself: usually another box's mirror that bound
+                // the port and has not listed it yet. Its reconcile wakes
+                // this mirror once it has, and the check above names it.
+                let own = pid == Some(std::process::id());
+                // What keeps the port when something does: the
+                // message's subject. A bind that failed for another
+                // reason has none.
+                let holder = if let Some((other, unit)) = &other_box {
+                    Some(format!("box {other} ({unit})"))
+                } else if own {
+                    Some("this devlanes daemon".to_owned())
+                } else if in_use {
+                    Some(match pid {
+                        Some(pid) => format!("{} (pid {pid})", process_name(pid).await),
+                        None => "another process".to_owned(),
+                    })
+                } else {
+                    None
+                };
+                let message = match &holder {
+                    Some(holder) => {
+                        format!("port {port} is in use on this machine by {holder}; not mirrored")
                     }
+                    None => format!(
+                        "port {port} cannot be bound on {address}: {}; not mirrored",
+                        failure.describe()
+                    ),
+                };
+                // Reported once per holder: again when another box, or
+                // something other than a box, holds it now. A port this
+                // daemon holds is only listed until a wake tells why.
+                let holder_box = other_box.as_ref().map(|(other, _)| other.as_str());
+                let known = mirror.conflicts.get(&address);
+                let report = !own
+                    && known.is_none_or(|known| {
+                        known["box"].as_str() != holder_box
+                            || known["pid"].as_u64() == Some(u64::from(std::process::id()))
+                    });
+                if report {
+                    tracing::warn!(host = %self.conn.name, %message, "cannot mirror port");
+                    engine.bus.emit(
+                        wire::WARNING_EVENT,
+                        json!({
+                            "host": self.conn.name,
+                            "code": "port_in_use",
+                            "message": message,
+                            "port": port,
+                            "address": address,
+                            "pid": pid,
+                            "box": other_box.as_ref().map(|(other, _)| other),
+                            "held_by": other_box.as_ref().map(|(_, unit)| unit),
+                            "unit": mirror.unit,
+                            "lane": mirror.lane,
+                        }),
+                    );
                 }
+                mirror.conflicts.insert(
+                    address,
+                    json!({
+                        "address": address,
+                        "pid": pid,
+                        "box": other_box.as_ref().map(|(other, _)| other),
+                        "holder": holder,
+                        "message": message,
+                    }),
+                );
             }
         }
         unbind(released).await;
@@ -913,13 +933,37 @@ pub(super) fn route_suffixes(engine: &Inner) -> Vec<String> {
     suffixes
 }
 
-/// Whether `host` (possibly `*.`-prefixed) is one of the suffixes or below one.
+/// Whether `host` lies strictly below one of the suffixes: at least one label
+/// below it, two for a `*.` wildcard. The suffix itself (`localhost`, the TLD)
+/// and a wildcard directly under it would let a box take every name this
+/// machine does not route itself, and browsers refuse such wildcards anyway.
 fn routable(host: &str, suffixes: &[String]) -> bool {
-    let host = host.trim_start_matches("*.").trim_end_matches('.');
-    let host = host.to_ascii_lowercase();
-    suffixes
-        .iter()
-        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let base = host.strip_prefix("*.").unwrap_or(&host);
+    suffixes.iter().any(|suffix| below(base, suffix))
+}
+
+/// Whether `name` has at least one label in front of `parent`.
+fn below(name: &str, parent: &str) -> bool {
+    name.strip_suffix(parent)
+        .is_some_and(|prefix| prefix.len() > 1 && prefix.ends_with('.'))
+}
+
+/// Whether some name matches both route patterns, each an exact name or a
+/// `*.` wildcard covering any depth below its parent (but not the parent),
+/// as the proxy matches them. Case and a trailing dot are ignored.
+fn overlap(a: &str, b: &str) -> bool {
+    let a = a.trim_end_matches('.').to_ascii_lowercase();
+    let b = b.trim_end_matches('.').to_ascii_lowercase();
+    match (a.strip_prefix("*."), b.strip_prefix("*.")) {
+        (None, None) => a == b,
+        (Some(parent), None) => below(&b, parent),
+        (None, Some(parent)) => below(&a, parent),
+        // Two wildcards share every name below the deeper parent.
+        (Some(first), Some(second)) => {
+            first == second || below(first, second) || below(second, first)
+        }
+    }
 }
 
 /// The process name for `pid`, for port conflict messages.
@@ -963,6 +1007,125 @@ fn denied_hint() -> String {
         "access denied (the port may lie in a Windows reserved port range, which `{}` lists)",
         crate::reserved_ports::LIST_COMMAND
     )
+}
+
+/// Why one loopback address of a box port is not mirrored.
+#[derive(Debug)]
+enum BindFailure {
+    /// The bind failed.
+    Bind(std::io::Error),
+    /// The bind worked, but the process with this pid listens on the port's
+    /// wildcard address, which Windows lets a loopback bind shadow.
+    Shadowed(u32),
+}
+
+impl BindFailure {
+    /// Whether something on this machine holds the port.
+    fn in_use(&self) -> bool {
+        match self {
+            Self::Bind(error) => error.kind() == std::io::ErrorKind::AddrInUse,
+            Self::Shadowed(_) => true,
+        }
+    }
+
+    /// The failure for a message, when nothing is known to hold the port.
+    fn describe(&self) -> String {
+        match self {
+            Self::Bind(error) => bind_failure(error),
+            Self::Shadowed(pid) => format!("pid {pid} listens on its wildcard address"),
+        }
+    }
+}
+
+/// What one attempt to bind a box port on some loopback addresses gave.
+#[derive(Debug, Default)]
+struct Attempt {
+    /// New listeners to serve.
+    listeners: Vec<(IpAddr, TcpListener)>,
+    /// Addresses that bound, closed again because the port is held on another.
+    closed: Vec<IpAddr>,
+    /// Addresses that are not mirrored, and why.
+    failures: Vec<(IpAddr, BindFailure)>,
+}
+
+impl Attempt {
+    /// Whether something on this machine holds the port on some address, in
+    /// which case no address of it may be mirrored.
+    fn held(&self) -> bool {
+        self.failures.iter().any(|(_, failure)| failure.in_use())
+    }
+}
+
+/// Binds `port` on each of `addresses`. An address without a loopback here
+/// (no IPv6) is neither bound nor failed. With `shadowed`, the pid of another
+/// program listening on the port's wildcard address, every bind that worked
+/// fails as [`BindFailure::Shadowed`]. When anything holds the port, the
+/// listeners that did bind are closed again: a program that reaches
+/// `localhost` on the other family would otherwise get the box instead of
+/// what holds the port here.
+fn bind_port(addresses: &[IpAddr], port: u16, shadowed: Option<u32>) -> Attempt {
+    let mut attempt = Attempt::default();
+    for address in addresses {
+        match bind(*address, port) {
+            Ok(listener) => attempt.listeners.push((*address, listener)),
+            Err(error) if error.kind() == std::io::ErrorKind::AddrNotAvailable => {}
+            Err(error) => attempt.failures.push((*address, BindFailure::Bind(error))),
+        }
+    }
+    if let Some(pid) = shadowed {
+        for (address, _) in std::mem::take(&mut attempt.listeners) {
+            attempt.failures.push((address, BindFailure::Shadowed(pid)));
+        }
+    }
+    if attempt.held() {
+        for (address, _) in std::mem::take(&mut attempt.listeners) {
+            attempt.closed.push(address);
+        }
+    }
+    attempt
+}
+
+/// Box ports among `ports` that another program listens on at a wildcard
+/// address, with its pid. Windows lets a loopback bind succeed next to such a
+/// listener (one without `SO_EXCLUSIVEADDRUSE`), and connections to
+/// `localhost` would then reach the box instead of that program. Unix refuses
+/// the bind instead, so there is nothing to look up.
+#[cfg(windows)]
+async fn shadowing(ports: BTreeSet<u16>) -> BTreeMap<u16, u32> {
+    if ports.is_empty() {
+        return BTreeMap::new();
+    }
+    match tokio::task::spawn_blocking(devlanes_sys_windows::proc::tcp_listeners).await {
+        Ok(Ok(listeners)) => wildcard_holders(&listeners, std::process::id(), &ports),
+        Ok(Err(error)) => {
+            tracing::debug!(%error, "cannot read the TCP listener table");
+            BTreeMap::new()
+        }
+        Err(_) => BTreeMap::new(),
+    }
+}
+
+/// Nothing: a loopback bind next to a wildcard listener fails on Unix.
+#[cfg(not(windows))]
+async fn shadowing(_ports: BTreeSet<u16>) -> BTreeMap<u16, u32> {
+    BTreeMap::new()
+}
+
+/// The first other process (not `own`) listening on the wildcard address of
+/// either family at each of `ports`, from a listener table of `(pid, address)`.
+#[cfg(any(windows, test))]
+fn wildcard_holders(
+    listeners: &[(u32, SocketAddr)],
+    own: u32,
+    ports: &BTreeSet<u16>,
+) -> BTreeMap<u16, u32> {
+    let mut holders = BTreeMap::new();
+    for (pid, address) in listeners {
+        if *pid != own && address.ip().is_unspecified() && ports.contains(&address.port()) {
+            holders.entry(address.port()).or_insert(*pid);
+        }
+    }
+    holders
 }
 
 /// Binds a mirror listener. `SO_REUSEADDR` only on Linux, where it merely skips
@@ -1267,5 +1430,134 @@ mod tests {
         for (error, reason, message) in cases {
             assert_eq!(open_error(&error, 3000), (reason, message.to_owned()));
         }
+    }
+
+    /// A box name must lie below `localhost` or the TLD: the suffix itself and
+    /// a wildcard directly under it are refused, deeper names and wildcards
+    /// pass, case and a trailing dot aside.
+    #[test]
+    fn box_names_need_a_label_below_the_suffix() {
+        let suffixes = ["localhost".to_owned(), "dev.internal".to_owned()];
+        for name in [
+            "web.acme.localhost",
+            "acme.localhost",
+            "*.acme.localhost",
+            "Web.Acme.Localhost.",
+            "api.dev.internal",
+            "*.app.dev.internal",
+        ] {
+            assert!(routable(name, &suffixes), "{name} is refused");
+        }
+        for name in [
+            "localhost",
+            "localhost.",
+            "*.localhost",
+            "dev.internal",
+            "*.dev.internal",
+            "internal",
+            "xlocalhost",
+            "web.example.com",
+            "*.com",
+        ] {
+            assert!(!routable(name, &suffixes), "{name} is routable");
+        }
+    }
+
+    /// Patterns overlap when one name matches both: equal names, a name below
+    /// a wildcard's parent (not the parent itself), and wildcards one of which
+    /// covers the other, in either order.
+    #[test]
+    fn route_patterns_overlap_like_the_proxy_matches_them() {
+        for (a, b) in [
+            ("web.acme.localhost", "WEB.acme.localhost."),
+            ("*.acme.localhost", "web.acme.localhost"),
+            ("*.acme.localhost", "a.b.acme.localhost"),
+            ("*.acme.localhost", "*.acme.localhost"),
+            ("*.acme.localhost", "*.pages.acme.localhost"),
+        ] {
+            assert!(overlap(a, b), "{a} and {b}");
+            assert!(overlap(b, a), "{b} and {a}");
+        }
+        for (a, b) in [
+            ("web.acme.localhost", "api.acme.localhost"),
+            ("*.acme.localhost", "acme.localhost"),
+            ("*.acme.localhost", "web.acme-2.localhost"),
+            ("*.acme.localhost", "*.acme-2.localhost"),
+            ("*.a.localhost", "*.ba.localhost"),
+        ] {
+            assert!(!overlap(a, b), "{a} and {b}");
+            assert!(!overlap(b, a), "{b} and {a}");
+        }
+    }
+
+    /// A port held on one loopback address is not bound on the other: every
+    /// listener of the attempt is closed and the held address fails as in use.
+    /// A free port binds on both, and a wildcard holder fails every bind.
+    #[tokio::test]
+    async fn a_port_held_on_one_family_is_not_bound_on_the_other() {
+        let v4 = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let v6 = IpAddr::V6(std::net::Ipv6Addr::LOCALHOST);
+        // Without an IPv6 loopback only the IPv4 half can be checked.
+        let has_v6 = std::net::TcpListener::bind((v6, 0)).is_ok();
+        let both = if has_v6 { vec![v4, v6] } else { vec![v4] };
+        for held in both.clone() {
+            let holder = std::net::TcpListener::bind((held, 0)).expect("holder");
+            let port = holder.local_addr().expect("holder address").port();
+            let attempt = bind_port(&both, port, None);
+            assert!(attempt.held(), "held on {held}: {attempt:?}");
+            assert!(attempt.listeners.is_empty(), "{attempt:?}");
+            assert!(
+                attempt
+                    .failures
+                    .iter()
+                    .any(|(address, failure)| *address == held && failure.in_use()),
+                "{attempt:?}"
+            );
+            // The other family bound and was closed again, unless something
+            // else on this machine happens to hold the number there too.
+            for address in &both {
+                let failed = attempt.failures.iter().any(|(a, _)| a == address);
+                assert!(failed || attempt.closed.contains(address), "{attempt:?}");
+            }
+            drop(holder);
+        }
+
+        // Port 0 picks a free port, so nothing holds it.
+        let attempt = bind_port(&[v4], 0, None);
+        assert!(!attempt.held(), "{attempt:?}");
+        assert_eq!(attempt.listeners.len(), 1, "{attempt:?}");
+        drop(attempt);
+
+        let attempt = bind_port(&[v4], 0, Some(812));
+        assert!(
+            attempt.held() && attempt.listeners.is_empty(),
+            "{attempt:?}"
+        );
+        assert!(
+            matches!(attempt.failures.as_slice(), [(address, BindFailure::Shadowed(812))] if *address == v4),
+            "{attempt:?}"
+        );
+    }
+
+    /// Only other processes' wildcard listeners on the asked ports count, the
+    /// first one per port; loopback listeners and this daemon's own do not.
+    #[test]
+    fn wildcard_listeners_of_others_shadow_a_port() {
+        let any4 = |port| SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
+        let any6 = |port| SocketAddr::new(std::net::Ipv6Addr::UNSPECIFIED.into(), port);
+        let lo = |port| SocketAddr::new(Ipv4Addr::LOCALHOST.into(), port);
+        let listeners = [
+            (7, any4(3000)),
+            (8, any6(3000)),
+            (9, lo(3001)),
+            (1, any4(3002)),
+            (10, any6(3003)),
+            (11, any4(4000)),
+        ];
+        let ports = BTreeSet::from([3000, 3001, 3002, 3003]);
+        assert_eq!(
+            wildcard_holders(&listeners, 1, &ports),
+            BTreeMap::from([(3000, 7), (3003, 10)])
+        );
     }
 }

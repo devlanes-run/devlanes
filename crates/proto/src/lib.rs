@@ -1075,6 +1075,15 @@ pub mod remote {
     /// them, and the client refuses bigger file headers.
     pub const MAX_SYNC_FILE: u64 = 256 * 1024 * 1024;
 
+    /// `sync.status` parameters.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct SyncStatusParams {
+        /// List only the entries a connected client may follow, as
+        /// `devlanes tunnel` asks: a hidden service's entries stay on the box.
+        #[serde(default)]
+        pub for_clients: bool,
+    }
+
     /// A `services.<name>.sync` entry of a running lane, as listed by `sync.status`.
     ///
     /// The client always writes to its own `$DEVLANES_HOME/sync/<host>/<project>/

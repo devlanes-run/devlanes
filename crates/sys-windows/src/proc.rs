@@ -286,17 +286,21 @@ pub fn boot_id() -> io::Result<String> {
 
 /// TCP listeners (IPv4 and IPv6) owned by `pids`, as `(pid, address)`.
 pub fn listening_tcp(pids: &[u32]) -> io::Result<Vec<(u32, SocketAddr)>> {
+    let mut sockets = tcp_listeners()?;
+    sockets.retain(|(pid, _)| pids.contains(pid));
+    Ok(sockets)
+}
+
+/// Every TCP listener on the machine (IPv4 and IPv6), as `(pid, address)`,
+/// read from the kernel's table without enumerating processes.
+pub fn tcp_listeners() -> io::Result<Vec<(u32, SocketAddr)>> {
     let mut sockets = Vec::new();
     for row in v4_rows(TCP_TABLE_OWNER_PID_LISTENER)? {
-        if pids.contains(&row.dwOwningPid) {
-            sockets.push((row.dwOwningPid, v4_addr(row.dwLocalAddr, row.dwLocalPort)));
-        }
+        sockets.push((row.dwOwningPid, v4_addr(row.dwLocalAddr, row.dwLocalPort)));
     }
     for row in v6_rows(TCP_TABLE_OWNER_PID_LISTENER)? {
-        if pids.contains(&row.dwOwningPid) {
-            let addr = v6_addr(row.ucLocalAddr, row.dwLocalPort, row.dwLocalScopeId);
-            sockets.push((row.dwOwningPid, addr));
-        }
+        let addr = v6_addr(row.ucLocalAddr, row.dwLocalPort, row.dwLocalScopeId);
+        sockets.push((row.dwOwningPid, addr));
     }
     Ok(sockets)
 }

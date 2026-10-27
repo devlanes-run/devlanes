@@ -627,6 +627,9 @@ const DAEMON_ENV: &[&str] = &[
     "TERM",
     // Local ssh to boxes (`remote connect`) authenticates through the agent.
     "SSH_AUTH_SOCK",
+    // `kubectl exec` boxes (`remote.boxes.<name>.command`) find their cluster
+    // through it, as `DOCKER_*` does for `docker exec` ones. A path, not a secret.
+    "KUBECONFIG",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
@@ -1346,6 +1349,7 @@ mod tests {
             ("SSH_CONNECTION", "1.2.3.4"),
             ("LC_ALL", "C"),
             ("DOCKER_HOST", "unix:///var/run/docker.sock"),
+            ("KUBECONFIG", "/tmp/kube/config"),
             ("DEVLANES_HOME", "/tmp/dl"),
             ("XDG_CONFIG_HOME", "/tmp/xdg"),
             ("https_proxy", "http://proxy.example.invalid"),
@@ -1365,6 +1369,7 @@ mod tests {
                 "PATH",
                 "LC_ALL",
                 "DOCKER_HOST",
+                "KUBECONFIG",
                 "DEVLANES_HOME",
                 "XDG_CONFIG_HOME",
                 "https_proxy",

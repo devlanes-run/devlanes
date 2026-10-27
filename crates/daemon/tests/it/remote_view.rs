@@ -47,7 +47,7 @@ fn mirrored(host: &Value, port: u16) -> Option<&Value> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `host.list` carries the box's registry (hidden and idle units included),
+/// `host.list` carries the box's registry (idle units included, hidden ones never),
 /// ports with their mirror state, routes with the URL to open here and their
 /// state, the box's handshake info, when the link came up and the names it
 /// may route; a unit starting on the box is announced with
@@ -102,13 +102,13 @@ async fn host_list_carries_the_registry_and_mirror_view() {
             "{web_unit}"
         );
         assert_eq!(web_unit["hosts"][0]["host"], "web.boxapp.localhost");
-        assert_eq!(
-            unit(&host, "secret").expect("secret listed")["hidden"],
-            true
+        assert!(
+            unit(&host, "secret").is_none(),
+            "a hidden unit stays on the box: {host}"
         );
         assert!(
             mirrored(&host, box_port(&side.h, 0, "secret").await).is_none(),
-            "a hidden unit is listed, never mirrored: {host}"
+            "a hidden unit is never mirrored: {host}"
         );
         let idle = unit(&host, "echo").expect("echo listed");
         assert_eq!(idle["ports"][0]["port"], echo, "{idle}");

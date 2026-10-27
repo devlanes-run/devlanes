@@ -471,7 +471,7 @@ impl Inner {
             Method::RemotePairingClaim => self.claim_pairing(params).await,
             Method::RemoteClients => self.clients_method().await,
             Method::RemoteRevoke => self.revoke_method(params).await,
-            Method::SyncStatus => self.sync_status_method().await,
+            Method::SyncStatus => self.sync_status_method(params).await,
             Method::Connect => self.connect_method(params, &session).await,
             Method::Disconnect => self.disconnect_method(params).await,
             Method::HostList => self.host_list().await,

@@ -377,6 +377,96 @@ async fn a_lane_this_machine_and_a_box_both_collide_with_names_this_machine() {
     .expect("timeout");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+/// Local routes win by pattern, not only by equal names: a box name under a
+/// local wildcard and a box wildcard over a local name both skip their box
+/// lane, while a box name neither covers is routed.
+async fn local_wildcards_and_names_win_over_overlapping_box_names() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping the wildcard collision test: no IPv6 loopback");
+        return;
+    }
+    // Port ranges: 15800-15999, between the pairing tests' 15400-15799 and
+    // 16000-16999.
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let under = repo(
+            &tmp.path,
+            "underrepo",
+            "project: underbox\nservices:\n  api:\n    run: \"http under-api\"\n    hosts: [\"api.wild.localhost\"]\n",
+        );
+        let over = repo(
+            &tmp.path,
+            "overrepo",
+            "project: overbox\nservices:\n  web:\n    run: \"http over-web\"\n    hosts: [\"*.wide.localhost\"]\n",
+        );
+        let apart = repo(
+            &tmp.path,
+            "apartrepo",
+            "project: apartbox\nservices:\n  web:\n    run: \"http apart-web\"\n    hosts: [\"web.apart.localhost\"]\n",
+        );
+        let side = BoxSide::start(&tmp, "box", "15800-15899").await;
+        for repo in [&under, &over, &apart] {
+            side.h
+                .call(Method::Start, json!({}), cx(repo))
+                .await
+                .expect("box start");
+        }
+        let client = ClientSide::start(&tmp, "client", "15900-15999", &side).await;
+        let local = repo(
+            &tmp.path,
+            "wildlocal",
+            "project: wildlocal\nservices:\n  web:\n    run: \"http local-web\"\n    hosts: [\"*.wild.localhost\", \"exact.wide.localhost\"]\n",
+        );
+        client
+            .h
+            .call(Method::Start, json!({}), cx(&local))
+            .await
+            .expect("local start");
+        client.connect("box").await;
+
+        let skipped = eventually(SOON, || async {
+            let host = client.host().await;
+            let lanes = host["skipped_lanes"].as_array()?.clone();
+            (lanes.len() == 2).then_some(lanes)
+        })
+        .await;
+        let Some(skipped) = skipped else {
+            panic!("both overlapping lanes are skipped: {}", client.host().await);
+        };
+        for (lane, name) in [
+            ("underbox@0", "api.wild.localhost"),
+            ("overbox@0", "*.wide.localhost"),
+        ] {
+            let entry = skipped
+                .iter()
+                .find(|entry| entry["lane"] == lane)
+                .unwrap_or_else(|| panic!("{lane} skipped: {skipped:?}"));
+            assert_eq!(entry["hosts"], json!([name]), "{entry}");
+            assert_eq!(entry["reason"], "this machine serves its hostnames");
+        }
+        let routed = eventually(SOON, || async {
+            http_get(client.proxy_port, "web.apart.localhost")
+                .await
+                .filter(|response| response.contains("apart-web"))
+        })
+        .await;
+        assert!(routed.is_some(), "a box name nothing local covers is routed");
+        for name in ["api.wild.localhost", "exact.wide.localhost"] {
+            let response = http_get(client.proxy_port, name).await;
+            assert!(
+                response.as_deref().is_some_and(|r| r.contains("local-web")),
+                "{name} stays local: {response:?}"
+            );
+        }
+
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 /// A local project with one routed HTTP service.
 const LOCAL_WEB: &str = r#"project: localweb
 services:

@@ -71,3 +71,44 @@ async fn service_sync_mirrors_while_the_unit_runs() {
     .await
     .expect("timeout");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+/// `sync.status` lists a hidden service's entries for this machine, and
+/// leaves them out of what connected clients may follow (`for_clients`).
+async fn hidden_services_sync_only_on_this_machine() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: hush\nservices:\n  ext:\n    run: sleep\n    ready: started\n    sync:\n      - from: out\n        to: ~/ext\n  vault:\n    run: sleep\n    ready: started\n    hidden: true\n    sync:\n      - from: keys\n        to: ~/keys\n";
+        let main = repo(&tmp.path, "r", config);
+        for folder in ["out", "keys"] {
+            std::fs::create_dir_all(main.join(folder)).expect("source");
+        }
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let units = |status: &Value| -> Vec<String> {
+            let mut units: Vec<String> = status["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item["unit"].as_str().map(str::to_owned))
+                .collect();
+            units.sort();
+            units
+        };
+        let here = h
+            .call(Method::SyncStatus, json!({}), cx(&main))
+            .await
+            .expect("sync status");
+        assert_eq!(units(&here), ["ext", "vault"], "{here}");
+        let clients = h
+            .call(Method::SyncStatus, json!({"for_clients": true}), cx(&main))
+            .await
+            .expect("sync status for clients");
+        assert_eq!(units(&clients), ["ext"], "{clients}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}

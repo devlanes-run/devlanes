@@ -199,6 +199,7 @@ async fn echo_roundtrip(session: &Session, port: u16) -> TestResult {
     Ok(())
 }
 
+/// The client's registry is the box's without its hidden units.
 #[tokio::test]
 async fn control_stream_delivers_snapshot() -> TestResult {
     bounded(async {
@@ -207,7 +208,10 @@ async fn control_stream_delivers_snapshot() -> TestResult {
         let session = Session::connect(&test_box.transport, session_options()).await?;
         assert_eq!(session.server(), "devlanes-test-box");
         let registry = session.registry().current();
-        assert_eq!(registry, Registry::from_snapshot(initial));
+        assert_eq!(
+            registry,
+            Registry::from_snapshot(snapshot(vec![unit("web", 20000, false)]))
+        );
         assert_eq!(
             registry
                 .mirrored_ports()
@@ -528,6 +532,68 @@ async fn unregistered_and_hidden_ports_are_rejected() -> TestResult {
                 ..
             })
         ));
+        Ok(())
+    })
+    .await
+}
+
+/// A unit that becomes hidden leaves the client's registry and one that is
+/// shown again comes back, while the box keeps refusing a port a hidden unit
+/// lists, also when a visible unit lists it too. Hidden units never reach the
+/// client, in events or in a resync.
+#[tokio::test]
+async fn hidden_units_never_reach_the_client() -> TestResult {
+    bounded(async {
+        let (port, _echo) = echo_server().await?;
+        let test_box = start_box(snapshot(vec![unit("api", port, false)]));
+        let session = Session::connect(&test_box.transport, session_options()).await?;
+        let mut watch = session.registry().subscribe();
+        let named = |registry: &Registry, name: &str| registry.units().any(|u| u.key.name == name);
+
+        test_box.registry.publish(RegistryEvent::UnitUpserted {
+            unit: unit("api", port, true),
+        });
+        watch.wait_for(|registry| !named(registry, "api")).await?;
+        let refused = session.open(DialTarget::Port { port }).await;
+        assert!(
+            matches!(
+                refused,
+                Err(OpenError::Rejected {
+                    reason: RejectReason::Hidden,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+
+        test_box.registry.publish(RegistryEvent::UnitUpserted {
+            unit: unit("api", port, false),
+        });
+        watch.wait_for(|registry| named(registry, "api")).await?;
+        echo_roundtrip(&session, port).await?;
+
+        // A hidden unit on the same port wins, and the client sees only the
+        // others. `marker` tells the client the resync arrived, and the box
+        // switches its own copy before it sends one.
+        test_box.registry.replace(snapshot(vec![
+            unit("api", port, false),
+            unit("vault", port, true),
+            unit("marker", 1, false),
+        ]));
+        watch.wait_for(|registry| named(registry, "marker")).await?;
+        assert_eq!(session.registry().current().units().count(), 2);
+        let refused = session.open(DialTarget::Port { port }).await;
+        assert!(
+            matches!(
+                refused,
+                Err(OpenError::Rejected {
+                    reason: RejectReason::Hidden,
+                    ..
+                })
+            ),
+            "{refused:?}"
+        );
+        assert!(!named(&session.registry().current(), "vault"));
         Ok(())
     })
     .await

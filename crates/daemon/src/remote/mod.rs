@@ -1376,10 +1376,16 @@ impl Inner {
         Ok(result)
     }
 
-    /// `sync.status`: sync entries of lanes with running services (what a tunnel may
-    /// stream; `kind: local` with the local copy's state under `local`), plus the
-    /// state of syncs this machine receives from boxes (`kind: remote`).
-    pub(crate) async fn sync_status_method(self: &Arc<Self>) -> Result<Value, RpcError> {
+    /// `sync.status`: sync entries of lanes with running services (`kind: local`
+    /// with the local copy's state under `local`), plus the state of syncs this
+    /// machine receives from boxes (`kind: remote`). With `for_clients`, what a
+    /// tunnel may stream: a hidden service's entries are left out, so a client
+    /// can neither list nor follow them.
+    pub(crate) async fn sync_status_method(
+        self: &Arc<Self>,
+        value: Value,
+    ) -> Result<Value, RpcError> {
+        let args: devlanes_proto::remote::SyncStatusParams = crate::engine::params(value)?;
         let mut items = Vec::new();
         for (project, lane) in self.all_lanes() {
             let (alive, reference) = {
@@ -1396,7 +1402,11 @@ impl Inner {
                     continue;
                 }
             };
-            for service in resolved.services.values() {
+            for service in resolved
+                .services
+                .values()
+                .filter(|service| !(args.for_clients && service.hidden))
+            {
                 for (index, spec) in service.sync.iter().enumerate() {
                     let entry = SyncEntry {
                         lane: reference.clone(),

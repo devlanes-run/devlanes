@@ -341,6 +341,10 @@ struct Controls {
     unanswered: Gate,
     /// Boxes reached by a command rather than ssh.
     commands: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Mirror on `127.0.0.1` too, where the box's services on this shared
+    /// machine already listen, as a client does where a program holds a box
+    /// port on one family only.
+    both_loopbacks: AtomicBool,
 }
 
 /// A connector handing out each test box's memory transport by box name.
@@ -393,9 +397,17 @@ impl RemoteConnector for MemoryConnector {
         }
     }
 
-    /// `127.0.0.1` belongs to the box's services on this shared machine.
+    /// `127.0.0.1` belongs to the box's services on this shared machine,
+    /// unless [`Controls::both_loopbacks`] asks for it too.
     fn mirror_addresses(&self) -> Vec<IpAddr> {
-        vec![Ipv6Addr::LOCALHOST.into()]
+        if self.controls.both_loopbacks.load(Ordering::SeqCst) {
+            vec![
+                std::net::Ipv4Addr::LOCALHOST.into(),
+                Ipv6Addr::LOCALHOST.into(),
+            ]
+        } else {
+            vec![Ipv6Addr::LOCALHOST.into()]
+        }
     }
 
     /// Fast retries keep the reconnect checks short.
@@ -1620,6 +1632,71 @@ async fn a_reconnected_client_is_listed_once() {
             .expect("status");
         assert!(status.get("clients").is_none(), "{status}");
         h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A box port something on the client holds on `127.0.0.1` (here the box's
+/// own service, on this shared machine) is not mirrored on `[::1]` either:
+/// it is reported in use with no address bound, while its hostname still
+/// reaches the box through a relay.
+async fn a_port_held_on_one_loopback_is_not_mirrored_on_the_other() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping the one-loopback test: no IPv6 loopback");
+        return;
+    }
+    // Port ranges: 19500-19999, below the default pool and the e2e slots,
+    // which no other test uses.
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "familyrepo", BOX);
+        let side = BoxSide::start(&tmp, "box", "19500-19749").await;
+        side.h
+            .call(Method::Start, json!({"units": ["web", "echo"]}), cx(&main))
+            .await
+            .expect("box start");
+        let echo_port = box_port(&side.h, 0, "echo").await;
+        let controls = Arc::new(Controls::default());
+        controls.both_loopbacks.store(true, Ordering::SeqCst);
+        let client =
+            ClientSide::start_controlled(&tmp, "client", "19750-19999", &side, controls).await;
+        client.connect("box").await;
+
+        let busy = format!("port {echo_port} is in use on this machine by");
+        let port = eventually(SOON, || async {
+            let host = client.host().await;
+            let port = host["ports"]
+                .as_array()?
+                .iter()
+                .find(|port| port["port"] == echo_port)?
+                .clone();
+            (port["state"] == "in_use").then_some(port)
+        })
+        .await;
+        let Some(port) = port else {
+            panic!("echo's port is in use: {}", client.host().await);
+        };
+        assert_eq!(port["addresses"], json!([]), "{port}");
+        let host = client.host().await;
+        assert!(
+            host["warnings"].as_array().is_some_and(|w| w
+                .iter()
+                .any(|m| m.as_str().is_some_and(|m| m.starts_with(&busy)))),
+            "{host}"
+        );
+        assert!(!echo(echo_port).await, "[::1] stays unbound");
+        let routed = eventually(SOON, || async {
+            http_get(client.proxy_port, "web.boxapp.localhost")
+                .await
+                .filter(|response| response.contains("hello-from-box"))
+        })
+        .await;
+        assert!(routed.is_some(), "the hostname goes through a relay");
+
+        client.stop().await;
+        side.stop().await;
     })
     .await
     .expect("timeout");

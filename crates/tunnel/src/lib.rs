@@ -6,12 +6,14 @@
 //!
 //! - the registry is the daemon's `remote.registry` feed: a snapshot, then
 //!   each change; it carries ports, hostnames and states, never environments
-//!   or secrets, and a feed that ends or breaks ends the session;
+//!   or secrets, the client gets it without hidden units, and a feed that
+//!   ends or breaks ends the session;
 //! - the client's mirror reports go to the daemon with `remote.report`, which
 //!   keeps the latest one with the client's `status` entry;
 //! - data streams dial loopback ports of running, non-hidden services,
 //!   containers and `infra.external` ports, nothing else;
-//! - syncs stream `sync.status` entries; the client never chooses a path;
+//! - syncs stream `sync.status` entries of non-hidden services; the client
+//!   never chooses a path;
 //! - with `remote.require_pairing` (the default), a client is served only
 //!   after the daemon accepted its remote token (`remote.pairing.verify`) or
 //!   traded its one-time code for one (`remote.pairing.claim`), and its feed

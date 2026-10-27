@@ -13,12 +13,15 @@ use bytes::Bytes;
 use devlanes_client::{Client, Paths};
 use devlanes_proto::{
     Context, Method,
-    remote::{MAX_SYNC_FILE, ManifestBatch, SyncEntry, SyncFile, SyncManifest, SyncRequest},
+    remote::{
+        MAX_SYNC_FILE, ManifestBatch, SyncEntry, SyncFile, SyncManifest, SyncRequest,
+        SyncStatusParams,
+    },
 };
 use devlanes_sync::{ContentHash, HeldFile, Manifest, RelPath, SyncOptions, SyncTarget, Syncer};
 use devlanes_transport::{SyncError, SyncFeed, SyncInput, SyncInputEvent, SyncMessage, SyncSource};
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 /// File bytes per chunk; well under the transport's 8 MiB frame limit.
@@ -42,13 +45,17 @@ impl DaemonSync {
         }
     }
 
-    /// Sync entries of the box's running lanes.
+    /// Sync entries of the box's running lanes that a client may follow,
+    /// without hidden services' entries. Both listing and following go
+    /// through here, so a hidden entry can be neither.
     async fn entries(&self) -> Result<Vec<SyncEntry>, SyncError> {
         let mut client = Client::connect(&self.paths)
             .await
             .map_err(|error| SyncError::new(format!("box daemon: {error}")))?;
+        let params = serde_json::to_value(SyncStatusParams { for_clients: true })
+            .map_err(|error| SyncError::new(error.to_string()))?;
         let data = client
-            .request(Method::SyncStatus, json!({}), Context::default())
+            .request(Method::SyncStatus, params, Context::default())
             .await
             .map_err(|error| SyncError::new(format!("sync.status: {error}")))?;
         serde_json::from_value(data.get("items").cloned().unwrap_or(Value::Null))
@@ -287,6 +294,7 @@ mod tests {
         BoxServices, LoopbackDialer, RegistrySnapshot, ServeOptions, Session, SessionOptions,
         SharedRegistry, SyncSubscription, memory::memory_transport, serve,
     };
+    use serde_json::json;
 
     use super::*;
 
@@ -395,6 +403,37 @@ mod tests {
                 .and_then(|file| file.set_modified(settled))
                 .expect("mtime");
         }
+    }
+
+    /// The tunnel asks the box daemon only for the entries clients may follow,
+    /// which leaves hidden services' entries on the box, and a follow of an
+    /// entry the daemon did not list is refused.
+    #[tokio::test]
+    async fn only_entries_for_clients_are_listed_and_followed() -> crate::test_daemon::TestResult {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let dir = tempfile::tempdir()?;
+            let paths = crate::test_daemon::home(dir.path())?;
+            let daemon = crate::test_daemon::answer_one(&paths, |_| devlanes_proto::Outcome::Ok {
+                data: json!({"items": []}),
+            })
+            .await?;
+            let sync = DaemonSync::new(paths);
+            let (_input, receiver) = mpsc::channel(1);
+            let input = SyncInput::from_receiver(receiver);
+            let refused = sync
+                .follow("app@0".into(), "vault".into(), 0, false, input)
+                .await;
+            let Err(error) = refused else {
+                panic!("followed an entry the daemon did not list");
+            };
+            assert!(error.to_string().contains("has no sync entry"), "{error}");
+            drop(sync);
+            let request = daemon.await??;
+            assert_eq!(request.method, Method::SyncStatus);
+            assert_eq!(request.params, json!({"for_clients": true}));
+            Ok(())
+        })
+        .await?
     }
 
     #[tokio::test(flavor = "multi_thread")]

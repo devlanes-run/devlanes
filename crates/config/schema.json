@@ -230,12 +230,12 @@
           ]
         },
         "hidden": {
-          "description": "Keep the port and hostnames off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
+          "description": "Keep the entry off machines connected with `devlanes remote connect`: they do not see it, and its port and hostnames are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
           "examples": [
             false,
             true
           ],
-          "markdownDescription": "Keep the port and hostnames off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
+          "markdownDescription": "Keep the entry off machines connected with `devlanes remote connect`: they do not see it, and its port and hostnames are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
           "type": [
             "boolean",
             "null"
@@ -964,21 +964,21 @@
           "type": "object"
         },
         "hidden": {
-          "description": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+          "description": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
           "examples": [
             [
               "postgres"
             ]
           ],
           "items": {
-            "description": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+            "description": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
             "examples": [
               "postgres"
             ],
-            "markdownDescription": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+            "markdownDescription": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
             "type": "string"
           },
-          "markdownDescription": "Containers whose ports are not mirrored to machines connected with `devlanes remote connect`.",
+          "markdownDescription": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
           "type": [
             "array",
             "null"
@@ -2177,12 +2177,12 @@
               "type": "null"
             }
           ],
-          "description": "Keep this service's ports and hosts off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. The service still runs and works on this machine. Defaults to false.",
+          "description": "Keep this service off machines connected with `devlanes remote connect`: they do not see it, its ports and hosts are not mirrored there and cannot be reached from there, and its `sync` folders are not synced there. The service still runs and works on this machine. Defaults to false.",
           "examples": [
             false,
             true
           ],
-          "markdownDescription": "Keep this service's ports and hosts off machines connected with `devlanes remote connect`: they are not mirrored there and cannot be reached from there. The service still runs and works on this machine. Defaults to false."
+          "markdownDescription": "Keep this service off machines connected with `devlanes remote connect`: they do not see it, its ports and hosts are not mirrored there and cannot be reached from there, and its `sync` folders are not synced there. The service still runs and works on this machine. Defaults to false."
         },
         "hosts": {
           "anyOf": [

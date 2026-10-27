@@ -302,8 +302,10 @@ where
         box_info: options.box_info.clone(),
     };
     send_control(&mut control, &welcome, timing).await?;
+    // The box's own copy above keeps hidden units, so "hidden wins" holds
+    // in `authorize`; the client never learns of them.
     let snapshot = BoxControl::Snapshot {
-        snapshot: feed.snapshot,
+        snapshot: feed.snapshot.without_hidden(),
     };
     send_control(&mut control, &snapshot, timing).await?;
     tracing::debug!(
@@ -364,11 +366,11 @@ where
                 let message = match update {
                     Some(Ok(RegistryUpdate::Event(event))) => {
                         write(&registry).apply(event.clone());
-                        BoxControl::Event { event }
+                        BoxControl::Event { event: event.without_hidden() }
                     }
                     Some(Ok(RegistryUpdate::Resync(snapshot))) => {
                         write(&registry).replace(snapshot.clone());
-                        BoxControl::Snapshot { snapshot }
+                        BoxControl::Snapshot { snapshot: snapshot.without_hidden() }
                     }
                     Some(Err(error)) => return Err(ServeError::Registry(error)),
                     None => return Err(ServeError::RegistryClosed),
