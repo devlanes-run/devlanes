@@ -360,11 +360,8 @@ async fn internal_variables_stay_out() -> TestResult {
             "--ignored",
             "--nocapture",
         ])
+        .envs(INTERNAL_ENV.map(|name| (name, "/acme/internal")))
         .env(HELPER_ENV, "1")
-        .env("DEVLANES_HOME", "/acme/home")
-        .env("DEVLANES_READY_FD", "1")
-        .env("DEVLANES_READY_STEPS", "1")
-        .env("DEVLANES_ASKPASS_SOCKET", "/acme/askpass")
         .env("ACME_KEPT", "kept")
         .env("ACME_REMOVED", "removed")
         .stdin(std::process::Stdio::null())
@@ -399,10 +396,10 @@ async fn helper_internal_variables() -> TestResult {
         let opened = CommandTransport::new(fake(&steps), options.clone())
             .open()
             .await?;
+        let unset: String = INTERNAL_ENV.map(|name| format!("{name} unset\n")).concat();
         assert_eq!(
             String::from_utf8_lossy(&opened.header),
-            "DEVLANES_HOME unset\nDEVLANES_READY_FD unset\nDEVLANES_READY_STEPS unset\n\
-             DEVLANES_ASKPASS_SOCKET unset\nACME_KEPT=kept\nACME_REMOVED unset\n"
+            format!("{unset}ACME_KEPT=kept\nACME_REMOVED unset\n")
         );
         drop(opened);
 

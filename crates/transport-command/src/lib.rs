@@ -67,6 +67,8 @@ const SHOWN: usize = 4096;
 /// and pipe, and anything it runs could send prompts to the relay.
 /// [`CommandOptions::env`] can still set them. The rest of the environment,
 /// such as `PATH`, `SSH_AUTH_SOCK` or `KUBECONFIG`, is inherited.
+// A variable devlanes adds for its own processes belongs here, or every box
+// command inherits it; the tests set each entry and check it stays out.
 pub const INTERNAL_ENV: [&str; 4] = [
     "DEVLANES_HOME",
     "DEVLANES_READY_FD",
