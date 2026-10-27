@@ -380,7 +380,8 @@ async fn a_lane_this_machine_and_a_box_both_collide_with_names_this_machine() {
 #[tokio::test(flavor = "multi_thread")]
 /// Local routes win by pattern, not only by equal names: a box name under a
 /// local wildcard and a box wildcard over a local name both skip their box
-/// lane, while a box name neither covers is routed.
+/// lane, while a box name neither covers is routed, and a box name this
+/// machine refuses anyway skips nothing even when a local route has it.
 async fn local_wildcards_and_names_win_over_overlapping_box_names() {
     if !ipv6_loopback().await {
         eprintln!("skipping the wildcard collision test: no IPv6 loopback");
@@ -403,7 +404,7 @@ async fn local_wildcards_and_names_win_over_overlapping_box_names() {
         let apart = repo(
             &tmp.path,
             "apartrepo",
-            "project: apartbox\nservices:\n  web:\n    run: \"http apart-web\"\n    hosts: [\"web.apart.localhost\"]\n",
+            "project: apartbox\nservices:\n  web:\n    run: \"http apart-web\"\n    hosts: [\"web.apart.localhost\", \"shop.example.com\"]\n",
         );
         let side = BoxSide::start(&tmp, "box", "15800-15899").await;
         for repo in [&under, &over, &apart] {
@@ -416,7 +417,7 @@ async fn local_wildcards_and_names_win_over_overlapping_box_names() {
         let local = repo(
             &tmp.path,
             "wildlocal",
-            "project: wildlocal\nservices:\n  web:\n    run: \"http local-web\"\n    hosts: [\"*.wild.localhost\", \"exact.wide.localhost\"]\n",
+            "project: wildlocal\nservices:\n  web:\n    run: \"http local-web\"\n    hosts: [\"*.wild.localhost\", \"exact.wide.localhost\", \"shop.example.com\"]\n",
         );
         client
             .h
@@ -452,6 +453,15 @@ async fn local_wildcards_and_names_win_over_overlapping_box_names() {
         })
         .await;
         assert!(routed.is_some(), "a box name nothing local covers is routed");
+        // `shop.example.com` is refused on its own, so the local route of the
+        // same name does not skip apartbox's lane.
+        let host = client.host().await;
+        assert!(
+            host["skipped_hosts"]
+                .as_array()
+                .is_some_and(|hosts| hosts.iter().any(|h| h["host"] == "shop.example.com")),
+            "{host}"
+        );
         for name in ["api.wild.localhost", "exact.wide.localhost"] {
             let response = http_get(client.proxy_port, name).await;
             assert!(

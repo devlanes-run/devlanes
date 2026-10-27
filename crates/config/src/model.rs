@@ -685,8 +685,8 @@ pub struct InfraConfig {
     #[schemars(extend("examples" = [{"s3mock":"s3.${{ lane.domain }}"}]))]
     pub hosts: IndexMap<String, Hosts>,
     /// Containers kept off machines connected with `devlanes remote connect`: those
-    /// machines do not see them, and their ports are not mirrored there and cannot be
-    /// reached from there.
+    /// machines do not see the containers, do not mirror their ports and cannot reach
+    /// them.
     #[schemars(extend("examples" = [["postgres"]]))]
     pub hidden: Option<Vec<String>>,
     /// Docker containers run without a Compose file, keyed by name and reached as
@@ -779,9 +779,9 @@ pub struct ExternalConfig {
     /// lane its own name; the first non-wildcard host becomes the unit's URL.
     #[schemars(extend("examples" = ["pgadmin.${{ lane.domain }}",["docs.${{ lane.domain }}"]]))]
     pub hosts: Option<ExternalHosts>,
-    /// Keep the entry off machines connected with `devlanes remote connect`: they do not
-    /// see it, and its port and hostnames are not mirrored there and cannot be reached
-    /// from there. This machine still routes them. Defaults to false.
+    /// Keep the entry off machines connected with `devlanes remote connect`: those
+    /// machines do not see the entry, do not mirror its port or route its hostnames, and
+    /// cannot reach the port. This machine still routes the hostnames. Defaults to false.
     #[schemars(extend("examples" = [false,true]))]
     pub hidden: Option<bool>,
 }

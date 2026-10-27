@@ -230,12 +230,12 @@
           ]
         },
         "hidden": {
-          "description": "Keep the entry off machines connected with `devlanes remote connect`: they do not see it, and its port and hostnames are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
+          "description": "Keep the entry off machines connected with `devlanes remote connect`: those machines do not see the entry, do not mirror its port or route its hostnames, and cannot reach the port. This machine still routes the hostnames. Defaults to false.",
           "examples": [
             false,
             true
           ],
-          "markdownDescription": "Keep the entry off machines connected with `devlanes remote connect`: they do not see it, and its port and hostnames are not mirrored there and cannot be reached from there. This machine still routes them. Defaults to false.",
+          "markdownDescription": "Keep the entry off machines connected with `devlanes remote connect`: those machines do not see the entry, do not mirror its port or route its hostnames, and cannot reach the port. This machine still routes the hostnames. Defaults to false.",
           "type": [
             "boolean",
             "null"
@@ -964,21 +964,21 @@
           "type": "object"
         },
         "hidden": {
-          "description": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
+          "description": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see the containers, do not mirror their ports and cannot reach them.",
           "examples": [
             [
               "postgres"
             ]
           ],
           "items": {
-            "description": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
+            "description": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see the containers, do not mirror their ports and cannot reach them.",
             "examples": [
               "postgres"
             ],
-            "markdownDescription": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
+            "markdownDescription": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see the containers, do not mirror their ports and cannot reach them.",
             "type": "string"
           },
-          "markdownDescription": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see them, and their ports are not mirrored there and cannot be reached from there.",
+          "markdownDescription": "Containers kept off machines connected with `devlanes remote connect`: those machines do not see the containers, do not mirror their ports and cannot reach them.",
           "type": [
             "array",
             "null"
@@ -2177,12 +2177,12 @@
               "type": "null"
             }
           ],
-          "description": "Keep this service off machines connected with `devlanes remote connect`: they do not see it, its ports and hosts are not mirrored there and cannot be reached from there, and its `sync` folders are not synced there. The service still runs and works on this machine. Defaults to false.",
+          "description": "Keep this service off machines connected with `devlanes remote connect`: those machines do not see the service, do not mirror its ports or route its hosts, cannot reach its ports and do not get its `sync` folders. The service still runs and works on this machine. Defaults to false.",
           "examples": [
             false,
             true
           ],
-          "markdownDescription": "Keep this service off machines connected with `devlanes remote connect`: they do not see it, its ports and hosts are not mirrored there and cannot be reached from there, and its `sync` folders are not synced there. The service still runs and works on this machine. Defaults to false."
+          "markdownDescription": "Keep this service off machines connected with `devlanes remote connect`: those machines do not see the service, do not mirror its ports or route its hosts, cannot reach its ports and do not get its `sync` folders. The service still runs and works on this machine. Defaults to false."
         },
         "hosts": {
           "anyOf": [

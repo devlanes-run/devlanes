@@ -444,7 +444,11 @@ async fn external_ports_are_routed_and_mirrored_while_a_lane_runs() {
             client.host().await
         );
         let current = direct(&side, "c0ffee01", FEATURES).await;
-        assert_eq!(refusal(&current, vault).await, Some(RejectReason::Hidden));
+        // Refused as if nothing listed it, so probing tells nothing about it.
+        assert_eq!(
+            refusal(&current, vault).await,
+            Some(RejectReason::NotRegistered)
+        );
         assert_eq!(refusal(&current, port).await, None, "files is dialable");
         current.close();
 

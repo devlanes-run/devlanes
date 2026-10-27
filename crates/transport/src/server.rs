@@ -363,20 +363,27 @@ where
             },
             update = updates.next() => {
                 // Authorization switches to the new state before the client hears about it.
+                // What the client hears is decided from the box's copy before
+                // the change, which tells whether the client was shown a unit.
                 let message = match update {
                     Some(Ok(RegistryUpdate::Event(event))) => {
-                        write(&registry).apply(event.clone());
-                        BoxControl::Event { event: event.without_hidden() }
+                        let mut copy = write(&registry);
+                        let shown = event.clone().without_hidden(&copy);
+                        copy.apply(event);
+                        shown.map(|event| BoxControl::Event { event })
                     }
                     Some(Ok(RegistryUpdate::Resync(snapshot))) => {
                         write(&registry).replace(snapshot.clone());
-                        BoxControl::Snapshot { snapshot: snapshot.without_hidden() }
+                        Some(BoxControl::Snapshot { snapshot: snapshot.without_hidden() })
                     }
                     Some(Err(error)) => return Err(ServeError::Registry(error)),
                     None => return Err(ServeError::RegistryClosed),
                 };
                 context.revoke();
-                send_control(&mut control, &message, timing).await?;
+                context.services.sync.registry_changed();
+                if let Some(message) = message {
+                    send_control(&mut control, &message, timing).await?;
+                }
             }
             () = tokio::time::sleep_until(deadline) => {
                 // Any inbound frame counts: pings can queue behind a large upload.
@@ -536,6 +543,9 @@ async fn handle_stream(stream: MuxStream, context: Arc<StreamContext>) {
     }
 }
 
+/// What a client hears for a port no unit it may reach lists.
+const NOT_REGISTERED: &str = "target is not registered on this box";
+
 /// Authorizes, dials and splices one data stream.
 async fn serve_data(mut channel: Channel<MuxStream>, target: DialTarget, context: &StreamContext) {
     let authorized = context
@@ -546,10 +556,16 @@ async fn serve_data(mut channel: Channel<MuxStream>, target: DialTarget, context
     let target = match authorized {
         Ok(target) => target,
         Err(reason) => {
-            let message = match reason {
-                RejectReason::Hidden => "target belongs to a hidden unit".to_owned(),
-                RejectReason::NotRunning => "target's unit is not running".to_owned(),
-                _ => "target is not registered on this box".to_owned(),
+            let (reason, message) = match reason {
+                // Answered like a port nothing lists, so probing ports tells a
+                // client nothing about hidden units; the box's log keeps why.
+                RejectReason::Hidden => {
+                    let DialTarget::Port { port } = target;
+                    tracing::info!(port, "refused a stream to a port a hidden unit lists");
+                    (RejectReason::NotRegistered, NOT_REGISTERED.to_owned())
+                }
+                RejectReason::NotRunning => (reason, "target's unit is not running".to_owned()),
+                _ => (reason, NOT_REGISTERED.to_owned()),
             };
             reject(&mut channel, reason, message).await;
             return;
@@ -608,4 +624,194 @@ async fn serve_data(mut channel: Channel<MuxStream>, target: DialTarget, context
 async fn reject(channel: &mut Channel<MuxStream>, reason: RejectReason, message: String) {
     let _ = wire::send(channel, &OpenReply::Rejected { reason, message }).await;
     let _ = channel.close().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use super::*;
+    use crate::registry::{
+        LaneInfo, LaneKey, PortInfo, RegistryEvent, RegistrySnapshot, SharedRegistry, UnitInfo,
+        UnitKey, UnitKind,
+    };
+    use crate::sync::{NoSync, SyncFeed, SyncInput};
+    use crate::wire::{OpenRequest, PROTOCOL_VERSION};
+
+    type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    /// A running service of lane `app@0` on `port`.
+    fn unit(name: &str, port: u16, hidden: bool, state: &str) -> UnitInfo {
+        UnitInfo {
+            key: UnitKey {
+                lane: lane(),
+                kind: UnitKind::Service,
+                name: name.into(),
+            },
+            hidden,
+            state: state.into(),
+            ports: vec![PortInfo {
+                name: "default".into(),
+                port,
+                address: None,
+            }],
+            hosts: Vec::new(),
+        }
+    }
+
+    /// The one lane of these tests.
+    fn lane() -> LaneKey {
+        LaneKey {
+            project: "app".into(),
+            lane: "0".into(),
+        }
+    }
+
+    /// The registry with `units` in its one lane.
+    fn snapshot(units: Vec<UnitInfo>) -> RegistrySnapshot {
+        RegistrySnapshot {
+            lanes: vec![LaneInfo {
+                key: lane(),
+                index: 0,
+                domain: Some("app.localhost".into()),
+            }],
+            units,
+        }
+    }
+
+    /// Counts the registry changes the session reports to its sync source.
+    #[derive(Default)]
+    struct CountingSync(AtomicUsize);
+
+    #[async_trait]
+    impl SyncSource for CountingSync {
+        async fn subscribe(
+            &self,
+            request: Value,
+            input: SyncInput,
+        ) -> Result<SyncFeed, crate::SyncError> {
+            NoSync.subscribe(request, input).await
+        }
+
+        fn registry_changed(&self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Every control frame the client receives, read raw, never names the
+    /// hidden `vault`: not in the first snapshot, nor when it changes state,
+    /// stops, goes away, comes back hidden or the box resyncs. Shown, it is
+    /// sent; hidden again, its removal is. `marker` upserts bound each step,
+    /// so the frames in between are exactly what the step sent.
+    #[tokio::test]
+    async fn no_frame_names_a_hidden_unit() -> TestResult {
+        timeout(Duration::from_secs(10), async {
+            let registry = SharedRegistry::new(
+                snapshot(vec![
+                    unit("web", 20000, false, "running"),
+                    unit("vault", 20001, true, "running"),
+                ]),
+                64,
+            );
+            let sync = Arc::new(CountingSync::default());
+            let services = BoxServices {
+                registry: Arc::new(registry.clone()),
+                dialer: Arc::new(LoopbackDialer),
+                sync: sync.clone(),
+                pairing: Arc::new(crate::NoPairing),
+            };
+            let (client_io, box_io) = tokio::io::duplex(1024 * 1024);
+            let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+            let client = mux::client(Box::new(client_io));
+            let mut control = wire::channel(client.open().await?);
+            let hello = OpenRequest::Control {
+                protocol: PROTOCOL_VERSION,
+                client: "client".into(),
+                features: Vec::new(),
+                client_id: String::new(),
+                client_name: String::new(),
+                token: None,
+            };
+            wire::send(&mut control, &hello).await?;
+            let mut next = async || -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
+                let (frame, _) = wire::recv::<_, Value>(&mut control)
+                    .await?
+                    .ok_or("the box closed the control stream")?;
+                Ok(frame)
+            };
+            let names_vault = |frame: &Value| frame.to_string().contains("vault");
+            let welcome = next().await?;
+            assert_eq!(welcome["type"], "welcome", "{welcome}");
+            let first = next().await?;
+            assert_eq!(first["type"], "snapshot", "{first}");
+            assert!(!names_vault(&first), "{first}");
+
+            let mut round = 0;
+            let mut step = async |change: Option<RegistryEvent>| -> Result<
+                Vec<Value>,
+                Box<dyn std::error::Error + Send + Sync>,
+            > {
+                if let Some(change) = change {
+                    registry.publish(change);
+                }
+                round += 1;
+                let state = format!("round-{round}");
+                registry.publish(RegistryEvent::UnitUpserted {
+                    unit: unit("marker", 1, false, &state),
+                });
+                let mut frames = Vec::new();
+                loop {
+                    let frame = next().await?;
+                    if frame["event"]["unit"]["key"]["name"] == "marker" {
+                        assert_eq!(frame["event"]["unit"]["state"], state.as_str());
+                        return Ok(frames);
+                    }
+                    frames.push(frame);
+                }
+            };
+            let upsert = |hidden, state: &str| {
+                Some(RegistryEvent::UnitUpserted {
+                    unit: unit("vault", 20001, hidden, state),
+                })
+            };
+            let removal = Some(RegistryEvent::UnitRemoved {
+                unit: unit("vault", 20001, true, "running").key,
+            });
+            // Hidden all along: a state change, a stop, a removal and a
+            // hidden comeback send nothing.
+            for change in [
+                upsert(true, "ready"),
+                upsert(true, "stopped"),
+                removal.clone(),
+                upsert(true, "running"),
+            ] {
+                assert_eq!(step(change).await?, Vec::<Value>::new());
+            }
+            // Shown: its upsert goes out; hidden again: its removal does.
+            let shown = step(upsert(false, "running")).await?;
+            assert_eq!(shown.len(), 1, "{shown:?}");
+            assert_eq!(shown[0]["event"]["type"], "unit_upserted", "{shown:?}");
+            let hidden = step(upsert(true, "running")).await?;
+            assert_eq!(hidden.len(), 1, "{hidden:?}");
+            assert_eq!(hidden[0]["event"]["type"], "unit_removed", "{hidden:?}");
+            // Hidden once more: changes and its removal send nothing again.
+            assert_eq!(step(upsert(true, "stopped")).await?, Vec::<Value>::new());
+            assert_eq!(step(removal).await?, Vec::<Value>::new());
+            // A resync carrying it hidden leaves it out.
+            registry.replace(snapshot(vec![
+                unit("web", 20000, false, "running"),
+                unit("vault", 20001, true, "running"),
+            ]));
+            let resync = next().await?;
+            assert_eq!(resync["type"], "snapshot", "{resync}");
+            assert!(!names_vault(&resync), "{resync}");
+            assert!(
+                sync.0.load(Ordering::SeqCst) > 0,
+                "the sync source heard of changes"
+            );
+            server.abort();
+            Ok(())
+        })
+        .await?
+    }
 }

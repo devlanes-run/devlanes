@@ -509,29 +509,27 @@ async fn stopping_a_unit_closes_its_streams_and_refuses_new_ones() -> TestResult
     .await
 }
 
+/// A port nothing lists and a hidden unit's port are refused with the same
+/// reason and message, so probing ports tells a client nothing about hidden
+/// units.
 #[tokio::test]
-async fn unregistered_and_hidden_ports_are_rejected() -> TestResult {
+async fn unregistered_and_hidden_ports_are_refused_alike() -> TestResult {
     bounded(async {
         let (port, _echo) = echo_server().await?;
         let (hidden_port, _hidden_echo) = echo_server().await?;
         let test_box = start_box(snapshot(vec![unit("db", hidden_port, true)]));
         let session = Session::connect(&test_box.transport, session_options()).await?;
-        let result = session.open(DialTarget::Port { port }).await;
-        assert!(matches!(
-            result,
-            Err(OpenError::Rejected {
-                reason: RejectReason::NotRegistered,
-                ..
-            })
-        ));
-        let result = session.open(DialTarget::Port { port: hidden_port }).await;
-        assert!(matches!(
-            result,
-            Err(OpenError::Rejected {
-                reason: RejectReason::Hidden,
-                ..
-            })
-        ));
+        let refusal = |result: Result<_, OpenError>| match result {
+            Err(OpenError::Rejected { reason, message }) => Some((reason, message)),
+            _ => None,
+        };
+        let unregistered = refusal(session.open(DialTarget::Port { port }).await);
+        let hidden = refusal(session.open(DialTarget::Port { port: hidden_port }).await);
+        assert_eq!(
+            unregistered.as_ref().map(|(reason, _)| *reason),
+            Some(RejectReason::NotRegistered)
+        );
+        assert_eq!(hidden, unregistered);
         Ok(())
     })
     .await
@@ -539,8 +537,8 @@ async fn unregistered_and_hidden_ports_are_rejected() -> TestResult {
 
 /// A unit that becomes hidden leaves the client's registry and one that is
 /// shown again comes back, while the box keeps refusing a port a hidden unit
-/// lists, also when a visible unit lists it too. Hidden units never reach the
-/// client, in events or in a resync.
+/// lists, also when a visible unit lists it too, as if nothing listed it.
+/// Hidden units never reach the client, in events or in a resync.
 #[tokio::test]
 async fn hidden_units_never_reach_the_client() -> TestResult {
     bounded(async {
@@ -559,7 +557,7 @@ async fn hidden_units_never_reach_the_client() -> TestResult {
             matches!(
                 refused,
                 Err(OpenError::Rejected {
-                    reason: RejectReason::Hidden,
+                    reason: RejectReason::NotRegistered,
                     ..
                 })
             ),
@@ -587,7 +585,7 @@ async fn hidden_units_never_reach_the_client() -> TestResult {
             matches!(
                 refused,
                 Err(OpenError::Rejected {
-                    reason: RejectReason::Hidden,
+                    reason: RejectReason::NotRegistered,
                     ..
                 })
             ),

@@ -404,7 +404,9 @@ pub enum DialTarget {
 pub enum RejectReason {
     /// No unit in the box's registry advertises the target.
     NotRegistered,
-    /// Only hidden units advertise the target.
+    /// A hidden unit advertises the target. The box decides this for its own
+    /// log and sends [`RejectReason::NotRegistered`] instead, so a client
+    /// cannot learn of hidden units by probing ports.
     Hidden,
     /// The unit advertising the target is not running.
     NotRunning,

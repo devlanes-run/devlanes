@@ -23,6 +23,47 @@ pub(crate) fn home(dir: &Path) -> devlanes_client::Result<Paths> {
     Ok(paths)
 }
 
+/// Listens at `paths` and answers the hello and first request of every
+/// connection with `answer`, until the task is aborted.
+pub(crate) async fn answer_all(
+    paths: &Paths,
+    answer: impl Fn(&Request) -> Outcome + Send + Sync + 'static,
+) -> Result<JoinHandle<()>, devlanes_ipc::local::BindError> {
+    let mut listener = LocalListener::bind(&paths.socket).await?;
+    let answer = std::sync::Arc::new(answer);
+    Ok(tokio::spawn(async move {
+        while let Ok(stream) = listener.accept().await {
+            let answer = answer.clone();
+            tokio::spawn(async move {
+                let _ = answer_requests(Connection::new(stream), answer.as_ref()).await;
+            });
+        }
+    }))
+}
+
+/// Answers the hello and then every request on `connection` until the client
+/// hangs up, which ends it with an error.
+async fn answer_requests(
+    mut connection: Connection<devlanes_ipc::local::LocalStream>,
+    answer: &(dyn Fn(&Request) -> Outcome + Send + Sync),
+) -> Result<(), devlanes_ipc::Error> {
+    connection.recv().await?;
+    connection
+        .send(Frame::Control(Control::Hello(Hello::current(0))))
+        .await?;
+    loop {
+        if let Frame::Control(Control::Request(request)) = connection.recv().await? {
+            let result = answer(&request);
+            connection
+                .send(Frame::Control(Control::Response(Response {
+                    id: request.id,
+                    result,
+                })))
+                .await?;
+        }
+    }
+}
+
 /// Listens at `paths`, then for one connection answers the hello and the
 /// first request with `answer`. The task returns that request after the
 /// client hangs up.

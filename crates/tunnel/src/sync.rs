@@ -22,7 +22,7 @@ use devlanes_sync::{ContentHash, HeldFile, Manifest, RelPath, SyncOptions, SyncT
 use devlanes_transport::{SyncError, SyncFeed, SyncInput, SyncInputEvent, SyncMessage, SyncSource};
 use futures_util::StreamExt;
 use serde_json::Value;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 
 /// File bytes per chunk; well under the transport's 8 MiB frame limit.
 const CHUNK: usize = 1024 * 1024;
@@ -34,6 +34,9 @@ const MAX_SUBSCRIPTIONS: usize = 16;
 pub(crate) struct DaemonSync {
     paths: Paths,
     slots: Arc<Semaphore>,
+    /// Bumped on every registry change a session reports, which makes each
+    /// follow check that its entry is still offered.
+    changes: watch::Sender<u64>,
 }
 
 impl DaemonSync {
@@ -42,28 +45,14 @@ impl DaemonSync {
         Self {
             paths,
             slots: Arc::new(Semaphore::new(MAX_SUBSCRIPTIONS)),
+            changes: watch::Sender::new(0),
         }
     }
 
-    /// Sync entries of the box's running lanes that a client may follow,
-    /// without hidden services' entries. Both listing and following go
-    /// through here, so a hidden entry can be neither.
-    async fn entries(&self) -> Result<Vec<SyncEntry>, SyncError> {
-        let mut client = Client::connect(&self.paths)
-            .await
-            .map_err(|error| SyncError::new(format!("box daemon: {error}")))?;
-        let params = serde_json::to_value(SyncStatusParams { for_clients: true })
-            .map_err(|error| SyncError::new(error.to_string()))?;
-        let data = client
-            .request(Method::SyncStatus, params, Context::default())
-            .await
-            .map_err(|error| SyncError::new(format!("sync.status: {error}")))?;
-        serde_json::from_value(data.get("items").cloned().unwrap_or(Value::Null))
-            .map_err(|error| SyncError::new(format!("sync.status: {error}")))
-    }
-
-    /// Streams one entry until the client drops the feed; `read_only_modes` as
-    /// the client's request says (see [`SyncOptions::read_only_modes`]).
+    /// Streams one entry until the client drops the feed or the box stops
+    /// offering the entry (its service became hidden, or its lane stopped);
+    /// `read_only_modes` as the client's request says (see
+    /// [`SyncOptions::read_only_modes`]).
     async fn follow(
         &self,
         lane: String,
@@ -77,17 +66,79 @@ impl DaemonSync {
                 "this client already follows {MAX_SUBSCRIPTIONS} syncs on the box"
             ))
         })?;
-        let entry = self
-            .entries()
+        let wanted = (lane, unit, index);
+        let entry = entries(&self.paths)
             .await?
             .into_iter()
-            .find(|entry| entry.lane == lane && entry.unit == unit && entry.index == index)
+            .find(|entry| offers(entry, &wanted))
             .ok_or_else(|| {
+                let (lane, unit, index) = &wanted;
                 SyncError::new(format!(
                     "{lane}:{unit} has no sync entry {index} running on this box"
                 ))
             })?;
-        follow_entry(&entry, read_only_modes, input, permit)
+        let (revoke, revoked) = watch::channel(false);
+        tokio::spawn(revoke_when_withdrawn(
+            self.paths.clone(),
+            self.changes.subscribe(),
+            wanted,
+            revoke,
+        ));
+        follow_entry(&entry, read_only_modes, input, permit, revoked)
+    }
+}
+
+/// Sync entries of the box's running lanes that a client may follow,
+/// without hidden services' entries. Listing, following and the check that a
+/// followed entry is still offered all go through here.
+async fn entries(paths: &Paths) -> Result<Vec<SyncEntry>, SyncError> {
+    let mut client = Client::connect(paths)
+        .await
+        .map_err(|error| SyncError::new(format!("box daemon: {error}")))?;
+    let params = serde_json::to_value(SyncStatusParams { for_clients: true })
+        .map_err(|error| SyncError::new(error.to_string()))?;
+    let data = client
+        .request(Method::SyncStatus, params, Context::default())
+        .await
+        .map_err(|error| SyncError::new(format!("sync.status: {error}")))?;
+    serde_json::from_value(data.get("items").cloned().unwrap_or(Value::Null))
+        .map_err(|error| SyncError::new(format!("sync.status: {error}")))
+}
+
+/// Whether `entry` is the one a follow named: `(lane, unit, index)`.
+fn offers(entry: &SyncEntry, wanted: &(String, String, usize)) -> bool {
+    entry.lane == wanted.0 && entry.unit == wanted.1 && entry.index == wanted.2
+}
+
+/// Sets `revoke` once the box no longer offers the `wanted` entry to clients,
+/// checked after each registry change in `changes`, the way a data stream to
+/// a unit that stopped or became hidden is closed. Ends with the follow,
+/// which drops the receiver.
+async fn revoke_when_withdrawn(
+    paths: Paths,
+    mut changes: watch::Receiver<u64>,
+    wanted: (String, String, usize),
+    revoke: watch::Sender<bool>,
+) {
+    loop {
+        tokio::select! {
+            () = revoke.closed() => return,
+            changed = changes.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+        }
+        match entries(&paths).await {
+            Ok(listed) if !listed.iter().any(|entry| offers(entry, &wanted)) => {
+                let (lane, unit, index) = &wanted;
+                tracing::debug!(%lane, %unit, index, "a followed sync entry is no longer offered");
+                let _ = revoke.send(true);
+                return;
+            }
+            Ok(_) => {}
+            Err(error) => tracing::debug!(%error, "cannot check a followed sync entry"),
+        }
     }
 }
 
@@ -99,11 +150,15 @@ impl DaemonSync {
 /// so in its request, and a Windows box knows it of itself, since its files
 /// all report `0o644` or `0o444` and an executable a Unix client holds would
 /// otherwise be resent without its exec bits on every connect.
+///
+/// The feed ends cleanly once `revoked` turns true, at any point; a sender
+/// that is gone revokes nothing.
 pub(crate) fn follow_entry(
     entry: &SyncEntry,
     read_only_modes: bool,
     mut input: SyncInput,
     permit: OwnedSemaphorePermit,
+    mut revoked: watch::Receiver<bool>,
 ) -> Result<SyncFeed, SyncError> {
     let (messages, receiver) = mpsc::channel(16);
     let target = Arc::new(MuxTarget {
@@ -122,6 +177,7 @@ pub(crate) fn follow_entry(
         loop {
             let event = tokio::select! {
                 () = messages.closed() => return,
+                Ok(_) = revoked.wait_for(|revoked| *revoked) => return,
                 event = input.recv() => event,
             };
             match event {
@@ -155,8 +211,13 @@ pub(crate) fn follow_entry(
                         .await
                         .is_ok()
                 {
-                    messages.closed().await;
+                    tokio::select! {
+                        () = messages.closed() => {}
+                        Ok(_) = revoked.wait_for(|revoked| *revoked) => {}
+                    }
                 }
+                // Stopping drops the syncer's target, and with it the last
+                // sender, so the feed ends.
                 handle.stop().await;
             }
             Err(error) => {
@@ -196,7 +257,7 @@ impl SyncSource for DaemonSync {
         {
             SyncRequest::List => {
                 let entries = SyncManifest::Entries {
-                    entries: self.entries().await?,
+                    entries: entries(&self.paths).await?,
                 };
                 let entries = serde_json::to_value(entries)
                     .map_err(|error| SyncError::new(error.to_string()))?;
@@ -212,6 +273,12 @@ impl SyncSource for DaemonSync {
                 read_only_modes,
             } => self.follow(lane, unit, index, read_only_modes, input).await,
         }
+    }
+
+    /// Makes every follow check that its entry is still offered.
+    fn registry_changed(&self) {
+        self.changes
+            .send_modify(|count| *count = count.wrapping_add(1));
     }
 }
 
@@ -313,7 +380,9 @@ mod tests {
                 .try_acquire_owned()
                 .map_err(|_| SyncError::new("busy"))?;
             let read_only_modes = request["read_only_modes"].as_bool().unwrap_or(false);
-            follow_entry(&self.entry, read_only_modes, input, permit)
+            // A dropped sender: nothing revokes these follows.
+            let (_, revoked) = watch::channel(false);
+            follow_entry(&self.entry, read_only_modes, input, permit, revoked)
         }
     }
 
@@ -431,6 +500,80 @@ mod tests {
             let request = daemon.await??;
             assert_eq!(request.method, Method::SyncStatus);
             assert_eq!(request.params, json!({"for_clients": true}));
+            Ok(())
+        })
+        .await?
+    }
+
+    /// A follow ends cleanly once a registry change finds its entry no longer
+    /// offered (the service became hidden or its lane stopped), and a change
+    /// that keeps it offered leaves the follow running.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_follow_ends_when_its_entry_is_withdrawn() -> crate::test_daemon::TestResult {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let dir = tempfile::tempdir()?;
+            let source = dir.path().join("src");
+            tree(&source, 3);
+            let paths = crate::test_daemon::home(dir.path())?;
+            let offered = Arc::new(AtomicBool::new(true));
+            let listing = offered.clone();
+            let entry = json!({
+                "lane": "app@0", "project": "app", "unit": "web", "index": 0,
+                "from": source, "leaf": "src",
+            });
+            let daemon = crate::test_daemon::answer_all(&paths, move |_| {
+                let items = if listing.load(Ordering::SeqCst) {
+                    vec![entry.clone()]
+                } else {
+                    Vec::new()
+                };
+                devlanes_proto::Outcome::Ok {
+                    data: json!({"items": items}),
+                }
+            })
+            .await?;
+            let sync = DaemonSync::new(paths);
+            let (input, receiver) = mpsc::channel(4);
+            let mut feed = sync
+                .follow(
+                    "app@0".into(),
+                    "web".into(),
+                    0,
+                    false,
+                    SyncInput::from_receiver(receiver),
+                )
+                .await?;
+            input
+                .send(SyncInputEvent::End)
+                .await
+                .map_err(|_| "the follow stopped reading its input")?;
+            loop {
+                match feed.next().await.ok_or("the feed ended before ready")?? {
+                    SyncMessage::Manifest(value)
+                        if serde_json::from_value::<SyncManifest>(value.clone())
+                            .is_ok_and(|manifest| matches!(manifest, SyncManifest::Ready)) =>
+                    {
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Still offered: the follow goes on.
+            sync.registry_changed();
+            let quiet = tokio::time::timeout(Duration::from_millis(500), feed.next()).await;
+            assert!(
+                quiet.is_err(),
+                "the feed moved: {:?}",
+                quiet.ok().flatten().map(|m| m.is_ok())
+            );
+
+            offered.store(false, Ordering::SeqCst);
+            sync.registry_changed();
+            let ended = tokio::time::timeout(Duration::from_secs(10), feed.next()).await?;
+            assert!(ended.is_none(), "the feed ends cleanly");
+            daemon.abort();
             Ok(())
         })
         .await?

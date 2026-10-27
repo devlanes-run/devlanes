@@ -176,13 +176,19 @@ pub enum RegistryEvent {
 }
 
 impl RegistryEvent {
-    /// The change a client gets, matching [`RegistrySnapshot::without_hidden`]:
-    /// a unit that is or became hidden is removed, which a client that never
-    /// had it ignores.
-    pub fn without_hidden(self) -> Self {
+    /// The change a client gets, matching [`RegistrySnapshot::without_hidden`],
+    /// decided from `before`, the box's own registry before this change. A
+    /// unit the client was shown that becomes hidden or goes away is removed
+    /// there; any other change to a hidden unit, or to one the client never
+    /// had, sends nothing, so no frame names a unit the client must not see.
+    pub fn without_hidden(self, before: &Registry) -> Option<Self> {
+        let shown = |key: &UnitKey| before.unit(key).is_some_and(|unit| !unit.hidden);
         match self {
-            Self::UnitUpserted { unit } if unit.hidden => Self::UnitRemoved { unit: unit.key },
-            event => event,
+            Self::UnitUpserted { unit } if unit.hidden => {
+                shown(&unit.key).then_some(Self::UnitRemoved { unit: unit.key })
+            }
+            Self::UnitRemoved { unit } => shown(&unit).then_some(Self::UnitRemoved { unit }),
+            event => Some(event),
         }
     }
 }
@@ -620,32 +626,47 @@ mod tests {
         );
     }
 
-    /// What a client gets leaves hidden units out: a snapshot drops them, and
-    /// an upsert of a hidden unit becomes its removal; other changes pass.
+    /// What a client gets leaves hidden units out: a snapshot drops them; a
+    /// shown unit that becomes hidden or goes away is removed; a change to a
+    /// unit that was hidden, or to one never there, sends nothing; other
+    /// changes pass.
     #[test]
     fn clients_get_no_hidden_units() {
-        let shown = snapshot_of(vec![unit("web", 20000, false), unit("db", 20001, true)]);
-        let names: Vec<String> = shown
+        let box_copy = snapshot_of(vec![unit("web", 20000, false), unit("db", 20001, true)]);
+        let names: Vec<String> = box_copy
+            .clone()
             .without_hidden()
             .units
             .into_iter()
             .map(|unit| unit.key.name)
             .collect();
         assert_eq!(names, ["web"]);
-        let hidden = unit("db", 20001, true);
-        assert_eq!(
-            RegistryEvent::UnitUpserted {
-                unit: hidden.clone()
-            }
-            .without_hidden(),
-            RegistryEvent::UnitRemoved { unit: hidden.key }
-        );
-        let visible = RegistryEvent::UnitUpserted {
-            unit: unit("web", 20000, false),
+        let before = Registry::from_snapshot(box_copy);
+        let upsert = |name: &str, port, hidden| RegistryEvent::UnitUpserted {
+            unit: unit(name, port, hidden),
         };
-        assert_eq!(visible.clone().without_hidden(), visible);
-        let removed = RegistryEvent::LaneRemoved { lane: lane() };
-        assert_eq!(removed.clone().without_hidden(), removed);
+        let removal = |name: &str| RegistryEvent::UnitRemoved {
+            unit: unit(name, 0, false).key,
+        };
+        // web was shown: hiding or removing it removes it on the client.
+        assert_eq!(
+            upsert("web", 20000, true).without_hidden(&before),
+            Some(removal("web"))
+        );
+        assert_eq!(removal("web").without_hidden(&before), Some(removal("web")));
+        // db was hidden: no change to it, removal included, names it.
+        assert_eq!(upsert("db", 20001, true).without_hidden(&before), None);
+        assert_eq!(removal("db").without_hidden(&before), None);
+        // A hidden unit the box never had sends nothing either.
+        assert_eq!(upsert("new", 20002, true).without_hidden(&before), None);
+        assert_eq!(removal("gone").without_hidden(&before), None);
+        // Shown, or shown again: the upsert passes.
+        let visible = upsert("web", 20000, false);
+        assert_eq!(visible.clone().without_hidden(&before), Some(visible));
+        let unhidden = upsert("db", 20001, false);
+        assert_eq!(unhidden.clone().without_hidden(&before), Some(unhidden));
+        let lane_gone = RegistryEvent::LaneRemoved { lane: lane() };
+        assert_eq!(lane_gone.clone().without_hidden(&before), Some(lane_gone));
     }
 
     /// A snapshot of `units` without lanes.

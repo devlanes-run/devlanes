@@ -392,7 +392,8 @@ impl Mirror {
             .map(|route| route.host)
             .collect();
         let suffixes = route_suffixes(engine);
-        // Hidden units and tasks are listed by the box but never mirrored.
+        // Tasks are listed by the box but never mirrored. A box sends no hidden
+        // units; the filter keeps any it would send off this machine all the same.
         let visible: Vec<&UnitInfo> = registry.units().filter(|unit| unit.mirrorable()).collect();
 
         // Hostnames of boxes connected earlier, which keep them over this one.
@@ -415,11 +416,15 @@ impl Mirror {
         // is skipped whole: renaming it would break the CORS origins and cookies
         // the box chose. Patterns count, not only equal names: a box name under
         // a local wildcard, or a box wildcard over a local name, would take
-        // requests the local lane serves today.
+        // requests the local lane serves today. Only names this machine would
+        // route count: a refused one gets no route, so it takes nothing.
         let mut collisions: BTreeMap<LaneKey, Collision> = BTreeMap::new();
         for unit in &visible {
-            for host in &unit.hosts {
-                let name = host.host.to_ascii_lowercase();
+            for name in unit
+                .hosts
+                .iter()
+                .filter_map(|host| accepted(&host.host, &suffixes))
+            {
                 let owner = if local_hosts.iter().any(|local| overlap(local, &name)) {
                     None
                 } else if let Some((other, _)) = earlier
@@ -480,16 +485,9 @@ impl Mirror {
         for port in stale {
             released.extend(self.ports.remove(&port).into_iter().flat_map(|m| m.bound));
         }
-        let unbound: BTreeSet<u16> = wanted
-            .keys()
-            .copied()
-            .filter(|port| {
-                self.ports
-                    .get(port)
-                    .is_none_or(|mirror| mirror.bound.len() < self.addresses.len())
-            })
-            .collect();
-        let shadowing = shadowing(unbound).await;
+        // Every wanted port, bound or not: a program that started listening
+        // on a wildcard address since the last reconcile takes its port back.
+        let shadowing = shadowing(wanted.keys().copied().collect()).await;
         for (port, unit) in &wanted {
             let mirror = self.ports.entry(*port).or_insert_with(|| PortMirror {
                 unit: unit.key.name.clone(),
@@ -535,13 +533,18 @@ impl Mirror {
                 continue;
             }
             mirror.local = None;
+            let shadowed = shadowing.get(port).copied();
+            if shadowed.is_some() {
+                // Every address is tried again below and fails as shadowed.
+                unbind(std::mem::take(&mut mirror.bound)).await;
+            }
             let missing: Vec<IpAddr> = self
                 .addresses
                 .iter()
                 .copied()
                 .filter(|address| !mirror.bound.iter().any(|b| b.address == *address))
                 .collect();
-            let attempt = bind_port(&missing, *port, shadowing.get(port).copied());
+            let attempt = bind_port(&missing, *port, shadowed);
             if attempt.held() {
                 // Held on one loopback address, the port stays off the others
                 // too. Closed now, so the holder lookup below cannot find this
@@ -563,19 +566,27 @@ impl Mirror {
                     )),
                 });
             }
+            // Looked up once per port, whichever addresses failed: a process
+            // scan each.
+            let mut box_holder: Option<Option<(String, String)>> = None;
+            let mut pid_holder: Option<Option<u32>> = None;
+            let mut names: BTreeMap<u32, String> = BTreeMap::new();
             for (address, failure) in attempt.failures {
                 let in_use = failure.in_use();
                 // Another box's mirror runs in this daemon, so its pid
                 // would only name devlanes itself.
                 let other_box = match &failure {
-                    BindFailure::Bind(_) if in_use => other_box_holding(engine, &self.conn, *port),
+                    BindFailure::Bind(_) if in_use => box_holder
+                        .get_or_insert_with(|| other_box_holding(engine, &self.conn, *port))
+                        .clone(),
                     _ => None,
                 };
                 let pid = match &failure {
                     BindFailure::Shadowed(pid) => Some(*pid),
-                    BindFailure::Bind(_) if in_use && other_box.is_none() => {
-                        engine.integ.ports.holder(*port).await
-                    }
+                    BindFailure::Bind(_) if in_use && other_box.is_none() => match pid_holder {
+                        Some(pid) => pid,
+                        None => *pid_holder.insert(engine.integ.ports.holder(*port).await),
+                    },
                     BindFailure::Bind(_) => None,
                 };
                 // This daemon itself: usually another box's mirror that bound
@@ -591,7 +602,17 @@ impl Mirror {
                     Some("this devlanes daemon".to_owned())
                 } else if in_use {
                     Some(match pid {
-                        Some(pid) => format!("{} (pid {pid})", process_name(pid).await),
+                        Some(pid) => {
+                            let name = match names.entry(pid) {
+                                std::collections::btree_map::Entry::Occupied(known) => {
+                                    known.get().clone()
+                                }
+                                std::collections::btree_map::Entry::Vacant(slot) => {
+                                    slot.insert(process_name(pid).await).clone()
+                                }
+                            };
+                            format!("{name} (pid {pid})")
+                        }
                         None => "another process".to_owned(),
                     })
                 } else {
@@ -661,15 +682,15 @@ impl Mirror {
                 .cloned();
             for host in &unit.hosts {
                 // The local CA signs whatever the routes name, so a box may only
-                // claim names this machine already routes to itself.
-                if !routable(&host.host, &suffixes) {
+                // claim valid names this machine already routes to itself.
+                let Some(name) = accepted(&host.host, &suffixes) else {
                     refused_hosts.push(json!({
                         "host": host.host,
                         "lane": lane_ref(&unit.key.lane),
                         "unit": unit.key.name,
                     }));
                     continue;
-                }
+                };
                 let owned = self.ports.get(&host.port).is_some_and(PortMirror::owns_v4);
                 let local_port = if owned {
                     host.port
@@ -693,7 +714,7 @@ impl Mirror {
                     _ => format!("Start it on {box_name}: devlanes start --lane {reference}"),
                 };
                 routes.push(RouteEntry {
-                    host: host.host.to_ascii_lowercase(),
+                    host: name,
                     port: local_port,
                     fallback: host.fallback,
                     host_header_upstream: host.host_header == HostHeader::Upstream,
@@ -704,8 +725,8 @@ impl Mirror {
                     unit: unit.key.name.clone(),
                     certificate_names: lane
                         .as_ref()
-                        .and_then(|lane| lane.domain.clone())
-                        .filter(|domain| routable(domain, &suffixes))
+                        .and_then(|lane| lane.domain.as_deref())
+                        .and_then(|domain| accepted(domain, &suffixes))
                         .into_iter()
                         .collect(),
                     remote: true,
@@ -716,7 +737,7 @@ impl Mirror {
             }
         }
         if !refused_hosts.is_empty() && lock(&self.conn.view).refused_hosts != refused_hosts {
-            tracing::warn!(host = %self.conn.name, ?refused_hosts, "box hostnames outside the local suffixes skipped");
+            tracing::warn!(host = %self.conn.name, ?refused_hosts, "box hostnames that are invalid or outside the local suffixes skipped");
             engine.bus.emit(
                 wire::WARNING_EVENT,
                 json!({"host": self.conn.name, "code": "hosts_skipped", "hosts": refused_hosts}),
@@ -831,9 +852,9 @@ impl Mirror {
 }
 
 /// A mirrored port's `state` for `host.list`: `local_lane` inside a local
-/// lane's block, `bound` with a listener on at least one address (a port held
-/// on one address and bound on the other still works), `in_use` when
-/// something holds it, `failed` when the binds failed with nothing holding it
+/// lane's block, `bound` with a listener on at least one address (one without
+/// a loopback here, such as IPv6, has none), `in_use` when something holds
+/// it on any address, `failed` when the binds failed with nothing holding it
 /// (a port Windows reserves, a low port), else `unbound`.
 fn port_state(local: bool, bound: bool, conflicts: &BTreeMap<IpAddr, Value>) -> &'static str {
     if local {
@@ -941,6 +962,14 @@ fn routable(host: &str, suffixes: &[String]) -> bool {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     let base = host.strip_prefix("*.").unwrap_or(&host);
     suffixes.iter().any(|suffix| below(base, suffix))
+}
+
+/// The box hostname `host`, normalised as local hostnames are (lowercase, no
+/// trailing dot), when this machine may route it: a valid DNS name, as the
+/// `host_rejected` check requires of local ones, that is [`routable`].
+fn accepted(host: &str, suffixes: &[String]) -> Option<String> {
+    let name = devlanes_config::normalize_host(host).ok()?;
+    routable(&name, suffixes).then_some(name)
 }
 
 /// Whether `name` has at least one label in front of `parent`.
@@ -1088,8 +1117,10 @@ fn bind_port(addresses: &[IpAddr], port: u16, shadowed: Option<u32>) -> Attempt 
 /// Box ports among `ports` that another program listens on at a wildcard
 /// address, with its pid. Windows lets a loopback bind succeed next to such a
 /// listener (one without `SO_EXCLUSIVEADDRUSE`), and connections to
-/// `localhost` would then reach the box instead of that program. Unix refuses
-/// the bind instead, so there is nothing to look up.
+/// `localhost` would then reach the box instead of that program. Read once
+/// per reconcile for every wanted port, also ones already bound, since such
+/// a program may start after the mirror bound its port. Unix refuses a
+/// loopback bind next to a wildcard listener, so there is nothing to look up.
 #[cfg(windows)]
 async fn shadowing(ports: BTreeSet<u16>) -> BTreeMap<u16, u32> {
     if ports.is_empty() {
@@ -1098,7 +1129,7 @@ async fn shadowing(ports: BTreeSet<u16>) -> BTreeMap<u16, u32> {
     match tokio::task::spawn_blocking(devlanes_sys_windows::proc::tcp_listeners).await {
         Ok(Ok(listeners)) => wildcard_holders(&listeners, std::process::id(), &ports),
         Ok(Err(error)) => {
-            tracing::debug!(%error, "cannot read the TCP listener table");
+            tracing::warn!(%error, "cannot read the TCP listener table; wildcard listeners are not checked");
             BTreeMap::new()
         }
         Err(_) => BTreeMap::new(),
@@ -1460,6 +1491,32 @@ mod tests {
             "*.com",
         ] {
             assert!(!routable(name, &suffixes), "{name} is routable");
+        }
+    }
+
+    /// A box name must also be a valid DNS name, as a local one must, and
+    /// comes out lowercase without its trailing dot.
+    #[test]
+    fn box_names_must_be_valid_dns_names() {
+        let suffixes = ["localhost".to_owned()];
+        assert_eq!(
+            accepted("Web.Acme.Localhost.", &suffixes).as_deref(),
+            Some("web.acme.localhost")
+        );
+        assert_eq!(
+            accepted("*.acme.localhost", &suffixes).as_deref(),
+            Some("*.acme.localhost")
+        );
+        for name in [
+            "*.*.localhost",
+            "a..localhost",
+            "x/y.localhost",
+            "a*.acme.localhost",
+            "-web.acme.localhost",
+            "web_1.acme.localhost",
+            "*.localhost",
+        ] {
+            assert_eq!(accepted(name, &suffixes), None, "{name}");
         }
     }
 

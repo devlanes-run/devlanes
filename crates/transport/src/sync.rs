@@ -84,6 +84,12 @@ pub trait SyncSource: Send + Sync {
     /// Starts a feed for an opaque subscription request. `input` carries what the
     /// client sends after the request, such as its manifest in batches.
     async fn subscribe(&self, request: Value, input: SyncInput) -> Result<SyncFeed, SyncError>;
+
+    /// Called after each registry change the session applies, so a source
+    /// can end the feeds of entries the box no longer offers, as data streams
+    /// to a unit that stopped or became hidden are closed. The default does
+    /// nothing. Must not block: the session's loop calls it.
+    fn registry_changed(&self) {}
 }
 
 /// One item of client input on a sync stream.
