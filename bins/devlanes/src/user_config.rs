@@ -44,8 +44,8 @@ pub async fn lenient(paths: &Paths) -> UserConfig {
 }
 
 /// The box settings for `devlanes tunnel --stdio`, read leniently so an
-/// unrelated bad key does not cut clients off; a problem under `remote` makes
-/// them fall to the safe side ([`devlanes_config::box_settings`]). The second
+/// unrelated bad key does not cut clients off; a problem under `remote` or
+/// with the whole file makes them fall to the safe side ([`devlanes_config::box_settings`]). The second
 /// value is the stderr text for those problems, empty when there are none.
 /// Blocking.
 pub fn tunnel_settings(paths: &Paths) -> (BoxSettings, String) {

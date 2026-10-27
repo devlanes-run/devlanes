@@ -433,14 +433,16 @@ pub struct RemoteConfig {
     /// `devlanes daemon start`, but a daemon started on demand exits about 30 seconds
     /// after the last TUI or connected client leaves while nothing runs, so run `devlanes daemon
     /// install` or set `daemon.exit_when_idle: false` to keep it running. An invalid
-    /// value here counts as false. Read at each connection, so no restart is needed.
+    /// value here, or a file that is not YAML or has too many problems to keep any
+    /// setting, counts as false. Read at each connection, so no restart is needed.
     #[schemars(extend("examples" = [true,false]))]
     pub start_daemon: bool,
     /// Serve only clients this machine paired with; defaults to true. A client's first
     /// connection needs a one-time code from `devlanes daemon pair` here, which it trades
     /// for a token it presents from then on; `devlanes daemon revoke` ends a client's
     /// pairing. Set false to serve every client that gets in over SSH or its command, as
-    /// before pairing existed. An invalid value here counts as true. Read at each
+    /// before pairing existed. An invalid value here, or a file that is not YAML or
+    /// has too many problems to keep any setting, counts as true. Read at each
     /// connection, so no restart is needed.
     #[schemars(extend("examples" = [true,false]))]
     pub require_pairing: bool,
@@ -1337,10 +1339,12 @@ pub struct BoxSettings {
 /// [`BoxSettings`] from a lenient load ([`load_user_lenient`],
 /// [`parse_user_lenient`]), with the load's problems that concern this
 /// machine as a box: those under `remote`, except `remote.boxes`, which is
-/// about the boxes this machine connects to. With any such problem both
-/// settings fall to the safe side instead of their defaults: starting is off,
-/// so a mistyped `start_daemon: false` does not start a daemon the user meant
-/// to keep stopped, and pairing is required, so a mistyped `require_pairing:
+/// about the boxes this machine connects to, and a failure of the whole file
+/// (unreadable, not YAML, or too many problems to keep any setting), which
+/// loses `remote` with everything else. With any such problem both settings
+/// fall to the safe side instead of their defaults: starting is off, so a
+/// mistyped `start_daemon: false` does not start a daemon the user meant to
+/// keep stopped, and pairing is required, so a mistyped `require_pairing:
 /// false` cannot let unpaired clients in.
 pub fn box_settings(
     config: &UserConfig,
@@ -1349,8 +1353,12 @@ pub fn box_settings(
     let remote: Vec<ConfigError> = problems
         .into_iter()
         .filter(|problem| {
-            (problem.message.starts_with("remote.") || problem.message.starts_with("remote:"))
-                && !problem.message.starts_with("remote.boxes")
+            let message = &problem.message;
+            // A lenient load ends each per-key problem this way; any other
+            // problem is about the whole file.
+            !message.ends_with("; the default applies")
+                || ((message.starts_with("remote.") || message.starts_with("remote:"))
+                    && !message.starts_with("remote.boxes"))
         })
         .collect();
     let settings = if remote.is_empty() {

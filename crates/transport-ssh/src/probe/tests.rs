@@ -378,7 +378,8 @@ mod shells {
 
     use super::super::*;
 
-    type TestResult = Result<(), Box<dyn std::error::Error>>;
+    type TestError = Box<dyn std::error::Error + Send + Sync>;
+    type TestResult = Result<(), TestError>;
 
     /// The shells installed here, each with its executable and the shell the
     /// probe should name.
@@ -432,16 +433,20 @@ mod shells {
         command: &str,
         env: &[(&str, std::ffi::OsString)],
         input: &[u8],
-    ) -> Result<(ExitStatus, Vec<u8>), Box<dyn std::error::Error>> {
+    ) -> Result<(ExitStatus, Vec<u8>), TestError> {
         let env: Vec<(String, String)> = env
             .iter()
             .map(|(name, value)| ((*name).to_owned(), value.to_string_lossy().into_owned()))
             .collect();
-        let sshd = install(
-            dir,
-            &format!("sshd-{}", shell.kind()),
-            &Behaviour::new().run_with(shell.kind(), Some(program), env),
-        )?;
+        let (dir, program) = (dir.to_owned(), program.to_owned());
+        let sshd = tokio::task::spawn_blocking(move || {
+            install(
+                &dir,
+                &format!("sshd-{}", shell.kind()),
+                &Behaviour::new().run_with(shell.kind(), Some(&program), env),
+            )
+        })
+        .await??;
         let mut sshd = tokio::process::Command::new(sshd);
         devlanes_testing::no_window(sshd.as_std_mut());
         let mut child = sshd
@@ -472,21 +477,35 @@ mod shells {
     #[tokio::test]
     async fn the_windows_probe_finds_devlanes_and_the_shell() -> TestResult {
         tokio::time::timeout(Duration::from_secs(300), async {
-            let dir = tempfile::tempdir()?;
-            let plain = dir.path().join("plain");
-            std::fs::create_dir_all(&plain)?;
-            std::fs::write(plain.join("devlanes"), b"#!/bin/sh\n")?;
-            let on_path = dir.path().join("Program Files (x86)").join("acme tools");
-            std::fs::create_dir_all(&on_path)?;
-            let program = install(&on_path, "devlanes", &Behaviour::new())?;
-            let profile = dir.path().join("profile");
-            let installed = profile.join(r".devlanes\bin");
-            std::fs::create_dir_all(&installed)?;
-            let fallback = install(&installed, "devlanes", &Behaviour::new())?;
-            let empty = dir.path().join("empty");
-            std::fs::create_dir_all(&empty)?;
+            let (dir, plain, on_path, program, profile, fallback, empty, shells) =
+                tokio::task::spawn_blocking(|| -> Result<_, TestError> {
+                    let dir = tempfile::tempdir()?;
+                    let plain = dir.path().join("plain");
+                    std::fs::create_dir_all(&plain)?;
+                    std::fs::write(plain.join("devlanes"), b"#!/bin/sh\n")?;
+                    let on_path = dir.path().join("Program Files (x86)").join("acme tools");
+                    std::fs::create_dir_all(&on_path)?;
+                    let program = install(&on_path, "devlanes", &Behaviour::new())?;
+                    let profile = dir.path().join("profile");
+                    let installed = profile.join(r".devlanes\bin");
+                    std::fs::create_dir_all(&installed)?;
+                    let fallback = install(&installed, "devlanes", &Behaviour::new())?;
+                    let empty = dir.path().join("empty");
+                    std::fs::create_dir_all(&empty)?;
+                    Ok((
+                        dir,
+                        plain,
+                        on_path,
+                        program,
+                        profile,
+                        fallback,
+                        empty,
+                        shells(),
+                    ))
+                })
+                .await??;
             let command = windows_probe_command("devlanes");
-            for (shell, sshd_shell, expected) in shells() {
+            for (shell, sshd_shell, expected) in shells {
                 let sshd = (shell, sshd_shell.as_path());
                 let env = [
                     ("PATH", path_of(&[&plain, &on_path])),
@@ -539,25 +558,30 @@ mod shells {
     #[tokio::test]
     async fn tunnel_commands_reach_the_program_byte_for_byte() -> TestResult {
         tokio::time::timeout(Duration::from_secs(300), async {
-            let dir = tempfile::tempdir()?;
-            let folder = dir.path().join("Program Files (x86)").join("R&D's tools");
-            std::fs::create_dir_all(&folder)?;
-            let echo = install(
-                &folder,
-                "devlanes",
-                &Behaviour::new()
-                    .args(["tunnel", "--stdio"])
-                    .stdout("devlanes-tunnel 4\n")
-                    .echo_stdin(),
-            )?;
-            let stopped = install(
-                &folder,
-                "stopped",
-                &Behaviour::new().args(["tunnel", "--stdio"]).exit(75),
-            )?;
+            let (dir, echo, stopped, shells) =
+                tokio::task::spawn_blocking(|| -> Result<_, TestError> {
+                    let dir = tempfile::tempdir()?;
+                    let folder = dir.path().join("Program Files (x86)").join("R&D's tools");
+                    std::fs::create_dir_all(&folder)?;
+                    let echo = install(
+                        &folder,
+                        "devlanes",
+                        &Behaviour::new()
+                            .args(["tunnel", "--stdio"])
+                            .stdout("devlanes-tunnel 4\n")
+                            .echo_stdin(),
+                    )?;
+                    let stopped = install(
+                        &folder,
+                        "stopped",
+                        &Behaviour::new().args(["tunnel", "--stdio"]).exit(75),
+                    )?;
+                    Ok((dir, echo, stopped, shells()))
+                })
+                .await??;
             let payload = binary_payload();
             let preamble = b"devlanes-tunnel 4\n";
-            for (shell, program, box_shell) in shells() {
+            for (shell, program, box_shell) in shells {
                 let sshd = (shell, program.as_path());
                 let command = box_shell
                     .tunnel_command(&echo.to_string_lossy())

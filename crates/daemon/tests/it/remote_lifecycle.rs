@@ -166,11 +166,16 @@ async fn a_background_connect_waits_for_the_record() {
         let side = BoxSide::start(&tmp, "box", "20625-20749").await;
         let client = ClientSide::start(&tmp, "client", "20750-20874", &side).await;
         let db = client.h.home.join("state.db");
-        let mut writer =
-            SqliteConnection::establish(db.to_str().expect("path")).expect("connection");
-        writer
-            .batch_execute("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;")
-            .expect("write lock");
+        let writer = tokio::task::spawn_blocking(move || {
+            let mut writer =
+                SqliteConnection::establish(db.to_str().expect("path")).expect("connection");
+            writer
+                .batch_execute("PRAGMA busy_timeout = 5000; BEGIN IMMEDIATE;")
+                .expect("write lock");
+            writer
+        })
+        .await
+        .expect("lock task");
 
         let (session, _frames) = Session::local(9_304);
         let engine = client.h.engine.clone();
@@ -204,8 +209,12 @@ async fn a_background_connect_waits_for_the_record() {
             !connecting.is_finished(),
             "connect answered before the connection was recorded"
         );
-        writer.batch_execute("COMMIT;").expect("release");
-        drop(writer);
+        tokio::task::spawn_blocking(move || {
+            let mut writer = writer;
+            writer.batch_execute("COMMIT;").expect("release");
+        })
+        .await
+        .expect("release task");
         let connected = connecting.await.expect("connect task").expect("connect");
         assert_eq!(connected["state"], "connected", "{connected}");
         client.stop().await;

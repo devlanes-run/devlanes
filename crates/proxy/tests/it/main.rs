@@ -857,12 +857,7 @@ fn open_scoped(
 #[tokio::test]
 async fn scoped_listeners_serve_only_their_routes() -> Result {
     tokio::time::timeout(Duration::from_secs(30), async {
-        let directory = tempfile::tempdir()?;
-        let path = directory.path().join("ca");
-        let ca = Arc::new(
-            tokio::task::spawn_blocking(move || CertificateAuthority::load_or_create(&path))
-                .await??,
-        );
+        let (_directory, ca) = scoped_ca().await?;
         let fixture = fixture(false, false).await?;
         let upstream = fixture.address;
         let proxy = Proxy::new(ProxyConfig::default(), RouteTable::default());
@@ -959,6 +954,43 @@ async fn scoped_listeners_serve_only_their_routes() -> Result {
         if cfg!(not(target_os = "macos")) {
             ports.open(&proxy, port, ca.clone(), &shutdown)?;
             ports.close(port).await;
+        }
+        shutdown.cancel();
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await?
+}
+
+/// A certificate authority in a new temporary directory, which must outlive it.
+async fn scoped_ca() -> Result<(tempfile::TempDir, Arc<CertificateAuthority>)> {
+    tokio::task::spawn_blocking(|| {
+        let directory = tempfile::tempdir()?;
+        let ca = CertificateAuthority::load_or_create(&directory.path().join("ca"))?;
+        Ok((directory, Arc::new(ca)))
+    })
+    .await?
+}
+
+/// Dropping the future `close` returns without polling it still closes the
+/// port: it is out of the map at once and stops accepting soon after.
+#[tokio::test]
+async fn dropping_an_unpolled_close_frees_the_port() -> Result {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let (_directory, ca) = scoped_ca().await?;
+        let proxy = Proxy::new(ProxyConfig::default(), RouteTable::default());
+        let ports = ScopedPorts::default();
+        let shutdown = CancellationToken::new();
+        let port = open_scoped(&proxy, &ports, &ca, &shutdown, &[])?;
+        assert_eq!(ports.ports(), [(port, true)]);
+        drop(ports.close(port));
+        assert!(ports.ports().is_empty());
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the scoped listener outlived its dropped close"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
         shutdown.cancel();
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())

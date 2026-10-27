@@ -51,8 +51,9 @@ async fn listed_client(side: &BoxSide, id: &str) -> Option<Value> {
 }
 
 /// The id a client engine keeps in its home.
-fn client_id(client: &ClientSide) -> String {
-    std::fs::read_to_string(client.h.home.join("client-id"))
+async fn client_id(client: &ClientSide) -> String {
+    tokio::fs::read_to_string(client.h.home.join("client-id"))
+        .await
         .expect("the client stored its id")
         .trim()
         .to_owned()
@@ -149,7 +150,7 @@ async fn a_mirror_report_reaches_status_and_url_on_the_box() {
         )
         .await;
         client.connect("box").await;
-        let id = client_id(&client);
+        let id = client_id(&client).await;
 
         let mirror = eventually(SOON, || async {
             let mirror = listed_client(&side, &id).await?["mirror"].clone();
@@ -571,7 +572,9 @@ async fn external_ports_stay_out_of_port_blocks() {
             .as_u64()
             .and_then(|port| u16::try_from(port).ok())
             .expect("api's port");
-        std::fs::write(late.join("devlanes.yaml"), config("late", api)).expect("edit config");
+        tokio::fs::write(late.join("devlanes.yaml"), config("late", api))
+            .await
+            .expect("edit config");
         let refused = h
             .call(Method::Start, json!({}), cx(&late))
             .await

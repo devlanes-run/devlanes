@@ -131,10 +131,11 @@ async fn config_check_uses_the_primary_local_file() {
         );
         let linked = tmp.path.join("linked");
         worktree(&main, &linked, "feat/linked");
-        std::fs::write(
+        tokio::fs::write(
             main.join("devlanes.local.yaml"),
             "infra:\n  external:\n    tool: { address: '10.0.0.1:5050' }\n",
         )
+        .await
         .expect("local file");
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
         let refused = h

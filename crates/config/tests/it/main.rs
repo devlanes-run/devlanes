@@ -675,6 +675,32 @@ fn box_settings_fall_to_the_safe_side() {
     }
 }
 
+/// A config that loses every setting at once (not YAML, or too many problems
+/// to keep any) also loses `remote`, so starting is off and pairing on.
+#[test]
+fn box_settings_fall_to_the_safe_side_when_the_whole_file_fails() {
+    let settings = |source: &str| {
+        let (config, problems) = devlanes_config::parse_user_lenient("config.yaml", source);
+        let (settings, remote) = devlanes_config::box_settings(&config, problems);
+        (settings.start_daemon, settings.require_pairing, remote)
+    };
+    let (start, pairing, remote) =
+        settings("remote:\n  start_daemon: false\n  require_pairing: [\n");
+    assert_eq!((start, pairing, remote.len()), (false, true, 1));
+
+    let mut many = String::from("remote:\n  start_daemon: true\n  require_pairing: false\n");
+    for key in 0..80 {
+        many.push_str(&format!("unknown_{key}: 1\n"));
+    }
+    let (start, pairing, remote) = settings(&many);
+    assert_eq!((start, pairing), (false, true));
+    let messages: Vec<&str> = remote.iter().map(|p| p.message.as_str()).collect();
+    assert_eq!(
+        messages,
+        ["config.yaml: too many problems to keep any setting; every default applies"]
+    );
+}
+
 /// Command boxes need a name `remote connect` can take and a program; the
 /// rest of the command is passed as written.
 #[test]

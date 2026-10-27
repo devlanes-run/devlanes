@@ -47,14 +47,20 @@ impl ScopedPorts {
 
     /// Stops serving `port`. The future resolves once its listeners are closed,
     /// so the port can be bound again right after, by this proxy or another
-    /// process; dropping it still closes them, only later.
+    /// process. Dropping it, even unpolled, still closes them without waiting.
     pub fn close(&self, port: u16) -> impl Future<Output = ()> + Send + 'static {
         let listening = self
             .open
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(&port);
+        // The port is out of the map already, so nothing else would cancel its
+        // listeners if the future never runs.
+        let guard = listening
+            .as_ref()
+            .map(|listening| listening.stop.clone().drop_guard());
         async move {
+            let _guard = guard;
             let Some(listening) = listening else { return };
             listening.stop.cancel();
             for task in listening.tasks {

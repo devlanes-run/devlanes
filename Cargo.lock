@@ -1865,6 +1865,7 @@ dependencies = [
  "devlanes-testing",
  "devlanes-transport",
  "rustix",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",

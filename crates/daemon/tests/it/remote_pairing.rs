@@ -47,8 +47,9 @@ async fn connect_unattended(client: &ClientSide, params: Value) -> Result<Value,
 }
 
 /// The id a client engine keeps in its home.
-fn client_id(client: &ClientSide) -> String {
-    std::fs::read_to_string(client.h.home.join("client-id"))
+async fn client_id(client: &ClientSide) -> String {
+    tokio::fs::read_to_string(client.h.home.join("client-id"))
+        .await
         .expect("the client stored its id")
         .trim()
         .to_owned()
@@ -114,7 +115,7 @@ async fn a_code_pairs_a_client_whose_token_serves_later_connections() {
             "{host}"
         );
         assert_eq!(host["lanes"], 0, "the box sent no registry: {host}");
-        let id = client_id(&client);
+        let id = client_id(&client).await;
         assert_eq!(
             listed(&side, &id).await,
             None,
@@ -222,7 +223,7 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
         .await;
         assert!(served.is_some(), "the box is mirrored");
 
-        let id = client_id(&client);
+        let id = client_id(&client).await;
         let mut bus = side.h.engine.subscribe();
         let revoked = side
             .h
@@ -310,7 +311,7 @@ async fn a_box_without_pairing_serves_every_client() {
             .await
             .expect("connect without a code");
         assert_eq!(connected["state"], "connected", "{connected}");
-        let id = client_id(&client);
+        let id = client_id(&client).await;
         let entry = eventually(SOON, || async { listed(&side, &id).await }).await;
         let Some(entry) = entry else {
             panic!("the box lists the client");
@@ -493,7 +494,7 @@ async fn revoking_one_client_leaves_another_connected() {
         let second = ClientSide::start(&tmp, "second", "16980-16999", &side).await;
         first.connect("box").await;
         second.connect("box").await;
-        let (first_id, second_id) = (client_id(&first), client_id(&second));
+        let (first_id, second_id) = (client_id(&first).await, client_id(&second).await);
         let both = eventually(SOON, || async {
             let a = listed(&side, &first_id).await?;
             let b = listed(&side, &second_id).await?;
@@ -592,7 +593,7 @@ async fn two_names_for_one_box_keep_both_pairings() {
         let client = ClientSide::start_with(&tmp, "client", "15700-15799", &boxes, None).await;
         client.connect("box").await;
         client.connect("alias").await;
-        let id = client_id(&client);
+        let id = client_id(&client).await;
         let entry = listed(&side, &id).await.expect("paired");
         assert_eq!(entry["pairings"], 2, "{entry}");
         assert_ne!(

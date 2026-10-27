@@ -54,7 +54,7 @@ remote:
   start_daemon: false
 ```
 
-A client that connects while the daemon is stopped then shows `the devlanes daemon is not running on hetzner` in `remote ls` and keeps retrying. It connects once you run `devlanes daemon start` on the box. A daemon started on demand like that exits about 30 seconds after the last client or TUI leaves while nothing runs, so run `devlanes daemon install` to keep it running, or set `daemon.exit_when_idle: false` in the same file. An invalid value, or any other problem under `remote` outside `remote.boxes`, counts as `false`. The setting is read at each connection, so it needs no restart.
+A client that connects while the daemon is stopped then shows `the devlanes daemon is not running on hetzner` in `remote ls` and keeps retrying. It connects once you run `devlanes daemon start` on the box. A daemon started on demand like that exits about 30 seconds after the last client or TUI leaves while nothing runs, so run `devlanes daemon install` to keep it running, or set `daemon.exit_when_idle: false` in the same file. An invalid value, any other problem under `remote` outside `remote.boxes`, or a file that cannot be read, is not YAML or has too many problems to keep any setting, counts as `false`. The setting is read at each connection, so it needs no restart.
 
 ### Pairing clients
 
@@ -74,7 +74,7 @@ remote:
   require_pairing: false
 ```
 
-A problem anywhere under `remote` outside `remote.boxes` turns `require_pairing` on (and `start_daemon` off). The setting is read at each connection, so it needs no restart. [Pairing](../remote.md#pairing) has the details.
+A problem anywhere under `remote` outside `remote.boxes`, or one that makes the whole file fall back to the defaults, turns `require_pairing` on (and `start_daemon` off). The setting is read at each connection, so it needs no restart. [Pairing](../remote.md#pairing) has the details.
 
 ### PATH for Docker and tools
 

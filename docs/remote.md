@@ -59,7 +59,7 @@ devlanes daemon revoke laptop       # by name, id, or a unique start of the id
 
 `daemon revoke` deletes every pairing of the client and ends its connections at once; another client's connection stays. A client connected without pairing (`remote.require_pairing: false`) has none to revoke. The revoked client then waits in `needs_pairing`, as it does when its token is refused for any other reason or when nobody was there to type a code: no retries, its ports stay bound and its hostnames show a [pairing needed](errors/box-pairing-needed.md) page while its daemon runs, and `remote ls` shows `devlanes daemon pair on <box>, then devlanes remote connect <box> --code <code>` as the `fix`. A new code pairs it again. `devlanes daemon reset-state` on the box removes every pairing, voids every code and ends every client's session; on a client it removes every token.
 
-To let every machine that can reach the box over SSH connect without a code, as before pairing existed, set `remote.require_pairing: false` in the box's user config. The tunnel reads it at each connection, so no restart is needed. An invalid value counts as `true`.
+To let every machine that can reach the box over SSH connect without a code, as before pairing existed, set `remote.require_pairing: false` in the box's user config. The tunnel reads it at each connection, so no restart is needed. An invalid value, or a user config that cannot be read, is not YAML or has too many problems to keep any setting, counts as `true`.
 
 ## Mirroring
 

@@ -214,6 +214,12 @@ pub enum CommandError {
         /// The tail of the command's stderr, when it had exited.
         stderr: String,
     },
+    /// [`CommandOptions::stop`] was cancelled before the tunnel started.
+    #[error("{what} was stopped before the tunnel started")]
+    Stopped {
+        /// The process, as messages name it.
+        what: String,
+    },
 }
 
 impl CommandError {
@@ -222,7 +228,7 @@ impl CommandError {
         match self {
             Self::Empty { .. } | Self::Spawn { .. } => true,
             Self::Exited { permanent, .. } | Self::Preamble { permanent, .. } => *permanent,
-            Self::DaemonStopped { .. } | Self::NotReady { .. } => false,
+            Self::DaemonStopped { .. } | Self::NotReady { .. } | Self::Stopped { .. } => false,
         }
     }
 
@@ -231,7 +237,10 @@ impl CommandError {
         match self {
             Self::Exited { output, .. } | Self::NotReady { output, .. } => output,
             Self::Preamble { error, .. } => error.output(),
-            Self::Empty { .. } | Self::Spawn { .. } | Self::DaemonStopped { .. } => &[],
+            Self::Empty { .. }
+            | Self::Spawn { .. }
+            | Self::DaemonStopped { .. }
+            | Self::Stopped { .. } => &[],
         }
     }
 
@@ -398,7 +407,24 @@ impl CommandTransport {
     }
 
     /// Starts the command and reads its output up to the tunnel preamble.
+    /// Cancelling [`CommandOptions::stop`] meanwhile, or before, fails it at
+    /// once with [`CommandError::Stopped`] and ends the command.
     pub async fn open(&self) -> Result<Opened, CommandError> {
+        // Taken before the first await, so a stop while the command starts
+        // counts too. Dropping the handshake drops the stream, which ends the
+        // command; its task also sees the stop.
+        let stop = self.options.stop.clone();
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => Err(CommandError::Stopped {
+                what: self.options.what.clone(),
+            }),
+            opened = self.handshake() => opened,
+        }
+    }
+
+    /// [`Self::open`] without the stop.
+    async fn handshake(&self) -> Result<Opened, CommandError> {
         let first = !self.connected.load(Ordering::Relaxed);
         let (mut stream, exit) = self.spawn().await?;
         let mut header = Vec::new();
@@ -441,6 +467,10 @@ impl CommandTransport {
             program: program.to_string_lossy().into_owned(),
             source,
         };
+        let stop = self.options.stop.clone();
+        // When `open`'s stop drops this mid-start on Windows, the start still
+        // finishes on the blocking pool, and dropping its result closes the
+        // job, which ends the command.
         let (process, pipes) =
             process::start(&self.argv, &self.options.env, &removed(&self.options), true)
                 .await
@@ -452,7 +482,6 @@ impl CommandTransport {
         let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let kept = Arc::new(Mutex::new(None));
         let shared = kept.clone();
-        let stop = self.options.stop.clone();
         let stderr = pipes.stderr;
         tokio::spawn(async move {
             let mut process = process;

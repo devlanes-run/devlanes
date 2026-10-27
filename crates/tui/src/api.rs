@@ -1188,7 +1188,8 @@ impl DaemonApi for ClientApi {
 
 /// `remote.require_pairing` of the user config at `path` as `devlanes tunnel`
 /// reads it ([`devlanes_config::box_settings`]): a missing file is the
-/// default (true), and a problem under `remote` counts as true, so the page
+/// default (true), and a problem under `remote` or with the whole file counts
+/// as true, so the page
 /// never says clients get in without pairing when they do not. Blocking.
 fn require_pairing(path: &std::path::Path) -> bool {
     if !path.exists() {

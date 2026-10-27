@@ -123,7 +123,7 @@ A box command (`docker exec`, `kubectl exec`, `wsl.exe`, `gh codespace ssh`) aut
 
 ## Settings
 
-`remote.require_pairing` in the box's user config, `true` by default, makes the box serve only paired clients; `false` serves every machine SSH lets in. `remote.start_daemon`, also `true` by default, lets any connection start the box daemon, paired or not; with `false` only you start it, and clients report it as stopped and retry. A daemon started this way runs no lane until you start one from a shell. The tunnel reads both at each connection. Any problem under `remote` in that file, other than under `remote.boxes`, turns pairing on and starting off.
+`remote.require_pairing` in the box's user config, `true` by default, makes the box serve only paired clients; `false` serves every machine SSH lets in. `remote.start_daemon`, also `true` by default, lets any connection start the box daemon, paired or not; with `false` only you start it, and clients report it as stopped and retry. A daemon started this way runs no lane until you start one from a shell. The tunnel reads both at each connection. Any problem under `remote` in that file, other than under `remote.boxes`, turns pairing on and starting off, and so does a file that cannot be read, is not YAML or has too many problems to keep any setting.
 
 `hidden` on a service (`services.<name>.hidden`), in `infra.hidden` for containers, or on an `infra.external` entry keeps that unit on the box: clients never receive its name, ports or hostnames, a hidden service's `sync` folders are not synced, and the box refuses streams to its ports, also when a unit that is not hidden lists the same port ([hidden](remote.md#hidden)).
 

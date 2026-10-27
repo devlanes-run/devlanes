@@ -9,7 +9,8 @@ use devlanes_transport_command::{
 };
 use tokio::io::AsyncReadExt;
 
-type TestResult = Result<(), Box<dyn std::error::Error + Send + Sync>>;
+type TestError = Box<dyn std::error::Error + Send + Sync>;
+type TestResult = Result<(), TestError>;
 
 /// Every test's limit; the fake answers in milliseconds.
 const LIMIT: Duration = Duration::from_secs(30);
@@ -428,13 +429,64 @@ async fn dropping_the_stream_ends_the_whole_command() -> TestResult {
             .strip_prefix("child ")
             .ok_or("no child pid")?
             .parse()?;
-        let child = devlanes_sys::identity(pid)?.ok_or("the child is not running")?;
-        assert!(devlanes_sys::matches(&child)?, "the child runs");
+        let child = identity(pid).await?.ok_or("the child is not running")?;
+        assert!(running(child).await?, "the child runs");
         drop(opened);
-        while devlanes_sys::matches(&child)? {
+        while running(child).await? {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         Ok(())
     })
     .await?
+}
+
+/// Cancelling the stop token while a command has not printed its preamble
+/// fails `open` at once, well within the preamble wait, and ends the command.
+#[tokio::test]
+async fn stopping_during_the_handshake_ends_the_command() -> TestResult {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tokio::task::spawn_blocking(tempfile::tempdir).await??;
+        let pid_file = dir.path().join("pid");
+        let options = CommandOptions::new("acme");
+        assert!(options.preamble_wait >= Duration::from_secs(60));
+        let stop = options.stop.clone();
+        let pid_arg = pid_file.to_string_lossy().into_owned();
+        let transport =
+            CommandTransport::new(fake(&["--pid-file", &pid_arg, "--sleep", "60"]), options);
+        let opening = tokio::spawn(async move { transport.open().await });
+        let pid = loop {
+            let written = tokio::fs::read_to_string(&pid_file)
+                .await
+                .unwrap_or_default();
+            if let Ok(pid) = written.trim().parse::<u32>() {
+                break pid;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let command = identity(pid).await?.ok_or("the command is not running")?;
+        stop.cancel();
+        let opened = tokio::time::timeout(Duration::from_secs(5), opening)
+            .await
+            .map_err(|_| "open did not return after the stop")??;
+        assert!(
+            matches!(&opened, Err(CommandError::Stopped { .. })),
+            "{opened:?}"
+        );
+        while running(command).await? {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        Ok(())
+    })
+    .await?
+}
+
+/// [`devlanes_sys::identity`] off the runtime's threads.
+async fn identity(pid: u32) -> Result<Option<devlanes_sys::ProcessIdentity>, TestError> {
+    Ok(tokio::task::spawn_blocking(move || devlanes_sys::identity(pid)).await??)
+}
+
+/// Whether the process `child` names still runs ([`devlanes_sys::matches`]),
+/// off the runtime's threads.
+async fn running(child: devlanes_sys::ProcessIdentity) -> Result<bool, TestError> {
+    Ok(tokio::task::spawn_blocking(move || devlanes_sys::matches(&child)).await??)
 }

@@ -200,10 +200,11 @@ async fn two_boxes_with_one_project() {
         }
 
         // Alpha drops the hostname from its config: beta's lane is mirrored.
-        std::fs::write(
+        tokio::fs::write(
             alpha_repo.join("devlanes.yaml"),
             BOX.replace("    hosts: [\"web.${{ lane.domain }}\"]\n", ""),
         )
+        .await
         .expect("alpha config");
         alpha
             .h

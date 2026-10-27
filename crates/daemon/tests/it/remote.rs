@@ -795,6 +795,11 @@ fn bundle() -> Vec<u8> {
         .collect()
 }
 
+/// Whether `path` exists, false when that cannot be told, as `Path::exists`.
+async fn exists(path: &Path) -> bool {
+    tokio::fs::try_exists(path).await.unwrap_or(false)
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// Connect mirrors ports and hostnames (hidden units and foreign hostnames
 /// excluded, a busy local port reported), the box reports its info and lists
@@ -810,11 +815,19 @@ async fn remote_box_end_to_end() {
     tokio::time::timeout(LIMIT * 2, async {
         let tmp = temp();
         let main = repo(&tmp.path, "boxrepo", BOX);
-        std::fs::create_dir_all(main.join("ext/js")).expect("ext");
-        std::fs::write(main.join("ext/manifest.json"), b"{\"v\":1}").expect("manifest");
-        std::fs::write(main.join("ext/js/app.js"), b"console.log(1)").expect("app");
+        tokio::fs::create_dir_all(main.join("ext/js"))
+            .await
+            .expect("ext");
+        tokio::fs::write(main.join("ext/manifest.json"), b"{\"v\":1}")
+            .await
+            .expect("manifest");
+        tokio::fs::write(main.join("ext/js/app.js"), b"console.log(1)")
+            .await
+            .expect("app");
         let bundle = bundle();
-        std::fs::write(main.join("ext/js/bundle.js"), &bundle).expect("bundle");
+        tokio::fs::write(main.join("ext/js/bundle.js"), &bundle)
+            .await
+            .expect("bundle");
         let side = BoxSide::start(&tmp, "box", "29000-29499").await;
         side.h
             .call(Method::Start, json!({}), cx(&main))
@@ -830,9 +843,13 @@ async fn remote_box_end_to_end() {
         // The sync root is always $DEVLANES_HOME/sync/<host>/<project>/<lane>/<leaf>;
         // a marked destination may be pruned, anything else there is stale.
         let out = client.h.home.join("sync/box/boxapp/boxapp@0/ext");
-        std::fs::create_dir_all(&out).expect("dest");
-        std::fs::write(out.join(devlanes_sync::OWNER_MARKER), b"").expect("marker");
-        std::fs::write(out.join("stale.txt"), b"old").expect("stale");
+        tokio::fs::create_dir_all(&out).await.expect("dest");
+        tokio::fs::write(out.join(devlanes_sync::OWNER_MARKER), b"")
+            .await
+            .expect("marker");
+        tokio::fs::write(out.join("stale.txt"), b"old")
+            .await
+            .expect("stale");
         // Something on this machine holds the web port on ::1: this listener, or
         // (when the bind fails) whatever already had it.
         let squatter = tokio::net::TcpListener::bind((Ipv6Addr::LOCALHOST, web))
@@ -906,7 +923,8 @@ async fn remote_box_end_to_end() {
 
         // The box lists its connected client by the id the client keeps in its
         // home, with its host name.
-        let client_id = std::fs::read_to_string(client.h.home.join("client-id"))
+        let client_id = tokio::fs::read_to_string(client.h.home.join("client-id"))
+            .await
             .expect("the client stored its id");
         let status = side
             .h
@@ -923,20 +941,24 @@ async fn remote_box_end_to_end() {
         // Sync: what differs from the marked destination, stale files pruned, then
         // changes and deletions. The box's `to:` is ignored.
         let copied = eventually(SOON, || async {
-            (std::fs::read(out.join("js/app.js")).ok()? == b"console.log(1)"
-                && std::fs::read(out.join("js/bundle.js")).ok()? == bundle
-                && !out.join("stale.txt").exists())
-            .then_some(())
+            (tokio::fs::read(out.join("js/app.js")).await.ok()? == b"console.log(1)"
+                && tokio::fs::read(out.join("js/bundle.js")).await.ok()? == bundle
+                && !exists(&out.join("stale.txt")).await)
+                .then_some(())
         })
         .await;
         assert!(copied.is_some(), "initial copy and prune");
-        assert!(!client.h.home.join("ext-out").exists());
-        std::fs::write(main.join("ext/js/app.js"), b"console.log(2)").expect("edit");
-        std::fs::remove_file(main.join("ext/manifest.json")).expect("delete");
+        assert!(!exists(&client.h.home.join("ext-out")).await);
+        tokio::fs::write(main.join("ext/js/app.js"), b"console.log(2)")
+            .await
+            .expect("edit");
+        tokio::fs::remove_file(main.join("ext/manifest.json"))
+            .await
+            .expect("delete");
         let followed = eventually(SOON, || async {
-            (std::fs::read(out.join("js/app.js")).ok()? == b"console.log(2)"
-                && !out.join("manifest.json").exists())
-            .then_some(())
+            (tokio::fs::read(out.join("js/app.js")).await.ok()? == b"console.log(2)"
+                && !exists(&out.join("manifest.json")).await)
+                .then_some(())
         })
         .await;
         assert!(followed.is_some(), "changes and deletions follow");
@@ -1020,7 +1042,7 @@ async fn remote_box_end_to_end() {
             client.host().await
         );
         assert_eq!(
-            std::fs::read(out.join("js/app.js")).ok().as_deref(),
+            tokio::fs::read(out.join("js/app.js")).await.ok().as_deref(),
             Some(&b"console.log(2)"[..])
         );
 

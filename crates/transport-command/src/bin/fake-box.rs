@@ -7,6 +7,7 @@
 //! - `--preamble`: write the tunnel preamble.
 //! - `--serve`: serve an empty box over stdio until the client leaves.
 //! - `--child`: start `fake-box --sleep 60` and print `child <pid>`.
+//! - `--pid-file <path>`: write this process's pid to the file.
 //! - `--sleep <seconds>`: wait.
 //! - `--exit <code>`: exit with that status.
 
@@ -42,6 +43,12 @@ async fn main() {
             "--preamble" => out(TUNNEL_PREAMBLE.as_bytes()),
             "--serve" => serve().await,
             "--child" => child(),
+            "--pid-file" => {
+                if let Err(error) = std::fs::write(value(), std::process::id().to_string()) {
+                    eprintln!("fake-box: {error}");
+                    std::process::exit(2);
+                }
+            }
             "--sleep" => {
                 let seconds = value().parse().unwrap_or(60);
                 tokio::time::sleep(Duration::from_secs(seconds)).await;

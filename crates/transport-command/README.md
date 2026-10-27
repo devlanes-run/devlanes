@@ -20,7 +20,7 @@ async fn connect() -> Result<Session, Box<dyn std::error::Error>> {
 ## API
 
 - `CommandTransport::new(argv, options)`: a `Transport` that starts `argv` for each connect; `open` also returns what the command printed before the tunnel's preamble.
-- `CommandOptions`: the box name and how messages call the process, the preamble wait (`COMMAND_WAIT`, 120 s), an optional `Ready` line with its own wait, environment changes, `connected_before` and a `stop` token that ends every command started with it.
+- `CommandOptions`: the box name and how messages call the process, the preamble wait (`COMMAND_WAIT`, 120 s), an optional `Ready` line with its own wait, environment changes, `connected_before` and a `stop` token that ends every command started with it (a connect still waiting for the preamble fails at once with `CommandError::Stopped`).
 - `CommandError::is_permanent`: separates a command that cannot work as given from one that may work on the next try.
 - `CommandStream`: the command's stdout and stdin; at end of file it reports the exit status and stderr tail.
 - `run(argv, options, limit)`: runs a short command to its end, for an SSH probe.
