@@ -90,7 +90,7 @@ infra:
   hidden: [postgres]
 ```
 
-Hidden units stay on the box: their ports are not mirrored and the box refuses streams to them. Everything else that is running or starting is mirrored.
+Hidden units stay on the box: clients do not see them, their ports are not mirrored, the box refuses streams to them and their `sync` folders are not synced. Everything else that is running or starting is mirrored.
 
 ### Ports outside the config
 
