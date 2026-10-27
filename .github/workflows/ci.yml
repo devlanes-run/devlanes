@@ -140,12 +140,41 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    env:
+      PSSCRIPTANALYZER_VERSION: 1.25.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The PowerShell Gallery sometimes fails a download ("Source Location ...
+      # is not valid"), so the module is cached and only fetched, with retries,
+      # when the cache misses.
+      - name: Locate the user module directory
+        id: modules
+        run: |
+          $dir = Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'PowerShell\Modules'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.modules.outputs.dir }}\PSScriptAnalyzer
+          key: psscriptanalyzer-${{ env.PSSCRIPTANALYZER_VERSION }}
       - name: Install PSScriptAnalyzer
-        run: Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Scope CurrentUser -Force
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          MODULES: ${{ steps.modules.outputs.dir }}
+        run: |
+          for ($attempt = 1; ; $attempt++) {
+            try {
+              Save-Module PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Repository PSGallery -Path $env:MODULES -Force -ErrorAction Stop
+              break
+            } catch {
+              if ($attempt -ge 4) { throw }
+              Write-Warning "PSScriptAnalyzer download failed (attempt $attempt): $_"
+              Start-Sleep -Seconds (15 * $attempt)
+            }
+          }
       - run: ./packaging/scripts/check.ps1
   e2e:
     strategy:
