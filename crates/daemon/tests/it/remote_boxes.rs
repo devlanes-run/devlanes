@@ -682,7 +682,7 @@ async fn box_https_port_is_served_here() {
             let host = client.host_named("busybox").await;
             warns(
                 &host,
-                &format!("cannot serve the box's HTTPS port {busy_https}: in use by"),
+                &format!("cannot use the box's HTTPS port {busy_https} (in use by"),
             )
             .then_some(())
         })

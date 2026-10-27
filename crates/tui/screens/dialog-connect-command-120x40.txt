@@ -4,7 +4,7 @@
 │                                                                                                                      │
 │   n   connect to a box by its SSH name or a command                                                                  │
 │                                                                                                                      │
-│ A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on   │
+│ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on  │
 │ this machine.                                                                                                        │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -13,7 +13,7 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                         ┌ connect a box ───────────────────────────────────────────────────┐                         │
-│                         │  Reach it by ( ) SSH name   (•) a command                        │                         │
+│                         │  Reach it by ( ) SSH name   (•) command                          │                         │
 │                         │                                                                  │                         │
 │                         │  Name        acme                                                │                         │
 │                         │ ▌Command     docker exec -i acme devlanes tunnel --stdio▏        │                         │
@@ -35,7 +35,7 @@
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. p shows a pairing code for one.                                                  │
+│ No other machine connects here yet. Press p for a pairing code.                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  n new box   p pairing code   esc back                                                            ? all keys   q quit
 
@@ -46,7 +46,7 @@
 3: 0 darkgray, 119 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 119 darkgray
 5: 0 darkgray, 119 darkgray
-6: 0 darkgray, 2-115 dim, 119 darkgray
+6: 0 darkgray, 2-116 dim, 119 darkgray
 7: 0 darkgray, 2-14 dim, 119 darkgray
 8: 0 darkgray, 119 darkgray
 9: 0 darkgray, 119 darkgray
@@ -55,7 +55,7 @@
 12: 0 darkgray, 119 darkgray
 13: 0 darkgray, 119 darkgray
 14: 0 darkgray, 26-93 bold, 119 darkgray
-15: 0 darkgray, 26 bold, 28 bold, 29-52 dim, 56-68 bold, 93 bold, 119 darkgray
+15: 0 darkgray, 26 bold, 28 bold, 29-52 dim, 56-66 bold, 93 bold, 119 darkgray
 16: 0 darkgray, 26 bold, 93 bold, 119 darkgray
 17: 0 darkgray, 26 bold, 28 bold, 29-40 dim, 93 bold, 119 darkgray
 18: 0 darkgray, 26 bold, 28-40 bold, 93 bold, 119 darkgray
@@ -77,6 +77,6 @@
 34: 0 darkgray, 119 darkgray
 35: 0-119 darkgray
 36: 0 darkgray, 1-14 bold, 15-119 darkgray
-37: 0 darkgray, 2-68 dim, 119 darkgray
+37: 0 darkgray, 2-64 dim, 119 darkgray
 38: 0-119 darkgray
 39: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

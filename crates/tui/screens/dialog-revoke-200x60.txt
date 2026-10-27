@@ -7,12 +7,12 @@
 │   skipped   acme@0: acme@0 on this machine serves its hostnames                                                                                                                                      │
 │             ext.example.com (acme@4:ext-build): not under .localhost                                                                                                                                 │
 │   syncs     acme@4:ext-build  up to date, following changes                                                                                                                                          │
-│   ! the box runs devlanes 0.9.2 and this machine 1.0.0; install the same release on both                                                                                                             │
-│   ! the box stops your processes at logout; run loginctl enable-linger there or devlanes daemon install                                                                                              │
-│   ! this machine cannot serve the box's HTTPS port 443: permission denied, since low ports may need privileges. Open its hostnames on port 8443 instead                                              │
+│   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same release on both.                                                                                                            │
+│   ! the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.                                                                                             │
+│   ! this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.                                                                                           │
 │                                                                                                                                                                                                      │
 │ ⠋ devbox                                                                                                                                                                      reconnecting · command │
-│   link      reconnecting, next try in 8s                                                                                                                                                             │
+│   link      next try in 8s                                                                                                                                                                           │
 │   error     docker exec exited 1: Error response from daemon: container devbox is not running                                                                                                        │
 │   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767                                                                                                                                 │
 │   proxy     this machine serves its hostnames on 8443 and on 9443, which its URLs use                                                                                                                │
@@ -21,14 +21,14 @@
 │ ! gpu                                                                                                                                                                          needs a sign-in · ssh │
 │   link      waiting for you to sign in again, with ports and hostnames kept                                                                                                                          │
 │   error     ssh to gpu failed (255): Permission denied (publickey).                                                                                                                                  │
-│   fix       devlanes remote connect gpu                                                                                                                                                              │
+│   fix       enter signs in again                                                                                                                                                                     │
+│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                 ┌ revoke laptop ──────────────────────────────────────────────────┐                                                                  │
 │                                                                 │ Revoke laptop (dl_cid_3f2a9c1e)?                                │                                                                  │
 │                                                                 │                                                                 │                                                                  │
 │                                                                 │ It deletes the client's 2 pairings and ends its connection now. │                                                                  │
-│                                                                 │ It can connect again only with a new code from                  │                                                                  │
-│                                                                 │ devlanes daemon pair.                                           │                                                                  │
+│                                                                 │ It needs a new pairing code to connect again.                   │                                                                  │
 │                                                                 │                                                                 │                                                                  │
 │                                                                 │ y revoke   n cancel                                             │                                                                  │
 │                                                                 └─────────────────────────────────────────────────────────────────┘                                                                  │
@@ -69,12 +69,12 @@
 6: 0 darkgray, 4-13 dim, 14-64 yellow, 199 darkgray
 7: 0 darkgray, 4-13 dim, 14-69 yellow, 199 darkgray
 8: 0 darkgray, 4-13 dim, 14-60 green, 199 darkgray
-9: 0 darkgray, 4-89 yellow, 199 darkgray
-10: 0 darkgray, 4-104 yellow, 199 darkgray
-11: 0 darkgray, 4-152 yellow, 199 darkgray
+9: 0 darkgray, 4-90 yellow, 199 darkgray
+10: 0 darkgray, 4-105 yellow, 199 darkgray
+11: 0 darkgray, 4-107 yellow, 199 darkgray
 12: 0 darkgray, 199 darkgray
 13: 0 darkgray, 4-9 bold, 188-197 dim, 199 darkgray
-14: 0 darkgray, 4-13 dim, 14-41 yellow, 199 darkgray
+14: 0 darkgray, 4-13 dim, 14-27 yellow, 199 darkgray
 15: 0 darkgray, 4-13 dim, 14-94 yellow, 199 darkgray
 16: 0 darkgray, 4-13 dim, 199 darkgray
 17: 0 darkgray, 4-13 dim, 199 darkgray
@@ -83,11 +83,11 @@
 20: 0 darkgray, 2-3 yellow, 4-6 bold, 177-191 yellow, 192-197 dim, 199 darkgray
 21: 0 darkgray, 4-13 dim, 14-76 yellow, 199 darkgray
 22: 0 darkgray, 4-13 dim, 14-68 yellow, 199 darkgray
-23: 0 darkgray, 4-13 dim, 14-40 bold, 199 darkgray
+23: 0 darkgray, 4-13 dim, 14-33 bold, 199 darkgray
 24: 0 darkgray, 199 darkgray
-25: 0 darkgray, 66-132 bold, 199 darkgray
-26: 0 darkgray, 66 bold, 68-99 bold, 132 bold, 199 darkgray
-27: 0 darkgray, 66 bold, 132 bold, 199 darkgray
+25: 0 darkgray, 199 darkgray
+26: 0 darkgray, 66-132 bold, 199 darkgray
+27: 0 darkgray, 66 bold, 68-99 bold, 132 bold, 199 darkgray
 28: 0 darkgray, 66 bold, 132 bold, 199 darkgray
 29: 0 darkgray, 66 bold, 132 bold, 199 darkgray
 30: 0 darkgray, 66 bold, 132 bold, 199 darkgray

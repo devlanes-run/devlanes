@@ -720,13 +720,33 @@ impl Executor {
                 self.connect = Some((task, answers));
             }
             Effect::ConnectAnswer { stream_id, answer } => {
+                // A closed queue means the pump ended, and its end says why.
                 if let Some((_, answers)) = &self.connect
-                    && answers.try_send((stream_id, Bytes::from(answer))).is_err()
+                    && let Err(mpsc::error::TrySendError::Full(_)) =
+                        answers.try_send((stream_id, Bytes::from(answer.0)))
                 {
-                    self.fail("answer", "the connection to the daemon ended".into());
+                    self.fail("answer", "too many answers are waiting. Try again".into());
                 }
             }
             Effect::ConnectDetach => self.detach_connect(),
+            Effect::LoadBoxCommands => {
+                let home = api.home();
+                tokio::spawn(async move {
+                    let known = tokio::task::spawn_blocking(move || {
+                        let path = home?.join("config.yaml");
+                        path.exists()
+                            .then(|| devlanes_config::load_user_lenient(&path).0.remote.boxes)
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(name, entry)| (name, entry.command))
+                    .collect();
+                    deliver(&sender, Msg::BoxCommands(known)).await;
+                });
+            }
             Effect::SaveBoxCommand {
                 generation,
                 host,

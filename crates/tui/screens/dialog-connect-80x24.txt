@@ -4,9 +4,9 @@
 │                                                                              │
 │   n   connect to a box by its SSH name or a command                          │
 │                                                                              │
-│ A box is another machine that runs devlanes. Its lanes show up here as       │
-│ proj┌ connect a box ───────────────────────────────────────────────────┐     │
-│     │  Reach it by (•) SSH name   ( ) a command                        │     │
+│ A box is another machine that runs devlanes. Its projects show up in the top │
+│ bar.┌ connect a box ───────────────────────────────────────────────────┐     │
+│     │  Reach it by (•) SSH name   ( ) command                          │     │
 │     │                                                                  │     │
 │     │ ▌Name        hetzner▏                                            │     │
 │     │                                                                  │     │
@@ -19,7 +19,7 @@
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. p shows a pairing code for one.          │
+│ No other machine connects here yet. Press p for a pairing code.              │
 └──────────────────────────────────────────────────────────────────────────────┘
  n new box   p pairing code   esc back                    ? all keys   q quit
 
@@ -30,9 +30,9 @@
 3: 0 darkgray, 79 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 79 darkgray
 5: 0 darkgray, 79 darkgray
-6: 0 darkgray, 2-71 dim, 79 darkgray
+6: 0 darkgray, 2-77 dim, 79 darkgray
 7: 0 darkgray, 2-5 dim, 6-73 bold, 79 darkgray
-8: 0 darkgray, 6 bold, 8 bold, 9-20 dim, 21-32 bold, 36-48 dim, 73 bold, 79 darkgray
+8: 0 darkgray, 6 bold, 8 bold, 9-20 dim, 21-32 bold, 36-46 dim, 73 bold, 79 darkgray
 9: 0 darkgray, 6 bold, 73 bold, 79 darkgray
 10: 0 darkgray, 6 bold, 8-20 bold, 73 bold, 79 darkgray
 11: 0 darkgray, 6 bold, 73 bold, 79 darkgray
@@ -45,6 +45,6 @@
 18: 0 darkgray, 79 darkgray
 19: 0-79 darkgray
 20: 0 darkgray, 1-14 bold, 15-79 darkgray
-21: 0 darkgray, 2-68 dim, 79 darkgray
+21: 0 darkgray, 2-64 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

@@ -24,8 +24,6 @@ pub struct BoxHost {
     pub error: Option<String>,
     /// While reconnecting: how long the link waits before the next attempt.
     pub retry_in_ms: Option<u64>,
-    /// The command that resumes a link waiting for a sign-in.
-    pub fix: Option<String>,
     /// `ssh` or `command`.
     pub transport: Option<String>,
     pub last_connected_ms: Option<u64>,

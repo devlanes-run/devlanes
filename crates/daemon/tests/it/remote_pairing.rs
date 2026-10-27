@@ -631,7 +631,7 @@ async fn a_box_that_takes_no_connections_fails_the_link_with_its_reason() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let reason =
-            "the box does not accept connections because remote.allow_connections is false there";
+            "the box does not accept connections. Set remote.allow_connections to true there";
         let side = BoxSide::start_refusing(&tmp, "box", "18200-18224", reason).await;
         let client = ClientSide::start(&tmp, "client", "18225-18249", &side).await;
         let refused = connect_unattended(&client, json!({"host": "box", "background": true}))

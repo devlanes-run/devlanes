@@ -4,7 +4,7 @@
 │                                                                                                                      │
 │   n   connect to a box by its SSH name or a command                                                                  │
 │                                                                                                                      │
-│ A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on   │
+│ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on  │
 │ this machine.                                                                                                        │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -14,13 +14,13 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                          ┌ pairing code ──────────────────────────────────────────────────┐                          │
-│                          │ Connections to this machine are off.                           │                          │
-│                          │ remote.allow_connections is false here. Set it to true to pair │                          │
-│                          │ another machine.                                               │                          │
-│                          │                                                                │                          │
-│                          │ esc close                                                      │                          │
-│                          └────────────────────────────────────────────────────────────────┘                          │
+│                                                                                                                      │
+│                            ┌ pairing code ─────────────────────────────────────────────┐                             │
+│                            │ Connections to this machine are off.                      │                             │
+│                            │ Turn on remote.allow_connections to pair another machine. │                             │
+│                            │                                                           │                             │
+│                            │ o options   esc close                                     │                             │
+│                            └───────────────────────────────────────────────────────────┘                             │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -35,9 +35,9 @@
 │                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Connections are off, so other machines cannot connect here. remote.allow_connections is false.                       │
+│ Connections to this machine are off. Press o to turn them on.                                                        │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- n new box   p pairing code   esc back                                                            ? all keys   q quit
+ n new box   p pairing code   o options   esc back                                                ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114-118 bold underlined
@@ -46,7 +46,7 @@
 3: 0 darkgray, 119 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 119 darkgray
 5: 0 darkgray, 119 darkgray
-6: 0 darkgray, 2-115 dim, 119 darkgray
+6: 0 darkgray, 2-116 dim, 119 darkgray
 7: 0 darkgray, 2-14 dim, 119 darkgray
 8: 0 darkgray, 119 darkgray
 9: 0 darkgray, 119 darkgray
@@ -56,13 +56,13 @@
 13: 0 darkgray, 119 darkgray
 14: 0 darkgray, 119 darkgray
 15: 0 darkgray, 119 darkgray
-16: 0 darkgray, 27-92 bold, 119 darkgray
-17: 0 darkgray, 27 bold, 29-64 bold, 92 bold, 119 darkgray
-18: 0 darkgray, 27 bold, 92 bold, 119 darkgray
-19: 0 darkgray, 27 bold, 92 bold, 119 darkgray
-20: 0 darkgray, 27 bold, 92 bold, 119 darkgray
-21: 0 darkgray, 27 bold, 29-31 bold, 32-37 dim, 92 bold, 119 darkgray
-22: 0 darkgray, 27-92 bold, 119 darkgray
+16: 0 darkgray, 119 darkgray
+17: 0 darkgray, 29-89 bold, 119 darkgray
+18: 0 darkgray, 29 bold, 31-66 bold, 89 bold, 119 darkgray
+19: 0 darkgray, 29 bold, 89 bold, 119 darkgray
+20: 0 darkgray, 29 bold, 89 bold, 119 darkgray
+21: 0 darkgray, 29 bold, 31 bold, 32-39 dim, 43-45 bold, 46-51 dim, 89 bold, 119 darkgray
+22: 0 darkgray, 29-89 bold, 119 darkgray
 23: 0 darkgray, 119 darkgray
 24: 0 darkgray, 119 darkgray
 25: 0 darkgray, 119 darkgray
@@ -77,6 +77,6 @@
 34: 0 darkgray, 119 darkgray
 35: 0-119 darkgray
 36: 0 darkgray, 1-14 bold, 15-119 darkgray
-37: 0 darkgray, 2-95 yellow, 119 darkgray
+37: 0 darkgray, 2-62 yellow, 119 darkgray
 38: 0-119 darkgray
-39: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim
+39: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30 bold, 31-41 dim, 42-44 bold, 45-52 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

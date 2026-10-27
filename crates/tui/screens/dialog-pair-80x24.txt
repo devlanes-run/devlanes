@@ -3,23 +3,23 @@
 │ no boxes yet                                                                 │
 │                                                                              │
 │   n   connect to a box by its SSH name or a command                          │
-│                                                                              │
-│ A box┌ pairing code ──────────────────────────────────────────────────┐      │
-│ proje│   K7QM-3XWD                                                    │      │
-│      │                                                                │      │
-│      │ It works once and expires in 9m 57s.                           │      │
-│      │                                                                │      │
-│      │ On the other machine, run this with its SSH name for this one: │      │
-│      │ devlanes remote connect <box> --code K7QM-3XWD                 │      │
-│      │                                                                │      │
-│      │ Or press n in its boxes view. It asks for the code.            │      │
-│      │                                                                │      │
-│      │ y copy command   p new code   esc close                        │      │
-│      └────────────────────────────────────────────────────────────────┘      │
+│           ┌ pairing code ────────────────────────────────────────┐           │
+│ A box is a│   K7QM-3XWD                                          │in the top │
+│ bar. Their│                                                      │           │
+│           │ It works once and expires in 9m 57s.                 │           │
+│           │                                                      │           │
+│           │ On the other machine, run:                           │           │
+│           │ devlanes remote connect <box> --code K7QM-3XWD       │           │
+│           │ <box> is this machine's SSH name there.              │           │
+│           │                                                      │           │
+│           │ Or press n in its Boxes view. It asks for this code. │           │
+│           │                                                      │           │
+│           │ y copy code   p new code   esc close                 │           │
+│           └──────────────────────────────────────────────────────┘           │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. p shows a pairing code for one.          │
+│ No other machine connects here yet. Press p for a pairing code.              │
 └──────────────────────────────────────────────────────────────────────────────┘
  n new box   p pairing code   esc back                    ? all keys   q quit
 
@@ -29,22 +29,22 @@
 2: 0 darkgray, 2-13 bold, 79 darkgray
 3: 0 darkgray, 79 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 79 darkgray
-5: 0 darkgray, 79 darkgray
-6: 0 darkgray, 2-6 dim, 7-72 bold, 79 darkgray
-7: 0 darkgray, 2-6 dim, 7 bold, 11-19 bold, 72 bold, 79 darkgray
-8: 0 darkgray, 7 bold, 72 bold, 79 darkgray
-9: 0 darkgray, 7 bold, 72 bold, 79 darkgray
-10: 0 darkgray, 7 bold, 72 bold, 79 darkgray
-11: 0 darkgray, 7 bold, 9-70 dim, 72 bold, 79 darkgray
-12: 0 darkgray, 7 bold, 9-54 bold, 72 bold, 79 darkgray
-13: 0 darkgray, 7 bold, 72 bold, 79 darkgray
-14: 0 darkgray, 7 bold, 9-59 dim, 72 bold, 79 darkgray
-15: 0 darkgray, 7 bold, 72 bold, 79 darkgray
-16: 0 darkgray, 7 bold, 9 bold, 10-22 dim, 26 bold, 27-35 dim, 39-41 bold, 42-47 dim, 72 bold, 79 darkgray
-17: 0 darkgray, 7-72 bold, 79 darkgray
+5: 0 darkgray, 12-67 bold, 79 darkgray
+6: 0 darkgray, 2-11 dim, 12 bold, 16-24 bold, 67 bold, 68-77 dim, 79 darkgray
+7: 0 darkgray, 2-11 dim, 12 bold, 67 bold, 79 darkgray
+8: 0 darkgray, 12 bold, 67 bold, 79 darkgray
+9: 0 darkgray, 12 bold, 67 bold, 79 darkgray
+10: 0 darkgray, 12 bold, 14-39 dim, 67 bold, 79 darkgray
+11: 0 darkgray, 12 bold, 14-59 bold, 67 bold, 79 darkgray
+12: 0 darkgray, 12 bold, 14-52 dim, 67 bold, 79 darkgray
+13: 0 darkgray, 12 bold, 67 bold, 79 darkgray
+14: 0 darkgray, 12 bold, 14-65 dim, 67 bold, 79 darkgray
+15: 0 darkgray, 12 bold, 67 bold, 79 darkgray
+16: 0 darkgray, 12 bold, 14 bold, 15-24 dim, 28 bold, 29-37 dim, 41-43 bold, 44-49 dim, 67 bold, 79 darkgray
+17: 0 darkgray, 12-67 bold, 79 darkgray
 18: 0 darkgray, 79 darkgray
 19: 0-79 darkgray
 20: 0 darkgray, 1-14 bold, 15-79 darkgray
-21: 0 darkgray, 2-68 dim, 79 darkgray
+21: 0 darkgray, 2-64 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

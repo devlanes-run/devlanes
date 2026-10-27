@@ -987,11 +987,10 @@ async fn help_lists_clean_and_the_daemon_page() -> TestResult {
     for expected in [
         "clean the lane (asks first)",
         "copy mode: v select, y copy, Y whole entries as in the file",
-        "move focus between the checks and the log",
-        "restart, stop or start the daemon",
-        "clean gone lanes",
-        "connect or disconnect the selected box",
-        "revoke the client",
+        "restart the daemon, stop or start it",
+        "clean the lanes whose worktree is gone",
+        "connect, sign in, type a code or disconnect",
+        "revoke the selected client",
         "hide the version notice",
         "monitor, daemon, boxes; again or esc returns",
     ] {

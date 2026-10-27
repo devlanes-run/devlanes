@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/main.rs
 expression: draw(&app)?.backend()
 ---
-" devlanes                                                               M  D  B "
+" devlanes                                                Monitor  Daemon  Boxes "
 "                                                                                "
 " No projects yet.                                                               "
 "                                                                                "

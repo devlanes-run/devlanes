@@ -68,18 +68,14 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "monitor (M)",
         &[
-            (
-                "< >  i",
-                "sort by the previous, next column, or reverse the sort",
-            ),
+            ("< >", "sort by the previous, next column"),
+            ("i", "reverse the sort"),
             ("/  e", "filter, grouped or flat"),
-            ("h l", "fold, unfold a lane"),
-            ("z", "detail graphs fill the page"),
+            ("h l  z", "fold, unfold a lane; detail graphs fill the page"),
             (
                 "c  m",
                 "cpu or memory in the big box (memory: a square per core)",
             ),
-            ("wheel", "scroll the table; the selection stays"),
             ("s  x  r", "start, stop, restart the unit or lane"),
             ("enter", "open the unit in its project"),
         ],
@@ -87,35 +83,25 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "daemon (D)",
         &[
-            (
-                "R  S  X",
-                "restart, stop or start the daemon, clean gone lanes",
-            ),
-            ("tab", "move focus between the checks and the log"),
-            (
-                "j k  g G  F",
-                "scroll the log (pauses), oldest, newest, pause or follow",
-            ),
-            (
-                "w  /  T  d",
-                "level floor, text filter, targets, fold or unfold repeats",
-            ),
+            ("R  S", "restart the daemon, stop or start it"),
+            ("X", "clean the lanes whose worktree is gone"),
+            ("j k  g G", "scroll the log (pauses), oldest, newest"),
+            ("F  d", "pause or follow the log, fold or unfold repeats"),
+            ("w  /  T", "level floor, text filter, targets"),
             (
                 "c",
                 "copy mode: v select, y copy, Y whole entries as in the file",
             ),
-            ("drag", "select text in the checks or the log and copy it"),
             ("i", "every check, or problems only"),
         ],
     ),
     (
         "boxes (B)",
         &[
-            ("enter  d", "connect or disconnect the selected box"),
-            (
-                "n  p  x",
-                "connect a new box, show a pairing code, revoke the client",
-            ),
+            ("enter", "connect, sign in, type a code or disconnect"),
+            ("d", "disconnect the selected box"),
+            ("n  p", "connect a new box, show a pairing code"),
+            ("x", "revoke the selected client"),
         ],
     ),
     (
@@ -123,13 +109,14 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
         &[
             (
                 "tab  shift+tab",
-                "next, previous project (not on the daemon page)",
+                "next, previous project; shift+1-9 picks one by number",
             ),
-            ("shift+1-9", "project by number"),
             ("M  D  B", "monitor, daemon, boxes; again or esc returns"),
             ("esc", "one step back, then the menu: options, help, quit"),
-            ("u", "hide the version notice"),
-            ("q", "quit; asks first while lanes run (tui.on_quit)"),
+            (
+                "u  q",
+                "hide the version notice; quit, asking first while lanes run",
+            ),
         ],
     ),
 ];
@@ -275,6 +262,40 @@ fn profile_row(theme: &Theme, item: &ProfileChoice, selected: bool, width: usize
     } else {
         line
     }
+}
+
+/// `rect` moved up to two rows within `area` so that neither its top nor
+/// its bottom row lies on a border of the screen under it. A border there
+/// runs into the dialog's own, and the two read as one box.
+fn off_borders(frame: &mut Frame, area: Rect, rect: Rect) -> Rect {
+    // The column beside the dialog shows what runs under its rows.
+    let beside = if rect.x > area.x {
+        rect.x - 1
+    } else if rect.right() < area.right() {
+        rect.right()
+    } else {
+        return rect;
+    };
+    let buffer = frame.buffer_mut();
+    let border = |y: u16| {
+        buffer
+            .cell((beside, y))
+            .is_some_and(|cell| matches!(cell.symbol(), "─" | "┌" | "┐" | "└" | "┘" | "├" | "┤"))
+    };
+    let clear = |rect: Rect| !border(rect.y) && !border(rect.bottom() - 1);
+    if rect.height == 0 || clear(rect) {
+        return rect;
+    }
+    for shift in [-1i32, 1, -2, 2] {
+        let Some(y) = u16::try_from(i32::from(rect.y) + shift).ok() else {
+            continue;
+        };
+        let moved = Rect { y, ..rect };
+        if moved.y >= area.y && moved.bottom() <= area.bottom() && clear(moved) {
+            return moved;
+        }
+    }
+    rect
 }
 
 /// Modal dialogs over a cleared box.
@@ -606,6 +627,7 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
         width,
         height,
     );
+    let rect = off_borders(frame, area, rect);
     *app.dialog_area.borrow_mut() = Some(rect);
     let block = Block::new()
         .borders(Borders::ALL)

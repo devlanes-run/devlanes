@@ -463,6 +463,7 @@ impl AttachSession {
 /// and prompts), then how it ended.
 #[derive(Debug)]
 pub enum ConnectEvent {
+    /// A `remote.state`, `remote.warning` or `remote.prompt` event.
     Event(Event),
     /// The daemon's answer: the box's status, or why the link stopped or
     /// waits for a person. Nothing follows it.
@@ -556,7 +557,8 @@ pub trait DaemonApi: Send + Sync {
     }
     /// `remote.clients`: the clients paired with this machine as a box and
     /// the ones connected now ([`crate::clients::parse`] reads it), with
-    /// `require_pairing` and `allow_connections` from the user config added.
+    /// `require_pairing` and `allow_connections` from the user config added,
+    /// and `remote_invalid` when invalid remote settings turned them off.
     async fn remote_clients(&self) -> Result<Value, ApiError> {
         Err(ApiError::Rpc(RpcError::new(
             "unknown_method",
@@ -1270,23 +1272,28 @@ impl DaemonApi for ClientApi {
     }
 
     /// Calls `remote.clients` on the shared connection and adds
-    /// `require_pairing` and `allow_connections`, which `devlanes tunnel`
-    /// reads from the user config at each connection, not the daemon.
+    /// `require_pairing`, `allow_connections` and `remote_invalid`, which
+    /// come from the user config `devlanes tunnel` reads at each connection,
+    /// not from the daemon.
     async fn remote_clients(&self) -> Result<Value, ApiError> {
         let mut value = self
             .shared_request(Method::RemoteClients, json!({}), self.context(None, false))
             .await?;
         let path = self.paths.home.join("config.yaml");
-        let settings = tokio::task::spawn_blocking(move || box_settings(&path))
+        let (settings, invalid) = tokio::task::spawn_blocking(move || box_settings(&path))
             .await
-            .unwrap_or(devlanes_config::BoxSettings {
-                allow_connections: false,
-                start_daemon: false,
-                require_pairing: true,
-            });
+            .unwrap_or((
+                devlanes_config::BoxSettings {
+                    allow_connections: false,
+                    start_daemon: false,
+                    require_pairing: true,
+                },
+                false,
+            ));
         if value.is_object() {
             value["require_pairing"] = json!(settings.require_pairing);
             value["allow_connections"] = json!(settings.allow_connections);
+            value["remote_invalid"] = json!(invalid);
         }
         Ok(value)
     }
@@ -1317,14 +1324,15 @@ impl DaemonApi for ClientApi {
 /// them ([`devlanes_config::box_settings`]): a missing file is every default,
 /// and a problem under `remote` or with the whole file falls to the safe
 /// side, so the view never says clients get in, or get in without pairing,
-/// when they do not. Blocking.
-fn box_settings(path: &std::path::Path) -> devlanes_config::BoxSettings {
+/// when they do not. True with them when that problem is why. Blocking.
+fn box_settings(path: &std::path::Path) -> (devlanes_config::BoxSettings, bool) {
     let (config, problems) = if path.exists() {
         devlanes_config::load_user_lenient(path)
     } else {
         (devlanes_config::UserConfig::default(), Vec::new())
     };
-    devlanes_config::box_settings(&config, problems).0
+    let (settings, problems) = devlanes_config::box_settings(&config, problems);
+    (settings, !problems.is_empty())
 }
 
 #[cfg(test)]
@@ -1338,26 +1346,34 @@ mod tests {
         let home = tempfile::tempdir()?;
         let path = home.path().join("config.yaml");
         let read = |path: &std::path::Path| {
-            let settings = box_settings(path);
-            (settings.require_pairing, settings.allow_connections)
+            let (settings, invalid) = box_settings(path);
+            (
+                settings.require_pairing,
+                settings.allow_connections,
+                invalid,
+            )
         };
-        assert_eq!(read(&path), (true, true), "no file");
+        assert_eq!(read(&path), (true, true, false), "no file");
         std::fs::write(&path, "remote:\n  require_pairing: false\n")?;
-        assert_eq!(read(&path), (false, true));
+        assert_eq!(read(&path), (false, true, false));
         std::fs::write(
             &path,
             "remote:\n  require_pairing: false\ntui:\n  thme: dark\n",
         )?;
-        assert_eq!(read(&path), (false, true), "a problem elsewhere");
+        assert_eq!(read(&path), (false, true, false), "a problem elsewhere");
         std::fs::write(&path, "remote:\n  require_pairing: nope\n")?;
-        assert_eq!(read(&path), (true, false), "an invalid value");
+        assert_eq!(read(&path), (true, false, true), "an invalid value");
         std::fs::write(
             &path,
             "remote:\n  require_pairing: false\n  requre_pairing: false\n",
         )?;
-        assert_eq!(read(&path), (true, false), "a misspelt key next to it");
+        assert_eq!(
+            read(&path),
+            (true, false, true),
+            "a misspelt key next to it"
+        );
         std::fs::write(&path, "remote:\n  allow_connections: false\n")?;
-        assert_eq!(read(&path), (true, false));
+        assert_eq!(read(&path), (true, false, false));
         Ok(())
     }
 

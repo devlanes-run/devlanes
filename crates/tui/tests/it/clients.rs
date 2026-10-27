@@ -227,22 +227,30 @@ async fn this_machine_at_58_columns_drops_the_pairing_and_the_id() -> TestResult
 }
 
 /// Nobody paired or connected: one line says how to pair one, with the
-/// note when pairing is off; with connections off it says so instead.
+/// note when pairing is off; with connections off it says so instead, and
+/// why when invalid remote settings turned them off.
 #[tokio::test]
 async fn no_clients_says_how_to_pair_one() -> TestResult {
-    let empty = "No other machine connects here yet. p shows a pairing code for one.";
+    let empty = "No other machine connects here yet. Press p for a pairing code.";
+    let off = "Connections to this machine are off";
     for (value, expected, absent) in [
-        (list(true, Vec::new()), empty, "Connections are off"),
+        (list(true, Vec::new()), empty, off),
         (
             list(false, Vec::new()),
             "remote.require_pairing is false, so clients connect without a code.",
-            "Connections are off",
+            off,
         ),
         (
             json!({"now_ms": NOW_MS, "require_pairing": true, "allow_connections": false,
                    "items": []}),
-            "Connections are off, so other machines cannot connect here.",
+            "Connections to this machine are off. Press o to turn them on.",
             empty,
+        ),
+        (
+            json!({"now_ms": NOW_MS, "require_pairing": true, "allow_connections": false,
+                   "remote_invalid": true, "items": []}),
+            "Connections to this machine are off because config.yaml has invalid remote",
+            "Press o to turn them on.",
         ),
     ] {
         let app = with_clients(120, 40, value).await?;
@@ -273,7 +281,7 @@ async fn a_daemon_without_remote_clients_lists_none() -> TestResult {
     );
     let text = screen(&render(&app)?);
     assert!(!text.contains("laptop"), "{text}");
-    assert!(text.contains("p shows a pairing code"), "{text}");
+    assert!(text.contains("Press p for a pairing code."), "{text}");
     Ok(())
 }
 
@@ -350,17 +358,18 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     let mut app = with_clients(80, 24, clients(true)).await?;
     app.update(key(KeyCode::Char('x')));
     match &app.dialog {
-        Some(Dialog::Confirm { detail, .. }) => assert_eq!(
-            detail[1].replace('\u{a0}', " "),
-            "It can connect again only with a new code from devlanes daemon pair."
-        ),
+        Some(Dialog::Confirm { detail, .. }) => {
+            assert_eq!(detail[1], "It needs a new pairing code to connect again.");
+        }
         other => return Err(format!("no confirm dialog: {other:?}").into()),
     }
     let buffer = render(&app)?;
     assert_clean(&buffer, "revoke dialog at 80x24");
-    // The command stays whole on the dialog's last row.
-    let text = screen(&buffer).replace('\u{a0}', " ");
-    assert!(text.contains("│ devlanes daemon pair."), "{text}");
+    let text = screen(&buffer);
+    assert!(
+        text.contains("It needs a new pairing code to connect again."),
+        "{text}"
+    );
     Ok(())
 }
 
@@ -416,6 +425,25 @@ async fn pages_move_through_the_clients() -> TestResult {
     assert_eq!(app.boxes.clients.selected, 0);
     let text = screen(&render(&app)?);
     assert!(text.contains("rows 1-"), "{text}");
+    Ok(())
+}
+
+/// On the boxes, a page is the boxes the view shows, not the client rows.
+#[tokio::test]
+async fn pages_on_the_boxes_move_by_the_boxes_shown() -> TestResult {
+    let mut app = with_clients(120, 40, clients(true)).await?;
+    let hosts: Vec<Value> = (0..12)
+        .map(|n| json!({"host": format!("box-{n:02}"), "state": "connected", "transport": "ssh"}))
+        .collect();
+    app.update(Msg::Boxes(Ok(json!({"items": hosts}))));
+    app.update(key(KeyCode::Char('g')));
+    render(&app)?;
+    let shown = app.boxes.host_blocks.borrow().len();
+    assert!((2..12).contains(&shown), "some boxes in view: {shown}");
+    app.update(key(KeyCode::PageDown));
+    assert_eq!(app.boxes.host, shown, "{:?}", app.boxes.part);
+    app.update(key(KeyCode::PageUp));
+    assert_eq!(app.boxes.host, 0);
     Ok(())
 }
 

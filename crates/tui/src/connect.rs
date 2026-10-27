@@ -3,6 +3,8 @@
 //! pairing code another machine needs to connect to this one. They hold what
 //! the modal shows and turn keys into [`Action`]s; the app runs the effects.
 
+use std::collections::BTreeMap;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 
@@ -38,8 +40,25 @@ pub struct Form {
     pub name: String,
     /// The command as typed, split like a shell line when sent.
     pub command: String,
-    /// What is wrong with what was sent.
+    /// What is wrong with what was sent, or what Enter again would do.
     pub error: Option<String>,
+    /// `remote.boxes` of the user config: each box's command by name.
+    pub known: BTreeMap<String, Vec<String>>,
+    /// Boxes with a link in the daemon now, which keeps its command until it
+    /// is disconnected.
+    pub live: Vec<String>,
+    /// The box whose configured command Enter replaces, once asked.
+    replace: Option<String>,
+}
+
+/// What the form asks for once it is sent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Submit {
+    /// Connect to the box by its name, with the command the config has for
+    /// it if any.
+    Connect(String),
+    /// Save the box's new command to the user config, then connect.
+    Save(String, Vec<String>),
 }
 
 impl Form {
@@ -51,8 +70,10 @@ impl Form {
         }
     }
 
-    /// The text field with the focus, if a text field has it.
+    /// The text field with the focus, if a text field has it. Typing there
+    /// takes back a question about replacing a command.
     fn text(&mut self) -> Option<&mut String> {
+        self.replace = None;
         match self.field {
             Field::Reach => None,
             Field::Name => Some(&mut self.name),
@@ -60,10 +81,20 @@ impl Form {
         }
     }
 
-    /// What Enter sends: the box to connect, with its command for a box
-    /// reached by one, or what is wrong in words.
-    pub fn submit(&self) -> Result<(String, Option<Vec<String>>), String> {
-        let name = self.name.trim();
+    /// The configured command of the SSH name typed, which `connect` uses
+    /// instead of ssh.
+    pub fn configured(&self) -> Option<&Vec<String>> {
+        match self.reach {
+            Reach::Ssh => self.known.get(self.name.trim()),
+            Reach::Command => None,
+        }
+    }
+
+    /// What Enter sends, or what is wrong in words. A command that would
+    /// replace the configured one is asked about first, and a box with a link
+    /// keeps its command until it is disconnected, so it is not saved then.
+    pub(crate) fn submit(&mut self) -> Result<Submit, String> {
+        let name = self.name.trim().to_owned();
         if name.is_empty() {
             return Err("Type the box's name.".into());
         }
@@ -71,7 +102,7 @@ impl Form {
             return Err("A box name cannot start with - or hold spaces.".into());
         }
         if self.reach == Reach::Ssh {
-            return Ok((name.to_owned(), None));
+            return Ok(Submit::Connect(name));
         }
         // The name becomes a key of remote.boxes in config.yaml.
         if !name
@@ -86,21 +117,70 @@ impl Form {
         if command.is_empty() {
             return Err("Type the command that runs devlanes tunnel --stdio in the box.".into());
         }
-        Ok((name.to_owned(), Some(command)))
+        let known = self.known.get(&name);
+        if known == Some(&command) {
+            return Ok(Submit::Connect(name));
+        }
+        if self.live.contains(&name) {
+            return Err(format!(
+                "{name} is connected now. Press d on it to disconnect it first."
+            ));
+        }
+        if let Some(old) = known
+            && self.replace.as_deref() != Some(name.as_str())
+        {
+            self.replace = Some(name.clone());
+            return Err(format!(
+                "config.yaml already runs {} for {name}. Press enter again to replace it.",
+                old.join(" ")
+            ));
+        }
+        Ok(Submit::Save(name, command))
+    }
+}
+
+/// An answer to a prompt, kept out of debug output since it may be a
+/// passphrase.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Answer(pub String);
+
+impl std::fmt::Debug for Answer {
+    /// The length only.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Answer({} bytes)", self.0.len())
     }
 }
 
 /// A question the box's link asks while the modal is attached.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Prompt {
     /// Where the answer goes, as the daemon's `remote.prompt` names it.
     pub stream_id: u64,
     /// `code` for a pairing code, `secret` for a passphrase or password
     /// (shown masked), anything else for text such as a host key's yes.
     pub kind: String,
-    /// What ssh or the daemon asked, cleaned.
-    pub text: String,
+    /// What ssh or the daemon asked, cleaned, one entry per line.
+    pub text: Vec<String>,
     pub input: String,
+    /// The link's attempt when it asked; a state of another attempt means
+    /// the question is gone.
+    pub attempt: Option<u64>,
+}
+
+impl std::fmt::Debug for Prompt {
+    /// Everything but what was typed, which may be a passphrase.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Prompt")
+            .field("stream_id", &self.stream_id)
+            .field("kind", &self.kind)
+            .field("text", &self.text)
+            .field(
+                "input",
+                &format_args!("{} chars", self.input.chars().count()),
+            )
+            .field("attempt", &self.attempt)
+            .finish()
+    }
 }
 
 impl Prompt {
@@ -119,7 +199,7 @@ pub struct Link {
     pub retry_in_ms: Option<u64>,
     /// Seconds since the state arrived, so a retry counts down.
     pub age: u64,
-    /// Notices ssh printed on the way, such as a host key it added.
+    /// Lines of the notices ssh printed on the way, such as a host key it added.
     pub notes: Vec<String>,
 }
 
@@ -129,32 +209,36 @@ impl Link {
         let text = |key: &str| data.get(key).and_then(Value::as_str).map(text::clean);
         self.state = text("state").unwrap_or_default();
         self.attempt = data.get("attempt").and_then(Value::as_u64);
-        self.error = text("error").filter(|error| !error.is_empty());
+        self.error = text("error")
+            .map(|error| error.replace('`', ""))
+            .filter(|error| !error.is_empty());
         self.retry_in_ms = data.get("retry_in_ms").and_then(Value::as_u64);
         self.age = 0;
     }
 
-    /// The state in words: `connecting…`, `trying again in 4s`.
+    /// The state in words: `connecting…`, `next try in 4s`.
     pub fn words(&self) -> String {
         match self.state.as_str() {
             "" | "connecting" => match self.attempt {
                 Some(attempt) if attempt > 1 => format!("connecting, try {attempt}…"),
                 _ => "connecting…".into(),
             },
-            "reconnecting" => {
-                let left = self
-                    .retry_in_ms
-                    .map(|ms| ms.saturating_sub(self.age * 1000).div_ceil(1000));
-                match left {
-                    Some(seconds) if seconds > 0 => format!("trying again in {seconds}s"),
-                    _ => "trying again…".into(),
-                }
-            }
+            "reconnecting" => next_try(self.retry_in_ms, self.age),
             "needs_auth" => "waiting for a sign-in…".into(),
             "needs_pairing" => "waiting for a pairing code…".into(),
             "connected" => "connected".into(),
             state => text::clean(&state.replace('_', " ")),
         }
+    }
+}
+
+/// `next try in 4s`, or `trying again now` once the wait is over: how long a
+/// link waits for its next attempt, `retry_in_ms` from `age` seconds ago.
+pub fn next_try(retry_in_ms: Option<u64>, age: u64) -> String {
+    let left = retry_in_ms.map(|ms| ms.saturating_sub(age * 1000).div_ceil(1000));
+    match left {
+        Some(seconds) if seconds > 0 => format!("next try in {seconds}s"),
+        _ => "trying again now".into(),
     }
 }
 
@@ -199,7 +283,7 @@ pub enum Action {
     /// Send `answer` for the prompt on `stream_id`.
     Answer {
         stream_id: u64,
-        answer: String,
+        answer: Answer,
     },
 }
 
@@ -235,9 +319,20 @@ impl ConnectDialog {
         matches!(self.step, Step::Saving | Step::Waiting)
     }
 
+    /// Whether a click outside the modal is ignored rather than closing it:
+    /// while it saves, which takes a moment, and while it asks something,
+    /// which a stray click must not cancel.
+    pub fn holds_clicks(&self) -> bool {
+        matches!(self.step, Step::Saving | Step::Prompt(_))
+    }
+
     /// Takes a key.
     pub fn key(&mut self, key: KeyEvent) -> Action {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Saving takes milliseconds, and then the box connects.
+        if self.step == Step::Saving {
+            return Action::Stay;
+        }
         if key.code == KeyCode::Esc {
             return Action::Close;
         }
@@ -247,7 +342,7 @@ impl ConnectDialog {
                 KeyCode::Enter => Action::Answer {
                     stream_id: prompt.stream_id,
                     // An empty frame cancels, so an empty answer is a newline.
-                    answer: format!("{}\n", prompt.input),
+                    answer: Answer(format!("{}\n", prompt.input)),
                 },
                 KeyCode::Backspace => {
                     prompt.input.pop();
@@ -289,14 +384,20 @@ impl ConnectDialog {
                     Reach::Command => Reach::Ssh,
                 };
                 form.error = None;
+                form.replace = None;
             }
             KeyCode::Enter => match form.submit() {
-                Ok((host, command)) => {
+                Ok(submit) => {
                     form.error = None;
-                    self.host = host;
-                    return match command {
-                        Some(command) => Action::Save(command),
-                        None => Action::Connect,
+                    return match submit {
+                        Submit::Connect(host) => {
+                            self.host = host;
+                            Action::Connect
+                        }
+                        Submit::Save(host, command) => {
+                            self.host = host;
+                            Action::Save(command)
+                        }
                     };
                 }
                 Err(error) => form.error = Some(error),
@@ -341,16 +442,14 @@ impl ConnectDialog {
     /// answer on the returned stream.
     pub fn prompt(&mut self, data: &Value) -> Option<u64> {
         let stream_id = data.get("stream_id").and_then(Value::as_u64)?;
-        let field = |key: &str| {
-            data.get(key)
-                .and_then(Value::as_str)
-                .map(text::clean)
-                .unwrap_or_default()
-        };
-        let kind = field("kind");
-        let asked = field("prompt");
+        let kind = data
+            .get("kind")
+            .and_then(Value::as_str)
+            .map(text::clean)
+            .unwrap_or_default();
+        let asked = text::clean_lines(data.get("prompt").and_then(Value::as_str).unwrap_or(""));
         if kind == "notify" {
-            self.link.notes.push(asked);
+            self.link.notes.extend(asked);
             return Some(stream_id);
         }
         self.step = Step::Prompt(Prompt {
@@ -358,23 +457,38 @@ impl ConnectDialog {
             kind,
             text: asked,
             input: String::new(),
+            attempt: self.link.attempt,
         });
         None
+    }
+
+    /// Takes a `remote.state` event's data. A question stays open while the
+    /// attempt that asked it goes on, so a state sent late for it does not
+    /// take the question away.
+    pub fn state(&mut self, data: &Value) {
+        self.link.update(data);
+        if let Step::Prompt(prompt) = &self.step
+            && (self.link.state != "connecting" || self.link.attempt != prompt.attempt)
+        {
+            self.step = Step::Waiting;
+        }
     }
 }
 
 impl Default for ConnectDialog {
+    /// The empty form, as [`ConnectDialog::new`].
     fn default() -> Self {
         Self::new()
     }
 }
 
 /// `line` split into a program and its arguments, the way a shell splits
-/// words: spaces separate them, single quotes keep everything, double quotes
-/// keep spaces, and a backslash keeps the quote, space or backslash after
-/// it. A backslash before anything else is kept, so Windows paths
-/// (`C:\tools\x.exe`) type as they are.
-pub fn split_command(line: &str) -> Result<Vec<String>, String> {
+/// words: spaces separate them, single quotes keep everything and double
+/// quotes keep spaces. A backslash is kept as it is, so Windows paths
+/// (`C:\tools\x.exe`, `\\server\share`) type as they are, except that `\"`
+/// is a quote. Inside double quotes a `\"` at the end of a word closes the
+/// quotes instead, so `"C:\dir\"` is `C:\dir\`.
+pub(crate) fn split_command(line: &str) -> Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut word = String::new();
     // A word started, even an empty `''`.
@@ -403,7 +517,15 @@ pub fn split_command(line: &str) -> Result<Vec<String>, String> {
                 loop {
                     match chars.next() {
                         Some('"') => break,
-                        Some('\\') if matches!(chars.peek(), Some('"' | '\\')) => {
+                        Some('\\') if chars.peek() == Some(&'"') => {
+                            let mut ahead = chars.clone();
+                            ahead.next();
+                            // `\"` before the end of the word ends the quotes.
+                            if ahead.peek().is_none_or(|next| next.is_whitespace()) {
+                                word.push('\\');
+                                chars.next();
+                                break;
+                            }
                             word.extend(chars.next());
                         }
                         Some(c) => word.push(c),
@@ -411,10 +533,7 @@ pub fn split_command(line: &str) -> Result<Vec<String>, String> {
                     }
                 }
             }
-            '\\' if chars
-                .peek()
-                .is_some_and(|next| matches!(next, '"' | '\'' | '\\') || next.is_whitespace()) =>
-            {
+            '\\' if chars.peek() == Some(&'"') => {
                 started = true;
                 word.extend(chars.next());
             }
@@ -507,13 +626,13 @@ impl PairDialog {
         total.saturating_sub(self.age * 1000)
     }
 
-    /// The command the other machine runs with the code shown, if one is.
-    pub fn command(&self) -> Option<String> {
+    /// The code shown, while it has not expired.
+    pub fn code(&self) -> Option<&str> {
         match &self.state {
             PairState::Code { code, valid_ms }
                 if valid_ms.is_none_or(|valid| self.left(valid) > 0) =>
             {
-                Some(format!("devlanes remote connect <box> --code {code}"))
+                Some(code)
             }
             _ => None,
         }
@@ -535,8 +654,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    /// Words split on spaces; quotes group them and backslashes keep what
-    /// they quote, while other backslashes stay for Windows paths.
+    /// Words split on spaces and quotes group them. Backslashes stay as they
+    /// are, so Windows and UNC paths type as they are, except before a quote.
     #[test]
     fn commands_split_like_a_shell_line() {
         let split = |line: &str| split_command(line).expect("split");
@@ -558,8 +677,24 @@ mod tests {
             ]
         );
         assert_eq!(
-            split(r#"C:\tools\box.exe a\ b "say \"hi\"" ''"#),
-            [r"C:\tools\box.exe", "a b", r#"say "hi""#, ""]
+            split(r#"C:\tools\box.exe \\server\share\x.exe a\ b say \"hi\" ''"#),
+            [
+                r"C:\tools\box.exe",
+                r"\\server\share\x.exe",
+                r"a\",
+                "b",
+                "say",
+                r#""hi""#,
+                ""
+            ]
+        );
+        assert_eq!(
+            split(r#""C:\Program Files\devlanes\" "say \"hi\"" "\\server\share""#),
+            [
+                r"C:\Program Files\devlanes\",
+                r#"say "hi""#,
+                r"\\server\share"
+            ]
         );
         assert_eq!(split("   "), Vec::<String>::new());
         assert!(split_command("docker 'exec").is_err());
@@ -570,39 +705,67 @@ mod tests {
     /// needs a name config.yaml can hold.
     #[test]
     fn the_form_checks_what_was_typed() {
-        let form = |reach, name: &str, command: &str| Form {
-            reach,
-            name: name.into(),
-            command: command.into(),
-            ..Form::default()
+        let form = |reach, name: &str, command: &str| {
+            Form {
+                reach,
+                name: name.into(),
+                command: command.into(),
+                ..Form::default()
+            }
+            .submit()
         };
         assert_eq!(
-            form(Reach::Ssh, " me@203.0.113.4 ", "").submit(),
-            Ok(("me@203.0.113.4".into(), None))
+            form(Reach::Ssh, " me@203.0.113.4 ", ""),
+            Ok(Submit::Connect("me@203.0.113.4".into()))
         );
-        assert!(form(Reach::Ssh, "", "").submit().is_err());
-        assert!(form(Reach::Ssh, "-oProxyCommand=x", "").submit().is_err());
-        assert!(form(Reach::Ssh, "two words", "").submit().is_err());
+        assert!(form(Reach::Ssh, "", "").is_err());
+        assert!(form(Reach::Ssh, "-oProxyCommand=x", "").is_err());
+        assert!(form(Reach::Ssh, "two words", "").is_err());
         assert_eq!(
-            form(
-                Reach::Command,
-                "acme",
-                "docker exec -i acme devlanes tunnel --stdio"
-            )
-            .submit(),
-            Ok((
+            form(Reach::Command, "acme", "wsl.exe -d Ubuntu"),
+            Ok(Submit::Save(
                 "acme".into(),
-                Some(
-                    [
-                        "docker", "exec", "-i", "acme", "devlanes", "tunnel", "--stdio"
-                    ]
-                    .map(String::from)
-                    .to_vec()
-                )
+                ["wsl.exe", "-d", "Ubuntu"].map(String::from).to_vec()
             ))
         );
-        assert!(form(Reach::Command, "me@box", "x").submit().is_err());
-        assert!(form(Reach::Command, "acme", "  ").submit().is_err());
+        assert!(form(Reach::Command, "me@box", "x").is_err());
+        assert!(form(Reach::Command, "acme", "  ").is_err());
+    }
+
+    /// A command already in the config is asked about before it is replaced,
+    /// the same command just connects, a box with a link keeps its command
+    /// until it is disconnected, and an SSH name with a command says so.
+    #[test]
+    fn the_form_checks_the_config_and_live_boxes() {
+        let docker = ["docker", "exec", "-i", "acme"].map(String::from).to_vec();
+        let mut form = Form {
+            reach: Reach::Command,
+            name: "acme".into(),
+            command: "wsl.exe -d Ubuntu".into(),
+            known: BTreeMap::from([("acme".to_owned(), docker.clone())]),
+            ..Form::default()
+        };
+        let asked = form.submit().expect_err("asks first");
+        assert!(
+            asked.contains("already runs docker exec -i acme"),
+            "{asked}"
+        );
+        assert!(
+            asked.contains("Press enter again to replace it."),
+            "{asked}"
+        );
+        assert!(matches!(form.submit(), Ok(Submit::Save(..))));
+        form.command = "docker exec -i acme".into();
+        assert_eq!(form.submit(), Ok(Submit::Connect("acme".into())));
+        form.command = "wsl.exe -d Ubuntu".into();
+        form.live = vec!["acme".into()];
+        let live = form.submit().expect_err("connected");
+        assert!(
+            live.contains("Press d on it to disconnect it first."),
+            "{live}"
+        );
+        form.reach = Reach::Ssh;
+        assert_eq!(form.configured(), Some(&docker));
     }
 
     /// Tab goes through the rows, space switches how the box is reached,
@@ -629,11 +792,16 @@ mod tests {
             Action::Save(["wsl.exe", "-d", "Ubuntu"].map(String::from).to_vec())
         );
         assert_eq!(dialog.host, "acme");
+        // Esc does nothing while the command is saved.
+        dialog.step = Step::Saving;
+        assert_eq!(dialog.key(key(KeyCode::Esc)), Action::Stay);
+        dialog.step = Step::Form;
         assert_eq!(dialog.key(key(KeyCode::Esc)), Action::Close);
     }
 
-    /// A question becomes the prompt step and its answer ends in a newline;
-    /// a notice is kept and answered at once.
+    /// A question becomes the prompt step with its lines, its answer ends in
+    /// a newline and stays out of debug output; a notice is kept and
+    /// answered at once.
     #[test]
     fn prompts_and_notices() {
         let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
@@ -643,18 +811,42 @@ mod tests {
         assert_eq!(dialog.prompt(&notice), Some(3));
         assert_eq!(dialog.link.notes, ["Warning: added the host key"]);
         assert_eq!(dialog.step, Step::Waiting);
+        let host_key = json!({"kind": "confirm", "stream_id": 5,
+            "prompt": "The authenticity of host 'hetzner' can't be established.\nAre you sure (yes/no)? "});
+        assert_eq!(dialog.prompt(&host_key), None);
+        assert!(matches!(&dialog.step, Step::Prompt(p) if p.text.len() == 2));
         let secret = json!({"kind": "secret", "prompt": "Enter passphrase:", "stream_id": 4});
         assert_eq!(dialog.prompt(&secret), None);
         dialog.key(key(KeyCode::Char('h')));
         dialog.key(key(KeyCode::Char('i')));
         assert!(matches!(&dialog.step, Step::Prompt(p) if p.masked() && p.input == "hi"));
+        assert!(!format!("{:?}", dialog.step).contains("hi\""));
+        let answer = dialog.key(key(KeyCode::Enter));
         assert_eq!(
-            dialog.key(key(KeyCode::Enter)),
+            answer,
             Action::Answer {
                 stream_id: 4,
-                answer: "hi\n".into()
+                answer: Answer("hi\n".into())
             }
         );
+        assert!(!format!("{answer:?}").contains("hi"), "{answer:?}");
+    }
+
+    /// A state of the attempt that asked keeps the question open; a state of
+    /// another attempt, or one that is not connecting, takes it away.
+    #[test]
+    fn late_states_keep_the_question() {
+        let mut dialog = ConnectDialog::following("hetzner");
+        let state = |state: &str, attempt: u64| json!({"host": "hetzner", "state": state, "attempt": attempt});
+        dialog.state(&state("connecting", 1));
+        dialog.prompt(&json!({"kind": "secret", "prompt": "Password:", "stream_id": 4}));
+        dialog.state(&state("connecting", 1));
+        assert!(matches!(dialog.step, Step::Prompt(_)), "the same attempt");
+        dialog.state(&state("connecting", 2));
+        assert_eq!(dialog.step, Step::Waiting, "another attempt");
+        dialog.prompt(&json!({"kind": "secret", "prompt": "Password:", "stream_id": 5}));
+        dialog.state(&json!({"host": "hetzner", "state": "reconnecting", "retry_in_ms": 500}));
+        assert_eq!(dialog.step, Step::Waiting, "the attempt ended");
     }
 
     /// The pairing modal counts its code down from when it arrived and has
@@ -666,12 +858,9 @@ mod tests {
         dialog.age = 2;
         assert!(matches!(&dialog.state, PairState::Code { code, .. } if code == "K7QM-3XWD"));
         assert_eq!(countdown(dialog.left(600_000)), "9m 58s");
-        assert_eq!(
-            dialog.command().as_deref(),
-            Some("devlanes remote connect <box> --code K7QM-3XWD")
-        );
+        assert_eq!(dialog.code(), Some("K7QM-3XWD"));
         dialog.age = 600;
-        assert_eq!(dialog.command(), None, "an expired code is not offered");
+        assert_eq!(dialog.code(), None, "an expired code is not offered");
         let refused = |code: &str, data| {
             let mut dialog = PairDialog::loading();
             dialog.answered(Err(crate::ApiError::Rpc(devlanes_proto::RpcError::new(
@@ -689,5 +878,7 @@ mod tests {
         );
         assert_eq!(countdown(45_000), "45s");
         assert_eq!(countdown(120_000), "2m");
+        assert_eq!(next_try(Some(4_000), 0), "next try in 4s");
+        assert_eq!(next_try(Some(4_000), 5), "trying again now");
     }
 }

@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/orphans.rs
 expression: text
 ---
-" devlanes  acme  1 main  2 feat                           ◆ 1 orphaned  M  D  B "
+" devlanes  acme  1 main  2 feat            ◆ 1 orphaned  Monitor  Daemon  Boxes "
 "┌ @0 · 1/2 up ─────────────────┐┌ api  orphaned · pid 4242 ────────────────────┐"
 "│ ▾ services                 2 ││ ◆ An earlier daemon started this process and │"
 "│   ◆ api  orphaned · pid 4242 ││   left it running.                           │"

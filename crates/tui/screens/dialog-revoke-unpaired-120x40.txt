@@ -4,7 +4,7 @@
 │                                                                                                                      │
 │   n   connect to a box by its SSH name or a command                                                                  │
 │                                                                                                                      │
-│ A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on   │
+│ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on  │
 │ this machine.                                                                                                        │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -46,7 +46,7 @@
 3: 0 darkgray, 119 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 119 darkgray
 5: 0 darkgray, 119 darkgray
-6: 0 darkgray, 2-115 dim, 119 darkgray
+6: 0 darkgray, 2-116 dim, 119 darkgray
 7: 0 darkgray, 2-14 dim, 119 darkgray
 8: 0 darkgray, 119 darkgray
 9: 0 darkgray, 119 darkgray

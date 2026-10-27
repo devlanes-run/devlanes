@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_proto::{
     Event, RpcError,
     remote::{PROMPT_EVENT, STATE_EVENT},
@@ -70,6 +70,16 @@ fn step(app: &App) -> Option<&Step> {
     }
 }
 
+/// A left click at `(column, row)`.
+fn click(column: u16, row: u16) -> Msg {
+    Msg::Mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
+}
+
 /// The notice's text, empty without one.
 fn notice(app: &App) -> String {
     app.notice
@@ -78,22 +88,26 @@ fn notice(app: &App) -> String {
         .unwrap_or_default()
 }
 
-/// The view buttons are always there, before any box is known: in full from
-/// 100 columns, as their key letters below.
+/// The view buttons are always there, before any box is known: in full
+/// while they fit, then Monitor, Daemon and last Boxes drop to their key
+/// letter.
 #[tokio::test]
 async fn the_header_always_shows_boxes() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
     let mut app = App::new(120, 40);
     app.update(Msg::Status(api.status().await));
     assert!(app.boxes.hosts.is_empty());
-    let header = row(&render(&app)?, 0);
-    assert!(
-        header.trim_end().ends_with("Monitor  Daemon  Boxes"),
-        "{header}"
-    );
-    app.update(Msg::Resize(80, 24));
-    let header = row(&render(&app)?, 0);
-    assert!(header.trim_end().ends_with("M  D  B"), "{header}");
+    for (width, buttons) in [
+        (120, "Monitor  Daemon  Boxes"),
+        (80, "Monitor  Daemon  Boxes"),
+        (62, "  M  Daemon  Boxes"),
+        (57, "  M  D  Boxes"),
+        (50, "  M  D  B"),
+    ] {
+        app.update(Msg::Resize(width, 24));
+        let header = row(&render(&app)?, 0);
+        assert!(header.trim_end().ends_with(buttons), "{width}: {header}");
+    }
     Ok(())
 }
 
@@ -147,7 +161,7 @@ async fn prompts_are_answered_in_the_modal() -> TestResult {
     let text = screen(&render(&app)?);
     assert!(text.contains("hetzner needs a pairing code."), "{text}");
     assert!(
-        text.contains("Run devlanes daemon pair on hetzner"),
+        text.contains("On hetzner, press p in the Boxes view or run devlanes daemon"),
         "{text}"
     );
     assert!(!text.contains('`'), "{text}");
@@ -155,7 +169,7 @@ async fn prompts_are_answered_in_the_modal() -> TestResult {
     let effects = app.update(key(KeyCode::Enter));
     assert!(
         effects.iter().any(|e| matches!(e,
-            Effect::ConnectAnswer { stream_id: 3, answer } if answer == "K7QM-3XWD\n")),
+            Effect::ConnectAnswer { stream_id: 3, answer } if answer.0 == "K7QM-3XWD\n")),
         "{effects:?}"
     );
     assert!(matches!(step(&app), Some(Step::Waiting)));
@@ -176,7 +190,7 @@ async fn prompts_are_answered_in_the_modal() -> TestResult {
     let effects = app.update(key(KeyCode::Enter));
     assert!(
         effects.iter().any(|e| matches!(e,
-            Effect::ConnectAnswer { stream_id: 4, answer } if answer == "hunter2\n")),
+            Effect::ConnectAnswer { stream_id: 4, answer } if answer.0 == "hunter2\n")),
         "{effects:?}"
     );
 
@@ -189,7 +203,7 @@ async fn prompts_are_answered_in_the_modal() -> TestResult {
     ));
     assert!(
         effects.iter().any(|e| matches!(e,
-            Effect::ConnectAnswer { stream_id: 5, answer } if answer == "\n")),
+            Effect::ConnectAnswer { stream_id: 5, answer } if answer.0 == "\n")),
         "{effects:?}"
     );
     assert!(screen(&render(&app)?).contains("Permanently added"));
@@ -223,7 +237,7 @@ async fn esc_detaches_and_leaves_the_connection_to_the_daemon() -> TestResult {
                "error": "ssh: connect to host hetzner port 22: Connection refused"}),
     ));
     let text = screen(&render(&app)?);
-    assert!(text.contains("trying again in 4s"), "{text}");
+    assert!(text.contains("next try in 4s"), "{text}");
     assert!(text.contains("Connection refused"), "{text}");
     let effects = app.update(key(KeyCode::Esc));
     assert!(app.dialog.is_none());
@@ -312,7 +326,7 @@ async fn a_refusal_shows_in_the_modal() -> TestResult {
         result: Err(ApiError::Rpc(RpcError::new(
             "remote_failed",
             json!({"host": "hetzner",
-                   "message": "the box does not accept connections because remote.allow_connections is false there"}),
+                   "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
             4,
         ))),
     });
@@ -320,11 +334,11 @@ async fn a_refusal_shows_in_the_modal() -> TestResult {
     assert_clean(&buffer, "a refused connection");
     let text = screen(&buffer);
     assert!(
-        text.contains("hetzner does not accept connections because"),
+        text.contains("hetzner does not accept connections."),
         "{text}"
     );
     assert!(
-        text.contains("remote.allow_connections is false there"),
+        text.contains("remote.allow_connections to true there"),
         "{text}"
     );
     let effects = app.update(key(KeyCode::Enter));
@@ -369,8 +383,9 @@ async fn the_pairing_code_modal() -> TestResult {
     assert!(screen(&render(&app)?).contains("expires in 9m 58s"));
     let effects = app.update(key(KeyCode::Char('y')));
     assert!(
-        effects.iter().any(|e| matches!(e,
-            Effect::Copy(text) if text == "devlanes remote connect <box> --code K7QM-3XWD")),
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Copy(text) if text == "K7QM-3XWD")),
         "{effects:?}"
     );
 
@@ -401,12 +416,210 @@ async fn the_pairing_code_modal() -> TestResult {
         "{text}"
     );
     assert!(
-        text.contains("remote.allow_connections is false here"),
+        text.contains("Turn on remote.allow_connections to pair another machine."),
         "{text}"
     );
     app.update(key(KeyCode::Esc));
     assert!(app.dialog.is_none());
     assert_eq!(app.view, View::Boxes);
+    Ok(())
+}
+
+/// `o` in the pair-off modal and in the view opens the options on
+/// `remote.allow_connections`, and closing them asks for the clients again,
+/// whose note then says whether connections are on.
+#[tokio::test]
+async fn o_opens_the_options_on_allow_connections() -> TestResult {
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(Msg::Clients(Ok(json!({"items": [], "now_ms": 0,
+        "require_pairing": true, "allow_connections": false}))));
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("Connections to this machine are off. Press o to turn them on."),
+        "{text}"
+    );
+    assert!(row(&render(&app)?, 29).contains("o options"), "the footer");
+    app.update(key(KeyCode::Char('p')));
+    let off = RpcError::new("connections_off", json!({"invalid": false}), 4);
+    app.update(Msg::Paired(Err(ApiError::Rpc(off))));
+    assert!(screen(&render(&app)?).contains("o options"));
+    app.update(key(KeyCode::Char('o')));
+    match &app.dialog {
+        Some(Dialog::Settings(settings)) => assert_eq!(
+            settings.selected().map(|item| item.key.as_str()),
+            Some("remote.allow_connections")
+        ),
+        other => return Err(format!("no options page: {other:?}").into()),
+    }
+    // Esc leaves the options for the menu.
+    let effects = app.update(key(KeyCode::Esc));
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::FetchClients)),
+        "{effects:?}"
+    );
+    app.update(key(KeyCode::Esc));
+    assert!(app.dialog.is_none());
+
+    // Invalid remote settings say so instead.
+    app.update(Msg::Clients(Ok(json!({"items": [], "now_ms": 0,
+        "require_pairing": true, "allow_connections": false, "remote_invalid": true}))));
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("because config.yaml has invalid remote settings"),
+        "{text}"
+    );
+    assert!(text.contains("doctor to see them."), "{text}");
+    app.update(key(KeyCode::Char('o')));
+    assert!(matches!(app.dialog, Some(Dialog::Settings(_))));
+    Ok(())
+}
+
+/// While the command is saved Esc and a click outside do nothing, and a
+/// save that fails shows why under the form, which stays as typed.
+#[tokio::test]
+async fn saving_a_command_holds_the_modal_and_reports_a_failure() -> TestResult {
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(key(KeyCode::Char('n')));
+    type_text(&mut app, "acme");
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::BackTab,
+        KeyModifiers::SHIFT,
+    )));
+    app.update(key(KeyCode::Char(' ')));
+    app.update(key(KeyCode::Tab));
+    app.update(key(KeyCode::Tab));
+    type_text(&mut app, "docker exec -i acme devlanes tunnel --stdio");
+    let effects = app.update(key(KeyCode::Enter));
+    let generation = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::SaveBoxCommand { generation, .. } => Some(*generation),
+            _ => None,
+        })
+        .ok_or("no save")?;
+    assert!(matches!(step(&app), Some(Step::Saving)));
+    let effects = app.update(key(KeyCode::Esc));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(matches!(step(&app), Some(Step::Saving)));
+    assert_eq!(notice(&app), "");
+    app.update(click(0, 0));
+    assert!(matches!(step(&app), Some(Step::Saving)), "a click outside");
+    app.update(Msg::BoxSaved {
+        generation,
+        result: Err("config.yaml is not valid YAML".into()),
+    });
+    assert!(matches!(step(&app), Some(Step::Form)));
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("config.yaml was not changed: config.yaml is not valid YAML"),
+        "{text}"
+    );
+    match &app.dialog {
+        Some(Dialog::Connect(dialog)) => {
+            assert_eq!(
+                dialog.form.command,
+                "docker exec -i acme devlanes tunnel --stdio"
+            );
+        }
+        other => return Err(format!("no form: {other:?}").into()),
+    }
+    Ok(())
+}
+
+/// The form reads the commands config.yaml has: a new command for a box
+/// that has one asks first, a connected box keeps its command, and an SSH
+/// name with a command says it runs that.
+#[tokio::test]
+async fn the_form_knows_the_configured_boxes() -> TestResult {
+    let hosts = json!([{"host": "live", "state": "connected", "transport": "command"}]);
+    let mut app = boxes_app(100, 30, hosts).await;
+    let effects = app.update(key(KeyCode::Char('n')));
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::LoadBoxCommands)),
+        "{effects:?}"
+    );
+    let docker = |name: &str| {
+        (
+            name.to_owned(),
+            ["docker", "exec", "-i", name].map(String::from).to_vec(),
+        )
+    };
+    app.update(Msg::BoxCommands([docker("acme"), docker("live")].into()));
+    type_text(&mut app, "acme");
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("acme has a command in config.yaml, so devlanes runs that"),
+        "{text}"
+    );
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::BackTab,
+        KeyModifiers::SHIFT,
+    )));
+    app.update(key(KeyCode::Char(' ')));
+    app.update(key(KeyCode::Tab));
+    app.update(key(KeyCode::Tab));
+    type_text(&mut app, "wsl.exe -d Ubuntu");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("config.yaml already runs docker exec -i acme for acme."),
+        "{text}"
+    );
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::SaveBoxCommand { host, .. } if host == "acme")),
+        "{effects:?}"
+    );
+
+    let hosts = json!([{"host": "live", "state": "connected", "transport": "command"}]);
+    let mut app = boxes_app(100, 30, hosts).await;
+    app.update(key(KeyCode::Char('n')));
+    app.update(Msg::BoxCommands([docker("live")].into()));
+    type_text(&mut app, "live");
+    app.update(Msg::Key(KeyEvent::new(
+        KeyCode::BackTab,
+        KeyModifiers::SHIFT,
+    )));
+    app.update(key(KeyCode::Char(' ')));
+    app.update(key(KeyCode::Tab));
+    app.update(key(KeyCode::Tab));
+    type_text(&mut app, "wsl.exe -d Ubuntu");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(effects.is_empty(), "{effects:?}");
+    let text = screen(&render(&app)?);
+    assert!(
+        text.contains("live is connected now. Press d on it to disconnect it first."),
+        "{text}"
+    );
+    Ok(())
+}
+
+/// A click outside the modal while it asks something leaves the question
+/// open; Esc still closes it.
+#[tokio::test]
+async fn a_click_outside_keeps_the_question() -> TestResult {
+    let mut app = boxes_app(100, 30, json!([])).await;
+    app.update(key(KeyCode::Char('n')));
+    type_text(&mut app, "hetzner");
+    let (generation, _) = opened(&app.update(key(KeyCode::Enter))).ok_or("no connect")?;
+    app.update(connect_event(
+        generation,
+        PROMPT_EVENT,
+        json!({"host": "hetzner", "kind": "secret", "stream_id": 4, "prompt": "Password:"}),
+    ));
+    render(&app)?;
+    let effects = app.update(click(0, 0));
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(matches!(step(&app), Some(Step::Prompt(_))));
+    let effects = app.update(key(KeyCode::Esc));
+    assert!(app.dialog.is_none());
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::ConnectDetach)),
+        "{effects:?}"
+    );
     Ok(())
 }
 
@@ -472,7 +685,7 @@ async fn drive_answers_the_code_and_the_passphrase() -> TestResult {
     steps.push(Script::Screen("needs a pairing code"));
     steps.extend(presses(typed("K7QM-3XWD")));
     steps.extend(presses(vec![key(KeyCode::Enter)]));
-    steps.push(Script::Screen("hetzner asks:"));
+    steps.push(Script::Screen("ssh asks:"));
     steps.extend(presses(typed("hunter2")));
     steps.extend(presses(vec![key(KeyCode::Enter)]));
     run_keys(

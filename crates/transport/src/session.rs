@@ -1199,7 +1199,8 @@ mod tests {
     async fn a_refusing_box_is_permanent_and_says_why() -> Result<(), Box<dyn std::error::Error>> {
         timeout(Duration::from_secs(10), async {
             let (client_io, box_io) = tokio::io::duplex(64 * 1024);
-            let reason = "the box does not accept connections because remote.allow_connections is false there";
+            let reason =
+                "the box does not accept connections. Set remote.allow_connections to true there";
             let server = tokio::spawn(crate::refuse(box_io, reason.into(), Timing::default()));
             let options = SessionOptions::new("client");
             let registry = options.registry.clone();

@@ -27,14 +27,14 @@
 │   ◉ wrk-ledger │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy              │                │
 │   ● stub-stripe│                                                                                    │ob_8130 took=170│
 │   ● stub-s3    │ monitor (M)                                                                        │                │
-│   ◆ stub-twilio│   < >  i            sort by the previous, next column, or reverse the sort         │ob_8131 took=183│
-│   ● stub-sendgr│   /  e              filter, grouped or flat                                        │                │
-│   ● stub-segmen│   h l               fold, unfold a lane                                            │ob_8132 took=196│
-│   ● stub-auth0 │   z                 detail graphs fill the page                                    │                │
+│   ◆ stub-twilio│   < >               sort by the previous, next column                              │ob_8131 took=183│
+│   ● stub-sendgr│   i                 reverse the sort                                               │                │
+│   ● stub-segmen│   /  e              filter, grouped or flat                                        │ob_8132 took=196│
+│   ● stub-auth0 │   h l  z            fold, unfold a lane; detail graphs fill the page               │                │
 │   ● proxy-edge │   c  m              cpu or memory in the big box (memory: a square per core)       │ob_8133 took=209│
-│   ● docs-search│   wheel             scroll the table; the selection stays                          │                │
-│   ● ml-ranker  │   s  x  r           start, stop, restart the unit or lane                          │                │
-│   ⠋ ml-embed   │   enter             open the unit in its project                                   │                │
+│   ● docs-search│   s  x  r           start, stop, restart the unit or lane                          │                │
+│   ● ml-ranker  │   enter             open the unit in its project                                   │                │
+│   ⠋ ml-embed   │                                                                                    │                │
 │   ● cache-warm │ …                                                                                  │                │
 └────────────────│ any key closes                                                                     │────────────────┘
  r restart   n ne└────────────────────────────────────────────────────────────────────────────────────┘ keys   q quit
@@ -76,7 +76,7 @@
 33: 0 darkgray, 4-5 green, 6-15 cyan, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 34: 0 darkgray, 4-5 green, 6-16 cyan, 17 bold, 19-38 bold, 102 bold, 119 darkgray
 35: 0 darkgray, 4-14 green, 17 bold, 19-38 bold, 102 bold, 119 darkgray
-36: 0 darkgray, 6-13 green, 17 bold, 19-38 bold, 102 bold, 119 darkgray
+36: 0 darkgray, 6-13 green, 17 bold, 102 bold, 119 darkgray
 37: 0 darkgray, 4-5 green, 6-15 dim blue, 17 bold, 19 dim, 102 bold, 119 darkgray
 38: 0-16 darkgray, 17 bold, 19-32 dim, 102 bold, 103-119 darkgray
 39: 1 bold, 2-12 dim, 13 bold, 14-16 dim, 17-102 bold, 103-110 dim, 111 bold, 112-119 dim

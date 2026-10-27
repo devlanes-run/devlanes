@@ -106,11 +106,8 @@ pub(super) fn connect(app: &App, dialog: &ConnectDialog, width: usize) -> Parts 
                 ),
                 Span::raw(format!("saving remote.boxes.{host}.command…")),
             ])];
-            (
-                format!("connect {host}"),
-                body,
-                vec![keys(theme, &[("esc", "close")])],
-            )
+            // It takes a moment and then connects, so no key stops it.
+            (format!("connect {host}"), body, Vec::new())
         }
         Step::Waiting => waiting(app, dialog, width),
         Step::Prompt(prompt) => question(theme, &host, prompt, width),
@@ -163,7 +160,7 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
             Span::styled(format!("{:<w$}", "Reach it by", w = LABEL - 1), label_style),
             option(Reach::Ssh, "SSH name"),
             Span::raw("   "),
-            option(Reach::Command, "a command"),
+            option(Reach::Command, "command"),
         ],
         width,
     )];
@@ -207,6 +204,17 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
         }
     };
     body.extend(wrapped(&about, width, theme.quiet()));
+    if form.configured().is_some() {
+        body.push(Line::from(""));
+        body.extend(wrapped(
+            &format!(
+                "{} has a command in config.yaml, so devlanes runs that instead of ssh.",
+                clean(form.name.trim())
+            ),
+            width,
+            theme.tone(Tone::Attention),
+        ));
+    }
     if let Some(error) = &form.error {
         body.push(Line::from(""));
         body.extend(wrapped(error, width, theme.tone(Tone::Attention)));
@@ -253,21 +261,27 @@ fn question(theme: &Theme, host: &str, prompt: &Prompt, width: usize) -> Parts {
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let mut body = Vec::new();
     let label = if prompt.kind == "code" {
-        let lead = if prompt.text.starts_with("new ") {
+        let new = prompt
+            .text
+            .first()
+            .is_some_and(|line| line.starts_with("new "));
+        let lead = if new {
             format!("{host} needs a new pairing code.")
         } else {
             format!("{host} needs a pairing code.")
         };
         body.extend(wrapped(&lead, width, bold));
         body.extend(wrapped(
-            &format!("Run devlanes daemon pair on {host}, then type the code here."),
+            &format!(
+                "On {host}, press p in the Boxes view or run devlanes daemon pair. Type the code here."
+            ),
             width,
             theme.quiet(),
         ));
         "Code"
     } else {
-        body.extend(wrapped(&format!("{host} asks:"), width, bold));
-        for line in prompt.text.lines() {
+        body.extend(wrapped("ssh asks:", width, bold));
+        for line in &prompt.text {
             body.extend(wrapped(line, width, Style::new()));
         }
         "Answer"
@@ -322,23 +336,24 @@ pub(super) fn pair(app: &App, dialog: &PairDialog, width: usize) -> Parts {
                 };
                 body.extend(wrapped(&expires, width, Style::new()));
                 body.push(Line::from(""));
-                body.extend(wrapped(
-                    "On the other machine, run this with its SSH name for this one:",
-                    width,
-                    theme.quiet(),
-                ));
+                body.extend(wrapped("On the other machine, run:", width, theme.quiet()));
                 body.extend(wrapped(
                     &format!("devlanes remote connect <box> --code {code}"),
                     width,
                     theme.key(),
                 ));
-                body.push(Line::from(""));
                 body.extend(wrapped(
-                    "Or press n in its boxes view. It asks for the code.",
+                    "<box> is this machine's SSH name there.",
                     width,
                     theme.quiet(),
                 ));
-                (body, vec![("y", "copy command"), ("p", "new code"), close])
+                body.push(Line::from(""));
+                body.extend(wrapped(
+                    "Or press n in its Boxes view. It asks for this code.",
+                    width,
+                    theme.quiet(),
+                ));
+                (body, vec![("y", "copy code"), ("p", "new code"), close])
             }
         }
         PairState::Paused { wait_ms } => {
@@ -355,12 +370,12 @@ pub(super) fn pair(app: &App, dialog: &PairDialog, width: usize) -> Parts {
         PairState::Off { invalid } => {
             let mut body = wrapped("Connections to this machine are off.", width, bold);
             let why = if *invalid {
-                "The remote settings in config.yaml are invalid, so they count as off. devlanes doctor shows the problem."
+                "config.yaml has invalid remote settings. Run devlanes doctor to see them."
             } else {
-                "remote.allow_connections is false here. Set it to true to pair another machine."
+                "Turn on remote.allow_connections to pair another machine."
             };
             body.extend(wrapped(why, width, Style::new()));
-            (body, vec![close])
+            (body, vec![("o", "options"), close])
         }
         PairState::Failed(worded) => {
             let mut body = wrapped(&worded.summary, width, theme.tone(Tone::Failure));

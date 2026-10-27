@@ -85,7 +85,7 @@ remote:
   allow_connections: false
 ```
 
-Clients then fail with `box hetzner does not accept connections because remote.allow_connections is false there` and stop retrying, and `devlanes daemon pair` gives no code. Connecting from that machine to its own boxes still works. Like the settings above it is read at each connection, and a problem under `remote` counts as `false`.
+Clients then fail with `box hetzner does not accept connections. Set remote.allow_connections to true there` and stop retrying, and `devlanes daemon pair` gives no code. Connecting from that machine to its own boxes still works. Like the settings above it is read at each connection, and a problem under `remote` counts as `false`.
 
 ### PATH for Docker and tools
 
@@ -161,7 +161,7 @@ devlanes remote disconnect hetzner
 
 Passphrase, one-time-password and host-key prompts appear in the terminal running `remote connect`, prefixed with the box name; type `yes` to a host-key question even though the input is hidden.
 
-The TUI connects boxes too: `B` opens the boxes view, `n` asks for the box's SSH name, or a command for a [box reached by a command](remote-command.md), and Enter connects. The same prompts, and the pairing code, come up in its modal. Enter on a box in the list connects it again, resumes one that waits for a sign-in or a code, or asks before it disconnects a connected one.
+The TUI connects boxes too: `B` opens the boxes view, `n` asks for the box's SSH name or, for a [box reached by a command](remote-command.md), its command, and Enter connects. The same prompts, and the pairing code, come up in its modal. Enter on a box in the list connects it again, resumes one that waits for a sign-in or a code, or asks before it disconnects a connected one.
 
 ### First connection
 
@@ -242,14 +242,14 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | Message | Cause | Fix |
 | --- | --- | --- |
 | `devlanes is not installed on hetzner` | not on the SSH session's `PATH` or in `~/.devlanes/bin` (`%USERPROFILE%\.devlanes\bin` on Windows) | install it on the box, or move the binary there, then connect again |
-| `box hetzner does not accept connections because remote.allow_connections is false there` | `remote.allow_connections: false` on the box | set it to `true` on the box, then `devlanes remote connect hetzner` again |
+| `box hetzner does not accept connections. Set remote.allow_connections to true there` | `remote.allow_connections: false` on the box | set it to `true` on the box, then `devlanes remote connect hetzner` again |
 | `box hetzner does not accept connections because the remote settings in its user config are invalid ...` | a problem under `remote` in the box's `config.yaml`, which turns connections off | `devlanes doctor` on the box shows it; fix it, then connect again |
 | `the devlanes daemon is not running on hetzner, and remote.start_daemon is false there` | `remote.start_daemon: false` on the box and its daemon is stopped | `devlanes daemon start` on the box, or `devlanes daemon install` to keep it running; the client keeps retrying |
 | `hetzner: a connection to port 20012 of acme@0:api failed because the unit is not running on the box` | an `open_failed` warning; `remote ls` shows the same as the port's `last_error` | start the unit on the box |
 | `... failed because nothing on the box accepted it (connection refused)` | the unit runs but does not listen on the box's loopback | make it listen on `127.0.0.1`, `::1` or a wildcard address |
 | `... failed because the box did not answer in time` or `the link dropped while it opened` | a slow or dropped link | try again; `remote ls` shows the link state |
 | `... failed because box hetzner is not connected: ...` | the link stayed down for 10 seconds | the error after the colon says why |
-| `the box runs devlanes 0.4.1 and this machine 0.4.3` | different releases, same protocol | works; upgrade the box when convenient |
+| `the box runs devlanes 0.4.1 and this machine 0.4.3. Install the same release on both.` | different releases, same protocol | works; upgrade the box when convenient |
 | `the box runs ... (protocol 5) but this client speaks protocol 4` | releases too far apart | install the same release on both machines, then `devlanes daemon restart` on the box |
 | `` `devlanes tunnel --stdio` did not answer within 20s. If the box runs an older devlanes release, ... `` | this client is newer than the box: the box's devlanes predates protocol 4, whose tunnel announces itself first | install the same release on both machines |
 | a mux or handshake error right after one machine was upgraded | this client predates protocol 4 and the box is newer: the client cannot read the line the box's tunnel starts with | install the same release on both machines |
@@ -261,8 +261,8 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | `lane acme@0 is not mirrored because box hetzner already serves acme.localhost` | two connected boxes serve the same hostname, and the box connected first keeps it | disconnect the other box, or run `devlanes lane clean` for that lane there; the lane is mirrored once the name is free |
 | `port 20012 is not mirrored because box hetzner (acme@0:api) uses it here` | another connected box's mirror holds the port | give the boxes different `ports.range` values |
 | `the box's ports.range 20000-32767 overlaps box hetzner (20000-32767), so ...` | two connected boxes hand out ports from the same pool | set another `ports.range` in `~/.devlanes/config.yaml` on one box, then `devlanes daemon restart` there |
-| `this machine cannot serve the box's HTTPS port 8443: in use by ... Open its hostnames on port 443 instead` | another process holds the box's proxy port on the client | stop that process; the client tries the port again every 30 seconds, or at once on `devlanes remote connect` for the box. Until then use the client's own HTTPS port |
-| `this machine cannot serve the box's HTTPS port 443: permission denied, since low ports may need privileges ...` | the box's proxy runs on a low port that the client's user may not bind (on macOS the extra port binds loopback only, which needs root below 1024) | on Linux, allow low ports as [Ports 443 and 80](https.md#ports-443-and-80) describes, then `devlanes daemon restart`; otherwise use the client's own HTTPS port |
+| `this machine cannot use the box's HTTPS port 8443 (in use by ...). Open its hostnames on port 443.` | another process holds the box's proxy port on the client | stop that process; the client tries the port again every 30 seconds, or at once on `devlanes remote connect` for the box. Until then use the client's own HTTPS port |
+| `this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.` | the box's proxy runs on a low port that the client's user may not bind (on macOS the extra port binds loopback only, which needs root below 1024) | on Linux, allow low ports as [Ports 443 and 80](https.md#ports-443-and-80) describes, then `devlanes daemon restart`; otherwise use the client's own HTTPS port |
 | `linger off` | Linux box without `loginctl enable-linger` | run it on the box |
 | `the box daemon stops when this SSH session ends` | a Windows box whose SSH server does not let the daemon leave the session | start the daemon outside SSH, as [Windows boxes](#windows-boxes) describes |
 | `cmd.exe on hetzner cannot run devlanes from C:\...\devlanes.exe because the path holds ...` | the box's shell is cmd.exe and the path holds `%` or `!` | install devlanes in another folder |

@@ -4,7 +4,7 @@
 │                                                                                                                                                                                                      │
 │   n   connect to a box by its SSH name or a command                                                                                                                                                  │
 │                                                                                                                                                                                                      │
-│ A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on this machine.                                                                     │
+│ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on this machine.                                                                    │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -24,13 +24,13 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                  ┌ pairing code ──────────────────────────────────────────────────┐                                                                  │
-│                                                                  │ Connections to this machine are off.                           │                                                                  │
-│                                                                  │ remote.allow_connections is false here. Set it to true to pair │                                                                  │
-│                                                                  │ another machine.                                               │                                                                  │
-│                                                                  │                                                                │                                                                  │
-│                                                                  │ esc close                                                      │                                                                  │
-│                                                                  └────────────────────────────────────────────────────────────────┘                                                                  │
+│                                                                                                                                                                                                      │
+│                                                                    ┌ pairing code ─────────────────────────────────────────────┐                                                                     │
+│                                                                    │ Connections to this machine are off.                      │                                                                     │
+│                                                                    │ Turn on remote.allow_connections to pair another machine. │                                                                     │
+│                                                                    │                                                           │                                                                     │
+│                                                                    │ o options   esc close                                     │                                                                     │
+│                                                                    └───────────────────────────────────────────────────────────┘                                                                     │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -55,9 +55,9 @@
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ Connections are off, so other machines cannot connect here. remote.allow_connections is false.                                                                                                       │
+│ Connections to this machine are off. Press o to turn them on.                                                                                                                                        │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- n new box   p pairing code   esc back                                                                                                                                            ? all keys   q quit
+ n new box   p pairing code   o options   esc back                                                                                                                                ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194-198 bold underlined
@@ -66,7 +66,7 @@
 3: 0 darkgray, 199 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 199 darkgray
 5: 0 darkgray, 199 darkgray
-6: 0 darkgray, 2-129 dim, 199 darkgray
+6: 0 darkgray, 2-130 dim, 199 darkgray
 7: 0 darkgray, 199 darkgray
 8: 0 darkgray, 199 darkgray
 9: 0 darkgray, 199 darkgray
@@ -86,13 +86,13 @@
 23: 0 darkgray, 199 darkgray
 24: 0 darkgray, 199 darkgray
 25: 0 darkgray, 199 darkgray
-26: 0 darkgray, 67-132 bold, 199 darkgray
-27: 0 darkgray, 67 bold, 69-104 bold, 132 bold, 199 darkgray
-28: 0 darkgray, 67 bold, 132 bold, 199 darkgray
-29: 0 darkgray, 67 bold, 132 bold, 199 darkgray
-30: 0 darkgray, 67 bold, 132 bold, 199 darkgray
-31: 0 darkgray, 67 bold, 69-71 bold, 72-77 dim, 132 bold, 199 darkgray
-32: 0 darkgray, 67-132 bold, 199 darkgray
+26: 0 darkgray, 199 darkgray
+27: 0 darkgray, 69-129 bold, 199 darkgray
+28: 0 darkgray, 69 bold, 71-106 bold, 129 bold, 199 darkgray
+29: 0 darkgray, 69 bold, 129 bold, 199 darkgray
+30: 0 darkgray, 69 bold, 129 bold, 199 darkgray
+31: 0 darkgray, 69 bold, 71 bold, 72-79 dim, 83-85 bold, 86-91 dim, 129 bold, 199 darkgray
+32: 0 darkgray, 69-129 bold, 199 darkgray
 33: 0 darkgray, 199 darkgray
 34: 0 darkgray, 199 darkgray
 35: 0 darkgray, 199 darkgray
@@ -117,6 +117,6 @@
 54: 0 darkgray, 199 darkgray
 55: 0-199 darkgray
 56: 0 darkgray, 1-14 bold, 15-199 darkgray
-57: 0 darkgray, 2-95 yellow, 199 darkgray
+57: 0 darkgray, 2-62 yellow, 199 darkgray
 58: 0-199 darkgray
-59: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30 bold, 31-41 dim, 42-44 bold, 45-52 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

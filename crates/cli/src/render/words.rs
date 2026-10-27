@@ -982,7 +982,8 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             )
         }
         // A box's own reason, such as connections being off there, starts
-        // with "the box", which this names.
+        // with "the box", which this names. It says what to do, so it gets
+        // no hint.
         "remote_failed" => {
             let host = text(data, "host");
             let message = data
@@ -994,10 +995,13 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                         .strip_prefix("the box ")
                         .map(|rest| format!("box {host} {rest}"))
                 });
-            (
-                message.unwrap_or_else(|| with_message(format!("remote {host}"))),
-                Some(Hint::command(["remote", "ls"])),
-            )
+            match message {
+                Some(message) => (message, None),
+                None => (
+                    with_message(format!("remote {host}")),
+                    Some(Hint::command(["remote", "ls"])),
+                ),
+            }
         }
         "connections_off" => {
             let invalid = data.get("invalid").and_then(Value::as_bool) == Some(true);
@@ -1298,7 +1302,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             field(data, "port")
         ),
         "proxy_port_in_use" => format!(
-            "{host}: this machine cannot serve the box's HTTPS port {}: {}. Open its hostnames on port {} instead",
+            "{host}: this machine cannot use the box's HTTPS port {} ({}). Open its hostnames on port {}.",
             field(data, "port"),
             super::clean(&field(data, "holder")),
             field(data, "own_port")

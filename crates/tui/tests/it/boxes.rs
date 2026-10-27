@@ -40,7 +40,7 @@ fn hosts() -> Value {
             "routes": [{"host": "web.acme-1.localhost", "port": 24100, "lane": "acme@1",
                         "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
             "skipped_lanes": [], "skipped_hosts": [], "syncs": [],
-            "warnings": ["the box runs devlanes 0.0.1 and this machine X; install the same release on both"],
+            "warnings": ["the box runs devlanes 0.0.1 and this machine X. Install the same release on both."],
             "registry": {
                 "lanes": [{"key": lane, "index": 1, "domain": "acme-1.localhost"}],
                 "units": [
@@ -298,7 +298,7 @@ async fn the_boxes_view_shows_links_errors_fixes_and_warnings() -> TestResult {
         "connected since 2026-10-14 ",
         "proxy on 443 · ports.range 24000-24999",
         "needs a sign-in · command",
-        "fix       devlanes remote connect devbox",
+        "fix       enter signs in again",
         "the box runs devlanes 0.0.1",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
@@ -327,7 +327,7 @@ async fn the_boxes_view_says_what_connecting_does_without_boxes() -> TestResult 
         "{text}"
     );
     assert!(
-        text.contains("No other machine connects here yet. p shows a pairing code"),
+        text.contains("No other machine connects here yet. Press p for a pairing code."),
         "{text}"
     );
     Ok(())
@@ -354,7 +354,7 @@ async fn a_box_the_restore_could_not_reopen_shows_as_failed_with_its_error() -> 
         "failed · command",
         "failed, so nothing is mirrored",
         "remote.boxes.devbox.command",
-        "fix       devlanes remote connect devbox",
+        "fix       enter connects again",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }

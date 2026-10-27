@@ -2426,14 +2426,15 @@ fn connections_off_reads_plainly_on_both_ends() {
     let client = error(
         "remote_failed",
         json!({"host": "hetzner",
-               "message": "the box does not accept connections because remote.allow_connections is false there"}),
+               "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
     );
     assert!(
         client.contains(
-            "box hetzner does not accept connections because remote.allow_connections is false there"
+            "box hetzner does not accept connections. Set remote.allow_connections to true there"
         ),
         "{client}"
     );
+    assert!(!client.contains("remote ls"), "no extra hint: {client}");
     let other = error(
         "remote_failed",
         json!({"host": "hetzner", "message": "connecting to the box timed out"}),
@@ -2641,9 +2642,9 @@ fn box_collision_warnings_name_the_other_box() {
     assert_eq!(
         line(
             json!({"host": "hetzner", "code": "proxy_port_in_use", "port": 8443,
-            "own_port": 443, "holder": "in use by nginx (pid 812)", "message": "…"})
+            "own_port": 443, "holder": "in use by nginx, pid 812", "message": "…"})
         ),
-        "warn hetzner: this machine cannot serve the box's HTTPS port 8443: in use by nginx (pid 812). Open its hostnames on port 443 instead\n"
+        "warn hetzner: this machine cannot use the box's HTTPS port 8443 (in use by nginx, pid 812). Open its hostnames on port 443.\n"
     );
     assert_eq!(
         line(

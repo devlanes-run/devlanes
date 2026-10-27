@@ -507,9 +507,9 @@ pub fn boxes() -> Value {
                        "state": "watching", "written": 214, "removed": 0, "pruned": 0,
                        "compared": 214, "errors": [], "error": null, "updated_ms": NOW_MS}],
             "warnings": [
-                format!("the box runs devlanes 0.9.2 and this machine {VERSION}; install the same release on both"),
-                "the box stops your processes at logout; run `loginctl enable-linger` there or `devlanes daemon install`",
-                "this machine cannot serve the box's HTTPS port 443: permission denied, since low ports may need privileges. Open its hostnames on port 8443 instead",
+                format!("the box runs devlanes 0.9.2 and this machine {VERSION}. Install the same release on both."),
+                "the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.",
+                "this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.",
             ],
             "registry": {
                 "lanes": [
@@ -630,7 +630,7 @@ pub fn connect_refused(host: &str) -> RpcError {
     RpcError::new(
         "remote_failed",
         json!({"host": host,
-               "message": "the box does not accept connections because remote.allow_connections is false there"}),
+               "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
         4,
     )
 }

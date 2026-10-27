@@ -9,17 +9,17 @@
 │   syncs     acm┌ disconnect hetzner ────────────────────────┐                │
 │   ! the box run│ Disconnect hetzner?                        │ll the same     │
 │     release on │                                            │                │
-│   ! the box sto│ Its ports and hostnames stop working here. │le-linger there │
-│     or devlanes│ Its lanes keep running on the box.         │                │
-│   ! this machin│                                            │ssion denied,   │
-│     since low p│ y disconnect   n cancel                    │n port 8443     │
-│     instead    └────────────────────────────────────────────┘                │
-│                                                                              │
+│   ! the box sto│ Its ports and hostnames stop working here. │le-linger or    │
+│     devlanes da│ Its lanes keep running on the box.         │                │
+│   ! this machin│                                            │ion denied).    │
+│     Open its ho│ y disconnect   n cancel                    │                │
+│                └────────────────────────────────────────────┘                │
 │ ⠋ devbox                                              reconnecting · command │
-│   link      reconnecting, next try in 8s                                     │
+│   link      next try in 8s                                                   │
+│   error     docker exec exited 1: Error response from daemon: container      │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. p shows a pairing code for one.          │
+│ No other machine connects here yet. Press p for a pairing code.              │
 └──────────────────────────────────────────────────────────────────────────────┘
  enter disconnect   n new box   p pairing code            ? all keys   q quit
 
@@ -35,16 +35,16 @@
 8: 0 bold, 4-13 dim, 14-16 green, 17-62 bold, 79 bold
 9: 0 bold, 4-16 yellow, 17 bold, 19-37 bold, 62 bold, 63-73 yellow, 79 bold
 10: 0 bold, 6-16 yellow, 17 bold, 62 bold, 79 bold
-11: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-77 yellow, 79 bold
+11: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-74 yellow, 79 bold
 12: 0 bold, 6-16 yellow, 17 bold, 62 bold, 79 bold
-13: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-75 yellow, 79 bold
-14: 0 bold, 6-16 yellow, 17 bold, 19 bold, 20-30 dim, 34 bold, 35-41 dim, 62 bold, 63-73 yellow, 79 bold
-15: 0 bold, 6-12 yellow, 17-62 bold, 79 bold
-16: 0 bold, 79 bold
-17: 0 bold, 4-9 bold, 68-77 dim, 79 bold
-18: 0 bold, 4-13 dim, 14-41 yellow, 79 bold
+13: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-74 yellow, 79 bold
+14: 0 bold, 6-16 yellow, 17 bold, 19 bold, 20-30 dim, 34 bold, 35-41 dim, 62 bold, 79 bold
+15: 0 bold, 17-62 bold, 79 bold
+16: 0 bold, 4-9 bold, 68-77 dim, 79 bold
+17: 0 bold, 4-13 dim, 14-27 yellow, 79 bold
+18: 0 bold, 4-13 dim, 14-72 yellow, 79 bold
 19: 0-79 bold
 20: 0 darkgray, 1-14 bold, 15-79 darkgray
-21: 0 darkgray, 2-68 dim, 79 darkgray
+21: 0 darkgray, 2-64 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1-5 bold, 6-19 dim, 20 bold, 21-31 dim, 32 bold, 33-48 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

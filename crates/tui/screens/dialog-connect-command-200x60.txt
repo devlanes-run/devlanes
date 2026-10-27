@@ -4,7 +4,7 @@
 │                                                                                                                                                                                                      │
 │   n   connect to a box by its SSH name or a command                                                                                                                                                  │
 │                                                                                                                                                                                                      │
-│ A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on this machine.                                                                     │
+│ A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on this machine.                                                                    │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -23,7 +23,7 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                 ┌ connect a box ───────────────────────────────────────────────────┐                                                                 │
-│                                                                 │  Reach it by ( ) SSH name   (•) a command                        │                                                                 │
+│                                                                 │  Reach it by ( ) SSH name   (•) command                          │                                                                 │
 │                                                                 │                                                                  │                                                                 │
 │                                                                 │  Name        acme                                                │                                                                 │
 │                                                                 │ ▌Command     docker exec -i acme devlanes tunnel --stdio▏        │                                                                 │
@@ -55,7 +55,7 @@
 │                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ No other machine connects here yet. p shows a pairing code for one.                                                                                                                                  │
+│ No other machine connects here yet. Press p for a pairing code.                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  n new box   p pairing code   esc back                                                                                                                                            ? all keys   q quit
 
@@ -66,7 +66,7 @@
 3: 0 darkgray, 199 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 199 darkgray
 5: 0 darkgray, 199 darkgray
-6: 0 darkgray, 2-129 dim, 199 darkgray
+6: 0 darkgray, 2-130 dim, 199 darkgray
 7: 0 darkgray, 199 darkgray
 8: 0 darkgray, 199 darkgray
 9: 0 darkgray, 199 darkgray
@@ -85,7 +85,7 @@
 22: 0 darkgray, 199 darkgray
 23: 0 darkgray, 199 darkgray
 24: 0 darkgray, 66-133 bold, 199 darkgray
-25: 0 darkgray, 66 bold, 68 bold, 69-92 dim, 96-108 bold, 133 bold, 199 darkgray
+25: 0 darkgray, 66 bold, 68 bold, 69-92 dim, 96-106 bold, 133 bold, 199 darkgray
 26: 0 darkgray, 66 bold, 133 bold, 199 darkgray
 27: 0 darkgray, 66 bold, 68 bold, 69-80 dim, 133 bold, 199 darkgray
 28: 0 darkgray, 66 bold, 68-80 bold, 133 bold, 199 darkgray
@@ -117,6 +117,6 @@
 54: 0 darkgray, 199 darkgray
 55: 0-199 darkgray
 56: 0 darkgray, 1-14 bold, 15-199 darkgray
-57: 0 darkgray, 2-68 dim, 199 darkgray
+57: 0 darkgray, 2-64 dim, 199 darkgray
 58: 0-199 darkgray
 59: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

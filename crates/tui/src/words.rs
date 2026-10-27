@@ -706,12 +706,12 @@ mod tests {
     fn remote_errors_name_the_box() {
         let worded = rpc(&RpcError::new(
             "remote_failed",
-            json!({"host": "hetzner", "message": "the box does not accept connections because remote.allow_connections is false there"}),
+            json!({"host": "hetzner", "message": "the box does not accept connections. Set remote.allow_connections to true there"}),
             4,
         ));
         assert_eq!(
             worded.summary,
-            "hetzner does not accept connections because remote.allow_connections is false there"
+            "hetzner does not accept connections. Set remote.allow_connections to true there"
         );
         let worded = rpc(&RpcError::new(
             "remote_needs_pairing",

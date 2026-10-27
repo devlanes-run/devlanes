@@ -2,14 +2,14 @@
 source: crates/tui/tests/it/clients.rs
 expression: text
 ---
-" devlanes  1 acme   2 shop                              ✕ 1 failed  M  D  Boxes "
+" devlanes  1 acme   2 shop                   ✕ 1 failed  Monitor  Daemon  Boxes "
 "┌ boxes ───────────────────────────────────────────────────────────────────────┐"
 "│ no boxes yet                                                                 │"
 "│                                                                              │"
 "│   n   connect to a box by its SSH name or a command                          │"
 "│                                                                              │"
-"│ A box is another machine that runs devlanes. Its lanes show up here as       │"
-"│ projects. Their ports and hostnames work on this machine.                    │"
+"│ A box is another machine that runs devlanes. Its projects show up in the top │"
+"│ bar. Their ports and hostnames work on this machine.                         │"
 "│                                                                              │"
 "│                                                                              │"
 "│                                                                              │"

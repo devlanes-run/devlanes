@@ -39,15 +39,21 @@ async fn tunnel() -> Result<u8, RpcError> {
     let result = match Paths::discover() {
         Ok(paths) => {
             let read = paths.clone();
-            let fallback = devlanes_config::BoxSettings {
-                allow_connections: true,
-                start_daemon: true,
-                require_pairing: true,
-            };
+            // The safe side, as for a config with invalid remote settings.
+            let fallback = (
+                devlanes_config::BoxSettings {
+                    allow_connections: false,
+                    start_daemon: false,
+                    require_pairing: true,
+                },
+                "devlanes tunnel: reading the user config failed, so this machine refuses \
+                 connections\n"
+                    .to_owned(),
+            );
             let (settings, problems) =
                 tokio::task::spawn_blocking(move || crate::user_config::tunnel_settings(&read))
                     .await
-                    .unwrap_or((fallback, String::new()));
+                    .unwrap_or(fallback);
             eprint!("{problems}");
             let served =
                 match crate::user_config::connections_refusal(&settings, !problems.is_empty()) {

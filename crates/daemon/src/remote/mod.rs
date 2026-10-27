@@ -142,7 +142,7 @@ struct BoxPorts {
 /// Why the proxy cannot serve a box's HTTPS port, as `proxy_port_in_use` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BoxPortProblem {
-    /// `in use by nginx (pid 812)`, or why the bind failed.
+    /// `in use by nginx, pid 812`, or why the bind failed.
     holder: String,
     pid: Option<u32>,
 }
@@ -307,13 +307,17 @@ impl RemotePrompter for HostPrompter {
         if session.event(event).await.is_ok() {
             let disconnected = session.disconnected();
             tokio::select! {
-                reply = answer => reply.ok().flatten(),
-                () = disconnected.cancelled() => None,
-                () = tokio::time::sleep(PROMPT_TIMEOUT) => None,
+                reply = answer => return reply.ok().flatten(),
+                () = disconnected.cancelled() => {}
+                () = tokio::time::sleep(PROMPT_TIMEOUT) => {}
             }
-        } else {
-            None
         }
+        // Nobody answered, as when no CLI is attached: the attempt then waits
+        // for a sign-in, so a `connect` attached later resumes it.
+        if prompt.kind != "notify" {
+            self.board.unanswered.store(true, Ordering::Relaxed);
+        }
+        None
     }
 }
 
@@ -1674,7 +1678,7 @@ impl Inner {
             }
             for conn in &conns {
                 let message = format!(
-                    "this machine cannot serve the box's HTTPS port {port}: {}. Open its hostnames on port {own} instead",
+                    "this machine cannot use the box's HTTPS port {port} ({}). Open its hostnames on port {own}.",
                     problem.holder
                 );
                 let changed = {
@@ -1707,6 +1711,14 @@ impl Inner {
     /// What keeps the proxy from serving a box's HTTPS `port`: the process holding
     /// it, or why the bind failed.
     async fn box_port_problem(&self, port: u16, error: &std::io::Error) -> BoxPortProblem {
+        // The warning offers this machine's own port instead, which is the
+        // way out whatever denied the bind.
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            return BoxPortProblem {
+                holder: "permission denied".to_owned(),
+                pid: None,
+            };
+        }
         if error.kind() != std::io::ErrorKind::AddrInUse {
             return BoxPortProblem {
                 holder: mirror::bind_failure(error),
@@ -1715,7 +1727,8 @@ impl Inner {
         }
         let pid = self.integ.ports.holder(port).await;
         let holder = match pid {
-            Some(pid) => format!("in use by {} (pid {pid})", mirror::process_name(pid).await),
+            // In parentheses in the warning, so without its own.
+            Some(pid) => format!("in use by {}, pid {pid}", mirror::process_name(pid).await),
             None => "in use by another process".to_owned(),
         };
         BoxPortProblem { holder, pid }
@@ -1843,13 +1856,13 @@ fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
     if theirs != ours {
         warnings.push((
             "box_version",
-            format!("the box runs devlanes {theirs} and this machine {ours}; install the same release on both"),
+            format!("the box runs devlanes {theirs} and this machine {ours}. Install the same release on both."),
         ));
     }
     if label.contains("(linger off)") {
         warnings.push((
             "box_linger_off",
-            "the box stops your processes at logout; run `loginctl enable-linger` there or `devlanes daemon install`".to_owned(),
+            "the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.".to_owned(),
         ));
     }
     // A Windows box whose ssh session job kept the daemon the tunnel started.
@@ -2168,6 +2181,52 @@ mod tests {
         .await?
         .is_ok();
         assert!(retrying, "the link retries: {:?}", *link.state().borrow());
+        link.shutdown().await;
+        Ok(())
+    }
+
+    /// A prompt whose CLI detaches before it answers counts as unanswered,
+    /// so the rejected login parks the link waiting for a sign-in, which a
+    /// later `connect` resumes, instead of failing it.
+    #[tokio::test]
+    async fn a_prompt_left_by_its_cli_waits_for_sign_in() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let board = Arc::new(PromptBoard::default());
+        let (session, mut frames) = Session::local(1);
+        let watching = board.watch(&session);
+        let prompts = Arc::new(HostPrompter {
+            board: board.clone(),
+        });
+        let transport = Arc::new(Attended {
+            inner: Arc::new(AsksThenFails {
+                prompts,
+                error: || TransportError::auth_failed("Permission denied (password)."),
+            }),
+            board,
+        });
+        let link = Link::spawn(
+            transport,
+            SessionOptions::new("client"),
+            devlanes_transport::Backoff::new(Duration::from_millis(10), Duration::from_millis(10)),
+        );
+        let asked = tokio::time::timeout(Duration::from_secs(5), frames.recv()).await?;
+        assert!(asked.is_some(), "the prompt reached the CLI");
+        // Esc in the TUI: the CLI goes away without answering.
+        session.close();
+        drop(watching);
+        let mut state = link.state();
+        let parked = tokio::time::timeout(
+            Duration::from_secs(5),
+            state.wait_for(|state| {
+                matches!(
+                    state,
+                    LinkState::NeedsAuth { .. } | LinkState::Failed { .. }
+                )
+            }),
+        )
+        .await?
+        .map(|state| matches!(*state, LinkState::NeedsAuth { .. }))?;
+        assert!(parked, "needs a sign-in: {:?}", *link.state().borrow());
         link.shutdown().await;
         Ok(())
     }

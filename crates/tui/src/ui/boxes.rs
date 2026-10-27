@@ -150,12 +150,12 @@ fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'s
         "connected" => None,
         "needs_auth" => Some((
             format!("{name} needs you to sign in again, so this is its last known state."),
-            vec![format!("Run devlanes remote connect {name}.")],
+            vec![format!("Press B, then enter on {name} to sign in.")],
         )),
         "needs_pairing" => Some((
             format!("{name} needs a new pairing code, so this is its last known state."),
             vec![format!(
-                "Run devlanes daemon pair on {name}, then devlanes remote connect {name} --code <code>."
+                "Run devlanes daemon pair on {name}. Then press B and enter on {name}."
             )],
         )),
         "reconnecting" | "connecting" => Some((
@@ -770,9 +770,17 @@ fn render_hosts(app: &App, frame: &mut Frame, area: Rect) {
     }
     let height = usize::from(inner.height);
     // The fewest lines scrolled off the top that show the selected box,
-    // from its first line when it is taller than the box.
+    // from its first line when it is taller than the box. The view starts
+    // at a box's first line, never partway through one.
     let first = match blocks.get(selected) {
-        Some((start, end, _)) if lines.len() > height => end.saturating_sub(height).min(*start),
+        Some((start, end, _)) if lines.len() > height => {
+            let least = end.saturating_sub(height).min(*start);
+            blocks
+                .iter()
+                .map(|(start, _, _)| *start)
+                .find(|start| *start >= least)
+                .unwrap_or(least)
+        }
         _ => 0,
     };
     let connected = hosts.iter().filter(|h| h.connected()).count();
@@ -837,7 +845,7 @@ fn empty_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     ));
     lines.push(Line::from(""));
     lines.extend(sentence(
-        "A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on this machine.",
+        "A box is another machine that runs devlanes. Its projects show up in the top bar. Their ports and hostnames work on this machine.",
         width,
         Vec::new(),
         theme.quiet(),
@@ -879,11 +887,12 @@ fn clients_content(app: &App, width: usize) -> ClientLines {
     };
     let attention = theme.tone(Tone::Attention);
     if off {
-        lines.note.extend(note(
-            "Connections are off, so other machines cannot connect here. remote.allow_connections is false.",
-            width,
-            attention,
-        ));
+        let text = if list.is_some_and(|list| list.remote_invalid) {
+            "Connections to this machine are off because config.yaml has invalid remote settings. Run devlanes doctor to see them."
+        } else {
+            "Connections to this machine are off. Press o to turn them on."
+        };
+        lines.note.extend(note(text, width, attention));
     } else if list.and_then(|list| list.require_pairing) == Some(false) {
         lines.note.extend(note(
             "remote.require_pairing is false, so clients connect without a code.",
@@ -899,7 +908,7 @@ fn clients_content(app: &App, width: usize) -> ClientLines {
         }
         _ if off => {}
         _ => lines.empty.extend(note(
-            "No other machine connects here yet. p shows a pairing code for one.",
+            "No other machine connects here yet. Press p for a pairing code.",
             width,
             theme.quiet(),
         )),
@@ -1205,7 +1214,6 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
             })
             .collect()
     };
-    let fix = || format!("devlanes remote connect {name}");
     match host.state.as_str() {
         "connected" => {
             let link = match host.connected_since_ms {
@@ -1216,13 +1224,7 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
         }
         "connecting" => lines.extend(fact("link", "connecting…", theme.tone(Tone::Busy))),
         "reconnecting" => {
-            let left = host
-                .retry_in_ms
-                .map(|ms| ms.saturating_sub(app.boxes.age * 1000).div_ceil(1000));
-            let link = match left {
-                Some(seconds) if seconds > 0 => format!("reconnecting, next try in {seconds}s"),
-                _ => "reconnecting, trying now".to_owned(),
-            };
+            let link = crate::connect::next_try(host.retry_in_ms, app.boxes.age);
             lines.extend(fact("link", &link, theme.tone(Tone::Attention)));
         }
         "needs_auth" => {
@@ -1258,14 +1260,21 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
         } else {
             Tone::Attention
         };
-        lines.extend(fact("error", error, theme.tone(tone)));
+        // The daemon marks commands with backticks; this page has no code
+        // style for them.
+        lines.extend(fact("error", &error.replace('`', ""), theme.tone(tone)));
     }
-    if !matches!(
-        host.state.as_str(),
-        "connected" | "connecting" | "reconnecting"
-    ) {
-        let command = host.fix.clone().unwrap_or_else(fix);
-        lines.extend(fact("fix", &command, theme.key()));
+    // What Enter on the box does, which the daemon's `fix` gives as a command.
+    let fix = match host.state.as_str() {
+        "connected" | "connecting" | "reconnecting" => None,
+        "needs_auth" => Some("enter signs in again".to_owned()),
+        "needs_pairing" => Some(format!(
+            "run devlanes daemon pair on {name}, then press enter here"
+        )),
+        _ => Some("enter connects again".to_owned()),
+    };
+    if let Some(fix) = fix {
+        lines.extend(fact("fix", &fix, theme.key()));
     }
     let mut about = Vec::new();
     about.extend(host.version().map(|v| format!("devlanes {}", clean(&v))));

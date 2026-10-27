@@ -685,6 +685,8 @@ pub enum Msg {
         generation: u64,
         result: Result<(), String>,
     },
+    /// [`Effect::LoadBoxCommands`]: each box's command in config.yaml.
+    BoxCommands(std::collections::BTreeMap<String, Vec<String>>),
     /// [`Effect::Disconnect`] is done.
     Disconnected {
         host: String,
@@ -785,10 +787,13 @@ pub enum Effect {
     /// The answer to the prompt on `stream_id` of the attached `connect`.
     ConnectAnswer {
         stream_id: u64,
-        answer: String,
+        answer: crate::connect::Answer,
     },
     /// Drops the attached `connect`; the connection stays in the daemon.
     ConnectDetach,
+    /// Reads `remote.boxes` of config.yaml, answered with
+    /// [`Msg::BoxCommands`]; a file that cannot be read has none.
+    LoadBoxCommands,
     /// Writes `remote.boxes.<host>.command` to config.yaml, answered with
     /// [`Msg::BoxSaved`].
     SaveBoxCommand {
@@ -1903,6 +1908,11 @@ impl App {
             }
             Msg::BoxSaved { generation, result } => {
                 self.box_saved(generation, result, &mut effects);
+            }
+            Msg::BoxCommands(known) => {
+                if let Some(Dialog::Connect(dialog)) = self.dialog.as_mut() {
+                    dialog.form.known = known;
+                }
             }
             Msg::Disconnected { host, result } => {
                 let host = text::clean(&host);
@@ -3355,21 +3365,25 @@ impl App {
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => self.move_box_selection(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_box_selection(-1),
-            KeyCode::PageDown => {
-                let page = usize::from(self.boxes.clients_rows.get().0.height).max(1);
-                self.move_box_selection(isize::try_from(page).unwrap_or(1));
-            }
-            KeyCode::PageUp => {
-                let page = usize::from(self.boxes.clients_rows.get().0.height).max(1);
-                self.move_box_selection(-isize::try_from(page).unwrap_or(1));
-            }
+            KeyCode::PageDown => self.move_box_selection(self.box_page()),
+            KeyCode::PageUp => self.move_box_selection(-self.box_page()),
             KeyCode::Char('g') | KeyCode::Home => self.move_box_selection(isize::MIN),
             KeyCode::Char('G') | KeyCode::End => self.move_box_selection(isize::MAX),
             KeyCode::Enter => self.box_enter(effects),
             KeyCode::Char('n') if plain => {
-                self.dialog = Some(Dialog::Connect(Box::default()));
+                let mut dialog = Box::<crate::connect::ConnectDialog>::default();
+                dialog.form.live = self
+                    .boxes
+                    .hosts
+                    .iter()
+                    .filter(|host| !matches!(host.state.as_str(), "disconnected" | "stopped"))
+                    .map(|host| host.host.clone())
+                    .collect();
+                self.dialog = Some(Dialog::Connect(dialog));
+                effects.push(Effect::LoadBoxCommands);
             }
             KeyCode::Char('p') if plain => self.pair(effects),
+            KeyCode::Char('o') if plain => self.open_options("remote.allow_connections", effects),
             KeyCode::Char('d') if plain => self.disconnect_prompt(),
             KeyCode::Char('x') if plain => {
                 if self.boxes.part == BoxPart::Clients {
@@ -3380,6 +3394,16 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// How many rows PageUp and PageDown move: the boxes or the clients the
+    /// last frame showed of the list the selection is in.
+    fn box_page(&self) -> isize {
+        let shown = match self.boxes.part {
+            BoxPart::Hosts => self.boxes.host_blocks.borrow().len(),
+            BoxPart::Clients => usize::from(self.boxes.clients_rows.get().0.height),
+        };
+        isize::try_from(shown.max(1)).unwrap_or(1)
     }
 
     /// Moves the boxes view's selection by `delta` rows over the boxes, then
@@ -3479,7 +3503,7 @@ impl App {
     /// keeps the daemon stopped.
     fn pair(&mut self, effects: &mut Vec<Effect>) {
         if self.daemon.stopped {
-            self.set_notice("daemon stopped: S on the daemon page starts it".into());
+            self.set_notice("daemon stopped. S on the daemon page starts it".into());
             return;
         }
         self.dialog = Some(Dialog::Pair(crate::connect::PairDialog::loading()));
@@ -3502,21 +3526,18 @@ impl App {
                 if let Some(stream_id) = dialog.prompt(&event.data) {
                     effects.push(Effect::ConnectAnswer {
                         stream_id,
-                        answer: "\n".into(),
+                        answer: crate::connect::Answer("\n".into()),
                     });
                 }
             }
             devlanes_proto::remote::STATE_EVENT if host == Some(dialog.host.as_str()) => {
-                dialog.link.update(&event.data);
+                dialog.state(&event.data);
                 if dialog.link.state == "connected" {
                     let name = text::clean(&dialog.host);
                     self.dialog = None;
                     effects.push(Effect::ConnectDetach);
                     self.set_notice(format!("connected to {name}"));
                     self.fetch_boxes(effects);
-                } else if matches!(dialog.step, crate::connect::Step::Prompt(_)) {
-                    // The question is gone once the link moved on.
-                    dialog.step = crate::connect::Step::Waiting;
                 }
             }
             _ => {}
@@ -3786,7 +3807,7 @@ impl App {
     /// it has nothing to revoke.
     fn revoke_prompt(&mut self) {
         if self.daemon.stopped {
-            self.set_notice("daemon stopped: S on the daemon page starts it".into());
+            self.set_notice("daemon stopped. S on the daemon page starts it".into());
             return;
         }
         let Some(client) = self.boxes.clients.current().cloned() else {
@@ -3819,9 +3840,7 @@ impl App {
             .and_then(|list| list.require_pairing)
             != Some(false);
         let again = if required {
-            // No-break spaces keep the command on one row where the dialog wraps,
-            // instead of leaving `pair.` alone on the last one at 80 columns.
-            "It can connect again only with a new code from devlanes\u{a0}daemon\u{a0}pair."
+            "It needs a new pairing code to connect again."
         } else {
             "remote.require_pairing is false here, so it can reconnect without a code."
         };
@@ -4784,7 +4803,7 @@ impl App {
         match dialog.key(key) {
             Action::Stay => self.dialog = Some(Dialog::Connect(dialog)),
             Action::Close => {
-                if dialog.attached() || dialog.step == Step::Saving {
+                if dialog.attached() {
                     effects.push(Effect::ConnectDetach);
                     self.set_notice(format!(
                         "{} keeps connecting in the daemon",
@@ -4813,8 +4832,8 @@ impl App {
         }
     }
 
-    /// Keys in the pairing code modal: `p` gets a new code, `y` copies the
-    /// command for the other machine, the rest closes it.
+    /// Keys in the pairing code modal: `p` gets a new code, `y` copies it,
+    /// `o` opens the options while connections are off, the rest closes it.
     fn pair_key(
         &mut self,
         key: KeyEvent,
@@ -4824,14 +4843,14 @@ impl App {
         match key.code {
             KeyCode::Char('p') => self.pair(effects),
             KeyCode::Char('y') => {
-                if let Some(command) = dialog.command() {
-                    effects.push(Effect::Copy(command));
-                    self.set_notice(
-                        "copied with OSC 52; it reaches the clipboard if the terminal allows that"
-                            .into(),
-                    );
+                if let Some(code) = dialog.code() {
+                    effects.push(Effect::Copy(code.to_owned()));
+                    self.set_notice("copied with OSC 52. Some terminals block it.".into());
                 }
                 self.dialog = Some(Dialog::Pair(dialog));
+            }
+            KeyCode::Char('o') if matches!(dialog.state, crate::connect::PairState::Off { .. }) => {
+                self.open_options("remote.allow_connections", effects);
             }
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {}
             _ => self.dialog = Some(Dialog::Pair(dialog)),
@@ -4872,10 +4891,7 @@ impl App {
                 if let Some(entry) = self.errors.get(state.index) {
                     effects.push(Effect::Copy(entry.lines().join("\n")));
                     // OSC 52 has no reply: the terminal may ignore it silently.
-                    self.set_notice(
-                        "copied with OSC 52; it reaches the clipboard if the terminal allows that"
-                            .into(),
-                    );
+                    self.set_notice("copied with OSC 52. Some terminals block it.".into());
                 }
             }
             _ => {}
@@ -4931,10 +4947,7 @@ impl App {
         match action {
             Action::Stay => self.dialog = Some(Dialog::Menu(menu)),
             Action::Close => {}
-            Action::Pick(Item::Options) => {
-                self.dialog = Some(Dialog::Settings(Box::default()));
-                effects.push(Effect::Settings(crate::settings::Request::Load));
-            }
+            Action::Pick(Item::Options) => self.open_options("", effects),
             Action::Pick(Item::Help) => self.dialog = Some(Dialog::Help),
             // The same path as q, so quitting asks what q asks.
             Action::Pick(Item::Quit) => {
@@ -4944,6 +4957,17 @@ impl App {
                 );
             }
         }
+    }
+
+    /// Opens the options page and loads config.yaml, with setting `key`
+    /// selected when one is named.
+    fn open_options(&mut self, key: &str, effects: &mut Vec<Effect>) {
+        let mut settings = Box::<crate::settings::Settings>::default();
+        if !key.is_empty() {
+            settings.select(key);
+        }
+        self.dialog = Some(Dialog::Settings(settings));
+        effects.push(Effect::Settings(crate::settings::Request::Load));
     }
 
     /// What a key or click on the options page asked for.
@@ -4956,6 +4980,10 @@ impl App {
         use crate::settings::Outcome;
         if outcome != Outcome::Stay && !settings.restart.is_empty() {
             self.set_notice("changed settings apply after a daemon restart: D, then R".into());
+        }
+        // Whether this machine takes connections may have changed.
+        if outcome != Outcome::Stay && self.view == View::Boxes {
+            self.fetch_clients(effects);
         }
         match outcome {
             Outcome::Stay => self.dialog = Some(Dialog::Settings(settings)),
@@ -5801,10 +5829,7 @@ impl App {
                 if !text.is_empty() {
                     effects.push(Effect::Copy(text));
                     // OSC 52 has no reply: the terminal may ignore it silently.
-                    self.set_notice(
-                        "copied with OSC 52; it reaches the clipboard if the terminal allows that"
-                            .into(),
-                    );
+                    self.set_notice("copied with OSC 52. Some terminals block it.".into());
                 }
             }
             _ => {}
@@ -5854,6 +5879,9 @@ impl App {
             if press && !inside {
                 // As Esc does, so an attached `connect` is let go.
                 match self.dialog.take() {
+                    Some(Dialog::Connect(dialog)) if dialog.holds_clicks() => {
+                        self.dialog = Some(Dialog::Connect(dialog));
+                    }
                     Some(Dialog::Connect(dialog)) => {
                         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
                         self.connect_key(esc, dialog, effects);
@@ -6222,7 +6250,7 @@ impl App {
         self.boxes.age += 1;
         // Connected-for times count on between answers.
         self.boxes.clients.age += 1;
-        // Countdowns in the modals.
+        // The retry and code countdowns count from when their state came.
         match self.dialog.as_mut() {
             Some(Dialog::Connect(dialog)) => dialog.link.age += 1,
             Some(Dialog::Pair(dialog)) => dialog.age += 1,

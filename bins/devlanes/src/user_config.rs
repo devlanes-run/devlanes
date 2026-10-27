@@ -72,9 +72,9 @@ fn tunnel_settings_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (Bo
 pub fn connections_refusal(settings: &BoxSettings, invalid: bool) -> Option<&'static str> {
     match (settings.allow_connections, invalid) {
         (true, _) => None,
-        (false, false) => Some(
-            "the box does not accept connections because remote.allow_connections is false there",
-        ),
+        (false, false) => {
+            Some("the box does not accept connections. Set remote.allow_connections to true there")
+        }
         (false, true) => Some(
             "the box does not accept connections because the remote settings in its user config \
              are invalid. Run devlanes doctor on the box to see them",
@@ -582,9 +582,7 @@ mod tests {
         assert_eq!(refusal("remote:\n  require_pairing: false\n"), None);
         assert_eq!(
             refusal("remote:\n  allow_connections: false\n"),
-            Some(
-                "the box does not accept connections because remote.allow_connections is false there"
-            )
+            Some("the box does not accept connections. Set remote.allow_connections to true there")
         );
         let invalid = refusal("remote:\n  allow_connections: nope\n").unwrap_or_default();
         assert!(invalid.contains("are invalid"), "{invalid}");

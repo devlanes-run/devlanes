@@ -5,9 +5,9 @@
 use serde::Deserialize;
 use serde_json::Value;
 
-/// What `remote.clients` answered, with `remote.require_pairing` and
-/// `remote.allow_connections` from this machine's user config when the TUI
-/// could read it.
+/// What `remote.clients` answered, with `remote.require_pairing`,
+/// `remote.allow_connections` and whether the remote settings are invalid,
+/// from this machine's user config when the TUI could read it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Clients {
@@ -18,6 +18,9 @@ pub struct Clients {
     pub require_pairing: Option<bool>,
     /// `false` when tunnels here turn every client away.
     pub allow_connections: Option<bool>,
+    /// True when invalid remote settings in config.yaml turned connections
+    /// off.
+    pub remote_invalid: bool,
 }
 
 /// One client by id: its pairings and its live connections.
@@ -81,6 +84,7 @@ pub fn parse(value: &Value) -> Clients {
         now_ms: value.get("now_ms").and_then(Value::as_u64),
         require_pairing: value.get("require_pairing").and_then(Value::as_bool),
         allow_connections: value.get("allow_connections").and_then(Value::as_bool),
+        remote_invalid: value.get("remote_invalid").and_then(Value::as_bool) == Some(true),
     }
 }
 
