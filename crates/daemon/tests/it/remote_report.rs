@@ -566,7 +566,7 @@ async fn external_ports_stay_out_of_port_blocks() {
         let message = refused.data["message"].as_str().unwrap_or_default();
         assert!(
             message.contains(&format!(
-                "infra.external.tool.address: port {api} is also services.api's port in late@0"
+                "infra.external.tool.address: port {api} is services.api's port in late@0"
             )),
             "{message}"
         );

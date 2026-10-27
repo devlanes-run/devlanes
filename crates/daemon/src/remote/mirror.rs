@@ -682,6 +682,8 @@ impl Mirror {
                         .collect(),
                     remote: true,
                     box_https_port,
+                    // The local end is the mirror's listener, on either loopback.
+                    address: None,
                 });
             }
         }

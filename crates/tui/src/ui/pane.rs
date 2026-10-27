@@ -714,14 +714,16 @@ fn external_lines(app: &App, unit: &UnitSummary, width: usize) -> Vec<Line<'stat
     let theme = &app.theme;
     let plain = Style::new();
     let port = unit.ports.get("default").copied().unwrap_or_default();
-    let mut lines = sentence(
-        &format!(
-            "Declared in infra.external: devlanes routes it to port {port} but runs nothing there, so start the server yourself."
-        ),
-        width,
-        Vec::new(),
-        plain,
-    );
+    let what = if unit.public_url.is_some() {
+        format!(
+            "Declared in infra.external: the proxy routes its hostnames to port {port}. devlanes runs and checks nothing there."
+        )
+    } else {
+        format!(
+            "Declared in infra.external: port {port} belongs to a server devlanes does not run or check."
+        )
+    };
+    let mut lines = sentence(&what, width, Vec::new(), plain);
     let mirror = if unit.hidden {
         "Hidden: machines connected with devlanes remote connect never get it."
     } else {

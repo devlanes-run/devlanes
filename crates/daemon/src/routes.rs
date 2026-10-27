@@ -226,6 +226,12 @@ impl Inner {
                     certificate_names: vec![view.domain.clone()],
                     remote: false,
                     box_https_port: None,
+                    // Unit names are unique in a lane, so this is the entry's route.
+                    address: view
+                        .externals
+                        .iter()
+                        .find(|external| external.name == *unit)
+                        .map(|external| external.address.ip()),
                 });
             }
         }

@@ -18,12 +18,14 @@ fn loopback_entries_parse() {
     )
     .expect("valid");
     let pgadmin = &config.infra.external["pgadmin"];
-    assert_eq!(pgadmin.port(), Ok(5050));
-    assert!(!pgadmin.is_ipv6());
+    assert_eq!(
+        pgadmin.socket_address(),
+        Ok("127.0.0.1:5050".parse().expect("v4"))
+    );
     assert_eq!(pgadmin.hidden, None);
     let docs = &config.infra.external["docs"];
     assert_eq!(docs.port(), Ok(8000));
-    assert!(docs.is_ipv6());
+    assert_eq!(docs.socket_address(), Ok("[::1]:8000".parse().expect("v6")));
     assert_eq!(docs.hidden, Some(true));
     assert_eq!(docs.hosts.as_deref().map(<[_]>::len), Some(2));
 }
@@ -37,7 +39,11 @@ fn only_loopback_addresses_are_accepted() {
         ("192.168.1.20:5050", "not a loopback address"),
         ("'[::]:5050'", "not a loopback address"),
         ("127.0.0.2:5050", "not a loopback address"),
-        ("localhost:5050", "not an address with a port"),
+        (
+            "localhost:5050",
+            "`localhost:5050` names a host; write `127.0.0.1:5050` or `[::1]:5050`",
+        ),
+        ("'[::1%2]:5050'", "has an IPv6 scope id"),
         ("'5050'", "not an address with a port"),
         ("127.0.0.1", "not an address with a port"),
         ("127.0.0.1:0", "needs a port from 1 to 65535"),
@@ -55,8 +61,9 @@ fn only_loopback_addresses_are_accepted() {
 }
 
 /// Two entries on one port, an entry on a service's literal `PORT`, a name
-/// another unit has and a route with `port` or a per-unit expression are
-/// refused; an unknown key is a parse error.
+/// another unit has, a per-unit expression or an unknown container in a
+/// hostname, and an entry named in the container keys are refused, each at
+/// its key; a route with `port` and an unknown key are parse errors.
 #[test]
 fn collisions_and_bad_hosts_are_refused() {
     let cases = [
@@ -81,8 +88,16 @@ fn collisions_and_bad_hosts_are_refused() {
             "infra.external.db: `db` is also a container",
         ),
         (
-            "infra:\n  external:\n    a: { address: '127.0.0.1:5050', hosts: [{ host: a.localhost, port: http }] }\n",
-            "infra.external.a.hosts: an external entry has one port",
+            "infra:\n  setup:\n    db: echo\n  external:\n    setup.db: { address: '127.0.0.1:5050' }\n",
+            "infra.external.setup.db: `setup.db` is also an infra.setup entry's unit",
+        ),
+        (
+            "infra:\n  teardown:\n    db: echo\n  external:\n    teardown.db: { address: '127.0.0.1:5050' }\n",
+            "infra.external.teardown.db: `teardown.db` is also an infra.teardown entry's unit",
+        ),
+        (
+            "infra:\n  external:\n    a: { address: '127.0.0.1:5050', hosts: 'a-${{ infra.nope.port }}.localhost' }\n",
+            "infra.external.a.hosts: unknown container `nope`",
         ),
         (
             "infra:\n  external:\n    a: { address: '127.0.0.1:5050', hosts: 'a-${{ self.port }}.localhost' }\n",
@@ -94,17 +109,46 @@ fn collisions_and_bad_hosts_are_refused() {
         ),
         (
             "infra:\n  hidden: [a]\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
-            "infra: `a` is an infra.external entry; set its own `hidden`",
+            "infra.hidden: `a` is an infra.external entry; set `hidden: true` on the entry",
+        ),
+        (
+            "infra:\n  hosts: { a: a.localhost }\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
+            "infra.hosts.a: `a` is an infra.external entry; put its hostnames under its own `hosts`",
+        ),
+        (
+            "infra:\n  per_lane: [a]\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
+            "infra.per_lane: `a` is an infra.external entry; every lane shares it",
+        ),
+        (
+            "infra:\n  exclude: [a]\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
+            "infra.exclude: `a` is an infra.external entry; devlanes never starts it",
         ),
     ];
     for (body, expected) in cases {
         let message = refused(&format!("project: acme\n{body}"));
         assert!(message.starts_with(expected), "{body}\n{message}");
     }
-    let unknown = refused(
-        "project: acme\ninfra:\n  external:\n    a: { address: '127.0.0.1:5050', port: 5050 }\n",
+    for parse_error in [
+        "a: { address: '127.0.0.1:5050', port: 5050 }",
+        "a: { address: '127.0.0.1:5050', hosts: [{ host: a.localhost, port: http }] }",
+    ] {
+        let unknown = refused(&format!(
+            "project: acme\ninfra:\n  external:\n    {parse_error}\n"
+        ));
+        assert!(unknown.contains("unknown"), "{parse_error}: {unknown}");
+    }
+}
+
+/// devlanes.local.yaml cannot rename the project.
+#[test]
+fn local_files_keep_the_project_name() {
+    let error =
+        parse_project("project: acme\n", Some("project: other\n")).expect_err("renamed locally");
+    assert_eq!(error.location.file, "devlanes.local.yaml", "{error:?}");
+    assert_eq!(
+        error.message,
+        "project: the project name belongs in devlanes.yaml; remove it from devlanes.local.yaml"
     );
-    assert!(unknown.contains("unknown"), "{unknown}");
 }
 
 /// devlanes.local.yaml adds entries and changes single keys of entries the

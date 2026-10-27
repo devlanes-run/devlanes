@@ -300,6 +300,7 @@ impl Inner {
             self.lane_for_units(&query.units, context).await?
         };
         let (project, lane) = &pair;
+        Self::refuse_external(project, lane, &selectors)?;
         let reference = lane.st().reference(&project.name());
         if query.since.as_deref() == Some("start") {
             let started = lane.st().started_at_ms.unwrap_or(0);

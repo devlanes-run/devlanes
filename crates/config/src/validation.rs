@@ -525,25 +525,50 @@ fn validate_inner<E: Extensions>(
         .collect();
     // Compose service names are only known once the integration resolves the Compose model.
     let can_validate_infra = config.infra.compose.is_none() || compose.is_some();
+    // Each key with the path an error points at, and what it means for an
+    // `infra.external` entry named there.
     let infra_names = config
         .infra
         .hosts
         .keys()
-        .chain(config.infra.hidden.iter().flatten())
-        .chain(config.infra.per_lane.iter().flatten())
-        .chain(config.infra.exclude.iter().flatten());
-    for name in infra_names {
+        .map(|name| {
+            (
+                format!("infra.hosts.{name}"),
+                name,
+                "put its hostnames under its own `hosts`",
+            )
+        })
+        .chain(config.infra.hidden.iter().flatten().map(|name| {
+            (
+                "infra.hidden".to_owned(),
+                name,
+                "set `hidden: true` on the entry",
+            )
+        }))
+        .chain(config.infra.per_lane.iter().flatten().map(|name| {
+            (
+                "infra.per_lane".to_owned(),
+                name,
+                "every lane shares it, and per_lane takes Compose services",
+            )
+        }))
+        .chain(config.infra.exclude.iter().flatten().map(|name| {
+            (
+                "infra.exclude".to_owned(),
+                name,
+                "devlanes never starts it, and exclude takes Compose services",
+            )
+        }));
+    for (path, name, hint) in infra_names {
         if config.infra.external.contains_key(name) && !known.contains(name) {
             return Err(fail(
-                "infra",
-                format!(
-                    "`{name}` is an infra.external entry; set its own `hidden` or `hosts` under infra.external.{name}"
-                ),
+                &path,
+                format!("`{name}` is an infra.external entry; {hint} (infra.external.{name})"),
             ));
         }
         if can_validate_infra && !known.contains(name) {
             return Err(fail(
-                "infra",
+                &path,
                 format!("unknown container or Compose service `{name}`"),
             ));
         }
@@ -629,9 +654,10 @@ fn validate_inner<E: Extensions>(
 }
 
 /// Checks `infra.external`: a loopback address per entry, a port no other entry and no
-/// literal service `PORT` uses, hostnames like service hosts but without `port` (the entry
-/// has one) and with expressions over `lane`, `project`, `infra` and `env` only (what a
-/// lane evaluates them with), and a name no service, task or container of the lane has.
+/// literal service `PORT` uses, valid hostnames whose expressions use `lane`, `project`,
+/// `infra` and `env` only (what a lane evaluates them with; `infra.<name>` must name a
+/// container, which the reference check does for every expression), and a name no
+/// service, task, container or setup or teardown entry of the lane has.
 /// `containers` lists the container and Compose service names when all of them are known.
 fn external<E: Extensions>(
     config: &ProjectConfig<E>,
@@ -640,12 +666,21 @@ fn external<E: Extensions>(
     let mut ports: BTreeMap<u16, &str> = BTreeMap::new();
     for (name, entry) in &config.infra.external {
         let path = format!("infra.external.{name}");
+        // Setup and teardown entries are the units `setup.<entry>` and `teardown.<entry>`.
+        let step = |prefix: &str, entries: &IndexMap<String, InfraCommand>| {
+            name.strip_prefix(prefix)
+                .is_some_and(|entry| entries.contains_key(entry))
+        };
         let other = if config.services.contains_key(name) {
             Some("a service")
         } else if config.tasks.contains_key(name) {
             Some("a task")
         } else if containers.is_some_and(|known| known.contains(name)) {
             Some("a container")
+        } else if step("setup.", &config.infra.setup) {
+            Some("an infra.setup entry's unit")
+        } else if step("teardown.", &config.infra.teardown) {
+            Some("an infra.teardown entry's unit")
         } else {
             None
         };
@@ -667,19 +702,13 @@ fn external<E: Extensions>(
             ));
         }
         let hosts_path = format!("{path}.hosts");
-        hosts(&hosts_path, entry.hosts.iter().flatten())?;
-        for host in entry.hosts.iter().flatten() {
-            let template = match host {
-                crate::HostConfig::Route(route) if route.port.is_some() => {
-                    return Err(fail(
-                        &hosts_path,
-                        "an external entry has one port, so its routes take no `port`",
-                    ));
-                }
-                crate::HostConfig::Route(route) => &route.host,
-                crate::HostConfig::Name(host) => host,
+        for host in entry.hosts.iter().flat_map(|hosts| hosts.iter()) {
+            let checked = match host.host() {
+                Templated::Literal(host) => crate::normalize_host(host).map(drop),
+                Templated::Expression(template) => crate::hostname::check_host_template(template),
             };
-            let Templated::Expression(text) = template else {
+            checked.map_err(|message| fail(&hosts_path, message))?;
+            let Templated::Expression(text) = host.host() else {
                 continue;
             };
             for reference in crate::references(text).map_err(|e| fail(&hosts_path, e.message))? {

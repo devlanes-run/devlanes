@@ -6,9 +6,9 @@
 //! its source position.
 
 use crate::{
-    ComposeFiles, HostConfig, HostRoute, Hosts, InfraCommand, InfraCommandOptions, ProfileConfig,
-    ProfileOptions, ReadyCheck, ReadyConfig, Run, RunScript, Scalar, Started, TcpReady, Templated,
-    TerminalConfig, TerminalSettings,
+    ComposeFiles, ExternalHost, ExternalHostRoute, ExternalHosts, HostConfig, HostRoute, Hosts,
+    InfraCommand, InfraCommandOptions, ProfileConfig, ProfileOptions, ReadyCheck, ReadyConfig, Run,
+    RunScript, Scalar, Started, TcpReady, Templated, TerminalConfig, TerminalSettings,
 };
 use serde::{
     Deserialize, Deserializer,
@@ -147,6 +147,27 @@ shape!(Hosts, "a hostname, a host route mapping, or a list of them",
             .map(|route| Hosts::One(HostConfig::Route(route)))
     }
     sequence!(Hosts::Many, Vec<HostConfig>);
+);
+
+shape!(ExternalHost, "a hostname or a host route mapping",
+    /// Parse a hostname.
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<ExternalHost, E> {
+        Ok(ExternalHost::Name(templated(value)))
+    }
+    mapping!(ExternalHost::Route, ExternalHostRoute);
+);
+
+shape!(ExternalHosts, "a hostname, a host route mapping, or a list of them",
+    /// Parse a single hostname.
+    fn visit_str<E: de::Error>(self, value: &str) -> Result<ExternalHosts, E> {
+        Ok(ExternalHosts::One(ExternalHost::Name(templated(value))))
+    }
+    /// Parse a single route through the route's strict parser.
+    fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<ExternalHosts, M::Error> {
+        ExternalHostRoute::deserialize(MapAccessDeserializer::new(map))
+            .map(|route| ExternalHosts::One(ExternalHost::Route(route)))
+    }
+    sequence!(ExternalHosts::Many, Vec<ExternalHost>);
 );
 
 shape!(ProfileConfig, "a selector list or a profile mapping",

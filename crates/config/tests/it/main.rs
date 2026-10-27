@@ -307,7 +307,7 @@ fn structural_validation() {
         ),
         (
             "project: demo\ninfra: { hidden: [missing] }",
-            "infra: unknown container or Compose service `missing`",
+            "infra.hidden: unknown container or Compose service `missing`",
         ),
         (
             "project: demo\nservices: { api: { run: a, ready: { tcp: true, log: ready } } }",

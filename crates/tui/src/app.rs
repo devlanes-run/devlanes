@@ -4685,7 +4685,7 @@ impl App {
                 .any(|u| u.name == *name && tree::role(u) == tree::Role::External)
         {
             self.set_notice(format!(
-                "{name} is declared in infra.external; devlanes does not run it, start it yourself"
+                "{name} is an infra.external entry; devlanes does not run it, so there is nothing to start or stop"
             ));
             return;
         }

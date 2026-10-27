@@ -34,7 +34,7 @@ devlanes gives every service a port from the lane's block and passes it as `PORT
 
 `devlanes config check` validates the file and points at the line of any mistake. [examples/minimal.yaml](examples/minimal.yaml) adds shared Postgres with a database per lane, [examples/devlanes.yaml](examples/devlanes.yaml) shows every form, and the [config reference](reference/config.md) lists each field.
 
-Changes only you want, such as a service turned off on your machine or a server you run yourself, go in `devlanes.local.yaml` next to it, which you keep out of Git ([per-machine overrides](guides/ports-and-env.md#per-machine-overrides)).
+Changes only you want, such as a service turned off on your machine or a server you run yourself, go in `devlanes.local.yaml` next to it, which you keep out of Git ([local overrides](guides/ports-and-env.md#local-overrides)).
 
 ### Coming from another process manager
 

@@ -106,6 +106,8 @@ pub(crate) struct InfraRoute {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ExternalInfo {
     pub name: String,
+    /// The declared address, the only one devlanes dials for it.
+    pub address: std::net::SocketAddr,
     pub port: u16,
     /// `http://127.0.0.1:<port>` or `http://[::1]:<port>`, as the address names it.
     pub url: String,

@@ -75,7 +75,7 @@ A hostname opens on the client through its proxy, on the box's HTTPS port when t
 
 ## External ports
 
-A server devlanes does not run, such as `python -m http.server 8000` started with `devlanes exec` or a pgAdmin you run yourself, reaches clients once the box's config declares it under `infra.external`. Put it in `devlanes.yaml` when the whole team runs it, or in `devlanes.local.yaml` on the box when only you do ([per-machine overrides](guides/ports-and-env.md#per-machine-overrides)):
+A server devlanes does not run, such as `python -m http.server 8000` started with `devlanes exec` or a pgAdmin you run yourself, reaches clients once the box's config declares it under `infra.external`. Put it in `devlanes.yaml` when the whole team runs it, or in `devlanes.local.yaml` on the box when only you do ([local overrides](guides/ports-and-env.md#local-overrides)):
 
 ```yaml
 # devlanes.local.yaml on the box
@@ -86,7 +86,7 @@ infra:
       hosts: "docs.${{ lane.domain }}"
 ```
 
-Every lane of the project lists `docs` as a unit of kind `external`, and the box's proxy routes `docs.<lane domain>` to the port. While a lane of the project runs something, clients mirror the port under the same number and route the hostnames like a service's; while none does, the port is only kept free on the client. The box dials the port only then, whether or not anything listens there, and a connection fails like any unit's when nothing does. `hidden: true` on the entry keeps it on the box. Clients of releases without external ports are not sent them and cannot dial them. [External ports](guides/infra.md#external-ports) covers the address and hostname rules, which are the same on a single machine.
+Every lane of the project lists `docs` as a unit of kind `external`, and the box's proxy routes `docs.<lane domain>` to the port. While a lane of the project runs a service, task or exec command, or has its containers up, clients mirror the port under the same number and route the hostnames like a service's; otherwise the port is only kept free on the client. Only then does the box dial the port, whether or not anything listens there; a connection then fails like any unit's when nothing does. The box dials exactly the declared address, `127.0.0.1` or `[::1]`, never the other one. `hidden: true` on the entry keeps it on the box. Clients of releases without external ports are not sent them and cannot dial them. [External ports](guides/infra.md#external-ports) covers the address and hostname rules, which are the same on a single machine.
 
 ## Hidden
 

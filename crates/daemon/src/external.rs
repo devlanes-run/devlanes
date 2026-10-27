@@ -1,18 +1,18 @@
 //! `infra.external`: servers devlanes does not run, reached on a loopback port
 //! the config declares. Each lane lists every entry as a unit of kind
-//! `external` with its own hostnames; the port is the same in every lane, kept
-//! out of new port blocks, and an allocated port that equals one is a config
+//! `external` with its own hostnames; the port is the same in every lane and
+//! goes to no unit, and one devlanes or any lane already uses is a config
 //! error.
 
 use std::collections::BTreeSet;
 
-use devlanes_config::{ExpressionContext, HostConfig, ProjectConfig};
+use devlanes_config::{ExpressionContext, ExternalHost, ProjectConfig};
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
 use crate::{
     engine::Inner,
-    model::{ExternalInfo, ExternalRoute},
+    model::{ExternalInfo, ExternalRoute, LaneRt, ProjectRt},
 };
 
 /// The entries of `config` for one lane, hostnames evaluated with `context`.
@@ -27,12 +27,15 @@ pub(crate) fn external_infos(
     let mut infos = Vec::new();
     for (name, entry) in &config.infra.external {
         // Validation refused a bad address when the config loaded.
-        let Ok(port) = entry.port() else { continue };
+        let Ok(address) = entry.socket_address() else {
+            continue;
+        };
+        let port = address.port();
         let mut routes = Vec::new();
-        for host in entry.hosts.iter().flatten() {
+        for host in entry.hosts.iter().flat_map(|hosts| hosts.iter()) {
             let (template, fallback, upstream) = match host {
-                HostConfig::Name(name) => (name, None, false),
-                HostConfig::Route(route) => (
+                ExternalHost::Name(name) => (name, None, false),
+                ExternalHost::Route(route) => (
                     &route.host,
                     route.fallback.as_ref(),
                     matches!(
@@ -62,15 +65,11 @@ pub(crate) fn external_infos(
                 }
             }
         }
-        let url = if entry.is_ipv6() {
-            format!("http://[::1]:{port}")
-        } else {
-            format!("http://127.0.0.1:{port}")
-        };
         infos.push(ExternalInfo {
             name: name.clone(),
+            address,
+            url: format!("http://{address}"),
             port,
-            url,
             hidden: entry.hidden.unwrap_or(false),
             routes,
         });
@@ -78,37 +77,86 @@ pub(crate) fn external_infos(
     infos
 }
 
-/// The config error for the first `infra.external` entry of `config` whose
-/// port a unit of lane `reference` was allocated: `taken` lists each unit's
-/// config path (`services.api`, `infra.postgres`) with a port. `None` when
-/// they are all apart.
-pub(crate) fn collision(
-    config: &ProjectConfig,
-    reference: &str,
-    taken: impl IntoIterator<Item = (String, u16)>,
-) -> Option<RpcError> {
-    let taken: Vec<(String, u16)> = taken.into_iter().collect();
-    for (name, entry) in &config.infra.external {
-        let Ok(port) = entry.port() else { continue };
-        if let Some((unit, _)) = taken.iter().find(|(_, used)| *used == port) {
-            let path = format!("infra.external.{name}.address");
-            let location = config.sources.position(&path).unwrap_or_default();
-            return Some(RpcError::new(
-                "config_error",
-                json!({
-                    "path": path,
-                    "message": format!(
-                        "{path}: port {port} is also {unit}'s port in {reference}; declare a port outside the range devlanes allocates from (`ports.range` in the user config)"
-                    ),
-                    "file": location.file,
-                    "line": location.line,
-                    "column": location.column,
-                }),
-                1,
-            ));
+/// A port something other than an `infra.external` entry holds on this
+/// machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PortUse {
+    pub port: u16,
+    /// What holds it, worded to follow "port N is": `services.api's port in
+    /// acme@1`, or `the devlanes proxy's HTTPS port, which devlanes listens on
+    /// itself`.
+    pub holder: String,
+    /// devlanes itself listens on it, so there is nothing to move.
+    pub daemon: bool,
+}
+
+impl PortUse {
+    /// `path`'s port in `lane`, such as `services.api` in `acme@1`.
+    pub(crate) fn unit(port: u16, path: &str, lane: &str) -> Self {
+        Self {
+            port,
+            holder: format!("{path}'s port in {lane}"),
+            daemon: false,
         }
     }
+}
+
+/// The config error for the first `infra.external` entry of `config` whose
+/// port is in `taken`; `None` when they are all apart. `pool` is the
+/// inclusive `ports.range`, whose ports the advice says to leave to devlanes.
+pub(crate) fn collision(
+    config: &ProjectConfig,
+    taken: &[PortUse],
+    pool: Option<(u16, u16)>,
+) -> Option<RpcError> {
+    for (name, entry) in &config.infra.external {
+        let Ok(port) = entry.port() else { continue };
+        let Some(used) = taken.iter().find(|used| used.port == port) else {
+            continue;
+        };
+        let path = format!("infra.external.{name}.address");
+        let advice = match pool {
+            _ if used.daemon => String::new(),
+            Some((first, last)) if (first..=last).contains(&port) => format!(
+                "; declare a port outside {first}-{last} (`ports.range` in the user config), the range devlanes allocates lane ports from"
+            ),
+            // A literal `PORT` or a port a Compose file publishes as written.
+            _ => "; declare another port, or change the one that unit uses".to_owned(),
+        };
+        let location = config.sources.position(&path).unwrap_or_default();
+        return Some(RpcError::new(
+            "config_error",
+            json!({
+                "path": path,
+                "message": format!("{path}: port {port} is {}{advice}", used.holder),
+                "file": location.file,
+                "line": location.line,
+                "column": location.column,
+            }),
+            1,
+        ));
+    }
     None
+}
+
+/// The ports lane `reference` plans for its services (`(name, port, named
+/// ports)`) and publishes for its containers (`infra`, its infra namespace).
+pub(crate) fn lane_ports<'a>(
+    reference: &str,
+    services: impl IntoIterator<Item = (&'a str, u16, &'a std::collections::BTreeMap<String, u16>)>,
+    infra: &Value,
+) -> Vec<PortUse> {
+    let mut ports = Vec::new();
+    for (name, port, named) in services {
+        let path = format!("services.{name}");
+        for port in std::iter::once(port).chain(named.values().copied()) {
+            ports.push(PortUse::unit(port, &path, reference));
+        }
+    }
+    for (path, port) in infra_ports(infra) {
+        ports.push(PortUse::unit(port, &path, reference));
+    }
+    ports
 }
 
 /// Every port a lane's infra namespace (`{name: {port, ports}}`) publishes,
@@ -134,6 +182,121 @@ pub(crate) fn infra_ports(infra: &Value) -> Vec<(String, u16)> {
 }
 
 impl Inner {
+    /// The config error for an `infra.external` entry of lane `lane`'s
+    /// `config` whose port is already in use by devlanes: the proxy's and the
+    /// DNS server's ports, `own` (the lane's units and containers, as just
+    /// planned), every lane's port block, and what every other lane of this
+    /// machine plans or publishes, other projects' included.
+    pub(crate) fn external_conflict(
+        &self,
+        config: &ProjectConfig,
+        lane: &LaneRt,
+        own: Vec<PortUse>,
+    ) -> Option<RpcError> {
+        if config.infra.external.is_empty() {
+            return None;
+        }
+        let mut taken = self.daemon_ports();
+        taken.extend(own);
+        for (project, other) in self.all_lanes() {
+            let st = other.st();
+            let reference = st.reference(&project.name());
+            // This lane's view is the one being replaced; `own` stands for it.
+            let same = std::ptr::eq(other.as_ref(), lane);
+            if let Some(view) = st.view.as_ref().filter(|_| !same) {
+                for service in &view.services {
+                    let path = format!("services.{}", service.name);
+                    for port in std::iter::once(service.port).chain(service.ports.values().copied())
+                    {
+                        taken.push(PortUse::unit(port, &path, &reference));
+                    }
+                }
+            }
+            if let Some(infra) = st.infra_ns.as_ref().filter(|_| !same) {
+                for (path, port) in infra_ports(infra) {
+                    taken.push(PortUse::unit(port, &path, &reference));
+                }
+            }
+            // Ports of the block's names the view does not show, such as
+            // per-lane containers before their infra runs.
+            if let Some(allocation) = &st.allocation {
+                for (name, offset) in &allocation.offsets {
+                    if let Some(port) = allocation.block.start.checked_add(*offset) {
+                        taken.push(PortUse {
+                            port,
+                            holder: format!("allocated to {} in {reference}", name.unit),
+                            daemon: false,
+                        });
+                    }
+                }
+            }
+        }
+        let pool = self.pool().ok().map(|pool| (pool.start, pool.end));
+        collision(config, &taken, pool)
+    }
+
+    /// The ports devlanes listens on itself: the proxy's HTTPS and HTTP
+    /// ports, bound and configured, and the DNS server's when it runs.
+    fn daemon_ports(&self) -> Vec<PortUse> {
+        let status = self.integ.routes.status();
+        let bound = |name: &str| {
+            status
+                .get(name)
+                .and_then(|listener| listener.get("port"))
+                .and_then(Value::as_u64)
+                .and_then(|port| u16::try_from(port).ok())
+        };
+        let proxy = &self.opts.user.proxy;
+        let https = "the devlanes proxy's HTTPS port";
+        let http = "the devlanes proxy's HTTP port";
+        [
+            (bound("https"), https),
+            (self.integ.routes.https_port(), https),
+            (Some(proxy.https_port), https),
+            (bound("http"), http),
+            (Some(proxy.http_port), http),
+            (
+                self.resolver_tld().map(|_| self.opts.dns_listen.port()),
+                "the devlanes DNS server's port",
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(port, what)| {
+            Some(PortUse {
+                port: port?,
+                holder: format!("{what}, which devlanes listens on itself"),
+                daemon: true,
+            })
+        })
+        .collect()
+    }
+
+    /// `external_unit` when one of `selectors` names an `infra.external`
+    /// entry of `lane`, for commands that act on a process (`start`, `stop`,
+    /// `restart`, `logs`, `attach`): there is none behind it. Globs and tags
+    /// never match one, since only processes are their candidates.
+    pub(crate) fn refuse_external(
+        project: &ProjectRt,
+        lane: &LaneRt,
+        selectors: &[String],
+    ) -> Result<(), RpcError> {
+        let st = lane.st();
+        let Some(config) = st.config.loaded() else {
+            return Ok(());
+        };
+        match selectors
+            .iter()
+            .find(|name| config.infra.external.contains_key(name.as_str()))
+        {
+            Some(name) => Err(RpcError::new(
+                "external_unit",
+                json!({"unit": name, "lane": st.reference(&project.name())}),
+                2,
+            )),
+            None => Ok(()),
+        }
+    }
+
     /// The ports every loaded project declares in `infra.external`, which new
     /// port blocks keep clear of.
     pub(crate) fn external_ports(&self) -> BTreeSet<u16> {
@@ -193,25 +356,58 @@ mod tests {
         assert!(docs.routes.is_empty(), "infra.db is not known yet");
     }
 
-    /// An allocated port equal to an external one is a config error naming
-    /// the entry and the unit; ports apart are none.
+    /// A port in use equal to an external one is a config error naming the
+    /// entry and the holder, with advice that fits it: a pool port goes to
+    /// `ports.range`, another port to the unit, and devlanes' own ports get
+    /// none. Ports apart are no error.
     #[test]
-    fn allocated_ports_must_stay_apart() {
+    fn used_ports_must_stay_apart() {
         let config = config();
-        assert!(collision(&config, "acme@1", [("services.api".into(), 20000)]).is_none());
+        let message = |taken: &[PortUse]| {
+            collision(&config, taken, Some((20000, 32767))).map(|error| {
+                assert_eq!(error.code, "config_error");
+                assert_eq!(error.data["path"], "infra.external.pgadmin.address");
+                error.data["message"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned()
+            })
+        };
+        assert_eq!(
+            message(&[PortUse::unit(20000, "services.api", "acme@1")]),
+            None
+        );
+        assert_eq!(
+            message(&[PortUse::unit(5050, "infra.db", "shop@0")]).as_deref(),
+            Some(
+                "infra.external.pgadmin.address: port 5050 is infra.db's port in shop@0; declare another port, or change the one that unit uses"
+            )
+        );
+        let pooled = devlanes_config::parse_project(
+            "project: acme\ninfra:\n  external:\n    pgadmin: { address: '127.0.0.1:20004' }\n",
+            None,
+        )
+        .expect("parses");
         let error = collision(
-            &config,
-            "acme@1",
-            [("services.api".into(), 20000), ("infra.db".into(), 5050)],
+            &pooled,
+            &[PortUse::unit(20004, "services.api", "acme@1")],
+            Some((20000, 32767)),
         )
         .expect("collides");
-        assert_eq!(error.code, "config_error");
-        let message = error.data["message"].as_str().unwrap_or_default();
-        assert!(
-            message.starts_with(
-                "infra.external.pgadmin.address: port 5050 is also infra.db's port in acme@1"
-            ),
-            "{message}"
+        assert_eq!(
+            error.data["message"],
+            "infra.external.pgadmin.address: port 20004 is services.api's port in acme@1; declare a port outside 20000-32767 (`ports.range` in the user config), the range devlanes allocates lane ports from"
+        );
+        let own = PortUse {
+            port: 5050,
+            holder: "the devlanes proxy's HTTPS port, which devlanes listens on itself".into(),
+            daemon: true,
+        };
+        assert_eq!(
+            message(&[own]).as_deref(),
+            Some(
+                "infra.external.pgadmin.address: port 5050 is the devlanes proxy's HTTPS port, which devlanes listens on itself"
+            )
         );
         assert_eq!(
             infra_ports(&json!({"db": {"port": 5050, "ports": {"5432": 5050, "x": "y"}}})),

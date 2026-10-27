@@ -32,13 +32,17 @@ pub trait Dialer: Send + Sync {
     async fn dial(&self, target: &AuthorizedTarget) -> io::Result<BoxDuplex>;
 }
 
-/// Dials `127.0.0.1:<port>`, then `[::1]:<port>`, matching how services bind.
+/// Dials `127.0.0.1:<port>`, then `[::1]:<port>`, matching how services bind;
+/// a target that names its address ([`AuthorizedTarget::address`]) only there.
 pub struct LoopbackDialer;
 
 #[async_trait]
 impl Dialer for LoopbackDialer {
     async fn dial(&self, target: &AuthorizedTarget) -> io::Result<BoxDuplex> {
         let port = target.port();
+        if let Some(address) = target.address() {
+            return Ok(Box::new(TcpStream::connect((address, port)).await?));
+        }
         match TcpStream::connect(("127.0.0.1", port)).await {
             Ok(stream) => Ok(Box::new(stream)),
             Err(v4) => match TcpStream::connect(("::1", port)).await {

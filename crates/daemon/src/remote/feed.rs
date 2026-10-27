@@ -30,6 +30,10 @@ use crate::{
     model::lock,
 };
 
+/// The declared address of each `infra.external` entry, by lane reference
+/// and entry name.
+pub(crate) type ExternalAddresses = std::collections::BTreeMap<(String, String), std::net::IpAddr>;
+
 /// Changes arriving within this window cause one rebuild.
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -96,9 +100,28 @@ impl Inner {
     /// The registry as of now, from `status --all`'s lanes and this machine's
     /// routes; external ports only with `external`.
     pub(super) fn registry_now(&self, external: bool) -> Registry {
-        let lanes = self.summaries(&self.all_lanes(), None);
+        let all = self.all_lanes();
+        let lanes = self.summaries(&all, None);
         let routes = self.local_route_entries();
-        build(lanes, &routes, external)
+        let addresses = external.then(|| {
+            all.iter()
+                .flat_map(|(project, lane)| {
+                    let st = lane.st();
+                    let reference = st.reference(&project.name());
+                    st.view
+                        .iter()
+                        .flat_map(|view| &view.externals)
+                        .map(|external| {
+                            (
+                                (reference.clone(), external.name.clone()),
+                                external.address.ip(),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        });
+        build(lanes, &routes, addresses.as_ref())
     }
 
     /// `remote.report`: keeps a client's mirror report, bounded, with its
@@ -219,10 +242,16 @@ async fn send_changes(session: &Session, changes: Vec<RegistryEvent>) -> Result<
 /// Maps lane summaries and routes to the registry: assigned lanes, their
 /// services and started containers with ports, hostnames and hidden flags,
 /// their tasks with state only, and with `external` (a client listing
-/// [`EXTERNAL_UNITS`]) their `infra.external` ports, in state `external` while
-/// a lane of the project runs something and `stopped` otherwise, so they are
-/// mirrored only meanwhile. Exec units are left out.
-pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], external: bool) -> Registry {
+/// [`EXTERNAL_UNITS`]: the declared address of each entry, by lane reference
+/// and name) their `infra.external` ports. Those are in state `external`
+/// while a lane of the project runs a service, task, exec or container, and
+/// `stopped` otherwise, so they are mirrored only meanwhile. Exec units are
+/// left out.
+pub(crate) fn build(
+    lanes: Vec<LaneSummary>,
+    routes: &[RouteEntry],
+    external: Option<&ExternalAddresses>,
+) -> Registry {
     let hosts_of = |lane: &str, unit: &str| -> Vec<HostInfo> {
         routes
             .iter()
@@ -245,17 +274,20 @@ pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], external: bo
             .map(|(name, port)| PortInfo {
                 name: name.clone(),
                 port: *port,
+                address: None,
             })
             .collect()
     };
-    // Projects with a lane whose service, task or exec unit runs.
+    // Projects with a lane whose service, task or exec unit runs, or whose
+    // containers are up (a lane lists them only then).
     let running: std::collections::BTreeSet<String> = lanes
         .iter()
         .filter(|lane| {
-            lane.units.iter().any(|unit| {
-                unit.kind != devlanes_proto::EXTERNAL_KIND
-                    && devlanes_transport::serving(&unit.state)
-            })
+            !lane.containers.is_empty()
+                || lane.units.iter().any(|unit| {
+                    unit.kind != devlanes_proto::EXTERNAL_KIND
+                        && devlanes_transport::serving(&unit.state)
+                })
         })
         .map(|lane| lane.project.clone())
         .collect();
@@ -273,10 +305,14 @@ pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], external: bo
             domain: lane.domain.clone(),
         });
         for unit in &lane.units {
-            let (kind, state) = match unit.kind.as_str() {
-                "" | "service" => (UnitKind::Service, unit.state.clone()),
-                "task" => (UnitKind::Task, unit.state.clone()),
-                devlanes_proto::EXTERNAL_KIND if external => {
+            let mut address = None;
+            let (kind, state) = match (unit.kind.as_str(), external) {
+                ("" | "service", _) => (UnitKind::Service, unit.state.clone()),
+                ("task", _) => (UnitKind::Task, unit.state.clone()),
+                (devlanes_proto::EXTERNAL_KIND, Some(addresses)) => {
+                    address = addresses
+                        .get(&(lane.reference.clone(), unit.name.clone()))
+                        .copied();
                     let state = if running.contains(&lane.project) {
                         devlanes_proto::EXTERNAL_KIND
                     } else {
@@ -296,7 +332,11 @@ pub(crate) fn build(lanes: Vec<LaneSummary>, routes: &[RouteEntry], external: bo
                 hidden: unit.hidden,
                 state,
                 ports: if endpoints {
-                    ports(&unit.ports)
+                    let mut listed = ports(&unit.ports);
+                    for port in &mut listed {
+                        port.address = address;
+                    }
+                    listed
                 } else {
                     Vec::new()
                 },
@@ -388,6 +428,14 @@ mod tests {
                  "ports": {"default": 8000}, "urls": [], "actor": {"kind": "human"}, "reason": null,
                  "kind": "external"}
             ]
+        }, {
+            "reference": "db@0", "project": "db", "index": 0, "branch": "main",
+            "path": "/d", "state": "idle", "config_changed": false, "units": [
+                {"name": "pgweb", "lane": "db@0", "state": "external", "pid": null, "exit_code": null,
+                 "ports": {"default": 8081}, "urls": [], "actor": {"kind": "human"}, "reason": null,
+                 "kind": "external"}
+            ],
+            "containers": [{"name": "postgres", "ports": {"5432": 4300}, "hidden": false}]
         }]))
         .expect("lane summaries");
         let route = |host: &str, unit: &str, port: u16| RouteEntry {
@@ -403,24 +451,39 @@ mod tests {
             certificate_names: Vec::new(),
             remote: false,
             box_https_port: None,
+            address: None,
         };
         let routes = [
             route("web.app-1.localhost", "web", 4100),
             route("migrate.app-1.localhost", "migrate", 4104),
             route("pgadmin.app-1.localhost", "pgadmin", 5050),
         ];
-        let with_external = build(lanes.clone(), &routes, true);
+        let addresses = ExternalAddresses::from([(
+            ("app@1".to_owned(), "pgadmin".to_owned()),
+            std::net::Ipv6Addr::LOCALHOST.into(),
+        )]);
+        let with_external = build(lanes.clone(), &routes, Some(&addresses));
         let external: Vec<_> = with_external
             .units()
             .filter(|u| u.key.kind == UnitKind::External)
             .collect();
-        assert_eq!(external.len(), 3, "{external:?}");
+        assert_eq!(external.len(), 4, "{external:?}");
+        let pgweb = external
+            .iter()
+            .find(|u| u.key.name == "pgweb")
+            .expect("pgweb is listed");
+        assert_eq!(pgweb.state, "external", "its project's containers are up");
         let pgadmin = external
             .iter()
             .find(|u| u.key.name == "pgadmin")
             .expect("pgadmin is listed");
         assert_eq!(pgadmin.state, "external", "its project runs a lane");
         assert_eq!(pgadmin.hosts[0].host, "pgadmin.app-1.localhost");
+        assert_eq!(
+            pgadmin.ports[0].address,
+            Some(std::net::Ipv6Addr::LOCALHOST.into()),
+            "the box dials the declared address"
+        );
         let docs = external
             .iter()
             .find(|u| u.key.name == "docs")
@@ -434,7 +497,7 @@ mod tests {
         );
         assert!(with_external.advertised_ports().contains(&8000));
         let lanes: Vec<LaneSummary> = lanes.into_iter().filter(|l| l.project == "app").collect();
-        let registry = build(lanes, &routes, false);
+        let registry = build(lanes, &routes, None);
         assert_eq!(registry.lanes().count(), 1);
         let units: Vec<_> = registry.units().collect();
         assert_eq!(

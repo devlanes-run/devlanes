@@ -698,6 +698,18 @@ fn parse_named<E: Extensions>(
     let mut local_services = Vec::new();
     if let Some((name, local)) = local {
         let overlay: PartialProject<E> = parse_yaml(name, local)?;
+        // One machine renaming the project would give its lanes other domains,
+        // container names and `projects.<name>` references than everyone else's.
+        if overlay.project.is_some() {
+            return Err(locate(
+                ConfigError::plain(
+                    "project: the project name belongs in devlanes.yaml; remove it from devlanes.local.yaml",
+                ),
+                file,
+                source,
+                Some((name, local)),
+            ));
+        }
         local_services.extend(
             overlay
                 .services
@@ -743,23 +755,44 @@ pub fn load_project(path: impl AsRef<Path>) -> Result<ProjectConfig, ConfigError
 pub fn load_project_with<E: Extensions>(
     path: impl AsRef<Path>,
 ) -> Result<ProjectConfig<E>, ConfigError> {
-    load_named(path.as_ref()).map(|(config, _)| config)
+    load_named(path.as_ref(), None).map(|(config, _)| config)
 }
 
-/// Read the base file and its sibling local file, returning the validation report as well.
-fn load_named<E: Extensions>(path: &Path) -> Result<(ProjectConfig<E>, CheckReport), ConfigError> {
+/// Like [`load_project_with`] for a lane's worktree: without a sibling
+/// `devlanes.local.yaml`, the one in `primary_dir` (the primary worktree's
+/// directory of `devlanes.yaml`) is merged instead, as lanes do.
+pub fn load_lane_project_with<E: Extensions>(
+    path: impl AsRef<Path>,
+    primary_dir: &Path,
+) -> Result<ProjectConfig<E>, ConfigError> {
+    load_named(path.as_ref(), Some(primary_dir)).map(|(config, _)| config)
+}
+
+/// Read the base file and its sibling local file, or the one in `fallback`
+/// when there is no sibling, returning the validation report as well.
+fn load_named<E: Extensions>(
+    path: &Path,
+    fallback: Option<&Path>,
+) -> Result<(ProjectConfig<E>, CheckReport), ConfigError> {
     let file = if path.is_dir() {
         path.join("devlanes.yaml")
     } else {
         path.to_owned()
     };
     let source = std::fs::read_to_string(&file).map_err(|e| ConfigError::io(&file, e))?;
-    let local_path = file.with_file_name("devlanes.local.yaml");
-    let local = match std::fs::read_to_string(&local_path) {
-        Ok(value) => Some(value),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(error) => return Err(ConfigError::io(&local_path, error)),
+    let read_local = |path: &Path| match std::fs::read_to_string(path) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(ConfigError::io(path, error)),
     };
+    let mut local_path = file.with_file_name("devlanes.local.yaml");
+    let mut local = read_local(&local_path)?;
+    if local.is_none()
+        && let Some(dir) = fallback
+    {
+        local_path = dir.join("devlanes.local.yaml");
+        local = read_local(&local_path)?;
+    }
     let (config, report) = parse_named::<E>(
         &file.display().to_string(),
         &source,
@@ -801,7 +834,7 @@ pub fn check_compose_files<E: Extensions>(
 
 /// Load and return warnings for `config check`; validation failures are errors.
 pub fn check(path: impl AsRef<Path>) -> Result<CheckReport, ConfigError> {
-    load_named::<OpaqueExtensions>(path.as_ref()).map(|(_, report)| report)
+    load_named::<OpaqueExtensions>(path.as_ref(), None).map(|(_, report)| report)
 }
 
 /// Determine all transitively referenced templates for unused-template warnings.

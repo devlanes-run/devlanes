@@ -236,17 +236,15 @@ impl Inner {
             .map_err(|error| resolve_error(&error))?;
         // A unit must never be spawned on a port the config leaves to a server
         // devlanes does not run.
-        let allocated = resolved
-            .services
-            .values()
-            .flat_map(|service| {
-                let path = format!("services.{}", service.name);
-                std::iter::once(service.port)
-                    .chain(service.ports.values().copied())
-                    .map(move |port| (path.clone(), port))
-            })
-            .chain(crate::external::infra_ports(&infra_ns));
-        if let Some(error) = crate::external::collision(&config, &reference, allocated) {
+        let own = crate::external::lane_ports(
+            &reference,
+            resolved
+                .services
+                .values()
+                .map(|service| (service.name.as_str(), service.port, &service.ports)),
+            &infra_ns,
+        );
+        if let Some(error) = self.external_conflict(&config, lane, own) {
             return Err(error);
         }
         Ok(Arc::new(resolved))

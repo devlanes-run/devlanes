@@ -511,6 +511,10 @@ pub struct RouteEntry {
     /// the box generated carry. A port opened with [`RouteSink::open_box_port`]
     /// serves the routes naming it.
     pub box_https_port: Option<u16>,
+    /// The one loopback address to dial, for an `infra.external` entry that
+    /// names it; otherwise the proxy tries `127.0.0.1`, then `::1`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<std::net::IpAddr>,
 }
 
 /// Receives complete routing snapshots.

@@ -117,7 +117,7 @@ devlanes stop --mine
 
 ## Ports outside the config
 
-An `exec` command gets no port or hostname from devlanes, and nothing devlanes neither runs nor declares is reachable from machines connected with `devlanes remote connect`. To give an ad-hoc server, such as `devlanes exec --name docs-server -- python -m http.server 8000`, a hostname or make it reachable from those machines, declare it in `devlanes.local.yaml` next to `devlanes.yaml`. That file holds one developer's changes and stays out of Git; create it when it does not exist, and add it to `.gitignore` if it is not ignored yet:
+An `exec` command gets no port or hostname from devlanes, and only what devlanes runs or declares is reachable from machines connected with `devlanes remote connect`. To give an ad-hoc server, such as `devlanes exec --name docs-server -- python -m http.server 8000`, a hostname or make it reachable from those machines, declare it in `devlanes.local.yaml` next to `devlanes.yaml`. That file holds one developer's changes and stays out of Git; create it when it does not exist, and add it to `.gitignore` if it is not ignored yet:
 
 ```yaml
 infra:
@@ -127,7 +127,7 @@ infra:
       hosts: "docs.${{ lane.domain }}"
 ```
 
-devlanes reads it with `devlanes.yaml`: every lane of the project lists the unit `docs` of kind `external`, `https://docs.<lane domain>` routes to the port, and connected machines mirror it while a lane of the project runs. Only `127.0.0.1:<port>` and `[::1]:<port>` are accepted, and a port devlanes allocated to a unit is a config error, so use a port outside `ports.range` (20000-32767 by default), such as a tool's usual 8000. Put the entry in `devlanes.yaml` instead when the whole team runs that server, and add `hidden: true` to keep it off connected machines. Remove the entry when the server is gone.
+devlanes reads it with `devlanes.yaml`: every lane of the project lists the unit `docs` of kind `external`, `https://docs.<lane domain>` routes to the port, and connected machines mirror it while a lane of the project runs a service, task, exec command or container. Use a name no exec unit has (here the exec is `docs-server`): `exec` refuses an entry's name. Only `127.0.0.1:<port>` and `[::1]:<port>` are accepted, devlanes connects to exactly that address, and a port devlanes itself or any lane uses is a config error, so use a port outside `ports.range` (20000-32767 by default), such as a tool's usual 8000. `start`, `stop` and `logs` do not apply to the entry. Put the entry in `devlanes.yaml` instead when the whole team runs that server, and add `hidden: true` to keep it off connected machines. Remove the entry when the server is gone.
 
 ## Working on a remote machine
 

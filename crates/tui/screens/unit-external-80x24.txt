@@ -1,9 +1,9 @@
  devlanes  1 acme   2 billing   3 shop   starting feat/c…  M monitor   D daemon
  lanes  1 main  2 feat/checkout 4/8  +2 more            1-9 or [ ] switch lanes
 ┌ @1 · 4/8 up · starting ──────┐┌ pgadmin  external ───────────────────────────┐
-│   … wrk-email         queued ││ Declared in infra.external: devlanes routes  │
-│   ● stub-stripe              ││ it to port 5050 but runs nothing there, so   │
-│                              ││ start the server yourself.                   │
+│   … wrk-email         queued ││ Declared in infra.external: the proxy routes │
+│   ● stub-stripe              ││ its hostnames to port 5050. devlanes runs and│
+│                              ││ checks nothing there.                        │
 │ ▾ tasks                    7 ││ Machines connected with devlanes remote      │
 │   ⠋ migrate          running ││ connect mirror it while a lane of the project│
 │   · seed             not run ││ runs.                                        │

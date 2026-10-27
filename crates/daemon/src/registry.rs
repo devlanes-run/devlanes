@@ -1089,6 +1089,7 @@ impl Inner {
                     names,
                     reserved: needs.reserved.clone(),
                     avoid: self.remote.advertised_ports(),
+                    never: self.external_ports(),
                 })
                 .await;
             let mut st = lane.st();
@@ -1116,6 +1117,7 @@ impl Inner {
                 names,
                 reserved: needs.reserved.clone(),
                 avoid: self.avoided_ports(pool).await,
+                never: self.external_ports(),
             })
             .await
             .map_err(store_error)?;
@@ -1141,6 +1143,7 @@ impl Inner {
                     names: shared,
                     reserved: BTreeSet::new(),
                     avoid: self.avoided_ports(pool).await,
+                    never: self.external_ports(),
                 })
                 .await
                 .map_err(store_error)?;
@@ -1153,23 +1156,20 @@ impl Inner {
         Ok(allocation)
     }
 
-    /// Ports a new pool block keeps clear of: a connected box's mirrored ports
-    /// and the `infra.external` ports of every project.
+    /// Ports a new pool block keeps clear of: a connected box's mirrored ports.
+    /// `infra.external` ports go in the request's `never` instead.
     #[cfg(unix)]
     async fn avoided_ports(&self, _pool: PortPool) -> BTreeSet<u16> {
-        let mut avoid = self.remote.advertised_ports();
-        avoid.extend(self.external_ports());
-        avoid
+        self.remote.advertised_ports()
     }
 
-    /// Ports a new pool block keeps clear of: a connected box's mirrored ports,
-    /// the `infra.external` ports of every project and the Windows reserved
-    /// port ranges inside `pool`, where no service could bind. Ranges `netsh`
-    /// could not list are not avoided; `doctor` reports why.
+    /// Ports a new pool block keeps clear of: a connected box's mirrored ports
+    /// and the Windows reserved port ranges inside `pool`, where no service
+    /// could bind. Ranges `netsh` could not list are not avoided; `doctor`
+    /// reports why. `infra.external` ports go in the request's `never` instead.
     #[cfg(windows)]
     async fn avoided_ports(&self, pool: PortPool) -> BTreeSet<u16> {
         let mut avoid = self.remote.advertised_ports();
-        avoid.extend(self.external_ports());
         let reserved = crate::reserved_ports::RESERVED.get().await;
         avoid.extend(reserved.ports_within(pool.start, pool.end));
         avoid
@@ -1587,17 +1587,15 @@ impl Inner {
             self.integ.routes.https_port(),
         );
         let reference = lane.st().reference(&project.name());
-        let allocated = layout
-            .services
-            .values()
-            .flat_map(|service| {
-                let path = format!("services.{}", service.name);
-                std::iter::once(service.port)
-                    .chain(service.ports.values().copied())
-                    .map(move |port| (path.clone(), port))
-            })
-            .chain(crate::external::infra_ports(&infra));
-        if let Some(error) = crate::external::collision(&config, &reference, allocated) {
+        let own = crate::external::lane_ports(
+            &reference,
+            layout
+                .services
+                .values()
+                .map(|service| (service.name.as_str(), service.port, &service.ports)),
+            &infra,
+        );
+        if let Some(error) = self.external_conflict(&config, lane, own) {
             return Err(error);
         }
         let externals = crate::external::external_infos(

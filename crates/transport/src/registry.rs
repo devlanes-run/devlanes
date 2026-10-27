@@ -78,6 +78,12 @@ pub struct PortInfo {
     pub name: String,
     /// Loopback port on the box.
     pub port: u16,
+    /// The one loopback address the box dials for this port. Only units of
+    /// kind [`UnitKind::External`] set it, so a client without
+    /// [`crate::EXTERNAL_UNITS`] never sees it; absent, the box tries
+    /// `127.0.0.1`, then `::1`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<std::net::IpAddr>,
 }
 
 /// How the client proxy sets `Host` when forwarding to a unit.
@@ -313,6 +319,11 @@ impl Registry {
             }
             return Ok(AuthorizedTarget {
                 port,
+                address: unit
+                    .ports
+                    .iter()
+                    .find(|p| p.port == port)
+                    .and_then(|p| p.address),
                 unit: unit.key.clone(),
             });
         }
@@ -335,6 +346,7 @@ pub fn serving(state: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthorizedTarget {
     port: u16,
+    address: Option<std::net::IpAddr>,
     unit: UnitKey,
 }
 
@@ -342,6 +354,12 @@ impl AuthorizedTarget {
     /// Loopback port to dial on the box.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// The one loopback address to dial, when the unit's port names it
+    /// ([`PortInfo::address`]).
+    pub fn address(&self) -> Option<std::net::IpAddr> {
+        self.address
     }
 
     /// Unit that advertises the port.
@@ -535,6 +553,7 @@ mod tests {
             ports: vec![PortInfo {
                 name: "default".into(),
                 port,
+                address: None,
             }],
             hosts: Vec::new(),
         }
@@ -696,6 +715,70 @@ mod tests {
             registry.authorize(&DialTarget::Port { port: 5050 }),
             Err(RejectReason::Hidden)
         );
+    }
+
+    /// An external port's declared address is the only one dialed: a `[::1]`
+    /// entry does not reach a `127.0.0.1` listener and the reverse, while a
+    /// port without one falls back from `127.0.0.1` to `::1`.
+    #[tokio::test]
+    async fn external_ports_dial_only_their_address() {
+        use crate::{Dialer, LoopbackDialer};
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+        let Ok(v6) = tokio::net::TcpListener::bind((Ipv6Addr::LOCALHOST, 0)).await else {
+            eprintln!("skipping: no IPv6 loopback");
+            return;
+        };
+        let v6_port = v6.local_addr().expect("v6 addr").port();
+        let v4 = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("v4 listener");
+        let v4_port = v4.local_addr().expect("v4 addr").port();
+        let target = |port: u16, address: Option<IpAddr>| {
+            let mut unit = unit("tool", port, false);
+            unit.key.kind = UnitKind::External;
+            unit.state = "external".into();
+            unit.ports[0].address = address;
+            Registry::from_snapshot(RegistrySnapshot {
+                lanes: Vec::new(),
+                units: vec![unit],
+            })
+            .authorize(&DialTarget::Port { port })
+            .expect("authorized")
+        };
+        let dial = |target: AuthorizedTarget| async move {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                LoopbackDialer.dial(&target),
+            )
+            .await
+            .expect("dial answers")
+            .is_ok()
+        };
+        let (on_v4, on_v6) = (
+            Some(Ipv4Addr::LOCALHOST.into()),
+            Some(Ipv6Addr::LOCALHOST.into()),
+        );
+        // Nothing listens on the other family's loopback at these ports.
+        let free = |ip: IpAddr, port| std::net::TcpListener::bind((ip, port)).is_ok();
+        if free(Ipv6Addr::LOCALHOST.into(), v4_port) {
+            assert!(
+                !dial(target(v4_port, on_v6)).await,
+                "[::1] reached 127.0.0.1"
+            );
+        }
+        if free(Ipv4Addr::LOCALHOST.into(), v6_port) {
+            assert!(
+                !dial(target(v6_port, on_v4)).await,
+                "127.0.0.1 reached [::1]"
+            );
+            assert!(
+                dial(target(v6_port, None)).await,
+                "the fallback reaches [::1]"
+            );
+        }
+        assert!(dial(target(v4_port, on_v4)).await);
+        assert!(dial(target(v6_port, on_v6)).await);
+        drop((v4, v6));
     }
 
     /// Tasks are listed with their state, but even a running task with ports

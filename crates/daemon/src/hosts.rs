@@ -476,6 +476,7 @@ mod tests {
             certificate_names: Vec::new(),
             remote: false,
             box_https_port: None,
+            address: None,
         }
     }
 

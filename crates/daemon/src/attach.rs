@@ -100,6 +100,7 @@ impl Inner {
         let ((project, lane), selectors) = self
             .lane_for_units(std::slice::from_ref(&args.unit), context)
             .await?;
+        Self::refuse_external(&project, &lane, &selectors)?;
         let name = selectors.into_iter().next().unwrap_or_default();
         // Someone about to type needs a running unit. A read-only view (the TUI
         // showing output) is not activity and leaves a frozen lane frozen.

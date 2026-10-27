@@ -174,6 +174,7 @@ impl Inner {
         let selection: Selection = params(value)?;
         let ((project, lane), selectors) = self.selection_lane(&selection.units, context).await?;
         self.fresh_config(&project, &lane).await;
+        Self::refuse_external(&project, &lane, &selectors)?;
         let start_id = self.new_start_id();
         let stream = selection
             .events
@@ -247,6 +248,7 @@ impl Inner {
         } else {
             let ((project, lane), selectors) =
                 self.lane_for_units(&selection.units, context).await?;
+            Self::refuse_external(&project, &lane, &selectors)?;
             let selectors = (!selectors.is_empty()).then_some(selectors);
             let mine = selection.mine.then_some(&context.actor);
             stopped = self
@@ -275,6 +277,7 @@ impl Inner {
         }
         let ((project, lane), selectors) = self.lane_for_units(&selection.units, context).await?;
         self.fresh_config(&project, &lane).await;
+        Self::refuse_external(&project, &lane, &selectors)?;
         let start_id = self.new_start_id();
         let stream = selection
             .events
@@ -779,9 +782,11 @@ impl Inner {
                     .as_ref()
                     .is_some_and(|view| view.services.iter().any(|s| s.unit == args.name));
             let task = config.is_some_and(|c| c.tasks.contains_key(&args.name));
-            match (service, task) {
-                (true, _) => Some("service"),
-                (_, true) => Some("task"),
+            let external = config.is_some_and(|c| c.infra.external.contains_key(&args.name));
+            match (service, task, external) {
+                (true, ..) => Some("service"),
+                (_, true, _) => Some("task"),
+                (.., true) => Some(devlanes_proto::EXTERNAL_KIND),
                 _ => None,
             }
             .map(|kind| (kind, st.reference(&project.name())))
@@ -1385,14 +1390,23 @@ impl Inner {
             return Err(crate::engine::no_config(&context.cwd).await);
         };
         // The lane's warnings below come from its loaded config; bring it up to date.
+        // A worktree without its own devlanes.local.yaml uses the primary
+        // worktree's, as the lane does.
+        let mut primary_dir = None;
         if let Ok((project, lane)) = self.target_lane(context).await {
             self.fresh_config(&project, &lane).await;
+            primary_dir = Some(self.config_dirs(&project, &lane).1);
         }
         let checks = self.config_checks();
         let known = crate::platforms::known(&self.integ.contributors);
         let path = file.clone();
         let (report, unknown) = tokio::task::spawn_blocking(move || {
-            let config = devlanes_config::load_project_with::<OpaqueExtensions>(&path)?;
+            let config = match &primary_dir {
+                Some(primary) => {
+                    devlanes_config::load_lane_project_with::<OpaqueExtensions>(&path, primary)?
+                }
+                None => devlanes_config::load_project_with::<OpaqueExtensions>(&path)?,
+            };
             let report = crate::registry::check_config(&config, &checks)?;
             Ok::<_, devlanes_config::ConfigError>((
                 report,
@@ -1416,10 +1430,21 @@ impl Inner {
                         .view
                         .as_ref()
                         .and_then(|view| {
-                            view.routes
+                            let service = view
+                                .routes
                                 .iter()
                                 .find(|route| route.host == data["host"])
-                                .map(|route| format!("services.{}.hosts", route.service))
+                                .map(|route| format!("services.{}.hosts", route.service));
+                            service.or_else(|| {
+                                view.externals
+                                    .iter()
+                                    .find(|external| {
+                                        external.routes.iter().any(|r| r.host == data["host"])
+                                    })
+                                    .map(|external| {
+                                        format!("infra.external.{}.hosts", external.name)
+                                    })
+                            })
                         })
                         .unwrap_or_else(|| "infra.hosts".into());
                     list.push(json!({

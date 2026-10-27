@@ -2065,6 +2065,16 @@ fn daemon_errors_are_worded_with_hints() {
             2,
         ),
         RpcError::new(
+            "name_taken",
+            json!({"name": "pgadmin", "kind": "external", "lane": "acme@2"}),
+            2,
+        ),
+        RpcError::new(
+            "external_unit",
+            json!({"unit": "pgadmin", "lane": "acme@2"}),
+            2,
+        ),
+        RpcError::new(
             "response_too_large",
             json!({"limit_bytes": 16_777_216, "message": "a message exceeded the 16 MiB frame limit"}),
             1,

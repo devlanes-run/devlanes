@@ -5,6 +5,7 @@
 mod attach;
 mod containers;
 mod engine;
+mod external;
 mod failures;
 mod fakes;
 mod folders;

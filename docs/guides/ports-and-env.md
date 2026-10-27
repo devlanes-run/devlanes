@@ -173,15 +173,15 @@ or let the app load its own dotenv. Most dotenv loaders do not overwrite variabl
 
 Compose interpolation is separate: `infra.env` and the worktree's `.env` (passed with `--env-file`) reach `docker compose`, the process environment does not.
 
-## Per-machine overrides
+## Local overrides
 
-`devlanes.local.yaml` holds the changes one developer wants on their machine only: a service turned off, a variable pointing at a local tool, a service or an [external port](infra.md#external-ports) that only they run. It sits next to `devlanes.yaml`, takes the same keys (the same schema modeline works) and stays out of Git. devlanes does not add it to `.gitignore` for you, so add `devlanes.local.yaml` there.
+`devlanes.local.yaml` holds the changes one developer wants on their machine only: a service turned off, a variable pointing at a local tool, a service or an [external port](infra.md#external-ports) that only they run. It sits next to `devlanes.yaml`, takes the same keys and stays out of Git. devlanes does not add it to `.gitignore` for you, so add `devlanes.local.yaml` there. Editors validate it with the same modeline as `devlanes.yaml`, `# yaml-language-server: $schema=https://devlanes.run/v1/schema.json`.
 
 ```yaml
 # devlanes.local.yaml
 services:
   web:
-    autostart: false                    # a plain `devlanes start` skips it here
+    autostart: false                    # a plain `devlanes start` skips it unless the lane ran it before or the default profile names it
   api:
     env:
       LOG_LEVEL: debug                  # added to api's env; its other variables stay
@@ -202,7 +202,7 @@ The file is merged over `devlanes.yaml` before templates are expanded:
 - Mappings merge by key at every level: services, tasks, templates, profiles, the top-level `tags`, `infra.containers`, `infra.external`, `infra.setup` and `infra.teardown`, every `env`, `lanes.vars`, a container's `ports`, a service's `ready` and `stop`, and preset options. A key the local file leaves out keeps its value from `devlanes.yaml`.
 - Lists and single values replace: a service's `tags`, `hosts` and `sync`, `autostart`, `infra.hidden`, `infra.per_lane`, `lanes.matrix` and the like. An `infra.hosts` entry replaces that container's hostnames, and a profile written as a list replaces only its `include`.
 - Alternatives drop each other: `run` drops the `run_script` from `devlanes.yaml` and the reverse (a task's `steps` too), and one `ready` check (`tcp`, `http`, `log`, `cmd`) drops the others. A `run_script` may set only `file` or only `name` and keep the other.
-- A service that exists only in the local file needs `run` or `run_script`, its own or from the template it `extends`. `project` must be set in `devlanes.yaml`.
+- A service that exists only in the local file needs `run` or `run_script`, its own or from the template it `extends`. `project` is refused there: the name lives in `devlanes.yaml`, so every machine gives the project the same lanes, domains and container names.
 
 Nothing can be deleted: turn a service off with `autostart: false`, and empty a list by setting it to `[]`.
 

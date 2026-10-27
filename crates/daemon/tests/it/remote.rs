@@ -430,10 +430,11 @@ impl RouteSink for ProxyRoutes {
         let routes = routes
             .into_iter()
             .map(|entry| {
-                let mut route = devlanes_proxy::Route::new(
-                    entry.host,
-                    devlanes_proxy::Upstream::Local(entry.port),
-                );
+                let upstream = match entry.address {
+                    Some(ip) => devlanes_proxy::Upstream::Address((ip, entry.port).into()),
+                    None => devlanes_proxy::Upstream::Local(entry.port),
+                };
+                let mut route = devlanes_proxy::Route::new(entry.host, upstream);
                 route.fallback = entry.fallback;
                 route.state = match entry.status {
                     RouteStatus::Ready => devlanes_proxy::RouteState::Ready,

@@ -55,6 +55,7 @@ fn unit(name: &str, port: u16, hidden: bool) -> UnitInfo {
         ports: vec![PortInfo {
             name: "default".into(),
             port,
+            address: None,
         }],
         hosts: Vec::new(),
     }

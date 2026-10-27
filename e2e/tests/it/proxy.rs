@@ -111,10 +111,9 @@ fn an_external_port_is_routed_by_its_hostname() -> Result<()> {
         devlanes_e2e::COMMAND_TIMEOUT,
         || Ok(devlanes_e2e::listening(served).then_some(())),
     )?;
-    let local = lab.repo().join("devlanes.local.yaml");
-    std::fs::write(
-        &local,
-        format!(
+    lab.write(
+        "devlanes.local.yaml",
+        &format!(
             "infra:\n  external:\n    docs:\n      address: 127.0.0.1:{served}\n      hosts: \"docs.${{{{ lane.domain }}}}\"\n"
         ),
     )?;
@@ -168,7 +167,7 @@ fn an_external_port_is_routed_by_its_hostname() -> Result<()> {
         "{host} must reach the exec unit"
     );
 
-    std::fs::remove_file(&local)?;
+    lab.write("devlanes.local.yaml", "services: {}\n")?;
     lab.eventually(
         "the external unit to go",
         devlanes_e2e::COMMAND_TIMEOUT,

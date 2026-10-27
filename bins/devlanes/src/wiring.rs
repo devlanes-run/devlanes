@@ -774,10 +774,11 @@ impl RouteSink for ProxyRoutes {
         let routes = routes
             .into_iter()
             .map(|entry| {
-                let mut route = devlanes_proxy::Route::new(
-                    entry.host,
-                    devlanes_proxy::Upstream::Local(entry.port),
-                );
+                let upstream = match entry.address {
+                    Some(ip) => devlanes_proxy::Upstream::Address((ip, entry.port).into()),
+                    None => devlanes_proxy::Upstream::Local(entry.port),
+                };
+                let mut route = devlanes_proxy::Route::new(entry.host, upstream);
                 route.fallback = entry.fallback;
                 route.host_header = if entry.host_header_upstream {
                     devlanes_proxy::HostHeader::Upstream
@@ -2456,6 +2457,7 @@ mod tests {
             certificate_names: Vec::new(),
             remote: false,
             box_https_port: None,
+            address: None,
         }
     }
 
@@ -2499,6 +2501,47 @@ mod tests {
         assert!(
             sink.status().get("rejected").is_none(),
             "a clean snapshot clears them"
+        );
+    }
+
+    #[test]
+    /// A route naming an address (an `infra.external` entry) goes to exactly
+    /// that address; the others to the port on either loopback.
+    fn routes_with_an_address_dial_only_it() {
+        let sink = ProxyRoutes {
+            proxy: devlanes_proxy::Proxy::new(
+                devlanes_proxy::ProxyConfig::default(),
+                devlanes_proxy::RouteTable::default(),
+            ),
+            status: json!({}),
+            rejected: Mutex::new(Vec::new()),
+            box_ca: None,
+            shutdown: CancellationToken::new(),
+            box_ports: devlanes_proxy::ScopedPorts::default(),
+        };
+        let mut docs = entry("docs.acme.localhost", "acme@0", "docs", 8000);
+        docs.address = Some(std::net::Ipv6Addr::LOCALHOST.into());
+        sink.publish(vec![
+            entry("web.acme.localhost", "acme@0", "web", 3000),
+            docs,
+        ]);
+        let routes = sink.proxy.routes();
+        let upstream = |host: &str| {
+            routes
+                .routes()
+                .iter()
+                .find(|route| route.host == host)
+                .map(|route| route.upstream.clone())
+        };
+        assert_eq!(
+            upstream("docs.acme.localhost"),
+            Some(devlanes_proxy::Upstream::Address(
+                "[::1]:8000".parse().expect("address")
+            ))
+        );
+        assert_eq!(
+            upstream("web.acme.localhost"),
+            Some(devlanes_proxy::Upstream::Local(3000))
         );
     }
 

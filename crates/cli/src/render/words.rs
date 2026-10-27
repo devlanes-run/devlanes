@@ -566,6 +566,23 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             "the daemon is shutting down; retry once it has stopped, or start a new one now".into(),
             Some(Hint::command(["daemon", "restart"])),
         ),
+        "external_unit" => {
+            let (name, lane) = (text(data, "unit"), text(data, "lane"));
+            (
+                format!(
+                    "{name} is an infra.external entry of {lane}; devlanes does not run it, so it has no process to start, stop or read logs from"
+                ),
+                Some(Hint::command(["url", "print", &format!("{lane}:{name}")])),
+            )
+        }
+        "name_taken" if text(data, "kind") == devlanes_proto::EXTERNAL_KIND => (
+            format!(
+                "{} is an infra.external entry of {}; give exec another --name",
+                text(data, "name"),
+                text(data, "lane")
+            ),
+            None,
+        ),
         "name_taken" => {
             let (name, lane) = (text(data, "name"), text(data, "lane"));
             let kind = match text(data, "kind").as_str() {
