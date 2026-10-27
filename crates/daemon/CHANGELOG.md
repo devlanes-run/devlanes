@@ -1,5 +1,11 @@
 # devlanes-daemon
 
+## 0.6.1 — 2026-10-27
+
+### Patch changes
+
+- [2a26145](https://github.com/devlanes-run/devlanes/commit/2a26145f9557581e398d512bc8d4f00fad683256) Added a `devlanes doctor` warning when another program listens on the proxy's HTTP or HTTPS port, which on Windows happens with a local reverse proxy on 443 or 80 that then stops getting requests to `localhost`.
+
 ## 0.6.0 — 2026-10-26
 
 ### Minor changes
