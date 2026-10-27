@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox     M monitor   D daemon   B boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox             Monitor  Daemon  Boxes · 3 issues
  lanes  1 @0  2 @4                                                                              1-9 or [ ] switch lanes
 ┌ @4 · 6/7 up ─────────────────────────────────┐┌ acme@4  running · 6 up ────────────────────────────────── on hetzner ┐
 │ ▾ services                                 6 ││ box       hetzner · ssh · devlanes 0.9.2                             │
@@ -40,7 +40,7 @@
  o open in browser   [ ] switch lane   / filter   B boxes   read-only: manage it on hetzner       ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 78 bold, 79-86 dim, 90 bold, 91-97 dim, 101 bold, 102-107 dim, 108-118 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold, 104-107 dim, 108-118 yellow
 1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 darkgray, 1-13 bold reversed, 14-48 darkgray, 50-55 bold, 56-71 dim, 73-106 darkgray, 108-117 dim, 119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray

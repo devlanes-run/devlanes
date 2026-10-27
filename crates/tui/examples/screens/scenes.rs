@@ -50,6 +50,8 @@ struct Fake {
     lanes: fn() -> Vec<devlanes_proto::LaneSummary>,
     /// What `host.list` answers: no boxes until a scene connects them.
     boxes: serde_json::Value,
+    /// What `remote.clients` answers: nobody until a scene pairs some.
+    clients: serde_json::Value,
 }
 
 impl Fake {
@@ -64,6 +66,7 @@ impl Fake {
             queue: VecDeque::new(),
             lanes: data::lanes,
             boxes: json!({"items": []}),
+            clients: data::no_clients(),
         };
         for effect in fake.app.start() {
             fake.answer(effect);
@@ -235,6 +238,7 @@ impl Fake {
                 lane,
             }],
             Effect::FetchBoxes => vec![Msg::Boxes(Ok(self.boxes.clone()))],
+            Effect::FetchClients => vec![Msg::Clients(Ok(self.clients.clone()))],
             // The file starts as USER_CONFIG; a save writes its changes over it.
             Effect::Settings(request) => {
                 let mut source = USER_CONFIG.to_owned();
@@ -720,8 +724,39 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "daemon",
-            what: "the daemon page (D): facts, doctor checks and the daemon log",
+            what: "the daemon page (D): facts, doctor checks, no remote clients yet and the daemon log",
             setup: |f| f.shifted('D'),
+        },
+        Scene {
+            name: "daemon-clients",
+            what: "remote clients on the daemon page, focused with Tab: one connected under two box names, two paired and away, laptop selected",
+            setup: |f| {
+                f.clients = data::clients();
+                f.shifted('D');
+                f.key(KeyCode::Tab);
+                f.key(KeyCode::Tab);
+                f.key(KeyCode::Char('G'));
+            },
+        },
+        Scene {
+            name: "daemon-clients-unpaired",
+            what: "remote clients with remote.require_pairing false: the note, and a tablet connected without pairing",
+            setup: |f| {
+                f.clients = data::clients_unpaired();
+                f.shifted('D');
+            },
+        },
+        Scene {
+            name: "dialog-revoke",
+            what: "revoking laptop (x in the clients box): asks first, y revokes",
+            setup: |f| {
+                f.clients = data::clients();
+                f.shifted('D');
+                f.key(KeyCode::Tab);
+                f.key(KeyCode::Tab);
+                f.key(KeyCode::Char('G'));
+                f.key(KeyCode::Char('x'));
+            },
         },
         Scene {
             name: "daemon-targets",

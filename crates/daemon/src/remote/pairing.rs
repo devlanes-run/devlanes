@@ -24,8 +24,8 @@ use async_trait::async_trait;
 use devlanes_proto::{
     RpcError,
     remote::{
-        CLIENT_ID_PREFIX, ClaimParams, PAIRING_CODE_TTL_MS, RemoteClient, TOKEN_PREFIX,
-        VerifyParams, is_random_id,
+        CLIENT_ID_PREFIX, CLIENTS_EVENT, ClaimParams, PAIRING_CODE_TTL_MS, RemoteClient,
+        TOKEN_PREFIX, VerifyParams, is_random_id,
     },
 };
 use devlanes_state::{RemotePairing, Store};
@@ -437,12 +437,20 @@ impl Inner {
             );
         }
         tracing::info!(client_id = %id, %name, address = ?address, "paired a client");
+        self.clients_changed();
         Ok(json!({"token": token}))
+    }
+
+    /// Announces that `remote.clients` would answer differently now
+    /// ([`CLIENTS_EVENT`]), so a TUI showing the clients fetches them again.
+    pub(crate) fn clients_changed(&self) {
+        self.bus.emit(CLIENTS_EVENT, json!({}));
     }
 
     /// `remote.clients`: every paired client and every client a tunnel serves
     /// now, by name, with its connections (address, since when, and what it
-    /// mirrors: `{ports, bound, skipped_lanes}`) and how many pairings it has.
+    /// mirrors: `{ports, bound, skipped_lanes}`) and how many pairings it has,
+    /// and this daemon's clock (`now_ms`) for the times.
     pub(crate) async fn clients_method(&self) -> Result<Value, RpcError> {
         let pairings = self.store.remote_pairings().await.map_err(store_error)?;
         let live: Vec<(ClientKey, RemoteClient)> = lock(&self.remote.clients)
@@ -503,7 +511,7 @@ impl Inner {
             };
             key(a).cmp(&key(b))
         });
-        Ok(json!({"items": items}))
+        Ok(json!({"items": items, "now_ms": now_ms()}))
     }
 
     /// `remote.revoke`: deletes every pairing of the client named by its id,
@@ -547,6 +555,7 @@ impl Inner {
         for client in &found {
             tracing::info!(client_id = %client.id, name = %client.name, ended, "revoked a client's pairings");
         }
+        self.clients_changed();
         let revoked: Vec<Value> = found
             .iter()
             .map(|client| json!({"id": client.id, "name": client.name}))
@@ -563,6 +572,7 @@ impl Inner {
         if ended > 0 {
             tracing::info!(ended, "ended every client's session after a state reset");
         }
+        self.clients_changed();
     }
 }
 

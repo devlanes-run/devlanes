@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                                                            starting feat/checkout: 4 of 8 ready  M monitor   D daemon · 2 issues
+ devlanes  1 acme   2 billing   3 shop                                                                                                 starting feat/checkout: 4 of 8 ready  Monitor  Daemon · 2 issues
 ┌ daemon ────────────────────────────────────┐┌ checks ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 fail · 1 warn · i all ┐
 │version   1.0.0 · pid 4242                  ││fail tls     no CA: no CA has been created yet                                                                                                          │
 │uptime    7h 38m                            ││             fix: devlanes certs trust                                                                                                                  │
@@ -8,6 +8,9 @@
 │clients   3 event subscribers               ││                                                                                                                                                        │
 │state     schema 7 · /Users/acme/.devlanes/…││                                                                                                                                                        │
 └────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ remote clients ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No client is paired or connected. devlanes remote pair prints a code for one.                                                                                                                        │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ daemon.log ────────────────────────────────────────────────────────────────────────────────────────────────── selecting · v mark · y copy · Y whole entries · all levels · repeats folded · 40 lines ┐
 │── 2026-10-21 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
 │10:02:02 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-users took=1.2s                                                                                                                       │
@@ -53,14 +56,11 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
  h j k l move   v mark   y copy   Y copy whole entries   esc cancel                                                                                                               ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 168 bold, 169-176 dim, 180 bold, 181-187 bold underlined, 188-198 red
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 173 bold, 174-179 dim, 182-187 bold underlined, 188-198 red
 1: 0 darkgray, 1-8 bold, 9-46 darkgray, 47-54 bold, 55-173 darkgray, 175-180 red, 181-183 dim, 184-189 yellow, 190-198 dim, 199 darkgray
 2: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 red, 199 darkgray
 3: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 red, 60-84 dim, 199 darkgray
@@ -70,41 +70,41 @@
 7: 0 darkgray, 1-10 dim, 45-46 darkgray, 199 darkgray
 8: 0 darkgray, 1-10 dim, 45-46 darkgray, 199 darkgray
 9: 0-199 darkgray
-10: 0-110 bold, 111-198 bold dim, 199 bold
-11: 0 bold, 1-198 darkgray, 199 bold
-12: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
-13: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
-14: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-15: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
+10: 0 darkgray, 1-16 bold, 17-199 darkgray
+11: 0 darkgray, 1-35 dim, 36-55 bold, 56-78 dim, 199 darkgray
+12: 0-199 darkgray
+13: 0-110 bold, 111-198 bold dim, 199 bold
+14: 0 bold, 1-198 darkgray, 199 bold
+15: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
 16: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
 17: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-18: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
+18: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
 19: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
 20: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-21: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
+21: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
 22: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
 23: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-24: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
+24: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
 25: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
 26: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-27: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
+27: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
 28: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
 29: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-30: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
+30: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
 31: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
 32: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-33: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
+33: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
 34: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
 35: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
-36: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
-37: 0 bold, 1-9 dim, 10-14 yellow, 55-60 dim, 68-74 dim, 185-198 dim, 199 bold
-38: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 185-198 dim, 199 bold
-39: 0 bold, 1 bold dim reversed, 2-9 dim reversed, 10-14 reversed blue, 15-47 reversed, 48-53 dim reversed, 54-68 reversed blue, 69 reversed, 70-74 dim reversed, 75-184 reversed, 185-198 dim reversed, 199 bold
-40: 0 bold, 1 dim reversed, 2-9 dim, 10-14 bold red, 49-54 dim, 55-71 magenta, 73-77 dim, 185-198 dim, 199 bold
-41: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
-42: 0 bold, 199 bold
-43: 0 bold, 199 bold
-44: 0 bold, 199 bold
+36: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
+37: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 199 bold
+38: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 199 bold
+39: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 71-75 dim, 199 bold
+40: 0 bold, 1-9 dim, 10-14 yellow, 55-60 dim, 68-74 dim, 185-198 dim, 199 bold
+41: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 73-77 dim, 185-198 dim, 199 bold
+42: 0 bold, 1 bold dim reversed, 2-9 dim reversed, 10-14 reversed blue, 15-47 reversed, 48-53 dim reversed, 54-68 reversed blue, 69 reversed, 70-74 dim reversed, 75-184 reversed, 185-198 dim reversed, 199 bold
+43: 0 bold, 1 dim reversed, 2-9 dim, 10-14 bold red, 49-54 dim, 55-71 magenta, 73-77 dim, 185-198 dim, 199 bold
+44: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 72-76 dim, 199 bold
 45: 0 bold, 199 bold
 46: 0 bold, 199 bold
 47: 0 bold, 199 bold

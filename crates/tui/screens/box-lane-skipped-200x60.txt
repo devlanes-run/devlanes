@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                                                     M monitor   D daemon   B boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                                                             Monitor  Daemon  Boxes · 3 issues
  lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
 ┌ @0 · 2/2 up ─────────────────────────────────┐┌ api-gateway  ready ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
 │ ▾ services                                 2 ││ ! Not mirrored here: acme@0 on this machine serves its hostnames.                                                                                    │
@@ -60,7 +60,7 @@
  o open in browser   z zoom   / filter   B boxes   read-only: manage it on hetzner (ssh hetzner)                                                                                  ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 158 bold, 159-166 dim, 170 bold, 171-177 dim, 181 bold, 182-187 dim, 188-198 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold, 184-187 dim, 188-198 yellow
 1: 0-6 dim, 7-12 bold reversed, 14-15 dim, 16-17 green, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 69-186 darkgray, 188-197 dim, 199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 199 darkgray

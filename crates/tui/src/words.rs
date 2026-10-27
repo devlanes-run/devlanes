@@ -463,6 +463,12 @@ pub fn rpc(error: &RpcError) -> Worded {
                 Some("devlanes daemon logs".into()),
             )
         }
+        // The TUI revokes by id, so this is a pairing gone since the list was read.
+        "client_not_found" => (
+            "the client has no pairing here any more".to_owned(),
+            Vec::new(),
+            Some("devlanes remote clients".into()),
+        ),
         "unsupported" | "unsupported_method" => (
             format!(
                 "the daemon is too old for {}; upgrade and restart it",

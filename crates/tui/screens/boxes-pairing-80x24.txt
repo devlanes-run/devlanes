@@ -1,4 +1,4 @@
- devlanes  1 acme  ›  starting feat/checkout: 4 of…  M   D   B boxes · 3 issues
+ devlanes  1 acme  ›  starting feat/checkout: 4 of 8 r…  M  D  Boxes · 3 issues
 ┌ boxes ────────────────────────────────────── 0 of 3 connected · j k for more ┐
 │ ! hetzner                                                needs pairing · ssh │
 │   link      waiting for you to pair again with a code from devlanes remote   │
@@ -24,7 +24,7 @@
  j k scroll   tab projects   esc back                     ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 18-19 dim, 53 bold, 57 bold, 61 bold, 62-67 bold underlined, 68-78 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 18-19 dim, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
 1: 0 darkgray, 1-7 bold, 8-45 darkgray, 46-78 dim, 79 darkgray
 2: 0 darkgray, 2-3 yellow, 4-10 bold, 59-71 yellow, 72-77 dim, 79 darkgray
 3: 0 darkgray, 4-13 dim, 14-75 yellow, 79 darkgray

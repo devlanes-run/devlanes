@@ -696,6 +696,17 @@ impl Executor {
                     deliver(&sender, Msg::Boxes(api.host_list().await)).await;
                 });
             }
+            Effect::FetchClients => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::Clients(api.remote_clients().await)).await;
+                });
+            }
+            Effect::RevokeClient { id, name } => {
+                tokio::spawn(async move {
+                    let result = api.revoke_client(id).await;
+                    deliver(&sender, Msg::Revoked { name, result }).await;
+                });
+            }
             Effect::FetchLogs {
                 generation,
                 lane,

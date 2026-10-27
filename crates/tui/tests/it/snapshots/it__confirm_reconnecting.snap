@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/main.rs
 expression: draw(&app)?.backend()
 ---
-" devlanes  1 acme   2 shop   daemon not responding, retr…  M monitor   D daemon "
+" devlanes  1 acme   2 shop    daemon not responding, retrying…  Monitor  Daemon "
 " lanes  1 main  2 feat/login  3 fix/cache               1-9 or [ ] switch lanes "
 "┌ @1 · 0/1 up ┌ clean acme@1 ────────────────────────────────────┐─────────────┐"
 "│ ▾ services  │ Clean feat/login (acme@1)?                       │ith its      │"

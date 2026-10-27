@@ -14,6 +14,7 @@ macro_rules! assert_screen {
 }
 
 mod boxes;
+mod clients;
 mod containers;
 mod daemon;
 mod errors;
@@ -350,7 +351,7 @@ async fn help_lists_every_key_with_this_screen_first() -> TestResult {
         "next, previous problem",
         "filter by name or +tag",
         "reverse the sort",
-        "clean every lane whose worktree is gone",
+        "clean lanes whose worktree is gone",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
@@ -1562,7 +1563,7 @@ async fn drive_loop_resyncs_and_quits_without_stopping() -> TestResult {
             // ends the loop without another frame, so a slower machine would
             // otherwise snapshot an earlier one.
             backend.wait_for("┌ api  ready").await;
-            backend.wait_for("D daemon · 2 issues").await;
+            backend.wait_for("Daemon · 2 issues").await;
             keys_tx.send(press('q')).await.ok();
             // Returned, so the input stays open: the loop must end on q, not
             // because the stream ended.

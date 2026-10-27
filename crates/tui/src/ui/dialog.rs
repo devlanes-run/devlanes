@@ -84,8 +84,14 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
         "daemon (D)",
         &[
             ("R  S", "restart, stop or start the daemon"),
-            ("X", "clean every lane whose worktree is gone"),
-            ("tab", "move j k g G and c between the checks and the log"),
+            (
+                "X  x",
+                "clean lanes whose worktree is gone; revoke a client (both ask)",
+            ),
+            (
+                "tab",
+                "move the keys between the checks, the clients and the log",
+            ),
             (
                 "j k  g G",
                 "scroll the log (pauses), oldest, newest and follow",
@@ -96,7 +102,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
                 "c",
                 "copy mode: v select, y copy, Y whole entries as in the file",
             ),
-            ("drag", "select text in either box and copy it"),
+            ("drag", "select text in the checks or the log and copy it"),
             ("i", "every check, or problems only"),
         ],
     ),

@@ -240,11 +240,13 @@ pub enum Method {
     /// too many failures refuse every code.
     #[serde(rename = "remote.pairing.claim")]
     RemotePairingClaim,
-    /// Box side, for `devlanes remote clients`: paired and connected clients by
-    /// name, `{items: [{id, name, paired, paired_at_ms, last_seen_ms,
-    /// connections: [{address, since_ms, mirror}]}]}`; a client connected
-    /// without pairing (`remote.require_pairing: false`) has `paired: false`
-    /// and no times.
+    /// Box side, for `devlanes remote clients` and the TUI: paired and
+    /// connected clients by name, `{items: [{id, name, paired, pairings,
+    /// paired_at_ms, last_seen_ms, connections: [{address, since_ms,
+    /// mirror}]}], now_ms}`; a client connected without pairing
+    /// (`remote.require_pairing: false`) has `paired: false` and no times.
+    /// `now_ms` is the daemon's clock, which the times are measured against.
+    /// [`remote::CLIENTS_EVENT`] announces changes.
     #[serde(rename = "remote.clients")]
     RemoteClients,
     /// Box side, for `devlanes remote revoke`: deletes the pairing of the
@@ -1057,6 +1059,10 @@ pub mod remote {
     /// [`STATE_EVENT`] reports): its registry, mirrored ports, routes or syncs.
     /// Clients fetch `host.list` again.
     pub const MIRROR_EVENT: &str = "remote.mirror.changed";
+    /// `{}` on a box daemon when what `remote.clients` lists changed: a client
+    /// connected or left, sent a mirror report, paired or was revoked.
+    /// Clients fetch `remote.clients` again.
+    pub const CLIENTS_EVENT: &str = "remote.clients.changed";
 
     /// The relay variable devlanes' ssh sets for askpass runs on Windows
     /// (devlanes-transport-ssh's `SOCKET_ENV`). A `devlanes.exe` started under

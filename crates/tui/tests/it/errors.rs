@@ -151,7 +151,7 @@ fn check_layout(app: &mut App) -> Result<Buffer, Box<dyn std::error::Error>> {
         "notice is clipped: {}",
         row(&with_notice, 0)
     );
-    assert!(row(&with_notice, 0).ends_with("M monitor   D daemon "));
+    assert!(row(&with_notice, 0).ends_with("Monitor  Daemon "));
     let layout = app.areas_sized(width, height).ok_or("too small")?;
     assert_boxes(&with_notice, width, height, "notice");
     let pane_text: Vec<String> = (layout.pane_inner.y..layout.pane_inner.bottom())

@@ -164,6 +164,9 @@ impl Inner {
             }
             _ => false,
         };
+        if stored {
+            self.clients_changed();
+        }
         Ok(json!({"stored": stored}))
     }
 }
@@ -190,6 +193,7 @@ impl ClientGuard {
         let revoked = CancellationToken::new();
         lock(&engine.remote.feeds).insert(serial, (client.id.clone(), revoked.clone()));
         lock(&engine.remote.clients).insert(key.clone(), (serial, client));
+        engine.clients_changed();
         Self {
             engine: engine.clone(),
             key,

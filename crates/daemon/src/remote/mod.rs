@@ -927,12 +927,15 @@ impl Drop for ClientGuard {
     /// replaced its entry.
     fn drop(&mut self) {
         lock(&self.engine.remote.feeds).remove(&self.serial);
-        let mut clients = lock(&self.engine.remote.clients);
-        if clients
-            .get(&self.key)
-            .is_some_and(|(serial, _)| *serial == self.serial)
-        {
-            clients.remove(&self.key);
+        let removed = {
+            let mut clients = lock(&self.engine.remote.clients);
+            let current = clients
+                .get(&self.key)
+                .is_some_and(|(serial, _)| *serial == self.serial);
+            current && clients.remove(&self.key).is_some()
+        };
+        if removed {
+            self.engine.clients_changed();
         }
     }
 }

@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                                                             starting feat/checkout: 4 of 8 ready  M monitor   D daemon   B boxes
+ devlanes  1 acme   2 billing   3 shop                                                                                                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ no boxes connected                                                                                                                                                                                   │
 │                                                                                                                                                                                                      │
@@ -60,7 +60,7 @@
  j k scroll   tab projects   esc back                                                                                                                                             ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 169 bold, 170-177 dim, 181 bold, 182-188 dim, 192 bold, 193-198 bold underlined
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194-198 bold underlined
 1: 0 darkgray, 1-7 bold, 8-199 darkgray
 2: 0 darkgray, 2-19 bold, 199 darkgray
 3: 0 darkgray, 199 darkgray

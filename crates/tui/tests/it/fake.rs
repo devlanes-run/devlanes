@@ -34,6 +34,9 @@ pub struct FakeApi {
     pub profiles_error: Option<RpcError>,
     /// What `host.list` answers; no boxes unless a test sets some.
     pub boxes: Mutex<Option<Value>>,
+    /// What `remote.clients` answers; unset, the daemon does not know the
+    /// method and the daemon page shows no clients box.
+    pub clients: Mutex<Option<Value>>,
     pub calls: Mutex<Vec<String>>,
     pub events: Mutex<Option<mpsc::Sender<Result<Event, ApiError>>>>,
     /// Keeps attach output channels open so streams do not end on their own.
@@ -223,6 +226,41 @@ impl DaemonApi for FakeApi {
         self.record("host.list".into());
         let boxes = self.boxes.lock().ok().and_then(|b| b.clone());
         Ok(boxes.unwrap_or_else(|| json!({"items": []})))
+    }
+
+    async fn remote_clients(&self) -> Result<Value, ApiError> {
+        self.record("remote.clients".into());
+        match self.clients.lock().ok().and_then(|c| c.clone()) {
+            Some(clients) => Ok(clients),
+            None => Err(ApiError::Rpc(RpcError::new(
+                "unknown_method",
+                json!({"method": "remote.clients"}),
+                2,
+            ))),
+        }
+    }
+
+    /// Drops the client with id `client` from what `remote.clients` answers.
+    async fn revoke_client(&self, client: String) -> Result<Value, ApiError> {
+        self.record(format!("remote.revoke {client}"));
+        let mut revoked = Vec::new();
+        let mut ended = 0;
+        if let Ok(mut clients) = self.clients.lock()
+            && let Some(items) = clients
+                .as_mut()
+                .and_then(|c| c.get_mut("items"))
+                .and_then(Value::as_array_mut)
+        {
+            items.retain(|item| {
+                let gone = item["id"] == client.as_str();
+                if gone {
+                    revoked.push(json!({"id": item["id"], "name": item["name"]}));
+                    ended += item["connections"].as_array().map_or(0, Vec::len);
+                }
+                !gone
+            });
+        }
+        Ok(json!({"revoked": revoked, "ended": ended}))
     }
 
     fn daemon_log(&self) -> Option<PathBuf> {

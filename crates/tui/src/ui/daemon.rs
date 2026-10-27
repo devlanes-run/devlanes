@@ -1,7 +1,8 @@
 //! The daemon page (`D`) as monitor.md draws it: a facts box and a checks
 //! box (problems first, each with its fix, scrolling when they don't fit),
-//! then `daemon.log` parsed into entries with level colors, folded repeats,
-//! filters and follow. Tab moves the scroll and copy keys between the boxes.
+//! the clients of this machine as a box (`remote.clients`, with `x` to
+//! revoke one), then `daemon.log` parsed into entries with level colors,
+//! folded repeats, filters and follow. Tab moves the keys between the boxes.
 
 use ratatui::{
     Frame,
@@ -13,10 +14,11 @@ use ratatui::{
 
 use super::{draw_box, fit};
 use crate::app::{App, DaemonBox, LogCopy};
+use crate::clients::{Client, Clients, short_id};
 use crate::daemonlog::{self, Entry, Level, LogPos, LogView, Shown};
 use crate::doctor::{self, Check, CheckState};
 use crate::text::{self, clean};
-use crate::theme::Tone;
+use crate::theme::{Glyph, Tone};
 
 /// Fact labels: `version`, `socket`.
 const LABEL: usize = 10;
@@ -85,10 +87,274 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         );
         render_checks(app, frame, rows, &checks);
     }
-    let log = Rect::new(area.x, area.y + top, area.width, area.height - top);
-    if log.height >= 3 {
-        render_log(app, frame, log);
+    let mut below = Rect::new(area.x, area.y + top, area.width, area.height - top);
+    app.daemon_clients_box.set(Rect::default());
+    app.daemon_clients_rows.set((Rect::default(), 0));
+    if let Some(list) = &app.daemon.clients.list {
+        // The clients take what they need, up to half of what is left.
+        let content = clients_rows(app, list, usize::from(area.width.saturating_sub(2)));
+        let rows =
+            u16::try_from(content.note.len() + content.rows.len().max(1)).unwrap_or(u16::MAX);
+        let height = (rows + 2).min((below.height / 2).max(3)).min(below.height);
+        let boxed = Rect::new(below.x, below.y, below.width, height);
+        render_clients(app, frame, boxed, content);
+        below = Rect::new(
+            below.x,
+            below.y + height,
+            below.width,
+            below.height - height,
+        );
     }
+    if below.height >= 3 {
+        render_log(app, frame, below);
+    }
+}
+
+/// The clients box's lines: notes on top, then one row per client, or the
+/// empty state.
+struct ClientRows {
+    note: Vec<Line<'static>>,
+    rows: Vec<Line<'static>>,
+    /// The counts for the box title.
+    counts: Vec<Span<'static>>,
+}
+
+/// `● laptop  dl_cid_3f2a9c1e  203.0.113.4  connected for 2h 14m  paired
+/// under 2 names  mirrors 5 of 6 ports`: one aligned row per client in
+/// `width` cells. Columns the width cannot hold go in this order: the
+/// address, what it mirrors, its pairing, its id.
+fn clients_rows(app: &App, list: &Clients, width: usize) -> ClientRows {
+    let theme = &app.theme;
+    let quiet = theme.quiet();
+    let mut note = Vec::new();
+    if list.require_pairing == Some(false) {
+        note.extend(
+            text::wrap(
+                "remote.require_pairing is false: clients connect without pairing.",
+                width.saturating_sub(1).max(1),
+            )
+            .into_iter()
+            .map(|part| {
+                fit(
+                    vec![
+                        Span::raw(" "),
+                        Span::styled(part, theme.tone(Tone::Attention)),
+                    ],
+                    width,
+                )
+            }),
+        );
+    }
+    let mut counts = Vec::new();
+    let (connected, paired) = (list.connected(), list.paired());
+    if connected > 0 {
+        counts.push(Span::styled(
+            format!("{connected} connected"),
+            theme.tone(Tone::Ok),
+        ));
+    }
+    if paired > 0 {
+        if !counts.is_empty() {
+            counts.push(Span::styled(" · ", quiet));
+        }
+        counts.push(Span::styled(format!("{paired} paired"), quiet));
+    }
+    if list.items.is_empty() {
+        let rows = vec![fit(
+            vec![
+                Span::styled(" No client is paired or connected. ", quiet),
+                Span::styled("devlanes remote pair", theme.key()),
+                Span::styled(" prints a code for one.", quiet),
+            ],
+            width,
+        )];
+        return ClientRows { note, rows, counts };
+    }
+    let now = app.daemon.clients.now_ms();
+    // Each client's cells: [name, id, address, seen, pairing, mirror].
+    let cells: Vec<[(String, Style); 6]> = list
+        .items
+        .iter()
+        .map(|client| client_cells(app, client, now))
+        .collect();
+    let widths: Vec<usize> = (0..6)
+        .map(|column| {
+            cells
+                .iter()
+                .map(|row| text::width(&row[column].0))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    // A blank column and the glyph take three cells; two spaces between cells.
+    let total = |keep: &[usize]| 1 + keep.iter().map(|c| widths[*c] + 2).sum::<usize>();
+    let mut keep: Vec<usize> = (0..6).filter(|c| widths[*c] > 0).collect();
+    for drop in [2, 5, 4, 1] {
+        if total(&keep) <= width {
+            break;
+        }
+        keep.retain(|c| *c != drop);
+    }
+    let focused = app.daemon.focus == DaemonBox::Clients;
+    let selected = app.daemon.clients.selected;
+    let rows = list
+        .items
+        .iter()
+        .zip(&cells)
+        .enumerate()
+        .map(|(index, (client, row))| {
+            let (glyph, tone) = if client.connected() {
+                (theme.glyph(Glyph::Ready), Tone::Ok)
+            } else {
+                (theme.glyph(Glyph::Stopped), Tone::Quiet)
+            };
+            // The selection shows only while `x` would act on it.
+            let chosen = index == selected && focused;
+            let mut spans = vec![
+                Span::raw(" "),
+                Span::styled(format!("{glyph} "), theme.tone(tone)),
+            ];
+            for (place, column) in keep.iter().enumerate() {
+                let (cell, style) = &row[*column];
+                // The last cell needs no padding.
+                let shown = if place + 1 == keep.len() {
+                    cell.clone()
+                } else {
+                    format!("{cell:<pad$}  ", pad = widths[*column])
+                };
+                spans.push(Span::styled(shown, *style));
+            }
+            let line = fit(spans, width);
+            if chosen {
+                let mut spans: Vec<Span> = line
+                    .spans
+                    .into_iter()
+                    .map(|s| Span::styled(s.content, theme.selected(s.style)))
+                    .collect();
+                let pad = width.saturating_sub(super::spans_width(&spans));
+                spans.push(Span::styled(" ".repeat(pad), theme.selection()));
+                Line::from(spans)
+            } else {
+                line
+            }
+        })
+        .collect();
+    ClientRows { note, rows, counts }
+}
+
+/// One client's cells, each with its style: name, short id, address, when
+/// it connected or was last seen, its pairing and what it mirrors.
+fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style); 6] {
+    let theme = &app.theme;
+    let quiet = theme.quiet();
+    let name = clip(&clean(&client.name), 24);
+    let name = if name.is_empty() {
+        "unnamed".to_owned()
+    } else {
+        name
+    };
+    let address = client.address().map(clean).unwrap_or_default();
+    let since = |ms: u64| now.map(|now| now.saturating_sub(ms));
+    let seen = match client.connected_since() {
+        Some(ms) => match since(ms) {
+            Some(elapsed) => format!("connected for {}", doctor::uptime(elapsed)),
+            None => "connected".to_owned(),
+        },
+        None if client.connected() => "connected".to_owned(),
+        None => match client.last_seen_ms.and_then(since) {
+            Some(elapsed) => format!("last seen {}", ago(elapsed)),
+            None => "never connected".to_owned(),
+        },
+    };
+    let seen = match client.connections.len() {
+        0 | 1 => seen,
+        n => format!("{seen} ({n} connections)"),
+    };
+    let (pairing, pairing_style) = match (client.paired, client.pairings) {
+        (false, _) => ("not paired".to_owned(), theme.tone(Tone::Attention)),
+        (true, 0 | 1) => ("paired".to_owned(), quiet),
+        (true, names) => (format!("paired under {names} names"), quiet),
+    };
+    let mirror = client
+        .mirror()
+        .map(|mirror| {
+            let ports = if mirror.ports == 1 { "port" } else { "ports" };
+            let mut text = format!("mirrors {} of {} {ports}", mirror.bound, mirror.ports);
+            match mirror.skipped_lanes {
+                0 => {}
+                1 => text.push_str(", 1 lane skipped"),
+                n => text.push_str(&format!(", {n} lanes skipped")),
+            }
+            text
+        })
+        .unwrap_or_default();
+    let seen_style = if client.connected() {
+        Style::new()
+    } else {
+        quiet
+    };
+    [
+        (name, Style::new().add_modifier(Modifier::BOLD)),
+        (short_id(&client.id), quiet),
+        (address, quiet),
+        (seen, seen_style),
+        (pairing, pairing_style),
+        (mirror, quiet),
+    ]
+}
+
+/// `just now`, `5m ago`, `3h ago` or `2d ago` for `elapsed` milliseconds,
+/// as `devlanes remote clients` words it.
+fn ago(elapsed: u64) -> String {
+    match elapsed / 1000 {
+        0..60 => "just now".into(),
+        seconds @ 60..3600 => format!("{}m ago", seconds / 60),
+        seconds @ 3600..86_400 => format!("{}h ago", seconds / 3600),
+        seconds => format!("{}d ago", seconds / 86_400),
+    }
+}
+
+/// The clients box: its notes, then the client rows from the one that keeps
+/// the selection in view, and where they are for the mouse.
+fn render_clients(app: &App, frame: &mut Frame, area: Rect, content: ClientRows) {
+    let theme = &app.theme;
+    let focused = app.daemon.focus == DaemonBox::Clients;
+    let inner = inside(area);
+    let notes = u16::try_from(content.note.len())
+        .unwrap_or(u16::MAX)
+        .min(inner.height);
+    let rows = Rect::new(inner.x, inner.y + notes, inner.width, inner.height - notes);
+    let room = usize::from(rows.height);
+    let count = content.rows.len();
+    let selected = app.daemon.clients.selected.min(count.saturating_sub(1));
+    // The fewest rows scrolled off the top that still show the selection.
+    let first = if count <= room {
+        0
+    } else {
+        (selected + 1).saturating_sub(room).min(count - room)
+    };
+    let mut right = Vec::new();
+    if !content.counts.is_empty() {
+        right.push(Span::raw(" "));
+        right.extend(content.counts);
+        // Clients past the box's end would go unnoticed without it.
+        if count > room && room > 0 {
+            right.push(Span::styled(
+                format!(" · rows {}-{}/{count}", first + 1, first + room),
+                theme.quiet(),
+            ));
+        }
+        right.push(Span::raw(" "));
+    }
+    draw_box(app, frame, area, title(" remote clients "), right, focused);
+    app.daemon_clients_box.set(area);
+    frame.render_widget(
+        Paragraph::new(content.note),
+        Rect::new(inner.x, inner.y, inner.width, notes),
+    );
+    let shown: Vec<Line> = content.rows.into_iter().skip(first).take(room).collect();
+    frame.render_widget(Paragraph::new(shown), rows);
+    app.daemon_clients_rows.set((rows, first));
 }
 
 /// The checks box's rows from its scroll on, with the copy selection, and

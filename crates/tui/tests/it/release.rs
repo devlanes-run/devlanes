@@ -95,7 +95,7 @@ async fn newer_release_shows_until_dismissed() -> TestResult {
     let top = screen.lines().next().unwrap_or_default();
     // The empty doctor reply has one problem by `devlanes doctor`'s rules:
     // the state schema is unknown.
-    assert!(top.contains("D daemon · 1 issue, update"), "{top}");
+    assert!(top.contains("Daemon · 1 issue, update"), "{top}");
     app.update(Msg::Key(crossterm::event::KeyEvent::new(
         KeyCode::Char('D'),
         crossterm::event::KeyModifiers::SHIFT,

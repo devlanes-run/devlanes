@@ -40,7 +40,7 @@ fn log_lines() -> Vec<String> {
 }
 
 /// An app on the daemon tab with fake facts and a log tail.
-async fn daemon_app(width: u16, height: u16) -> Result<App, Box<dyn std::error::Error>> {
+pub async fn daemon_app(width: u16, height: u16) -> Result<App, Box<dyn std::error::Error>> {
     let api = FakeApi::with_lanes(mixed_lanes());
     let mut app = App::new(width, height);
     app.update(Msg::Status(api.status().await));
@@ -987,9 +987,9 @@ async fn help_lists_clean_and_the_daemon_page() -> TestResult {
     for expected in [
         "clean the lane (asks first)",
         "copy mode: v select, y copy, Y whole entries as in the file",
-        "move j k g G and c between the checks and the log",
+        "move the keys between the checks, the clients and the log",
         "restart, stop or start the daemon",
-        "clean every lane whose worktree is gone",
+        "clean lanes whose worktree is gone; revoke a client (both ask)",
         "hide the version notice",
         "monitor, daemon, boxes; again or esc returns",
     ] {

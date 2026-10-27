@@ -1,6 +1,6 @@
 # devlanes-tui
 
-The terminal UI opened by bare `devlanes`, `devlanes ui` and `devlanes start` on a terminal. It is a daemon client like the CLI: it talks to the daemon through `devlanes-client` and shows each project's lanes with a live terminal for the selected unit, a resource monitor, a daemon page, and the lanes of connected boxes, read-only, with a boxes page (`B`).
+The terminal UI opened by bare `devlanes`, `devlanes ui` and `devlanes start` on a terminal. It is a daemon client like the CLI: it talks to the daemon through `devlanes-client` and shows each project's lanes with a live terminal for the selected unit, a resource monitor, a daemon page with the clients connected to this machine as a box, and the lanes of connected boxes, read-only, with a boxes page (`B`).
 
 ## Usage
 

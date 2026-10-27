@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox     M monitor   D daemon   B boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox   startin…  Monitor  Daemon  Boxes · 3 issues
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────── 0 of 3 connected ┐
 │ ! hetzner                                                                                        needs pairing · ssh │
 │   link      waiting for you to pair again with a code from devlanes remote pair on the box; ports and hostnames stay │
@@ -40,7 +40,7 @@
  j k scroll   tab projects   esc back                                                             ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 78 bold, 79-86 dim, 90 bold, 91-97 dim, 101 bold, 102-107 bold underlined, 108-118 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103-107 bold underlined, 108-118 yellow
 1: 0 darkgray, 1-7 bold, 8-100 darkgray, 101-118 dim, 119 darkgray
 2: 0 darkgray, 2-3 yellow, 4-10 bold, 99-111 yellow, 112-117 dim, 119 darkgray
 3: 0 darkgray, 4-13 dim, 14-117 yellow, 119 darkgray

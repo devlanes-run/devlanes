@@ -508,6 +508,25 @@ pub trait DaemonApi: Send + Sync {
     async fn host_list(&self) -> Result<Value, ApiError> {
         Ok(json!({"items": []}))
     }
+    /// `remote.clients`: the clients paired with this machine as a box and
+    /// the ones connected now ([`crate::clients::parse`] reads it), with
+    /// `require_pairing` from the user config added.
+    async fn remote_clients(&self) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "remote.clients"}),
+            2,
+        )))
+    }
+    /// `remote.revoke` for the client with id `client`: deletes its pairings
+    /// and ends its connections. Call it only after the user confirmed.
+    async fn revoke_client(&self, _client: String) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "remote.revoke"}),
+            2,
+        )))
+    }
     /// `infra.logs` with `follow` for one infra container of `lane`: its last
     /// `tail` lines, then new ones, as `log` events until the stream is dropped.
     async fn follow_container(
@@ -1128,6 +1147,34 @@ impl DaemonApi for ClientApi {
             .await
     }
 
+    /// Calls `remote.clients` on the shared connection and adds
+    /// `require_pairing`, which `devlanes tunnel` reads from the user config
+    /// at each connection, not the daemon.
+    async fn remote_clients(&self) -> Result<Value, ApiError> {
+        let mut value = self
+            .shared_request(Method::RemoteClients, json!({}), self.context(None, false))
+            .await?;
+        let path = self.paths.home.join("config.yaml");
+        let require = tokio::task::spawn_blocking(move || require_pairing(&path))
+            .await
+            .unwrap_or(true);
+        if value.is_object() {
+            value["require_pairing"] = json!(require);
+        }
+        Ok(value)
+    }
+
+    /// Calls `remote.revoke` on its own connection, by id, so no other
+    /// client with the same name is revoked.
+    async fn revoke_client(&self, client: String) -> Result<Value, ApiError> {
+        self.oneshot(
+            Method::RemoteRevoke,
+            json!({"client": client}),
+            self.context(None, false),
+        )
+        .await
+    }
+
     /// `$DEVLANES_HOME/logs/daemon.log`.
     fn daemon_log(&self) -> Option<PathBuf> {
         Some(self.paths.logs.join("daemon.log"))
@@ -1139,9 +1186,48 @@ impl DaemonApi for ClientApi {
     }
 }
 
+/// `remote.require_pairing` of the user config at `path` as `devlanes tunnel`
+/// reads it: leniently, a missing file is the default (true), and a problem
+/// under `remote` other than in `remote.boxes` counts as true, so the page
+/// never says clients get in without pairing when they do not. Blocking.
+fn require_pairing(path: &std::path::Path) -> bool {
+    if !path.exists() {
+        return true;
+    }
+    let (config, problems) = devlanes_config::load_user_lenient(path);
+    let remote_problem = problems.iter().any(|problem| {
+        (problem.message.starts_with("remote.") || problem.message.starts_with("remote:"))
+            && !problem.message.starts_with("remote.boxes")
+    });
+    remote_problem || config.remote.require_pairing
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Read as the tunnel reads it: false only when set and valid.
+    #[test]
+    fn require_pairing_falls_to_the_safe_side() -> Result<(), Box<dyn std::error::Error>> {
+        let home = tempfile::tempdir()?;
+        let path = home.path().join("config.yaml");
+        assert!(require_pairing(&path), "no file");
+        std::fs::write(&path, "remote:\n  require_pairing: false\n")?;
+        assert!(!require_pairing(&path));
+        std::fs::write(
+            &path,
+            "remote:\n  require_pairing: false\ntui:\n  thme: dark\n",
+        )?;
+        assert!(!require_pairing(&path), "a problem elsewhere");
+        std::fs::write(&path, "remote:\n  require_pairing: nope\n")?;
+        assert!(require_pairing(&path), "an invalid value");
+        std::fs::write(
+            &path,
+            "remote:\n  require_pairing: false\n  requre_pairing: false\n",
+        )?;
+        assert!(require_pairing(&path), "a misspelt key next to it");
+        Ok(())
+    }
 
     #[test]
     fn metrics_parse_tolerates_missing_and_partial_data() {

@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox     M monitor   D daemon   B boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox   ✕ 1 fai…  Monitor  Daemon  Boxes · 3 issues
 ┌ shop@0 on devbox ────────────────────────────┐┌ checkout-api  failed ───────────────────────────────────── on devbox ┐
 │ ▾ services                                 2 ││ ! devbox is reconnecting; this is its last known state.              │
 │   ● storefront                               ││                                                                      │
@@ -40,7 +40,7 @@
  o open in browser   z zoom   / filter   B boxes   read-only: manage it on devbox                 ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 58-73 bold black on yellow, 78 bold, 79-86 dim, 90 bold, 91-97 dim, 101 bold, 102-107 dim, 108-118 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 58-73 bold black on yellow, 76-83 red, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold, 104-107 dim, 108-118 yellow
 1: 0 darkgray, 2-7 bold, 8-17 dim, 19-48 darkgray, 50-61 bold, 62-63 dim, 64-69 red, 71-107 darkgray, 109-117 dim, 119 darkgray
 2: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray
 3: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 119 darkgray

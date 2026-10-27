@@ -1,4 +1,4 @@
- devlanes  1 acme┌ keys ──────────────────────────────────────────────────────────────────────────────┐nitor   D daemon
+ devlanes  1 acme┌ keys ──────────────────────────────────────────────────────────────────────────────┐ Monitor  Daemon
  lanes  1 main  2│ glyphs                                                                             │[ ] switch lanes
 ┌ @0 · 34/38 up ─│   ● ready (check passed)  ◉ running (no ready check)  z throttled         ❄ frozen │────────────────┐
 │ ▾ services     │   · stopped, not run      ⠸ starting, stopping        … queued            ✕ failed │                │
@@ -40,7 +40,7 @@
  r restart   n ne└────────────────────────────────────────────────────────────────────────────────────┘ keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-16 bold black on yellow, 17-102 bold, 103-107 dim, 111 bold, 112-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-16 bold black on yellow, 17-102 bold, 104 bold, 105-110 dim, 113 bold, 114-118 dim
 1: 0-6 dim, 7-14 bold reversed, 16 dim, 17 bold, 19-24 dim, 102-105 bold, 106-119 dim
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16 darkgray, 17 bold, 21-22 green, 45-46 green, 73-74 dim, 93-94 blue, 102 bold, 103-119 darkgray
 3: 0 darkgray, 2-3 dim, 17 bold, 21-22 dim, 73-74 dim, 93-94 red, 102 bold, 119 darkgray

@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/units.rs
 expression: text
 ---
-" devlanes  1 acme   2 shop                     ✕ 1 failed  M monitor   D daemon "
+" devlanes  1 acme   2 shop                          ✕ 1 failed  Monitor  Daemon "
 " lanes  1 main  2 feat/login  3 fix/cache               1-9 or [ ] switch lanes "
 "┌ @0 · 1/3 up ─────────────────┐┌ worker  failed · exit 1 ─────────────────────┐"
 "│ ▾ services                 3 ││ failed    exited with code 1                 │"

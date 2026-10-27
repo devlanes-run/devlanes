@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                               starting feat/checkout: 4 of 8 ready  M monitor   D daemon   B boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                       starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 1 of 3 connected ┐
 │ ● hetzner                                                                                                                                                                            connected · ssh │
 │   link      connected since 2026-10-14 15:32                                                                                                                                                         │
@@ -60,7 +60,7 @@
  j k scroll   tab projects   esc back                                                                                                                                             ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 158 bold, 159-166 dim, 170 bold, 171-177 dim, 181 bold, 182-187 bold underlined, 188-198 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
 1: 0 darkgray, 1-7 bold, 8-180 darkgray, 181-198 dim, 199 darkgray
 2: 0 darkgray, 2-3 green, 4-10 bold, 183-191 green, 192-197 dim, 199 darkgray
 3: 0 darkgray, 4-13 dim, 199 darkgray

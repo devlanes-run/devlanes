@@ -1,6 +1,7 @@
 //! The devlanes terminal UI: a daemon client like the CLI, with a lane tree,
-//! a live terminal pane for one unit, a resource monitor, a daemon tab and a
-//! read-only view of the boxes this machine connects to.
+//! a live terminal pane for one unit, a resource monitor, a daemon tab with
+//! the clients connected to this machine as a box, and a read-only view of
+//! the boxes this machine connects to.
 //!
 //! Quitting closes connections and units keep running in the daemon, unless
 //! the user chooses to stop the project's lanes on the way out.
@@ -10,6 +11,7 @@ pub mod app;
 pub mod banner;
 pub mod blockcopy;
 pub mod boxes;
+pub mod clients;
 pub mod daemonlog;
 pub mod doctor;
 pub mod exit_summary;

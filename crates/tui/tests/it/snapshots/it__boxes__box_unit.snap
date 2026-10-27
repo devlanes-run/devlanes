@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/boxes.rs
 expression: draw(&app)?.backend()
 ---
-" devlanes  1 acme   2 shop   3 acme @hetzner              M monitor   D daemon   B boxes · 2 issues "
+" devlanes  1 acme   2 shop   3 acme @hetzner                      Monitor  Daemon  Boxes · 2 issues "
 "┌ acme@1 on hetzner ───────────────────┐┌ worker  running ───────────────────────────── on hetzner ┐"
 "│ ▾ services                         2 ││ state     running on the box                             │"
 "│   ● web                              ││ ports     default 24101  in use here by postgres (pid    │"

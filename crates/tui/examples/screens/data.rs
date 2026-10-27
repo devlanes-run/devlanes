@@ -589,6 +589,52 @@ pub fn boxes_pairing() -> Value {
     list
 }
 
+/// `remote.clients` with nobody paired or connected, pairing required.
+pub fn no_clients() -> Value {
+    json!({"items": [], "now_ms": NOW_MS, "require_pairing": true})
+}
+
+/// `remote.clients` on this machine as a box: a laptop connected over two
+/// box names, a desktop paired and away for three days, and a CI runner
+/// paired and never connected.
+pub fn clients() -> Value {
+    json!({
+        "now_ms": NOW_MS,
+        "require_pairing": true,
+        "items": [
+            {"id": "dl_cid_0b9e44d1c7a35f2e8a6d0c1b9f4e7a2d3c5b8e1f0a9d6c4b2e7f3a1d5c8b0e9f",
+             "name": "ci-runner", "paired": true, "pairings": 1,
+             "paired_at_ms": NOW_MS - 7_200_000, "last_seen_ms": null, "connections": []},
+            {"id": "dl_cid_7c41e0a9b2d85f3c6e1a4d7b0c9f2e5a8d3b6c1f4e7a0d9c2b5e8f1a4d7c0b3e",
+             "name": "desktop", "paired": true, "pairings": 1,
+             "paired_at_ms": NOW_MS - 1_209_600_000, "last_seen_ms": NOW_MS - 266_400_000,
+             "connections": []},
+            {"id": "dl_cid_3f2a9c1e5b7d40a8c6e2f1b9d3a7c5e0b8f4d2a6c1e9b7d5f3a0c8e6b4d2f1a9",
+             "name": "laptop", "paired": true, "pairings": 2,
+             "paired_at_ms": NOW_MS - 604_800_000, "last_seen_ms": NOW_MS - 8_040_000,
+             "connections": [{"address": "203.0.113.24", "since_ms": NOW_MS - 8_040_000,
+                              "mirror": {"ports": 6, "bound": 5, "skipped_lanes": 1}}]},
+        ],
+    })
+}
+
+/// [`clients`] on a box with `remote.require_pairing: false`: a tablet is
+/// connected without pairing.
+pub fn clients_unpaired() -> Value {
+    let mut list = clients();
+    list["require_pairing"] = json!(false);
+    if let Some(items) = list["items"].as_array_mut() {
+        items.push(json!({
+            "id": "dl_cid_e5d8a1c4b7f02e6d9a3c8b1f5e4d7a0c2b9f6e3d8a5c1b4f7e0d3a6c9b2f5e8d1",
+            "name": "tablet", "paired": false, "pairings": 0,
+            "paired_at_ms": null, "last_seen_ms": null,
+            "connections": [{"address": "198.51.100.7", "since_ms": NOW_MS - 300_000,
+                             "mirror": null}],
+        }));
+    }
+    list
+}
+
 /// The Docker log lines a container's pane shows, as the TUI writes them.
 pub fn container_logs(container: &str) -> Vec<u8> {
     let lines: Vec<String> = (0..6)

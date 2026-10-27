@@ -443,7 +443,8 @@ fn severity(lane: &LaneSummary) -> u8 {
 }
 
 /// ` devlanes   1 acme ●   2 shop ·` on the left, the message, then
-/// `M monitor   D daemon` on the right, and `B boxes` once a box is known.
+/// `Monitor  Daemon` on the right, and `Boxes` once a box is known, each
+/// label's first letter its key.
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let width = usize::from(area.width);
@@ -451,22 +452,21 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let badge = daemon_badge(app);
     let boxes_badge = boxes_badge(app);
     let mut buttons: Vec<(Vec<Span<'static>>, KeyCode)> = Vec::new();
-    // `B boxes` only once this machine knows a box; B works either way.
+    // `Boxes` only once this machine knows a box; B works either way.
     let boxes = (!app.boxes.hosts.is_empty() || app.view == View::Boxes).then_some((
         'B',
-        "boxes",
+        "oxes",
         View::Boxes,
     ));
     // Below 100 columns a badge's words, or a third button, would crowd out
-    // the message, so the buttons of other views drop their labels; their
-    // keys stay.
+    // the message, so the buttons of other views drop to their key letter.
     let compact = (badge.is_some() || boxes_badge.is_some() || boxes.is_some()) && width < 100;
     let views = [
-        Some(('M', "monitor", View::Monitor)),
-        Some(('D', "daemon", View::Daemon)),
+        Some(('M', "onitor", View::Monitor)),
+        Some(('D', "aemon", View::Daemon)),
         boxes,
     ];
-    for (key, label, view) in views.into_iter().flatten() {
+    for (key, rest, view) in views.into_iter().flatten() {
         let active = app.view == view;
         let label_style = if active {
             theme
@@ -475,11 +475,18 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         } else {
             theme.quiet()
         };
-        let mut spans = vec![Span::styled(key.to_string(), theme.key())];
+        // The key letter keeps the key color, underlined with the rest of an
+        // open view's label.
+        let key_style = if active {
+            theme.key().add_modifier(Modifier::UNDERLINED)
+        } else {
+            theme.key()
+        };
+        let mut spans = vec![Span::styled(key.to_string(), key_style)];
         if active || !compact {
-            spans.push(Span::styled(format!(" {label}"), label_style));
+            spans.push(Span::styled(rest.to_owned(), label_style));
         }
-        // `D daemon · 1 issue`, `D daemon · update`: a count alone said nothing.
+        // `Daemon · 1 issue`, `Daemon · update`: a count alone said nothing.
         let view_badge = match view {
             View::Daemon => badge.as_ref(),
             View::Boxes => boxes_badge.as_ref(),
@@ -490,16 +497,16 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
         }
         buttons.push((spans, KeyCode::Char(key)));
     }
-    // Three spaces between buttons, one after the last.
+    // Two spaces between buttons, one after the last.
     let buttons_width: usize = buttons.iter().map(|(s, _)| spans_width(s)).sum::<usize>()
-        + 3 * buttons.len().saturating_sub(1)
+        + 2 * buttons.len().saturating_sub(1)
         + 1;
     let mut x = area.right().saturating_sub(buttons_width as u16);
     let mut right: Vec<Span> = Vec::new();
     for (index, (spans, key)) in buttons.into_iter().enumerate() {
         if index > 0 {
-            right.push(Span::raw("   "));
-            x += 3;
+            right.push(Span::raw("  "));
+            x += 2;
         }
         let w = spans_width(&spans) as u16;
         hit(
@@ -1088,10 +1095,22 @@ fn hints(app: &App) -> Vec<Hint> {
             } else {
                 ("d", "unfold", ch('d'))
             };
+            let clients = app.daemon.clients.list.is_some();
             let tab = match app.daemon.focus {
                 crate::app::DaemonBox::Log => ("tab", "to checks", KeyCode::Tab),
-                crate::app::DaemonBox::Checks => ("tab", "to log", KeyCode::Tab),
+                crate::app::DaemonBox::Checks if clients => ("tab", "to clients", KeyCode::Tab),
+                crate::app::DaemonBox::Checks | crate::app::DaemonBox::Clients => {
+                    ("tab", "to log", KeyCode::Tab)
+                }
             };
+            if app.daemon.focus == crate::app::DaemonBox::Clients && !app.daemon.stopped {
+                let mut hints = vec![("j k", "select", ch('j'))];
+                if app.daemon.clients.current().is_some() {
+                    hints.push(("x", "revoke", ch('x')));
+                }
+                hints.extend([tab, ("R", "restart", ch('R')), ("S", "stop", ch('S'))]);
+                return hints;
+            }
             let mut hints = vec![
                 ("j k", "scroll", ch('k')),
                 follow,

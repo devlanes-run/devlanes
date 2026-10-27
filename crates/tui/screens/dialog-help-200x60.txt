@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                   ┌ keys ──────────────────────────────────────────────────────────────────────────────┐arting feat/checkout: 4 of 8 ready  M monitor   D daemon
+ devlanes  1 acme   2 billing   3 shop                   ┌ keys ──────────────────────────────────────────────────────────────────────────────┐   starting feat/checkout: 4 of 8 ready  Monitor  Daemon
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike│ glyphs                                                                             │                                 1-9 or [ ] switch lanes
 ┌ @0 · 34/38 up ───────────────────────────────┐┌ wrk-exp│   ● ready (check passed)  ◉ running (no ready check)  z throttled         ❄ frozen │────────────────────────────────────────────────────────┐
 │ ▾ services                                34 ││ failed │   · stopped, not run      ⠸ starting, stopping        … queued            ✕ failed │                                                        │
@@ -40,13 +40,13 @@
 │ ▾ tasks                                    7 ││        │                                                                                    │                                                        │
 │   ✓ migrate             done · runs at start ││        │ daemon (D)                                                                         │                                                        │
 │   ✓ seed                                done ││        │   R  S              restart, stop or start the daemon                              │                                                        │
-│   · lint                             not run ││        │   X                 clean every lane whose worktree is gone                        │                                                        │
-│   · typecheck                        not run ││        │   tab               move j k g G and c between the checks and the log              │                                                        │
+│   · lint                             not run ││        │   X  x              clean lanes whose worktree is gone; revoke a client (both ask) │                                                        │
+│   · typecheck                        not run ││        │   tab               move the keys between the checks, the clients and the log      │                                                        │
 │   · test-e2e                         not run ││        │   j k  g G          scroll the log (pauses), oldest, newest and follow             │                                                        │
 │   ✓ codegen                             done ││        │   w  /  T           level floor, text filter, targets                              │                                                        │
 │   · clean-cache                      not run ││        │   F  d              pause or follow, fold or unfold repeats                        │                                                        │
 │                                              ││        │   c                 copy mode: v select, y copy, Y whole entries as in the file    │                                                        │
-│ ▾ infra                                      ││        │   drag              select text in either box and copy it                          │                                                        │
+│ ▾ infra                                      ││        │   drag              select text in the checks or the log and copy it               │                                                        │
 │   ▾ containers                          2 up ││        │   i                 every check, or problems only                                  │                                                        │
 │     ● localstack                             ││        │                                                                                    │                                                        │
 │     ● rabbitmq                               ││        │ everywhere                                                                         │                                                        │
@@ -60,7 +60,7 @@
  r restart   n next problem   pgup scroll back   c select└────────────────────────────────────────────────────────────────────────────────────┘                                   ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57-142 bold, 179 bold, 180-187 dim, 191 bold, 192-198 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57-142 bold, 184 bold, 185-190 dim, 193 bold, 194-198 dim
 1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 37-47 dim, 50-51 dim, 52-56 yellow, 57 bold, 59-64 dim, 142 bold, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16-48 darkgray, 50-57 bold, 61-62 green, 85-86 green, 113-114 dim, 133-134 blue, 142 bold, 143-199 darkgray
 3: 0 darkgray, 2-3 dim, 44-45 dim, 47-48 darkgray, 50-56 dim, 57 bold, 61-62 dim, 113-114 dim, 133-134 red, 142 bold, 199 darkgray

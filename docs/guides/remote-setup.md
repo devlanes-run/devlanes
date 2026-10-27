@@ -66,7 +66,7 @@ devlanes remote pair
 # on the machine you connect from, run: devlanes remote connect <box> --code K7QM-3XWD
 ```
 
-The client enters it once ([first connection](#first-connection)) and connects with a token from then on, one per box name it connects by. `devlanes remote clients` lists the paired machines and the ones connected now; `devlanes remote revoke <name>` removes one and cuts its connection. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
+The client enters it once ([first connection](#first-connection)) and connects with a token from then on, one per box name it connects by. `devlanes remote clients` lists the paired machines and the ones connected now; `devlanes remote revoke <name>` removes one and cuts its connection. The daemon page of the TUI on the box (`D`) shows the same list, and `x` there revokes the selected client. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
 
 ```yaml
 remote:

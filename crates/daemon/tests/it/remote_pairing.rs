@@ -12,7 +12,7 @@ use devlanes_daemon::{Handler, Session};
 use devlanes_ipc::Frame;
 use devlanes_proto::{
     Context, Control, Method, Request, RpcError,
-    remote::{PROMPT_EVENT, TOKEN_PREFIX, is_random_id},
+    remote::{CLIENTS_EVENT, PROMPT_EVENT, TOKEN_PREFIX, is_random_id},
 };
 use devlanes_state::Store;
 use serde_json::{Value, json};
@@ -69,6 +69,8 @@ async fn listed(side: &BoxSide, id: &str) -> Option<Value> {
         .call(Method::RemoteClients, json!({}), Context::default())
         .await
         .expect("remote clients");
+    // The times are measured against the box's own clock, which it sends.
+    assert!(clients["now_ms"].as_u64().is_some(), "{clients}");
     clients["items"]
         .as_array()?
         .iter()
@@ -221,6 +223,7 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
         assert!(served.is_some(), "the box is mirrored");
 
         let id = client_id(&client);
+        let mut bus = side.h.engine.subscribe();
         let revoked = side
             .h
             .call(
@@ -232,6 +235,18 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
             .expect("revoke");
         assert_eq!(revoked["revoked"][0]["id"], id.as_str(), "{revoked}");
         assert_eq!(revoked["ended"], 1, "{revoked}");
+        // A TUI showing the clients hears of it.
+        let announced = tokio::time::timeout(SOON, async {
+            loop {
+                match bus.recv().await {
+                    Ok(event) if event.event == CLIENTS_EVENT => break,
+                    Ok(_) => {}
+                    Err(error) => panic!("the bus ended: {error}"),
+                }
+            }
+        })
+        .await;
+        assert!(announced.is_ok(), "no {CLIENTS_EVENT} after the revoke");
 
         let host = eventually(SOON, || async {
             let host = client.host().await;

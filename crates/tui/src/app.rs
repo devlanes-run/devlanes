@@ -138,6 +138,9 @@ const DAEMON_PAGE_METRICS: MetricsQuery = MetricsQuery {
 };
 /// Doctor refreshes this often while the daemon view is closed, for its badge.
 const DOCTOR_BACKGROUND_TICKS: u8 = 60;
+/// `remote.clients` refreshes this often while the daemon page is open, for
+/// last seen times; [`devlanes_proto::remote::CLIENTS_EVENT`] covers the rest.
+const CLIENTS_REFRESH_TICKS: u8 = 15;
 
 /// The daemon tab: facts, doctor data, the log tail and in-flight actions.
 #[derive(Debug, Default)]
@@ -179,6 +182,8 @@ pub struct DaemonView {
     pub busy: Option<&'static str>,
     /// Set after this TUI stopped the daemon, until one is reachable again.
     pub stopped: bool,
+    /// The clients of this machine as a box (`remote.clients`).
+    pub clients: ClientsView,
     /// Facts and log failures repeat every refresh; only a change is reported.
     last_error: Option<String>,
     ticks: u8,
@@ -186,12 +191,49 @@ pub struct DaemonView {
     background: u8,
 }
 
-/// A box of the daemon page that takes the scroll and copy keys.
+/// A box of the daemon page that takes the scroll and copy keys, top to
+/// bottom.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum DaemonBox {
     Checks,
+    /// The clients box, while it shows.
+    Clients,
     #[default]
     Log,
+}
+
+/// The daemon page's clients box: what `remote.clients` said and the client
+/// `x` revokes.
+#[derive(Debug, Default)]
+pub struct ClientsView {
+    /// The last answer; `None` before the first one and from daemons
+    /// without `remote.clients`, which hides the box.
+    pub list: Option<crate::clients::Clients>,
+    /// Index of the selected client in `list`.
+    pub selected: usize,
+    /// Seconds since `list` arrived, which its times count on from.
+    pub age: u64,
+    /// A fetch is in flight; another trigger only sets `again`.
+    fetching: bool,
+    again: bool,
+    /// Failures repeat on every fetch; only a change is reported.
+    last_error: Option<String>,
+    ticks: u8,
+}
+
+impl ClientsView {
+    /// The selected client, when the box lists any.
+    pub fn current(&self) -> Option<&crate::clients::Client> {
+        self.list.as_ref()?.items.get(self.selected)
+    }
+
+    /// The daemon's clock now: its `now_ms` plus the seconds since it answered.
+    pub fn now_ms(&self) -> Option<u64> {
+        self.list
+            .as_ref()?
+            .now_ms
+            .map(|now| now.saturating_add(self.age * 1000))
+    }
 }
 
 /// The cursor and selection of copy mode on the daemon log, a cell of the
@@ -614,6 +656,13 @@ pub enum Msg {
     },
     /// `host.list`: the boxes and what they mirror here.
     Boxes(Result<Value, ApiError>),
+    /// `remote.clients`: the clients of this machine as a box.
+    Clients(Result<Value, ApiError>),
+    /// [`Effect::RevokeClient`] is done.
+    Revoked {
+        name: String,
+        result: Result<Value, ApiError>,
+    },
     /// A spinner frame passed; sent only while something spins.
     Spin,
     /// config.yaml as read for the options page.
@@ -689,6 +738,14 @@ pub enum Effect {
     },
     /// `host.list`, answered with [`Msg::Boxes`].
     FetchBoxes,
+    /// `remote.clients`, answered with [`Msg::Clients`].
+    FetchClients,
+    /// `remote.revoke` for the client with id `id`, answered with
+    /// [`Msg::Revoked`]; only produced by a confirmed dialog.
+    RevokeClient {
+        id: String,
+        name: String,
+    },
     FetchLogs {
         generation: u64,
         lane: String,
@@ -872,6 +929,12 @@ pub struct App {
     /// The whole box the checks are drawn in, borders and facts included,
     /// where the wheel and a press go to the checks.
     pub daemon_checks_box: std::cell::Cell<ratatui::layout::Rect>,
+    /// The clients box in the last frame, borders included; empty while it
+    /// does not show.
+    pub daemon_clients_box: std::cell::Cell<ratatui::layout::Rect>,
+    /// The clients box's client rows in the last frame and the index of the
+    /// client on the first one, for clicks.
+    pub daemon_clients_rows: std::cell::Cell<(ratatui::layout::Rect, usize)>,
     pub list_offset: usize,
     pub notice: Option<Notice>,
     /// The row of a box lane whose key did nothing, and the line the pane
@@ -976,6 +1039,8 @@ impl App {
             daemon_log_view: std::cell::Cell::default(),
             daemon_checks_view: std::cell::Cell::default(),
             daemon_checks_box: std::cell::Cell::default(),
+            daemon_clients_box: std::cell::Cell::default(),
+            daemon_clients_rows: std::cell::Cell::default(),
             list_offset: 0,
             notice: None,
             refusal: None,
@@ -1703,6 +1768,23 @@ impl App {
                 self.after_change(&mut effects);
             }
             Msg::Boxes(result) => self.boxes_loaded(result, &mut effects),
+            Msg::Clients(result) => self.clients_loaded(result, &mut effects),
+            Msg::Revoked { name, result } => match result {
+                Ok(value) => {
+                    let ended = value.get("ended").and_then(Value::as_u64).unwrap_or(0);
+                    let notice = match ended {
+                        0 => format!("revoked {name}; it was not connected"),
+                        1 => format!("revoked {name} and ended its connection"),
+                        n => format!("revoked {name} and ended its {n} connections"),
+                    };
+                    self.set_notice(text::clean(&notice));
+                    self.fetch_clients(&mut effects);
+                }
+                Err(error) => {
+                    self.api_error(&format!("revoke {name}"), None, error, &mut effects);
+                    self.fetch_clients(&mut effects);
+                }
+            },
             Msg::Spin => self.spin = self.spin.wrapping_add(1),
             Msg::DaemonRestarted(result) | Msg::DaemonStarted(result) => {
                 let verb = if self.daemon.busy == Some("restarting") {
@@ -1937,10 +2019,15 @@ impl App {
         if event.event == events::PHASE {
             self.track_phase(&event.data);
         }
+        let clients = event.event == devlanes_proto::remote::CLIENTS_EVENT;
         // Link states, warnings and `remote.mirror.changed` all change what
-        // `host.list` says.
-        if event.event.starts_with("remote.") || event.event == events::RESYNC {
+        // `host.list` says; the clients of this machine as a box do not.
+        if (event.event.starts_with("remote.") && !clients) || event.event == events::RESYNC {
             self.fetch_boxes(effects);
+        }
+        // Only the daemon page shows the clients; opening it fetches them.
+        if (clients || event.event == events::RESYNC) && self.view == View::Daemon {
+            self.fetch_clients(effects);
         }
         match event.event.as_str() {
             events::RESYNC => effects.push(Effect::Refresh),
@@ -3080,10 +3167,7 @@ impl App {
         // The daemon page shows nothing of the selected project, so Tab moves
         // between its boxes there instead of switching projects.
         if self.view == View::Daemon && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
-            self.daemon.focus = match self.daemon.focus {
-                DaemonBox::Checks => DaemonBox::Log,
-                DaemonBox::Log => DaemonBox::Checks,
-            };
+            self.daemon.focus = self.next_daemon_box(key.code == KeyCode::Tab);
             return;
         }
         if let Some(attached) = self.attached.as_mut()
@@ -3179,12 +3263,14 @@ impl App {
         };
         if view == View::Daemon && self.view != View::Daemon {
             self.daemon.ticks = 0;
+            self.daemon.clients.ticks = 0;
             effects.push(Effect::ReadDaemonLog {
                 from: self.daemon.log_position,
             });
             if !self.daemon.stopped {
                 effects.push(Effect::FetchDaemon);
                 effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
+                self.fetch_clients(effects);
             }
         }
         if view == View::Monitor && self.view != View::Monitor {
@@ -3242,6 +3328,152 @@ impl App {
                 }
             }
         }
+    }
+
+    // ---- clients of this machine as a box ---------------------------------
+
+    /// Asks for `remote.clients`, once at a time, as [`App::fetch_boxes`]
+    /// asks for `host.list`.
+    fn fetch_clients(&mut self, effects: &mut Vec<Effect>) {
+        let clients = &mut self.daemon.clients;
+        if clients.fetching {
+            clients.again = true;
+            return;
+        }
+        clients.fetching = true;
+        effects.push(Effect::FetchClients);
+    }
+
+    /// Takes a `remote.clients` answer, keeping the selected client by id. A
+    /// daemon without the method hides the box; other failures keep the last
+    /// list and are reported once each.
+    fn clients_loaded(&mut self, result: Result<Value, ApiError>, effects: &mut Vec<Effect>) {
+        let clients = &mut self.daemon.clients;
+        clients.fetching = false;
+        let again = std::mem::take(&mut clients.again);
+        match result {
+            Ok(value) => {
+                clients.last_error = None;
+                let list = crate::clients::parse(&value);
+                let selected = clients.current().map(|c| (c.id.clone(), c.name.clone()));
+                clients.selected = selected
+                    .and_then(|(id, name)| {
+                        list.items
+                            .iter()
+                            .position(|c| !id.is_empty() && c.id == id)
+                            .or_else(|| list.items.iter().position(|c| c.name == name))
+                    })
+                    .unwrap_or(clients.selected)
+                    .min(list.items.len().saturating_sub(1));
+                clients.list = Some(list);
+                clients.age = 0;
+            }
+            Err(error) if crate::api::is_unsupported(&error) => {
+                clients.list = None;
+                if self.daemon.focus == DaemonBox::Clients {
+                    self.daemon.focus = DaemonBox::Log;
+                }
+            }
+            // The subscription reports a lost daemon once.
+            Err(error) if error.is_disconnect() => {}
+            Err(error) => {
+                let worded = words::api(&error);
+                let line = worded.one_line();
+                if clients.last_error.as_ref() != Some(&line) {
+                    clients.last_error = Some(line);
+                    self.report("list clients", None, worded);
+                }
+            }
+        }
+        if again {
+            self.fetch_clients(effects);
+        }
+    }
+
+    /// The box Tab (`forward`) or Shift+Tab moves the daemon page's keys to,
+    /// top to bottom and around; the clients box only while it shows.
+    fn next_daemon_box(&self, forward: bool) -> DaemonBox {
+        let mut boxes = vec![DaemonBox::Checks];
+        if self.daemon.clients.list.is_some() {
+            boxes.push(DaemonBox::Clients);
+        }
+        boxes.push(DaemonBox::Log);
+        let at = boxes
+            .iter()
+            .position(|b| *b == self.daemon.focus)
+            .unwrap_or(boxes.len() - 1);
+        let next = if forward {
+            (at + 1) % boxes.len()
+        } else {
+            (at + boxes.len() - 1) % boxes.len()
+        };
+        boxes[next]
+    }
+
+    /// Keys while the clients box has focus: `j k` and `g G` move the
+    /// selection, `x` revokes the selected client after asking. False for
+    /// every other key, which stays the page's.
+    fn clients_key(&mut self, key: KeyEvent) -> bool {
+        let count = self
+            .daemon
+            .clients
+            .list
+            .as_ref()
+            .map_or(0, |list| list.items.len());
+        let last = count.saturating_sub(1);
+        let selected = self.daemon.clients.selected.min(last);
+        self.daemon.clients.selected = match key.code {
+            KeyCode::Char('k') | KeyCode::Up => selected.saturating_sub(1),
+            KeyCode::Char('j') | KeyCode::Down => (selected + 1).min(last),
+            KeyCode::Home | KeyCode::Char('g') => 0,
+            KeyCode::End | KeyCode::Char('G') => last,
+            KeyCode::Char('x') if key.modifiers.is_empty() => {
+                self.revoke_prompt();
+                return true;
+            }
+            _ => return false,
+        };
+        true
+    }
+
+    /// Opens the confirm dialog for revoking the selected client, or says why
+    /// it has nothing to revoke.
+    fn revoke_prompt(&mut self) {
+        let Some(client) = self.daemon.clients.current().cloned() else {
+            self.set_notice("no client to revoke".into());
+            return;
+        };
+        let name = text::clean(&client.name);
+        if !client.revocable() {
+            self.set_notice(format!(
+                "{name} is connected without pairing (remote.require_pairing: false); nothing to revoke"
+            ));
+            return;
+        }
+        let short = crate::clients::short_id(&client.id);
+        let pairing = match client.pairings {
+            0 | 1 => "It deletes the client's pairing".to_owned(),
+            n => format!("It deletes the client's pairings under {n} names"),
+        };
+        let connections = match client.connections.len() {
+            0 => format!("{pairing}; {name} is not connected now."),
+            1 => format!("{pairing} and ends its connection now."),
+            n => format!("{pairing} and ends its {n} connections now."),
+        };
+        self.dialog = Some(Dialog::Confirm {
+            title: format!("revoke {name}"),
+            prompt: format!("Revoke {name} ({short})?"),
+            detail: vec![
+                connections,
+                "To connect again it needs a new code from devlanes remote pair here.".into(),
+            ],
+            action: "revoke",
+            strict: true,
+            effect: Box::new(Effect::RevokeClient {
+                id: client.id,
+                name,
+            }),
+        });
     }
 
     /// Whether the shown lane is a box's, so actions on it belong to the box.
@@ -3361,6 +3593,9 @@ impl App {
         if self.daemon.focus == DaemonBox::Checks && self.checks_key(key) {
             return;
         }
+        if self.daemon.focus == DaemonBox::Clients && self.clients_key(key) {
+            return;
+        }
         match key.code {
             // On the bottom line of the box, like copy mode in a unit's pane.
             KeyCode::Char('c') if !ctrl && shown > 0 => {
@@ -3445,6 +3680,16 @@ impl App {
                         effect: Box::new(Effect::LaneGc),
                     });
                 }
+            }
+            KeyCode::Char('x')
+                if self
+                    .daemon
+                    .clients
+                    .list
+                    .as_ref()
+                    .is_some_and(|list| !list.items.is_empty()) =>
+            {
+                self.set_notice("tab to the clients box first; x there revokes a client".into());
             }
             KeyCode::Char('s') => {
                 if self.connection == Connection::Online {
@@ -3544,6 +3789,7 @@ impl App {
             Effect::LaneGc => self.daemon.busy = Some("collecting lanes"),
             Effect::RestartDaemon => self.daemon.busy = Some("restarting"),
             Effect::StopDaemon => self.daemon.busy = Some("stopping"),
+            Effect::RevokeClient { name, .. } => self.set_notice(format!("revoking {name}…")),
             _ => {}
         }
     }
@@ -5230,6 +5476,21 @@ impl App {
             .daemon_checks_box
             .get()
             .contains((mouse.column, mouse.row).into());
+        let over_clients = self
+            .daemon_clients_box
+            .get()
+            .contains((mouse.column, mouse.row).into());
+        // A drag that began in another box goes on selecting its text there.
+        let starts_here = matches!(
+            mouse.kind,
+            MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::ScrollUp
+                | MouseEventKind::ScrollDown
+        );
+        if over_clients && starts_here {
+            self.clients_mouse(mouse);
+            return;
+        }
         let shown = self.daemon_shown().1.len();
         let max = self.daemon_log_layout(shown).max_scroll;
         match mouse.kind {
@@ -5322,6 +5583,40 @@ impl App {
                     let copy = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
                     self.daemon_copy_key(copy, page, effects);
                 }
+            }
+            _ => {}
+        }
+    }
+
+    /// The clients box: a press focuses it and selects the client under the
+    /// pointer, the wheel moves the selection. A press there also ends any
+    /// selection of text in the other boxes.
+    fn clients_mouse(&mut self, mouse: MouseEvent) {
+        let count = self
+            .daemon
+            .clients
+            .list
+            .as_ref()
+            .map_or(0, |list| list.items.len());
+        let selected = self.daemon.clients.selected;
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.daemon.focus = DaemonBox::Clients;
+                self.daemon.press = None;
+                self.daemon.checks_press = None;
+                self.daemon.copy = None;
+                self.daemon.checks_copy = None;
+                let (rows, first) = self.daemon_clients_rows.get();
+                if rows.contains((mouse.column, mouse.row).into()) {
+                    let index = first + usize::from(mouse.row - rows.y);
+                    if index < count {
+                        self.daemon.clients.selected = index;
+                    }
+                }
+            }
+            MouseEventKind::ScrollUp => self.daemon.clients.selected = selected.saturating_sub(1),
+            MouseEventKind::ScrollDown => {
+                self.daemon.clients.selected = (selected + 1).min(count.saturating_sub(1));
             }
             _ => {}
         }
@@ -5521,6 +5816,8 @@ impl App {
             effects.push(Effect::FetchMetrics(self.metrics_query()));
         }
         self.boxes.age += 1;
+        // Connected-for times count on between answers.
+        self.daemon.clients.age += 1;
         // Sync counters and retry times move without an event.
         if self.view == View::Boxes && online {
             self.boxes.ticks += 1;
@@ -5570,6 +5867,13 @@ impl App {
                 if self.connection == Connection::Online && self.daemon.busy.is_none() {
                     effects.push(Effect::FetchDaemon);
                     effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
+                }
+            }
+            self.daemon.clients.ticks += 1;
+            if self.daemon.clients.ticks >= CLIENTS_REFRESH_TICKS {
+                self.daemon.clients.ticks = 0;
+                if online && self.daemon.busy.is_none() {
+                    self.fetch_clients(effects);
                 }
             }
         }

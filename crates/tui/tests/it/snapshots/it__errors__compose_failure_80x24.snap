@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/errors.rs
 expression: screen(&buffer)
 ---
-" devlanes  acme  ‹ 2 feat/portal   ✕ start acme@1:portal…  M monitor   D daemon "
+" devlanes  acme  ‹ 2 feat/portal   ✕ start acme@1:portal fail…  Monitor  Daemon "
 "┌ @1 · 0/1 up ─────────────────┐┌ portal  stopped ─────────────────────────────┐"
 "│ ▾ services                 1 ││ ✕ Start acme@1:portal failed: docker compose │"
 "│   · portal      start failed ││   failed (exit status 1)                     │"

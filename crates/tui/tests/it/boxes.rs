@@ -294,7 +294,7 @@ async fn the_boxes_view_shows_links_errors_fixes_and_warnings() -> TestResult {
     app.update(Msg::Boxes(Ok(hosts())));
     let text = screen_text(&draw(&app)?);
     for expected in [
-        "B boxes · 2 issues",
+        "Boxes · 2 issues",
         "connected since 2026-10-14 ",
         "proxy on 443 · ports.range 24000-24999",
         "needs a sign-in · command",
@@ -346,7 +346,7 @@ async fn a_box_the_restore_could_not_reopen_shows_as_failed_with_its_error() -> 
     }]}))));
     let text = screen_text(&draw(&app)?);
     for expected in [
-        "B boxes · 1 issue",
+        "Boxes · 1 issue",
         "failed · command",
         "failed; nothing is mirrored",
         "remote.boxes.devbox.command",
