@@ -53,21 +53,18 @@ const UDP: &str = "UDP";
 const TCP: &str = "TCP";
 
 /// First port and size of the dynamic range IANA sets aside, which Windows
-/// uses for ephemeral ports; ports the fallback of an ephemeral bind tries.
-#[cfg(windows)]
+/// and macOS use for ephemeral ports; ports the fallback of an ephemeral bind
+/// tries.
 const DYNAMIC_START: u16 = 49152;
-#[cfg(windows)]
 const DYNAMIC_PORTS: u64 = 16384;
 
 /// Steps between the ports the fallback tries: odd, so 16384 steps visit every
 /// port once, and near the golden ratio of the range, so any 17 of them in a
 /// row lie hundreds of ports apart, out of a 100-port reserved block.
-#[cfg(windows)]
 const STRIDE: u64 = 10125;
 
 /// Ports of the dynamic range, from a place `seed` picks, each far from the
 /// ones before it.
-#[cfg(windows)]
 fn spread_ports(seed: u64) -> impl Iterator<Item = u16> {
     (0..DYNAMIC_PORTS).map(move |step| {
         let offset = (seed % DYNAMIC_PORTS + step * STRIDE) % DYNAMIC_PORTS;
@@ -77,7 +74,6 @@ fn spread_ports(seed: u64) -> impl Iterator<Item = u16> {
 
 /// A per-process random start for [`spread_ports`], so two daemons do not try
 /// the same ports in the same order.
-#[cfg(windows)]
 fn seed() -> u64 {
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
@@ -182,48 +178,27 @@ impl DnsServer {
             Err(error) if retry_twin(&error) => (addr, UDP, error),
             Err(error) => return Err(bind_error(addr, UDP, error)),
         };
-        #[cfg(unix)]
-        {
-            // Rejected ports stay bound until the end, so the OS cannot hand
-            // the same one out again on the next attempt.
-            let mut rejected = vec![tcp];
-            for _ in 0..EPHEMERAL_ATTEMPTS {
-                let tcp = TcpListener::bind(listen)
-                    .await
-                    .map_err(|e| bind_error(listen, TCP, e))?;
-                let addr = tcp.local_addr().map_err(|e| bind_error(listen, TCP, e))?;
-                match UdpSocket::bind(addr).await {
-                    Ok(udp) => return Ok(Self::new(udp, tcp, zone)),
-                    Err(error) if retry_twin(&error) => {
-                        last = (addr, UDP, error);
-                        rejected.push(tcp);
-                    }
-                    Err(error) => return Err(bind_error(addr, UDP, error)),
+        drop(tcp);
+        // Windows and macOS hand out ephemeral ports close to each other, so
+        // asking again lands next to the port that just failed, inside the
+        // same run of taken ports or, on Windows, reserved block (Hyper-V
+        // reserves 100 at a time); asking the OS again failed on both in CI.
+        // Ports far apart from each other get out of it. Linux binds any port
+        // of this range as well, so one fallback serves every OS.
+        for port in spread_ports(seed()).take(EPHEMERAL_ATTEMPTS) {
+            let addr = SocketAddr::new(listen.ip(), port);
+            let tcp = match TcpListener::bind(addr).await {
+                Ok(tcp) => tcp,
+                Err(error) if retry_twin(&error) => {
+                    last = (addr, TCP, error);
+                    continue;
                 }
-            }
-        }
-        #[cfg(windows)]
-        {
-            drop(tcp);
-            // Windows hands out ephemeral ports one after another, so asking
-            // it again lands next to the port that just failed, inside the
-            // same reserved block (Hyper-V reserves 100 at a time) or run of
-            // taken ports. Ports far apart from each other get out of it.
-            for port in spread_ports(seed()).take(EPHEMERAL_ATTEMPTS) {
-                let addr = SocketAddr::new(listen.ip(), port);
-                let tcp = match TcpListener::bind(addr).await {
-                    Ok(tcp) => tcp,
-                    Err(error) if retry_twin(&error) => {
-                        last = (addr, TCP, error);
-                        continue;
-                    }
-                    Err(error) => return Err(bind_error(addr, TCP, error)),
-                };
-                match UdpSocket::bind(addr).await {
-                    Ok(udp) => return Ok(Self::new(udp, tcp, zone)),
-                    Err(error) if retry_twin(&error) => last = (addr, UDP, error),
-                    Err(error) => return Err(bind_error(addr, UDP, error)),
-                }
+                Err(error) => return Err(bind_error(addr, TCP, error)),
+            };
+            match UdpSocket::bind(addr).await {
+                Ok(udp) => return Ok(Self::new(udp, tcp, zone)),
+                Err(error) if retry_twin(&error) => last = (addr, UDP, error),
+                Err(error) => return Err(bind_error(addr, UDP, error)),
             }
         }
         let (addr, protocol, source) = last;
@@ -339,7 +314,7 @@ async fn serve_tcp(mut stream: TcpStream, zone: &Zone) -> io::Result<()> {
     }
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
