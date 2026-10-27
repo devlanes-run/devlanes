@@ -178,10 +178,11 @@ async fn shutdown_stops_serving_and_frees_the_port() {
     assert!(rebound.is_ok(), "port is free after shutdown: {rebound:?}");
 }
 
-/// Windows hands out ephemeral ports of each protocol one after another. A
-/// run of UDP ports that cannot be bound right where the TCP sequence goes
-/// next, as a block Hyper-V reserves for UDP (or, here, ports this test holds),
-/// must not make binding port 0 fail: it took more tries than the bind makes.
+/// Windows and macOS hand out ephemeral ports of each protocol one after
+/// another. A run of UDP ports that cannot be bound right where the TCP
+/// sequence goes next, as a block Hyper-V reserves for UDP (or, here, ports
+/// this test holds), must not make binding port 0 fail: it took more tries
+/// than the bind makes.
 #[tokio::test]
 async fn an_ephemeral_bind_gets_past_a_run_of_unusable_udp_ports() {
     let probe = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("probe");

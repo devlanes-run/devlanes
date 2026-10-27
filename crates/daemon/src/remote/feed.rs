@@ -153,18 +153,21 @@ impl Inner {
     /// `status` entry, when the report names that entry's serial, so a tunnel
     /// whose feed a newer connection of the client replaced cannot overwrite
     /// it. A report for a client that is not listed (its feed ended
-    /// meanwhile) is dropped.
+    /// meanwhile) is dropped. Only a report that differs from the kept one
+    /// announces a change.
     pub(crate) fn remote_report(&self, value: Value) -> Result<Value, RpcError> {
         let args: ReportParams = required(value)?;
         let key = ClientKey::Id(clean(&args.id));
-        let stored = match lock(&self.remote.clients).get_mut(&key) {
+        let (stored, changed) = match lock(&self.remote.clients).get_mut(&key) {
             Some((serial, client)) if args.serial == Some(*serial) => {
-                client.mirror = Some(args.report.bounded());
-                true
+                let report = args.report.bounded();
+                let changed = client.mirror.as_ref() != Some(&report);
+                client.mirror = Some(report);
+                (true, changed)
             }
-            _ => false,
+            _ => (false, false),
         };
-        if stored {
+        if changed {
             self.clients_changed();
         }
         Ok(json!({"stored": stored}))

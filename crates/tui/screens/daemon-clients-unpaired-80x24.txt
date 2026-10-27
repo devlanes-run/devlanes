@@ -10,10 +10,10 @@
 │ok           daemon · sandbox · docker · proxy · hosts                        │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ remote clients ───────────────────────── 2 connected · 3 paired · rows 1-3/4 ┐
-│ remote.require_pairing is false: clients connect without pairing.            │
-│ · ci-runner  dl_cid_0b9e44d1  never connected       paired                   │
-│ · desktop    dl_cid_7c41e0a9  last seen 3d ago      paired                   │
-│ ● laptop     dl_cid_3f2a9c1e  connected for 2h 14m  paired under 2 names     │
+│ remote.require_pairing is false: clients connect without a code.             │
+│ ● laptop     dl_cid_3f2a9c1e  connected for 2h 14m  2 pairings               │
+│ ● tablet     dl_cid_e5d8a1c4  connected for 5m      not paired               │
+│ · ci-runner  dl_cid_0b9e44d1  last seen 1h ago      paired                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ daemon.log ────────────── following · all levels · repeats folded · 40 lines ┐
 │10:38:40 ERROR daemon::lifecycle    unit exited                 ×5 since 10:06│
@@ -36,10 +36,10 @@
 9: 0 darkgray, 1-13 green, 79 darkgray
 10: 0-79 darkgray
 11: 0 darkgray, 1-16 bold, 17-41 darkgray, 43-53 green, 54-77 dim, 79 darkgray
-12: 0 darkgray, 2-66 yellow, 79 darkgray
-13: 0 darkgray, 2-3 dim, 4-14 bold, 15-59 dim, 79 darkgray
-14: 0 darkgray, 2-3 dim, 4-14 bold, 15-59 dim, 79 darkgray
-15: 0 darkgray, 2-3 green, 4-14 bold, 15-31 dim, 54-73 dim, 79 darkgray
+12: 0 darkgray, 2-65 yellow, 79 darkgray
+13: 0 darkgray, 2-3 green, 4-14 bold, 15-31 dim, 54-63 dim, 79 darkgray
+14: 0 darkgray, 2-3 green, 4-14 bold, 15-31 dim, 54-63 yellow, 79 darkgray
+15: 0 darkgray, 2-3 dim, 4-14 bold, 15-59 dim, 79 darkgray
 16: 0-79 darkgray
 17: 0-26 bold, 27-78 bold dim, 79 bold
 18: 0 bold, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold

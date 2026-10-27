@@ -241,7 +241,7 @@ pub enum Method {
     #[serde(rename = "remote.pairing.claim")]
     RemotePairingClaim,
     /// Box side, for `devlanes daemon clients` and the TUI: paired and
-    /// connected clients by name, `{items: [{id, name, paired, pairings,
+    /// connected clients, connected ones first, then by name, `{items: [{id, name, paired, pairings,
     /// paired_at_ms, last_seen_ms, connections: [{address, since_ms,
     /// mirror}]}], now_ms}`; a client connected without pairing
     /// (`remote.require_pairing: false`) has `paired: false` and no times.

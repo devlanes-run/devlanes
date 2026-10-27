@@ -5,16 +5,16 @@
 │fail tls     no CA: no CA has been created yet                                │
 │             fix: devlanes certs trust                                        │
 │warn proxy   https on fallback port 8443: port 443 needs root                 │
-│      ┌ revoke laptop ─────────────────────────────────────────────────┐      │
-│      │ Revoke laptop (dl_cid_3f2a9c1e)?                               │      │
-│ok    │                                                                │      │
-└──────│ It deletes the client's pairings under 2 names and ends its    │──────┘
-┌ remot│ connection now.                                                │aired ┐
-│ · ci-│ To connect again it needs a new code from devlanes daemon pair │      │
-│ · des│ here.                                                          │      │
-│ ● lap│                                                                │s     │
-└──────│ y revoke   n cancel                                            │──────┘
-┌ daemo└────────────────────────────────────────────────────────────────┘lines ┐
+│     ┌ revoke laptop ──────────────────────────────────────────────────┐      │
+│     │ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
+│ok   │                                                                 │      │
+└─────│ It deletes the client's 2 pairings and ends its connection now. │──────┘
+┌ remo│ It can connect again only with a new code from                  │aired ┐
+│ ● la│ devlanes daemon pair.                                           │      │
+│ · ci│                                                                 │      │
+│ · de│ y revoke   n cancel                                             │      │
+└─────└─────────────────────────────────────────────────────────────────┘──────┘
+┌ daemon.log ────────────── following · all levels · repeats folded · 40 lines ┐
 │                                    unit=acme@0:api-auth took=1.1s            │
 │10:38:40 ERROR daemon::lifecycle    unit exited                 ×5 since 10:06│
 │                                    unit=acme@0:wrk-export code=1             │
@@ -31,16 +31,16 @@
 4: 0 darkgray, 1-13 red, 79 darkgray
 5: 0 darkgray, 1-13 red, 14-38 dim, 79 darkgray
 6: 0 darkgray, 1-13 yellow, 79 darkgray
-7: 0 darkgray, 1-6 yellow, 7-72 bold, 79 darkgray
-8: 0 darkgray, 1-6 yellow, 7 bold, 9-40 bold, 72 bold, 79 darkgray
-9: 0 darkgray, 1-6 green, 7 bold, 72 bold, 79 darkgray
-10: 0-6 darkgray, 7 bold, 72 bold, 73-79 darkgray
-11: 0-7 bold, 72 bold, 73-77 bold dim, 78-79 bold
-12: 0 bold, 2-3 dim, 4-7 bold, 72 bold, 79 bold
-13: 0 bold, 2-3 dim, 4-7 bold, 72 bold, 79 bold
-14: 0 bold, 1-3 reversed, 4-6 bold reversed, 7 bold, 72 bold, 73-78 reversed, 79 bold
-15: 0-7 bold, 9 bold, 10-16 dim, 20 bold, 21-27 dim, 72-79 bold
-16: 0 darkgray, 1-72 bold, 73-78 dim, 79 darkgray
+7: 0 darkgray, 1-5 yellow, 6-72 bold, 79 darkgray
+8: 0 darkgray, 1-5 yellow, 6 bold, 8-39 bold, 72 bold, 79 darkgray
+9: 0 darkgray, 1-5 green, 6 bold, 72 bold, 79 darkgray
+10: 0-5 darkgray, 6 bold, 72 bold, 73-79 darkgray
+11: 0-6 bold, 72 bold, 73-77 bold dim, 78-79 bold
+12: 0 bold, 1-3 reversed, 4-5 bold reversed, 6 bold, 72 bold, 73-78 reversed, 79 bold
+13: 0 bold, 2-3 dim, 4-6 bold, 72 bold, 79 bold
+14: 0 bold, 2-3 dim, 4-6 bold, 8 bold, 9-15 dim, 19 bold, 20-26 dim, 72 bold, 79 bold
+15: 0-79 bold
+16: 0 darkgray, 1-12 bold, 13-26 darkgray, 27-78 dim, 79 darkgray
 17: 0 darkgray, 37-41 dim, 42-56 blue, 58-62 dim, 79 darkgray
 18: 0 darkgray, 1-9 dim, 10-14 bold red, 65-78 dim, 79 darkgray
 19: 0 darkgray, 37-41 dim, 42-58 magenta, 60-64 dim, 79 darkgray

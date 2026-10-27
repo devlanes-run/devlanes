@@ -2094,15 +2094,20 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 }
                 None => match item.get("last_seen_ms").and_then(Value::as_u64) {
                     Some(ms) => format!("last seen {}", ago(ms)),
-                    None => "never connected".into(),
+                    None => "not seen yet".into(),
                 },
             };
             let mirror = connections
                 .iter()
                 .find_map(|connection| connection.get("mirror").filter(|m| m.is_object()))
                 .map(|mirror| {
+                    let ports = if mirror["ports"].as_u64() == Some(1) {
+                        "port"
+                    } else {
+                        "ports"
+                    };
                     format!(
-                        "mirrors {}/{} ports",
+                        "mirrors {} of {} {ports}",
                         display_value(&mirror["bound"]),
                         display_value(&mirror["ports"])
                     )
@@ -2124,7 +2129,7 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
             let state = match (paired, pairings) {
                 (false, _) => "not paired".to_owned(),
                 (true, 0 | 1) => "paired".to_owned(),
-                (true, names) => format!("paired under {names} names"),
+                (true, pairings) => format!("{pairings} pairings"),
             };
             vec![text(item, "name"), short_id(&id), state, seen, mirror]
         })

@@ -388,15 +388,23 @@ the detail graphs zoomed (z) on api-search
 
 ## daemon
 
-the daemon page (D): facts, doctor checks, no remote clients yet and the daemon log
+the daemon page (D): facts with the remote row (no clients yet, how to pair one), doctor checks and the daemon log
 
 - 200x60: [txt](daemon-200x60.txt) · [png](daemon-200x60.png) · [ansi](daemon-200x60.ansi)
 - 120x40: [txt](daemon-120x40.txt) · [png](daemon-120x40.png) · [ansi](daemon-120x40.ansi)
 - 80x24: [txt](daemon-80x24.txt) · [png](daemon-80x24.png) · [ansi](daemon-80x24.ansi)
 
+## daemon-no-clients-unpaired
+
+the daemon page with remote.require_pairing false and no clients: the remote row says pairing is off
+
+- 200x60: [txt](daemon-no-clients-unpaired-200x60.txt) · [png](daemon-no-clients-unpaired-200x60.png) · [ansi](daemon-no-clients-unpaired-200x60.ansi)
+- 120x40: [txt](daemon-no-clients-unpaired-120x40.txt) · [png](daemon-no-clients-unpaired-120x40.png) · [ansi](daemon-no-clients-unpaired-120x40.ansi)
+- 80x24: [txt](daemon-no-clients-unpaired-80x24.txt) · [png](daemon-no-clients-unpaired-80x24.png) · [ansi](daemon-no-clients-unpaired-80x24.ansi)
+
 ## daemon-clients
 
-remote clients on the daemon page, focused with Tab: one connected under two box names, two paired and away, laptop selected
+remote clients on the daemon page, focused with Tab: one connected with two pairings, two paired and away, laptop selected
 
 - 200x60: [txt](daemon-clients-200x60.txt) · [png](daemon-clients-200x60.png) · [ansi](daemon-clients-200x60.ansi)
 - 120x40: [txt](daemon-clients-120x40.txt) · [png](daemon-clients-120x40.png) · [ansi](daemon-clients-120x40.ansi)
@@ -417,6 +425,14 @@ revoking laptop (x in the clients box): asks first, y revokes
 - 200x60: [txt](dialog-revoke-200x60.txt) · [png](dialog-revoke-200x60.png) · [ansi](dialog-revoke-200x60.ansi)
 - 120x40: [txt](dialog-revoke-120x40.txt) · [png](dialog-revoke-120x40.png) · [ansi](dialog-revoke-120x40.ansi)
 - 80x24: [txt](dialog-revoke-80x24.txt) · [png](dialog-revoke-80x24.png) · [ansi](dialog-revoke-80x24.ansi)
+
+## dialog-revoke-unpaired
+
+revoking laptop with remote.require_pairing false: it can connect again at once
+
+- 200x60: [txt](dialog-revoke-unpaired-200x60.txt) · [png](dialog-revoke-unpaired-200x60.png) · [ansi](dialog-revoke-unpaired-200x60.ansi)
+- 120x40: [txt](dialog-revoke-unpaired-120x40.txt) · [png](dialog-revoke-unpaired-120x40.png) · [ansi](dialog-revoke-unpaired-120x40.ansi)
+- 80x24: [txt](dialog-revoke-unpaired-80x24.txt) · [png](dialog-revoke-unpaired-80x24.png) · [ansi](dialog-revoke-unpaired-80x24.ansi)
 
 ## daemon-targets
 

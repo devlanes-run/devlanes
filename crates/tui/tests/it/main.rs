@@ -351,7 +351,7 @@ async fn help_lists_every_key_with_this_screen_first() -> TestResult {
         "next, previous problem",
         "filter by name or +tag",
         "reverse the sort",
-        "clean lanes whose worktree is gone",
+        "clean gone lanes",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }

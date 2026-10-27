@@ -1323,6 +1323,49 @@ pub fn load_user_lenient(path: impl AsRef<Path>) -> (UserConfig, Vec<ConfigError
     }
 }
 
+/// What this machine reads from `remote` as a box for other machines, as
+/// `devlanes tunnel --stdio` applies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoxSettings {
+    /// `remote.start_daemon`.
+    pub start_daemon: bool,
+    /// `remote.require_pairing`.
+    pub require_pairing: bool,
+}
+
+/// [`BoxSettings`] from a lenient load ([`load_user_lenient`],
+/// [`parse_user_lenient`]), with the load's problems that concern this
+/// machine as a box: those under `remote`, except `remote.boxes`, which is
+/// about the boxes this machine connects to. With any such problem both
+/// settings fall to the safe side instead of their defaults: starting is off,
+/// so a mistyped `start_daemon: false` does not start a daemon the user meant
+/// to keep stopped, and pairing is required, so a mistyped `require_pairing:
+/// false` cannot let unpaired clients in.
+pub fn box_settings(
+    config: &UserConfig,
+    problems: Vec<ConfigError>,
+) -> (BoxSettings, Vec<ConfigError>) {
+    let remote: Vec<ConfigError> = problems
+        .into_iter()
+        .filter(|problem| {
+            (problem.message.starts_with("remote.") || problem.message.starts_with("remote:"))
+                && !problem.message.starts_with("remote.boxes")
+        })
+        .collect();
+    let settings = if remote.is_empty() {
+        BoxSettings {
+            start_daemon: config.remote.start_daemon,
+            require_pairing: config.remote.require_pairing,
+        }
+    } else {
+        BoxSettings {
+            start_daemon: false,
+            require_pairing: true,
+        }
+    };
+    (settings, remote)
+}
+
 /// Keys dropped before giving up and using the defaults for everything.
 const LENIENT_ATTEMPTS: usize = 64;
 

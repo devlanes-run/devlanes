@@ -1095,7 +1095,7 @@ fn hints(app: &App) -> Vec<Hint> {
             } else {
                 ("d", "unfold", ch('d'))
             };
-            let clients = app.daemon.clients.list.is_some();
+            let clients = app.daemon.clients.shown();
             let tab = match app.daemon.focus {
                 crate::app::DaemonBox::Log => ("tab", "to checks", KeyCode::Tab),
                 crate::app::DaemonBox::Checks if clients => ("tab", "to clients", KeyCode::Tab),

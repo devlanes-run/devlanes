@@ -1,16 +1,13 @@
  devlanes  1 acme   2 billing   3 shop   starting feat/c…  M  Daemon · 2 issues
-┌ daemon ───────────────────────────────────────────── 1 fail · 1 warn · i all ┐
+┌ daemon ──────────────────────────────── 1 fail · 1 warn · rows 1-5/6 · i all ┐
 │daemon    1.0.0 · pid 4242 · up 7h 38m · 41 managed                           │
 │socket    /Users/acme/.devlanes/run/daemon.sock                               │
+│remote    no clients · devlanes daemon pair prints a code                     │
 │fail tls     no CA: no CA has been created yet                                │
 │             fix: devlanes certs trust                                        │
 │warn proxy   https on fallback port 8443: port 443 needs root                 │
 │             fix: free the standard port or set proxy ports in                │
 │             ~/.devlanes/config.yaml                                          │
-│ok           daemon · sandbox · docker · proxy · hosts                        │
-└──────────────────────────────────────────────────────────────────────────────┘
-┌ remote clients ──────────────────────────────────────────────────────────────┐
-│ No client is paired or connected. devlanes daemon pair prints a code for one.│
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ daemon.log ──────────────────────────────────────────────────────────────────┐
 │── 2026-10-21 ────────────────────────────────────────────────────────────────│
@@ -20,28 +17,31 @@
 │                                                                              │
 │                                                                              │
 │                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
  j k scroll   F pause   w level   / filter   T targets    ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 59 bold, 62-67 bold underlined, 68-78 red
-1: 0 darkgray, 1-8 bold, 9-53 darkgray, 55-60 red, 61-63 dim, 64-69 yellow, 70-78 dim, 79 darkgray
+1: 0 darkgray, 1-8 bold, 9-40 darkgray, 42-47 red, 48-50 dim, 51-56 yellow, 57-78 dim, 79 darkgray
 2: 0 darkgray, 1-10 dim, 79 darkgray
 3: 0 darkgray, 1-10 dim, 79 darkgray
-4: 0 darkgray, 1-13 red, 79 darkgray
-5: 0 darkgray, 1-13 red, 14-38 dim, 79 darkgray
-6: 0 darkgray, 1-13 yellow, 79 darkgray
-7: 0 darkgray, 1-13 yellow, 14-62 dim, 79 darkgray
-8: 0 darkgray, 1-13 yellow, 14-36 dim, 79 darkgray
-9: 0 darkgray, 1-13 green, 79 darkgray
+4: 0 darkgray, 1-10 dim, 24-43 bold, 79 darkgray
+5: 0 darkgray, 1-13 red, 79 darkgray
+6: 0 darkgray, 1-13 red, 14-38 dim, 79 darkgray
+7: 0 darkgray, 1-13 yellow, 79 darkgray
+8: 0 darkgray, 1-13 yellow, 14-62 dim, 79 darkgray
+9: 0 darkgray, 1-13 yellow, 14-36 dim, 79 darkgray
 10: 0-79 darkgray
-11: 0 darkgray, 1-16 bold, 17-79 darkgray
-12: 0 darkgray, 1-35 dim, 36-55 bold, 56-78 dim, 79 darkgray
-13: 0-79 darkgray
-14: 0-79 bold
-15: 0 bold, 1-78 darkgray, 79 bold
-16: 0 bold, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold
-17: 0 bold, 37-41 dim, 42-48 magenta, 49-58 bold reversed yellow, 60-64 dim, 79 bold
+11: 0-79 bold
+12: 0 bold, 1-78 darkgray, 79 bold
+13: 0 bold, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold
+14: 0 bold, 37-41 dim, 42-48 magenta, 49-58 bold reversed yellow, 60-64 dim, 79 bold
+15: 0 bold, 79 bold
+16: 0 bold, 79 bold
+17: 0 bold, 79 bold
 18: 0 bold, 79 bold
 19: 0 bold, 79 bold
 20: 0 bold, 79 bold

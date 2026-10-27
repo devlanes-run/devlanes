@@ -639,6 +639,42 @@ fn remote_require_pairing_defaults_to_true() {
     assert!(parse_user("remote: { require_pairing: maybe }").is_err());
 }
 
+/// The box settings keep their values when `remote` is valid; a problem under
+/// `remote` other than in `remote.boxes` turns starting off and pairing on and
+/// comes back, while a problem elsewhere is not theirs.
+#[test]
+fn box_settings_fall_to_the_safe_side() {
+    let settings = |source: &str| {
+        let (config, problems) = devlanes_config::parse_user_lenient("config.yaml", source);
+        let (settings, remote) = devlanes_config::box_settings(&config, problems);
+        (
+            settings.start_daemon,
+            settings.require_pairing,
+            remote.len(),
+        )
+    };
+    assert_eq!(settings(""), (true, true, 0));
+    assert_eq!(
+        settings("remote:\n  start_daemon: false\n  require_pairing: false\n"),
+        (false, false, 0)
+    );
+    assert_eq!(
+        settings("remote:\n  require_pairing: false\ntui:\n  theme: neon\n"),
+        (true, false, 0)
+    );
+    assert_eq!(
+        settings("remote:\n  require_pairing: false\n  boxes:\n    acme:\n      command: []\n"),
+        (true, false, 0)
+    );
+    for source in [
+        "remote:\n  start_daemon: flase\n",
+        "remote:\n  require_pairing: false\n  requre_pairing: false\n",
+        "remote: 5\n",
+    ] {
+        assert_eq!(settings(source), (false, true, 1), "{source}");
+    }
+}
+
 /// Command boxes need a name `remote connect` can take and a program; the
 /// rest of the command is passed as written.
 #[test]

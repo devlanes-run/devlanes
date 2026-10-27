@@ -448,9 +448,10 @@ impl Inner {
     }
 
     /// `remote.clients`: every paired client and every client a tunnel serves
-    /// now, by name, with its connections (address, since when, and what it
-    /// mirrors: `{ports, bound, skipped_lanes}`) and how many pairings it has,
-    /// and this daemon's clock (`now_ms`) for the times.
+    /// now, connected ones first, then by name, with its connections
+    /// (address, since when, and what it mirrors: `{ports, bound,
+    /// skipped_lanes}`) and how many pairings it has, and this daemon's clock
+    /// (`now_ms`) for the times.
     pub(crate) async fn clients_method(&self) -> Result<Value, RpcError> {
         let pairings = self.store.remote_pairings().await.map_err(store_error)?;
         let live: Vec<(ClientKey, RemoteClient)> = lock(&self.remote.clients)
@@ -502,15 +503,7 @@ impl Inner {
                 })),
             }
         }
-        items.sort_by(|a, b| {
-            let key = |item: &Value| {
-                (
-                    item["name"].as_str().unwrap_or_default().to_owned(),
-                    item["id"].as_str().unwrap_or_default().to_owned(),
-                )
-            };
-            key(a).cmp(&key(b))
-        });
+        sort_clients(&mut items);
         Ok(json!({"items": items, "now_ms": now_ms()}))
     }
 
@@ -590,6 +583,21 @@ fn matching<'a>(clients: &'a [Paired], target: &str) -> Vec<&'a Paired> {
         .iter()
         .filter(|c| c.id.starts_with(target))
         .collect()
+}
+
+/// `remote.clients` items with connected clients first, then by name and id,
+/// so `daemon clients` and the TUI list them alike.
+fn sort_clients(items: &mut [Value]) {
+    items.sort_by_cached_key(|item| {
+        let away = item["connections"]
+            .as_array()
+            .is_none_or(|connections| connections.is_empty());
+        (
+            away,
+            item["name"].as_str().unwrap_or_default().to_owned(),
+            item["id"].as_str().unwrap_or_default().to_owned(),
+        )
+    });
 }
 
 /// `{id, name}` of each client, for a `client_not_found` or
@@ -819,6 +827,34 @@ mod tests {
                     last_seen: None,
                     pairings: 1,
                 },
+            ]
+        );
+    }
+
+    /// Connected clients come first, then everyone by name and id.
+    #[test]
+    fn clients_list_connected_ones_first() {
+        let item = |id: &str, name: &str, connections: usize| {
+            let connections = vec![json!({}); connections];
+            json!({"id": id, "name": name, "connections": connections})
+        };
+        let mut items = vec![
+            item("dl_cid_c", "alpha", 0),
+            item("dl_cid_b", "zulu", 1),
+            item("dl_cid_d", "beta", 0),
+            item("dl_cid_a", "mike", 2),
+            item("dl_cid_e", "alpha", 0),
+            item("", "beta", 1),
+        ];
+        sort_clients(&mut items);
+        let order: Vec<&str> = items
+            .iter()
+            .map(|item| item["id"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            order,
+            [
+                "", "dl_cid_a", "dl_cid_b", "dl_cid_c", "dl_cid_e", "dl_cid_d"
             ]
         );
     }

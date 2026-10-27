@@ -724,18 +724,25 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "daemon",
-            what: "the daemon page (D): facts, doctor checks, no remote clients yet and the daemon log",
+            what: "the daemon page (D): facts with the remote row (no clients yet, how to pair one), doctor checks and the daemon log",
             setup: |f| f.shifted('D'),
         },
         Scene {
+            name: "daemon-no-clients-unpaired",
+            what: "the daemon page with remote.require_pairing false and no clients: the remote row says pairing is off",
+            setup: |f| {
+                f.clients = data::no_clients_unpaired();
+                f.shifted('D');
+            },
+        },
+        Scene {
             name: "daemon-clients",
-            what: "remote clients on the daemon page, focused with Tab: one connected under two box names, two paired and away, laptop selected",
+            what: "remote clients on the daemon page, focused with Tab: one connected with two pairings, two paired and away, laptop selected",
             setup: |f| {
                 f.clients = data::clients();
                 f.shifted('D');
                 f.key(KeyCode::Tab);
                 f.key(KeyCode::Tab);
-                f.key(KeyCode::Char('G'));
             },
         },
         Scene {
@@ -754,7 +761,17 @@ fn scenes() -> Vec<Scene> {
                 f.shifted('D');
                 f.key(KeyCode::Tab);
                 f.key(KeyCode::Tab);
-                f.key(KeyCode::Char('G'));
+                f.key(KeyCode::Char('x'));
+            },
+        },
+        Scene {
+            name: "dialog-revoke-unpaired",
+            what: "revoking laptop with remote.require_pairing false: it can connect again at once",
+            setup: |f| {
+                f.clients = data::clients_unpaired();
+                f.shifted('D');
+                f.key(KeyCode::Tab);
+                f.key(KeyCode::Tab);
                 f.key(KeyCode::Char('x'));
             },
         },

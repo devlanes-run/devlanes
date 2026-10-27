@@ -59,8 +59,10 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
                 "pgup pgdn  wheel",
                 "scroll; older lines come from stored logs",
             ),
-            ("c  v  y", "select text, mark, copy (OSC 52)"),
-            ("drag", "select text and copy it"),
+            (
+                "c  v  y  drag",
+                "select text, mark, copy (OSC 52); a drag selects and copies",
+            ),
         ],
     ),
     (
@@ -84,13 +86,11 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
         "daemon (D)",
         &[
             ("R  S", "restart, stop or start the daemon"),
-            (
-                "X  x",
-                "clean lanes whose worktree is gone; revoke a client (both ask)",
-            ),
+            ("X", "clean gone lanes"),
+            ("x", "revoke the selected client"),
             (
                 "tab",
-                "move the keys between the checks, the clients and the log",
+                "move focus between the checks, the clients and the log",
             ),
             (
                 "j k  g G",

@@ -38,7 +38,7 @@ async fn tunnel() -> Result<u8, RpcError> {
     let result = match Paths::discover() {
         Ok(paths) => {
             let read = paths.clone();
-            let fallback = crate::user_config::TunnelSettings {
+            let fallback = devlanes_config::BoxSettings {
                 start_daemon: true,
                 require_pairing: true,
             };

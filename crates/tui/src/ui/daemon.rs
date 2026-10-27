@@ -1,8 +1,9 @@
 //! The daemon page (`D`) as monitor.md draws it: a facts box and a checks
 //! box (problems first, each with its fix, scrolling when they don't fit),
-//! the clients of this machine as a box (`remote.clients`, with `x` to
-//! revoke one), then `daemon.log` parsed into entries with level colors,
-//! folded repeats, filters and follow. Tab moves the keys between the boxes.
+//! the clients of this machine as a box once one is paired or connected
+//! (`remote.clients`, with `x` to revoke one), then `daemon.log` parsed into
+//! entries with level colors, folded repeats, filters and follow. Tab moves
+//! the focus between the boxes.
 
 use ratatui::{
     Frame,
@@ -28,6 +29,8 @@ const FACTS_WIDTH: u16 = 46;
 const PREFIX: usize = 36;
 /// The same without the target, below 60 columns.
 const NARROW_PREFIX: usize = 15;
+/// The command that prints a pairing code, in the remote facts row.
+const PAIR_COMMAND: &str = "devlanes daemon pair";
 
 /// The boxes, top to bottom.
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
@@ -90,7 +93,9 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let mut below = Rect::new(area.x, area.y + top, area.width, area.height - top);
     app.daemon_clients_box.set(Rect::default());
     app.daemon_clients_rows.set((Rect::default(), 0));
-    if let Some(list) = &app.daemon.clients.list {
+    if let Some(list) = &app.daemon.clients.list
+        && app.daemon.clients.shown()
+    {
         // The clients take what they need, up to half of what is left.
         let content = clients_rows(app, list, usize::from(area.width.saturating_sub(2)));
         let rows =
@@ -113,8 +118,7 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     }
 }
 
-/// The clients box's lines: notes on top, then one row per client, or the
-/// empty state.
+/// The clients box's lines: notes on top, then one row per client.
 struct ClientRows {
     note: Vec<Line<'static>>,
     rows: Vec<Line<'static>>,
@@ -122,10 +126,10 @@ struct ClientRows {
     counts: Vec<Span<'static>>,
 }
 
-/// `● laptop  dl_cid_3f2a9c1e  203.0.113.4  connected for 2h 14m  paired
-/// under 2 names  mirrors 5 of 6 ports`: one aligned row per client in
-/// `width` cells. Columns the width cannot hold go in this order: the
-/// address, what it mirrors, its pairing, its id.
+/// `● laptop  dl_cid_3f2a9c1e  203.0.113.4  connected for 2h 14m  2 pairings
+/// mirrors 5 of 6 ports`: one aligned row per client in `width` cells.
+/// Columns the width cannot hold go in this order: the address, what it
+/// mirrors, its pairing, its id.
 fn clients_rows(app: &App, list: &Clients, width: usize) -> ClientRows {
     let theme = &app.theme;
     let quiet = theme.quiet();
@@ -133,7 +137,7 @@ fn clients_rows(app: &App, list: &Clients, width: usize) -> ClientRows {
     if list.require_pairing == Some(false) {
         note.extend(
             text::wrap(
-                "remote.require_pairing is false: clients connect without pairing.",
+                "remote.require_pairing is false: clients connect without a code.",
                 width.saturating_sub(1).max(1),
             )
             .into_iter()
@@ -162,17 +166,6 @@ fn clients_rows(app: &App, list: &Clients, width: usize) -> ClientRows {
         }
         counts.push(Span::styled(format!("{paired} paired"), quiet));
     }
-    if list.items.is_empty() {
-        let rows = vec![fit(
-            vec![
-                Span::styled(" No client is paired or connected. ", quiet),
-                Span::styled("devlanes daemon pair", theme.key()),
-                Span::styled(" prints a code for one.", quiet),
-            ],
-            width,
-        )];
-        return ClientRows { note, rows, counts };
-    }
     let now = app.daemon.clients.now_ms();
     // Each client's cells: [name, id, address, seen, pairing, mirror].
     let cells: Vec<[(String, Style); 6]> = list
@@ -189,7 +182,8 @@ fn clients_rows(app: &App, list: &Clients, width: usize) -> ClientRows {
                 .unwrap_or(0)
         })
         .collect();
-    // A blank column and the glyph take three cells; two spaces between cells.
+    // A blank column and the glyph take three cells, and two spaces follow
+    // every cell but the last: 3 + the cells + 2 per cell - 2.
     let total = |keep: &[usize]| 1 + keep.iter().map(|c| widths[*c] + 2).sum::<usize>();
     let mut keep: Vec<usize> = (0..6).filter(|c| widths[*c] > 0).collect();
     for drop in [2, 5, 4, 1] {
@@ -260,13 +254,13 @@ fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style
     let since = |ms: u64| now.map(|now| now.saturating_sub(ms));
     let seen = match client.connected_since() {
         Some(ms) => match since(ms) {
-            Some(elapsed) => format!("connected for {}", doctor::uptime(elapsed)),
+            Some(elapsed) => format!("connected for {}", connected_for(elapsed)),
             None => "connected".to_owned(),
         },
         None if client.connected() => "connected".to_owned(),
         None => match client.last_seen_ms.and_then(since) {
             Some(elapsed) => format!("last seen {}", ago(elapsed)),
-            None => "never connected".to_owned(),
+            None => "not seen yet".to_owned(),
         },
     };
     let seen = match client.connections.len() {
@@ -276,7 +270,7 @@ fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style
     let (pairing, pairing_style) = match (client.paired, client.pairings) {
         (false, _) => ("not paired".to_owned(), theme.tone(Tone::Attention)),
         (true, 0 | 1) => ("paired".to_owned(), quiet),
-        (true, names) => (format!("paired under {names} names"), quiet),
+        (true, pairings) => (format!("{pairings} pairings"), quiet),
     };
     let mirror = client
         .mirror()
@@ -304,6 +298,19 @@ fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style
         (pairing, pairing_style),
         (mirror, quiet),
     ]
+}
+
+/// `40s`, `5m`, `2h 14m` or `3d 2h` for `elapsed` milliseconds: whole
+/// minutes under an hour, as `devlanes daemon clients` counts them.
+fn connected_for(elapsed: u64) -> String {
+    let seconds = elapsed / 1000;
+    let (days, hours, minutes) = (seconds / 86_400, seconds / 3600 % 24, seconds / 60 % 60);
+    match (days, hours, minutes) {
+        (0, 0, 0) => format!("{seconds}s"),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
 }
 
 /// `just now`, `5m ago`, `3h ago` or `2d ago` for `elapsed` milliseconds,
@@ -474,8 +481,9 @@ pub(crate) fn home_short(app: &App, path: &str) -> String {
         .unwrap_or_else(|| path.to_owned())
 }
 
-/// The facts: version and pid, uptime, socket, managed processes, clients,
-/// state. Below 100 columns, two lines.
+/// The facts: version and pid, uptime, socket, managed processes, event
+/// subscribers, the remote row while no client is paired or connected, state.
+/// Below 100 columns, the daemon and socket lines and the remote row.
 fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
     let theme = &app.theme;
     let view = &app.daemon;
@@ -487,7 +495,8 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
     let line = |label: &str, value: String, style: Style| {
         fit(
             vec![
-                Span::styled(format!("{label:<LABEL$}"), theme.quiet()),
+                // A label longer than the column still gets a space after it.
+                Span::styled(format!("{:<LABEL$}", format!("{label} ")), theme.quiet()),
                 Span::styled(clean(&value), style),
             ],
             width,
@@ -535,8 +544,11 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
         n => Some(format!("{n} {many}")),
     };
     managed.extend(count("projects", "project", "projects"));
-    let clients = count("subscribers", "event subscriber", "event subscribers");
+    let subscribers = doctor
+        .and_then(|doctor| doctor.get("subscribers"))
+        .and_then(serde_json::Value::as_u64);
     let plain = Style::new();
+    let remote = remote_lines(app, width);
     if !wide {
         let mut first = version;
         if let Some(uptime) = &uptime {
@@ -547,6 +559,7 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
         }
         lines.push(line("daemon", first, plain));
         lines.push(line("socket", socket, plain));
+        lines.extend(remote);
         return lines;
     }
     lines.push(line("version", version, plain));
@@ -560,9 +573,10 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
     if !managed.is_empty() {
         lines.push(line("managed", managed.join(" · "), plain));
     }
-    if let Some(clients) = clients {
-        lines.push(line("clients", clients, plain));
+    if let Some(subscribers) = subscribers {
+        lines.push(line("subscribers", subscribers.to_string(), plain));
     }
+    lines.extend(remote);
     if let Some(doctor) = doctor
         && doctor.get("schema_version").is_some()
     {
@@ -574,6 +588,44 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
         lines.push(line("state", state, plain));
     }
     lines
+}
+
+/// `remote    no clients · devlanes daemon pair prints a code`, or `pairing
+/// is off` with `remote.require_pairing: false`, wrapped under its value
+/// column in `width` cells: the facts row that stands in for the clients box
+/// until a client is paired or connected. Empty otherwise, and before the
+/// first `remote.clients` answer.
+fn remote_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let theme = &app.theme;
+    let Some(list) = &app.daemon.clients.list else {
+        return Vec::new();
+    };
+    if !list.items.is_empty() {
+        return Vec::new();
+    }
+    let value = if list.require_pairing == Some(false) {
+        "no clients · pairing is off".to_owned()
+    } else {
+        format!("no clients · {PAIR_COMMAND} prints a code")
+    };
+    text::wrap(&value, width.saturating_sub(LABEL).max(1))
+        .into_iter()
+        .enumerate()
+        .map(|(index, part)| {
+            let label = if index == 0 { "remote" } else { "" };
+            let mut spans = vec![Span::styled(format!("{label:<LABEL$}"), theme.quiet())];
+            // The command shows in the key color where a row holds all of it.
+            match part.split_once(PAIR_COMMAND) {
+                Some((before, after)) => spans.extend([
+                    Span::raw(before.to_owned()),
+                    Span::styled(PAIR_COMMAND, theme.key()),
+                    Span::raw(after.to_owned()),
+                ]),
+                None => spans.push(Span::raw(part)),
+            }
+            fit(spans, width)
+        })
+        .collect()
 }
 
 /// `cpu 1.2% · mem 48M` from the last `metrics` reply; `None` before one

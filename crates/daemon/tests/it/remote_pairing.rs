@@ -235,18 +235,11 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
             .expect("revoke");
         assert_eq!(revoked["revoked"][0]["id"], id.as_str(), "{revoked}");
         assert_eq!(revoked["ended"], 1, "{revoked}");
-        // A TUI showing the clients hears of it.
-        let announced = tokio::time::timeout(SOON, async {
-            loop {
-                match bus.recv().await {
-                    Ok(event) if event.event == CLIENTS_EVENT => break,
-                    Ok(_) => {}
-                    Err(error) => panic!("the bus ended: {error}"),
-                }
-            }
-        })
-        .await;
-        assert!(announced.is_ok(), "no {CLIENTS_EVENT} after the revoke");
+        // A TUI showing the clients hears of it: the revoke announces it before
+        // answering, so the event is queued when the call returns.
+        let announced =
+            std::iter::from_fn(|| bus.try_recv().ok()).any(|event| event.event == CLIENTS_EVENT);
+        assert!(announced, "no {CLIENTS_EVENT} when the revoke returned");
 
         let host = eventually(SOON, || async {
             let host = client.host().await;

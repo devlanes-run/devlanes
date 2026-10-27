@@ -25,7 +25,7 @@ pub struct Client {
     pub id: String,
     pub name: String,
     pub paired: bool,
-    /// Box names the client paired under, one pairing each.
+    /// How many pairings it has: one per box name it paired under.
     pub pairings: u64,
     pub paired_at_ms: Option<u64>,
     pub last_seen_ms: Option<u64>,

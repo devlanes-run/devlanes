@@ -5,15 +5,15 @@
 │usage     cpu 1.1% · mem 47M                ││warn proxy   https on fallback port 8443: port 443 needs root           │
 │socket    /Users/acme/.devlanes/run/daemon.…││             fix: free the standard port or set proxy ports in          │
 │managed   41 processes · 2 projects         ││             ~/.devlanes/config.yaml                                    │
-│clients   3 event subscribers               ││ok           daemon · sandbox · docker · proxy · hosts                  │
+│subscribers 3                               ││ok           daemon · sandbox · docker · proxy · hosts                  │
+│remote    no clients · devlanes daemon pair ││                                                                        │
+│          prints a code                     ││                                                                        │
 │state     schema 7 · /Users/acme/.devlanes/…││                                                                        │
 └────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────┘
-┌ remote clients ──────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ No client is paired or connected. devlanes daemon pair prints a code for one.                                        │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ daemon.log ─────────────────────────────────────────── following · all levels · repeats folded · 1 target · 40 lines ┐
 │── 2026-10-21 ────────────────────────────────────────────────────────────────────────────────────────────────────────│
 │10:35:12 WARN  daemon::gate         start window full  lane=acme@1 queued=2                             ×5 since 10:03│
+│                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -47,15 +47,15 @@
 4: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 yellow, 119 darkgray
 5: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 yellow, 60-108 dim, 119 darkgray
 6: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 yellow, 60-82 dim, 119 darkgray
-7: 0 darkgray, 1-10 dim, 45-46 darkgray, 47-59 green, 119 darkgray
-8: 0 darkgray, 1-10 dim, 45-46 darkgray, 119 darkgray
-9: 0-119 darkgray
-10: 0 darkgray, 1-16 bold, 17-119 darkgray
-11: 0 darkgray, 1-35 dim, 36-55 bold, 56-78 dim, 119 darkgray
-12: 0-119 darkgray
-13: 0-55 bold, 56-118 bold dim, 119 bold
-14: 0 bold, 1-118 darkgray, 119 bold
-15: 0 bold, 1-9 dim, 10-14 yellow, 55-60 dim, 68-74 dim, 105-118 dim, 119 bold
+7: 0 darkgray, 1-12 dim, 45-46 darkgray, 47-59 green, 119 darkgray
+8: 0 darkgray, 1-10 dim, 24-43 bold, 45-46 darkgray, 119 darkgray
+9: 0 darkgray, 1-10 dim, 45-46 darkgray, 119 darkgray
+10: 0 darkgray, 1-10 dim, 45-46 darkgray, 119 darkgray
+11: 0-119 darkgray
+12: 0-55 bold, 56-118 bold dim, 119 bold
+13: 0 bold, 1-118 darkgray, 119 bold
+14: 0 bold, 1-9 dim, 10-14 yellow, 55-60 dim, 68-74 dim, 105-118 dim, 119 bold
+15: 0 bold, 119 bold
 16: 0 bold, 119 bold
 17: 0 bold, 119 bold
 18: 0 bold, 119 bold

@@ -2441,13 +2441,19 @@ fn daemon_clients_and_revoke_name_each_client() {
     let text = render_text(Method::RemoteClients, &clients);
     assert!(
         text.contains(
-            "laptop  dl_cid_ab12ab12  paired                connected for 5m from 203.0.113.4  mirrors 3/4 ports"
+            "laptop  dl_cid_ab12ab12  paired      connected for 5m from 203.0.113.4  mirrors 3 of 4 ports"
         ),
         "{text}"
     );
     assert!(
-        text.contains("desk    dl_cid_cd34cd34  paired under 2 names  last seen 3h ago"),
+        text.contains("desk    dl_cid_cd34cd34  2 pairings  last seen 3h ago"),
         "{text}"
+    );
+    let unseen = json!({"items": [{"id": id, "name": "laptop", "paired": true, "pairings": 1,
+        "paired_at_ms": now, "last_seen_ms": null, "connections": []}]});
+    assert!(
+        render_text(Method::RemoteClients, &unseen).contains("not seen yet"),
+        "a pairing that never connected"
     );
     assert!(
         text.contains(&format!("client laptop id={id} paired=true connections=1")),

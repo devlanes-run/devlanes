@@ -14,7 +14,7 @@ use std::{
 
 use devlanes_cli::{Hint, OutputMode, Rendered, Runtime};
 use devlanes_client::Paths;
-use devlanes_config::{Applies, ConfigError, UserConfig};
+use devlanes_config::{Applies, BoxSettings, ConfigError, UserConfig};
 use devlanes_proto::RpcError;
 use serde_json::{Value, json};
 
@@ -43,44 +43,19 @@ pub async fn lenient(paths: &Paths) -> UserConfig {
         .unwrap_or_default()
 }
 
-/// What `devlanes tunnel --stdio` reads from the user config of this machine
-/// as a box.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TunnelSettings {
-    /// `remote.start_daemon`.
-    pub start_daemon: bool,
-    /// `remote.require_pairing`.
-    pub require_pairing: bool,
-}
-
-/// [`TunnelSettings`] for `devlanes tunnel --stdio`, read leniently so an
-/// unrelated bad key does not cut clients off. A problem under `remote` makes
-/// both settings fall to the safe side instead of their defaults: starting is
-/// off, so a mistyped `start_daemon: false` does not start a daemon the user
-/// meant to keep stopped, and pairing is required, so a mistyped
-/// `require_pairing: false` cannot let unpaired clients in. The second value
-/// is the stderr text for those problems, empty when there are none. Blocking.
-pub fn tunnel_settings(paths: &Paths) -> (TunnelSettings, String) {
+/// The box settings for `devlanes tunnel --stdio`, read leniently so an
+/// unrelated bad key does not cut clients off; a problem under `remote` makes
+/// them fall to the safe side ([`devlanes_config::box_settings`]). The second
+/// value is the stderr text for those problems, empty when there are none.
+/// Blocking.
+pub fn tunnel_settings(paths: &Paths) -> (BoxSettings, String) {
     tunnel_settings_of(lenient_file(&file(paths)))
 }
 
-/// [`tunnel_settings`] for a lenient load's result. Problems with the boxes
-/// this machine connects to (`remote.boxes`) do not concern it as a box.
-fn tunnel_settings_of(
-    (config, problems): (UserConfig, Vec<ConfigError>),
-) -> (TunnelSettings, String) {
-    let remote: Vec<ConfigError> = problems
-        .into_iter()
-        .filter(|problem| {
-            (problem.message.starts_with("remote.") || problem.message.starts_with("remote:"))
-                && !problem.message.starts_with("remote.boxes")
-        })
-        .collect();
+/// [`tunnel_settings`] for a lenient load's result.
+fn tunnel_settings_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (BoxSettings, String) {
+    let (settings, remote) = devlanes_config::box_settings(&config, problems);
     if remote.is_empty() {
-        let settings = TunnelSettings {
-            start_daemon: config.remote.start_daemon,
-            require_pairing: config.remote.require_pairing,
-        };
         return (settings, String::new());
     }
     let stderr = format!(
@@ -88,10 +63,6 @@ fn tunnel_settings_of(
          is not started and clients must be paired\n{}",
         warnings(&remote)
     );
-    let settings = TunnelSettings {
-        start_daemon: false,
-        require_pairing: true,
-    };
     (settings, stderr)
 }
 
@@ -531,7 +502,7 @@ mod tests {
     #[test]
     fn remote_problems_turn_starting_off_and_pairing_on() {
         let parse = |source: &str| devlanes_config::parse_user_lenient("config.yaml", source);
-        let settings = |start_daemon, require_pairing| TunnelSettings {
+        let settings = |start_daemon, require_pairing| BoxSettings {
             start_daemon,
             require_pairing,
         };
