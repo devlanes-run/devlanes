@@ -15,6 +15,7 @@ macro_rules! assert_screen {
 
 mod boxes;
 mod clients;
+mod connect;
 mod containers;
 mod daemon;
 mod errors;

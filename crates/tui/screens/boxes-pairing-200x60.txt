@@ -53,70 +53,70 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- j k scroll   tab projects   esc back                                                                                                                                             ? all keys   q quit
+┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. p shows a pairing code for one.                                                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ enter pair   d disconnect   n new box   p pairing code   j k select   esc back                                                                                                   ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
-1: 0 darkgray, 1-7 bold, 8-180 darkgray, 181-198 dim, 199 darkgray
-2: 0 darkgray, 2-3 yellow, 4-10 bold, 179-191 yellow, 192-197 dim, 199 darkgray
-3: 0 darkgray, 4-13 dim, 14-74 yellow, 199 darkgray
-4: 0 darkgray, 4-13 dim, 14-121 yellow, 199 darkgray
-5: 0 darkgray, 4-13 dim, 14-96 bold, 199 darkgray
-6: 0 darkgray, 4-13 dim, 199 darkgray
-7: 0 darkgray, 4-13 dim, 199 darkgray
-8: 0 darkgray, 4-13 dim, 14-64 yellow, 199 darkgray
-9: 0 darkgray, 4-13 dim, 14-69 yellow, 199 darkgray
-10: 0 darkgray, 4-13 dim, 14-60 green, 199 darkgray
-11: 0 darkgray, 4-89 yellow, 199 darkgray
-12: 0 darkgray, 4-104 yellow, 199 darkgray
-13: 0 darkgray, 4-152 yellow, 199 darkgray
-14: 0 darkgray, 199 darkgray
-15: 0 darkgray, 4-9 bold, 188-197 dim, 199 darkgray
-16: 0 darkgray, 4-13 dim, 14-41 yellow, 199 darkgray
-17: 0 darkgray, 4-13 dim, 14-94 yellow, 199 darkgray
-18: 0 darkgray, 4-13 dim, 199 darkgray
-19: 0 darkgray, 4-13 dim, 199 darkgray
-20: 0 darkgray, 4-13 dim, 199 darkgray
-21: 0 darkgray, 199 darkgray
-22: 0 darkgray, 2-3 yellow, 4-6 bold, 177-191 yellow, 192-197 dim, 199 darkgray
-23: 0 darkgray, 4-13 dim, 14-76 yellow, 199 darkgray
-24: 0 darkgray, 4-13 dim, 14-68 yellow, 199 darkgray
-25: 0 darkgray, 4-13 dim, 14-40 bold, 199 darkgray
-26: 0 darkgray, 199 darkgray
-27: 0 darkgray, 199 darkgray
-28: 0 darkgray, 199 darkgray
-29: 0 darkgray, 199 darkgray
-30: 0 darkgray, 199 darkgray
-31: 0 darkgray, 199 darkgray
-32: 0 darkgray, 199 darkgray
-33: 0 darkgray, 199 darkgray
-34: 0 darkgray, 199 darkgray
-35: 0 darkgray, 199 darkgray
-36: 0 darkgray, 199 darkgray
-37: 0 darkgray, 199 darkgray
-38: 0 darkgray, 199 darkgray
-39: 0 darkgray, 199 darkgray
-40: 0 darkgray, 199 darkgray
-41: 0 darkgray, 199 darkgray
-42: 0 darkgray, 199 darkgray
-43: 0 darkgray, 199 darkgray
-44: 0 darkgray, 199 darkgray
-45: 0 darkgray, 199 darkgray
-46: 0 darkgray, 199 darkgray
-47: 0 darkgray, 199 darkgray
-48: 0 darkgray, 199 darkgray
-49: 0 darkgray, 199 darkgray
-50: 0 darkgray, 199 darkgray
-51: 0 darkgray, 199 darkgray
-52: 0 darkgray, 199 darkgray
-53: 0 darkgray, 199 darkgray
-54: 0 darkgray, 199 darkgray
-55: 0 darkgray, 199 darkgray
-56: 0 darkgray, 199 darkgray
-57: 0 darkgray, 199 darkgray
+1: 0-180 bold, 181-198 bold dim, 199 bold
+2: 0 bold, 2-3 reversed, 4-10 bold reversed, 11-197 reversed, 199 bold
+3: 0 bold, 4-13 dim, 14-74 yellow, 199 bold
+4: 0 bold, 4-13 dim, 14-121 yellow, 199 bold
+5: 0 bold, 4-13 dim, 14-96 bold, 199 bold
+6: 0 bold, 4-13 dim, 199 bold
+7: 0 bold, 4-13 dim, 199 bold
+8: 0 bold, 4-13 dim, 14-64 yellow, 199 bold
+9: 0 bold, 4-13 dim, 14-69 yellow, 199 bold
+10: 0 bold, 4-13 dim, 14-60 green, 199 bold
+11: 0 bold, 4-89 yellow, 199 bold
+12: 0 bold, 4-104 yellow, 199 bold
+13: 0 bold, 4-152 yellow, 199 bold
+14: 0 bold, 199 bold
+15: 0 bold, 4-9 bold, 188-197 dim, 199 bold
+16: 0 bold, 4-13 dim, 14-41 yellow, 199 bold
+17: 0 bold, 4-13 dim, 14-94 yellow, 199 bold
+18: 0 bold, 4-13 dim, 199 bold
+19: 0 bold, 4-13 dim, 199 bold
+20: 0 bold, 4-13 dim, 199 bold
+21: 0 bold, 199 bold
+22: 0 bold, 2-3 yellow, 4-6 bold, 177-191 yellow, 192-197 dim, 199 bold
+23: 0 bold, 4-13 dim, 14-76 yellow, 199 bold
+24: 0 bold, 4-13 dim, 14-68 yellow, 199 bold
+25: 0 bold, 4-13 dim, 14-40 bold, 199 bold
+26: 0 bold, 199 bold
+27: 0 bold, 199 bold
+28: 0 bold, 199 bold
+29: 0 bold, 199 bold
+30: 0 bold, 199 bold
+31: 0 bold, 199 bold
+32: 0 bold, 199 bold
+33: 0 bold, 199 bold
+34: 0 bold, 199 bold
+35: 0 bold, 199 bold
+36: 0 bold, 199 bold
+37: 0 bold, 199 bold
+38: 0 bold, 199 bold
+39: 0 bold, 199 bold
+40: 0 bold, 199 bold
+41: 0 bold, 199 bold
+42: 0 bold, 199 bold
+43: 0 bold, 199 bold
+44: 0 bold, 199 bold
+45: 0 bold, 199 bold
+46: 0 bold, 199 bold
+47: 0 bold, 199 bold
+48: 0 bold, 199 bold
+49: 0 bold, 199 bold
+50: 0 bold, 199 bold
+51: 0 bold, 199 bold
+52: 0 bold, 199 bold
+53: 0 bold, 199 bold
+54: 0 bold, 199 bold
+55: 0-199 bold
+56: 0 darkgray, 1-14 bold, 15-199 darkgray
+57: 0 darkgray, 2-68 dim, 199 darkgray
 58: 0-199 darkgray
-59: 1-3 bold, 4-13 dim, 14-16 bold, 17-28 dim, 29-31 bold, 32-39 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1-5 bold, 6-13 dim, 14 bold, 15-28 dim, 29 bold, 30-40 dim, 41 bold, 42-57 dim, 58-60 bold, 61-70 dim, 71-73 bold, 74-81 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

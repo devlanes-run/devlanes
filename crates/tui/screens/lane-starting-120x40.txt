@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                   starting feat/checkout: tasks  Monitor  Daemon
+ devlanes  1 acme   2 billing   3 shop                            starting feat/checkout: tasks  Monitor  Daemon  Boxes
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                            1-9 or [ ] switch lanes
 ┌ @1 · 4/8 up · starting ──────────────────────┐┌ feat/checkout @1 · starting · 4 of 8 ready ──────────────────────────┐
 │ ▾ services                                 6 ││   ✓ infra      done                                                  │
@@ -40,7 +40,7 @@
  x stop lane   r restart lane   p start with profiles   C clean lane   [ ] switch lane            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 104 bold, 105-110 dim, 113 bold, 114-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 8-9 dim, 10-13 red, 15-35 bold reversed, 37-47 dim, 50-51 dim, 52-67 yellow, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 darkgray, 1-24 bold reversed, 25-48 darkgray, 50-62 bold, 66-68 dim, 77-91 dim, 93-119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 52-53 green, 65-68 dim, 119 darkgray

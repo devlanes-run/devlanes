@@ -1,6 +1,6 @@
 # devlanes-tui
 
-The terminal UI opened by bare `devlanes`, `devlanes ui` and `devlanes start` on a terminal. It is a daemon client like the CLI: it talks to the daemon through `devlanes-client` and shows each project's lanes with a live terminal for the selected unit, a resource monitor, a daemon page with the clients paired with or connected to this machine as a box, and the lanes of connected boxes, read-only, with a boxes page (`B`).
+The terminal UI opened by bare `devlanes`, `devlanes ui` and `devlanes start` on a terminal. It is a daemon client like the CLI: it talks to the daemon through `devlanes-client` and shows each project's lanes with a live terminal for the selected unit, a resource monitor, a daemon page, and the lanes of connected boxes, read-only. Its boxes view (`B`) connects, signs in to, pairs with and disconnects boxes, shows a pairing code for another machine, and lists and revokes the clients of this machine as a box.
 
 ## Usage
 
@@ -32,7 +32,8 @@ async fn main() -> Result<(), devlanes_tui::Error> {
 - `drive` runs the event loop on any ratatui backend with any event stream.
 - `app::App::update` turns messages into effects without I/O; `ui::render` draws an `App`.
 - `tree` builds a lane's rows; `monitor` sorts, filters and groups the monitor's rows; `graph` draws braille graphs, sparklines and meters in the load gradient.
-- `boxes` reads `host.list` and turns each connected box's registry into read-only lanes (`acme@1 @hetzner` in project `acme @hetzner`).
+- `boxes` reads `host.list` and turns each connected box's registry into read-only lanes (`acme@1 @hetzner` in project `acme @hetzner`); `clients` reads `remote.clients`.
+- `connect` holds the boxes view's modals: the new connection form, the prompts of an attached `connect` and the pairing code.
 
 ## Config example
 
@@ -53,6 +54,8 @@ Quitting closes connections; units, tasks and containers keep running in the dae
 Once the TUI closed, `run_with` and `run_start` print the devlanes banner, the lane shown last with its state, whether the daemon still runs and how many lanes it runs, and `devlanes stop --lane <lane>` while that lane runs (`exit_summary`). The daemon gets one second to answer `status` for it.
 
 Moving through the list watches a unit without resizing its PTY. Enter, a double click or a click in the pane types into it: the stream reopens as the PTY's owner and the pane takes over its size, as zoom does. Esc or Ctrl+] ends typing; inside full-screen programs only Ctrl+], which crossterm may report as Ctrl+5. Units on pipes (`pty: false` from the daemon) are never resized.
+
+Connecting a box from the boxes view sends `connect` on a connection of its own and stays attached while the link settles, so the daemon relays ssh's prompts and the box's pairing code to the TUI, as it does to `remote connect`. Answers go back as binary frames on that connection. Esc drops it, and the daemon keeps the connection to the box. A box reached by a command is first saved as `remote.boxes.<name>.command` in `config.yaml`, with the same edit `devlanes config set` makes.
 
 While lanes start, the terminal tab's progress bar shows ready services over the services starting, across every starting lane. A failed start shows red for three seconds. Quitting, a panic or `terminal.progress: never` clears it; see `devlanes-term` for where it is drawn.
 

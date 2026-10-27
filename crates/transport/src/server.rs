@@ -218,16 +218,21 @@ impl Drop for OpenGuard<'_> {
     }
 }
 
-/// Runs one box-side session over `io` until the client leaves.
-///
-/// The first stream must be the control stream. Returns `Ok(())` when the
-/// client closes the session; per-stream tasks are aborted on return.
-pub async fn serve<S>(io: S, services: BoxServices, options: ServeOptions) -> Result<(), ServeError>
-where
-    S: Duplex + 'static,
-{
-    let timing = options.timing;
-    let mut mux = mux::server(Box::new(io));
+/// What a client's control stream opened with: its hello.
+struct Hello {
+    client: String,
+    features: Vec<String>,
+    client_id: String,
+    client_name: String,
+    token: Option<wire::Secret>,
+}
+
+/// Accepts the control stream and reads the client's hello. A client of
+/// another protocol revision is told so and fails the session.
+async fn hello(
+    mux: &mut MuxServer,
+    timing: Timing,
+) -> Result<(Channel<MuxStream>, Hello), ServeError> {
     let first = timeout(timing.handshake_timeout, mux.accept())
         .await
         .map_err(|_| ServeError::HandshakeTimeout)?
@@ -270,6 +275,63 @@ where
         .await;
         return Err(ServeError::IncompatibleClient { protocol, client });
     }
+    let hello = Hello {
+        client,
+        features,
+        client_id,
+        client_name,
+        token,
+    };
+    Ok((control, hello))
+}
+
+/// Turns the client on `io` away before the welcome, telling it `message`,
+/// for a box that takes no connections (`remote.allow_connections: false`).
+/// Nothing else about the box is sent, and no service is asked anything.
+/// Returns once the client was told, or failed to read the refusal.
+pub async fn refuse<S>(io: S, message: String, timing: Timing) -> Result<(), ServeError>
+where
+    S: Duplex + 'static,
+{
+    let mut mux = mux::server(Box::new(io));
+    let (mut control, hello) = hello(&mut mux, timing).await?;
+    tracing::debug!(client = %hello.client, id = %hello.client_id, "refused a client: connections are off");
+    let refused = BoxControl::Refused { message };
+    timeout(timing.handshake_timeout, async {
+        wire::send(&mut control, &refused).await?;
+        control.close().await
+    })
+    .await
+    .map_err(|_| ServeError::ClientTimeout)??;
+    // The client closes the session once it read the refusal; dropping the
+    // mux before then could cut the frame off on its way out.
+    let _ = timeout(timing.handshake_timeout, async {
+        while mux.accept().await.is_some() {}
+    })
+    .await;
+    Ok(())
+}
+
+/// Runs one box-side session over `io` until the client leaves.
+///
+/// The first stream must be the control stream. Returns `Ok(())` when the
+/// client closes the session; per-stream tasks are aborted on return.
+pub async fn serve<S>(io: S, services: BoxServices, options: ServeOptions) -> Result<(), ServeError>
+where
+    S: Duplex + 'static,
+{
+    let timing = options.timing;
+    let mut mux = mux::server(Box::new(io));
+    let (
+        mut control,
+        Hello {
+            client,
+            features,
+            client_id,
+            client_name,
+            token,
+        },
+    ) = hello(&mut mux, timing).await?;
     let peer = ClientInfo {
         features: negotiate(&options.features, &features),
         label: client,

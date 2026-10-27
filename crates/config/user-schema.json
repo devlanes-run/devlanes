@@ -543,6 +543,9 @@
       "description": "Settings for `devlanes remote connect`: boxes reached by a command, and how this machine serves clients when it is a box.",
       "examples": [
         {
+          "allow_connections": false
+        },
+        {
           "start_daemon": false
         },
         {
@@ -566,6 +569,16 @@
       ],
       "markdownDescription": "Settings for `devlanes remote connect`: boxes reached by a command, and how this machine serves clients when it is a box.",
       "properties": {
+        "allow_connections": {
+          "default": true,
+          "description": "Let other machines connect to this one with `devlanes remote connect`. Defaults to true. When false, every client is turned away and `devlanes daemon pair` gives no codes. Connecting from this machine to a box still works. Clients already connected stay until they disconnect. An invalid value counts as false.",
+          "examples": [
+            true,
+            false
+          ],
+          "markdownDescription": "Let other machines connect to this one with `devlanes remote connect`. Defaults to true. When false, every client is turned away and `devlanes daemon pair` gives no codes. Connecting from this machine to a box still works. Clients already connected stay until they disconnect. An invalid value counts as false.",
+          "type": "boolean"
+        },
         "boxes": {
           "additionalProperties": {
             "$ref": "#/$defs/RemoteBox",
@@ -1483,12 +1496,16 @@
     "remote": {
       "$ref": "#/$defs/RemoteConfig",
       "default": {
+        "allow_connections": true,
         "boxes": {},
         "require_pairing": true,
         "start_daemon": true
       },
       "description": "Settings for `devlanes remote connect`: boxes reached by a command, and how this machine serves clients when it is a box.",
       "examples": [
+        {
+          "allow_connections": false
+        },
         {
           "start_daemon": false
         },

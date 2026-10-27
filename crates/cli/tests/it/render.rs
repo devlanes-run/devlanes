@@ -2412,6 +2412,59 @@ fn daemon_pair_prints_the_code_in_every_mode() {
     );
 }
 
+/// A box that takes no connections names itself in the client's error, and
+/// `daemon pair` on such a box says why it gives no code and how to allow
+/// connections.
+#[test]
+fn connections_off_reads_plainly_on_both_ends() {
+    let error = |code: &str, data: serde_json::Value| {
+        runtime(OutputMode::Human)
+            .reporter()
+            .error(&RpcError::new(code, data, 4), None)
+            .stderr
+    };
+    let client = error(
+        "remote_failed",
+        json!({"host": "hetzner",
+               "message": "the box does not accept connections because remote.allow_connections is false there"}),
+    );
+    assert!(
+        client.contains(
+            "box hetzner does not accept connections because remote.allow_connections is false there"
+        ),
+        "{client}"
+    );
+    let other = error(
+        "remote_failed",
+        json!({"host": "hetzner", "message": "connecting to the box timed out"}),
+    );
+    assert!(
+        other.contains("remote hetzner: connecting to the box timed out"),
+        "{other}"
+    );
+    let pair = error(
+        "connections_off",
+        json!({"message": "this machine does not accept connections because remote.allow_connections is false",
+               "invalid": false}),
+    );
+    assert!(
+        pair.contains(
+            "this machine does not accept connections because remote.allow_connections is false"
+        ),
+        "{pair}"
+    );
+    assert!(
+        pair.contains("devlanes config set remote.allow_connections true"),
+        "{pair}"
+    );
+    let invalid = error(
+        "connections_off",
+        json!({"message": "this machine does not accept connections because the remote settings in its user config are invalid",
+               "invalid": true}),
+    );
+    assert!(invalid.contains("devlanes doctor"), "{invalid}");
+}
+
 /// `daemon clients` lists each client with a short id that `revoke` takes,
 /// whether it is paired, its connection or when it was last seen, and what
 /// it mirrors; `revoke` says whom it revoked.

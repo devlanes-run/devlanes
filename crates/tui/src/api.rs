@@ -459,6 +459,25 @@ impl AttachSession {
     }
 }
 
+/// What an attached `connect` delivers: its events (link states, warnings
+/// and prompts), then how it ended.
+#[derive(Debug)]
+pub enum ConnectEvent {
+    Event(Event),
+    /// The daemon's answer: the box's status, or why the link stopped or
+    /// waits for a person. Nothing follows it.
+    Done(Result<Value, ApiError>),
+}
+
+/// A `connect` the TUI stays attached to, so the daemon asks it the link's
+/// prompts. Dropping it detaches; the connection stays in the daemon.
+pub struct ConnectSession {
+    pub events: mpsc::Receiver<ConnectEvent>,
+    /// `(stream_id, answer)` for a `remote.prompt`, sent as a binary frame
+    /// on the same connection; an empty answer cancels the prompt.
+    pub answers: mpsc::Sender<(u64, Bytes)>,
+}
+
 /// Everything the TUI asks of the daemon. Context.actor is always human here.
 #[async_trait]
 pub trait DaemonApi: Send + Sync {
@@ -508,9 +527,36 @@ pub trait DaemonApi: Send + Sync {
     async fn host_list(&self) -> Result<Value, ApiError> {
         Ok(json!({"items": []}))
     }
+    /// `connect` for `host`, attached: the daemon relays the link's prompts
+    /// to this connection until it is dropped.
+    async fn connect(&self, _host: String) -> Result<ConnectSession, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "connect"}),
+            2,
+        )))
+    }
+    /// `disconnect` for `host`: unmirrors it and forgets to connect it again.
+    /// Call it only after the user confirmed.
+    async fn disconnect(&self, _host: String) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "disconnect"}),
+            2,
+        )))
+    }
+    /// `remote.pair`: a one-time code for another machine, with `valid_ms`,
+    /// how long it is valid from now, added.
+    async fn pair(&self) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "remote.pair"}),
+            2,
+        )))
+    }
     /// `remote.clients`: the clients paired with this machine as a box and
     /// the ones connected now ([`crate::clients::parse`] reads it), with
-    /// `require_pairing` from the user config added.
+    /// `require_pairing` and `allow_connections` from the user config added.
     async fn remote_clients(&self) -> Result<Value, ApiError> {
         Err(ApiError::Rpc(RpcError::new(
             "unknown_method",
@@ -1147,19 +1193,100 @@ impl DaemonApi for ClientApi {
             .await
     }
 
+    /// Calls `connect` on its own connection and pumps its events; prompt
+    /// answers go back on that connection, whose stream ids they name.
+    async fn connect(&self, host: String) -> Result<ConnectSession, ApiError> {
+        let mut client = self.fresh().await?;
+        let id = client
+            .begin_request(
+                Method::Connect,
+                json!({"host": host}),
+                self.context(None, false),
+            )
+            .await?;
+        let (events_tx, events) = mpsc::channel(EVENT_QUEUE);
+        let (answers, mut answers_rx) = mpsc::channel::<(u64, Bytes)>(INPUT_QUEUE);
+        tokio::spawn(async move {
+            let done = loop {
+                // Both receives are cancel-safe, so losing the race drops nothing.
+                tokio::select! {
+                    answer = answers_rx.recv() => match answer {
+                        Some((stream_id, data)) => {
+                            if let Err(error) = client.send_bytes(stream_id, data).await {
+                                break Err(ApiError::from(error));
+                            }
+                        }
+                        // The TUI detached; dropping the connection is the detach.
+                        None => return,
+                    },
+                    frame = client.next_frame() => match frame {
+                        Ok(Frame::Control(Control::Event(event))) => {
+                            if events_tx.send(ConnectEvent::Event(event)).await.is_err() {
+                                return;
+                            }
+                        }
+                        Ok(Frame::Control(Control::Response(response))) if response.id == id => {
+                            break match response.result {
+                                Outcome::Ok { data } => Ok(data),
+                                Outcome::Error { error } => Err(ApiError::Rpc(error)),
+                            };
+                        }
+                        Ok(_) => {}
+                        Err(error) => break Err(ApiError::from(error)),
+                    },
+                }
+            };
+            if events_tx.send(ConnectEvent::Done(done)).await.is_err() {
+                // The TUI detached first; there is nobody left to tell.
+            }
+        });
+        Ok(ConnectSession { events, answers })
+    }
+
+    /// Calls `disconnect` on its own connection; it waits for the box's
+    /// listeners to close.
+    async fn disconnect(&self, host: String) -> Result<Value, ApiError> {
+        self.oneshot(
+            Method::Disconnect,
+            json!({"host": host}),
+            self.context(None, false),
+        )
+        .await
+    }
+
+    /// Calls `remote.pair` on the shared connection and adds `valid_ms`:
+    /// the daemon runs on this machine, so its expiry time is on this clock.
+    async fn pair(&self) -> Result<Value, ApiError> {
+        let mut value = self
+            .shared_request(Method::RemotePair, json!({}), self.context(None, false))
+            .await?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        if let Some(expires) = value.get("expires_at_ms").and_then(Value::as_u64) {
+            value["valid_ms"] = json!(expires.saturating_sub(now));
+        }
+        Ok(value)
+    }
+
     /// Calls `remote.clients` on the shared connection and adds
-    /// `require_pairing`, which `devlanes tunnel` reads from the user config
-    /// at each connection, not the daemon.
+    /// `require_pairing` and `allow_connections`, which `devlanes tunnel`
+    /// reads from the user config at each connection, not the daemon.
     async fn remote_clients(&self) -> Result<Value, ApiError> {
         let mut value = self
             .shared_request(Method::RemoteClients, json!({}), self.context(None, false))
             .await?;
         let path = self.paths.home.join("config.yaml");
-        let require = tokio::task::spawn_blocking(move || require_pairing(&path))
+        let settings = tokio::task::spawn_blocking(move || box_settings(&path))
             .await
-            .unwrap_or(true);
+            .unwrap_or(devlanes_config::BoxSettings {
+                allow_connections: false,
+                start_daemon: false,
+                require_pairing: true,
+            });
         if value.is_object() {
-            value["require_pairing"] = json!(require);
+            value["require_pairing"] = json!(settings.require_pairing);
+            value["allow_connections"] = json!(settings.allow_connections);
         }
         Ok(value)
     }
@@ -1186,45 +1313,51 @@ impl DaemonApi for ClientApi {
     }
 }
 
-/// `remote.require_pairing` of the user config at `path` as `devlanes tunnel`
-/// reads it ([`devlanes_config::box_settings`]): a missing file is the
-/// default (true), and a problem under `remote` or with the whole file counts
-/// as true, so the page
-/// never says clients get in without pairing when they do not. Blocking.
-fn require_pairing(path: &std::path::Path) -> bool {
-    if !path.exists() {
-        return true;
-    }
-    let (config, problems) = devlanes_config::load_user_lenient(path);
-    devlanes_config::box_settings(&config, problems)
-        .0
-        .require_pairing
+/// The box settings of the user config at `path` as `devlanes tunnel` reads
+/// them ([`devlanes_config::box_settings`]): a missing file is every default,
+/// and a problem under `remote` or with the whole file falls to the safe
+/// side, so the view never says clients get in, or get in without pairing,
+/// when they do not. Blocking.
+fn box_settings(path: &std::path::Path) -> devlanes_config::BoxSettings {
+    let (config, problems) = if path.exists() {
+        devlanes_config::load_user_lenient(path)
+    } else {
+        (devlanes_config::UserConfig::default(), Vec::new())
+    };
+    devlanes_config::box_settings(&config, problems).0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Read as the tunnel reads it: false only when set and valid.
+    /// Read as the tunnel reads them: pairing is off and connections are
+    /// off only when set so and valid.
     #[test]
-    fn require_pairing_falls_to_the_safe_side() -> Result<(), Box<dyn std::error::Error>> {
+    fn box_settings_fall_to_the_safe_side() -> Result<(), Box<dyn std::error::Error>> {
         let home = tempfile::tempdir()?;
         let path = home.path().join("config.yaml");
-        assert!(require_pairing(&path), "no file");
+        let read = |path: &std::path::Path| {
+            let settings = box_settings(path);
+            (settings.require_pairing, settings.allow_connections)
+        };
+        assert_eq!(read(&path), (true, true), "no file");
         std::fs::write(&path, "remote:\n  require_pairing: false\n")?;
-        assert!(!require_pairing(&path));
+        assert_eq!(read(&path), (false, true));
         std::fs::write(
             &path,
             "remote:\n  require_pairing: false\ntui:\n  thme: dark\n",
         )?;
-        assert!(!require_pairing(&path), "a problem elsewhere");
+        assert_eq!(read(&path), (false, true), "a problem elsewhere");
         std::fs::write(&path, "remote:\n  require_pairing: nope\n")?;
-        assert!(require_pairing(&path), "an invalid value");
+        assert_eq!(read(&path), (true, false), "an invalid value");
         std::fs::write(
             &path,
             "remote:\n  require_pairing: false\n  requre_pairing: false\n",
         )?;
-        assert!(require_pairing(&path), "a misspelt key next to it");
+        assert_eq!(read(&path), (true, false), "a misspelt key next to it");
+        std::fs::write(&path, "remote:\n  allow_connections: false\n")?;
+        assert_eq!(read(&path), (true, false));
         Ok(())
     }
 

@@ -1,12 +1,13 @@
 //! Machines connected to this one as a box, as `remote.clients` lists them:
-//! the clients paired with it and the ones a tunnel serves now. The daemon
-//! page shows them and revokes a pairing.
+//! the clients paired with it and the ones a tunnel serves now. The boxes
+//! view shows them and revokes a pairing.
 
 use serde::Deserialize;
 use serde_json::Value;
 
-/// What `remote.clients` answered, with `remote.require_pairing` from this
-/// machine's user config when the TUI could read it.
+/// What `remote.clients` answered, with `remote.require_pairing` and
+/// `remote.allow_connections` from this machine's user config when the TUI
+/// could read it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct Clients {
@@ -15,6 +16,8 @@ pub struct Clients {
     pub now_ms: Option<u64>,
     /// `false` when tunnels here serve clients without pairing.
     pub require_pairing: Option<bool>,
+    /// `false` when tunnels here turn every client away.
+    pub allow_connections: Option<bool>,
 }
 
 /// One client by id: its pairings and its live connections.
@@ -77,6 +80,7 @@ pub fn parse(value: &Value) -> Clients {
         items,
         now_ms: value.get("now_ms").and_then(Value::as_u64),
         require_pairing: value.get("require_pairing").and_then(Value::as_bool),
+        allow_connections: value.get("allow_connections").and_then(Value::as_bool),
     }
 }
 
@@ -146,6 +150,7 @@ mod tests {
         assert_eq!(parsed.items.len(), 2);
         assert_eq!(parsed.now_ms, Some(5_000));
         assert_eq!(parsed.require_pairing, None);
+        assert_eq!(parsed.allow_connections, None);
         assert_eq!((parsed.connected(), parsed.paired()), (2, 1));
         let laptop = &parsed.items[0];
         assert!(laptop.revocable());

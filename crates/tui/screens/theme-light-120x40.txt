@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                            starting feat/checkout: 4 of 8 ready  Monitor  Daemon
+ devlanes  1 acme   2 billing   3 shop                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                            1-9 or [ ] switch lanes
 ┌ @0 · 34/38 up ───────────────────────────────┐┌ Gateway API  api-gateway · ready ──────────── watching · enter types ┐
 │ ▾ services                                34 ││ > @acme/api-gateway@2.4.0 dev                                        │
@@ -40,7 +40,7 @@
  enter type into it   x stop   r restart   o open in browser   c select text   z zoom             ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1 bold #9a6b00, 2 bold #9e6900, 3 bold #a16700, 4 bold #a56500, 5 bold #a86200, 6 bold #ac6000, 7 bold #af5e00, 8 bold #b35c00, 10-17 bold #1a1917 on #f5c542, 20-21 dim, 22-28 #a35a00, 32-33 dim, 34-37 #1d7a46, 104 bold, 105-110 dim, 113 bold, 114-118 dim
+0: 1 bold #9a6b00, 2 bold #9e6900, 3 bold #a16700, 4 bold #a56500, 5 bold #a86200, 6 bold #ac6000, 7 bold #af5e00, 8 bold #b35c00, 10-17 bold #1a1917 on #f5c542, 20-21 dim, 22-28 #a35a00, 32-33 dim, 34-37 #1d7a46, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 7 bold on #f7e7b4, 8-9 bold dim on #f7e7b4, 10-13 bold #c0392b on #f7e7b4, 14 bold on #f7e7b4, 16-17 dim, 18-34 #a35a00, 37-47 dim, 50-51 dim, 52-67 #a35a00, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 #8f8a7f, 2-3 bold, 4-14 dim, 16-48 #8f8a7f, 50-60 bold, 61-76 dim, 77-81 #1d7a46, 83-94 #8f8a7f, 96-117 dim, 119 #8f8a7f
 3: 0 #8f8a7f, 2-3 dim, 44-45 dim, 47-48 #8f8a7f, 50-78 dim, 119 #8f8a7f

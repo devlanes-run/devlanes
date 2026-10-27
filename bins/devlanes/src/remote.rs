@@ -26,8 +26,9 @@ pub async fn run(action: Action) -> Result<u8, RpcError> {
 /// stdout carries only mux frames; failures go straight to stderr (whatever the
 /// output mode, since a JSON error on stdout would corrupt the pipe), and the
 /// client's SSH transport returns that text as the connection error. The user
-/// config's `remote.start_daemon` decides whether a stopped daemon is started,
-/// and `remote.require_pairing` whether clients must be paired (see
+/// config's `remote.allow_connections` decides whether clients are served at
+/// all, `remote.start_daemon` whether a stopped daemon is started, and
+/// `remote.require_pairing` whether clients must be paired (see
 /// [`crate::user_config::tunnel_settings`]).
 ///
 /// On Windows sshd runs it through cmd.exe or PowerShell with pipes for
@@ -39,6 +40,7 @@ async fn tunnel() -> Result<u8, RpcError> {
         Ok(paths) => {
             let read = paths.clone();
             let fallback = devlanes_config::BoxSettings {
+                allow_connections: true,
                 start_daemon: true,
                 require_pairing: true,
             };
@@ -47,9 +49,19 @@ async fn tunnel() -> Result<u8, RpcError> {
                     .await
                     .unwrap_or((fallback, String::new()));
             eprint!("{problems}");
-            devlanes_tunnel::run_stdio(paths, settings.start_daemon, settings.require_pairing)
-                .await
-                .map_err(|error| (error.to_string(), error.exit_code()))
+            let served =
+                match crate::user_config::connections_refusal(&settings, !problems.is_empty()) {
+                    Some(reason) => devlanes_tunnel::refuse_stdio(reason).await,
+                    None => {
+                        devlanes_tunnel::run_stdio(
+                            paths,
+                            settings.start_daemon,
+                            settings.require_pairing,
+                        )
+                        .await
+                    }
+                };
+            served.map_err(|error| (error.to_string(), error.exit_code()))
         }
         Err(error) => Err((error.to_string(), 1)),
     };

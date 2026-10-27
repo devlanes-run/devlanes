@@ -52,6 +52,32 @@ struct Fake {
     boxes: serde_json::Value,
     /// What `remote.clients` answers: nobody until a scene pairs some.
     clients: serde_json::Value,
+    /// What `remote.pair` answers: a code unless a scene says otherwise.
+    pairing: Result<serde_json::Value, RpcError>,
+    /// What an attached `connect` to a box sends: the link connecting
+    /// unless a scene has it ask something or fail.
+    connect: fn(u64, &str) -> Vec<Msg>,
+}
+
+/// A `remote.state` or `remote.prompt` event of the `connect` `generation`.
+fn connect_event(generation: u64, name: &str, data: serde_json::Value) -> Msg {
+    Msg::ConnectEvent {
+        generation,
+        event: Event {
+            seq: 0,
+            event: name.into(),
+            data,
+        },
+    }
+}
+
+/// The link to `host` connecting, as `connect` reports it first.
+fn connecting(generation: u64, host: &str) -> Vec<Msg> {
+    vec![connect_event(
+        generation,
+        devlanes_proto::remote::STATE_EVENT,
+        json!({"host": host, "state": "connecting", "attempt": 1}),
+    )]
 }
 
 impl Fake {
@@ -67,6 +93,8 @@ impl Fake {
             lanes: data::lanes,
             boxes: json!({"items": []}),
             clients: data::no_clients(),
+            pairing: Ok(data::pair_code()),
+            connect: connecting,
         };
         for effect in fake.app.start() {
             fake.answer(effect);
@@ -239,6 +267,12 @@ impl Fake {
             }],
             Effect::FetchBoxes => vec![Msg::Boxes(Ok(self.boxes.clone()))],
             Effect::FetchClients => vec![Msg::Clients(Ok(self.clients.clone()))],
+            Effect::Pair => vec![Msg::Paired(self.pairing.clone().map_err(ApiError::Rpc))],
+            Effect::Connect { generation, host } => (self.connect)(generation, &host),
+            Effect::SaveBoxCommand { generation, .. } => vec![Msg::BoxSaved {
+                generation,
+                result: Ok(()),
+            }],
             // The file starts as USER_CONFIG; a save writes its changes over it.
             Effect::Settings(request) => {
                 let mut source = USER_CONFIG.to_owned();
@@ -531,8 +565,39 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "boxes",
-            what: "the boxes view (B): link state, errors and fixes, box info, proxy port, skipped lanes and hostnames, syncs, warnings",
+            what: "the boxes view (B): link state, errors and fixes, box info, proxy port, skipped lanes and hostnames, syncs, warnings; this machine's clients below; hetzner selected, so enter disconnects",
             setup: |f| {
+                f.clients = data::clients();
+                f.connect_boxes();
+                f.shifted('B');
+            },
+        },
+        Scene {
+            name: "boxes-clients",
+            what: "the boxes view with the selection on this machine's clients (j past the boxes): laptop selected, x revokes",
+            setup: |f| {
+                f.clients = data::clients();
+                f.connect_boxes();
+                f.shifted('B');
+                for _ in 0..3 {
+                    f.key(KeyCode::Char('j'));
+                }
+            },
+        },
+        Scene {
+            name: "boxes-clients-unpaired",
+            what: "this machine's clients with remote.require_pairing false: the note, and a tablet connected without pairing",
+            setup: |f| {
+                f.clients = data::clients_unpaired();
+                f.connect_boxes();
+                f.shifted('B');
+            },
+        },
+        Scene {
+            name: "boxes-connections-off",
+            what: "the boxes view with remote.allow_connections false: this machine says connections are off",
+            setup: |f| {
+                f.clients = data::no_clients_off();
                 f.connect_boxes();
                 f.shifted('B');
             },
@@ -555,8 +620,148 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "boxes-empty",
-            what: "the boxes view before any box connected",
+            what: "the boxes view before any box connected or any client paired: n connects a box, p shows a pairing code",
             setup: |f| f.shifted('B'),
+        },
+        Scene {
+            name: "dialog-connect",
+            what: "a new connection (n): a box reached by its SSH name",
+            setup: |f| {
+                f.shifted('B');
+                f.key(KeyCode::Char('n'));
+                f.type_text("hetzner");
+            },
+        },
+        Scene {
+            name: "dialog-connect-command",
+            what: "a new connection reached by a command (shift+tab, space, tab, tab): saved as remote.boxes.acme.command",
+            setup: |f| {
+                f.shifted('B');
+                f.key(KeyCode::Char('n'));
+                f.type_text("acme");
+                f.send(Msg::Key(KeyEvent::new(
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                )));
+                f.key(KeyCode::Char(' '));
+                f.key(KeyCode::Tab);
+                f.key(KeyCode::Tab);
+                f.type_text("docker exec -i acme devlanes tunnel --stdio");
+            },
+        },
+        Scene {
+            name: "dialog-connect-code",
+            what: "connecting to a box that asks for a pairing code: the code typed so far",
+            setup: |f| {
+                f.connect = |generation, host| {
+                    let mut msgs = connecting(generation, host);
+                    msgs.push(connect_event(
+                        generation,
+                        devlanes_proto::remote::PROMPT_EVENT,
+                        json!({"host": host, "kind": "code", "stream_id": 3,
+                               "prompt": "pairing code from `devlanes daemon pair` on the box:"}),
+                    ));
+                    msgs
+                };
+                f.shifted('B');
+                f.key(KeyCode::Char('n'));
+                f.type_text("hetzner");
+                f.key(KeyCode::Enter);
+                f.type_text("K7QM-3X");
+            },
+        },
+        Scene {
+            name: "dialog-connect-secret",
+            what: "enter on gpu, which needs a sign-in: ssh asks for the key's passphrase, typed masked",
+            setup: |f| {
+                f.connect = |generation, host| {
+                    let mut msgs = connecting(generation, host);
+                    msgs.push(connect_event(
+                        generation,
+                        devlanes_proto::remote::PROMPT_EVENT,
+                        json!({"host": host, "kind": "secret", "stream_id": 4,
+                               "prompt": "Enter passphrase for key '/Users/acme/.ssh/id_ed25519': "}),
+                    ));
+                    msgs
+                };
+                f.connect_boxes();
+                f.shifted('B');
+                f.key(KeyCode::Char('j'));
+                f.key(KeyCode::Char('j'));
+                f.key(KeyCode::Enter);
+                f.type_text("hunter2");
+            },
+        },
+        Scene {
+            name: "dialog-connect-waiting",
+            what: "enter on devbox while it reconnects: the link's state and its last error",
+            setup: |f| {
+                f.connect = |generation, host| {
+                    vec![connect_event(
+                        generation,
+                        devlanes_proto::remote::STATE_EVENT,
+                        json!({"host": host, "state": "reconnecting", "retry_in_ms": 4_000,
+                               "error": "docker exec exited 1: Error response from daemon: container devbox is not running"}),
+                    )]
+                };
+                f.connect_boxes();
+                f.shifted('B');
+                f.key(KeyCode::Char('j'));
+                f.key(KeyCode::Enter);
+            },
+        },
+        Scene {
+            name: "dialog-connect-refused",
+            what: "connecting to a box with remote.allow_connections false: the box's reason, enter tries again",
+            setup: |f| {
+                f.connect = |generation, host| {
+                    vec![Msg::ConnectDone {
+                        generation,
+                        result: Err(ApiError::Rpc(data::connect_refused(host))),
+                    }]
+                };
+                f.shifted('B');
+                f.key(KeyCode::Char('n'));
+                f.type_text("hetzner");
+                f.key(KeyCode::Enter);
+            },
+        },
+        Scene {
+            name: "dialog-disconnect",
+            what: "enter on a connected box: asks before disconnecting it",
+            setup: |f| {
+                f.connect_boxes();
+                f.shifted('B');
+                f.key(KeyCode::Enter);
+            },
+        },
+        Scene {
+            name: "dialog-pair",
+            what: "a pairing code for another machine (p): the code, its countdown and what to run there",
+            setup: |f| {
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+                f.send(Msg::Tick);
+            },
+        },
+        Scene {
+            name: "dialog-pair-paused",
+            what: "p while 5 wrong codes keep pairing paused: how long it stays paused",
+            setup: |f| {
+                f.pairing = Err(data::pairing_paused());
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+            },
+        },
+        Scene {
+            name: "dialog-pair-off",
+            what: "p with remote.allow_connections false: no code, and how to turn connections on",
+            setup: |f| {
+                f.pairing = Err(data::connections_off());
+                f.clients = data::no_clients_off();
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+            },
         },
         Scene {
             name: "unit-failed",
@@ -724,43 +929,19 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "daemon",
-            what: "the daemon page (D): facts with the remote row (no clients yet, how to pair one), doctor checks and the daemon log",
+            what: "the daemon page (D): facts, doctor checks and the daemon log",
             setup: |f| f.shifted('D'),
         },
         Scene {
-            name: "daemon-no-clients-unpaired",
-            what: "the daemon page with remote.require_pairing false and no clients: the remote row says pairing is off",
-            setup: |f| {
-                f.clients = data::no_clients_unpaired();
-                f.shifted('D');
-            },
-        },
-        Scene {
-            name: "daemon-clients",
-            what: "remote clients on the daemon page, focused with Tab: one connected with two pairings, two paired and away, laptop selected",
-            setup: |f| {
-                f.clients = data::clients();
-                f.shifted('D');
-                f.key(KeyCode::Tab);
-                f.key(KeyCode::Tab);
-            },
-        },
-        Scene {
-            name: "daemon-clients-unpaired",
-            what: "remote clients with remote.require_pairing false: the note, and a tablet connected without pairing",
-            setup: |f| {
-                f.clients = data::clients_unpaired();
-                f.shifted('D');
-            },
-        },
-        Scene {
             name: "dialog-revoke",
-            what: "revoking laptop (x in the clients box): asks first, y revokes",
+            what: "revoking laptop (x on a client in the boxes view): asks first, y revokes",
             setup: |f| {
                 f.clients = data::clients();
-                f.shifted('D');
-                f.key(KeyCode::Tab);
-                f.key(KeyCode::Tab);
+                f.connect_boxes();
+                f.shifted('B');
+                for _ in 0..3 {
+                    f.key(KeyCode::Char('j'));
+                }
                 f.key(KeyCode::Char('x'));
             },
         },
@@ -769,9 +950,7 @@ fn scenes() -> Vec<Scene> {
             what: "revoking laptop with remote.require_pairing false: it can reconnect without a code",
             setup: |f| {
                 f.clients = data::clients_unpaired();
-                f.shifted('D');
-                f.key(KeyCode::Tab);
-                f.key(KeyCode::Tab);
+                f.shifted('B');
                 f.key(KeyCode::Char('x'));
             },
         },

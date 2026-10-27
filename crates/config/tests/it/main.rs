@@ -639,61 +639,89 @@ fn remote_require_pairing_defaults_to_true() {
     assert!(parse_user("remote: { require_pairing: maybe }").is_err());
 }
 
+/// Other machines may connect unless `remote.allow_connections` is false.
+#[test]
+fn remote_allow_connections_defaults_to_true() {
+    assert!(parse_user("{}").expect("defaults").remote.allow_connections);
+    assert!(
+        !parse_user("remote: { allow_connections: false }")
+            .expect("off")
+            .remote
+            .allow_connections
+    );
+    assert!(parse_user("remote: { allow_connections: maybe }").is_err());
+}
+
 /// The box settings keep their values when `remote` is valid; a problem under
-/// `remote` other than in `remote.boxes` turns starting off and pairing on and
-/// comes back, while a problem elsewhere is not theirs.
+/// `remote` other than in `remote.boxes` refuses connections, turns starting
+/// off and pairing on and comes back, while a problem elsewhere is not theirs.
 #[test]
 fn box_settings_fall_to_the_safe_side() {
     let settings = |source: &str| {
         let (config, problems) = devlanes_config::parse_user_lenient("config.yaml", source);
         let (settings, remote) = devlanes_config::box_settings(&config, problems);
         (
+            settings.allow_connections,
             settings.start_daemon,
             settings.require_pairing,
             remote.len(),
         )
     };
-    assert_eq!(settings(""), (true, true, 0));
+    assert_eq!(settings(""), (true, true, true, 0));
     assert_eq!(
         settings("remote:\n  start_daemon: false\n  require_pairing: false\n"),
-        (false, false, 0)
+        (true, false, false, 0)
+    );
+    assert_eq!(
+        settings("remote:\n  allow_connections: false\n"),
+        (false, true, true, 0)
     );
     assert_eq!(
         settings("remote:\n  require_pairing: false\ntui:\n  theme: neon\n"),
-        (true, false, 0)
+        (true, true, false, 0)
     );
     assert_eq!(
         settings("remote:\n  require_pairing: false\n  boxes:\n    acme:\n      command: []\n"),
-        (true, false, 0)
+        (true, true, false, 0)
     );
     for source in [
         "remote:\n  start_daemon: flase\n",
         "remote:\n  require_pairing: false\n  requre_pairing: false\n",
+        "remote:\n  allow_conections: false\n",
         "remote: 5\n",
     ] {
-        assert_eq!(settings(source), (false, true, 1), "{source}");
+        assert_eq!(settings(source), (false, false, true, 1), "{source}");
     }
 }
 
 /// A config that loses every setting at once (not YAML, or too many problems
-/// to keep any) also loses `remote`, so starting is off and pairing on.
+/// to keep any) also loses `remote`, so connections are refused, starting is
+/// off and pairing on.
 #[test]
 fn box_settings_fall_to_the_safe_side_when_the_whole_file_fails() {
     let settings = |source: &str| {
         let (config, problems) = devlanes_config::parse_user_lenient("config.yaml", source);
         let (settings, remote) = devlanes_config::box_settings(&config, problems);
-        (settings.start_daemon, settings.require_pairing, remote)
+        (
+            settings.allow_connections,
+            settings.start_daemon,
+            settings.require_pairing,
+            remote,
+        )
     };
-    let (start, pairing, remote) =
+    let (allow, start, pairing, remote) =
         settings("remote:\n  start_daemon: false\n  require_pairing: [\n");
-    assert_eq!((start, pairing, remote.len()), (false, true, 1));
+    assert_eq!(
+        (allow, start, pairing, remote.len()),
+        (false, false, true, 1)
+    );
 
     let mut many = String::from("remote:\n  start_daemon: true\n  require_pairing: false\n");
     for key in 0..80 {
         many.push_str(&format!("unknown_{key}: 1\n"));
     }
-    let (start, pairing, remote) = settings(&many);
-    assert_eq!((start, pairing), (false, true));
+    let (allow, start, pairing, remote) = settings(&many);
+    assert_eq!((allow, start, pairing), (false, false, true));
     let messages: Vec<&str> = remote.iter().map(|p| p.message.as_str()).collect();
     assert_eq!(
         messages,

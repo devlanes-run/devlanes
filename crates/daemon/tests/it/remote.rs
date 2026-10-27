@@ -148,23 +148,30 @@ impl BoxSide {
         ports: &str,
         dialer: Option<Arc<dyn Dialer>>,
     ) -> Self {
-        Self::start_full(tmp, name, ports, dialer, None, true).await
+        Self::start_full(tmp, name, ports, dialer, None, true, None).await
     }
 
     /// [`BoxSide::start`] for a box whose proxy reports `https_port`.
     async fn start_on_https(tmp: &Temp, name: &str, ports: &str, https_port: u16) -> Self {
-        Self::start_full(tmp, name, ports, None, Some(https_port), true).await
+        Self::start_full(tmp, name, ports, None, Some(https_port), true, None).await
     }
 
     /// [`BoxSide::start`] for a box with `remote.require_pairing: false`,
     /// which serves every client.
     async fn start_unpaired(tmp: &Temp, name: &str, ports: &str) -> Self {
-        Self::start_full(tmp, name, ports, None, None, false).await
+        Self::start_full(tmp, name, ports, None, None, false, None).await
+    }
+
+    /// [`BoxSide::start`] for a box with `remote.allow_connections: false`,
+    /// whose tunnel turns every client away with `reason`.
+    async fn start_refusing(tmp: &Temp, name: &str, ports: &str, reason: &str) -> Self {
+        Self::start_full(tmp, name, ports, None, None, true, Some(reason.to_owned())).await
     }
 
     /// [`BoxSide::start_with`], with the HTTPS port the box reports in the
     /// handshake when `https_port` is set, serving only paired clients with
-    /// `require_pairing`, as a box does by default.
+    /// `require_pairing`, as a box does by default, or no client at all with
+    /// a `refusal`.
     async fn start_full(
         tmp: &Temp,
         name: &str,
@@ -172,6 +179,7 @@ impl BoxSide {
         dialer: Option<Arc<dyn Dialer>>,
         https_port: Option<u16>,
         require_pairing: bool,
+        refusal: Option<String>,
     ) -> Self {
         let h = engine_with(&tmp.path.join(name), ports, None, None).await;
         let home = tmp.path.join(format!("{name}-srv"));
@@ -214,8 +222,15 @@ impl BoxSide {
             while let Some(stream) = listener.accept().await {
                 let services = services.clone();
                 let options = serve_options.clone();
+                let refusal = refusal.clone();
                 tokio::spawn(async move {
-                    let _ = serve(stream, services, options).await;
+                    // As `devlanes tunnel --stdio` does with connections off.
+                    let _ = match refusal {
+                        Some(reason) => {
+                            devlanes_transport::refuse(stream, reason, options.timing).await
+                        }
+                        None => serve(stream, services, options).await,
+                    };
                 });
             }
         });

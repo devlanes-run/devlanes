@@ -591,12 +591,48 @@ pub fn boxes_pairing() -> Value {
 
 /// `remote.clients` with nobody paired or connected, pairing required.
 pub fn no_clients() -> Value {
-    json!({"items": [], "now_ms": NOW_MS, "require_pairing": true})
+    json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": true})
 }
 
-/// [`no_clients`] on a box with `remote.require_pairing: false`.
-pub fn no_clients_unpaired() -> Value {
-    json!({"items": [], "now_ms": NOW_MS, "require_pairing": false})
+/// [`no_clients`] on a machine with `remote.allow_connections: false`.
+pub fn no_clients_off() -> Value {
+    json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": false})
+}
+
+/// `remote.pair`'s code, valid for 10 minutes less two seconds, as the TUI
+/// reads it.
+pub fn pair_code() -> Value {
+    json!({"code": "K7QM-3XWD", "expires_at_ms": NOW_MS + 598_000, "valid_ms": 598_000})
+}
+
+/// `remote.pair` while 5 wrong codes keep pairing paused for 4m 12s more.
+pub fn pairing_paused() -> RpcError {
+    RpcError::new(
+        "pairing_paused",
+        json!({"message": "the box paused pairing after 5 wrong codes in 10 minutes",
+               "retry_after_ms": 252_000}),
+        4,
+    )
+}
+
+/// `remote.pair` on a machine with `remote.allow_connections: false`.
+pub fn connections_off() -> RpcError {
+    RpcError::new(
+        "connections_off",
+        json!({"message": "this machine does not accept connections because remote.allow_connections is false",
+               "invalid": false}),
+        4,
+    )
+}
+
+/// `connect`'s answer for a box with `remote.allow_connections: false`.
+pub fn connect_refused(host: &str) -> RpcError {
+    RpcError::new(
+        "remote_failed",
+        json!({"host": host,
+               "message": "the box does not accept connections because remote.allow_connections is false there"}),
+        4,
+    )
 }
 
 /// `remote.clients` on this machine as a box, connected clients first as the
@@ -606,6 +642,7 @@ pub fn clients() -> Value {
     json!({
         "now_ms": NOW_MS,
         "require_pairing": true,
+        "allow_connections": true,
         "items": [
             {"id": "dl_cid_3f2a9c1e5b7d40a8c6e2f1b9d3a7c5e0b8f4d2a6c1e9b7d5f3a0c8e6b4d2f1a9",
              "name": "laptop", "paired": true, "pairings": 2,

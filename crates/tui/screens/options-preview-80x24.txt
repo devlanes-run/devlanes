@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   starting feat/checko…  Monitor  Daemon
+ devlanes  1 acme   2 billing   3 shop   starting feat/checkout: 4 of…  M  D  B
  lanes  1 main  2 feat/checkout 4/8  +2 more            1-9 or [ ] switch lanes
 ┌ ┌ options ● 1 unsaved change ───────────────────── ~/.devlanes/config.yaml ┐─┐
 │ │ 1 general   2 network   3 startup   4 storage                            │ │
@@ -24,7 +24,7 @@
  r restart   n next problem   pgup scroll back            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1 bold #9a6b00, 2 bold #9e6900, 3 bold #a16700, 4 bold #a56500, 5 bold #a86200, 6 bold #ac6000, 7 bold #af5e00, 8 bold #b35c00, 10-17 bold #1a1917 on #f5c542, 20-21 dim, 22-28 #a35a00, 32-33 dim, 34-37 #1d7a46, 64 bold, 65-70 dim, 73 bold, 74-78 dim
+0: 1 bold #9a6b00, 2 bold #9e6900, 3 bold #a16700, 4 bold #a56500, 5 bold #a86200, 6 bold #ac6000, 7 bold #af5e00, 8 bold #b35c00, 10-17 bold #1a1917 on #f5c542, 20-21 dim, 22-28 #a35a00, 32-33 dim, 34-37 #1d7a46, 72 bold, 75 bold, 78 bold
 1: 0-6 dim, 7 bold on #f7e7b4, 8-9 bold dim on #f7e7b4, 10-13 bold #c0392b on #f7e7b4, 14 bold on #f7e7b4, 16-17 dim, 18-34 #a35a00, 36-43 dim, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
 2: 0 #8f8a7f, 2-11 #9a6b00, 12-30 #a35a00, 31-51 #9a6b00, 52-76 dim #9a6b00, 77 #9a6b00, 78-79 #8f8a7f
 3: 0 #8f8a7f, 2 #9a6b00, 4-5 dim, 6-12 bold underlined #9a6b00, 16-17 dim, 28-29 dim, 40-41 dim, 77 #9a6b00, 79 #8f8a7f

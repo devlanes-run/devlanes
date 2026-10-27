@@ -1,4 +1,4 @@
- devlanes  1 acme┌ keys ──────────────────────────────────────────────────────────────────────────────┐ Monitor  Daemon
+ devlanes  1 acme┌ keys ──────────────────────────────────────────────────────────────────────────────┐r  Daemon  Boxes
  lanes  1 main  2│ glyphs                                                                             │[ ] switch lanes
 ┌ @0 · 34/38 up ─│   ● ready (check passed)  ◉ running (no ready check)  z throttled         ❄ frozen │────────────────┐
 │ ▾ services     │   · stopped, not run      ⠸ starting, stopping        … queued            ✕ failed │                │
@@ -27,20 +27,20 @@
 │   ◉ wrk-ledger │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy              │                │
 │   ● stub-stripe│                                                                                    │ob_8130 took=170│
 │   ● stub-s3    │ monitor (M)                                                                        │                │
-│   ◆ stub-twilio│   < >               sort by the previous, next column                              │ob_8131 took=183│
-│   ● stub-sendgr│   i                 reverse the sort                                               │                │
-│   ● stub-segmen│   /  e              filter, grouped or flat                                        │ob_8132 took=196│
-│   ● stub-auth0 │   h l               fold, unfold a lane                                            │                │
-│   ● proxy-edge │   z                 detail graphs fill the page                                    │ob_8133 took=209│
-│   ● docs-search│   c  m              cpu or memory in the big box (memory: a square per core)       │                │
-│   ● ml-ranker  │   wheel             scroll the table; the selection stays                          │                │
-│   ⠋ ml-embed   │   s  x  r           start, stop, restart the unit or lane                          │                │
+│   ◆ stub-twilio│   < >  i            sort by the previous, next column, or reverse the sort         │ob_8131 took=183│
+│   ● stub-sendgr│   /  e              filter, grouped or flat                                        │                │
+│   ● stub-segmen│   h l               fold, unfold a lane                                            │ob_8132 took=196│
+│   ● stub-auth0 │   z                 detail graphs fill the page                                    │                │
+│   ● proxy-edge │   c  m              cpu or memory in the big box (memory: a square per core)       │ob_8133 took=209│
+│   ● docs-search│   wheel             scroll the table; the selection stays                          │                │
+│   ● ml-ranker  │   s  x  r           start, stop, restart the unit or lane                          │                │
+│   ⠋ ml-embed   │   enter             open the unit in its project                                   │                │
 │   ● cache-warm │ …                                                                                  │                │
 └────────────────│ any key closes                                                                     │────────────────┘
  r restart   n ne└────────────────────────────────────────────────────────────────────────────────────┘ keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-16 bold black on yellow, 17-102 bold, 104 bold, 105-110 dim, 113 bold, 114-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-16 bold black on yellow, 17-102 bold, 103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 7-14 bold reversed, 16 dim, 17 bold, 19-24 dim, 102-105 bold, 106-119 dim
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16 darkgray, 17 bold, 21-22 green, 45-46 green, 73-74 dim, 93-94 blue, 102 bold, 103-119 darkgray
 3: 0 darkgray, 2-3 dim, 17 bold, 21-22 dim, 73-74 dim, 93-94 red, 102 bold, 119 darkgray

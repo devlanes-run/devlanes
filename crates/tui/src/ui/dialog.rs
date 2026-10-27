@@ -68,8 +68,10 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "monitor (M)",
         &[
-            ("< >", "sort by the previous, next column"),
-            ("i", "reverse the sort"),
+            (
+                "< >  i",
+                "sort by the previous, next column, or reverse the sort",
+            ),
             ("/  e", "filter, grouped or flat"),
             ("h l", "fold, unfold a lane"),
             ("z", "detail graphs fill the page"),
@@ -85,25 +87,35 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "daemon (D)",
         &[
-            ("R  S", "restart, stop or start the daemon"),
-            ("X", "clean gone lanes"),
-            ("x", "revoke the selected client"),
             (
-                "tab",
-                "move focus between the checks, the clients and the log",
+                "R  S  X",
+                "restart, stop or start the daemon, clean gone lanes",
+            ),
+            ("tab", "move focus between the checks and the log"),
+            (
+                "j k  g G  F",
+                "scroll the log (pauses), oldest, newest, pause or follow",
             ),
             (
-                "j k  g G",
-                "scroll the log (pauses), oldest, newest and follow",
+                "w  /  T  d",
+                "level floor, text filter, targets, fold or unfold repeats",
             ),
-            ("w  /  T", "level floor, text filter, targets"),
-            ("F  d", "pause or follow, fold or unfold repeats"),
             (
                 "c",
                 "copy mode: v select, y copy, Y whole entries as in the file",
             ),
             ("drag", "select text in the checks or the log and copy it"),
             ("i", "every check, or problems only"),
+        ],
+    ),
+    (
+        "boxes (B)",
+        &[
+            ("enter  d", "connect or disconnect the selected box"),
+            (
+                "n  p  x",
+                "connect a new box, show a pairing code, revoke the client",
+            ),
         ],
     ),
     (
@@ -127,7 +139,8 @@ fn first_section(app: &App) -> &'static str {
     match app.view {
         View::Monitor => "monitor (M)",
         View::Daemon => "daemon (D)",
-        View::Project | View::Boxes => "list",
+        View::Boxes => "boxes (B)",
+        View::Project => "list",
     }
 }
 
@@ -212,7 +225,7 @@ fn legend_lines(legend: &[(&'static str, Style, &'static str)], max: usize) -> V
 }
 
 /// `key action   key action`: the keys bold, the labels dim.
-fn keys(theme: &Theme, pairs: &[(&str, &str)]) -> Line<'static> {
+pub(super) fn keys(theme: &Theme, pairs: &[(&str, &str)]) -> Line<'static> {
     let mut spans = Vec::new();
     for (index, (key, label)) in pairs.iter().enumerate() {
         if index > 0 {
@@ -285,6 +298,8 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
             return crate::settings::render(theme, settings, frame, area);
         }
         Dialog::Welcome(welcome) => return crate::welcome::render(theme, welcome, frame, area),
+        Dialog::Connect(dialog) => super::connect::connect(app, dialog, narrow),
+        Dialog::Pair(dialog) => super::connect::pair(app, dialog, narrow),
         Dialog::Confirm {
             title,
             prompt,

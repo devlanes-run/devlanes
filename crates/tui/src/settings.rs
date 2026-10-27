@@ -1975,6 +1975,13 @@ mod tests {
             .expect("remote.require_pairing");
         assert_eq!(pairing.kind, Kind::Bool);
         assert_eq!(pairing.applies, Applies::NextCommand);
+        let allow = categories[1]
+            .items
+            .iter()
+            .find(|item| item.key == "remote.allow_connections")
+            .expect("remote.allow_connections");
+        assert_eq!(allow.kind, Kind::Bool);
+        assert_eq!(allow.applies, Applies::NextCommand);
         let title = categories[0]
             .items
             .iter()

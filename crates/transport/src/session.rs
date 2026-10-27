@@ -150,6 +150,10 @@ pub enum SessionError {
     /// The box serves only paired clients and nobody gave a pairing code.
     #[error("{}", needs_pairing_text(*.0))]
     NeedsPairing(PairingReason),
+    /// The box takes no connections (`remote.allow_connections: false` there);
+    /// the text is the box's reason.
+    #[error("{0}")]
+    Refused(String),
     /// The box refused the pairing code.
     #[error("{message}")]
     PairingRefused {
@@ -168,7 +172,8 @@ impl SessionError {
     pub fn is_permanent(&self) -> bool {
         match self {
             Self::Transport(error) => error.is_permanent(),
-            Self::IncompatibleProtocol { .. } => true,
+            // Retrying cannot help until someone changes the box's config.
+            Self::IncompatibleProtocol { .. } | Self::Refused(_) => true,
             _ => false,
         }
     }
@@ -502,6 +507,9 @@ async fn handshake(
                     server,
                 });
             }
+            Some((BoxControl::Refused { message }, _)) => {
+                return Err(SessionError::Refused(message));
+            }
             Some(_) => return Err(SessionError::Handshake("expected welcome")),
             None => return Err(SessionError::Handshake("box closed the control stream")),
         };
@@ -564,7 +572,7 @@ async fn pair(
 }
 
 /// Runs one handshake exchange within `limit`. A failure other than the
-/// box's own answer (a protocol mismatch, a refused pairing code) is replaced
+/// box's own answer (a protocol mismatch, a refusal, a refused pairing code) is replaced
 /// by the pipe's error when the pipe died, which usually says why.
 async fn within<T>(
     mux: &MuxClient,
@@ -575,6 +583,7 @@ async fn within<T>(
         Err(_) => Err(SessionError::HandshakeTimeout),
         Ok(Err(
             error @ (SessionError::IncompatibleProtocol { .. }
+            | SessionError::Refused(_)
             | SessionError::PairingRefused { .. }),
         )) => Err(error),
         Ok(Err(error)) => match mux.failure_within(FAILURE_GRACE).await {
@@ -1178,6 +1187,30 @@ mod tests {
                     .contains("Install the same release on both machines")
             );
             fake_box.abort();
+            Ok(())
+        })
+        .await?
+    }
+
+    /// A box that takes no connections turns the client away before the
+    /// welcome with its reason, which the client keeps as a permanent error,
+    /// and the client learns nothing about the box.
+    #[tokio::test]
+    async fn a_refusing_box_is_permanent_and_says_why() -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let (client_io, box_io) = tokio::io::duplex(64 * 1024);
+            let reason = "the box does not accept connections because remote.allow_connections is false there";
+            let server = tokio::spawn(crate::refuse(box_io, reason.into(), Timing::default()));
+            let options = SessionOptions::new("client");
+            let registry = options.registry.clone();
+            let Err(error) = Session::establish(Box::new(client_io), options).await else {
+                panic!("a refusing box served the client");
+            };
+            assert!(matches!(&error, SessionError::Refused(_)), "{error:?}");
+            assert!(error.is_permanent(), "{error:?}");
+            assert_eq!(error.to_string(), reason);
+            assert_eq!(registry.current().lanes().count(), 0);
+            server.await??;
             Ok(())
         })
         .await?

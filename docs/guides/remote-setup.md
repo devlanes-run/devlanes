@@ -67,9 +67,9 @@ devlanes daemon pair
 # on your other machine, run: devlanes remote connect <box> --code K7QM-3XWD
 ```
 
-`<box>` is the name the client reaches this machine by. Without `--code`, `remote connect` asks for the code.
+`<box>` is the name the client reaches this machine by. Without `--code`, `remote connect` asks for the code. In the TUI on the box, `B` opens the boxes view, and `p` there shows a code with how long it stays valid.
 
-The client enters it once ([first connection](#first-connection)) and connects with a token from then on, one per box name it connects by. `devlanes daemon clients` lists the paired machines and the ones connected now; `devlanes daemon revoke <name>` removes one and cuts its connection. The daemon page of the TUI on the box (`D`) shows the same list, and `x` there revokes the selected client. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
+The client enters it once ([first connection](#first-connection)) and connects with a token from then on, one per box name it connects by. `devlanes daemon clients` lists the paired machines and the ones connected now; `devlanes daemon revoke <name>` removes one and cuts its connection. The boxes view of the TUI on the box (`B`) shows the same list under this machine, and `x` there revokes the selected client. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
 
 ```yaml
 remote:
@@ -77,6 +77,15 @@ remote:
 ```
 
 A problem anywhere under `remote` outside `remote.boxes`, or one that makes the whole file fall back to the defaults, turns `require_pairing` on (and `start_daemon` off). The setting is read at each connection, so it needs no restart. [Pairing](../remote.md#pairing) has the details.
+
+A machine that no other machine should connect to can turn connections off:
+
+```yaml
+remote:
+  allow_connections: false
+```
+
+Clients then fail with `box hetzner does not accept connections because remote.allow_connections is false there` and stop retrying, and `devlanes daemon pair` gives no code. Connecting from that machine to its own boxes still works. Like the settings above it is read at each connection, and a problem under `remote` counts as `false`.
 
 ### PATH for Docker and tools
 
@@ -151,6 +160,8 @@ devlanes remote disconnect hetzner
 ```
 
 Passphrase, one-time-password and host-key prompts appear in the terminal running `remote connect`, prefixed with the box name; type `yes` to a host-key question even though the input is hidden.
+
+The TUI connects boxes too: `B` opens the boxes view, `n` asks for the box's SSH name, or a command for a [box reached by a command](remote-command.md), and Enter connects. The same prompts, and the pairing code, come up in its modal. Enter on a box in the list connects it again, resumes one that waits for a sign-in or a code, or asks before it disconnects a connected one.
 
 ### First connection
 
@@ -231,6 +242,8 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | Message | Cause | Fix |
 | --- | --- | --- |
 | `devlanes is not installed on hetzner` | not on the SSH session's `PATH` or in `~/.devlanes/bin` (`%USERPROFILE%\.devlanes\bin` on Windows) | install it on the box, or move the binary there, then connect again |
+| `box hetzner does not accept connections because remote.allow_connections is false there` | `remote.allow_connections: false` on the box | set it to `true` on the box, then `devlanes remote connect hetzner` again |
+| `box hetzner does not accept connections because the remote settings in its user config are invalid ...` | a problem under `remote` in the box's `config.yaml`, which turns connections off | `devlanes doctor` on the box shows it; fix it, then connect again |
 | `the devlanes daemon is not running on hetzner, and remote.start_daemon is false there` | `remote.start_daemon: false` on the box and its daemon is stopped | `devlanes daemon start` on the box, or `devlanes daemon install` to keep it running; the client keeps retrying |
 | `hetzner: a connection to port 20012 of acme@0:api failed because the unit is not running on the box` | an `open_failed` warning; `remote ls` shows the same as the port's `last_error` | start the unit on the box |
 | `... failed because nothing on the box accepted it (connection refused)` | the unit runs but does not listen on the box's loopback | make it listen on `127.0.0.1`, `::1` or a wildcard address |

@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   starting feat/checko…  Monitor  Daemon
+ devlanes  1 acme   2 billing   3 shop   starting feat/checkout: 4 of…  M  D  B
  lanes  1 main  2 feat/checkout 4/8  +2 more            1-9 or [ ] switch lanes
 ┌ ┌ options ──────────────────────────────────────── ~/.devlanes/config.yaml ┐─┐
 │ │ 1 general   2 network   3 startup   4 storage                            │ │
@@ -13,9 +13,9 @@
 │ │   ports.range               20000-32767│ (low ports on Linux need extra  │a│
 │ │   tls.ca                       devlanes│ permission), the daemon falls   │ │
 │ │   tls.trust                        none│ back to 8443 and service URLs   │a│
-│ │   remote.start_daemon              true│ carry the port.                 │ │
-│ │   remote.require_pai…              true│                                 │a│
-│ │                                        │ default  443                    │ │
+│ │   remote.allow_conne…              true│ carry the port.                 │ │
+│ │   remote.start_daemon              true│                                 │a│
+│ │   remote.require_pai…              true│ default  443                    │ │
 │ │                                        │ example  443, 8443              │a│
 │ │                                        │                                 │ │
 │ │                                                                          │a│
@@ -24,7 +24,7 @@
  r restart   n next problem   pgup scroll back            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 64 bold, 65-70 dim, 73 bold, 74-78 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 72 bold, 75 bold, 78 bold
 1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 36-43 dim, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
 2: 0 darkgray, 2-51 bold, 52-76 bold dim, 77 bold, 78-79 darkgray
 3: 0 darkgray, 2 bold, 4-5 dim, 16-17 dim, 18-24 bold underlined, 28-29 dim, 40-41 dim, 77 bold, 79 darkgray
@@ -41,7 +41,7 @@
 14: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
 15: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
 16: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
-17: 0 darkgray, 2 bold, 43 darkgray, 45-53 dim, 77 bold, 79 darkgray
+17: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 45-53 dim, 77 bold, 79 darkgray
 18: 0 darkgray, 2 bold, 43 darkgray, 45-53 dim, 77 bold, 79 darkgray
 19: 0 darkgray, 2 bold, 43 darkgray, 77 bold, 79 darkgray
 20: 0 darkgray, 2 bold, 77 bold, 79 darkgray

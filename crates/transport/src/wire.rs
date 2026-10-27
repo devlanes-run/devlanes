@@ -360,6 +360,12 @@ pub(crate) enum BoxControl {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         server: String,
     },
+    /// Sent instead of the welcome when the box takes no connections at all
+    /// (its `remote.allow_connections` is false); the box closes the session
+    /// after it. `message` says why, in words the client shows as they are.
+    Refused {
+        message: String,
+    },
     /// Sent instead of the welcome to a client the box does not serve yet;
     /// the client answers with [`ClientControl::Pair`] or leaves.
     PairingRequired {

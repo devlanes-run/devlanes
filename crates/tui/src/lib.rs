@@ -1,7 +1,7 @@
 //! The devlanes terminal UI: a daemon client like the CLI, with a lane tree,
-//! a live terminal pane for one unit, a resource monitor, a daemon tab with
-//! the clients connected to this machine as a box, and a read-only view of
-//! the boxes this machine connects to.
+//! a live terminal pane for one unit, a resource monitor, a daemon tab, and a
+//! boxes view that connects to boxes, shows pairing codes for other machines
+//! and lists the clients connected to this one.
 //!
 //! Quitting closes connections and units keep running in the daemon, unless
 //! the user chooses to stop the project's lanes on the way out.
@@ -12,6 +12,7 @@ pub mod banner;
 pub mod blockcopy;
 pub mod boxes;
 pub mod clients;
+pub mod connect;
 pub mod daemonlog;
 pub mod doctor;
 pub mod exit_summary;
@@ -37,8 +38,9 @@ pub mod words;
 use std::{io::IsTerminal, sync::Arc};
 
 pub use api::{
-    ApiError, AttachEvent, AttachInput, AttachSession, ClientApi, DaemonApi, DaemonMetrics,
-    EventStream, LaneMetrics, Metrics, MetricsQuery, SystemMetrics, UnitMetrics, Window,
+    ApiError, AttachEvent, AttachInput, AttachSession, ClientApi, ConnectEvent, ConnectSession,
+    DaemonApi, DaemonMetrics, EventStream, LaneMetrics, Metrics, MetricsQuery, SystemMetrics,
+    UnitMetrics, Window,
 };
 pub use devlanes_client::Paths;
 pub use runtime::{TerminalGuard, drive, drive_start};

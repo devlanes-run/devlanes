@@ -1,0 +1,82 @@
+ devlanes  1 acme   2 billing   3 shop                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ no boxes yet                                                                                                         │
+│                                                                                                                      │
+│   n   connect to a box by its SSH name or a command                                                                  │
+│                                                                                                                      │
+│ A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on   │
+│ this machine.                                                                                                        │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                         ┌ connect a box ───────────────────────────────────────────────────┐                         │
+│                         │  Reach it by (•) SSH name   ( ) a command                        │                         │
+│                         │                                                                  │                         │
+│                         │ ▌Name        hetzner▏                                            │                         │
+│                         │                                                                  │                         │
+│                         │ devlanes runs ssh with this name, so your SSH config applies.    │                         │
+│                         │ devlanes never edits it.                                         │                         │
+│                         │                                                                  │                         │
+│                         │ tab next field   enter connect   esc cancel                      │                         │
+│                         └──────────────────────────────────────────────────────────────────┘                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. p shows a pairing code for one.                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ n new box   p pairing code   esc back                                                            ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114-118 bold underlined
+1: 0 darkgray, 1-7 bold, 8-119 darkgray
+2: 0 darkgray, 2-13 bold, 119 darkgray
+3: 0 darkgray, 119 darkgray
+4: 0 darkgray, 4 bold, 8-52 dim, 119 darkgray
+5: 0 darkgray, 119 darkgray
+6: 0 darkgray, 2-115 dim, 119 darkgray
+7: 0 darkgray, 2-14 dim, 119 darkgray
+8: 0 darkgray, 119 darkgray
+9: 0 darkgray, 119 darkgray
+10: 0 darkgray, 119 darkgray
+11: 0 darkgray, 119 darkgray
+12: 0 darkgray, 119 darkgray
+13: 0 darkgray, 119 darkgray
+14: 0 darkgray, 119 darkgray
+15: 0 darkgray, 26-93 bold, 119 darkgray
+16: 0 darkgray, 26 bold, 28 bold, 29-40 dim, 41-52 bold, 56-68 dim, 93 bold, 119 darkgray
+17: 0 darkgray, 26 bold, 93 bold, 119 darkgray
+18: 0 darkgray, 26 bold, 28-40 bold, 93 bold, 119 darkgray
+19: 0 darkgray, 26 bold, 93 bold, 119 darkgray
+20: 0 darkgray, 26 bold, 28-88 dim, 93 bold, 119 darkgray
+21: 0 darkgray, 26 bold, 28-51 dim, 93 bold, 119 darkgray
+22: 0 darkgray, 26 bold, 93 bold, 119 darkgray
+23: 0 darkgray, 26 bold, 28-30 bold, 31-41 dim, 45-49 bold, 50-57 dim, 61-63 bold, 64-70 dim, 93 bold, 119 darkgray
+24: 0 darkgray, 26-93 bold, 119 darkgray
+25: 0 darkgray, 119 darkgray
+26: 0 darkgray, 119 darkgray
+27: 0 darkgray, 119 darkgray
+28: 0 darkgray, 119 darkgray
+29: 0 darkgray, 119 darkgray
+30: 0 darkgray, 119 darkgray
+31: 0 darkgray, 119 darkgray
+32: 0 darkgray, 119 darkgray
+33: 0 darkgray, 119 darkgray
+34: 0 darkgray, 119 darkgray
+35: 0-119 darkgray
+36: 0 darkgray, 1-14 bold, 15-119 darkgray
+37: 0 darkgray, 2-68 dim, 119 darkgray
+38: 0-119 darkgray
+39: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-32 bold, 33-40 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

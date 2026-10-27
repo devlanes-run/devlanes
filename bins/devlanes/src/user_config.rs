@@ -43,11 +43,10 @@ pub async fn lenient(paths: &Paths) -> UserConfig {
         .unwrap_or_default()
 }
 
-/// The box settings for `devlanes tunnel --stdio`, read leniently so an
-/// unrelated bad key does not cut clients off; a problem under `remote` or
-/// with the whole file makes them fall to the safe side ([`devlanes_config::box_settings`]). The second
-/// value is the stderr text for those problems, empty when there are none.
-/// Blocking.
+/// The box settings for `devlanes tunnel --stdio`, read leniently so an unrelated bad key does not cut clients off; a problem
+/// under `remote` or with the whole file makes them fall to the safe side
+/// ([`devlanes_config::box_settings`]). The second value is the stderr text
+/// for those problems, empty when there are none. Blocking.
 pub fn tunnel_settings(paths: &Paths) -> (BoxSettings, String) {
     tunnel_settings_of(lenient_file(&file(paths)))
 }
@@ -59,11 +58,28 @@ fn tunnel_settings_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (Bo
         return (settings, String::new());
     }
     let stderr = format!(
-        "devlanes tunnel: invalid remote settings in the user config, so the daemon is not \
-         started and clients must pair\n{}",
+        "devlanes tunnel: the remote settings in the user config are invalid, so this machine \
+         refuses connections\n{}",
         warnings(&remote)
     );
     (settings, stderr)
+}
+
+/// Why `devlanes tunnel --stdio` turns a client away, as the client shows it,
+/// or `None` when this machine accepts connections. `invalid` says the
+/// settings fell to the safe side because the user config has problems
+/// ([`tunnel_settings`]'s stderr is not empty).
+pub fn connections_refusal(settings: &BoxSettings, invalid: bool) -> Option<&'static str> {
+    match (settings.allow_connections, invalid) {
+        (true, _) => None,
+        (false, false) => Some(
+            "the box does not accept connections because remote.allow_connections is false there",
+        ),
+        (false, true) => Some(
+            "the box does not accept connections because the remote settings in its user config \
+             are invalid. Run devlanes doctor on the box to see them",
+        ),
+    }
 }
 
 /// The command of box `name` from `remote.boxes` in the user config of the
@@ -116,8 +132,10 @@ fn box_command_in(file: &str, source: &str, name: &str) -> Result<Option<Vec<Str
         .into_iter()
         .flatten()
         .filter(|(key, value)| {
-            !matches!(key.as_str(), "boxes" | "start_daemon" | "require_pairing")
-                && value.get(name).is_some()
+            !matches!(
+                key.as_str(),
+                "boxes" | "allow_connections" | "start_daemon" | "require_pairing"
+            ) && value.get(name).is_some()
         })
         .map(|(key, _)| format!("remote.{key}"))
         .collect();
@@ -496,51 +514,81 @@ mod tests {
         assert_eq!(warning.lines().count(), 1);
     }
 
-    /// A problem under `remote` turns the tunnel's daemon start off, requires
-    /// pairing and is reported; a problem elsewhere keeps the settings and
-    /// stays quiet.
+    /// A problem under `remote` refuses connections, turns the tunnel's
+    /// daemon start off, requires pairing and is reported; a problem
+    /// elsewhere keeps the settings and stays quiet.
     #[test]
-    fn remote_problems_turn_starting_off_and_pairing_on() {
+    fn remote_problems_refuse_connections() {
         let parse = |source: &str| devlanes_config::parse_user_lenient("config.yaml", source);
-        let settings = |start_daemon, require_pairing| BoxSettings {
+        let settings = |allow_connections, start_daemon, require_pairing| BoxSettings {
+            allow_connections,
             start_daemon,
             require_pairing,
         };
         assert_eq!(
             tunnel_settings_of(parse("")),
-            (settings(true, true), String::new())
+            (settings(true, true, true), String::new())
         );
         assert_eq!(
             tunnel_settings_of(parse(
                 "remote:\n  start_daemon: false\n  require_pairing: false\n"
             )),
-            (settings(false, false), String::new())
+            (settings(true, false, false), String::new())
+        );
+        assert_eq!(
+            tunnel_settings_of(parse("remote:\n  allow_connections: false\n")),
+            (settings(false, true, true), String::new())
         );
         assert_eq!(
             tunnel_settings_of(parse("tui:\n  theme: neon\n")),
-            (settings(true, true), String::new())
+            (settings(true, true, true), String::new())
         );
         // The boxes this machine connects to are not about it as a box.
         assert_eq!(
             tunnel_settings_of(parse("remote:\n  boxes:\n    acme:\n      command: []\n")),
-            (settings(true, true), String::new())
+            (settings(true, true, true), String::new())
         );
         for source in [
             "remote:\n  start_daemon: flase\n",
             "remote:\n  start_deamon: false\n",
             "remote:\n  require_pairing: no way\n",
             "remote:\n  require_pairing: false\n  requre_pairing: false\n",
+            "remote:\n  allow_connections: nope\n",
             "remote: 5\n",
         ] {
             let (found, stderr) = tunnel_settings_of(parse(source));
-            assert_eq!(found, settings(false, true), "{source}");
-            assert!(stderr.contains("the daemon is not started"), "{stderr}");
-            assert!(stderr.contains("clients must pair"), "{stderr}");
+            assert_eq!(found, settings(false, false, true), "{source}");
+            assert!(
+                stderr.contains("so this machine refuses connections"),
+                "{stderr}"
+            );
             assert!(
                 stderr.contains("warning: config.yaml is invalid"),
                 "{stderr}"
             );
         }
+    }
+
+    /// The client hears why it was turned away: the setting, or the invalid
+    /// settings that stand in for it.
+    #[test]
+    fn a_refusal_names_its_cause() {
+        let parse = |source: &str| devlanes_config::parse_user_lenient("config.yaml", source);
+        let refusal = |source: &str| {
+            let (settings, stderr) = tunnel_settings_of(parse(source));
+            connections_refusal(&settings, !stderr.is_empty())
+        };
+        assert_eq!(refusal(""), None);
+        assert_eq!(refusal("remote:\n  require_pairing: false\n"), None);
+        assert_eq!(
+            refusal("remote:\n  allow_connections: false\n"),
+            Some(
+                "the box does not accept connections because remote.allow_connections is false there"
+            )
+        );
+        let invalid = refusal("remote:\n  allow_connections: nope\n").unwrap_or_default();
+        assert!(invalid.contains("are invalid"), "{invalid}");
+        assert!(invalid.contains("devlanes doctor"), "{invalid}");
     }
 
     /// A box with a command gets it; other names are ssh destinations; a bad

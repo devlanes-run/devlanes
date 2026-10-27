@@ -321,9 +321,13 @@ async fn the_boxes_view_says_what_connecting_does_without_boxes() -> TestResult 
     let (mut app, _) = loaded(&api, 100, 24).await;
     app.update(shifted('B'));
     let text = screen_text(&draw(&app)?);
-    assert!(text.contains("no boxes connected"), "{text}");
+    assert!(text.contains("no boxes yet"), "{text}");
     assert!(
-        text.contains("devlanes remote connect <box>   mirrors a box's lanes here"),
+        text.contains("n   connect to a box by its SSH name or a command"),
+        "{text}"
+    );
+    assert!(
+        text.contains("No other machine connects here yet. p shows a pairing code"),
         "{text}"
     );
     Ok(())

@@ -981,10 +981,35 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 Some(Hint::command(["remote", "connect", host.as_str()])),
             )
         }
-        "remote_failed" => (
-            with_message(format!("remote {}", field(data, "host"))),
-            Some(Hint::command(["remote", "ls"])),
-        ),
+        // A box's own reason, such as connections being off there, starts
+        // with "the box", which this names.
+        "remote_failed" => {
+            let host = text(data, "host");
+            let message = data
+                .get("message")
+                .and_then(Value::as_str)
+                .map(super::clean)
+                .and_then(|message| {
+                    message
+                        .strip_prefix("the box ")
+                        .map(|rest| format!("box {host} {rest}"))
+                });
+            (
+                message.unwrap_or_else(|| with_message(format!("remote {host}"))),
+                Some(Hint::command(["remote", "ls"])),
+            )
+        }
+        "connections_off" => {
+            let invalid = data.get("invalid").and_then(Value::as_bool) == Some(true);
+            (
+                message.unwrap_or_else(|| "this machine does not accept connections".into()),
+                Some(if invalid {
+                    Hint::command(["doctor"])
+                } else {
+                    Hint::command(["config", "set", "remote.allow_connections", "true"])
+                }),
+            )
+        }
         // A restored box whose command left the user config; the message
         // says what to do.
         "box_command_missing" => (text(data, "message"), Some(Hint::command(["remote", "ls"]))),

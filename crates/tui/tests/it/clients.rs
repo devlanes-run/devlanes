@@ -1,17 +1,18 @@
-//! The clients box on the daemon page: the machines paired with this one as
-//! a box and the ones connected now, and revoking one.
+//! This machine as a box in the boxes view: the machines paired with it
+//! and the ones connected now, revoking one, and the daemon page without
+//! them.
 
 use std::sync::Arc;
 
 use crossterm::event::KeyCode;
 use devlanes_proto::{Event, RpcError, events, remote::CLIENTS_EVENT};
 use devlanes_tui::{
-    ApiError,
-    app::{App, DaemonBox, Dialog, Effect, Msg, View},
+    ApiError, DaemonApi,
+    app::{App, BoxPart, Dialog, Effect, Msg, View},
 };
 use serde_json::{Value, json};
 
-use crate::daemon::{daemon_app, presses, run_keys, shifted};
+use crate::daemon::{Step, daemon_app, presses, run_keys, shifted};
 use crate::errors::{assert_clean, key, render, screen};
 use crate::fake::{FakeApi, mixed_lanes};
 
@@ -46,9 +47,10 @@ fn desktop() -> Value {
            "connections": []})
 }
 
-/// `remote.clients` with `items` in that order.
+/// `remote.clients` with `items` in that order, connections allowed.
 fn list(require_pairing: bool, items: Vec<Value>) -> Value {
-    json!({"now_ms": NOW_MS, "require_pairing": require_pairing, "items": items})
+    json!({"now_ms": NOW_MS, "require_pairing": require_pairing, "allow_connections": true,
+           "items": items})
 }
 
 /// `remote.clients` with the laptop, the tablet and the desktop, connected
@@ -57,13 +59,19 @@ fn clients(require_pairing: bool) -> Value {
     list(require_pairing, vec![laptop(), tablet(), desktop()])
 }
 
-/// The daemon page of [`daemon_app`] with `value` as the clients.
+/// The boxes view, with no box and `value` as this machine's clients.
 async fn with_clients(
     width: u16,
     height: u16,
     value: Value,
 ) -> Result<App, Box<dyn std::error::Error>> {
-    let mut app = daemon_app(width, height).await?;
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let mut app = App::new(width, height);
+    app.update(Msg::Status(api.status().await));
+    app.update(Msg::Subscribed(Ok(())));
+    app.update(shifted('B'));
+    assert_eq!(app.view, View::Boxes);
+    app.update(Msg::Boxes(Ok(json!({"items": []}))));
     app.update(Msg::Clients(Ok(value)));
     Ok(app)
 }
@@ -95,15 +103,18 @@ fn notice(app: &App) -> String {
 
 /// The selected client's name.
 fn selected(app: &App) -> Option<String> {
-    app.daemon.clients.current().map(|c| c.name.clone())
+    app.boxes.selected_client().map(|c| c.name.clone())
 }
 
-/// Opening the daemon page asks for the clients, once at a time.
+/// Opening the boxes view asks for the clients, once at a time; the daemon
+/// page no longer does.
 #[tokio::test]
-async fn the_daemon_page_asks_for_the_clients_once_at_a_time() -> TestResult {
+async fn the_boxes_view_asks_for_the_clients_once_at_a_time() -> TestResult {
     let mut app = App::new(120, 40);
     app.update(Msg::Subscribed(Ok(())));
-    let effects = app.update(shifted('D'));
+    assert_eq!(fetches(&app.update(shifted('D'))), 0, "the daemon page");
+    app.update(key(KeyCode::Esc));
+    let effects = app.update(shifted('B'));
     assert_eq!(fetches(&effects), 1, "{effects:?}");
     // A change while the fetch is out asks again once it returns.
     let effects = app.update(event(CLIENTS_EVENT));
@@ -116,21 +127,21 @@ async fn the_daemon_page_asks_for_the_clients_once_at_a_time() -> TestResult {
     assert_eq!(fetches(&effects), 1, "{effects:?}");
     let effects = app.update(Msg::Clients(Ok(clients(true))));
     assert_eq!(fetches(&effects), 0, "{effects:?}");
-    // A slow poll while the page is open, for the times.
+    // A slow poll while the view is open, for the times.
     let ticks: usize = (0..15).map(|_| fetches(&app.update(Msg::Tick))).sum();
     assert_eq!(ticks, 1);
     // A resync may have missed a change.
     app.update(Msg::Clients(Ok(clients(true))));
     assert_eq!(fetches(&app.update(event(events::RESYNC))), 1);
-    // A change during that fetch waits for the page if it closed meanwhile.
+    // A change during that fetch waits for the view if it closed meanwhile.
     app.update(event(CLIENTS_EVENT));
     app.update(key(KeyCode::Esc));
     assert_eq!(app.view, View::Project);
     assert_eq!(fetches(&app.update(Msg::Clients(Ok(clients(true))))), 0);
-    // Elsewhere, changes are left until the page opens.
+    // Elsewhere, changes are left until the view opens.
     assert_eq!(fetches(&app.update(event(CLIENTS_EVENT))), 0);
     assert_eq!(fetches(&app.update(event(events::RESYNC))), 0);
-    assert_eq!(fetches(&app.update(shifted('D'))), 1);
+    assert_eq!(fetches(&app.update(shifted('B'))), 1);
     Ok(())
 }
 
@@ -138,23 +149,24 @@ async fn the_daemon_page_asks_for_the_clients_once_at_a_time() -> TestResult {
 /// how long it is connected or when it was last seen, its pairings and what
 /// it mirrors.
 #[tokio::test]
-async fn the_clients_box_lists_paired_and_connected_clients() -> TestResult {
+async fn this_machine_lists_paired_and_connected_clients() -> TestResult {
     let app = with_clients(200, 60, clients(true)).await?;
     let buffer = render(&app)?;
     assert_clean(&buffer, "clients box");
     let text = screen(&buffer);
     for expected in [
-        "remote clients",
+        "this machine",
         "2 connected · 2 paired",
         "desktop  dl_cid_7c41e0a9",
         "last seen 3d ago",
         "laptop   dl_cid_3f2a9c1e  203.0.113.24  connected for 2h 14m  2 pairings  mirrors 5 of 6 ports, 1 lane skipped",
         "tablet   dl_cid_e5d8a1c4  198.51.100.7  connected for 5m      not paired",
+        "no boxes yet",
     ] {
         assert!(text.contains(expected), "missing {expected:?}:\n{text}");
     }
     assert!(!text.contains("require_pairing"), "{text}");
-    assert!(!text.contains("no clients"), "{text}");
+    assert!(!text.contains("No other machine"), "{text}");
     let at: Vec<Option<usize>> = ["laptop   dl_cid", "tablet   dl_cid", "desktop  dl_cid"]
         .into_iter()
         .map(|row| text.find(row))
@@ -174,34 +186,34 @@ async fn the_clients_box_lists_paired_and_connected_clients() -> TestResult {
     Ok(())
 }
 
-/// At 80 columns the address and the mirror go first; the box keeps half
-/// of the room below the checks and says which rows show.
+/// At 80 columns the address and the mirror go first, and the note says
+/// clients connect without a code.
 #[tokio::test]
-async fn the_clients_box_at_80x24() -> TestResult {
+async fn this_machine_at_80x24() -> TestResult {
     let app = with_clients(80, 24, clients(false)).await?;
     let buffer = render(&app)?;
-    assert_clean(&buffer, "clients box at 80x24");
+    assert_clean(&buffer, "clients at 80x24");
     let text = screen(&buffer);
     assert!(
         text.contains("remote.require_pairing is false, so clients connect without a code."),
         "{text}"
     );
     assert!(!text.contains("203.0.113.24"), "{text}");
-    assert_screen!("clients_box_80x24", text);
+    assert_screen!("boxes_clients_80x24", text);
     Ok(())
 }
 
 /// At 58 columns the pairing and then the id go too, so a client with two
 /// connections still shows its name and how long it has been connected.
 #[tokio::test]
-async fn the_clients_box_at_58_columns_drops_the_pairing_and_the_id() -> TestResult {
+async fn this_machine_at_58_columns_drops_the_pairing_and_the_id() -> TestResult {
     let mut twice = laptop();
     if let Some(connections) = twice["connections"].as_array_mut() {
         connections.push(json!({"address": null, "since_ms": NOW_MS - 600_000, "mirror": null}));
     }
     let app = with_clients(58, 24, list(true, vec![twice, tablet(), desktop()])).await?;
     let buffer = render(&app)?;
-    assert_clean(&buffer, "clients box at 58 columns");
+    assert_clean(&buffer, "clients at 58 columns");
     let text = screen(&buffer);
     assert!(
         text.contains("laptop   connected for 2h 14m (2 connections)"),
@@ -214,74 +226,54 @@ async fn the_clients_box_at_58_columns_drops_the_pairing_and_the_id() -> TestRes
     Ok(())
 }
 
-/// Nobody paired or connected: no box, one facts row saying how to pair
-/// one, or that pairing is off, and Tab goes from the checks to the log.
+/// Nobody paired or connected: one line says how to pair one, with the
+/// note when pairing is off; with connections off it says so instead.
 #[tokio::test]
-async fn no_clients_is_a_facts_row() -> TestResult {
-    for (require_pairing, row) in [
+async fn no_clients_says_how_to_pair_one() -> TestResult {
+    let empty = "No other machine connects here yet. p shows a pairing code for one.";
+    for (value, expected, absent) in [
+        (list(true, Vec::new()), empty, "Connections are off"),
         (
-            true,
-            "remote    no clients · devlanes daemon pair prints a code",
+            list(false, Vec::new()),
+            "remote.require_pairing is false, so clients connect without a code.",
+            "Connections are off",
         ),
-        (false, "remote    no clients · pairing is off"),
+        (
+            json!({"now_ms": NOW_MS, "require_pairing": true, "allow_connections": false,
+                   "items": []}),
+            "Connections are off, so other machines cannot connect here.",
+            empty,
+        ),
     ] {
-        let mut app = with_clients(80, 24, list(require_pairing, Vec::new())).await?;
+        let app = with_clients(120, 40, value).await?;
         let buffer = render(&app)?;
         assert_clean(&buffer, "no clients");
         let text = screen(&buffer);
-        assert!(text.contains(row), "{row:?} missing:\n{text}");
-        assert!(!text.contains("remote clients"), "{text}");
-        assert!(!text.contains("require_pairing"), "{text}");
-        app.update(key(KeyCode::Tab));
-        assert_eq!(app.daemon.focus, DaemonBox::Checks);
-        app.update(key(KeyCode::Tab));
-        assert_eq!(app.daemon.focus, DaemonBox::Log);
+        assert!(text.contains(expected), "{expected:?} missing:\n{text}");
+        assert!(!text.contains(absent), "{absent:?} shown:\n{text}");
+        assert!(text.contains("this machine"), "{text}");
     }
-    // Beside the checks the row wraps under its value.
-    let app = with_clients(120, 40, list(true, Vec::new())).await?;
-    let text = screen(&render(&app)?);
-    assert!(
-        text.contains("remote    no clients · devlanes daemon pair"),
-        "{text}"
-    );
-    assert!(text.contains("          prints a code"), "{text}");
     Ok(())
 }
 
-/// The box shows once a client pairs and goes when the last one leaves,
-/// taking the focus back to the log.
+/// A daemon without `remote.clients` lists no client and reports nothing.
 #[tokio::test]
-async fn the_box_comes_and_goes_with_its_clients() -> TestResult {
-    let mut app = with_clients(120, 40, list(true, Vec::new())).await?;
-    app.update(Msg::Clients(Ok(list(true, vec![desktop()]))));
-    assert!(screen(&render(&app)?).contains("remote clients"));
-    app.update(key(KeyCode::Tab));
-    app.update(key(KeyCode::Tab));
-    assert_eq!(app.daemon.focus, DaemonBox::Clients);
-    app.update(Msg::Clients(Ok(list(true, Vec::new()))));
-    assert_eq!(app.daemon.focus, DaemonBox::Log);
-    assert!(!screen(&render(&app)?).contains("remote clients"));
-    Ok(())
-}
-
-/// A daemon without `remote.clients` shows no box and no facts row, and Tab
-/// skips it.
-#[tokio::test]
-async fn a_daemon_without_remote_clients_shows_no_box() -> TestResult {
-    let mut app = daemon_app(120, 40).await?;
+async fn a_daemon_without_remote_clients_lists_none() -> TestResult {
+    let mut app = with_clients(120, 40, clients(true)).await?;
     app.update(Msg::Clients(Err(ApiError::Rpc(RpcError::new(
         "unknown_method",
         json!({"method": "remote.clients"}),
         2,
     )))));
     assert!(app.errors.is_empty(), "{:?}", app.errors);
+    assert_eq!(
+        app.boxes.part,
+        BoxPart::Hosts,
+        "the selection left the list"
+    );
     let text = screen(&render(&app)?);
-    assert!(!text.contains("remote clients"), "{text}");
-    assert!(!text.contains("no clients"), "{text}");
-    app.update(key(KeyCode::Tab));
-    assert_eq!(app.daemon.focus, DaemonBox::Checks);
-    app.update(key(KeyCode::Tab));
-    assert_eq!(app.daemon.focus, DaemonBox::Log);
+    assert!(!text.contains("laptop"), "{text}");
+    assert!(text.contains("p shows a pairing code"), "{text}");
     Ok(())
 }
 
@@ -310,22 +302,14 @@ async fn a_failed_fetch_is_reported_once() -> TestResult {
     Ok(())
 }
 
-/// Tab reaches the clients between the checks and the log; there `j k` pick
-/// a client and `x` asks before revoking it by id. Enter does not confirm,
-/// a client connected without pairing has nothing to revoke, and the dialog
-/// says whether the client needs a new code to come back.
+/// `j k` pick a client and `x` asks before revoking it by id. Enter does
+/// not confirm, a client connected without pairing has nothing to revoke,
+/// and the dialog says whether the client needs a new code to come back.
 #[tokio::test]
 async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     let mut app = with_clients(120, 40, clients(false)).await?;
-    app.update(key(KeyCode::Char('x')));
-    assert!(app.dialog.is_none(), "x on the log revokes nothing");
-    assert_eq!(
-        notice(&app),
-        "to revoke a client, tab to the clients box first"
-    );
-    app.update(key(KeyCode::Tab));
-    app.update(key(KeyCode::Tab));
-    assert_eq!(app.daemon.focus, DaemonBox::Clients);
+    // Without boxes the selection starts on the clients.
+    assert_eq!(app.boxes.part, BoxPart::Clients);
     assert_eq!(selected(&app).as_deref(), Some("laptop"));
     app.update(key(KeyCode::Char('j')));
     app.update(key(KeyCode::Char('x')));
@@ -364,8 +348,6 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
 
     // With pairing required it needs a new code.
     let mut app = with_clients(80, 24, clients(true)).await?;
-    app.update(key(KeyCode::Tab));
-    app.update(key(KeyCode::Tab));
     app.update(key(KeyCode::Char('x')));
     match &app.dialog {
         Some(Dialog::Confirm { detail, .. }) => assert_eq!(
@@ -382,10 +364,40 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     Ok(())
 }
 
-/// In the clients box PgUp and PgDn move the selection by a page, and the
-/// log's keys do nothing: `c` says where copying works.
+/// One selection moves through the boxes, then the clients: `j` past the
+/// last box reaches the first client and `k` goes back; `x` on a box says
+/// where clients are.
 #[tokio::test]
-async fn the_clients_box_keeps_its_keys() -> TestResult {
+async fn one_selection_runs_through_boxes_and_clients() -> TestResult {
+    let mut app = with_clients(120, 40, clients(true)).await?;
+    app.update(Msg::Boxes(Ok(json!({"items": [
+        {"host": "hetzner", "state": "connected", "transport": "ssh"},
+        {"host": "gpu", "state": "needs_auth", "transport": "ssh"},
+    ]}))));
+    app.update(key(KeyCode::Char('g')));
+    assert_eq!(
+        app.boxes.selected_host().map(|h| h.host.as_str()),
+        Some("hetzner")
+    );
+    app.update(key(KeyCode::Char('x')));
+    assert!(app.dialog.is_none());
+    assert_eq!(notice(&app), "select a client below to revoke it");
+    app.update(key(KeyCode::Char('j')));
+    app.update(key(KeyCode::Char('j')));
+    assert_eq!(selected(&app).as_deref(), Some("laptop"));
+    app.update(key(KeyCode::Char('k')));
+    assert_eq!(
+        app.boxes.selected_host().map(|h| h.host.as_str()),
+        Some("gpu")
+    );
+    app.update(key(KeyCode::Char('G')));
+    assert_eq!(selected(&app).as_deref(), Some("desktop"));
+    Ok(())
+}
+
+/// PgUp and PgDn move the selection by a page of client rows.
+#[tokio::test]
+async fn pages_move_through_the_clients() -> TestResult {
     let many: Vec<Value> = (0..30)
         .map(|n| {
             let mut client = desktop();
@@ -396,30 +408,14 @@ async fn the_clients_box_keeps_its_keys() -> TestResult {
         .collect();
     let mut app = with_clients(80, 24, list(true, many)).await?;
     render(&app)?;
-    let page = usize::from(app.daemon_clients_rows.get().0.height);
+    let page = usize::from(app.boxes.clients_rows.get().0.height);
     assert!(page > 1, "a page of rows: {page}");
-    app.update(key(KeyCode::Tab));
-    app.update(key(KeyCode::Tab));
     app.update(key(KeyCode::PageDown));
-    assert_eq!(app.daemon.clients.selected, page);
+    assert_eq!(app.boxes.clients.selected, page);
     app.update(key(KeyCode::PageUp));
-    assert_eq!(app.daemon.clients.selected, 0);
-    let (floor, folded, follow) = (
-        app.daemon.filters.floor,
-        app.daemon.filters.unfolded,
-        app.daemon.paused,
-    );
-    for c in ['w', 'd', 'F', '/', 'c'] {
-        app.update(key(KeyCode::Char(c)));
-    }
-    app.update(shifted('T'));
-    assert_eq!(app.daemon.filters.floor, floor);
-    assert_eq!(app.daemon.filters.unfolded, folded);
-    assert_eq!(app.daemon.paused, follow);
-    assert!(!app.daemon.filter_editing);
-    assert!(app.daemon.copy.is_none());
-    assert!(app.dialog.is_none(), "no target picker");
-    assert_eq!(app.daemon.focus, DaemonBox::Clients);
+    assert_eq!(app.boxes.clients.selected, 0);
+    let text = screen(&render(&app)?);
+    assert!(text.contains("rows 1-"), "{text}");
     Ok(())
 }
 
@@ -429,15 +425,13 @@ async fn the_clients_box_keeps_its_keys() -> TestResult {
 #[tokio::test]
 async fn the_selection_follows_its_client_across_refreshes() -> TestResult {
     let mut app = with_clients(120, 40, clients(true)).await?;
-    app.update(key(KeyCode::Tab));
-    app.update(key(KeyCode::Tab));
     app.update(key(KeyCode::Char('j')));
     assert_eq!(selected(&app).as_deref(), Some("tablet"));
     app.update(Msg::Clients(Ok(list(
         true,
         vec![tablet(), laptop(), desktop()],
     ))));
-    assert_eq!(app.daemon.clients.selected, 0);
+    assert_eq!(app.boxes.clients.selected, 0);
     assert_eq!(selected(&app).as_deref(), Some("tablet"));
     // Another tablet comes in while this one leaves: the place is kept.
     let mut other = tablet();
@@ -446,13 +440,16 @@ async fn the_selection_follows_its_client_across_refreshes() -> TestResult {
         true,
         vec![laptop(), other, desktop()],
     ))));
-    assert_eq!(app.daemon.clients.selected, 0);
+    assert_eq!(app.boxes.clients.selected, 0);
     assert_eq!(selected(&app).as_deref(), Some("laptop"));
     app.update(key(KeyCode::Char('G')));
     assert_eq!(selected(&app).as_deref(), Some("desktop"));
     app.update(Msg::Clients(Ok(list(true, vec![laptop()]))));
-    assert_eq!(app.daemon.clients.selected, 0);
+    assert_eq!(app.boxes.clients.selected, 0);
     assert_eq!(selected(&app).as_deref(), Some("laptop"));
+    // An emptied list sends the selection back to the boxes.
+    app.update(Msg::Clients(Ok(list(true, Vec::new()))));
+    assert_eq!(app.boxes.part, BoxPart::Hosts);
     Ok(())
 }
 
@@ -511,7 +508,7 @@ async fn a_revoke_that_loses_the_daemon_has_an_unknown_outcome() -> TestResult {
         app.errors[1]
             .worded
             .summary
-            .contains("Check the clients box after the TUI reconnects"),
+            .contains("Check the clients in the boxes view after the TUI reconnects"),
         "{:?}",
         app.errors[1]
     );
@@ -524,18 +521,15 @@ async fn a_revoke_that_loses_the_daemon_has_an_unknown_outcome() -> TestResult {
     Ok(())
 }
 
-/// Stopping the daemon from the page empties the clients, takes the focus
-/// off them and keeps `x` from asking; the next daemon lists them again.
+/// Stopping the daemon empties the clients and keeps `x` from asking; the
+/// next daemon lists them again.
 #[tokio::test]
 async fn a_stopped_daemon_has_no_clients() -> TestResult {
     let mut app = with_clients(120, 40, clients(true)).await?;
-    app.update(key(KeyCode::Tab));
-    app.update(key(KeyCode::Tab));
-    assert_eq!(app.daemon.focus, DaemonBox::Clients);
     app.update(Msg::DaemonStopped(Ok(json!({}))));
-    assert!(app.daemon.clients.list.is_none());
-    assert_eq!(app.daemon.focus, DaemonBox::Log);
-    assert!(!screen(&render(&app)?).contains("remote clients"));
+    assert!(app.boxes.clients.list.is_none());
+    assert_eq!(app.boxes.part, BoxPart::Hosts);
+    assert!(!screen(&render(&app)?).contains("laptop"));
     app.update(key(KeyCode::Char('x')));
     assert!(app.dialog.is_none());
     // Nothing asks a stopped daemon, not even a change that came in before.
@@ -546,14 +540,13 @@ async fn a_stopped_daemon_has_no_clients() -> TestResult {
     Ok(())
 }
 
-/// A click on a client focuses the box and selects it; the wheel over the
-/// box focuses it too and moves the selection instead of scrolling the log.
+/// A click on a client selects it; the wheel moves the selection.
 #[tokio::test]
 async fn the_mouse_selects_a_client() -> TestResult {
     use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
     let mut app = with_clients(120, 40, clients(true)).await?;
     render(&app)?;
-    let (rows, first) = app.daemon_clients_rows.get();
+    let (rows, first) = app.boxes.clients_rows.get();
     assert_eq!(first, 0);
     let mouse = |kind, row| {
         Msg::Mouse(MouseEvent {
@@ -563,16 +556,24 @@ async fn the_mouse_selects_a_client() -> TestResult {
             modifiers: crossterm::event::KeyModifiers::NONE,
         })
     };
-    assert_eq!(app.daemon.focus, DaemonBox::Log);
     app.update(mouse(MouseEventKind::ScrollDown, rows.y));
-    assert_eq!(app.daemon.focus, DaemonBox::Clients);
     assert_eq!(selected(&app).as_deref(), Some("tablet"));
-    assert_eq!(app.daemon.scroll, 0, "the log did not scroll");
-    app.update(key(KeyCode::Tab));
-    assert_eq!(app.daemon.focus, DaemonBox::Log);
     app.update(mouse(MouseEventKind::Down(MouseButton::Left), rows.y + 2));
-    assert_eq!(app.daemon.focus, DaemonBox::Clients);
     assert_eq!(selected(&app).as_deref(), Some("desktop"));
+    Ok(())
+}
+
+/// The daemon page is back to its facts, checks and log: no clients box
+/// and no remote row, whatever clients this machine has.
+#[tokio::test]
+async fn the_daemon_page_has_no_clients() -> TestResult {
+    let mut app = daemon_app(120, 40).await?;
+    app.update(Msg::Clients(Ok(clients(true))));
+    let text = screen(&render(&app)?);
+    for gone in ["remote clients", "laptop", "no clients", "daemon pair"] {
+        assert!(!text.contains(gone), "{gone:?} on the daemon page:\n{text}");
+    }
+    assert!(text.contains("daemon.log"), "{text}");
     Ok(())
 }
 
@@ -583,15 +584,14 @@ async fn drive_revokes_the_selected_client_and_the_list_updates() -> TestResult 
     let fake = FakeApi::with_lanes(mixed_lanes());
     *fake.clients.lock().map_err(|e| e.to_string())? = Some(clients(true));
     let api = Arc::new(fake);
-    let keys = vec![
-        shifted('D'),
-        key(KeyCode::Tab),
-        key(KeyCode::Tab),
+    let mut steps = presses(vec![shifted('B')]);
+    steps.push(Step::Screen("laptop"));
+    steps.extend(presses(vec![
         key(KeyCode::Char('x')),
         key(KeyCode::Char('y')),
-    ];
+    ]));
     let revoke = format!("remote.revoke {LAPTOP}");
-    let terminal = run_keys(Arc::clone(&api), presses(keys), &["1 paired"], |calls| {
+    let terminal = run_keys(Arc::clone(&api), steps, &["1 paired"], |calls| {
         calls
             .iter()
             .skip_while(|c| **c != revoke)
@@ -609,6 +609,6 @@ async fn drive_revokes_the_selected_client_and_the_list_updates() -> TestResult 
     );
     let text = screen(terminal.buffer());
     assert!(!text.contains("dl_cid_3f2a9c1e"), "{text}");
-    assert!(text.contains("dl_cid_7c41e0a9"), "{text}");
+    assert!(text.contains("desktop"), "{text}");
     Ok(())
 }

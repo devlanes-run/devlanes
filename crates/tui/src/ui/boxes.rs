@@ -1,7 +1,8 @@
 //! Boxes on screen: the pane of a box lane, which shows a unit's details
 //! (state, ports with their mirror state, hostnames with the URL that opens
 //! here, syncs) where a local unit has its terminal, and the boxes view (`B`)
-//! with every box's link and what it mirrors. Nothing here acts on a box.
+//! with every box's link and what it mirrors, then this machine as a box
+//! with the clients that connect to it.
 
 use devlanes_proto::LaneSummary;
 use ratatui::{
@@ -15,8 +16,9 @@ use ratatui::{
 use super::list::{container_look, lane_summary};
 use super::pane::{LABEL, banner, details, field, render_box, sentence, title, unit_facts_title};
 use super::{draw_box, fit, spread, unit_look};
-use crate::app::App;
+use crate::app::{App, BoxPart};
 use crate::boxes::{BoxHost, RegistryUnit};
+use crate::clients::{Client, short_id};
 use crate::text::{self, clean, clip};
 use crate::theme::{Glyph, Theme, Tone};
 use crate::tree::{self, Role, RowId};
@@ -709,10 +711,33 @@ fn members_table(
 
 // ---- the boxes view ---------------------------------------------------------
 
-/// The boxes view: one block per box, scrolling as one page.
+/// The boxes view: the boxes this machine connects to on top, one block
+/// each, and this machine as a box below, with the clients that connect to
+/// it. One selection moves through both.
 pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
+    let clients = clients_content(app, usize::from(area.width.saturating_sub(2)));
+    // This machine takes what it needs, up to half of the page; the boxes
+    // get the rest.
+    let needs = (clients.note.len() + clients.rows.len().max(clients.empty.len())).max(1);
+    let bottom = u16::try_from(needs + 2)
+        .unwrap_or(u16::MAX)
+        .min((area.height / 2).max(4))
+        .min(area.height);
+    let top = Rect::new(area.x, area.y, area.width, area.height - bottom);
+    render_hosts(app, frame, top);
+    let below = Rect::new(area.x, top.bottom(), area.width, bottom);
+    render_clients(app, frame, below, clients);
+}
+
+/// The boxes this machine connects to, the selected one in view.
+fn render_hosts(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let hosts = &app.boxes.hosts;
+    app.boxes.hosts_box.set(area);
+    app.boxes.host_blocks.borrow_mut().clear();
+    if area.height < 3 {
+        return;
+    }
     let inner = Rect::new(
         area.x + 2,
         area.y + 1,
@@ -720,7 +745,11 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
         area.height.saturating_sub(2),
     );
     let width = usize::from(inner.width).max(1);
+    let focused = app.boxes.part == BoxPart::Hosts && !hosts.is_empty();
+    let selected = app.boxes.host.min(hosts.len().saturating_sub(1));
     let mut lines = Vec::new();
+    // Each box's first and last line, with its index.
+    let mut blocks = Vec::new();
     if hosts.is_empty() {
         lines.extend(empty_lines(theme, width));
     }
@@ -728,16 +757,32 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
         if index > 0 {
             lines.push(Line::from(""));
         }
-        lines.extend(host_lines(app, host, width));
+        let start = lines.len();
+        let mut block = host_lines(app, host, width);
+        if focused
+            && index == selected
+            && let Some(first) = block.first_mut()
+        {
+            *first = highlight(theme, std::mem::take(first), width);
+        }
+        lines.extend(block);
+        blocks.push((start, lines.len(), index));
     }
     let height = usize::from(inner.height);
-    let max = lines.len().saturating_sub(height);
-    app.boxes.max_scroll.set(max);
-    let scroll = app.boxes.scroll.min(max);
+    // The fewest lines scrolled off the top that show the selected box,
+    // from its first line when it is taller than the box.
+    let first = match blocks.get(selected) {
+        Some((start, end, _)) if lines.len() > height => end.saturating_sub(height).min(*start),
+        _ => 0,
+    };
     let connected = hosts.iter().filter(|h| h.connected()).count();
     let mut right = Vec::new();
     if !hosts.is_empty() {
-        let more = if max > 0 { " · j k for more" } else { "" };
+        let more = if lines.len() > height {
+            " · j k for more"
+        } else {
+            ""
+        };
         right.push(Span::styled(
             format!(" {connected} of {} connected{more} ", hosts.len()),
             theme.quiet(),
@@ -747,39 +792,360 @@ pub(super) fn render(app: &App, frame: &mut Frame, area: Rect) {
         " boxes ",
         Style::new().add_modifier(Modifier::BOLD),
     )];
-    draw_box(app, frame, area, left, right, false);
-    let shown: Vec<Line> = lines.into_iter().skip(scroll).take(height).collect();
+    draw_box(app, frame, area, left, right, focused);
+    for (start, end, index) in blocks {
+        let top = start.max(first);
+        let bottom = end.min(first + height);
+        if top < bottom {
+            let y = inner.y + u16::try_from(top - first).unwrap_or(0);
+            let rows = u16::try_from(bottom - top).unwrap_or(0);
+            let rect = Rect::new(inner.x, y, inner.width, rows);
+            app.boxes.host_blocks.borrow_mut().push((rect, index));
+        }
+    }
+    let shown: Vec<Line> = lines.into_iter().skip(first).take(height).collect();
     frame.render_widget(Paragraph::new(shown), inner);
 }
 
-/// No box yet: what connecting one does, laid out like the welcome's keys.
+/// `line` in the selection's colors across `width` cells.
+fn highlight(theme: &Theme, line: Line<'static>, width: usize) -> Line<'static> {
+    let mut spans: Vec<Span> = line
+        .spans
+        .into_iter()
+        .map(|s| Span::styled(s.content, theme.selected(s.style)))
+        .collect();
+    let pad = width.saturating_sub(super::spans_width(&spans));
+    spans.push(Span::styled(" ".repeat(pad), theme.selection()));
+    Line::from(spans)
+}
+
+/// No box yet: the key that connects one and what a box is.
 fn empty_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
-    let command = "devlanes remote connect <box>";
     let mut lines = vec![
-        Line::styled(
-            "no boxes connected",
-            Style::new().add_modifier(Modifier::BOLD),
-        ),
+        Line::styled("no boxes yet", Style::new().add_modifier(Modifier::BOLD)),
         Line::from(""),
     ];
     lines.extend(sentence(
-        "mirrors a box's lanes here",
+        "connect to a box by its SSH name or a command",
         width,
         vec![
             Span::raw("  "),
-            Span::styled(command, theme.key()),
+            Span::styled("n", theme.key()),
             Span::raw("   "),
         ],
         theme.quiet(),
     ));
     lines.push(Line::from(""));
     lines.extend(sentence(
-        "The lanes keep running on the box. This view is read-only.",
+        "A box is another machine that runs devlanes. Its lanes show up here as projects. Their ports and hostnames work on this machine.",
         width,
         Vec::new(),
         theme.quiet(),
     ));
     lines
+}
+
+// ---- this machine as a box --------------------------------------------------
+
+/// The lines of the clients box: notes on top, then one row per client, or
+/// what to do while there is none.
+struct ClientLines {
+    note: Vec<Line<'static>>,
+    rows: Vec<Line<'static>>,
+    /// Shown instead of rows while no client is listed.
+    empty: Vec<Line<'static>>,
+    /// The counts for the box title.
+    counts: Vec<Span<'static>>,
+}
+
+/// `text` wrapped in `width` cells under a one-cell margin, in `style`.
+fn note(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
+    text::wrap(text, width.saturating_sub(1).max(1))
+        .into_iter()
+        .map(|part| fit(vec![Span::raw(" "), Span::styled(part, style)], width))
+        .collect()
+}
+
+/// The clients box's content in `width` cells.
+fn clients_content(app: &App, width: usize) -> ClientLines {
+    let theme = &app.theme;
+    let list = app.boxes.clients.list.as_ref();
+    let off = list.and_then(|list| list.allow_connections) == Some(false);
+    let mut lines = ClientLines {
+        note: Vec::new(),
+        rows: Vec::new(),
+        empty: Vec::new(),
+        counts: Vec::new(),
+    };
+    let attention = theme.tone(Tone::Attention);
+    if off {
+        lines.note.extend(note(
+            "Connections are off, so other machines cannot connect here. remote.allow_connections is false.",
+            width,
+            attention,
+        ));
+    } else if list.and_then(|list| list.require_pairing) == Some(false) {
+        lines.note.extend(note(
+            "remote.require_pairing is false, so clients connect without a code.",
+            width,
+            attention,
+        ));
+    }
+    match list {
+        Some(list) if !list.items.is_empty() => {
+            let (rows, counts) = clients_rows(app, list, width);
+            lines.rows = rows;
+            lines.counts = counts;
+        }
+        _ if off => {}
+        _ => lines.empty.extend(note(
+            "No other machine connects here yet. p shows a pairing code for one.",
+            width,
+            theme.quiet(),
+        )),
+    }
+    lines
+}
+
+/// The clients box: its notes, then the client rows from the one that keeps
+/// the selection in view, and where they are for the mouse.
+fn render_clients(app: &App, frame: &mut Frame, area: Rect, content: ClientLines) {
+    let theme = &app.theme;
+    app.boxes.clients_box.set(area);
+    app.boxes.clients_rows.set((Rect::default(), 0));
+    if area.height < 3 {
+        return;
+    }
+    let focused = app.boxes.part == BoxPart::Clients;
+    let inner = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    let notes = u16::try_from(content.note.len())
+        .unwrap_or(u16::MAX)
+        .min(inner.height);
+    let rows = Rect::new(inner.x, inner.y + notes, inner.width, inner.height - notes);
+    let room = usize::from(rows.height);
+    let count = content.rows.len();
+    let selected = app.boxes.clients.selected.min(count.saturating_sub(1));
+    // The fewest rows scrolled off the top that still show the selection.
+    let first = if count <= room {
+        0
+    } else {
+        (selected + 1).saturating_sub(room).min(count - room)
+    };
+    let mut right = Vec::new();
+    if !content.counts.is_empty() {
+        right.push(Span::raw(" "));
+        right.extend(content.counts);
+        // Clients past the box's end would go unnoticed without it.
+        if count > room && room > 0 {
+            right.push(Span::styled(
+                format!(" · rows {}-{}/{count}", first + 1, first + room),
+                theme.quiet(),
+            ));
+        }
+        right.push(Span::raw(" "));
+    }
+    let left = vec![Span::styled(
+        " this machine ",
+        Style::new().add_modifier(Modifier::BOLD),
+    )];
+    draw_box(app, frame, area, left, right, focused);
+    frame.render_widget(
+        Paragraph::new(content.note),
+        Rect::new(inner.x, inner.y, inner.width, notes),
+    );
+    let shown: Vec<Line> = if count == 0 {
+        content.empty
+    } else {
+        content
+            .rows
+            .into_iter()
+            .enumerate()
+            .skip(first)
+            .take(room)
+            .map(|(index, line)| {
+                if focused && index == selected {
+                    highlight(theme, line, usize::from(rows.width))
+                } else {
+                    line
+                }
+            })
+            .collect()
+    };
+    frame.render_widget(Paragraph::new(shown), rows);
+    if count > 0 {
+        app.boxes.clients_rows.set((rows, first));
+    }
+}
+
+/// `● laptop  dl_cid_3f2a9c1e  203.0.113.4  connected for 2h 14m  2 pairings
+/// mirrors 5 of 6 ports`: one aligned row per client in `width` cells, and
+/// the counts for the title. Columns the width cannot hold go in this order:
+/// the address, what it mirrors, its pairing, its id.
+fn clients_rows(
+    app: &App,
+    list: &crate::clients::Clients,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
+    let theme = &app.theme;
+    let quiet = theme.quiet();
+    let mut counts = Vec::new();
+    let (connected, paired) = (list.connected(), list.paired());
+    if connected > 0 {
+        counts.push(Span::styled(
+            format!("{connected} connected"),
+            theme.tone(Tone::Ok),
+        ));
+    }
+    if paired > 0 {
+        if !counts.is_empty() {
+            counts.push(Span::styled(" · ", quiet));
+        }
+        counts.push(Span::styled(format!("{paired} paired"), quiet));
+    }
+    let now = app.boxes.clients.now_ms();
+    // Each client's cells: [name, id, address, seen, pairing, mirror].
+    let cells: Vec<[(String, Style); 6]> = list
+        .items
+        .iter()
+        .map(|client| client_cells(app, client, now))
+        .collect();
+    let widths: Vec<usize> = (0..6)
+        .map(|column| {
+            cells
+                .iter()
+                .map(|row| text::width(&row[column].0))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    // A blank column and the glyph take three cells, and two spaces follow
+    // every cell but the last: 3 + the cells + 2 per cell - 2.
+    let total = |keep: &[usize]| 1 + keep.iter().map(|c| widths[*c] + 2).sum::<usize>();
+    let mut keep: Vec<usize> = (0..6).filter(|c| widths[*c] > 0).collect();
+    for drop in [2, 5, 4, 1] {
+        if total(&keep) <= width {
+            break;
+        }
+        keep.retain(|c| *c != drop);
+    }
+    let rows = list
+        .items
+        .iter()
+        .zip(&cells)
+        .map(|(client, row)| {
+            let (glyph, tone) = if client.connected() {
+                (theme.glyph(Glyph::Ready), Tone::Ok)
+            } else {
+                (theme.glyph(Glyph::Stopped), Tone::Quiet)
+            };
+            let mut spans = vec![
+                Span::raw(" "),
+                Span::styled(format!("{glyph} "), theme.tone(tone)),
+            ];
+            for (place, column) in keep.iter().enumerate() {
+                let (cell, style) = &row[*column];
+                // The last cell needs no padding.
+                let shown = if place + 1 == keep.len() {
+                    cell.clone()
+                } else {
+                    format!("{cell:<pad$}  ", pad = widths[*column])
+                };
+                spans.push(Span::styled(shown, *style));
+            }
+            fit(spans, width)
+        })
+        .collect();
+    (rows, counts)
+}
+
+/// One client's cells, each with its style: name, short id, address, when
+/// it connected or was last seen, its pairing and what it mirrors.
+fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style); 6] {
+    let theme = &app.theme;
+    let quiet = theme.quiet();
+    let name = clip(&clean(&client.name), 24);
+    let name = if name.is_empty() {
+        "unnamed".to_owned()
+    } else {
+        name
+    };
+    let address = client.address().map(clean).unwrap_or_default();
+    let since = |ms: u64| now.map(|now| now.saturating_sub(ms));
+    let seen = match client.connected_since() {
+        Some(ms) => match since(ms) {
+            Some(elapsed) => format!("connected for {}", connected_for(elapsed)),
+            None => "connected".to_owned(),
+        },
+        None if client.connected() => "connected".to_owned(),
+        None => match client.last_seen_ms.and_then(since) {
+            Some(elapsed) => format!("last seen {}", ago(elapsed)),
+            None => "not seen yet".to_owned(),
+        },
+    };
+    let seen = match client.connections.len() {
+        0 | 1 => seen,
+        n => format!("{seen} ({n} connections)"),
+    };
+    let (pairing, pairing_style) = match (client.paired, client.pairings) {
+        (false, _) => ("not paired".to_owned(), theme.tone(Tone::Attention)),
+        (true, 0 | 1) => ("paired".to_owned(), quiet),
+        (true, pairings) => (format!("{pairings} pairings"), quiet),
+    };
+    let mirror = client
+        .mirror()
+        .map(|mirror| {
+            let ports = if mirror.ports == 1 { "port" } else { "ports" };
+            let mut text = format!("mirrors {} of {} {ports}", mirror.bound, mirror.ports);
+            match mirror.skipped_lanes {
+                0 => {}
+                1 => text.push_str(", 1 lane skipped"),
+                n => text.push_str(&format!(", {n} lanes skipped")),
+            }
+            text
+        })
+        .unwrap_or_default();
+    let seen_style = if client.connected() {
+        Style::new()
+    } else {
+        quiet
+    };
+    [
+        (name, Style::new().add_modifier(Modifier::BOLD)),
+        (short_id(&client.id), quiet),
+        (address, quiet),
+        (seen, seen_style),
+        (pairing, pairing_style),
+        (mirror, quiet),
+    ]
+}
+
+/// `40s`, `5m`, `2h 14m` or `3d 2h` for `elapsed` milliseconds: whole
+/// minutes under an hour, as `devlanes daemon clients` counts them.
+fn connected_for(elapsed: u64) -> String {
+    let seconds = elapsed / 1000;
+    let (days, hours, minutes) = (seconds / 86_400, seconds / 3600 % 24, seconds / 60 % 60);
+    match (days, hours, minutes) {
+        (0, 0, 0) => format!("{seconds}s"),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
+}
+
+/// `just now`, `5m ago`, `3h ago` or `2d ago` for `elapsed` milliseconds,
+/// as `devlanes daemon clients` words it.
+fn ago(elapsed: u64) -> String {
+    match elapsed / 1000 {
+        0..60 => "just now".into(),
+        seconds @ 60..3600 => format!("{}m ago", seconds / 60),
+        seconds @ 3600..86_400 => format!("{}h ago", seconds / 3600),
+        seconds => format!("{}d ago", seconds / 86_400),
+    }
 }
 
 /// A box's glyph and tone by link state.

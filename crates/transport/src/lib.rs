@@ -24,7 +24,9 @@
 //! Before the welcome, the box's [`PairingGate`] decides whether it serves the
 //! client: by its id and remote token, or after the client traded a one-time
 //! code for a token ([`pairing`]). A client it does not serve learns nothing
-//! about the box.
+//! about the box. A box that takes no connections at all answers every hello
+//! with [`refuse`] instead, which the client reports as a permanent
+//! [`SessionError::Refused`].
 //!
 //! The box side is [`serve`], driven by injected [`BoxServices`]. [`Link`]
 //! reconnects with backoff and keeps one [`ClientRegistry`] across sessions.
@@ -57,7 +59,7 @@ pub use registry::{
     UnitInfo, UnitKey, UnitKind, serving,
 };
 pub use server::{
-    BoxServices, ClientInfo, Dialer, LoopbackDialer, ServeError, ServeOptions, serve,
+    BoxServices, ClientInfo, Dialer, LoopbackDialer, ServeError, ServeOptions, refuse, serve,
 };
 pub use session::{
     DataStream, OpenError, Session, SessionEnd, SessionError, SessionOptions, Timing,

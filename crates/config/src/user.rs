@@ -413,7 +413,7 @@ impl Default for DaemonConfig {
 /// machine serves clients when it is a box.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"start_daemon":false},{"require_pairing":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
+#[schemars(extend("examples" = [{"allow_connections":false},{"start_daemon":false},{"require_pairing":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
 pub struct RemoteConfig {
     /// Boxes that `devlanes remote connect <name>` reaches by running a command instead of
     /// SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace.
@@ -421,6 +421,12 @@ pub struct RemoteConfig {
     /// `remote connect`.
     #[schemars(extend("examples" = [{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}]))]
     pub boxes: std::collections::BTreeMap<String, RemoteBox>,
+    /// Let other machines connect to this one with `devlanes remote connect`. Defaults to
+    /// true. When false, every client is turned away and `devlanes daemon pair` gives no
+    /// codes. Connecting from this machine to a box still works. Clients already
+    /// connected stay until they disconnect. An invalid value counts as false.
+    #[schemars(extend("examples" = [true,false]))]
+    pub allow_connections: bool,
     /// Start the devlanes daemon here when a client connects and it is not running.
     /// Defaults to true. When false, a client keeps retrying until you run
     /// `devlanes daemon start` here. An invalid value counts as false.
@@ -435,11 +441,12 @@ pub struct RemoteConfig {
 }
 
 impl Default for RemoteConfig {
-    /// Connections start the daemon and need pairing unless turned off; no
-    /// command boxes.
+    /// Connections are allowed, start the daemon and need pairing unless
+    /// turned off; no command boxes.
     fn default() -> Self {
         Self {
             boxes: std::collections::BTreeMap::new(),
+            allow_connections: true,
             start_daemon: true,
             require_pairing: true,
         }
@@ -1315,6 +1322,8 @@ pub fn load_user_lenient(path: impl AsRef<Path>) -> (UserConfig, Vec<ConfigError
 /// `devlanes tunnel --stdio` applies it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BoxSettings {
+    /// `remote.allow_connections`.
+    pub allow_connections: bool,
     /// `remote.start_daemon`.
     pub start_daemon: bool,
     /// `remote.require_pairing`.
@@ -1326,11 +1335,12 @@ pub struct BoxSettings {
 /// machine as a box: those under `remote`, except `remote.boxes`, which is
 /// about the boxes this machine connects to, and a failure of the whole file
 /// (unreadable, not YAML, or too many problems to keep any setting), which
-/// loses `remote` with everything else. With any such problem both settings
-/// fall to the safe side instead of their defaults: starting is off, so a
-/// mistyped `start_daemon: false` does not start a daemon the user meant to
-/// keep stopped, and pairing is required, so a mistyped `require_pairing:
-/// false` cannot let unpaired clients in.
+/// loses `remote` with everything else. With any such problem every setting
+/// falls to the safe side instead of its default: connections are refused,
+/// so a mistyped `allow_connections: false` keeps clients out, starting is
+/// off, so a mistyped `start_daemon: false` does not start a daemon the user
+/// meant to keep stopped, and pairing is required, so a mistyped
+/// `require_pairing: false` cannot let unpaired clients in.
 pub fn box_settings(
     config: &UserConfig,
     problems: Vec<ConfigError>,
@@ -1348,11 +1358,13 @@ pub fn box_settings(
         .collect();
     let settings = if remote.is_empty() {
         BoxSettings {
+            allow_connections: config.remote.allow_connections,
             start_daemon: config.remote.start_daemon,
             require_pairing: config.remote.require_pairing,
         }
     } else {
         BoxSettings {
+            allow_connections: false,
             start_daemon: false,
             require_pairing: true,
         }

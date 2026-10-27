@@ -6,6 +6,7 @@
 //! spill into another widget or move the real terminal's cursor.
 
 mod boxes;
+mod connect;
 pub(crate) mod daemon;
 mod dialog;
 mod list;
@@ -443,8 +444,7 @@ fn severity(lane: &LaneSummary) -> u8 {
 }
 
 /// ` devlanes   1 acme ●   2 shop ·` on the left, the message, then
-/// `Monitor  Daemon` on the right, and `Boxes` once a box is known, each
-/// label's first letter its key.
+/// `Monitor  Daemon  Boxes` on the right, each label's first letter its key.
 fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let width = usize::from(area.width);
@@ -452,21 +452,15 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     let badge = daemon_badge(app);
     let boxes_badge = boxes_badge(app);
     let mut buttons: Vec<(Vec<Span<'static>>, KeyCode)> = Vec::new();
-    // `Boxes` only once this machine knows a box; B works either way.
-    let boxes = (!app.boxes.hosts.is_empty() || app.view == View::Boxes).then_some((
-        'B',
-        "oxes",
-        View::Boxes,
-    ));
-    // Below 100 columns a badge's words, or a third button, would crowd out
-    // the message, so the buttons of other views drop to their key letter.
-    let compact = (badge.is_some() || boxes_badge.is_some() || boxes.is_some()) && width < 100;
+    // Below 100 columns three labels would crowd out the message, so the
+    // buttons of other views drop to their key letter.
+    let compact = width < 100;
     let views = [
-        Some(('M', "onitor", View::Monitor)),
-        Some(('D', "aemon", View::Daemon)),
-        boxes,
+        ('M', "onitor", View::Monitor),
+        ('D', "aemon", View::Daemon),
+        ('B', "oxes", View::Boxes),
     ];
-    for (key, rest, view) in views.into_iter().flatten() {
+    for (key, rest, view) in views {
         let active = app.view == view;
         let label_style = if active {
             theme
@@ -1095,22 +1089,10 @@ fn hints(app: &App) -> Vec<Hint> {
             } else {
                 ("d", "unfold", ch('d'))
             };
-            let clients = app.daemon.clients.shown();
             let tab = match app.daemon.focus {
                 crate::app::DaemonBox::Log => ("tab", "to checks", KeyCode::Tab),
-                crate::app::DaemonBox::Checks if clients => ("tab", "to clients", KeyCode::Tab),
-                crate::app::DaemonBox::Checks | crate::app::DaemonBox::Clients => {
-                    ("tab", "to log", KeyCode::Tab)
-                }
+                crate::app::DaemonBox::Checks => ("tab", "to log", KeyCode::Tab),
             };
-            if app.daemon.focus == crate::app::DaemonBox::Clients && !app.daemon.stopped {
-                let mut hints = Vec::new();
-                if app.daemon.clients.current().is_some() {
-                    hints.extend([("j k", "select", ch('j')), ("x", "revoke", ch('x'))]);
-                }
-                hints.extend([tab, ("R", "restart", ch('R')), ("S", "stop", ch('S'))]);
-                return hints;
-            }
             let mut hints = vec![
                 ("j k", "scroll", ch('k')),
                 follow,
@@ -1132,11 +1114,31 @@ fn hints(app: &App) -> Vec<Hint> {
             return hints;
         }
         View::Boxes => {
-            return vec![
-                ("j k", "scroll", ch('j')),
-                ("tab", "projects", KeyCode::Tab),
-                ("esc", "back", KeyCode::Esc),
-            ];
+            let mut hints = Vec::new();
+            if let Some(host) = app.boxes.selected_host() {
+                let enter = match host.state.as_str() {
+                    "connected" => "disconnect",
+                    "needs_auth" => "sign in",
+                    "needs_pairing" => "pair",
+                    _ => "connect",
+                };
+                hints.push(("enter", enter, KeyCode::Enter));
+                if !matches!(
+                    host.state.as_str(),
+                    "connected" | "disconnected" | "stopped"
+                ) {
+                    hints.push(("d", "disconnect", ch('d')));
+                }
+            }
+            if app.boxes.selected_client().is_some() {
+                hints.push(("x", "revoke", ch('x')));
+            }
+            hints.extend([("n", "new box", ch('n')), ("p", "pairing code", ch('p'))]);
+            if app.boxes.hosts.len() + app.boxes.clients.count() > 1 {
+                hints.push(("j k", "select", ch('j')));
+            }
+            hints.push(("esc", "back", KeyCode::Esc));
+            return hints;
         }
         View::Project => {}
     }

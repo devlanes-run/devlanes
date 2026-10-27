@@ -1,4 +1,4 @@
- de┌───────────────────────────────────────────────────────────────────────┐mon
+ de┌───────────────────────────────────────────────────────────────────────┐  B
  la│   ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎   │nes
 ┌ @│   ╎                   ▄▄             ▄▄                           ╎   │───┐
 │  │   ╎                   ██             ██                           ╎   │   │
@@ -24,7 +24,7 @@
  r └──────────────────────────────────────────────── enter or esc to start ┘t
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3-75 bold, 76-78 dim
+0: 1-2 bold color220, 3-75 bold, 78 bold
 1: 0-2 dim, 3 bold, 7 darkgray, 15 darkgray, 23 darkgray, 31 darkgray, 39 dim yellow, 47 darkgray, 55 darkgray, 63 darkgray, 71 darkgray, 75 bold, 76-79 dim
 2: 0 darkgray, 2-3 bold, 7 darkgray, 27-28 yellow, 42-43 yellow, 71 darkgray, 75 bold, 76-79 darkgray
 3: 0 darkgray, 3 bold, 7 darkgray, 27-28 lightyellow, 42-43 lightyellow, 71 darkgray, 75 bold, 79 darkgray

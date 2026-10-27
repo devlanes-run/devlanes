@@ -331,10 +331,49 @@ fn by_client(pairings: &[RemotePairing]) -> Vec<Paired> {
     clients
 }
 
+/// `connections_off`: this machine turns every client away, so a code would
+/// be of no use. `invalid` says the user config's remote settings have
+/// problems and count as false, rather than the setting being false.
+fn connections_off(invalid: bool) -> RpcError {
+    let message = if invalid {
+        "this machine does not accept connections because the remote settings in its user \
+         config are invalid"
+    } else {
+        "this machine does not accept connections because remote.allow_connections is false"
+    };
+    RpcError::new(
+        "connections_off",
+        json!({"message": message, "invalid": invalid}),
+        4,
+    )
+}
+
+/// `remote.allow_connections` of the user config in `home`, read as the
+/// tunnel reads it ([`devlanes_config::box_settings`]): a missing file
+/// allows connections, a problem under `remote` or with the whole file does
+/// not. The second value says such a problem made it false. Blocking.
+fn allow_connections(home: &std::path::Path) -> (bool, bool) {
+    let path = home.join("config.yaml");
+    if !path.exists() {
+        return (true, false);
+    }
+    let (config, problems) = devlanes_config::load_user_lenient(&path);
+    let (settings, remote) = devlanes_config::box_settings(&config, problems);
+    (settings.allow_connections, !remote.is_empty())
+}
+
 impl Inner {
-    /// `remote.pair`: a new one-time code, or `pairing_paused` while wrong
-    /// codes refuse every code. The code is never logged.
-    pub(crate) fn pair_method(&self) -> Result<Value, RpcError> {
+    /// `remote.pair`: a new one-time code, `connections_off` when this
+    /// machine's user config turns clients away, or `pairing_paused` while
+    /// wrong codes refuse every code. The code is never logged.
+    pub(crate) async fn pair_method(&self) -> Result<Value, RpcError> {
+        let home = self.opts.home.clone();
+        let (allowed, invalid) = tokio::task::spawn_blocking(move || allow_connections(&home))
+            .await
+            .unwrap_or((false, true));
+        if !allowed {
+            return Err(connections_off(invalid));
+        }
         let minted = lock(&self.remote.codes).mint(Instant::now());
         let code = match minted {
             Ok(code) => code,

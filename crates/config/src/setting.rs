@@ -392,6 +392,7 @@ mod tests {
         assert_eq!(applies("terminal.progress"), Applies::NextCommand);
         assert_eq!(applies("terminal"), Applies::NextCommand);
         assert_eq!(applies("start.restore"), Applies::NextCommand);
+        assert_eq!(applies("remote.allow_connections"), Applies::NextCommand);
         assert_eq!(applies("remote.start_daemon"), Applies::NextCommand);
         assert_eq!(applies("remote.require_pairing"), Applies::NextCommand);
         assert_eq!(applies("startup.mode"), Applies::Daemon);

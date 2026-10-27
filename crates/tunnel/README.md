@@ -40,10 +40,11 @@ async fn serve_pipe(
 ## API
 
 - `run_stdio(paths, start_daemon, require_pairing)`: the `tunnel --stdio` entry point.
+- `refuse_stdio(reason)`: the entry point instead when the box's `remote.allow_connections` is false. It writes the preamble, tells the client `reason` before the welcome and fails with `TunnelError::Refused`, without the box daemon.
 - `services(paths, client, require_pairing)`: `BoxServices` for `devlanes_transport::serve`; `client`, with the id and name from each client's handshake, is listed by the box's `status` while the session lasts.
 - `box_info(paths)`: the box daemon's HTTPS port and `ports.range`, for `ServeOptions::box_info`.
 - `server_label()`: the version label sent in the handshake; `SESSION_BOUND` is what `run_stdio` adds to it on Windows when the daemon it started could not leave the ssh session's job.
-- `TunnelError`: the box daemon was unreachable or stopped, or the session failed; `exit_code` gives the process status.
+- `TunnelError`: the box daemon was unreachable or stopped, the client was turned away, or the session failed; `exit_code` gives the process status.
 
 ## Config example
 

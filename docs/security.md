@@ -74,7 +74,7 @@ Environments, `.env` values, secrets, logs, terminal output, commands and either
 
 ### Client details on the box
 
-Anyone who runs commands on the box as you, an agent working there included, sees what clients tell it and what sshd adds: each connected client's id, host name, SSH address and connection time in `devlanes status --json`, `devlanes daemon clients` and the `remote clients` box on the TUI's daemon page (`D`), and from the mirror report the names of the client's local lanes and the names and pids of programs there that hold box ports, in `status --json` and `devlanes url print --json`. Paired clients stay listed with their names and when they last connected.
+Anyone who runs commands on the box as you, an agent working there included, sees what clients tell it and what sshd adds: each connected client's id, host name, SSH address and connection time in `devlanes status --json`, `devlanes daemon clients` and the clients listed under this machine in the TUI's boxes view (`B`), and from the mirror report the names of the client's local lanes and the names and pids of programs there that hold box ports, in `status --json` and `devlanes url print --json`. Paired clients stay listed with their names and when they last connected.
 
 ### Dial authorization on the box
 
@@ -101,7 +101,7 @@ A box serves only clients it paired with; [pairing](remote.md#pairing) shows how
 - A code from `devlanes daemon pair` carries 40 random bits, works once, expires after 10 minutes and lives only in the box daemon's memory. Every wrong code voids every outstanding code, and 5 wrong codes within 10 minutes stop the box from accepting or handing out any until the oldest of them is 10 minutes old. Failures count across all of the box's tunnels.
 - A remote token is `dl_rt_` and 256 random bits. The client keeps it in its `state.db`; the box stores only its SHA-256 and compares hashes, and codes, in constant time. The box keeps up to 8 pairings per client.
 - A client id (`dl_cid_` and 256 random bits) and host name are what the client says it is. Neither is a credential: the box accepts a client only with the token of one of that id's pairings, or a valid code.
-- `devlanes daemon revoke`, or `x` in the TUI's `remote clients` box on the daemon page, deletes a client's pairings and ends its sessions at once. `devlanes daemon reset-state` deletes every pairing on a box, voids its codes and ends every session; on a client it deletes every token.
+- `devlanes daemon revoke`, or `x` on a client in the TUI's boxes view, deletes a client's pairings and ends its sessions at once. `devlanes daemon reset-state` deletes every pairing on a box, voids its codes and ends every session; on a client it deletes every token.
 
 Until the box accepts its token or code, a client gets no registry, version label or box info, and the box answers no stream it opens except the control stream ([pairing](remote.md#pairing) lists what an unpaired client can still see).
 
@@ -123,7 +123,7 @@ A box command (`docker exec`, `kubectl exec`, `wsl.exe`, `gh codespace ssh`) aut
 
 ## Settings
 
-`remote.require_pairing` in the box's user config, `true` by default, makes the box serve only paired clients; `false` serves every machine SSH lets in. `remote.start_daemon`, also `true` by default, lets any connection start the box daemon, paired or not; with `false` only you start it, and clients report it as stopped and retry. A daemon started this way runs no lane until you start one from a shell. The tunnel reads both at each connection. Any problem under `remote` in that file, other than under `remote.boxes`, turns pairing on and starting off, and so does a file that cannot be read, is not YAML or has too many problems to keep any setting.
+`remote.allow_connections` in the box's user config, `true` by default, lets other machines connect at all. With `false`, the tunnel turns every client away before the welcome with only its reason, without starting or asking the box daemon, and `devlanes daemon pair` gives no code. It does not affect the boxes this machine connects to, and sessions already open stay until they end. `remote.require_pairing`, also `true` by default, makes the box serve only paired clients; `false` serves every machine SSH lets in. `remote.start_daemon`, also `true` by default, lets any connection start the box daemon, paired or not; with `false` only you start it, and clients report it as stopped and retry. A daemon started this way runs no lane until you start one from a shell. The tunnel reads all three at each connection. Any problem under `remote` in that file, other than under `remote.boxes`, turns connections off, pairing on and starting off, and so does a file that cannot be read, is not YAML or has too many problems to keep any setting.
 
 `hidden` on a service (`services.<name>.hidden`), in `infra.hidden` for containers, or on an `infra.external` entry keeps that unit on the box: clients never receive its name, ports or hostnames, a hidden service's `sync` folders are not synced, and the box refuses streams to its ports, also when a unit that is not hidden lists the same port ([hidden](remote.md#hidden)).
 
@@ -135,8 +135,9 @@ A box command (`docker exec`, `kubectl exec`, `wsl.exe`, `gh codespace ssh`) aut
 
 ## Recommendations
 
+- Set `remote.allow_connections: false` on a machine that only connects to boxes and should never be one.
 - Keep `remote.require_pairing` on, and run `devlanes daemon pair` yourself rather than leaving it to an agent when you can.
-- Revoke a machine you retire with `devlanes daemon revoke` (or `x` in the TUI's `remote clients` box), and remove its key from `authorized_keys` too.
+- Revoke a machine you retire with `devlanes daemon revoke` (or `x` on it in the TUI's boxes view), and remove its key from `authorized_keys` too.
 - Mark services and containers `hidden` on a box when their ports should stay there, such as admin pages, debuggers and databases without passwords, and give box services authentication rather than trusting loopback.
 - Let services on a box listen on loopback; devlanes dials them there, so a wildcard address only adds the box's own network.
 - Set `remote.start_daemon: false` on a box where a stopped daemon should stay stopped.

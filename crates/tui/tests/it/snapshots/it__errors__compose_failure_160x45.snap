@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/errors.rs
 expression: screen(&buffer)
 ---
-" devlanes  acme  1 main  2 feat/portal   ✕ start acme@1:portal failed: docker compose failed (exit status 1); error: open /work/acme/worktree…  Monitor  Daemon "
+" devlanes  acme  1 main  2 feat/portal   ✕ start acme@1:portal failed: docker compose failed (exit status 1); error: open /work/acme/w…  Monitor  Daemon  Boxes "
 "┌ @1 · 0/1 up ─────────────────────────────────┐┌ portal  stopped ─────────────────────────────────────────────────────────────────────────────────────────────┐"
 "│ ▾ services                                 1 ││ ✕ Start acme@1:portal failed: docker compose failed (exit status 1)                                          │"
 "│   · portal                      start failed ││   error: open /work/acme/worktrees/portal-checkout-with-a-long-directory-name/compose.yaml: no such file or  │"

@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   starting feat/checko…  Monitor  Daemon
+ devlanes  1 acme   2 billing   3 shop   starting feat/checkout: 4 of…  M  D  B
  lanes  1 main  2 feat/checkout 4/8  +2 more            1-9 or [ ] switch lanes
 ┌ @0 · 34/38 up ───────────────┐┌ Gateway API  api-gateway · ready ────────────┐
 │▌  ● Gateway API              ││ listening on :41000                          │
@@ -24,7 +24,7 @@
  TYPING into Gateway API · keys go to the program · esc or ctrl+] returns to th…
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 64 bold, 65-70 dim, 73 bold, 74-78 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 72 bold, 75 bold, 78 bold
 1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 36-43 dim, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16-31 darkgray, 32-44 bold, 45-60 bold dim, 61-65 bold green, 66-79 bold
 3: 0 darkgray, 1-3 bold, 4-5 bold green, 6-16 bold blue, 31 darkgray, 32 bold, 34-52 bold, 79 bold

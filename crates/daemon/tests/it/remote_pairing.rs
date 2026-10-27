@@ -622,3 +622,63 @@ async fn two_names_for_one_box_keep_both_pairings() {
     .await
     .expect("timeout");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+/// A box with `remote.allow_connections: false` turns the client away before
+/// pairing: `connect` fails with the box's reason, and the link stays failed
+/// with it instead of retrying.
+async fn a_box_that_takes_no_connections_fails_the_link_with_its_reason() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let reason =
+            "the box does not accept connections because remote.allow_connections is false there";
+        let side = BoxSide::start_refusing(&tmp, "box", "18200-18224", reason).await;
+        let client = ClientSide::start(&tmp, "client", "18225-18249", &side).await;
+        let refused = connect_unattended(&client, json!({"host": "box", "background": true}))
+            .await
+            .expect_err("connected to a box that takes no connections");
+        assert_eq!(refused.code, "remote_failed", "{refused:?}");
+        assert_eq!(refused.data["message"], reason, "{refused:?}");
+        let host = client.host().await;
+        assert_eq!(host["state"], "failed", "{host}");
+        assert_eq!(host["error"], reason, "{host}");
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `daemon pair` gives no code while `remote.allow_connections` is false, or
+/// while the remote settings it is read with are invalid, and gives one
+/// again once connections are allowed.
+async fn pairing_needs_connections_to_be_allowed() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "18200-18224").await;
+        let config = side.h.home.join("config.yaml");
+        let pair = || async {
+            side.h
+                .call(Method::RemotePair, json!({}), Context::default())
+                .await
+        };
+        for (source, invalid) in [
+            ("remote:\n  allow_connections: false\n", false),
+            ("remote:\n  allow_connections: nope\n", true),
+        ] {
+            tokio::fs::write(&config, source).await.expect("config");
+            let refused = pair().await.expect_err("a code with connections off");
+            assert_eq!(refused.code, "connections_off", "{refused:?}");
+            assert_eq!(refused.data["invalid"], invalid, "{refused:?}");
+        }
+        tokio::fs::write(&config, "remote:\n  allow_connections: true\n")
+            .await
+            .expect("config");
+        let paired = pair().await.expect("a code");
+        assert!(paired["code"].as_str().is_some(), "{paired}");
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}

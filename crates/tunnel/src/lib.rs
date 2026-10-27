@@ -17,7 +17,9 @@
 //! - with `remote.require_pairing` (the default), a client is served only
 //!   after the daemon accepted its remote token (`remote.pairing.verify`) or
 //!   traded its one-time code for one (`remote.pairing.claim`), and its feed
-//!   ends when `daemon revoke` deletes its pairing.
+//!   ends when `daemon revoke` deletes its pairing;
+//! - with `remote.allow_connections: false`, [`refuse_stdio`] turns every
+//!   client away before the welcome and never reaches the daemon.
 
 mod pairing;
 mod registry;
@@ -58,6 +60,10 @@ pub enum TunnelError {
     /// (`remote.start_daemon: false`).
     #[error("box daemon is not running")]
     DaemonStopped,
+    /// The box's user config turns connections off
+    /// (`remote.allow_connections: false`); the client was told so.
+    #[error("connections to this machine are off, so the client was turned away")]
+    Refused,
     /// The box daemon's `daemon.status` did not have the expected shape.
     #[error("box daemon sent an unexpected daemon.status: {0}")]
     Status(#[from] serde_json::Error),
@@ -75,7 +81,11 @@ impl TunnelError {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::DaemonStopped => u8::try_from(EXIT_DAEMON_STOPPED).unwrap_or(1),
-            Self::Daemon(_) | Self::Status(_) | Self::Stdout(_) | Self::Serve(_) => 1,
+            Self::Daemon(_)
+            | Self::Refused
+            | Self::Status(_)
+            | Self::Stdout(_)
+            | Self::Serve(_) => 1,
         }
     }
 }
@@ -222,6 +232,23 @@ pub async fn run_stdio(
     )
     .await?;
     Ok(())
+}
+
+/// Turns the client on this process's stdin and stdout away with `reason`,
+/// for a box whose `remote.allow_connections` is false. Writes
+/// [`TUNNEL_PREAMBLE`] first, as [`run_stdio`] does, so the client reads the
+/// refusal as the box's answer. The box daemon is neither started nor asked.
+/// Fails with [`TunnelError::Refused`] once the client was told, so the
+/// process exits with a failure and says why on stderr.
+pub async fn refuse_stdio(reason: &str) -> Result<(), TunnelError> {
+    write_preamble(&mut tokio::io::stdout()).await?;
+    devlanes_transport::refuse(
+        devlanes_transport::stdio(),
+        reason.to_owned(),
+        devlanes_transport::Timing::default(),
+    )
+    .await?;
+    Err(TunnelError::Refused)
 }
 
 /// The `daemon.status` fields a box reports to clients; a daemon from before
