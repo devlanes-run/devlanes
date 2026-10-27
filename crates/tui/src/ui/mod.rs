@@ -1104,9 +1104,9 @@ fn hints(app: &App) -> Vec<Hint> {
                 }
             };
             if app.daemon.focus == crate::app::DaemonBox::Clients && !app.daemon.stopped {
-                let mut hints = vec![("j k", "select", ch('j'))];
+                let mut hints = Vec::new();
                 if app.daemon.clients.current().is_some() {
-                    hints.push(("x", "revoke", ch('x')));
+                    hints.extend([("j k", "select", ch('j')), ("x", "revoke", ch('x'))]);
                 }
                 hints.extend([tab, ("R", "restart", ch('R')), ("S", "stop", ch('S'))]);
                 return hints;

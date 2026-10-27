@@ -229,6 +229,38 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     Ok(())
 }
 
+/// A click on a client focuses the box and selects it; the wheel over the
+/// box moves the selection instead of scrolling the log.
+#[tokio::test]
+async fn a_click_selects_a_client() -> TestResult {
+    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    let mut app = with_clients(120, 40, clients(true)).await?;
+    render(&app)?;
+    let (rows, first) = app.daemon_clients_rows.get();
+    assert_eq!(first, 0);
+    let mouse = |kind, row| {
+        Msg::Mouse(MouseEvent {
+            kind,
+            column: rows.x + 4,
+            row,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        })
+    };
+    app.update(mouse(MouseEventKind::Down(MouseButton::Left), rows.y + 1));
+    assert_eq!(app.daemon.focus, DaemonBox::Clients);
+    assert_eq!(
+        app.daemon.clients.current().map(|c| c.name.as_str()),
+        Some("laptop")
+    );
+    app.update(mouse(MouseEventKind::ScrollDown, rows.y));
+    assert_eq!(
+        app.daemon.clients.current().map(|c| c.name.as_str()),
+        Some("tablet")
+    );
+    assert_eq!(app.daemon.scroll, 0, "the log did not scroll");
+    Ok(())
+}
+
 /// The whole loop: `x` and `y` on laptop send `remote.revoke` with its id,
 /// and the list fetched after it no longer has it.
 #[tokio::test]

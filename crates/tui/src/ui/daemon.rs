@@ -95,7 +95,10 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         let content = clients_rows(app, list, usize::from(area.width.saturating_sub(2)));
         let rows =
             u16::try_from(content.note.len() + content.rows.len().max(1)).unwrap_or(u16::MAX);
-        let height = (rows + 2).min((below.height / 2).max(3)).min(below.height);
+        let height = rows
+            .saturating_add(2)
+            .min((below.height / 2).max(3))
+            .min(below.height);
         let boxed = Rect::new(below.x, below.y, below.width, height);
         render_clients(app, frame, boxed, content);
         below = Rect::new(
