@@ -37,7 +37,8 @@ pub(crate) fn load(home: &Path) -> io::Result<ClientIdentity> {
 /// never sees a half-written id, and an id another daemon of this home just
 /// stored is read instead of replaced. Where the file system has no hard
 /// links, the id is written to its file directly, which also fails when the
-/// file exists; a daemon reading at that moment may then see a partial id.
+/// file exists. A partial id could only be seen by a second daemon of the
+/// same home, which `daemon.lock` rules out; the daemon reads the file once.
 fn stored_id(home: &Path) -> io::Result<String> {
     stored_id_with(home, |from, to| std::fs::hard_link(from, to))
 }
