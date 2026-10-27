@@ -223,12 +223,12 @@ without the daemon.",
         #[command(subcommand)]
         command: CertsCommand,
     },
-    /// Connect to boxes over SSH or a command and mirror their lanes here; on a box, pair and revoke clients
+    /// Connect to boxes over SSH or a command and mirror their lanes here
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
     },
-    /// Run, stop and install the background daemon
+    /// Run, stop and install the background daemon, and pair machines that connect to this one
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -566,19 +566,9 @@ pub enum RemoteCommand {
         /// Return once connected instead of staying attached for prompts
         #[arg(long)]
         background: bool,
-        /// Pair with the box using this one-time code from devlanes remote pair on the box, instead of entering it when asked (also with --background); used only by this request
+        /// Pair with the box using this one-time code from devlanes daemon pair on the box, instead of entering it when asked (also with --background); used only by this request
         #[arg(long, value_name = "CODE")]
         code: Option<String>,
-    },
-    /// On a box: print a one-time code that pairs a client with this machine on its next devlanes remote connect
-    Pair,
-    /// On a box: list paired clients and the clients connected now
-    Clients,
-    /// On a box: delete a client's pairings and end its connections now; a client connected without pairing (remote.require_pairing: false) has none to revoke
-    Revoke {
-        /// The client's name or id from devlanes remote clients (a unique start of the id works)
-        #[arg(value_name = "CLIENT")]
-        client: String,
     },
     /// Disconnect from a box, remove its mirrored ports and hostnames, and stop reconnecting it after daemon restarts
     Disconnect {
@@ -727,6 +717,16 @@ pub enum DaemonCommand {
     Uninstall,
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
+    /// Print a one-time code a machine enters on its next devlanes remote connect to this one
+    Pair,
+    /// List machines paired with this one and the ones connected now (devlanes remote connect)
+    Clients,
+    /// End a client's connections and delete its pairings; a machine connected without pairing (remote.require_pairing: false) has none
+    Revoke {
+        /// The client's name or id from devlanes daemon clients (a unique start of the id works)
+        #[arg(value_name = "CLIENT")]
+        client: String,
+    },
     /// Run the daemon in this process (spawned by the client)
     #[command(hide = true)]
     Run,
@@ -1140,6 +1140,11 @@ impl Cli {
                 DaemonCommand::Status => (Method::DaemonStatus, json!({})),
                 DaemonCommand::Stop => (Method::DaemonShutdown, json!({})),
                 DaemonCommand::ResetState => (Method::DaemonResetState, json!({})),
+                DaemonCommand::Pair => (Method::RemotePair, json!({})),
+                DaemonCommand::Clients => (Method::RemoteClients, json!({})),
+                DaemonCommand::Revoke { client } => {
+                    (Method::RemoteRevoke, json!({"client": client}))
+                }
                 DaemonCommand::Restart => {
                     // The lanes that ran come back with this shell's env, as `lane resume`.
                     context.env = Some(environment());
@@ -1164,11 +1169,6 @@ impl Cli {
                     Method::Connect,
                     json!({"host": host, "background": background, "code": code}),
                 ),
-                RemoteCommand::Pair => (Method::RemotePair, json!({})),
-                RemoteCommand::Clients => (Method::RemoteClients, json!({})),
-                RemoteCommand::Revoke { client } => {
-                    (Method::RemoteRevoke, json!({"client": client}))
-                }
                 RemoteCommand::Disconnect { host } => (Method::Disconnect, json!({"host": host})),
                 RemoteCommand::Ls => (Method::HostList, json!({})),
                 RemoteCommand::Sync => (Method::SyncStatus, json!({})),

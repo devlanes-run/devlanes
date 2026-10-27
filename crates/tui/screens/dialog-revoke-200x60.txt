@@ -28,7 +28,7 @@
 │10:16:06 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-ga│                                                                │                                                                  │
 │10:17:07 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-au│ It deletes the client's pairings under 2 names and ends its    │                                                                  │
 │10:18:08 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-us│ connection now.                                                │                                                                  │
-│10:20:00 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-ga│ To connect again it needs a new code from devlanes remote pair │                                                                  │
+│10:20:00 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-ga│ To connect again it needs a new code from devlanes daemon pair │                                                                  │
 │10:21:01 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-au│ here.                                                          │                                                                  │
 │10:23:03 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-or│                                                                │                                                                  │
 │10:24:04 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-ga│ y revoke   n cancel                                            │                                                                  │

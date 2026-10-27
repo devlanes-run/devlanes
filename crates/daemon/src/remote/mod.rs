@@ -98,7 +98,7 @@ pub(crate) struct Remotes {
     clients: Mutex<BTreeMap<ClientKey, (u64, RemoteClient)>>,
     next_client: AtomicU64,
     /// Box side: every open `remote.registry` feed by its serial, with its
-    /// client's id and the token `remote revoke` cancels to end it. Apart from
+    /// client's id and the token `daemon revoke` cancels to end it. Apart from
     /// `clients`, where a newer connection of a client replaces the entry
     /// while the older feed may still run.
     feeds: Mutex<BTreeMap<u64, (String, CancellationToken)>>,
@@ -751,7 +751,7 @@ fn sign_in_command(host: &str) -> String {
 /// The command that pairs with `host` again, with the code `devlanes remote
 /// pair` printed on the box.
 fn pair_command(host: &str) -> String {
-    format!("devlanes remote pair on {host}, then devlanes remote connect {host} --code <code>")
+    format!("devlanes daemon pair on {host}, then devlanes remote connect {host} --code <code>")
 }
 
 /// `time` in milliseconds since the Unix epoch.
@@ -876,7 +876,7 @@ struct ConnectParams {
     host: String,
     #[serde(default)]
     background: bool,
-    /// A pairing code from `devlanes remote pair` on the box.
+    /// A pairing code from `devlanes daemon pair` on the box.
     #[serde(default)]
     code: Option<String>,
 }
@@ -928,7 +928,7 @@ struct ClientGuard {
     engine: Arc<Inner>,
     key: ClientKey,
     serial: u64,
-    /// Cancelled by `remote revoke` to end the feed, and with it the session.
+    /// Cancelled by `daemon revoke` to end the feed, and with it the session.
     revoked: CancellationToken,
 }
 

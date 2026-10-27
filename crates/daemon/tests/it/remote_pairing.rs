@@ -1,7 +1,7 @@
 //! Pairing over the in-memory transport: a box that requires it serves a
 //! client only after the client traded a one-time code for a remote token,
 //! the client presents the token from then on, also after its daemon
-//! restarts, and `remote revoke` ends the client's session and refuses it
+//! restarts, and `daemon revoke` ends the client's session and refuses it
 //! until it pairs again. A child of `remote`, whose box and client harness it
 //! reuses.
 
@@ -27,7 +27,7 @@ use crate::{LIMIT, cx, eventually, repo, temp};
 
 /// The `fix` of a client waiting for pairing with box `host`.
 fn pair_fix(host: &str) -> String {
-    format!("devlanes remote pair on {host}, then devlanes remote connect {host} --code <code>")
+    format!("devlanes daemon pair on {host}, then devlanes remote connect {host} --code <code>")
 }
 
 /// `connect` with `params` from a CLI that cannot answer prompts: its
@@ -62,13 +62,13 @@ async fn stored_token(home: &Path, host: &str) -> Option<String> {
     token
 }
 
-/// The box's `remote clients` entry of the client with id `id`.
+/// The box's `daemon clients` entry of the client with id `id`.
 async fn listed(side: &BoxSide, id: &str) -> Option<Value> {
     let clients = side
         .h
         .call(Method::RemoteClients, json!({}), Context::default())
         .await
-        .expect("remote clients");
+        .expect("daemon clients");
     // The times are measured against the box's own clock, which it sends.
     assert!(clients["now_ms"].as_u64().is_some(), "{clients}");
     clients["items"]
@@ -81,7 +81,7 @@ async fn listed(side: &BoxSide, id: &str) -> Option<Value> {
 #[tokio::test(flavor = "multi_thread")]
 /// A client with no token and nobody to type a code waits in `needs_pairing`,
 /// and the box tells it nothing. With a code it pairs: it keeps a `dl_rt_`
-/// token, the box only the token's SHA-256, and `remote clients` lists it
+/// token, the box only the token's SHA-256, and `daemon clients` lists it
 /// paired and connected. The code is then used up. A restarted client daemon
 /// connects again with the token alone.
 async fn a_code_pairs_a_client_whose_token_serves_later_connections() {
@@ -110,7 +110,7 @@ async fn a_code_pairs_a_client_whose_token_serves_later_connections() {
         assert!(
             host["error"]
                 .as_str()
-                .is_some_and(|error| error.contains("devlanes remote pair")),
+                .is_some_and(|error| error.contains("devlanes daemon pair")),
             "{host}"
         );
         assert_eq!(host["lanes"], 0, "the box sent no registry: {host}");
@@ -195,7 +195,7 @@ async fn a_code_pairs_a_client_whose_token_serves_later_connections() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// `remote revoke` deletes the pairing and ends the client's session at once.
+/// `daemon revoke` deletes the pairing and ends the client's session at once.
 /// The client then waits in `needs_pairing` with its listener bound and its
 /// route on the pairing page, the box refuses its token, and a new code
 /// pairs it again.
@@ -273,7 +273,7 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
             .await
             .unwrap_or_default();
         assert!(page.contains("box-pairing-needed"), "{page}");
-        assert!(page.contains("devlanes remote pair"), "{page}");
+        assert!(page.contains("devlanes daemon pair"), "{page}");
         let gone = eventually(SOON, || async {
             listed(&side, &id).await.is_none().then_some(())
         })
@@ -306,8 +306,8 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A box with `remote.require_pairing: false` serves a client that brings
-/// no code, which `remote clients` lists as connected but not paired and
-/// `remote revoke` cannot revoke.
+/// no code, which `daemon clients` lists as connected but not paired and
+/// `daemon revoke` cannot revoke.
 async fn a_box_without_pairing_serves_every_client() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -396,7 +396,7 @@ async fn the_attached_cli_is_asked_for_the_code() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A wrong code voids the box's outstanding codes, so the right one fails
-/// after it. After five failures `remote pair` hands out no code and says
+/// after it. After five failures `daemon pair` hands out no code and says
 /// how long, every code is refused, and the client keeps the time the box
 /// takes codes again, not a wait that goes stale.
 async fn wrong_codes_void_codes_and_lock_out_pairing() {

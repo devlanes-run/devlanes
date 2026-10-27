@@ -10,7 +10,7 @@
 │ok           daemon · sandbox · docker · proxy · hosts                        │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ remote clients ──────────────────────────────────────────────────────────────┐
-│ No client is paired or connected. devlanes remote pair prints a code for one.│
+│ No client is paired or connected. devlanes daemon pair prints a code for one.│
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ daemon.log ────────────── following · all levels · repeats folded · 40 lines ┐
 │                                    unit=acme@0:api-gateway took=1.0s         │

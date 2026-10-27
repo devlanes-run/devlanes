@@ -1022,7 +1022,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 .map_or(10, |ms| ms.div_ceil(60_000).max(1));
             (
                 format!(
-                    "5 wrong pairing codes in the last 10 minutes; run `devlanes remote pair` again in {}",
+                    "5 wrong pairing codes in the last 10 minutes; run `devlanes daemon pair` again in {}",
                     super::plural(usize::try_from(minutes).unwrap_or(usize::MAX), "minute")
                 ),
                 None,
@@ -1032,15 +1032,15 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         // these methods by hand.
         "client_not_paired" => (
             "the client is not paired with this box".to_owned(),
-            Some(Hint::command(["remote", "clients"])),
+            Some(Hint::command(["daemon", "clients"])),
         ),
         "client_revoked" => (
             "the client's pairing was revoked on this box".to_owned(),
-            Some(Hint::command(["remote", "clients"])),
+            Some(Hint::command(["daemon", "clients"])),
         ),
         "pairing_refused" => (
             with_message("the box refused the pairing code".into()),
-            Some(Hint::command(["remote", "pair"])),
+            Some(Hint::command(["daemon", "pair"])),
         ),
         "random_failed" => (
             with_message("this machine's random number source failed".into()),
@@ -1069,7 +1069,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             if code == "client_not_found" && !names.is_empty() {
                 message.push_str(&format!("; paired: {}", names.join(", ")));
             }
-            (message, Some(Hint::command(["remote", "clients"])))
+            (message, Some(Hint::command(["daemon", "clients"])))
         }
         "client_identity" => {
             let path = text(data, "path");

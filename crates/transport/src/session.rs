@@ -200,11 +200,11 @@ fn box_protocol(server: &str, remote: u32) -> String {
 fn needs_pairing_text(reason: PairingReason) -> &'static str {
     match reason {
         PairingReason::Missing => {
-            "the box serves only paired clients; get a code with `devlanes remote pair` on the box"
+            "the box serves only paired clients; get a code with `devlanes daemon pair` on the box"
         }
         PairingReason::Invalid => {
             "the box no longer accepts this machine's pairing (it was revoked, or dropped as the \
-             oldest of too many); get a new code with `devlanes remote pair` on the box"
+             oldest of too many); get a new code with `devlanes daemon pair` on the box"
         }
     }
 }

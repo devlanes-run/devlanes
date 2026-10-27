@@ -156,7 +156,7 @@ async fn the_clients_box_says_how_to_pair_when_empty() -> TestResult {
     let text = screen(&render(&app)?);
     assert!(
         text.contains(
-            "No client is paired or connected. devlanes remote pair prints a code for one."
+            "No client is paired or connected. devlanes daemon pair prints a code for one."
         ),
         "{text}"
     );

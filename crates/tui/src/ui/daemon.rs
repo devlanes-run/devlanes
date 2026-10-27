@@ -166,7 +166,7 @@ fn clients_rows(app: &App, list: &Clients, width: usize) -> ClientRows {
         let rows = vec![fit(
             vec![
                 Span::styled(" No client is paired or connected. ", quiet),
-                Span::styled("devlanes remote pair", theme.key()),
+                Span::styled("devlanes daemon pair", theme.key()),
                 Span::styled(" prints a code for one.", quiet),
             ],
             width,
@@ -307,7 +307,7 @@ fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style
 }
 
 /// `just now`, `5m ago`, `3h ago` or `2d ago` for `elapsed` milliseconds,
-/// as `devlanes remote clients` words it.
+/// as `devlanes daemon clients` words it.
 fn ago(elapsed: u64) -> String {
     match elapsed / 1000 {
         0..60 => "just now".into(),

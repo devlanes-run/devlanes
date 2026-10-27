@@ -54,7 +54,7 @@ fn main() -> io::Result<()> {
                 .unit(Some("acme@2"), Some("web"))
                 .hint("Sign in to my-box again: devlanes remote connect my-box"),
             ErrorCode::BoxPairingNeeded => page.unit(Some("acme@2"), Some("web")).hint(
-                "Pair with my-box again: run devlanes remote pair on my-box, then devlanes remote connect my-box --code <code>",
+                "Pair with my-box again: run devlanes daemon pair on my-box, then devlanes remote connect my-box --code <code>",
             ),
             _ => page.unit(Some("acme@2"), Some("web")),
         };

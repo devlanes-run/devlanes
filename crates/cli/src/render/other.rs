@@ -2004,9 +2004,9 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
     tree(&data)
 }
 
-/// `remote pair`: the code and what to run on the client. Plain output is the
+/// `daemon pair`: the code and what to run on the client. Plain output is the
 /// code alone, for scripts; agents get one line saying what to ask the user.
-pub(super) fn remote_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let code = text(data, "code");
     if cx.mode == crate::OutputMode::Plain {
         return vec![code];
@@ -2059,13 +2059,13 @@ pub(super) fn remote_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
-/// `remote clients`: one row per client by name, with its short id, whether
+/// `daemon clients`: one row per client by name, with its short id, whether
 /// it is paired, its connections or when it was last seen, and what it mirrors.
-pub(super) fn remote_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let items = list(data, "items");
     if items.is_empty() {
         return vec![
-            "no paired or connected clients; devlanes remote pair prints a code that pairs one"
+            "no paired or connected clients; devlanes daemon pair prints a code that pairs one"
                 .into(),
         ];
     }
@@ -2135,15 +2135,15 @@ pub(super) fn remote_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     table(&rows, "")
 }
 
-/// The start of a client id that `remote revoke` takes: the prefix and 8
+/// The start of a client id that `daemon revoke` takes: the prefix and 8
 /// hex digits.
 fn short_id(id: &str) -> String {
     let keep = devlanes_proto::remote::CLIENT_ID_PREFIX.len() + 8;
     id.chars().take(keep).collect()
 }
 
-/// `remote revoke`: whom it revoked and how many connections it ended.
-pub(super) fn remote_revoke(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+/// `daemon revoke`: whom it revoked and how many connections it ended.
+pub(super) fn daemon_revoke(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let ended = data.get("ended").and_then(Value::as_u64).unwrap_or(0);
     list(data, "revoked")
         .iter()

@@ -3465,7 +3465,7 @@ impl App {
             prompt: format!("Revoke {name} ({short})?"),
             detail: vec![
                 connections,
-                "To connect again it needs a new code from devlanes remote pair here.".into(),
+                "To connect again it needs a new code from devlanes daemon pair here.".into(),
             ],
             action: "revoke",
             strict: true,

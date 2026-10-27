@@ -436,8 +436,8 @@ pub struct RemoteConfig {
     #[schemars(extend("examples" = [true,false]))]
     pub start_daemon: bool,
     /// Serve only clients this machine paired with; defaults to true. A client's first
-    /// connection needs a one-time code from `devlanes remote pair` here, which it trades
-    /// for a token it presents from then on; `devlanes remote revoke` ends a client's
+    /// connection needs a one-time code from `devlanes daemon pair` here, which it trades
+    /// for a token it presents from then on; `devlanes daemon revoke` ends a client's
     /// pairing. Set false to serve every client that gets in over SSH or its command, as
     /// before pairing existed. An invalid value here counts as true. Read at each
     /// connection, so no restart is needed.

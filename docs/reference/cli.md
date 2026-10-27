@@ -635,7 +635,7 @@ devlanes certs untrust [OPTIONS]
 
 ### devlanes remote
 
-Connect to boxes over SSH or a command and mirror their lanes here; on a box, pair and revoke clients
+Connect to boxes over SSH or a command and mirror their lanes here
 
 ```text
 devlanes remote [OPTIONS] <COMMAND>
@@ -651,33 +651,7 @@ devlanes remote connect [OPTIONS] <HOST>
 
 - `<HOST>`: A box name from remote.boxes in the user config, else an SSH destination as in ~/.ssh/config
 - `--background`: Return once connected instead of staying attached for prompts
-- `--code <CODE>`: Pair with the box using this one-time code from devlanes remote pair on the box, instead of entering it when asked (also with --background); used only by this request
-
-### devlanes remote pair
-
-On a box: print a one-time code that pairs a client with this machine on its next devlanes remote connect
-
-```text
-devlanes remote pair [OPTIONS]
-```
-
-### devlanes remote clients
-
-On a box: list paired clients and the clients connected now
-
-```text
-devlanes remote clients [OPTIONS]
-```
-
-### devlanes remote revoke
-
-On a box: delete a client's pairings and end its connections now; a client connected without pairing (remote.require_pairing: false) has none to revoke
-
-```text
-devlanes remote revoke [OPTIONS] <CLIENT>
-```
-
-- `<CLIENT>`: The client's name or id from devlanes remote clients (a unique start of the id works)
+- `--code <CODE>`: Pair with the box using this one-time code from devlanes daemon pair on the box, instead of entering it when asked (also with --background); used only by this request
 
 ### devlanes remote disconnect
 
@@ -707,7 +681,7 @@ devlanes remote sync [OPTIONS]
 
 ### devlanes daemon
 
-Run, stop and install the background daemon
+Run, stop and install the background daemon, and pair machines that connect to this one
 
 ```text
 devlanes daemon [OPTIONS] <COMMAND>
@@ -779,6 +753,32 @@ Stop everything and empty the state database; lanes get new numbers and ports (n
 ```text
 devlanes daemon reset-state [OPTIONS]
 ```
+
+### devlanes daemon pair
+
+Print a one-time code a machine enters on its next devlanes remote connect to this one
+
+```text
+devlanes daemon pair [OPTIONS]
+```
+
+### devlanes daemon clients
+
+List machines paired with this one and the ones connected now (devlanes remote connect)
+
+```text
+devlanes daemon clients [OPTIONS]
+```
+
+### devlanes daemon revoke
+
+End a client's connections and delete its pairings; a machine connected without pairing (remote.require_pairing: false) has none
+
+```text
+devlanes daemon revoke [OPTIONS] <CLIENT>
+```
+
+- `<CLIENT>`: The client's name or id from devlanes daemon clients (a unique start of the id works)
 
 ### devlanes doctor
 

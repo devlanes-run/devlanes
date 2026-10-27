@@ -2,7 +2,7 @@
 source: crates/cli/tests/it/help.rs
 expression: long_help(path)
 ---
-Run, stop and install the background daemon
+Run, stop and install the background daemon, and pair machines that connect to this one
 
 Usage: devlanes daemon [OPTIONS] <COMMAND>
 
@@ -15,6 +15,9 @@ Commands:
   install      Install a login service so the daemon starts at login and outside agent sandboxes
   uninstall    Remove the login service; a running daemon keeps running
   reset-state  Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
+  pair         Print a one-time code a machine enters on its next devlanes remote connect to this one
+  clients      List machines paired with this one and the ones connected now (devlanes remote connect)
+  revoke       End a client's connections and delete its pairings; a machine connected without pairing (remote.require_pairing: false) has none
   help         Print this message or the help of the given subcommand(s)
 
 Options:

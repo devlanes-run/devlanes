@@ -222,7 +222,7 @@ pub enum Method {
     /// client with that id is listed.
     #[serde(rename = "remote.report")]
     RemoteReport,
-    /// Box side, for `devlanes remote pair`: a one-time pairing code, valid
+    /// Box side, for `devlanes daemon pair`: a one-time pairing code, valid
     /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Reply
     /// `{code, expires_at_ms, retry_after_ms?}`; `retry_after_ms` is set while
     /// failed attempts keep every code refused.
@@ -240,7 +240,7 @@ pub enum Method {
     /// too many failures refuse every code.
     #[serde(rename = "remote.pairing.claim")]
     RemotePairingClaim,
-    /// Box side, for `devlanes remote clients` and the TUI: paired and
+    /// Box side, for `devlanes daemon clients` and the TUI: paired and
     /// connected clients by name, `{items: [{id, name, paired, pairings,
     /// paired_at_ms, last_seen_ms, connections: [{address, since_ms,
     /// mirror}]}], now_ms}`; a client connected without pairing
@@ -249,7 +249,7 @@ pub enum Method {
     /// [`remote::CLIENTS_EVENT`] announces changes.
     #[serde(rename = "remote.clients")]
     RemoteClients,
-    /// Box side, for `devlanes remote revoke`: deletes the pairing of the
+    /// Box side, for `devlanes daemon revoke`: deletes the pairing of the
     /// client named by `{client}` (its name, its id or a unique start of the
     /// id) and ends its sessions. Reply `{revoked: [{id, name}], ended}`.
     /// Errors `client_not_found` (`{client, candidates}`) and

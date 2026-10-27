@@ -10,7 +10,7 @@
 │ok    │                                                                │      │
 └──────│ It deletes the client's pairings under 2 names and ends its    │──────┘
 ┌ remot│ connection now.                                                │aired ┐
-│ · ci-│ To connect again it needs a new code from devlanes remote pair │      │
+│ · ci-│ To connect again it needs a new code from devlanes daemon pair │      │
 │ · des│ here.                                                          │      │
 │ ● lap│                                                                │s     │
 └──────│ y revoke   n cancel                                            │──────┘

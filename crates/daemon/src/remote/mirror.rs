@@ -668,7 +668,7 @@ impl Mirror {
                         format!("Sign in to {box_name} again: devlanes remote connect {box_name}")
                     }
                     Phase::Pairing => format!(
-                        "Pair with {box_name} again: run devlanes remote pair on {box_name}, then devlanes remote connect {box_name} --code <code>"
+                        "Pair with {box_name} again: run devlanes daemon pair on {box_name}, then devlanes remote connect {box_name} --code <code>"
                     ),
                     _ => format!("Start it on {box_name}: devlanes start --lane {reference}"),
                 };
@@ -1013,7 +1013,7 @@ async fn splice(stream: TcpStream, port: u16, conn: Arc<HostConn>, engine: Weak<
             }
             None if conn.needs_pairing() => {
                 let message = format!(
-                    "box {} needs this machine to pair again: run `devlanes remote pair` there, then `devlanes remote connect {} --code <code>`",
+                    "box {} needs this machine to pair again: run `devlanes daemon pair` there, then `devlanes remote connect {} --code <code>`",
                     conn.name, conn.name
                 );
                 open_failed(&engine, &conn, port, "needs_pairing", message);

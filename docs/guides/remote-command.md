@@ -14,7 +14,7 @@ remote:
 ```
 
 ```sh
-docker exec acme devlanes remote pair           # a one-time code for the first connection
+docker exec acme devlanes daemon pair           # a one-time code for the first connection
 devlanes remote connect acme --code K7QM-3XWD
 devlanes remote ls                              # transport: command
 ```

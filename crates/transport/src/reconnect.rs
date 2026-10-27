@@ -493,7 +493,7 @@ mod tests {
                 LinkState::NeedsPairing { error, .. } => error.clone(),
                 _ => String::new(),
             };
-            assert!(error.contains("devlanes remote pair"), "{error}");
+            assert!(error.contains("devlanes daemon pair"), "{error}");
             // Twenty backoff periods: a retrying link would have tried again.
             tokio::time::sleep(Duration::from_millis(200)).await;
             assert_eq!(attempts(), 1);

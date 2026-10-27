@@ -282,7 +282,7 @@ impl ErrorCode {
                 run("Show the connection state and error", "devlanes remote ls"),
             ],
             Self::BoxPairingNeeded => vec![
-                run("On the box, get a one-time code", "devlanes remote pair"),
+                run("On the box, get a one-time code", "devlanes daemon pair"),
                 run(
                     "Here, pair again with that code",
                     "devlanes remote connect <box> --code <code>",

@@ -15,7 +15,7 @@
 //! - with `remote.require_pairing` (the default), a client is served only
 //!   after the daemon accepted its remote token (`remote.pairing.verify`) or
 //!   traded its one-time code for one (`remote.pairing.claim`), and its feed
-//!   ends when `remote revoke` deletes its pairing.
+//!   ends when `daemon revoke` deletes its pairing.
 
 mod pairing;
 mod registry;

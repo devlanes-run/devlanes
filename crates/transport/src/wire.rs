@@ -332,7 +332,7 @@ pub(crate) enum ClientControl {
     Mirror {
         report: Value,
     },
-    /// The one-time code a person got from `devlanes remote pair` on the box,
+    /// The one-time code a person got from `devlanes daemon pair` on the box,
     /// sent once in answer to [`BoxControl::PairingRequired`].
     Pair {
         code: Secret,

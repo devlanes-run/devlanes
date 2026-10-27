@@ -2323,8 +2323,8 @@ fn boxes_that_need_pairing_name_both_commands() {
     let host = |retry_at: u64| {
         json!({"items": [{
             "host": "hetzner", "state": "needs_pairing", "transport": "ssh",
-            "error": "the box no longer accepts this machine's pairing (it was revoked, or dropped as the oldest of too many); get a new code with `devlanes remote pair` on the box",
-            "fix": "devlanes remote pair on hetzner, then devlanes remote connect hetzner --code <code>",
+            "error": "the box no longer accepts this machine's pairing (it was revoked, or dropped as the oldest of too many); get a new code with `devlanes daemon pair` on the box",
+            "fix": "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>",
             "pairing_retry_at_ms": retry_at, "ports": [],
         }], "truncated": false, "next_cursor": null})
     };
@@ -2333,7 +2333,7 @@ fn boxes_that_need_pairing_name_both_commands() {
     assert!(text.contains("it was revoked"), "{text}");
     assert!(
         text.contains(
-            "fix: devlanes remote pair on hetzner, then devlanes remote connect hetzner --code <code>"
+            "fix: devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"
         ),
         "{text}"
     );
@@ -2346,12 +2346,12 @@ fn boxes_that_need_pairing_name_both_commands() {
     assert!(!later.contains("pairing_paused"), "{later}");
 }
 
-/// `remote pair` in each mode: the code with what to run on the client for a
+/// `daemon pair` in each mode: the code with what to run on the client for a
 /// person, one line saying what to ask the user for an agent, the code alone
 /// when piped, and the daemon's data for `--json`. A box that pairs nobody
 /// says so; one paused by wrong codes refuses with the wait.
 #[test]
-fn remote_pair_prints_the_code_in_every_mode() {
+fn daemon_pair_prints_the_code_in_every_mode() {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
@@ -2413,17 +2413,17 @@ fn remote_pair_prints_the_code_in_every_mode() {
         .stderr;
     assert!(
         paused.contains(
-            "5 wrong pairing codes in the last 10 minutes; run `devlanes remote pair` again in 4 minutes"
+            "5 wrong pairing codes in the last 10 minutes; run `devlanes daemon pair` again in 4 minutes"
         ),
         "{paused}"
     );
 }
 
-/// `remote clients` lists each client with a short id that `revoke` takes,
+/// `daemon clients` lists each client with a short id that `revoke` takes,
 /// whether it is paired, its connection or when it was last seen, and what
 /// it mirrors; `revoke` says whom it revoked.
 #[test]
-fn remote_clients_and_revoke_name_each_client() {
+fn daemon_clients_and_revoke_name_each_client() {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
@@ -2455,7 +2455,7 @@ fn remote_clients_and_revoke_name_each_client() {
     );
     let empty = render_text(Method::RemoteClients, &json!({"items": []}));
     assert!(
-        empty.contains("devlanes remote pair prints a code"),
+        empty.contains("devlanes daemon pair prints a code"),
         "{empty}"
     );
 
@@ -2484,11 +2484,11 @@ fn pairing_errors_say_what_to_run() {
             .stderr
     };
     let message =
-        "the box serves only paired clients; get a code with `devlanes remote pair` on the box";
+        "the box serves only paired clients; get a code with `devlanes daemon pair` on the box";
     let needs = error(
         "remote_needs_pairing",
         json!({"host": "hetzner", "message": message,
-               "fix": "devlanes remote pair on hetzner, then devlanes remote connect hetzner --code <code>"}),
+               "fix": "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"}),
     );
     assert!(
         needs.contains(&format!("box hetzner: {message}")),
@@ -2499,7 +2499,7 @@ fn pairing_errors_say_what_to_run() {
         "{needs}"
     );
     assert_eq!(
-        needs.matches("devlanes remote pair").count(),
+        needs.matches("devlanes daemon pair").count(),
         1,
         "the message names the box command once: {needs}"
     );
@@ -2532,7 +2532,7 @@ fn pairing_errors_say_what_to_run() {
         missing.contains("no paired client is called tablet; paired: laptop (dl_cid_ab)"),
         "{missing}"
     );
-    assert!(missing.contains("devlanes remote clients"), "{missing}");
+    assert!(missing.contains("devlanes daemon clients"), "{missing}");
     let ambiguous = error(
         "client_ambiguous",
         json!({"client": "laptop", "candidates": [{"id": "dl_cid_ab", "name": "laptop"},

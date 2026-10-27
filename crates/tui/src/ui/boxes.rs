@@ -158,7 +158,7 @@ fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'s
             "{name} needs a sign-in; this is its last known state. devlanes remote connect {name} resumes it."
         )),
         "needs_pairing" => Some(format!(
-            "{name} needs this machine to pair again; this is its last known state. Run devlanes remote pair on {name}, then devlanes remote connect {name} --code <code>."
+            "{name} needs this machine to pair again; this is its last known state. Run devlanes daemon pair on {name}, then devlanes remote connect {name} --code <code>."
         )),
         "reconnecting" | "connecting" => Some(format!(
             "{name} is reconnecting; this is its last known state."
@@ -869,7 +869,7 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
         "needs_pairing" => {
             lines.extend(fact(
                 "link",
-                "waiting for you to pair again with a code from devlanes remote pair on the box; ports and hostnames stay",
+                "waiting for you to pair again with a code from devlanes daemon pair on the box; ports and hostnames stay",
                 theme.tone(Tone::Attention),
             ));
         }

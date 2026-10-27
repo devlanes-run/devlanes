@@ -2,7 +2,7 @@
  lanes  1 @0  2 @4                                                                              1-9 or [ ] switch lanes
 ┌ @4 · 6/7 up ─────────────────────────────────┐┌ web-app  ready · https://app.acme-4.localhost:8443 ────── on hetzner ┐
 │ ▾ services                                 6 ││ ! hetzner needs this machine to pair again; this is its last known   │
-│   ● api-gateway                              ││   state. Run devlanes remote pair on hetzner, then devlanes remote   │
+│   ● api-gateway                              ││   state. Run devlanes daemon pair on hetzner, then devlanes remote   │
 │   ● web-app                                  ││   connect hetzner --code <code>.                                     │
 │   ◉ wrk-email                                ││                                                                      │
 │   ● api-admin                                ││ state     ready on the box                                           │

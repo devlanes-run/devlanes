@@ -576,10 +576,10 @@ pub fn boxes_pairing() -> Value {
     if let Some(hetzner) = hetzner {
         hetzner["state"] = json!("needs_pairing");
         hetzner["error"] = json!(
-            "the box no longer accepts this machine's pairing (it was revoked, or dropped as the oldest of too many); get a new code with `devlanes remote pair` on the box"
+            "the box no longer accepts this machine's pairing (it was revoked, or dropped as the oldest of too many); get a new code with `devlanes daemon pair` on the box"
         );
         hetzner["fix"] = json!(
-            "devlanes remote pair on hetzner, then devlanes remote connect hetzner --code <code>"
+            "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"
         );
         hetzner["connected_since_ms"] = Value::Null;
         for route in hetzner["routes"].as_array_mut().into_iter().flatten() {

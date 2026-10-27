@@ -1,12 +1,12 @@
  devlanes  1 acme  ›  starting feat/checkout: 4 of 8 r…  M  D  Boxes · 3 issues
 ┌ boxes ────────────────────────────────────── 0 of 3 connected · j k for more ┐
 │ ! hetzner                                                needs pairing · ssh │
-│   link      waiting for you to pair again with a code from devlanes remote   │
+│   link      waiting for you to pair again with a code from devlanes daemon   │
 │             pair on the box; ports and hostnames stay                        │
 │   error     the box no longer accepts this machine's pairing (it was         │
 │             revoked, or dropped as the oldest of too many); get a new code   │
-│             with `devlanes remote pair` on the box                           │
-│   fix       devlanes remote pair on hetzner, then devlanes remote connect    │
+│             with `devlanes daemon pair` on the box                           │
+│   fix       devlanes daemon pair on hetzner, then devlanes remote connect    │
 │             hetzner --code <code>                                            │
 │   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999          │
 │   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed           │

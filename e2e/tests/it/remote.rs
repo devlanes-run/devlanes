@@ -68,10 +68,10 @@ fn ps_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// A one-time code from `remote pair` on `boxed`, as its plain output prints
+/// A one-time code from `daemon pair` on `boxed`, as its plain output prints
 /// it for scripts: the code alone.
 fn pairing_code(boxed: &Lab) -> Result<String> {
-    let mut pair = boxed.command(boxed.repo(), &["remote", "pair"])?;
+    let mut pair = boxed.command(boxed.repo(), &["daemon", "pair"])?;
     pair.env("DEVLANES_OUTPUT", "plain");
     let output = boxed.run(pair, Duration::from_secs(60))?;
     output.expect_code(0)?;
@@ -83,9 +83,9 @@ fn pairing_code(boxed: &Lab) -> Result<String> {
 }
 
 /// A box in `remote.boxes` connects through its command once paired with a
-/// code from `remote pair`: the client mirrors the box lane's ports, `remote
+/// code from `daemon pair`: the client mirrors the box lane's ports, `remote
 /// ls` shows the command transport, and the box lists the client as paired
-/// and connected. `remote revoke` on the box ends the tunnel and leaves the
+/// and connected. `daemon revoke` on the box ends the tunnel and leaves the
 /// client waiting in `needs_pairing`; a new code connects it again, and
 /// `disconnect` ends the tunnel.
 #[test]
@@ -132,7 +132,7 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
     let clients = status["clients"].as_array().cloned().unwrap_or_default();
     assert_eq!(clients.len(), 1, "the box lists one client: {status}");
     let id = clients[0]["id"].as_str().unwrap_or_default().to_owned();
-    let paired = boxed.json(boxed.repo(), &["remote", "clients", "--json"])?;
+    let paired = boxed.json(boxed.repo(), &["daemon", "clients", "--json"])?;
     let entry = paired["items"]
         .as_array()
         .and_then(|items| items.iter().find(|item| item["id"] == id.as_str()))
@@ -140,7 +140,7 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
         .unwrap_or_default();
     assert_eq!(entry["paired"], true, "{paired}");
 
-    let revoked = boxed.json(boxed.repo(), &["remote", "revoke", &id, "--json"])?;
+    let revoked = boxed.json(boxed.repo(), &["daemon", "revoke", &id, "--json"])?;
     assert_eq!(revoked["ended"], 1, "{revoked}");
     let waiting = client.eventually("acme to need pairing", CONNECT, || {
         Ok(host(&client, "acme")?.filter(|host| host["state"] == "needs_pairing"))

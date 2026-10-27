@@ -228,7 +228,7 @@ impl BoxSide {
         }
     }
 
-    /// A fresh one-time code from `remote pair` on the box.
+    /// A fresh one-time code from `daemon pair` on the box.
     async fn code(&self) -> String {
         pairing_code(&self.h.engine).await
     }
@@ -242,7 +242,7 @@ impl BoxSide {
     }
 }
 
-/// A fresh one-time code from `remote pair` on the box engine `engine`.
+/// A fresh one-time code from `daemon pair` on the box engine `engine`.
 async fn pairing_code(engine: &Engine) -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1 << 32);
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -253,7 +253,7 @@ async fn pairing_code(engine: &Engine) -> String {
         context: Context::default(),
     };
     let (session, _frames) = Session::local(id);
-    let paired = engine.handle(request, session).await.expect("remote pair");
+    let paired = engine.handle(request, session).await.expect("daemon pair");
     paired["code"].as_str().expect("a code").to_owned()
 }
 

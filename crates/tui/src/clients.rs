@@ -53,8 +53,8 @@ pub struct Mirror {
     pub skipped_lanes: u64,
 }
 
-/// Characters of a client id the TUI shows and `remote revoke` takes: the
-/// prefix and 8 hex digits, as `devlanes remote clients` prints it.
+/// Characters of a client id the TUI shows and `daemon revoke` takes: the
+/// prefix and 8 hex digits, as `devlanes daemon clients` prints it.
 pub fn short_id(id: &str) -> String {
     let keep = devlanes_proto::remote::CLIENT_ID_PREFIX.len() + 8;
     id.chars().take(keep).collect()

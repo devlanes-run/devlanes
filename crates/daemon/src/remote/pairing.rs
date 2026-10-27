@@ -1,7 +1,7 @@
-//! Pairing. On a box: one-time codes for `devlanes remote pair`, kept in
+//! Pairing. On a box: one-time codes for `devlanes daemon pair`, kept in
 //! memory with the failed attempts that limit them, the remote tokens they
 //! are traded for (only their SHA-256 is stored, in `remote_pairings`), and
-//! `remote clients` and `remote revoke`. On a client: the token each box gave
+//! `daemon clients` and `daemon revoke`. On a client: the token each box gave
 //! this machine (`remote_tokens`) and the code a person types.
 //!
 //! Codes are 8 characters of Crockford's base32 alphabet (no I, L, O or U),
@@ -249,7 +249,7 @@ fn refused(refusal: Refusal) -> RpcError {
     let (message, retry_after_ms) = match refusal {
         Refusal::Wrong => (
             "the pairing code is wrong, expired or already used, and every other code from \
-             `devlanes remote pair` is void now; run `devlanes remote pair` on the box for a new one"
+             `devlanes daemon pair` is void now; run `devlanes daemon pair` on the box for a new one"
                 .to_owned(),
             None,
         ),
@@ -262,7 +262,7 @@ fn refused(refusal: Refusal) -> RpcError {
     )
 }
 
-/// `pairing_paused`: `remote pair` hands out no code while failures refuse
+/// `pairing_paused`: `daemon pair` hands out no code while failures refuse
 /// every code.
 fn paused(wait: Duration) -> RpcError {
     RpcError::new(
@@ -293,7 +293,7 @@ struct RevokeParams {
 /// Shortest start of an id `revoke` matches: the prefix and four hex digits.
 const MIN_ID_PREFIX: usize = CLIENT_ID_PREFIX.len() + 4;
 
-/// A paired client with all its pairings, as `remote clients` lists it.
+/// A paired client with all its pairings, as `daemon clients` lists it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Paired {
     id: String,
@@ -643,10 +643,10 @@ impl PairingClient for HostPairing {
         }
         let prompt = match reason {
             PairingReason::Missing => {
-                "the box serves only paired clients; pairing code from `devlanes remote pair` on the box:"
+                "the box serves only paired clients; pairing code from `devlanes daemon pair` on the box:"
             }
             PairingReason::Invalid => {
-                "the box no longer accepts this machine's pairing; new pairing code from `devlanes remote pair` on the box:"
+                "the box no longer accepts this machine's pairing; new pairing code from `devlanes daemon pair` on the box:"
             }
         };
         self.prompter

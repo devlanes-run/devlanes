@@ -34,7 +34,7 @@ Host acme-box
 
 ```sh
 ssh acme-box                        # in a terminal first, see below; then on the box:
-devlanes remote pair                # a one-time code for the first connection
+devlanes daemon pair                # a one-time code for the first connection
 exit
 devlanes remote connect acme-box --code K7QM-3XWD
 ```

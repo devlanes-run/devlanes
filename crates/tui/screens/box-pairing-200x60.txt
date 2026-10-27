@@ -1,7 +1,7 @@
  devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                                                             Monitor  Daemon  Boxes · 3 issues
  lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
 ┌ @4 · 6/7 up ─────────────────────────────────┐┌ web-app  ready · https://app.acme-4.localhost:8443 ────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
-│ ▾ services                                 6 ││ ! hetzner needs this machine to pair again; this is its last known state. Run devlanes remote pair on hetzner, then devlanes remote connect hetzner  │
+│ ▾ services                                 6 ││ ! hetzner needs this machine to pair again; this is its last known state. Run devlanes daemon pair on hetzner, then devlanes remote connect hetzner  │
 │   ● api-gateway                              ││   --code <code>.                                                                                                                                     │
 │   ● web-app                                  ││                                                                                                                                                      │
 │   ◉ wrk-email                                ││ state     ready on the box                                                                                                                           │

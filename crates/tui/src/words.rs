@@ -467,7 +467,7 @@ pub fn rpc(error: &RpcError) -> Worded {
         "client_not_found" => (
             "the client has no pairing here any more".to_owned(),
             Vec::new(),
-            Some("devlanes remote clients".into()),
+            Some("devlanes daemon clients".into()),
         ),
         "unsupported" | "unsupported_method" => (
             format!(

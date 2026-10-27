@@ -5,7 +5,7 @@ use crate::{Error, Store, models::*, schema::*};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// One pairing of a client with a box (`devlanes remote pair` on the box,
+/// One pairing of a client with a box (`devlanes daemon pair` on the box,
 /// then the client's connection with the code). A client paired under several
 /// box names has one per name. The token itself is never stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

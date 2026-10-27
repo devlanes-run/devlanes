@@ -490,7 +490,7 @@ pub enum RouteStatus {
     SignInNeeded,
     /// A mirrored route whose box serves only paired clients and took no
     /// token or code from this machine: a person pairs it again with a code
-    /// from `devlanes remote pair` on the box.
+    /// from `devlanes daemon pair` on the box.
     PairingNeeded,
 }
 

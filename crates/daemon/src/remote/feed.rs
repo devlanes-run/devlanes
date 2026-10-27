@@ -213,7 +213,7 @@ fn client_not_paired() -> RpcError {
     )
 }
 
-/// `client_revoked`: the feed ends because `devlanes remote revoke` deleted
+/// `client_revoked`: the feed ends because `devlanes daemon revoke` deleted
 /// the client's pairing, which ends its session.
 fn client_revoked() -> RpcError {
     RpcError::new(

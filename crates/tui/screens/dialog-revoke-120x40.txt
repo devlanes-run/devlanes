@@ -18,7 +18,7 @@
 │10:15:05 INFO  daemon::lif│                                                                │                          │
 │10:16:06 INFO  daemon::lif│ It deletes the client's pairings under 2 names and ends its    │                          │
 │10:17:07 INFO  daemon::lif│ connection now.                                                │                          │
-│10:18:08 INFO  daemon::lif│ To connect again it needs a new code from devlanes remote pair │                          │
+│10:18:08 INFO  daemon::lif│ To connect again it needs a new code from devlanes daemon pair │                          │
 │10:20:00 INFO  daemon::lif│ here.                                                          │                          │
 │10:21:01 INFO  daemon::lif│                                                                │                          │
 │10:23:03 INFO  daemon::lif│ y revoke   n cancel                                            │                          │

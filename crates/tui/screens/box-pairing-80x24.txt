@@ -3,7 +3,7 @@
 ┌ @4 · 6/7 up ─────────────────┐┌ web-app  ready ────────────────── on hetzner ┐
 │ ▾ services                 6 ││ ! hetzner needs this machine to pair again;  │
 │   ● api-gateway              ││   this is its last known state. Run devlanes │
-│   ● web-app                  ││   remote pair on hetzner, then devlanes      │
+│   ● web-app                  ││   daemon pair on hetzner, then devlanes      │
 │   ◉ wrk-email                ││   remote connect hetzner --code <code>.      │
 │   ● api-admin                ││                                              │
 │   · web-docs                 ││ state     ready on the box                   │
