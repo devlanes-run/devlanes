@@ -130,9 +130,10 @@ pub enum SessionError {
     Handshake(&'static str),
     /// Client and box speak different protocol revisions.
     #[error(
-        "the box runs {server} (protocol {remote}) but this client speaks protocol {local}. \
-         Install the matching devlanes release on the box, then run `devlanes daemon restart` \
-         there when its managed processes may stop. Box daemons are never upgraded automatically"
+        "{} but this client speaks protocol {local}. Install the matching devlanes release on \
+         the box, then run `devlanes daemon restart` there when its managed processes may stop. \
+         Box daemons are never upgraded automatically",
+        box_protocol(server, *remote)
     )]
     IncompatibleProtocol {
         /// This client's revision.
@@ -184,16 +185,26 @@ impl SessionError {
     }
 }
 
+/// The box's side of a protocol mismatch: its version label when it sent
+/// one (a welcome of another revision), else the revision alone, which is
+/// all a box's refusal before pairing says.
+fn box_protocol(server: &str, remote: u32) -> String {
+    if server.is_empty() {
+        format!("the box speaks protocol {remote}")
+    } else {
+        format!("the box runs {server} (protocol {remote})")
+    }
+}
+
 /// What [`SessionError::NeedsPairing`] says for `reason`.
 fn needs_pairing_text(reason: PairingReason) -> &'static str {
     match reason {
         PairingReason::Missing => {
-            "the box serves only paired clients; run `devlanes remote pair` on the box and enter \
-             the code here"
+            "the box serves only paired clients; get a code with `devlanes remote pair` on the box"
         }
         PairingReason::Invalid => {
-            "the box no longer accepts this machine's pairing (it was revoked or replaced); run \
-             `devlanes remote pair` on the box and enter the new code here"
+            "the box no longer accepts this machine's pairing (it was revoked, or dropped as the \
+             oldest of too many); get a new code with `devlanes remote pair` on the box"
         }
     }
 }
@@ -780,16 +791,31 @@ mod tests {
             };
             wire::send(&mut control, &hello).await?;
             let reply = wire::recv::<_, BoxControl>(&mut control).await?;
-            assert!(matches!(
-                reply,
-                Some((
-                    BoxControl::Incompatible {
-                        protocol: PROTOCOL_VERSION,
-                        ..
-                    },
-                    _
-                ))
-            ));
+            // The revision only: no version label before pairing.
+            assert!(
+                matches!(
+                    &reply,
+                    Some((
+                        BoxControl::Incompatible {
+                            protocol: PROTOCOL_VERSION,
+                            server,
+                        },
+                        _
+                    )) if server.is_empty()
+                ),
+                "{reply:?}"
+            );
+            let error = SessionError::IncompatibleProtocol {
+                local: PROTOCOL_VERSION + 1,
+                remote: PROTOCOL_VERSION,
+                server: String::new(),
+            };
+            assert!(
+                error
+                    .to_string()
+                    .starts_with(&format!("the box speaks protocol {PROTOCOL_VERSION} but")),
+                "{error}"
+            );
             let result = server.await?;
             assert!(matches!(result, Err(ServeError::IncompatibleClient { .. })));
             Ok(())
@@ -1056,6 +1082,64 @@ mod tests {
                 }
                 assert_eq!(holder.token().await.as_deref(), token, "nothing stored");
             }
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Until the welcome the box answers nothing but the control stream: a
+    /// data stream an unpaired client opens while the box waits for its code
+    /// is reset unanswered, and pairing still works afterwards.
+    #[tokio::test]
+    async fn streams_before_the_welcome_are_reset() -> Result<(), Box<dyn std::error::Error>> {
+        timeout(Duration::from_secs(10), async {
+            let (client_io, box_io) = tokio::io::duplex(64 * 1024);
+            let services = BoxServices {
+                pairing: Arc::new(OneCode::default()),
+                ..services()
+            };
+            let server = tokio::spawn(serve(box_io, services, ServeOptions::new("box")));
+            let mux = mux::client(Box::new(client_io));
+            let mut control = wire::channel(mux.open().await?);
+            let hello = OpenRequest::Control {
+                protocol: PROTOCOL_VERSION,
+                client: "c".into(),
+                features: Vec::new(),
+                client_id: "dl_cid_x".into(),
+                client_name: "laptop".into(),
+                token: None,
+            };
+            wire::send(&mut control, &hello).await?;
+            let first = wire::recv::<_, BoxControl>(&mut control).await?;
+            assert!(
+                matches!(first, Some((BoxControl::PairingRequired { .. }, _))),
+                "{first:?}"
+            );
+            let mut data = wire::channel(mux.open().await?);
+            // The box may reset the stream before this arrives.
+            let _ = wire::send(
+                &mut data,
+                &OpenRequest::Data {
+                    target: DialTarget::Port { port: 9 },
+                },
+            )
+            .await;
+            let reply = timeout(
+                Duration::from_secs(5),
+                wire::recv::<_, OpenReply>(&mut data),
+            )
+            .await?;
+            assert!(!matches!(reply, Ok(Some(_))), "answered: {reply:?}");
+            let pair = ClientControl::Pair {
+                code: Secret(CODE.into()),
+            };
+            wire::send(&mut control, &pair).await?;
+            let paired = wire::recv::<_, BoxControl>(&mut control).await?;
+            assert!(
+                matches!(paired, Some((BoxControl::Paired { .. }, _))),
+                "{paired:?}"
+            );
+            server.abort();
             Ok(())
         })
         .await?

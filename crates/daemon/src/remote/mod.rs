@@ -160,7 +160,7 @@ impl Remotes {
         lock(&self.hosts).values().all(|conn| conn.ended())
             && lock(&self.clients).is_empty()
             && !self.restoring.load(Ordering::Relaxed)
-            && !lock(&self.codes).outstanding(now_ms())
+            && !lock(&self.codes).outstanding(std::time::Instant::now())
     }
 
     /// Mirrored routes of every connected box, in connect order.
@@ -180,6 +180,19 @@ impl Remotes {
             .filter(|conn| !conn.ended())
             .flat_map(|conn| conn.registry.current().advertised_ports())
             .collect()
+    }
+
+    /// Ends the registry feed, and with it the session, of every client whose
+    /// id `ended` picks; returns how many feeds it ended.
+    fn end_feeds(&self, ended: impl Fn(&str) -> bool) -> usize {
+        let mut count = 0;
+        for (id, revoked) in lock(&self.feeds).values() {
+            if ended(id) {
+                revoked.cancel();
+                count += 1;
+            }
+        }
+        count
     }
 
     /// Every connection, in connect order.
@@ -373,9 +386,10 @@ pub(crate) struct HostConn {
     /// [`announce_changes`], waited for on close.
     announce_task: Mutex<Option<JoinHandle<()>>>,
     /// A code from `remote connect --code`, for the next time the box asks
-    /// for one; cleared once a session is up, so a stale code is never sent
+    /// for one; cleared once a session is up and when that `connect` returns,
+    /// and never sent past a code's lifetime, so a stale code never goes out
     /// (a wrong code voids the box's other codes).
-    code: Arc<Mutex<Option<String>>>,
+    code: pairing::GivenCode,
 }
 
 /// Shortest time between two [`wire::MIRROR_EVENT`]s for one box: a start on
@@ -492,7 +506,9 @@ impl HostConn {
         match &*self.state.borrow() {
             LinkState::Failed { error } => Some(remote_failed(&self.name, error)),
             LinkState::NeedsAuth { error } => Some(remote_needs_auth(&self.name, error)),
-            LinkState::NeedsPairing { error, .. } => Some(remote_needs_pairing(&self.name, error)),
+            LinkState::NeedsPairing {
+                error, retry_at, ..
+            } => Some(remote_needs_pairing(&self.name, error, *retry_at)),
             _ => None,
         }
     }
@@ -715,7 +731,13 @@ fn describe(state: &LinkState) -> Value {
             "error": error,
         }),
         LinkState::NeedsAuth { error } => json!({"state": "needs_auth", "error": error}),
-        LinkState::NeedsPairing { error, .. } => json!({"state": "needs_pairing", "error": error}),
+        LinkState::NeedsPairing {
+            error, retry_at, ..
+        } => json!({
+            "state": "needs_pairing",
+            "error": error,
+            "pairing_retry_at_ms": retry_at.map(unix_ms),
+        }),
         LinkState::Failed { error } => json!({"state": "failed", "error": error}),
         LinkState::Stopped => json!({"state": "stopped"}),
     }
@@ -729,7 +751,13 @@ fn sign_in_command(host: &str) -> String {
 /// The command that pairs with `host` again, with the code `devlanes remote
 /// pair` printed on the box.
 fn pair_command(host: &str) -> String {
-    format!("devlanes remote connect {host} --code <code>")
+    format!("devlanes remote pair on {host}, then devlanes remote connect {host} --code <code>")
+}
+
+/// `time` in milliseconds since the Unix epoch.
+fn unix_ms(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// Milliseconds since the Unix epoch.
@@ -823,11 +851,21 @@ fn remote_needs_auth(host: &str, message: impl std::fmt::Display) -> RpcError {
 }
 
 /// `remote_needs_pairing`: the box serves only paired clients and took no
-/// token or code from this machine, with the command that pairs it as `fix`.
-fn remote_needs_pairing(host: &str, message: impl std::fmt::Display) -> RpcError {
+/// token or code from this machine, with the commands that pair it as `fix`
+/// and, after too many wrong codes, when the box takes codes again.
+fn remote_needs_pairing(
+    host: &str,
+    message: impl std::fmt::Display,
+    retry_at: Option<SystemTime>,
+) -> RpcError {
     RpcError::new(
         "remote_needs_pairing",
-        json!({"host": host, "message": message.to_string(), "fix": pair_command(host)}),
+        json!({
+            "host": host,
+            "message": message.to_string(),
+            "fix": pair_command(host),
+            "retry_at_ms": retry_at.map(unix_ms),
+        }),
         4,
     )
 }
@@ -856,6 +894,23 @@ struct DisconnectParams {
 enum ClientKey {
     Id(String),
     Anonymous(u64),
+}
+
+/// Drops the code a `connect` gave once that request returns or its CLI
+/// detaches, unless a later `connect` gave another one meanwhile.
+struct ForgetCode {
+    slot: pairing::GivenCode,
+    code: String,
+}
+
+impl Drop for ForgetCode {
+    /// Clears the slot when it still holds this code.
+    fn drop(&mut self) {
+        let mut slot = lock(&self.slot);
+        if slot.as_ref().is_some_and(|(code, _)| *code == self.code) {
+            *slot = None;
+        }
+    }
 }
 
 /// Removes a tunnel from the box's client list when its registry feed ends.
@@ -924,7 +979,8 @@ impl Inner {
     /// events until the CLI detaches. The connection lives in the daemon either way;
     /// `background` only returns once the first attempt settled and, when it
     /// connected, the connection is recorded. A `code` is kept for the next
-    /// time the box asks for one, and dropped when the link is up already.
+    /// time the box asks for one, and dropped when the link is up already and
+    /// when this request returns or its CLI detaches.
     pub(crate) async fn connect_method(
         self: &Arc<Self>,
         value: Value,
@@ -940,8 +996,12 @@ impl Inner {
         }
         let code = args.code.filter(|code| !code.trim().is_empty());
         let (conn, _watching) = self
-            .ensure_host(&args.host, Some(session), false, code)
+            .ensure_host(&args.host, Some(session), false, code.clone())
             .await?;
+        let _forget = code.map(|code| ForgetCode {
+            slot: conn.code.clone(),
+            code,
+        });
         // Connecting to a box again retries a box HTTPS port that was taken.
         self.reconcile_box_ports().await;
         // This CLI can answer prompts now, so a link waiting for one goes on,
@@ -1027,8 +1087,8 @@ impl Inner {
             match hosts.get(host) {
                 Some(conn) if !conn.ended() => {
                     let guard = watcher.map(|session| conn.board.watch(session));
-                    if code.is_some() {
-                        *lock(&conn.code) = code;
+                    if let Some(code) = code {
+                        *lock(&conn.code) = Some((code, std::time::Instant::now()));
                     }
                     return Ok((conn.clone(), guard));
                 }
@@ -1105,7 +1165,9 @@ impl Inner {
             board: board.clone(),
         });
         let guard = watcher.map(|session| board.watch(session));
-        let code = Arc::new(Mutex::new(code));
+        let code: pairing::GivenCode = Arc::new(Mutex::new(
+            code.map(|code| (code, std::time::Instant::now())),
+        ));
         let mut options = SessionOptions::new(format!("devlanes {}", devlanes_version::VERSION));
         options.client_id = identity.id;
         options.client_name = identity.name;
@@ -2127,7 +2189,9 @@ mod tests {
         assert!(!remotes.is_idle(), "restoring");
         remotes.restoring.store(false, Ordering::Relaxed);
         // A code someone is about to type keeps the daemon up.
-        lock(&remotes.codes).mint(now_ms())?;
+        lock(&remotes.codes)
+            .mint(std::time::Instant::now())
+            .map_err(|error| format!("{error:?}"))?;
         assert!(!remotes.is_idle(), "a pairing code is outstanding");
         *lock(&remotes.codes) = pairing::Codes::default();
 
@@ -2147,6 +2211,7 @@ mod tests {
             LinkState::NeedsPairing {
                 error: "the box serves only paired clients".into(),
                 refused: false,
+                retry_at: None,
             },
         ];
         for link in busy {
@@ -2167,6 +2232,25 @@ mod tests {
         }
         session.close();
         Ok(())
+    }
+
+    /// The code a `connect` gave goes when that request ends, unless a later
+    /// `connect` replaced it meanwhile.
+    #[test]
+    fn a_given_code_goes_with_its_connect() {
+        let slot: pairing::GivenCode = Arc::default();
+        *lock(&slot) = Some(("K7QM-3XWD".into(), std::time::Instant::now()));
+        drop(ForgetCode {
+            slot: slot.clone(),
+            code: "K7QM-3XWD".into(),
+        });
+        assert!(lock(&slot).is_none());
+        *lock(&slot) = Some(("NEWR-CODE".into(), std::time::Instant::now()));
+        drop(ForgetCode {
+            slot: slot.clone(),
+            code: "K7QM-3XWD".into(),
+        });
+        assert!(lock(&slot).is_some(), "a later connect's code stays");
     }
 
     /// Ranges overlap when they share one port; invalid ranges never parse.

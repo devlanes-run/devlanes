@@ -999,12 +999,33 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         }
         "remote_needs_pairing" => {
             let host = text(data, "host");
+            let mut message = match data.get("message").and_then(Value::as_str) {
+                Some(message) => format!("box {host}: {}", super::clean(message)),
+                None => format!("box {host} needs this machine to pair with it"),
+            };
+            // A time, so the wait is right when this is shown.
+            if let Some(wait) = data.get("retry_at_ms").and_then(super::other::until) {
+                message.push_str(&format!("; {wait}"));
+            }
             (
-                with_message(format!("box {host} needs this machine to pair with it")),
+                message,
                 Some(Hint(format!(
-                    "devlanes remote pair on {host}, then {} --code <code>",
+                    "{} --code <code>",
                     Hint::command(["remote", "connect", host.as_str()]).0
                 ))),
+            )
+        }
+        "pairing_paused" => {
+            let minutes = data
+                .get("retry_after_ms")
+                .and_then(Value::as_u64)
+                .map_or(10, |ms| ms.div_ceil(60_000).max(1));
+            (
+                format!(
+                    "5 wrong pairing codes in the last 10 minutes; run `devlanes remote pair` again in {}",
+                    super::plural(usize::try_from(minutes).unwrap_or(usize::MAX), "minute")
+                ),
+                None,
             )
         }
         // Tunnel-side answers of the box daemon, shown when someone calls
@@ -1031,7 +1052,13 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 .iter()
                 .map(|candidate| format!("{} ({})", text(candidate, "name"), text(candidate, "id")))
                 .collect();
-            let mut message = if code == "client_not_found" {
+            let unpaired = data.get("unpaired").and_then(Value::as_bool) == Some(true);
+            let mut message = if code == "client_not_found" && unpaired {
+                format!(
+                    "{client} is connected without pairing (remote.require_pairing: false on this \
+                     box), so it has no pairing to revoke"
+                )
+            } else if code == "client_not_found" {
                 format!("no paired client is called {client}")
             } else {
                 format!(

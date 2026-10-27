@@ -120,7 +120,12 @@ impl Fake {
     /// Connects the fake's boxes: `host.list` lists them from now on, and a
     /// `remote.mirror.changed` makes the TUI ask.
     fn connect_boxes(&mut self) {
-        self.boxes = data::boxes();
+        self.show_boxes(data::boxes());
+    }
+
+    /// Makes `host.list` answer `boxes` and announces it.
+    fn show_boxes(&mut self, boxes: serde_json::Value) {
+        self.boxes = boxes;
         self.send(Msg::Event(Event {
             seq: 1,
             event: devlanes_proto::remote::MIRROR_EVENT.into(),
@@ -526,6 +531,22 @@ fn scenes() -> Vec<Scene> {
             setup: |f| {
                 f.connect_boxes();
                 f.shifted('B');
+            },
+        },
+        Scene {
+            name: "boxes-pairing",
+            what: "the boxes view while hetzner waits for this machine to pair again: the box's reason and both commands",
+            setup: |f| {
+                f.show_boxes(data::boxes_pairing());
+                f.shifted('B');
+            },
+        },
+        Scene {
+            name: "box-pairing",
+            what: "a service of a box that waits for pairing: the last known state, and what to run on the box and here",
+            setup: |f| {
+                f.show_boxes(data::boxes_pairing());
+                f.unit("acme@4 @hetzner", "web-app");
             },
         },
         Scene {

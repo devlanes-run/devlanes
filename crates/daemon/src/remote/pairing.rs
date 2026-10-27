@@ -7,11 +7,18 @@
 //! Codes are 8 characters of Crockford's base32 alphabet (no I, L, O or U),
 //! shown as `XXXX-XXXX`: 40 bits, valid once for 10 minutes. Every failed
 //! attempt voids every outstanding code, so a guesser gets one try per code,
-//! and five failures within 10 minutes refuse every code until the oldest of
-//! them is 10 minutes old. Client ids and tokens are a prefix and 256 random
-//! bits as lowercase hex. Codes and token hashes are compared in constant time.
+//! and five failures within 10 minutes refuse every code, and every new one,
+//! until the oldest of them is 10 minutes old. Client ids and tokens are a
+//! prefix and 256 random bits as lowercase hex. Codes and token hashes are
+//! compared in constant time. A client keeps one pairing per box name it
+//! connects by, so the box keeps up to [`MAX_PAIRINGS`] per client.
 
-use std::{collections::VecDeque, io, sync::Arc};
+use std::{
+    collections::VecDeque,
+    io,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use devlanes_proto::{
@@ -24,7 +31,7 @@ use devlanes_proto::{
 use devlanes_state::{RemotePairing, Store};
 use devlanes_transport::{BoxError, PairingClient, PairingReason};
 use serde::Deserialize;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
@@ -41,12 +48,18 @@ use crate::{
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 /// Characters per code, without the dash.
 const CODE_LEN: usize = 8;
-/// Failed attempts within [`FAILURE_WINDOW_MS`] after which every code is refused.
+/// How long a code stays valid.
+pub(crate) const CODE_TTL: Duration = Duration::from_millis(PAIRING_CODE_TTL_MS);
+/// Failed attempts within [`FAILURE_WINDOW`] after which every code is refused.
 pub(crate) const MAX_FAILURES: usize = 5;
 /// How long a failed attempt counts against [`MAX_FAILURES`].
-pub(crate) const FAILURE_WINDOW_MS: u64 = 10 * 60 * 1000;
+pub(crate) const FAILURE_WINDOW: Duration = Duration::from_secs(10 * 60);
 /// Outstanding codes kept at most; minting another drops the oldest.
 const MAX_CODES: usize = 16;
+/// Pairings kept per client, one per box name it pairs under; pairing once
+/// more drops the oldest. A client that lost its token and paired again
+/// leaves its old pairing behind, which this bounds.
+pub(crate) const MAX_PAIRINGS: usize = 8;
 
 /// `prefix` and 256 bits from the OS random source as lowercase hex.
 pub(crate) fn random_hex(prefix: &str) -> io::Result<String> {
@@ -104,7 +117,7 @@ fn display(code: &[u8; CODE_LEN]) -> String {
 /// One outstanding code.
 struct Code {
     value: [u8; CODE_LEN],
-    expires_ms: u64,
+    expires: Instant,
 }
 
 /// Why a code was refused.
@@ -112,42 +125,57 @@ struct Code {
 pub(crate) enum Refusal {
     /// Wrong, expired or used; every outstanding code is void now.
     Wrong,
-    /// Too many failures; every code is refused for `retry_after_ms`.
-    Locked { retry_after_ms: u64 },
+    /// Too many failures; every code is refused for `retry_after`.
+    Locked { retry_after: Duration },
 }
 
-/// The box's outstanding codes and recent failures, in memory only. Every
-/// method takes the time, so tests choose it.
+/// Why no code was minted.
+#[derive(Debug)]
+pub(crate) enum MintError {
+    /// Too many failures; no code is handed out for this long.
+    Paused(Duration),
+    /// The OS random source failed.
+    Random(io::Error),
+}
+
+/// The box's outstanding codes and recent failures, in memory only. The
+/// times are monotonic, so a clock change neither revives nor voids a code;
+/// every method takes the time, so tests choose it.
 #[derive(Default)]
 pub(crate) struct Codes {
     codes: Vec<Code>,
-    /// Times of failed attempts within [`FAILURE_WINDOW_MS`], oldest first.
-    failures: VecDeque<u64>,
+    /// Times of failed attempts within [`FAILURE_WINDOW`], oldest first.
+    failures: VecDeque<Instant>,
 }
 
 impl Codes {
-    /// A new code, valid until the returned time (Unix ms).
-    pub(crate) fn mint(&mut self, now_ms: u64) -> io::Result<(String, u64)> {
-        self.prune(now_ms);
+    /// A new code, valid for [`CODE_TTL`] from `now`. While failures refuse
+    /// every code, none is handed out.
+    pub(crate) fn mint(&mut self, now: Instant) -> Result<String, MintError> {
+        if let Some(wait) = self.locked_for(now) {
+            return Err(MintError::Paused(wait));
+        }
         let mut bytes = [0u8; CODE_LEN];
-        getrandom::fill(&mut bytes).map_err(|error| io::Error::other(error.to_string()))?;
+        getrandom::fill(&mut bytes)
+            .map_err(|error| MintError::Random(io::Error::other(error.to_string())))?;
         // 32 divides 256, so masking keeps every character equally likely.
         let value = bytes.map(|byte| ALPHABET[usize::from(byte & 31)]);
-        let expires_ms = now_ms.saturating_add(PAIRING_CODE_TTL_MS);
         if self.codes.len() >= MAX_CODES {
             self.codes.remove(0);
         }
-        self.codes.push(Code { value, expires_ms });
-        Ok((display(&value), expires_ms))
+        self.codes.push(Code {
+            value,
+            expires: now + CODE_TTL,
+        });
+        Ok(display(&value))
     }
 
     /// Uses `input` up when it matches an outstanding code. A failure voids
     /// every outstanding code and counts towards the limit; while the limit
     /// holds, every code is refused without being compared.
-    pub(crate) fn claim(&mut self, input: &str, now_ms: u64) -> Result<(), Refusal> {
-        self.prune(now_ms);
-        if let Some(retry_after_ms) = self.locked_for(now_ms) {
-            return Err(Refusal::Locked { retry_after_ms });
+    pub(crate) fn claim(&mut self, input: &str, now: Instant) -> Result<(), Refusal> {
+        if let Some(retry_after) = self.locked_for(now) {
+            return Err(Refusal::Locked { retry_after });
         }
         let normalized = normalize(input);
         let valid = normalized.is_some();
@@ -166,45 +194,55 @@ impl Codes {
             }
             None => {
                 self.codes.clear();
-                self.failures.push_back(now_ms);
+                self.failures.push_back(now);
                 Err(Refusal::Wrong)
             }
         }
     }
 
     /// How long every code stays refused, when failures reached the limit.
-    pub(crate) fn locked_for(&mut self, now_ms: u64) -> Option<u64> {
-        self.prune(now_ms);
+    pub(crate) fn locked_for(&mut self, now: Instant) -> Option<Duration> {
+        self.prune(now);
         if self.failures.len() < MAX_FAILURES {
             return None;
         }
         let oldest = self.failures.front()?;
-        Some(
-            oldest
-                .saturating_add(FAILURE_WINDOW_MS)
-                .saturating_sub(now_ms),
-        )
+        Some((*oldest + FAILURE_WINDOW).saturating_duration_since(now))
     }
 
     /// Whether a code is still valid, which keeps an idle daemon running so
     /// the code does not vanish with it.
-    pub(crate) fn outstanding(&mut self, now_ms: u64) -> bool {
-        self.prune(now_ms);
+    pub(crate) fn outstanding(&mut self, now: Instant) -> bool {
+        self.prune(now);
         !self.codes.is_empty()
     }
 
+    /// Voids every outstanding code; recent failures still count.
+    pub(crate) fn void(&mut self) {
+        self.codes.clear();
+    }
+
     /// Forgets expired codes and failures older than the window.
-    fn prune(&mut self, now_ms: u64) {
-        self.codes.retain(|code| code.expires_ms > now_ms);
+    fn prune(&mut self, now: Instant) {
+        self.codes.retain(|code| code.expires > now);
         while self
             .failures
             .front()
-            .is_some_and(|at| at.saturating_add(FAILURE_WINDOW_MS) <= now_ms)
+            .is_some_and(|at| *at + FAILURE_WINDOW <= now)
         {
             self.failures.pop_front();
         }
     }
 }
+
+/// `retry_after` in milliseconds, for answers.
+fn millis(wait: Duration) -> u64 {
+    u64::try_from(wait.as_millis()).unwrap_or(u64::MAX)
+}
+
+/// The text of too many wrong codes. The wait goes separately as
+/// `retry_after_ms`, so a client can show it from a time that stays right.
+const PAUSED: &str = "5 wrong pairing codes in the last 10 minutes";
 
 /// `pairing_refused`, which the tunnel hands to the client as the reason.
 fn refused(refusal: Refusal) -> RpcError {
@@ -215,14 +253,7 @@ fn refused(refusal: Refusal) -> RpcError {
                 .to_owned(),
             None,
         ),
-        Refusal::Locked { retry_after_ms } => (
-            format!(
-                "too many wrong pairing codes; the box takes codes again in {}, then run \
-                 `devlanes remote pair` there for a new one",
-                minutes(retry_after_ms)
-            ),
-            Some(retry_after_ms),
-        ),
+        Refusal::Locked { retry_after } => (PAUSED.to_owned(), Some(millis(retry_after))),
     };
     RpcError::new(
         "pairing_refused",
@@ -231,12 +262,14 @@ fn refused(refusal: Refusal) -> RpcError {
     )
 }
 
-/// `retry_after_ms` as whole minutes, rounded up: `1 minute`, `7 minutes`.
-fn minutes(ms: u64) -> String {
-    match ms.div_ceil(60_000).max(1) {
-        1 => "1 minute".to_owned(),
-        count => format!("{count} minutes"),
-    }
+/// `pairing_paused`: `remote pair` hands out no code while failures refuse
+/// every code.
+fn paused(wait: Duration) -> RpcError {
+    RpcError::new(
+        "pairing_paused",
+        json!({"message": PAUSED, "retry_after_ms": millis(wait)}),
+        4,
+    )
 }
 
 /// `io` errors of the random source, as the daemon reports them.
@@ -260,29 +293,64 @@ struct RevokeParams {
 /// Shortest start of an id `revoke` matches: the prefix and four hex digits.
 const MIN_ID_PREFIX: usize = CLIENT_ID_PREFIX.len() + 4;
 
-impl Inner {
-    /// `remote.pair`: a new one-time code. The code is never logged.
-    pub(crate) fn pair_method(&self) -> Result<Value, RpcError> {
-        let now = now_ms();
-        let mut codes = lock(&self.remote.codes);
-        let (code, expires_at_ms) = codes.mint(now).map_err(random_error)?;
-        let locked = codes.locked_for(now);
-        drop(codes);
-        tracing::info!(expires_at_ms, "issued a pairing code");
-        let mut reply = Map::new();
-        reply.insert("code".into(), json!(code));
-        reply.insert("expires_at_ms".into(), json!(expires_at_ms));
-        if let Some(retry_after_ms) = locked {
-            reply.insert("retry_after_ms".into(), json!(retry_after_ms));
+/// A paired client with all its pairings, as `remote clients` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Paired {
+    id: String,
+    /// The name of its most recently used pairing.
+    name: String,
+    /// When its first pairing was made.
+    paired_at: i64,
+    last_seen: Option<i64>,
+    pairings: usize,
+}
+
+/// `pairings` grouped by client, in the order of each client's first pairing.
+fn by_client(pairings: &[RemotePairing]) -> Vec<Paired> {
+    let mut clients: Vec<Paired> = Vec::new();
+    for pairing in pairings {
+        let recent = pairing.last_seen.unwrap_or(pairing.paired_at);
+        match clients.iter_mut().find(|c| c.id == pairing.client_id) {
+            Some(client) => {
+                if recent > client.last_seen.unwrap_or(client.paired_at) {
+                    client.name.clone_from(&pairing.name);
+                }
+                client.paired_at = client.paired_at.min(pairing.paired_at);
+                client.last_seen = client.last_seen.max(pairing.last_seen);
+                client.pairings += 1;
+            }
+            None => clients.push(Paired {
+                id: pairing.client_id.clone(),
+                name: pairing.name.clone(),
+                paired_at: pairing.paired_at,
+                last_seen: pairing.last_seen,
+                pairings: 1,
+            }),
         }
-        Ok(Value::Object(reply))
+    }
+    clients
+}
+
+impl Inner {
+    /// `remote.pair`: a new one-time code, or `pairing_paused` while wrong
+    /// codes refuse every code. The code is never logged.
+    pub(crate) fn pair_method(&self) -> Result<Value, RpcError> {
+        let minted = lock(&self.remote.codes).mint(Instant::now());
+        let code = match minted {
+            Ok(code) => code,
+            Err(MintError::Paused(wait)) => return Err(paused(wait)),
+            Err(MintError::Random(error)) => return Err(random_error(error)),
+        };
+        let expires_at_ms = now_ms().saturating_add(PAIRING_CODE_TTL_MS);
+        tracing::info!(expires_at_ms, "issued a pairing code");
+        Ok(json!({"code": code, "expires_at_ms": expires_at_ms}))
     }
 
-    /// `remote.pairing.verify`: whether a client's token is the one its
-    /// pairing was made with; an accepted one updates the pairing's name and
-    /// last seen time. A refused token is logged with the client's id and
-    /// address. The hash is compared in constant time, also against a
-    /// placeholder when the client has no pairing.
+    /// `remote.pairing.verify`: whether a client's token is one of its
+    /// pairings'; an accepted one updates that pairing's name and last seen
+    /// time. A refused token is logged with the client's id and address.
+    /// Every pairing's hash is compared in constant time, and a placeholder
+    /// when the client has none, so the time tells nothing either way.
     pub(crate) async fn verify_pairing(&self, value: Value) -> Result<Value, RpcError> {
         let args: VerifyParams = required(value)?;
         let Some(token) = args.token else {
@@ -291,14 +359,17 @@ impl Inner {
         let id = clean(&args.id);
         let stored = self
             .store
-            .remote_pairing(id.clone())
+            .remote_pairings_of(id.clone())
             .await
             .map_err(store_error)?;
         let presented = token_hash(&token);
-        let expected = stored
-            .as_ref()
-            .map_or_else(|| "0".repeat(presented.len()), |p| p.token_sha256.clone());
-        let matches = same(presented.as_bytes(), expected.as_bytes()) && stored.is_some();
+        let placeholder = "0".repeat(presented.len());
+        let mut matches = stored.is_empty() && same(presented.as_bytes(), placeholder.as_bytes());
+        for pairing in &stored {
+            // `|`, not `||`: no comparison is skipped once one matched.
+            matches |= same(presented.as_bytes(), pairing.token_sha256.as_bytes());
+        }
+        let matches = matches && !stored.is_empty();
         let name = clean(&args.name);
         let address = args.address.as_deref().map(clean);
         if !matches {
@@ -306,15 +377,16 @@ impl Inner {
             return Ok(json!({"paired": false, "reason": PairingReason::Invalid}));
         }
         let at = i64::try_from(now_ms()).unwrap_or(i64::MAX);
-        if let Err(error) = self.store.touch_remote_pairing(id.clone(), name, at).await {
+        if let Err(error) = self.store.touch_remote_pairing(presented, name, at).await {
             tracing::warn!(%error, client_id = %id, "cannot record when a client was last seen");
         }
         Ok(json!({"paired": true}))
     }
 
     /// `remote.pairing.claim`: trades a one-time code for a remote token and
-    /// stores the pairing, replacing an earlier one of the same client. A
-    /// refused code is logged with the client's id and address.
+    /// stores the pairing next to the client's others, dropping its oldest
+    /// beyond [`MAX_PAIRINGS`]. A refused code is logged with the client's id
+    /// and address.
     pub(crate) async fn claim_pairing(&self, value: Value) -> Result<Value, RpcError> {
         let args: ClaimParams = required(value)?;
         let id = clean(&args.id);
@@ -327,55 +399,66 @@ impl Inner {
                 2,
             ));
         }
-        let now = now_ms();
-        let outcome = lock(&self.remote.codes).claim(&args.code, now);
+        let outcome = lock(&self.remote.codes).claim(&args.code, Instant::now());
         if let Err(refusal) = outcome {
             match refusal {
                 Refusal::Wrong => tracing::warn!(
                     client_id = %id, %name, address = ?address,
                     "refused a pairing code; every outstanding code is void now"
                 ),
-                Refusal::Locked { retry_after_ms } => tracing::warn!(
-                    client_id = %id, %name, address = ?address, retry_after_ms,
+                Refusal::Locked { retry_after } => tracing::warn!(
+                    client_id = %id, %name, address = ?address,
+                    retry_after_ms = millis(retry_after),
                     "refused a pairing code after too many failures"
                 ),
             }
             return Err(refused(refusal));
         }
         let token = random_hex(TOKEN_PREFIX).map_err(random_error)?;
-        let at = i64::try_from(now).unwrap_or(i64::MAX);
-        self.store
-            .upsert_remote_pairing(RemotePairing {
-                client_id: id.clone(),
-                name: name.clone(),
-                token_sha256: token_hash(&token),
-                paired_at: at,
-                last_seen: Some(at),
-            })
+        let at = i64::try_from(now_ms()).unwrap_or(i64::MAX);
+        let dropped = self
+            .store
+            .add_remote_pairing(
+                RemotePairing {
+                    client_id: id.clone(),
+                    name: name.clone(),
+                    token_sha256: token_hash(&token),
+                    paired_at: at,
+                    last_seen: Some(at),
+                },
+                MAX_PAIRINGS,
+            )
             .await
             .map_err(store_error)?;
+        for old in dropped {
+            tracing::info!(
+                client_id = %id, %name, old_name = %old.name, paired_at = old.paired_at,
+                "replaced the oldest pairing of {}", old.name
+            );
+        }
         tracing::info!(client_id = %id, %name, address = ?address, "paired a client");
         Ok(json!({"token": token}))
     }
 
     /// `remote.clients`: every paired client and every client a tunnel serves
     /// now, by name, with its connections (address, since when, and what it
-    /// mirrors: `{ports, bound, skipped_lanes}`).
+    /// mirrors: `{ports, bound, skipped_lanes}`) and how many pairings it has.
     pub(crate) async fn clients_method(&self) -> Result<Value, RpcError> {
         let pairings = self.store.remote_pairings().await.map_err(store_error)?;
         let live: Vec<(ClientKey, RemoteClient)> = lock(&self.remote.clients)
             .iter()
             .map(|(key, (_, client))| (key.clone(), client.clone()))
             .collect();
-        let mut items: Vec<Value> = pairings
-            .iter()
-            .map(|pairing| {
+        let mut items: Vec<Value> = by_client(&pairings)
+            .into_iter()
+            .map(|client| {
                 json!({
-                    "id": pairing.client_id,
-                    "name": pairing.name,
+                    "id": client.id,
+                    "name": client.name,
                     "paired": true,
-                    "paired_at_ms": pairing.paired_at,
-                    "last_seen_ms": pairing.last_seen,
+                    "pairings": client.pairings,
+                    "paired_at_ms": client.paired_at,
+                    "last_seen_ms": client.last_seen,
                     "connections": [],
                 })
             })
@@ -404,6 +487,7 @@ impl Inner {
                     "id": client.id,
                     "name": client.name,
                     "paired": false,
+                    "pairings": 0,
                     "paired_at_ms": null,
                     "last_seen_ms": null,
                     "connections": [connection],
@@ -422,20 +506,26 @@ impl Inner {
         Ok(json!({"items": items}))
     }
 
-    /// `remote.revoke`: deletes the pairing of the client named by its id,
+    /// `remote.revoke`: deletes every pairing of the client named by its id,
     /// its name or a unique start of its id, then ends its sessions, in that
     /// order: a feed that starts meanwhile finds the pairing gone
     /// ([`RegistryParams::paired`](devlanes_proto::remote::RegistryParams::paired)).
+    /// A client connected without pairing cannot be revoked; the answer says
+    /// so (`unpaired`).
     pub(crate) async fn revoke_method(&self, value: Value) -> Result<Value, RpcError> {
         let args: RevokeParams = required(value)?;
         let target = args.client.trim().to_owned();
         let pairings = self.store.remote_pairings().await.map_err(store_error)?;
-        let found = matching(&pairings, &target);
+        let clients = by_client(&pairings);
+        let found = matching(&clients, &target);
         if found.is_empty() {
-            let all: Vec<&RemotePairing> = pairings.iter().collect();
+            let unpaired = lock(&self.remote.clients).values().any(|(_, client)| {
+                !client.id.is_empty() && (client.id == target || client.name == target)
+            });
+            let all: Vec<&Paired> = clients.iter().collect();
             return Err(RpcError::new(
                 "client_not_found",
-                json!({"client": target, "candidates": candidates(&all)}),
+                json!({"client": target, "unpaired": unpaired, "candidates": candidates(&all)}),
                 3,
             ));
         }
@@ -446,53 +536,65 @@ impl Inner {
                 3,
             ));
         }
-        let ids: Vec<String> = found.iter().map(|p| p.client_id.clone()).collect();
+        let ids: Vec<String> = found.iter().map(|client| client.id.clone()).collect();
         self.store
             .delete_remote_pairings(ids.clone())
             .await
             .map_err(store_error)?;
-        let mut ended = 0;
-        for (id, revoked) in lock(&self.remote.feeds).values() {
-            if ids.contains(id) {
-                revoked.cancel();
-                ended += 1;
-            }
-        }
-        for pairing in &found {
-            tracing::info!(client_id = %pairing.client_id, name = %pairing.name, ended, "revoked a client's pairing");
+        let ended = self
+            .remote
+            .end_feeds(|id| ids.iter().any(|revoked| revoked == id));
+        for client in &found {
+            tracing::info!(client_id = %client.id, name = %client.name, ended, "revoked a client's pairings");
         }
         let revoked: Vec<Value> = found
             .iter()
-            .map(|p| json!({"id": p.client_id, "name": p.name}))
+            .map(|client| json!({"id": client.id, "name": client.name}))
             .collect();
         Ok(json!({"revoked": revoked, "ended": ended}))
     }
+
+    /// After `daemon reset-state` deleted every pairing: voids the
+    /// outstanding codes and ends every client's session, so no client keeps
+    /// a box that no longer knows it. Recent failed attempts still count.
+    pub(crate) fn forget_pairings(&self) {
+        lock(&self.remote.codes).void();
+        let ended = self.remote.end_feeds(|_| true);
+        if ended > 0 {
+            tracing::info!(ended, "ended every client's session after a state reset");
+        }
+    }
 }
 
-/// The pairings `target` names: the one with that id, else those with that
+/// The clients `target` names: the one with that id, else those with that
 /// name, else those whose id starts with it (at least [`MIN_ID_PREFIX`] long).
-fn matching<'a>(pairings: &'a [RemotePairing], target: &str) -> Vec<&'a RemotePairing> {
-    if let Some(exact) = pairings.iter().find(|p| p.client_id == target) {
+fn matching<'a>(clients: &'a [Paired], target: &str) -> Vec<&'a Paired> {
+    if let Some(exact) = clients.iter().find(|c| c.id == target) {
         return vec![exact];
     }
-    let named: Vec<&RemotePairing> = pairings.iter().filter(|p| p.name == target).collect();
+    let named: Vec<&Paired> = clients.iter().filter(|c| c.name == target).collect();
     if !named.is_empty() || target.len() < MIN_ID_PREFIX {
         return named;
     }
-    pairings
+    clients
         .iter()
-        .filter(|p| p.client_id.starts_with(target))
+        .filter(|c| c.id.starts_with(target))
         .collect()
 }
 
-/// `{id, name}` of each pairing, for a `client_not_found` or
+/// `{id, name}` of each client, for a `client_not_found` or
 /// `client_ambiguous` answer.
-fn candidates(pairings: &[&RemotePairing]) -> Vec<Value> {
-    pairings
+fn candidates(clients: &[&Paired]) -> Vec<Value> {
+    clients
         .iter()
-        .map(|p| json!({"id": p.client_id, "name": p.name}))
+        .map(|c| json!({"id": c.id, "name": c.name}))
         .collect()
 }
+
+/// A code from `remote connect --code` and when it was given: it is used
+/// only within [`CODE_TTL`], after which the box has dropped it anyway and
+/// sending it would only void the box's other codes.
+pub(super) type GivenCode = Arc<std::sync::Mutex<Option<(String, Instant)>>>;
 
 /// Client side: the token this machine keeps for one box, and the person who
 /// types the box's code, through `remote connect --code` or a prompt to the
@@ -502,7 +604,7 @@ pub(super) struct HostPairing {
     pub(super) store: Store,
     pub(super) prompter: Arc<dyn RemotePrompter>,
     /// A code from `remote connect --code`, used by the next pairing only.
-    pub(super) code: Arc<std::sync::Mutex<Option<String>>>,
+    pub(super) code: GivenCode,
 }
 
 #[async_trait]
@@ -518,10 +620,16 @@ impl PairingClient for HostPairing {
         }
     }
 
-    /// The code from `--code`, else one asked of the attached `remote connect`.
+    /// The code from `--code` while it can still be valid, else one asked of
+    /// the attached `remote connect`.
     async fn code(&self, reason: PairingReason) -> Option<String> {
-        if let Some(code) = lock(&self.code).take() {
-            return Some(code);
+        let given = lock(&self.code).take();
+        match given {
+            Some((code, at)) if at.elapsed() < CODE_TTL => return Some(code),
+            Some(_) => {
+                tracing::debug!(host = %self.host, "dropping a --code older than a code lives")
+            }
+            None => {}
         }
         let prompt = match reason {
             PairingReason::Missing => {
@@ -554,74 +662,87 @@ impl PairingClient for HostPairing {
 mod tests {
     use super::*;
 
-    const MINUTE: u64 = 60_000;
+    const MINUTE: Duration = Duration::from_secs(60);
 
     /// A code works once, in any case and with or without its dash, and not
     /// after it expired.
     #[test]
-    fn a_code_is_used_once_and_expires() -> io::Result<()> {
+    fn a_code_is_used_once_and_expires() -> Result<(), MintError> {
+        let start = Instant::now();
         let mut codes = Codes::default();
-        let (code, expires) = codes.mint(0)?;
-        assert_eq!(expires, PAIRING_CODE_TTL_MS);
+        let code = codes.mint(start)?;
         assert_eq!(code.len(), 9);
         assert_eq!(code.as_bytes()[4], b'-');
-        assert!(codes.outstanding(0));
+        assert!(codes.outstanding(start));
         let typed = code.replace('-', " ").to_lowercase();
-        assert_eq!(codes.claim(&typed, MINUTE), Ok(()));
-        assert!(!codes.outstanding(MINUTE));
-        assert_eq!(codes.claim(&code, MINUTE), Err(Refusal::Wrong), "used up");
-
-        let (late, _) = codes.mint(0)?;
-        assert!(codes.outstanding(PAIRING_CODE_TTL_MS - 1));
-        assert!(!codes.outstanding(PAIRING_CODE_TTL_MS));
+        assert_eq!(codes.claim(&typed, start + MINUTE), Ok(()));
+        assert!(!codes.outstanding(start + MINUTE));
         assert_eq!(
-            codes.claim(&late, PAIRING_CODE_TTL_MS),
+            codes.claim(&code, start + MINUTE),
+            Err(Refusal::Wrong),
+            "used up"
+        );
+
+        let late = codes.mint(start)?;
+        assert!(codes.outstanding(start + CODE_TTL - Duration::from_millis(1)));
+        assert!(!codes.outstanding(start + CODE_TTL));
+        assert_eq!(
+            codes.claim(&late, start + CODE_TTL),
             Err(Refusal::Wrong),
             "expired"
         );
         Ok(())
     }
 
-    /// One wrong code voids every outstanding code, including valid ones.
+    /// One wrong code voids every outstanding code, including valid ones,
+    /// and so does a state reset, which keeps the failures.
     #[test]
-    fn a_failure_voids_every_code() -> io::Result<()> {
+    fn a_failure_or_a_reset_voids_every_code() -> Result<(), MintError> {
+        let start = Instant::now();
         let mut codes = Codes::default();
-        let (first, _) = codes.mint(0)?;
-        let (second, _) = codes.mint(0)?;
-        assert_eq!(codes.claim("not-a-code", 1), Err(Refusal::Wrong));
-        assert!(!codes.outstanding(1));
-        assert_eq!(codes.claim(&first, 2), Err(Refusal::Wrong));
-        assert_eq!(codes.claim(&second, 3), Err(Refusal::Wrong));
+        let first = codes.mint(start)?;
+        let second = codes.mint(start)?;
+        assert_eq!(codes.claim("not-a-code", start), Err(Refusal::Wrong));
+        assert!(!codes.outstanding(start));
+        assert_eq!(codes.claim(&first, start), Err(Refusal::Wrong));
+        assert_eq!(codes.claim(&second, start), Err(Refusal::Wrong));
+        let third = codes.mint(start)?;
+        codes.void();
+        assert!(!codes.outstanding(start));
+        assert_eq!(codes.claim(&third, start), Err(Refusal::Wrong));
+        assert_eq!(codes.failures.len(), 4, "the reset forgot no failure");
         Ok(())
     }
 
-    /// Five failures within ten minutes refuse every code, a valid one too,
-    /// with the time until the oldest failure is ten minutes old; then codes
-    /// work again.
+    /// Five failures within ten minutes refuse every code with the time
+    /// until the oldest failure is ten minutes old, and no new code is handed
+    /// out meanwhile; then codes work again.
     #[test]
-    fn failures_lock_out_codes_for_a_while() -> io::Result<()> {
+    fn failures_lock_out_codes_for_a_while() -> Result<(), MintError> {
+        let start = Instant::now();
         let mut codes = Codes::default();
-        for minute in 0..MAX_FAILURES as u64 {
+        let early = codes.mint(start)?;
+        for minute in 0..MAX_FAILURES as u32 {
             assert_eq!(
-                codes.claim("0000-0000", minute * MINUTE),
+                codes.claim("0000-0000", start + MINUTE * minute),
                 Err(Refusal::Wrong)
             );
         }
-        assert_eq!(codes.locked_for(5 * MINUTE), Some(5 * MINUTE));
-        let (code, _) = codes.mint(5 * MINUTE)?;
+        assert_eq!(codes.locked_for(start + MINUTE * 5), Some(MINUTE * 5));
+        assert!(matches!(
+            codes.mint(start + MINUTE * 6),
+            Err(MintError::Paused(wait)) if wait == MINUTE * 4
+        ));
         assert_eq!(
-            codes.claim(&code, 6 * MINUTE),
+            codes.claim(&early, start + MINUTE * 6),
             Err(Refusal::Locked {
-                retry_after_ms: 4 * MINUTE
+                retry_after: MINUTE * 4
             })
         );
-        assert!(
-            codes.outstanding(6 * MINUTE),
-            "a locked-out claim voids nothing"
-        );
         // The oldest failure leaves the window at minute 10.
-        assert_eq!(codes.locked_for(10 * MINUTE), None);
-        assert_eq!(codes.claim(&code, 10 * MINUTE), Ok(()));
+        assert_eq!(codes.locked_for(start + MINUTE * 10), None);
+        let code = codes.mint(start + MINUTE * 10)?;
+        assert_eq!(codes.claim(&code, start + MINUTE * 10), Ok(()));
         Ok(())
     }
 
@@ -654,26 +775,64 @@ mod tests {
         Ok(())
     }
 
+    /// A client's pairings make one entry: the name of the one used last,
+    /// the first pairing time, the last connection and their count.
+    #[test]
+    fn pairings_are_grouped_by_client() {
+        let pairing =
+            |id: &str, name: &str, paired_at: i64, last_seen: Option<i64>| RemotePairing {
+                client_id: id.into(),
+                name: name.into(),
+                token_sha256: format!("{id}{paired_at}"),
+                paired_at,
+                last_seen,
+            };
+        let clients = by_client(&[
+            pairing("dl_cid_a", "laptop", 5, Some(9)),
+            pairing("dl_cid_a", "old-laptop", 2, Some(3)),
+            pairing("dl_cid_b", "desk", 4, None),
+        ]);
+        assert_eq!(
+            clients,
+            [
+                Paired {
+                    id: "dl_cid_a".into(),
+                    name: "laptop".into(),
+                    paired_at: 2,
+                    last_seen: Some(9),
+                    pairings: 2,
+                },
+                Paired {
+                    id: "dl_cid_b".into(),
+                    name: "desk".into(),
+                    paired_at: 4,
+                    last_seen: None,
+                    pairings: 1,
+                },
+            ]
+        );
+    }
+
     /// `revoke` takes an exact id first, then a name, then a long enough
     /// start of an id; two clients with the same name stay ambiguous.
     #[test]
     fn revoke_names_clients_by_id_name_or_id_start() {
-        let pairing = |id: &str, name: &str| RemotePairing {
-            client_id: id.into(),
+        let client = |id: &str, name: &str| Paired {
+            id: id.into(),
             name: name.into(),
-            token_sha256: String::new(),
             paired_at: 0,
             last_seen: None,
+            pairings: 1,
         };
-        let pairings = [
-            pairing("dl_cid_aaaa1111", "laptop"),
-            pairing("dl_cid_aaaa2222", "laptop"),
-            pairing("dl_cid_bbbb3333", "desk"),
+        let clients = [
+            client("dl_cid_aaaa1111", "laptop"),
+            client("dl_cid_aaaa2222", "laptop"),
+            client("dl_cid_bbbb3333", "desk"),
         ];
         let ids = |target: &str| -> Vec<String> {
-            matching(&pairings, target)
+            matching(&clients, target)
                 .iter()
-                .map(|p| p.client_id.clone())
+                .map(|c| c.id.clone())
                 .collect()
         };
         assert_eq!(ids("dl_cid_aaaa1111"), ["dl_cid_aaaa1111"]);
@@ -685,10 +844,36 @@ mod tests {
         assert!(ids("nobody").is_empty());
     }
 
-    #[test]
-    fn waits_are_rounded_up_to_minutes() {
-        assert_eq!(minutes(1), "1 minute");
-        assert_eq!(minutes(60_001), "2 minutes");
-        assert_eq!(minutes(10 * 60_000), "10 minutes");
+    /// A `--code` is given once, and not after a code would have expired.
+    #[tokio::test]
+    async fn a_given_code_is_used_once_and_not_once_stale() -> Result<(), Box<dyn std::error::Error>>
+    {
+        struct Nobody;
+
+        #[async_trait]
+        impl RemotePrompter for Nobody {
+            async fn ask(&self, _: RemotePrompt) -> Option<String> {
+                None
+            }
+        }
+
+        let code: GivenCode = Arc::default();
+        let pairing = HostPairing {
+            host: "box".into(),
+            store: Store::open(":memory:").await?,
+            prompter: Arc::new(Nobody),
+            code: code.clone(),
+        };
+        *lock(&code) = Some(("K7QM-3XWD".into(), Instant::now()));
+        let reason = PairingReason::Missing;
+        assert_eq!(pairing.code(reason).await.as_deref(), Some("K7QM-3XWD"));
+        assert_eq!(pairing.code(reason).await, None, "used once");
+        let Some(old) = Instant::now().checked_sub(CODE_TTL + MINUTE) else {
+            // A monotonic clock that started less than 11 minutes ago.
+            return Ok(());
+        };
+        *lock(&code) = Some(("K7QM-3XWD".into(), old));
+        assert_eq!(pairing.code(reason).await, None, "a stale code is not sent");
+        Ok(())
     }
 }

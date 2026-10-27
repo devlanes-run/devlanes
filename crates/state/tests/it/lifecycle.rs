@@ -69,63 +69,88 @@ async fn migration_adds_unwanted_remote_hosts_and_down_keeps_them() {
 }
 
 #[tokio::test]
-/// A box keeps one pairing per client id: pairing again replaces it, a
-/// connection updates its name and last seen time, and deleting removes it.
-/// A client keeps one token per box, replaced when it pairs again. A reset
-/// removes both.
+/// A box keeps a client's pairings side by side, the newest `keep` of them,
+/// and drops the oldest beyond that; a connection updates the name and last
+/// seen time of the pairing it used, and deleting a client removes all of
+/// its pairings. A client keeps one token per box, replaced when it pairs
+/// again. A reset removes both.
 async fn pairings_and_tokens_round_trip() {
     use devlanes_state::RemotePairing;
     let store = Store::open(":memory:").await.expect("store");
-    let pairing = |hash: &str, at: i64| RemotePairing {
-        client_id: "dl_cid_a".into(),
+    let pairing = |client: &str, hash: &str, at: i64| RemotePairing {
+        client_id: client.into(),
         name: "laptop".into(),
         token_sha256: hash.into(),
         paired_at: at,
         last_seen: Some(at),
     };
-    store
-        .upsert_remote_pairing(pairing("one", 1))
-        .await
-        .expect("pair");
-    store
-        .upsert_remote_pairing(pairing("two", 2))
-        .await
-        .expect("pair again");
+    let add = |pairing: RemotePairing| store.add_remote_pairing(pairing, 2);
+    assert!(
+        add(pairing("dl_cid_a", "one", 1))
+            .await
+            .expect("pair")
+            .is_empty()
+    );
+    assert!(
+        add(pairing("dl_cid_a", "two", 2))
+            .await
+            .expect("second")
+            .is_empty()
+    );
+    assert!(
+        add(pairing("dl_cid_b", "other", 2))
+            .await
+            .expect("other")
+            .is_empty()
+    );
+    let dropped = add(pairing("dl_cid_a", "three", 3)).await.expect("third");
+    assert_eq!(dropped, [pairing("dl_cid_a", "one", 1)], "the oldest goes");
+    let hashes = |pairings: Vec<RemotePairing>| -> Vec<String> {
+        pairings.into_iter().map(|p| p.token_sha256).collect()
+    };
     assert_eq!(
-        store.remote_pairings().await.expect("list"),
-        [pairing("two", 2)]
+        hashes(
+            store
+                .remote_pairings_of("dl_cid_a".into())
+                .await
+                .expect("of a")
+        ),
+        ["three", "two"]
     );
     assert!(
         store
-            .touch_remote_pairing("dl_cid_a".into(), "desk".into(), 9)
+            .touch_remote_pairing("two".into(), "desk".into(), 9)
             .await
             .expect("touch")
     );
     assert!(
         !store
-            .touch_remote_pairing("dl_cid_other".into(), "x".into(), 9)
+            .touch_remote_pairing("one".into(), "x".into(), 9)
             .await
-            .expect("touch unknown")
+            .expect("touch a dropped pairing")
     );
-    let stored = store
-        .remote_pairing("dl_cid_a".into())
+    let touched = store
+        .remote_pairings_of("dl_cid_a".into())
         .await
-        .expect("get")
-        .expect("paired");
+        .expect("of a")
+        .into_iter()
+        .find(|p| p.token_sha256 == "two")
+        .expect("two");
     assert_eq!(
-        (stored.name.as_str(), stored.last_seen, stored.paired_at),
+        (touched.name.as_str(), touched.last_seen, touched.paired_at),
         ("desk", Some(9), 2)
     );
     assert_eq!(
         store
-            .delete_remote_pairings(vec!["dl_cid_a".into(), "dl_cid_b".into()])
+            .delete_remote_pairings(vec!["dl_cid_a".into(), "dl_cid_c".into()])
             .await
             .expect("delete"),
-        1
+        2
     );
     assert_eq!(
-        store.remote_pairing("dl_cid_a".into()).await.expect("get"),
-        None
+        hashes(store.remote_pairings().await.expect("all")),
+        ["other"],
+        "another client keeps its pairing"
     );
 
     store
@@ -144,10 +169,7 @@ async fn pairings_and_tokens_round_trip() {
             .as_deref(),
         Some("dl_rt_2")
     );
-    store
-        .upsert_remote_pairing(pairing("three", 3))
-        .await
-        .expect("pair");
+    add(pairing("dl_cid_a", "four", 4)).await.expect("pair");
     store.reset().await.expect("reset");
     assert_eq!(store.remote_token("box".into()).await.expect("get"), None);
     assert!(store.remote_pairings().await.expect("list").is_empty());

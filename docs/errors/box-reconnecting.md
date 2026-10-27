@@ -7,7 +7,7 @@ sidebar:
 
 `503`. The hostname belongs to a lane on a remote box and the connection to the box is down. The daemon reconnects with backoff after network loss or sleep. Requests wait up to 15 seconds for the reconnect and are then forwarded; this page appears when it takes longer.
 
-When a reconnect needs you to sign in, requests get [DL205](box-sign-in-needed.md) instead. When the connection fails for good, such as a box upgraded to a release with another protocol version, the box's hostnames are removed and requests get [DL101](unknown-host.md).
+When a reconnect needs you to sign in, requests get [DL205](box-sign-in-needed.md) instead, and when the box needs this machine to pair with it again, [DL206](box-pairing-needed.md). When the connection fails for good, such as a box upgraded to a release with another protocol version, the box's hostnames are removed and requests get [DL101](unknown-host.md).
 
 ## Fix
 

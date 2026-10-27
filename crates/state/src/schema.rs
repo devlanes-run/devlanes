@@ -169,10 +169,10 @@ diesel::table! {
     }
 }
 diesel::table! {
-    remote_pairings (client_id) {
+    remote_pairings (token_sha256) {
+        token_sha256 -> Text,
         client_id -> Text,
         name -> Text,
-        token_sha256 -> Text,
         paired_at -> BigInt,
         last_seen -> Nullable<BigInt>,
     }

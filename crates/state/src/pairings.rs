@@ -5,19 +5,20 @@ use crate::{Error, Store, models::*, schema::*};
 use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// A client a box paired with (`devlanes remote pair` on the box, then the
-/// client's first connection with the code). The token itself is never stored.
+/// One pairing of a client with a box (`devlanes remote pair` on the box,
+/// then the client's connection with the code). A client paired under several
+/// box names has one per name. The token itself is never stored.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RemotePairing {
     /// The client's `dl_cid_` id.
     pub client_id: String,
-    /// The client's host name when it last connected.
+    /// The client's host name when it last connected with this pairing.
     pub name: String,
-    /// Lowercase hex SHA-256 of the client's remote token.
+    /// Lowercase hex SHA-256 of the pairing's remote token.
     pub token_sha256: String,
     /// Unix milliseconds of the pairing.
     pub paired_at: i64,
-    /// Unix milliseconds of the client's last accepted connection.
+    /// Unix milliseconds of the last connection accepted with this pairing.
     pub last_seen: Option<i64>,
 }
 
@@ -35,49 +36,56 @@ impl From<PairingRow> for RemotePairing {
 }
 
 impl Store {
-    /// Stores `pairing`, replacing an earlier pairing of the same client id,
-    /// whose token stops working.
-    pub async fn upsert_remote_pairing(&self, pairing: RemotePairing) -> Result<(), Error> {
+    /// Adds `pairing` and keeps at most `keep` pairings of its client, newest
+    /// first; returns the ones it dropped to stay within that.
+    pub async fn add_remote_pairing(
+        &self,
+        pairing: RemotePairing,
+        keep: usize,
+    ) -> Result<Vec<RemotePairing>, Error> {
         if pairing.client_id.is_empty() {
             return Err(Error::Invalid("empty client id".into()));
         }
         self.call(move |c| {
-            let row = PairingRow {
-                client_id: pairing.client_id,
-                name: pairing.name,
-                token_sha256: pairing.token_sha256,
-                paired_at: pairing.paired_at,
-                last_seen: pairing.last_seen,
-            };
-            diesel::insert_into(remote_pairings::table)
-                .values(&row)
-                .on_conflict(remote_pairings::client_id)
-                .do_update()
-                .set(&row)
+            c.immediate_transaction(|c| {
+                let client_id = pairing.client_id.clone();
+                let row = PairingRow {
+                    token_sha256: pairing.token_sha256,
+                    client_id: pairing.client_id,
+                    name: pairing.name,
+                    paired_at: pairing.paired_at,
+                    last_seen: pairing.last_seen,
+                };
+                diesel::insert_into(remote_pairings::table)
+                    .values(&row)
+                    .execute(c)?;
+                let dropped: Vec<PairingRow> = remote_pairings::table
+                    .filter(remote_pairings::client_id.eq(&client_id))
+                    .order((
+                        remote_pairings::paired_at.desc(),
+                        remote_pairings::token_sha256,
+                    ))
+                    .offset(i64::try_from(keep).unwrap_or(i64::MAX))
+                    .select(PairingRow::as_select())
+                    .load(c)?;
+                let hashes: Vec<String> =
+                    dropped.iter().map(|row| row.token_sha256.clone()).collect();
+                diesel::delete(
+                    remote_pairings::table.filter(remote_pairings::token_sha256.eq_any(hashes)),
+                )
                 .execute(c)?;
-            Ok(())
+                Ok(dropped.into_iter().map(RemotePairing::from).collect())
+            })
         })
         .await
     }
 
-    /// The pairing of `client_id`, if the box has one.
-    pub async fn remote_pairing(&self, client_id: String) -> Result<Option<RemotePairing>, Error> {
+    /// Every pairing of `client_id`.
+    pub async fn remote_pairings_of(&self, client_id: String) -> Result<Vec<RemotePairing>, Error> {
         self.call(move |c| {
             Ok(remote_pairings::table
-                .find(client_id)
-                .select(PairingRow::as_select())
-                .first::<PairingRow>(c)
-                .optional()?
-                .map(RemotePairing::from))
-        })
-        .await
-    }
-
-    /// Every pairing, by client name and then id.
-    pub async fn remote_pairings(&self) -> Result<Vec<RemotePairing>, Error> {
-        self.call(|c| {
-            Ok(remote_pairings::table
-                .order((remote_pairings::name, remote_pairings::client_id))
+                .filter(remote_pairings::client_id.eq(client_id))
+                .order(remote_pairings::token_sha256)
                 .select(PairingRow::as_select())
                 .load::<PairingRow>(c)?
                 .into_iter()
@@ -87,16 +95,35 @@ impl Store {
         .await
     }
 
-    /// Records an accepted connection of `client_id` at `at` under `name`.
-    /// Returns false when the client has no pairing.
+    /// Every pairing, by client name, then client id, then when it was made.
+    pub async fn remote_pairings(&self) -> Result<Vec<RemotePairing>, Error> {
+        self.call(|c| {
+            Ok(remote_pairings::table
+                .order((
+                    remote_pairings::name,
+                    remote_pairings::client_id,
+                    remote_pairings::paired_at,
+                ))
+                .select(PairingRow::as_select())
+                .load::<PairingRow>(c)?
+                .into_iter()
+                .map(RemotePairing::from)
+                .collect())
+        })
+        .await
+    }
+
+    /// Records a connection accepted at `at` with the pairing whose token
+    /// hash is `token_sha256`, from a client now called `name`. Returns false
+    /// when no pairing has that hash.
     pub async fn touch_remote_pairing(
         &self,
-        client_id: String,
+        token_sha256: String,
         name: String,
         at: i64,
     ) -> Result<bool, Error> {
         self.call(move |c| {
-            let changed = diesel::update(remote_pairings::table.find(client_id))
+            let changed = diesel::update(remote_pairings::table.find(token_sha256))
                 .set((
                     remote_pairings::name.eq(name),
                     remote_pairings::last_seen.eq(Some(at)),
@@ -107,7 +134,7 @@ impl Store {
         .await
     }
 
-    /// Deletes the pairings of `client_ids`; returns how many existed.
+    /// Deletes every pairing of `client_ids`; returns how many there were.
     pub async fn delete_remote_pairings(&self, client_ids: Vec<String>) -> Result<usize, Error> {
         self.call(move |c| {
             Ok(diesel::delete(

@@ -230,11 +230,11 @@ pub(crate) struct RemoteRow {
     pub wanted: i32,
 }
 #[derive(Queryable, Selectable, Insertable, AsChangeset)]
-#[diesel(table_name = remote_pairings, primary_key(client_id), treat_none_as_null = true, check_for_backend(diesel::sqlite::Sqlite))]
+#[diesel(table_name = remote_pairings, primary_key(token_sha256), treat_none_as_null = true, check_for_backend(diesel::sqlite::Sqlite))]
 pub(crate) struct PairingRow {
+    pub token_sha256: String,
     pub client_id: String,
     pub name: String,
-    pub token_sha256: String,
     pub paired_at: i64,
     pub last_seen: Option<i64>,
 }

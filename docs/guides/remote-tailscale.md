@@ -17,7 +17,7 @@ devlanes remote pair                            # in an ssh shell on the box: a 
 devlanes remote connect devbox --code K7QM-3XWD # here, for the first connection
 ```
 
-The first connection pairs this machine with the box ([pairing](../remote.md#pairing)); later ones present the token it got. A Tailscale SSH policy can let several of your devices, or other people's, log in as the same user. Pairing keeps the box's lanes to the machines you paired, and `devlanes remote revoke` on the box removes one.
+The first connection pairs this machine with the box ([pairing](../remote.md#pairing)); later ones present the token it got. Pairing keeps the box's lanes from devices that only run the tunnel; anyone who gets a shell as that user can run `devlanes remote pair` too, so limit the SSH policy to your devices. `devlanes remote revoke` on the box removes a paired machine.
 
 A device keeps its Tailscale IP when it changes networks, so after sleep or a move to another Wi-Fi the daemon reconnects to the same name and address.
 

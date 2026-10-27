@@ -21,8 +21,14 @@ use tokio::net::TcpStream;
 use super::{BOX, BoxSide, ClientSide, SOON, box_port, echo, http_get, ipv6_loopback};
 use crate::{LIMIT, cx, eventually, repo, temp};
 
-// Port ranges: 16000-16999, below `remote_sync.rs`'s 17000 and above the DNS
-// server's 15353, which no other test in this binary uses.
+// Port ranges: 15400-15799 and 16000-16999, between the DNS server's 15353
+// and `remote_sync.rs`'s 17000, which no other test in this binary uses.
+// Each test has its own slice, given where it starts its box.
+
+/// The `fix` of a client waiting for pairing with box `host`.
+fn pair_fix(host: &str) -> String {
+    format!("devlanes remote pair on {host}, then devlanes remote connect {host} --code <code>")
+}
 
 /// `connect` with `params` from a CLI that cannot answer prompts: its
 /// session is gone before the daemon asks anything.
@@ -96,10 +102,7 @@ async fn a_code_pairs_a_client_whose_token_serves_later_connections() {
             .await
             .expect_err("connected without pairing");
         assert_eq!(refused.code, "remote_needs_pairing", "{refused:?}");
-        assert_eq!(
-            refused.data["fix"], "devlanes remote connect box --code <code>",
-            "{refused:?}"
-        );
+        assert_eq!(refused.data["fix"], pair_fix("box"), "{refused:?}");
         let host = client.host().await;
         assert_eq!(host["state"], "needs_pairing", "{host}");
         assert!(
@@ -144,12 +147,14 @@ async fn a_code_pairs_a_client_whose_token_serves_later_connections() {
         let box_store = Store::open(side.h.home.join("state.db"))
             .await
             .expect("box store");
-        let pairing = box_store
-            .remote_pairing(id.clone())
+        let pairings = box_store
+            .remote_pairings_of(id.clone())
             .await
-            .expect("pairing")
-            .expect("the box keeps the pairing");
+            .expect("pairings");
         box_store.close().await.expect("close");
+        let [pairing] = pairings.as_slice() else {
+            panic!("one pairing: {pairings:?}");
+        };
         assert_ne!(pairing.token_sha256, token, "only a hash is kept");
         assert_eq!(pairing.token_sha256.len(), 64, "{}", pairing.token_sha256);
 
@@ -236,10 +241,7 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
         let Some(host) = host else {
             panic!("the client needs pairing: {}", client.host().await);
         };
-        assert_eq!(
-            host["fix"], "devlanes remote connect box --code <code>",
-            "{host}"
-        );
+        assert_eq!(host["fix"], pair_fix("box"), "{host}");
         assert!(
             TcpStream::connect((Ipv6Addr::LOCALHOST, echo_port))
                 .await
@@ -289,12 +291,13 @@ async fn revoking_a_client_ends_its_session_until_it_pairs_again() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A box with `remote.require_pairing: false` serves a client that brings
-/// no code, which `remote clients` lists as connected but not paired.
+/// no code, which `remote clients` lists as connected but not paired and
+/// `remote revoke` cannot revoke.
 async fn a_box_without_pairing_serves_every_client() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start_unpaired(&tmp, "box", "16500-16624").await;
-        let client = ClientSide::start(&tmp, "client", "16625-16749", &side).await;
+        let side = BoxSide::start_unpaired(&tmp, "box", "16500-16562").await;
+        let client = ClientSide::start(&tmp, "client", "16563-16624", &side).await;
         let connected = connect_unattended(&client, json!({"host": "box", "background": true}))
             .await
             .expect("connect without a code");
@@ -306,6 +309,17 @@ async fn a_box_without_pairing_serves_every_client() {
         };
         assert_eq!(entry["paired"], false, "{entry}");
         assert_eq!(stored_token(&client.h.home, "box").await, None);
+        let refused = side
+            .h
+            .call(
+                Method::RemoteRevoke,
+                json!({"client": id}),
+                Context::default(),
+            )
+            .await
+            .expect_err("revoked an unpaired client");
+        assert_eq!(refused.code, "client_not_found", "{refused:?}");
+        assert_eq!(refused.data["unpaired"], true, "{refused:?}");
         client.stop().await;
         side.stop().await;
     })
@@ -319,8 +333,8 @@ async fn a_box_without_pairing_serves_every_client() {
 async fn the_attached_cli_is_asked_for_the_code() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start(&tmp, "box", "16750-16874").await;
-        let client = ClientSide::start(&tmp, "client", "16875-16999", &side).await;
+        let side = BoxSide::start(&tmp, "box", "16625-16687").await;
+        let client = ClientSide::start(&tmp, "client", "16688-16749", &side).await;
         let code = side.code().await;
         let (session, mut frames) = Session::local(9_450);
         let engine = client.h.engine.clone();
@@ -367,13 +381,14 @@ async fn the_attached_cli_is_asked_for_the_code() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A wrong code voids the box's outstanding codes, so the right one fails
-/// after it, and after five failures a fresh code is refused with the wait,
-/// which `remote pair` reports too.
+/// after it. After five failures `remote pair` hands out no code and says
+/// how long, every code is refused, and the client keeps the time the box
+/// takes codes again, not a wait that goes stale.
 async fn wrong_codes_void_codes_and_lock_out_pairing() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start(&tmp, "box", "16500-16624").await;
-        let client = ClientSide::start(&tmp, "client", "16625-16749", &side).await;
+        let side = BoxSide::start(&tmp, "box", "16750-16812").await;
+        let client = ClientSide::start(&tmp, "client", "16813-16874", &side).await;
         let attempt = |code: String| {
             let client = &client;
             async move {
@@ -407,17 +422,26 @@ async fn wrong_codes_void_codes_and_lock_out_pairing() {
             .h
             .call(Method::RemotePair, json!({}), Context::default())
             .await
-            .expect("pair");
-        assert!(paused["retry_after_ms"].as_u64().is_some(), "{paused}");
-        let fresh = paused["code"].as_str().expect("code").to_owned();
-        let locked = attempt(fresh).await;
+            .expect_err("a code while paused");
+        assert_eq!(paused.code, "pairing_paused", "{paused:?}");
+        let wait = paused.data["retry_after_ms"].as_u64().unwrap_or_default();
+        assert!(wait > 0 && wait <= 10 * 60_000, "{paused:?}");
+        let locked = attempt("0000-0000".into()).await;
         assert!(
             locked.data["message"]
                 .as_str()
-                .is_some_and(|message| message.contains("too many wrong pairing codes")),
+                .is_some_and(|message| message.contains("5 wrong pairing codes")),
             "{locked:?}"
         );
-        assert_eq!(client.host().await["state"], "needs_pairing");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as u64)
+            .unwrap_or_default();
+        let retry_at = locked.data["retry_at_ms"].as_u64().unwrap_or_default();
+        assert!(retry_at > now, "{locked:?}");
+        let host = client.host().await;
+        assert_eq!(host["state"], "needs_pairing", "{host}");
+        assert_eq!(host["pairing_retry_at_ms"], retry_at, "{host}");
         client.stop().await;
         side.stop().await;
     })
@@ -431,7 +455,7 @@ async fn wrong_codes_void_codes_and_lock_out_pairing() {
 async fn the_feed_refuses_a_client_without_a_pairing() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
-        let side = BoxSide::start(&tmp, "box", "16500-16624").await;
+        let side = BoxSide::start(&tmp, "box", "16875-16937").await;
         let id = format!("dl_cid_{}", "2".repeat(64));
         let refused = side
             .h
@@ -444,6 +468,146 @@ async fn the_feed_refuses_a_client_without_a_pairing() {
             .expect_err("a feed for an unpaired client");
         assert_eq!(refused.code, "client_not_paired", "{refused:?}");
         assert_eq!(listed(&side, &id).await, None, "the client is not listed");
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Revoking one client ends its session only: another client of the same
+/// box stays connected and listed.
+async fn revoking_one_client_leaves_another_connected() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "16938-16958").await;
+        let first = ClientSide::start(&tmp, "first", "16959-16979", &side).await;
+        let second = ClientSide::start(&tmp, "second", "16980-16999", &side).await;
+        first.connect("box").await;
+        second.connect("box").await;
+        let (first_id, second_id) = (client_id(&first), client_id(&second));
+        let both = eventually(SOON, || async {
+            let a = listed(&side, &first_id).await?;
+            let b = listed(&side, &second_id).await?;
+            (a["connections"].as_array()?.len() == 1 && b["connections"].as_array()?.len() == 1)
+                .then_some(())
+        })
+        .await;
+        assert!(both.is_some(), "both clients are connected");
+
+        let revoked = side
+            .h
+            .call(
+                Method::RemoteRevoke,
+                json!({"client": first_id}),
+                Context::default(),
+            )
+            .await
+            .expect("revoke");
+        assert_eq!(revoked["ended"], 1, "{revoked}");
+        let waiting = eventually(SOON, || async {
+            (first.host().await["state"] == "needs_pairing").then_some(())
+        })
+        .await;
+        assert!(waiting.is_some(), "{}", first.host().await);
+        // Long enough for a session the revoke ended by mistake to go down.
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert_eq!(second.host().await["state"], "connected");
+        let entry = listed(&side, &second_id).await.expect("still paired");
+        assert_eq!(entry["paired"], true, "{entry}");
+        assert_eq!(
+            entry["connections"].as_array().map(Vec::len),
+            Some(1),
+            "{entry}"
+        );
+        first.stop().await;
+        second.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `daemon reset-state` on the box deletes every pairing: a connected client
+/// loses its session and waits in `needs_pairing`, and a code handed out
+/// before the reset no longer works.
+async fn a_state_reset_on_the_box_ends_every_pairing() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "15400-15499").await;
+        let client = ClientSide::start(&tmp, "client", "15500-15599", &side).await;
+        client.connect("box").await;
+        let before = side.code().await;
+        let yes = Context {
+            yes: true,
+            ..Context::default()
+        };
+        side.h
+            .call(Method::DaemonResetState, json!({}), yes)
+            .await
+            .expect("reset");
+        let waiting = eventually(SOON, || async {
+            (client.host().await["state"] == "needs_pairing").then_some(())
+        })
+        .await;
+        assert!(waiting.is_some(), "{}", client.host().await);
+        let refused = connect_unattended(
+            &client,
+            json!({"host": "box", "background": true, "code": before}),
+        )
+        .await
+        .expect_err("a code from before the reset");
+        assert!(
+            refused.data["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("already used")),
+            "{refused:?}"
+        );
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A machine that reaches one box under two names pairs once per name, and
+/// the second pairing leaves the first working: the box lists one client
+/// with two pairings, and a restarted client connects under both names with
+/// their tokens.
+async fn two_names_for_one_box_keep_both_pairings() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let side = BoxSide::start(&tmp, "box", "15600-15699").await;
+        let boxes = [("box", &side), ("alias", &side)];
+        let client = ClientSide::start_with(&tmp, "client", "15700-15799", &boxes, None).await;
+        client.connect("box").await;
+        client.connect("alias").await;
+        let id = client_id(&client);
+        let entry = listed(&side, &id).await.expect("paired");
+        assert_eq!(entry["pairings"], 2, "{entry}");
+        assert_ne!(
+            stored_token(&client.h.home, "box").await,
+            stored_token(&client.h.home, "alias").await,
+            "one token per name"
+        );
+        client.stop().await;
+
+        let client = ClientSide::start_with(&tmp, "client", "15700-15799", &boxes, None).await;
+        let restored = eventually(SOON, || async {
+            (client.host_named("box").await["state"] == "connected"
+                && client.host_named("alias").await["state"] == "connected")
+                .then_some(())
+        })
+        .await;
+        assert!(
+            restored.is_some(),
+            "both names connect with their tokens: {} {}",
+            client.host_named("box").await,
+            client.host_named("alias").await
+        );
+        client.stop().await;
         side.stop().await;
     })
     .await

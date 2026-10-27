@@ -566,7 +566,7 @@ pub enum RemoteCommand {
         /// Return once connected instead of staying attached for prompts
         #[arg(long)]
         background: bool,
-        /// Pair with the box using this one-time code from devlanes remote pair on the box, instead of entering it when asked
+        /// Pair with the box using this one-time code from devlanes remote pair on the box, instead of entering it when asked (also with --background); used only by this request
         #[arg(long, value_name = "CODE")]
         code: Option<String>,
     },
@@ -574,7 +574,7 @@ pub enum RemoteCommand {
     Pair,
     /// On a box: list paired clients and the clients connected now
     Clients,
-    /// On a box: delete a client's pairing and end its connections now
+    /// On a box: delete a client's pairings and end its connections now; a client connected without pairing (remote.require_pairing: false) has none to revoke
     Revoke {
         /// The client's name or id from devlanes remote clients (a unique start of the id works)
         #[arg(value_name = "CLIENT")]

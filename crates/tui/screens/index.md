@@ -202,6 +202,22 @@ the boxes view (B): link state, errors and fixes, box info, proxy port, skipped 
 - 120x40: [txt](boxes-120x40.txt) · [png](boxes-120x40.png) · [ansi](boxes-120x40.ansi)
 - 80x24: [txt](boxes-80x24.txt) · [png](boxes-80x24.png) · [ansi](boxes-80x24.ansi)
 
+## boxes-pairing
+
+the boxes view while hetzner waits for this machine to pair again: the box's reason and both commands
+
+- 200x60: [txt](boxes-pairing-200x60.txt) · [png](boxes-pairing-200x60.png) · [ansi](boxes-pairing-200x60.ansi)
+- 120x40: [txt](boxes-pairing-120x40.txt) · [png](boxes-pairing-120x40.png) · [ansi](boxes-pairing-120x40.ansi)
+- 80x24: [txt](boxes-pairing-80x24.txt) · [png](boxes-pairing-80x24.png) · [ansi](boxes-pairing-80x24.ansi)
+
+## box-pairing
+
+a service of a box that waits for pairing: the last known state, and what to run on the box and here
+
+- 200x60: [txt](box-pairing-200x60.txt) · [png](box-pairing-200x60.png) · [ansi](box-pairing-200x60.ansi)
+- 120x40: [txt](box-pairing-120x40.txt) · [png](box-pairing-120x40.png) · [ansi](box-pairing-120x40.ansi)
+- 80x24: [txt](box-pairing-80x24.txt) · [png](box-pairing-80x24.png) · [ansi](box-pairing-80x24.ansi)
+
 ## boxes-empty
 
 the boxes view before any box connected

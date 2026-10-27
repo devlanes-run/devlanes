@@ -84,6 +84,9 @@ pub enum LinkState {
         error: String,
         /// The box refused a code the attempt sent; false when nobody gave one.
         refused: bool,
+        /// When the box takes codes again, after too many wrong ones: a time,
+        /// so a wait shown later is still right.
+        retry_at: Option<std::time::SystemTime>,
     },
     /// Stopped because retrying cannot help, such as a protocol mismatch.
     Failed {
@@ -276,9 +279,15 @@ async fn supervise(
             Err(error) if error.is_needs_auth() || error.is_needs_pairing() => {
                 let waiting = if error.is_needs_pairing() {
                     tracing::debug!("waiting for pairing: {error}");
+                    let retry_after = match &error {
+                        SessionError::PairingRefused { retry_after, .. } => *retry_after,
+                        _ => None,
+                    };
                     LinkState::NeedsPairing {
                         error: error.to_string(),
                         refused: matches!(error, SessionError::PairingRefused { .. }),
+                        retry_at: retry_after
+                            .and_then(|wait| std::time::SystemTime::now().checked_add(wait)),
                     }
                 } else {
                     tracing::debug!("waiting for sign-in: {error}");

@@ -114,12 +114,12 @@ impl Inner {
         let Some(ClientKey::Id(id)) = listed.map(|guard| &guard.key) else {
             return Ok(false);
         };
-        Ok(self
+        Ok(!self
             .store
-            .remote_pairing(id.clone())
+            .remote_pairings_of(id.clone())
             .await
             .map_err(crate::registry::store_error)?
-            .is_some())
+            .is_empty())
     }
 
     /// The registry as of now, from `status --all`'s lanes and this machine's

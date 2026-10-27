@@ -5,12 +5,13 @@ A box is any machine you can reach with `ssh`, or with a command such as `docker
 ## Connect
 
 ```sh
-devlanes remote pair                         # on the box: a one-time code such as K7QM-3XWD
-devlanes remote connect hetzner              # any ~/.ssh/config host; asks for the code the first time
-devlanes remote connect hetzner --background --code K7QM-3XWD # returns once connected; the connection stays up
-devlanes remote ls                           # boxes, state, mirrored ports, skipped lanes, syncs, warnings
-devlanes remote sync                         # synced folders of running box lanes
-devlanes remote disconnect hetzner           # or `devlanes remote disconnect` for every box
+devlanes remote pair                              # on the box: a one-time code such as K7QM-3XWD
+devlanes remote connect hetzner                   # any ~/.ssh/config host; asks for the code the first time
+devlanes remote connect hetzner --code K7QM-3XWD  # or pass the code
+devlanes remote connect hetzner --background      # returns once connected; the connection stays up
+devlanes remote ls                                # boxes, state, mirrored ports, skipped lanes, syncs, warnings
+devlanes remote sync                              # synced folders of running box lanes
+devlanes remote disconnect hetzner                # or `devlanes remote disconnect` for every box
 ```
 
 The connection belongs to your local daemon, not to the terminal. Ctrl-C on `remote connect` only detaches the CLI. The daemon reconnects with backoff after network loss or sleep. While it is down, mirrored ports stay bound; requests to the box's hostnames wait up to 15 seconds for the reconnect, then get a [box reconnecting](errors/box-reconnecting.md) page. After a reconnect the box's current state replaces what the client knew. When the connection fails for good (on the first connection, rejected credentials or a host key, or a host name that does not resolve; a protocol mismatch at any time), its ports and hostnames are removed and `remote ls` shows the error.
@@ -36,22 +37,26 @@ A box serves only machines it paired with. SSH, or the command that reaches the 
 ```sh
 devlanes remote pair                            # on the box
 # pairing code: K7QM-3XWD (works once, for 10 minutes)
-# on your machine, run: devlanes remote connect <box> --code K7QM-3XWD
+# on the machine you connect from, run: devlanes remote connect <box> --code K7QM-3XWD
 
 devlanes remote connect hetzner --code K7QM-3XWD   # on the client
 devlanes remote connect hetzner                    # or this, which asks for the code
 ```
 
-The client trades the code for a remote token (`dl_rt_` and 64 lowercase hex digits) that it keeps for that box in its state database, in its devlanes home, and presents with its client id on every later connection, including the ones a restarted daemon makes in the background. The box keeps only the SHA-256 of the token, with the client's id, name, when it paired and when it last connected, in its own state database. A machine that pairs again, after its token was lost or revoked, replaces its earlier pairing, so a machine that connects to one box under two names keeps only the pairing of the name it paired last. Until a client is paired, the box tells it nothing, not even its version or ports. Pairing does not stop someone who can run commands on the box as you, since they can run `devlanes remote pair` themselves; it keeps out machines that reach the tunnel but should not see your lanes, such as a key restricted to `devlanes tunnel --stdio` or an SSH policy wider than you meant.
+`--background` asks for the code the same way before it returns. A `--code` is used only by the `remote connect` that passed it, and only within the 10 minutes a code lives: a later reconnect that needs a code asks again instead of sending an old one.
 
-A code is 8 characters from an alphabet without I, L, O and U, works once and expires after 10 minutes. It lives only in the box daemon's memory, which stays running while a code is outstanding. Every wrong code makes every outstanding code void, so ask for a new one after a typo, and after 5 wrong codes within 10 minutes the box refuses every code until the oldest of those is 10 minutes old; `remote connect` and `remote pair` say how long that is. The box logs each refused code and token with the client's id and SSH address, and compares codes and token hashes in constant time.
+The client trades the code for a remote token (`dl_rt_` and 64 lowercase hex digits) that it keeps for that box in its state database, in its devlanes home, and presents with its client id on every later connection, including the ones a restarted daemon makes in the background. The box keeps only the SHA-256 of the token, with the client's id, name, when it paired and when it last connected, in its own state database. Each pairing has its own token, so a machine that reaches one box under two names, such as two SSH aliases, pairs once per name and keeps both. The box keeps up to 8 pairings per machine and drops the oldest beyond that, which also bounds what a machine that lost its token and paired again leaves behind. Pairing does not stop someone who can run commands on the box as you, since they can run `devlanes remote pair` themselves; it keeps the box's lanes from machines that only reach the tunnel, such as one using a key restricted to `devlanes tunnel --stdio` in `authorized_keys` through a [box command](guides/remote-command.md) like `[ssh, -T, acme-box]`. That restriction works with a box command only: `remote connect` over SSH first runs a probe, which a forced command replaces.
+
+Until a client is paired, the box sends it no version label, registry or box info, and answers no stream it opens other than the control stream. An unpaired client can still see the first line the tunnel writes (`devlanes-tunnel 4`, its protocol revision), the protocol revision the box speaks when they differ, whatever the tunnel writes on stderr before the session (that the box daemon is not running with `remote.start_daemon: false`, that the box's user config has invalid remote settings, that a Windows box daemon stays inside the ssh session), and whether the box asks for a code or refuses one, with the wait after too many wrong ones. Connecting also starts the box daemon when none runs, unless `remote.start_daemon` is false. Over SSH the client's probe reports the box's OS, shell and where devlanes is installed before any of this.
+
+A code is 8 characters from an alphabet without I, L, O and U, works once and expires after 10 minutes. It lives only in the box daemon's memory, which stays running while a code is outstanding. Every wrong code makes every outstanding code void, so ask for a new one after a typo, and after 5 wrong codes within 10 minutes the box refuses every code, and `remote pair` hands out none, until the oldest of those is 10 minutes old; `remote pair`, `remote connect` and `remote ls` say how long that is. The box logs each refused code and token with the client's id and SSH address, and compares codes and token hashes in constant time.
 
 ```sh
 devlanes remote clients             # on the box: paired clients and the ones connected now
 devlanes remote revoke laptop       # by name, id, or a unique start of the id
 ```
 
-`remote revoke` deletes the pairing and ends the client's connections at once. The client then waits in `needs_pairing`, as it does when its token is refused for any other reason or when nobody was there to type a code: no retries, its ports stay bound and its hostnames show a [pairing needed](errors/box-pairing-needed.md) page while its daemon runs, and `remote ls` shows `devlanes remote connect <box> --code <code>` as the `fix`. A new code pairs it again. `devlanes daemon reset-state` on the box removes every pairing, and on a client every token.
+`remote revoke` deletes every pairing of the client and ends its connections at once; another client's connection stays. A client connected without pairing (`remote.require_pairing: false`) has none to revoke. The revoked client then waits in `needs_pairing`, as it does when its token is refused for any other reason or when nobody was there to type a code: no retries, its ports stay bound and its hostnames show a [pairing needed](errors/box-pairing-needed.md) page while its daemon runs, and `remote ls` shows `devlanes remote pair on <box>, then devlanes remote connect <box> --code <code>` as the `fix`. A new code pairs it again. `devlanes daemon reset-state` on the box removes every pairing, voids every code and ends every client's session; on a client it removes every token.
 
 To let every machine that can reach the box over SSH connect without a code, as before pairing existed, set `remote.require_pairing: false` in the box's user config. The tunnel reads it at each connection, so no restart is needed. An invalid value counts as `true`.
 
@@ -168,7 +173,7 @@ Raw TCP clients such as `psql` skip the proxy and start at the mirror listener.
 
 The checks are split between the processes:
 
-- The tunnel asks the box daemon whether the client's token is valid, or trades its code, before it sends the box's version or registry. Without `remote.require_pairing`, it lets every client through. The box daemon ends a revoked client's registry stream, which ends its session.
+- The tunnel asks the box daemon whether the client's token is valid, or trades its code, before it sends the box's version or registry. With `remote.require_pairing: false`, it lets every client through. Until the welcome it resets every other stream the client opens. The box daemon ends a revoked client's registry stream, which ends its session.
 - The client daemon checks the protocol version in the handshake and stops on a mismatch. A different release with the same protocol, linger off on a Linux box, and a Windows box daemon that stays inside the ssh session become warnings from the box's version label.
 - The box daemon builds the registry from the same lanes as `status --all` and the same routes as `hosts`, and streams it to the tunnel: a full copy, then each change. A tunnel that falls behind gets a fresh full copy. The tunnel passes it on to the client. When the box daemon stops or sends something the tunnel cannot read, the session ends and the client reconnects, so it never mirrors a registry the box stopped reporting.
 - The tunnel authorizes every stream: the port must belong to a running service or container, or to an external port of a project that runs a lane, and no hidden unit may have it. It then dials loopback on the box. It passes each mirror report to the box daemon, which keeps it bounded in size.

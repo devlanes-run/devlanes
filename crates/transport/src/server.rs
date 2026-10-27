@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 
-use crate::mux::{self, MuxStream};
+use crate::mux::{self, MuxServer, MuxStream};
 use crate::pairing::{PairingCheck, PairingClaim, PairingGate};
 use crate::registry::{AuthorizedTarget, Registry, RegistrySource, RegistryUpdate};
 use crate::session::Timing;
@@ -86,9 +86,11 @@ pub struct ServeOptions {
 }
 
 impl ServeOptions {
-    /// Default timing, this build's features, no box info and three minutes to
-    /// pair, as long as a client's whole connection attempt, with the given
-    /// version label.
+    /// Default timing, this build's features, no box info and 150 seconds to
+    /// pair: the two minutes devlanes' client gives a person to type the code,
+    /// and time for the code to travel. Shorter than a client's whole
+    /// connection attempt, so an unpaired client holds the tunnel no longer
+    /// than it needs to. With the given version label.
     pub fn new(server: impl Into<String>) -> Self {
         Self {
             server: server.into(),
@@ -96,7 +98,7 @@ impl ServeOptions {
             box_info: BoxInfo::default(),
             timing: Timing::default(),
             dial_timeout: Duration::from_secs(10),
-            pairing_timeout: Duration::from_secs(180),
+            pairing_timeout: Duration::from_secs(150),
         }
     }
 }
@@ -256,9 +258,10 @@ where
         ));
     };
     if protocol != PROTOCOL_VERSION {
+        // No version label: an unpaired client learns the revision only.
         let reply = BoxControl::Incompatible {
             protocol: PROTOCOL_VERSION,
-            server: options.server.clone(),
+            server: String::new(),
         };
         let _ = timeout(timing.handshake_timeout, async {
             wire::send(&mut control, &reply).await?;
@@ -273,13 +276,17 @@ where
         id: client_id,
         name: client_name,
     };
-    // Nothing about the box, not even its welcome, goes to a client it does not serve.
-    pair(
-        &mut control,
-        &services,
-        &peer,
-        token.map(|token| token.0),
-        &options,
+    // Nothing about the box, not even its welcome, goes to a client it does
+    // not serve, and nothing it opens before then is answered.
+    refusing_streams(
+        &mut mux,
+        pair(
+            &mut control,
+            &services,
+            &peer,
+            token.map(|token| token.0),
+            &options,
+        ),
     )
     .await?;
     let feed = services
@@ -378,6 +385,26 @@ where
                 deadline = alive_until;
             }
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {}
+        }
+    }
+}
+
+/// Runs `work` while resetting every stream the client opens meanwhile, by
+/// dropping it unanswered: until the welcome a client may only use its
+/// control stream, and a client that is not paired yet gets nothing else.
+async fn refusing_streams<T>(mux: &mut MuxServer, work: impl Future<Output = T>) -> T {
+    tokio::pin!(work);
+    let mut open = true;
+    loop {
+        tokio::select! {
+            done = &mut work => return done,
+            stream = mux.accept(), if open => match stream {
+                Some(stream) => {
+                    tracing::debug!("reset a stream the client opened before the welcome");
+                    drop(stream);
+                }
+                None => open = false,
+            },
         }
     }
 }

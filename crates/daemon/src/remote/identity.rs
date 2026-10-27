@@ -35,8 +35,19 @@ pub(crate) fn load(home: &Path) -> io::Result<ClientIdentity> {
 /// A new id is written whole to a temporary file and then hard-linked into
 /// place, which fails when the file exists: a daemon reading at the same time
 /// never sees a half-written id, and an id another daemon of this home just
-/// stored is read instead of replaced.
+/// stored is read instead of replaced. Where the file system has no hard
+/// links, the id is written to its file directly, which also fails when the
+/// file exists; a daemon reading at that moment may then see a partial id.
 fn stored_id(home: &Path) -> io::Result<String> {
+    stored_id_with(home, |from, to| std::fs::hard_link(from, to))
+}
+
+/// [`stored_id`] with `link` in place of [`std::fs::hard_link`], so a test
+/// can take the fallback.
+fn stored_id_with(
+    home: &Path,
+    link: impl Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<String> {
     let path = home.join(ID_FILE);
     loop {
         match std::fs::read_to_string(&path) {
@@ -56,10 +67,18 @@ fn stored_id(home: &Path) -> io::Result<String> {
         let id = random_id()?;
         let temporary = home.join(format!("{ID_FILE}.{id}.tmp"));
         write_new(&temporary, &id)?;
-        let linked = std::fs::hard_link(&temporary, &path);
+        let linked = link(&temporary, &path);
         let _ = std::fs::remove_file(&temporary);
-        match linked {
+        let stored = match linked {
+            Err(error) if error.kind() != io::ErrorKind::AlreadyExists => {
+                tracing::debug!(%error, "no hard link for the client id; writing it in place");
+                write_new(&path, &id)
+            }
+            linked => linked,
+        };
+        match stored {
             Ok(()) => return Ok(id),
+            // Another daemon of this home stored one first: read that.
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error),
         }
@@ -147,6 +166,31 @@ mod tests {
         let identity = load(dir.path())?;
         assert!(valid(&identity.id), "{}", identity.id);
         assert_eq!(load(dir.path())?.id, identity.id);
+        Ok(())
+    }
+
+    /// Without hard links the id is written in place, the temporary file is
+    /// removed, and an id already there is read instead of replaced.
+    #[test]
+    fn the_id_is_written_in_place_without_hard_links() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let unsupported = |_: &Path, _: &Path| Err(io::Error::from(io::ErrorKind::Unsupported));
+        let id = stored_id_with(dir.path(), unsupported)?;
+        assert!(valid(&id), "{id}");
+        let files: Vec<_> = std::fs::read_dir(dir.path())?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<io::Result<_>>()?;
+        assert_eq!(files, [ID_FILE], "{files:?}");
+        assert_eq!(stored_id_with(dir.path(), unsupported)?, id);
+
+        // A daemon that stores its id between this one's read and write wins.
+        let other = tempfile::tempdir()?;
+        let theirs = format!("dl_cid_{}", "a".repeat(64));
+        let racing = |_: &Path, to: &Path| {
+            std::fs::write(to, format!("{theirs}\n"))?;
+            Err(io::Error::from(io::ErrorKind::Unsupported))
+        };
+        assert_eq!(stored_id_with(other.path(), racing)?, theirs);
         Ok(())
     }
 

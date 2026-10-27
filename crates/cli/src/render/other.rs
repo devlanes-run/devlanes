@@ -1970,6 +1970,12 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
         {
             fields.insert("connected_since".into(), Value::String(ago(ms)));
         }
+        // A time, so the wait is right whenever this runs.
+        if let Some(at) = fields.remove("pairing_retry_at_ms")
+            && let Some(wait) = until(&at)
+        {
+            fields.insert("pairing_paused".into(), Value::String(wait));
+        }
     }
     let ports = data
         .get_mut("items")
@@ -2010,29 +2016,25 @@ pub(super) fn remote_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0);
     // Whole minutes, rounded up.
-    let minutes = |ms: u64| ms.div_ceil(60_000).max(1);
     let valid = data
         .get("expires_at_ms")
         .and_then(Value::as_u64)
-        .map(|expires| minutes(expires.saturating_sub(now)));
-    let paused = data
-        .get("retry_after_ms")
-        .and_then(Value::as_u64)
-        .map(minutes);
+        .map(|expires| expires.saturating_sub(now).div_ceil(60_000).max(1));
+    // `devlanes` adds this from the user config: the tunnel reads it.
+    let unpaired = data.get("require_pairing").and_then(Value::as_bool) == Some(false);
     let connect = format!("devlanes remote connect <box> --code {code}");
     if cx.agent() {
         let mut line = format!(
-            "pairing code {code}{}: ask the user to run `{connect}` on their machine, where <box> is \
-             the name they connect to this machine by (its SSH host or remote.boxes name), or to \
-             run `devlanes remote connect <box>` and enter the code; it works once",
+            "pairing code {code}{} single_use: ask the user to run `{connect}` on their machine, \
+             with <box> the name they reach this machine by (SSH host or remote.boxes name)",
             valid
                 .map(|valid| format!(" valid_for={valid}m"))
                 .unwrap_or_default()
         );
-        if let Some(paused) = paused {
-            line.push_str(&format!(
-                "; wrong codes paused pairing, so it works in {paused}m"
-            ));
+        if unpaired {
+            line.push_str(
+                "; remote.require_pairing is false here, so a plain `devlanes remote connect <box>` works too",
+            );
         }
         return vec![line];
     }
@@ -2043,18 +2045,17 @@ pub(super) fn remote_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         ),
         None => format!("pairing code: {code} (works once)"),
     }];
-    if let Some(paused) = paused {
-        lines.push(cx.warning(&format!(
-            "wrong codes paused pairing; this code works in {}",
-            plural(usize::try_from(paused).unwrap_or(usize::MAX), "minute")
-        )));
-    }
-    lines.push(format!("on your machine, run: {connect}"));
+    lines.push(format!("on the machine you connect from, run: {connect}"));
     lines.push(
-        "  <box> is the name you connect to this machine by; without --code, devlanes remote \
+        "  <box> is the name you reach this machine by; without --code, devlanes remote \
          connect asks for the code"
             .into(),
     );
+    if unpaired {
+        lines.push(cx.warning(
+            "remote.require_pairing is false in this machine's user config, so clients connect without a code",
+        ));
+    }
     lines
 }
 
@@ -2068,14 +2069,6 @@ pub(super) fn remote_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                 .into(),
         ];
     }
-    let short = |id: &str| -> String {
-        let keep = devlanes_proto::remote::CLIENT_ID_PREFIX.len() + 8;
-        if id.len() > keep {
-            id.chars().take(keep).collect()
-        } else {
-            id.to_owned()
-        }
-    };
     let rows: Vec<Vec<String>> = items
         .iter()
         .map(|item| {
@@ -2090,7 +2083,7 @@ pub(super) fn remote_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                         .map(age)
                         .unwrap_or_default();
                     let from = text(connection, "address");
-                    let mut word = format!("connected {since}");
+                    let mut word = format!("connected for {since}");
                     if !from.is_empty() {
                         word.push_str(&format!(" from {from}"));
                     }
@@ -2127,19 +2120,26 @@ pub(super) fn remote_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                     }
                 )];
             }
-            vec![
-                text(item, "name"),
-                short(&id),
-                if paired { "paired" } else { "not paired" }.to_owned(),
-                seen,
-                mirror,
-            ]
+            let pairings = item.get("pairings").and_then(Value::as_u64).unwrap_or(0);
+            let state = match (paired, pairings) {
+                (false, _) => "not paired".to_owned(),
+                (true, 0 | 1) => "paired".to_owned(),
+                (true, names) => format!("paired under {names} names"),
+            };
+            vec![text(item, "name"), short_id(&id), state, seen, mirror]
         })
         .collect();
     if cx.agent() {
         return rows.into_iter().flatten().collect();
     }
     table(&rows, "")
+}
+
+/// The start of a client id that `remote revoke` takes: the prefix and 8
+/// hex digits.
+fn short_id(id: &str) -> String {
+    let keep = devlanes_proto::remote::CLIENT_ID_PREFIX.len() + 8;
+    id.chars().take(keep).collect()
 }
 
 /// `remote revoke`: whom it revoked and how many connections it ended.
@@ -2149,18 +2149,34 @@ pub(super) fn remote_revoke(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .iter()
         .map(|client| {
             let (name, id) = (text(client, "name"), text(client, "id"));
+            let short = short_id(&id);
             if cx.agent() {
                 format!("revoked {name} id={id} ended={ended}")
             } else if ended == 0 {
-                format!("revoked {name} ({id}); it was not connected")
+                format!("revoked {name} ({short}); it was not connected")
             } else {
                 format!(
-                    "revoked {name} ({id}) and ended {}",
+                    "revoked {name} ({short}) and ended {}",
                     plural(usize::try_from(ended).unwrap_or(usize::MAX), "connection")
                 )
             }
         })
         .collect()
+}
+
+/// `the box takes codes again in 7 minutes` for an epoch-milliseconds time
+/// still ahead; `None` once it passed or when `at` is not a time.
+pub(super) fn until(at: &Value) -> Option<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0);
+    let left = at.as_u64()?.checked_sub(now).filter(|left| *left > 0)?;
+    let minutes = usize::try_from(left.div_ceil(60_000)).unwrap_or(usize::MAX);
+    Some(format!(
+        "the box takes codes again in {}",
+        plural(minutes, "minute")
+    ))
 }
 
 /// A past epoch-milliseconds time as `5m ago`, `3h ago` or `2d ago`.

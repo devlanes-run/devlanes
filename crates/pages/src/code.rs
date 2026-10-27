@@ -220,7 +220,7 @@ impl ErrorCode {
                 "The service runs on a remote box whose connection needs you to sign in again, such as an SSH password prompt nobody answered or a changed host key. devlanes stopped retrying until you do."
             }
             Self::BoxPairingNeeded => {
-                "The service runs on a remote box that serves only paired machines, and it does not accept this machine's pairing: the pairing was revoked or replaced, or no code was entered. devlanes stopped retrying until you pair again."
+                "The service runs on a remote box that serves only paired machines, and it does not accept this machine's pairing: the pairing was revoked or reset on the box, or no code was entered. devlanes stopped retrying until you pair again."
             }
             Self::UpstreamUnreachable => {
                 "devlanes has the service as running, but nothing accepted connections on its port while the proxy retried."
@@ -287,6 +287,7 @@ impl ErrorCode {
                     "Here, pair again with that code",
                     "devlanes remote connect <box> --code <code>",
                 ),
+                run("Show the connection state and reason", "devlanes remote ls"),
             ],
             Self::UpstreamUnreachable => vec![
                 note("Make the service listen on `PORT`, on 127.0.0.1 or ::1"),

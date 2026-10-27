@@ -353,8 +353,11 @@ pub(crate) enum BoxControl {
         #[serde(default, rename = "box")]
         box_info: BoxInfo,
     },
+    /// The client speaks another protocol revision. Sent before pairing, so
+    /// it names the revision only, never the box's version label.
     Incompatible {
         protocol: u32,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         server: String,
     },
     /// Sent instead of the welcome to a client the box does not serve yet;

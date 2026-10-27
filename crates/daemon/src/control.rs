@@ -1252,6 +1252,9 @@ impl Inner {
         }
         // A refused reset leaves the loaded projects in place.
         self.store.reset().await.map_err(store_error)?;
+        // The pairings went with the store: no client keeps its session, and
+        // no code handed out before stays valid.
+        self.forget_pairings();
         // A start waiting for one of these lanes finds it unassigned once it runs.
         for (_, lane) in &lanes {
             let mut st = lane.st();

@@ -565,6 +565,30 @@ pub fn boxes() -> Value {
     ], "truncated": false, "next_cursor": null})
 }
 
+/// [`boxes`] after `hetzner` revoked this machine's pairing: its link waits
+/// for a new code, its ports and routes stay, and the routes serve the
+/// pairing page.
+pub fn boxes_pairing() -> Value {
+    let mut list = boxes();
+    let hetzner = list["items"]
+        .as_array_mut()
+        .and_then(|items| items.iter_mut().find(|item| item["host"] == "hetzner"));
+    if let Some(hetzner) = hetzner {
+        hetzner["state"] = json!("needs_pairing");
+        hetzner["error"] = json!(
+            "the box no longer accepts this machine's pairing (it was revoked, or dropped as the oldest of too many); get a new code with `devlanes remote pair` on the box"
+        );
+        hetzner["fix"] = json!(
+            "devlanes remote pair on hetzner, then devlanes remote connect hetzner --code <code>"
+        );
+        hetzner["connected_since_ms"] = Value::Null;
+        for route in hetzner["routes"].as_array_mut().into_iter().flatten() {
+            route["state"] = json!("pairing_needed");
+        }
+    }
+    list
+}
+
 /// The Docker log lines a container's pane shows, as the TUI writes them.
 pub fn container_logs(container: &str) -> Vec<u8> {
     let lines: Vec<String> = (0..6)

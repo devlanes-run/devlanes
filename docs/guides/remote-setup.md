@@ -63,17 +63,17 @@ The box serves only machines it paired with. Before a machine's first connection
 ```sh
 devlanes remote pair
 # pairing code: K7QM-3XWD (works once, for 10 minutes)
-# on your machine, run: devlanes remote connect <box> --code K7QM-3XWD
+# on the machine you connect from, run: devlanes remote connect <box> --code K7QM-3XWD
 ```
 
-The client enters it once ([first connection](#first-connection)) and connects with a token from then on. `devlanes remote clients` lists the paired machines and the ones connected now; `devlanes remote revoke <name>` removes one and cuts its connection. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
+The client enters it once ([first connection](#first-connection)) and connects with a token from then on, one per box name it connects by. `devlanes remote clients` lists the paired machines and the ones connected now; `devlanes remote revoke <name>` removes one and cuts its connection. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
 
 ```yaml
 remote:
   require_pairing: false
 ```
 
-An invalid value under `remote` counts as `true`. The setting is read at each connection, so it needs no restart. [Pairing](../remote.md#pairing) has the details.
+A problem anywhere under `remote` turns `require_pairing` on (and `start_daemon` off). The setting is read at each connection, so it needs no restart. [Pairing](../remote.md#pairing) has the details.
 
 ### PATH for Docker and tools
 
@@ -159,7 +159,7 @@ devlanes remote connect hetzner
 # [hetzner] the box serves only paired clients; pairing code from `devlanes remote pair` on the box: K7QM-3XWD
 ```
 
-Case and the dash do not matter. The box gives this machine a token, kept in its state database, that every later connection presents, also the ones the daemon makes on its own after sleep or a restart. Without a code, as in a script with no terminal, or with a wrong one, the connection waits in `needs_pairing` and `remote connect` says why; run it again with a new code. The same happens when the box revoked this machine's pairing: its ports stay bound and its hostnames answer with a [pairing needed](../errors/box-pairing-needed.md) page until you pair again.
+Case and the dash do not matter. `--background` asks for the code the same way before it returns; without a terminal, as for an agent, pass `--code`. The box gives this machine a token, kept in its state database, that every later connection presents, also the ones the daemon makes on its own after sleep or a restart. Without a code, as in a script with no terminal, or with a wrong one, the connection waits in `needs_pairing` and `remote connect` says why; run it again with a new code. The same happens when the box revoked this machine's pairing: its ports stay bound and its hostnames answer with a [pairing needed](../errors/box-pairing-needed.md) page until you pair again.
 
 The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an upgrade): the new daemon connects every box that connected since you last ran `remote disconnect` for it, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
 
@@ -252,10 +252,10 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | `devlanes on hetzner is C:\…\devlanes.exe, a path cmd.exe cannot run as a command` | the box's shell is cmd.exe and the path holds `%` or `!` | install devlanes in another folder |
 | `ssh to hetzner failed (255): Permission denied` | no agent or key for the daemon's ssh | load the key, `devlanes daemon restart`, connect again |
 | `needs_auth` in `remote ls`, a sign-in needed page in the browser | a reconnect asked for a password, passphrase or host key with no `remote connect` attached, or ssh rejected credentials that worked before | `devlanes remote connect hetzner` in a terminal; load the key into an agent so later reconnects need no prompt |
-| `box hetzner needs this machine to pair with it: the box serves only paired clients …` | the first connection, with no code given or typed | `devlanes remote pair` on the box, then `devlanes remote connect hetzner --code <code>` |
-| `… the box no longer accepts this machine's pairing (it was revoked or replaced) …` | `devlanes remote revoke` on the box, or this machine paired again under another name | pair again with a new code from `devlanes remote pair` |
+| `box hetzner: the box serves only paired clients; get a code with devlanes remote pair on the box` | the first connection, with no code given or typed | `devlanes remote pair` on the box, then `devlanes remote connect hetzner --code <code>` |
+| `box hetzner: the box no longer accepts this machine's pairing (it was revoked, …)` | `devlanes remote revoke` or `devlanes daemon reset-state` on the box, or the box dropped this pairing as the oldest of 8 | pair again with a new code from `devlanes remote pair` |
 | `… the box refused the pairing code: the pairing code is wrong, expired or already used …` | a typo, a code older than 10 minutes or one used before; every outstanding code is void now | a new code from `devlanes remote pair` |
-| `… the box refused the pairing code: too many wrong pairing codes; the box takes codes again in 7 minutes …` | five wrong codes within 10 minutes | wait, then use a new code; the box logs the refused attempts with their client id and SSH address |
+| `… the box refused the pairing code: 5 wrong pairing codes in the last 10 minutes; the box takes codes again in 7 minutes` | five wrong codes within 10 minutes; `remote pair` on the box refuses with the same wait | wait, then use a new code; the box logs the refused attempts with their client id and SSH address |
 | `box hetzner needs you to sign in again: … Host key verification failed` | the box's host key changed | check the new key, `ssh-keygen -R hetzner`, then `devlanes remote connect hetzner` |
 | a box connects again after a daemon restart | you connected it and have not run `remote disconnect` for it since | `devlanes remote disconnect hetzner` when you no longer want it |
 | `no ssh client found` | Windows without OpenSSH Client | add the optional feature, or put `ssh.exe` on `PATH` |

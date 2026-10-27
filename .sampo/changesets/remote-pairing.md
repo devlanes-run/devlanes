@@ -14,4 +14,4 @@ cargo/devlanes-tunnel: minor
 
 Changed `devlanes remote connect` so a box serves only machines it paired with, and added `devlanes remote pair`, `devlanes remote clients`, `devlanes remote revoke` and `remote.require_pairing`.
 
-Before a machine's first connection, run `devlanes remote pair` on the box and enter the code on the machine, or pass it with `devlanes remote connect <box> --code <code>`; later connections need no code. A box whose `~/.devlanes/config.yaml` sets `remote.require_pairing: false` serves every machine that reaches it, as before.
+After upgrading the box and this machine, a box connected before waits in `needs_pairing` (`devlanes remote ls`). Run `devlanes remote pair` on the box, then `devlanes remote connect <box> --code <code>` here, or enter the code when `devlanes remote connect <box>` asks; later connections need no code. To keep the earlier behaviour, set `remote.require_pairing: false` in the box's user config. See "Pairing" in `docs/remote.md`.

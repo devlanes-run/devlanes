@@ -697,6 +697,17 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                                 }
                                 crate::local_doctor::add_wsl(&mut data).await;
                             }
+                            // The tunnel reads this from the user config, not the
+                            // daemon, so a box that pairs nobody is told here.
+                            if method == Method::RemotePair && data.is_object() {
+                                let read = paths.clone();
+                                let require = tokio::task::spawn_blocking(move || {
+                                    crate::user_config::tunnel_settings(&read).0.require_pairing
+                                })
+                                .await
+                                .unwrap_or(true);
+                                data["require_pairing"] = json!(require);
+                            }
                             // The counterpart of the not-running answer's `false`.
                             if method == Method::DaemonStatus && data.is_object() {
                                 data["running"] = json!(true);
