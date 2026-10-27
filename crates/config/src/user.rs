@@ -72,10 +72,8 @@ pub struct UserConfig {
     /// The daemon's lifetime: whether it stops on its own once the last TUI closes and
     /// nothing runs.
     pub daemon: DaemonConfig,
-    /// `devlanes remote connect`: boxes this machine reaches with a command
-    /// instead of SSH (`boxes`), and, for this machine as a box, whether a
-    /// connecting client starts its daemon (`start_daemon`) and must be paired
-    /// (`require_pairing`).
+    /// Settings for `devlanes remote connect`: boxes reached by a command, and how this
+    /// machine serves clients when it is a box.
     pub remote: RemoteConfig,
 }
 
@@ -393,12 +391,11 @@ impl Default for UpdatesConfig {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"exit_when_idle":false}]))]
 pub struct DaemonConfig {
-    /// Stop the daemon about 30 seconds after the last TUI closes when no service, task
-    /// or start is running, no remote box is connected, reconnecting or waiting for a
-    /// sign-in or pairing, no client is connected to this machine and no pairing code
-    /// is outstanding; the next devlanes command starts it again. Containers keep
-    /// running either way. Defaults to true. Only a daemon a command started on demand
-    /// exits; one installed with `devlanes daemon install` keeps running.
+    /// Stop the daemon about 30 seconds after the last TUI closes, once nothing runs or
+    /// starts, no box or client is connected or waiting to reconnect, and no pairing code
+    /// is outstanding. The next devlanes command starts it again. Containers keep running
+    /// either way. Defaults to true. Only a daemon a command started on demand exits. One
+    /// installed with `devlanes daemon install` keeps running.
     #[schemars(extend("examples" = [true,false]))]
     pub exit_when_idle: bool,
 }
@@ -412,38 +409,27 @@ impl Default for DaemonConfig {
     }
 }
 
-/// `devlanes remote connect` settings: boxes reached by a command, and this machine as
-/// a box for other machines.
+/// Settings for `devlanes remote connect`: boxes reached by a command, and how this
+/// machine serves clients when it is a box.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"start_daemon":false},{"require_pairing":false},{"boxes":{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}}]))]
 pub struct RemoteConfig {
-    /// Boxes that `devlanes remote connect <name>` reaches by running a command on this
-    /// machine instead of SSH, keyed by the name you connect with: a container
-    /// (`docker exec -i`, `kubectl exec -i`), a WSL distribution or a codespace. A name
-    /// listed here is never used as an `ssh` destination; any other name is. The daemon
-    /// reads this at each `remote connect`, so no restart is needed; a box that is
-    /// already connected keeps its command until `devlanes remote disconnect`.
+    /// Boxes that `devlanes remote connect <name>` reaches by running a command instead of
+    /// SSH, keyed by that name. Use it for a container, a WSL distribution or a codespace.
+    /// Names not listed here are SSH destinations. Changes apply at the next
+    /// `remote connect`.
     #[schemars(extend("examples" = [{"acme":{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]}}]))]
     pub boxes: std::collections::BTreeMap<String, RemoteBox>,
-    /// Start the devlanes daemon when a client connects with `devlanes remote connect`
-    /// and none is running here; defaults to true. Set false to keep the daemon under
-    /// your own control: a client that connects while it is stopped then reports that
-    /// the box daemon is not running and keeps retrying until it runs. Start it with
-    /// `devlanes daemon start`, but a daemon started on demand exits about 30 seconds
-    /// after the last TUI or connected client leaves while nothing runs, so run `devlanes daemon
-    /// install` or set `daemon.exit_when_idle: false` to keep it running. An invalid
-    /// value here, or a file that is not YAML or has too many problems to keep any
-    /// setting, counts as false. Read at each connection, so no restart is needed.
+    /// Start the devlanes daemon here when a client connects and it is not running.
+    /// Defaults to true. When false, a client keeps retrying until you run
+    /// `devlanes daemon start` here. An invalid value counts as false.
     #[schemars(extend("examples" = [true,false]))]
     pub start_daemon: bool,
-    /// Serve only clients this machine paired with; defaults to true. A client's first
-    /// connection needs a one-time code from `devlanes daemon pair` here, which it trades
-    /// for a token it presents from then on; `devlanes daemon revoke` ends a client's
-    /// pairing. Set false to serve every client that gets in over SSH or its command, as
-    /// before pairing existed. An invalid value here, or a file that is not YAML or
-    /// has too many problems to keep any setting, counts as true. Read at each
-    /// connection, so no restart is needed.
+    /// Serve only clients paired with this machine. Defaults to true. A client's first
+    /// connection needs a one-time code from `devlanes daemon pair`, and
+    /// `devlanes daemon revoke` removes a pairing. Set false to serve every client that
+    /// reaches this machine over SSH or its command. An invalid value counts as true.
     #[schemars(extend("examples" = [true,false]))]
     pub require_pairing: bool,
 }
@@ -460,17 +446,16 @@ impl Default for RemoteConfig {
     }
 }
 
-/// A box reached by a command: `devlanes remote connect <name>` runs it, and its
-/// standard input and output must reach `devlanes tunnel --stdio` inside the box.
+/// A box that `devlanes remote connect <name>` reaches by running a command. The command
+/// must run `devlanes tunnel --stdio` in the box.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"command":["docker","exec","-i","acme","devlanes","tunnel","--stdio"]},{"command":["wsl.exe","-d","Ubuntu","devlanes","tunnel","--stdio"]}]))]
 pub struct RemoteBox {
-    /// The program and its arguments, as a list; no shell runs it, so write each argument
-    /// as its own item. It must end up running `devlanes tunnel --stdio` in the box, with
-    /// standard input and output passed through and no terminal (`docker exec -i`, not
-    /// `-it`). It runs again for every reconnect. It cannot prompt: the daemon runs it
-    /// with nobody to answer, so sign in to the tool it uses beforehand.
+    /// The program and its arguments as a list, one item per argument. No shell runs it.
+    /// It must run `devlanes tunnel --stdio` in the box with its input and output passed
+    /// through and no terminal, so use `docker exec -i`, not `-it`. It runs again for every
+    /// reconnect and cannot ask for input, so sign in to its tool first.
     #[schemars(extend("examples" = [["docker","exec","-i","acme","devlanes","tunnel","--stdio"],["kubectl","exec","-i","acme-0","--","devlanes","tunnel","--stdio"]]))]
     pub command: Vec<String>,
 }

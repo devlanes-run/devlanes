@@ -569,15 +569,13 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         "external_unit" => {
             let (name, lane) = (text(data, "unit"), text(data, "lane"));
             (
-                format!(
-                    "{name} is an infra.external entry of {lane}; devlanes does not run it, so it has no process to start, stop or read logs from"
-                ),
+                format!("{lane}:{name} is an infra.external port that devlanes does not run"),
                 Some(Hint::command(["url", "print", &format!("{lane}:{name}")])),
             )
         }
         "name_taken" if text(data, "kind") == devlanes_proto::EXTERNAL_KIND => (
             format!(
-                "{} is an infra.external entry of {}; give exec another --name",
+                "{} is already an infra.external port of {}, so give exec another --name",
                 text(data, "name"),
                 text(data, "lane")
             ),
@@ -999,13 +997,21 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         }
         "remote_needs_pairing" => {
             let host = text(data, "host");
-            let mut message = match data.get("message").and_then(Value::as_str) {
-                Some(message) => format!("box {host}: {}", super::clean(message)),
-                None => format!("box {host} needs this machine to pair with it"),
+            // The box's reasons mostly start with "the box", which this names.
+            let mut message = match data
+                .get("message")
+                .and_then(Value::as_str)
+                .map(super::clean)
+            {
+                Some(message) => match message.strip_prefix("the box ") {
+                    Some(rest) => format!("box {host} {rest}"),
+                    None => format!("box {host}: {message}"),
+                },
+                None => format!("box {host} needs a new pairing code"),
             };
             // A time, so the wait is right when this is shown.
             if let Some(wait) = data.get("retry_at_ms").and_then(super::other::until) {
-                message.push_str(&format!("; {wait}"));
+                message.push_str(&format!(". The box takes codes again in {wait}"));
             }
             (
                 message,
@@ -1022,7 +1028,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 .map_or(10, |ms| ms.div_ceil(60_000).max(1));
             (
                 format!(
-                    "5 wrong pairing codes in the last 10 minutes; run `devlanes daemon pair` again in {}",
+                    "pairing is paused for {} after 5 wrong codes",
                     super::plural(usize::try_from(minutes).unwrap_or(usize::MAX), "minute")
                 ),
                 None,
@@ -1039,7 +1045,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             Some(Hint::command(["daemon", "clients"])),
         ),
         "pairing_refused" => (
-            with_message("the box refused the pairing code".into()),
+            message.unwrap_or_else(|| "the box refused the pairing code".into()),
             Some(Hint::command(["daemon", "pair"])),
         ),
         "random_failed" => (
@@ -1048,27 +1054,23 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
         ),
         code @ ("client_not_found" | "client_ambiguous") => {
             let client = text(data, "client");
-            let names: Vec<String> = list(data, "candidates")
+            let ids: Vec<String> = list(data, "candidates")
                 .iter()
-                .map(|candidate| format!("{} ({})", text(candidate, "name"), text(candidate, "id")))
+                .map(|candidate| text(candidate, "id"))
                 .collect();
             let unpaired = data.get("unpaired").and_then(Value::as_bool) == Some(true);
-            let mut message = if code == "client_not_found" && unpaired {
+            let message = if code == "client_not_found" && unpaired {
                 format!(
-                    "{client} is connected without pairing (remote.require_pairing: false on this \
-                     box), so it has no pairing to revoke"
+                    "{client} has no pairing to revoke because remote.require_pairing is false here"
                 )
             } else if code == "client_not_found" {
                 format!("no paired client is called {client}")
             } else {
                 format!(
-                    "{client} names more than one paired client; give its id instead: {}",
-                    names.join(", ")
+                    "{client} matches several paired clients, so give one of their ids: {}",
+                    ids.join(", ")
                 )
             };
-            if code == "client_not_found" && !names.is_empty() {
-                message.push_str(&format!("; paired: {}", names.join(", ")));
-            }
             (message, Some(Hint::command(["daemon", "clients"])))
         }
         "client_identity" => {
@@ -1080,7 +1082,7 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             };
             (
                 with_message(format!(
-                    "cannot connect to a box: this machine's client id could not be read from or saved to {file}"
+                    "cannot read or save this machine's client id in {file}"
                 )),
                 None,
             )
@@ -1231,7 +1233,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
     match code {
         // A stopped lane keeps its hostnames, so the hint names the clean.
         "lane_skipped" if !other_box.is_empty() => format!(
-            "{host}: lane {} is not mirrored; box {other_box}, connected earlier, already serves {hosts}; a stopped lane keeps its hostnames, so run devlanes lane clean for that lane on {other_box} or disconnect {other_box}",
+            "{host}: lane {} is not mirrored because box {other_box} already serves {hosts}. Run devlanes lane clean for that lane on {other_box}, or disconnect {other_box}",
             field(data, "lane")
         ),
         "lane_skipped" => {
@@ -1254,7 +1256,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
                 ),
             };
             format!(
-                "{host}: lane {} is not mirrored; {holders} {hosts}; a stopped lane keeps its hostnames, devlanes lane clean {clean} releases them",
+                "{host}: lane {} is not mirrored because {holders} {hosts}. Stopped lanes keep their hostnames, so run devlanes lane clean {clean} to free them",
                 field(data, "lane")
             )
         }
@@ -1262,7 +1264,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             "{host}: {hosts} are not mirrored; they are outside the hostnames this machine routes"
         ),
         "port_in_use" if !other_box.is_empty() => format!(
-            "{host}: port {} is not mirrored; box {other_box} already mirrors it for {}",
+            "{host}: port {} is not mirrored because box {other_box} already mirrors it for {}",
             field(data, "port"),
             field(data, "held_by")
         ),
@@ -1271,13 +1273,13 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             field(data, "port")
         ),
         "proxy_port_in_use" => format!(
-            "{host}: the box's URLs use HTTPS port {}, which this machine cannot serve: {}; open its hostnames on port {} instead",
+            "{host}: this machine cannot serve the box's HTTPS port {}: {}. Open its hostnames on port {} instead",
             field(data, "port"),
             super::clean(&field(data, "holder")),
             field(data, "own_port")
         ),
         "ports_range_overlap" => format!(
-            "{host}: the box's ports.range {} overlaps that of {}, so lanes on both can get the same ports and only one box's are mirrored here; give one box a different ports.range",
+            "{host}: the box's ports.range {} overlaps {}, so their lanes can get the same ports. Give one box a different ports.range",
             field(data, "range"),
             list(data, "overlaps")
                 .iter()
@@ -1288,10 +1290,10 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
         "open_failed" => {
             let unit = match target(data) {
                 target if target.is_empty() => String::new(),
-                target => format!(" ({target})"),
+                target => format!(" of {target}"),
             };
             format!(
-                "{host}: a connection to port {}{unit} failed: {}",
+                "{host}: a connection to port {}{unit} failed because {}",
                 field(data, "port"),
                 super::clean(&field(data, "message"))
             )

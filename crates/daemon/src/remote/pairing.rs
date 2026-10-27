@@ -242,14 +242,14 @@ fn millis(wait: Duration) -> u64 {
 
 /// The text of too many wrong codes. The wait goes separately as
 /// `retry_after_ms`, so a client can show it from a time that stays right.
-const PAUSED: &str = "5 wrong pairing codes in the last 10 minutes";
+const PAUSED: &str = "the box paused pairing after 5 wrong codes in 10 minutes";
 
 /// `pairing_refused`, which the tunnel hands to the client as the reason.
 fn refused(refusal: Refusal) -> RpcError {
     let (message, retry_after_ms) = match refusal {
         Refusal::Wrong => (
-            "the pairing code is wrong, expired or already used, and every other code from \
-             `devlanes daemon pair` is void now; run `devlanes daemon pair` on the box for a new one"
+            "the pairing code is wrong, expired or already used. Get a new one with \
+             `devlanes daemon pair` on the box"
                 .to_owned(),
             None,
         ),
@@ -650,12 +650,8 @@ impl PairingClient for HostPairing {
             None => {}
         }
         let prompt = match reason {
-            PairingReason::Missing => {
-                "the box serves only paired clients; pairing code from `devlanes daemon pair` on the box:"
-            }
-            PairingReason::Invalid => {
-                "the box no longer accepts this machine's pairing; new pairing code from `devlanes daemon pair` on the box:"
-            }
+            PairingReason::Missing => "pairing code from `devlanes daemon pair` on the box:",
+            PairingReason::Invalid => "new pairing code from `devlanes daemon pair` on the box:",
         };
         self.prompter
             .ask(RemotePrompt {

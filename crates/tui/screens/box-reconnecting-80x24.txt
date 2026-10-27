@@ -1,14 +1,14 @@
  devlanes ‹  4 acme @hetzner  ›                  ✕ 1 failed  M  D  B · 3 issues
 ┌ shop@0 on devbox ────────────┐┌ checkout-api  failed ───────────── on devbox ┐
-│ ▾ services                 2 ││ ! devbox is reconnecting; this is its last   │
+│ ▾ services                 2 ││ ! devbox is reconnecting, so this is its last│
 │   ● storefront               ││   known state.                               │
 │   ✕ checkout-api      failed ││                                              │
 │                              ││ state     failed on the box                  │
 │                              ││ ports     default 30001  mirrored once it    │
 │                              ││                          runs                │
 │                              ││                                              │
-│                              ││ Read-only here. Its output stays on devbox:  │
-│                              ││ devlanes logs shop@0:checkout-api            │
+│                              ││ Read-only here. On devbox: devlanes logs     │
+│                              ││ shop@0:checkout-api                          │
 │                              ││                                              │
 │                              ││                                              │
 │                              ││                                              │
@@ -33,8 +33,8 @@
 6: 0 darkgray, 31-32 darkgray, 34-43 dim, 59-74 dim, 79 darkgray
 7: 0 darkgray, 31-32 darkgray, 34-43 dim, 59-62 dim, 79 darkgray
 8: 0 darkgray, 31-32 darkgray, 79 darkgray
-9: 0 darkgray, 31-32 darkgray, 34-76 dim, 79 darkgray
-10: 0 darkgray, 31-32 darkgray, 34-66 dim, 79 darkgray
+9: 0 darkgray, 31-32 darkgray, 34-73 dim, 79 darkgray
+10: 0 darkgray, 31-32 darkgray, 34-52 dim, 79 darkgray
 11: 0 darkgray, 31-32 darkgray, 79 darkgray
 12: 0 darkgray, 31-32 darkgray, 79 darkgray
 13: 0 darkgray, 31-32 darkgray, 79 darkgray

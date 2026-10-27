@@ -13,9 +13,9 @@
 │   ■ migrate            ended ││ hosts                                        │
 │                              ││   https://gateway.acme-4.localhost:8443      │
 │ ▾ infra                      ││                                              │
-│   ▾ containers          1 up ││ Read-only here. Its output stays on hetzner: │
-│     ● postgres               ││ ssh hetzner, then devlanes logs              │
-│                              ││ acme@4:api-gateway                           │
+│   ▾ containers          1 up ││ Read-only here. On hetzner: ssh hetzner, then│
+│     ● postgres               ││ devlanes logs acme@4:api-gateway             │
+│                              ││                                              │
 │                              ││                                              │
 │                              ││                                              │
 │                              ││                                              │
@@ -39,9 +39,9 @@
 12: 0 darkgray, 4-12 dim, 25-29 dim, 31-32 darkgray, 34-38 dim, 79 darkgray
 13: 0 darkgray, 31-32 darkgray, 79 darkgray
 14: 0 darkgray, 2-3 dim, 31-32 darkgray, 79 darkgray
-15: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-77 dim, 79 darkgray
-16: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-64 dim, 79 darkgray
-17: 0 darkgray, 31-32 darkgray, 34-51 dim, 79 darkgray
+15: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-78 dim, 79 darkgray
+16: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-65 dim, 79 darkgray
+17: 0 darkgray, 31-32 darkgray, 79 darkgray
 18: 0 darkgray, 31-32 darkgray, 79 darkgray
 19: 0 darkgray, 31-32 darkgray, 79 darkgray
 20: 0 darkgray, 31-32 darkgray, 79 darkgray

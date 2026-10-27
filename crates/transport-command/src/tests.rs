@@ -40,7 +40,6 @@ fn a_stopped_box_daemon_is_transient() {
     let message = stopped.to_string();
     assert!(message.contains("acme"), "{message}");
     assert!(message.contains("`devlanes daemon start`"), "{message}");
-    assert!(message.contains("`devlanes daemon install`"), "{message}");
     assert!(!TransportError::from(stopped).is_permanent());
 
     let failed = exit_error(
@@ -77,13 +76,11 @@ fn a_missing_program_on_the_box_is_permanent_only_at_first() {
     let first = with_output(missing(), b"motd\n".to_vec(), true);
     assert!(first.is_permanent());
     let message = first.to_string();
-    assert!(message.contains("was not found"), "{message}");
+    assert!(message.contains("sh: devlanes: not found"), "{message}");
     assert!(
-        message.contains("check that devlanes is installed on acme"),
+        message.ends_with(". The box printed: motd. Check that devlanes is installed on acme"),
         "{message}"
     );
-    assert!(message.contains("sh: devlanes: not found"), "{message}");
-    assert!(message.ends_with("; the box printed: motd"), "{message}");
     assert_eq!(first.output(), b"motd\n");
     assert!(TransportError::from(first).is_permanent());
     let later = with_output(missing(), Vec::new(), false);
@@ -108,7 +105,7 @@ fn preamble_failures_follow_the_first_connection() {
         let mismatch = transport.classify(protocol(), first, &none);
         assert!(mismatch.is_permanent());
         assert!(
-            mismatch.to_string().contains("install the same release"),
+            mismatch.to_string().contains("Install the same release"),
             "{mismatch}"
         );
     }
@@ -124,7 +121,7 @@ fn preamble_failures_follow_the_first_connection() {
     );
     assert!(!error.is_permanent());
     let message = error.to_string();
-    assert!(message.contains("the box printed: bye"), "{message}");
+    assert!(message.contains("The box printed: bye"), "{message}");
     assert!(message.ends_with(": warning: no tty"), "{message}");
 }
 

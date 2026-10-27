@@ -11,7 +11,7 @@ expression: draw(&app)?.backend()
 "│   ! the box runs devlanes 0.0.1 and this machine X; install the same release on both             │"
 "│                                                                                                  │"
 "│ ! devbox                                                               needs a sign-in · command │"
-"│   link      waiting for you to sign in again; ports and hostnames stay                           │"
+"│   link      waiting for you to sign in again, with ports and hostnames kept                      │"
 "│   error     Permission denied (publickey).                                                       │"
 "│   fix       devlanes remote connect devbox                                                       │"
 "│                                                                                                  │"

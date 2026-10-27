@@ -535,35 +535,35 @@ fn validate_inner<E: Extensions>(
             (
                 format!("infra.hosts.{name}"),
                 name,
-                "put its hostnames under its own `hosts`",
+                "Set its hostnames in its own `hosts`",
             )
         })
         .chain(config.infra.hidden.iter().flatten().map(|name| {
             (
                 "infra.hidden".to_owned(),
                 name,
-                "set `hidden: true` on the entry",
+                "Set `hidden: true` on it instead",
             )
         }))
         .chain(config.infra.per_lane.iter().flatten().map(|name| {
             (
                 "infra.per_lane".to_owned(),
                 name,
-                "every lane shares it, and per_lane takes Compose services",
+                "per_lane only takes Compose services",
             )
         }))
         .chain(config.infra.exclude.iter().flatten().map(|name| {
             (
                 "infra.exclude".to_owned(),
                 name,
-                "devlanes never starts it, and exclude takes Compose services",
+                "exclude only takes Compose services",
             )
         }));
     for (path, name, hint) in infra_names {
         if config.infra.external.contains_key(name) && !known.contains(name) {
             return Err(fail(
                 &path,
-                format!("`{name}` is an infra.external entry; {hint} (infra.external.{name})"),
+                format!("`{name}` is an infra.external entry. {hint}"),
             ));
         }
         if can_validate_infra && !known.contains(name) {
@@ -687,7 +687,7 @@ fn external<E: Extensions>(
         if let Some(other) = other {
             return Err(fail(
                 &path,
-                format!("`{name}` is also {other}; units of a lane need distinct names"),
+                format!("`{name}` is also {other}. Give the entry another name"),
             ));
         }
         let port = entry
@@ -696,9 +696,7 @@ fn external<E: Extensions>(
         if let Some(first) = ports.insert(port, name) {
             return Err(fail(
                 &format!("{path}.address"),
-                format!(
-                    "port {port} is also infra.external.{first}'s; each entry needs its own port"
-                ),
+                format!("port {port} is already infra.external.{first}'s port"),
             ));
         }
         let hosts_path = format!("{path}.hosts");
@@ -717,7 +715,7 @@ fn external<E: Extensions>(
                     return Err(fail(
                         &hosts_path,
                         format!(
-                            "`{reference}` is not defined for an external entry; use `lane`, `project`, `infra` or `env`"
+                            "`{reference}` is not defined for an external entry. Use `lane`, `project`, `infra` or `env`"
                         ),
                     ));
                 }
@@ -734,7 +732,7 @@ fn external<E: Extensions>(
             return Err(fail(
                 &format!("services.{name}.env.PORT"),
                 format!(
-                    "port {} is infra.external.{external}'s; an external port cannot be a service's too",
+                    "port {} is already infra.external.{external}'s port",
                     literal.unwrap_or_default()
                 ),
             ));

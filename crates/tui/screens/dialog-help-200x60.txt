@@ -24,7 +24,7 @@
 │   ✕ wrk-export               failed · exit 1 ││        │   esc  ctrl+]       stop typing (ctrl+] in full-screen programs)                   │                                                        │
 │   ◉ wrk-cron                                 ││        │   z                 zoom the pane                                                  │                                                        │
 │   ◉ wrk-webhooks                             ││        │   pgup pgdn  wheel  scroll; older lines come from stored logs                      │                                                        │
-│   ◉ wrk-ledger                               ││        │   c  v  y  drag     select text, mark, copy (OSC 52); a drag selects and copies    │                                                        │
+│   ◉ wrk-ledger                               ││        │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy              │                                                        │
 │   ● stub-stripe                              ││        │                                                                                    │                                                        │
 │   ● stub-s3                                  ││        │ monitor (M)                                                                        │                                                        │
 │   ◆ stub-twilio         orphaned · pid 48211 ││        │   < >               sort by the previous, next column                              │                                                        │

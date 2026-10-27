@@ -11,9 +11,9 @@
 │     release on both                                                          │
 │   ! the box stops your processes at logout; run loginctl enable-linger there │
 │     or devlanes daemon install                                               │
-│   ! the box's URLs use HTTPS port 443, which this machine cannot serve:      │
-│     permission denied (low ports may need privileges); open its hostnames on │
-│     port 8443 instead                                                        │
+│   ! this machine cannot serve the box's HTTPS port 443: permission denied,   │
+│     since low ports may need privileges. Open its hostnames on port 8443     │
+│     instead                                                                  │
 │                                                                              │
 │ ⠋ devbox                                              reconnecting · command │
 │   link      reconnecting, next try in 8s                                     │
@@ -37,9 +37,9 @@
 10: 0 darkgray, 6-20 yellow, 79 darkgray
 11: 0 darkgray, 4-77 yellow, 79 darkgray
 12: 0 darkgray, 6-31 yellow, 79 darkgray
-13: 0 darkgray, 4-72 yellow, 79 darkgray
-14: 0 darkgray, 6-77 yellow, 79 darkgray
-15: 0 darkgray, 6-22 yellow, 79 darkgray
+13: 0 darkgray, 4-75 yellow, 79 darkgray
+14: 0 darkgray, 6-73 yellow, 79 darkgray
+15: 0 darkgray, 6-12 yellow, 79 darkgray
 16: 0 darkgray, 79 darkgray
 17: 0 darkgray, 4-9 bold, 68-77 dim, 79 darkgray
 18: 0 darkgray, 4-13 dim, 14-41 yellow, 79 darkgray

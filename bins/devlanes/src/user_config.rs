@@ -59,8 +59,8 @@ fn tunnel_settings_of((config, problems): (UserConfig, Vec<ConfigError>)) -> (Bo
         return (settings, String::new());
     }
     let stderr = format!(
-        "devlanes tunnel: the remote settings of the user config are invalid, so the daemon \
-         is not started and clients must be paired\n{}",
+        "devlanes tunnel: invalid remote settings in the user config, so the daemon is not \
+         started and clients must pair\n{}",
         warnings(&remote)
     );
     (settings, stderr)
@@ -535,7 +535,7 @@ mod tests {
             let (found, stderr) = tunnel_settings_of(parse(source));
             assert_eq!(found, settings(false, true), "{source}");
             assert!(stderr.contains("the daemon is not started"), "{stderr}");
-            assert!(stderr.contains("clients must be paired"), "{stderr}");
+            assert!(stderr.contains("clients must pair"), "{stderr}");
             assert!(
                 stderr.contains("warning: config.yaml is invalid"),
                 "{stderr}"

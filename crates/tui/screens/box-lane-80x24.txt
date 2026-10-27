@@ -9,7 +9,7 @@
 │   · web-docs                 ││ infra     postgres :24110                    │
 │   ● ext-build                ││ ports     4 of 5 mirrored here               │
 │                              ││ proxy     this machine serves its hostnames  │
-│ ▾ tasks                    1 ││           on 8443 (the box's URLs use 443)   │
+│ ▾ tasks                    1 ││           on 8443, but its URLs use 443      │
 │   ■ migrate            ended ││ urls                                         │
 │                              ││   https://gateway.acme-4.localhost:8443      │
 │ ▾ infra                      ││   https://app.acme-4.localhost:8443          │

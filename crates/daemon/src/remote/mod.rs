@@ -829,9 +829,9 @@ fn command_missing(host: &str) -> RpcError {
         json!({
             "host": host,
             "message": format!(
-                "box {host} was connected with remote.boxes.{host}.command, which the user config \
-                 no longer has; add it back and run `devlanes remote connect {host}`, or run \
-                 `devlanes remote disconnect {host}`"
+                "the user config no longer has remote.boxes.{host}.command for box {host}. Add it \
+                 back and run `devlanes remote connect {host}`, or run `devlanes remote disconnect \
+                 {host}`"
             ),
         }),
         1,
@@ -1674,7 +1674,7 @@ impl Inner {
             }
             for conn in &conns {
                 let message = format!(
-                    "the box's URLs use HTTPS port {port}, which this machine cannot serve: {}; open its hostnames on port {own} instead",
+                    "this machine cannot serve the box's HTTPS port {port}: {}. Open its hostnames on port {own} instead",
                     problem.holder
                 );
                 let changed = {
@@ -1806,7 +1806,7 @@ fn range_overlap(conn: &HostConn, live: &[Arc<HostConn>]) -> Option<(String, Val
         return None;
     }
     let message = format!(
-        "the box's ports.range {range} overlaps that of {}, so lanes on both can get the same ports and only one box's are mirrored here; give one box a different ports.range",
+        "the box's ports.range {range} overlaps {}, so their lanes can get the same ports. Give one box a different ports.range",
         overlaps.join(" and ")
     );
     Some((message, json!({"range": range, "overlaps": overlaps})))
@@ -1856,7 +1856,7 @@ fn label_warnings(label: &str) -> Vec<(&'static str, String)> {
     if label.contains("(daemon stops with the session)") {
         warnings.push((
             "box_daemon_in_session",
-            "the box's daemon was started inside this connection's ssh session and stops when it ends; run `devlanes daemon install` there".to_owned(),
+            "the box daemon stops when this SSH session ends. Run `devlanes daemon install` on the box".to_owned(),
         ));
     }
     warnings

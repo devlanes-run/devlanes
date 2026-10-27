@@ -1974,7 +1974,10 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
         if let Some(at) = fields.remove("pairing_retry_at_ms")
             && let Some(wait) = until(&at)
         {
-            fields.insert("pairing_paused".into(), Value::String(wait));
+            fields.insert(
+                "pairing_paused".into(),
+                Value::String(format!("the box takes codes again in {wait}")),
+            );
         }
     }
     let ports = data
@@ -2025,36 +2028,32 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let connect = format!("devlanes remote connect <box> --code {code}");
     if cx.agent() {
         let mut line = format!(
-            "pairing code {code}{} single_use: ask the user to run `{connect}` on their machine, \
-             with <box> the name they reach this machine by (SSH host or remote.boxes name)",
+            "pairing code {code}{} single_use: ask the user to run `{connect}` on their machine. \
+             <box> is this machine's SSH host or remote.boxes name.",
             valid
                 .map(|valid| format!(" valid_for={valid}m"))
                 .unwrap_or_default()
         );
         if unpaired {
-            line.push_str(
-                "; remote.require_pairing is false here, so a plain `devlanes remote connect <box>` works too",
-            );
+            line.push_str(" remote.require_pairing is false here, so --code is optional.");
         }
         return vec![line];
     }
-    let mut lines = vec![match valid {
-        Some(valid) => format!(
-            "pairing code: {code} (works once, for {})",
-            plural(usize::try_from(valid).unwrap_or(usize::MAX), "minute")
-        ),
-        None => format!("pairing code: {code} (works once)"),
-    }];
-    lines.push(format!("on the machine you connect from, run: {connect}"));
-    lines.push(
-        "  <box> is the name you reach this machine by; without --code, devlanes remote \
-         connect asks for the code"
-            .into(),
-    );
+    let mut lines = vec![
+        format!("pairing code: {code}"),
+        match valid {
+            Some(valid) => format!(
+                "it works once and expires in {}",
+                plural(usize::try_from(valid).unwrap_or(usize::MAX), "minute")
+            ),
+            None => "it works once".into(),
+        },
+        format!("on your other machine, run: {connect}"),
+    ];
     if unpaired {
-        lines.push(cx.warning(
-            "remote.require_pairing is false in this machine's user config, so clients connect without a code",
-        ));
+        lines.push(
+            cx.warning("remote.require_pairing is false here, so clients connect without a code"),
+        );
     }
     lines
 }
@@ -2065,8 +2064,8 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let items = list(data, "items");
     if items.is_empty() {
         return vec![
-            "no paired or connected clients; devlanes daemon pair prints a code that pairs one"
-                .into(),
+            "no paired or connected clients".into(),
+            "to pair one, run: devlanes daemon pair".into(),
         ];
     }
     let rows: Vec<Vec<String>> = items
@@ -2158,7 +2157,7 @@ pub(super) fn daemon_revoke(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
             if cx.agent() {
                 format!("revoked {name} id={id} ended={ended}")
             } else if ended == 0 {
-                format!("revoked {name} ({short}); it was not connected")
+                format!("revoked {name} ({short})")
             } else {
                 format!(
                     "revoked {name} ({short}) and ended {}",
@@ -2169,8 +2168,8 @@ pub(super) fn daemon_revoke(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .collect()
 }
 
-/// `the box takes codes again in 7 minutes` for an epoch-milliseconds time
-/// still ahead; `None` once it passed or when `at` is not a time.
+/// `7 minutes` until an epoch-milliseconds time still ahead, rounded up;
+/// `None` once it passed or when `at` is not a time.
 pub(super) fn until(at: &Value) -> Option<String> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2178,10 +2177,7 @@ pub(super) fn until(at: &Value) -> Option<String> {
         .unwrap_or(0);
     let left = at.as_u64()?.checked_sub(now).filter(|left| *left > 0)?;
     let minutes = usize::try_from(left.div_ceil(60_000)).unwrap_or(usize::MAX);
-    Some(format!(
-        "the box takes codes again in {}",
-        plural(minutes, "minute")
-    ))
+    Some(plural(minutes, "minute"))
 }
 
 /// A past epoch-milliseconds time as `5m ago`, `3h ago` or `2d ago`.

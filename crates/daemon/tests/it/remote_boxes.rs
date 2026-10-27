@@ -149,7 +149,7 @@ async fn two_boxes_with_one_project() {
             "{skipped}"
         );
         let held =
-            format!("port {alpha_echo} is in use on this machine by box alpha (boxapp@0:echo)");
+            format!("port {alpha_echo} is not mirrored because box alpha (boxapp@0:echo) uses it");
         let found = eventually(SOON, || async {
             let host = client.host_named("beta").await;
             warns(&host, &held).then_some(host)
@@ -162,12 +162,12 @@ async fn two_boxes_with_one_project() {
             );
         };
         assert!(
-            warns(&beta_host, "overlaps that of box alpha (30000-30499)"),
+            warns(&beta_host, "overlaps box alpha (30000-30499)"),
             "{beta_host}"
         );
         let alpha_host = client.host_named("alpha").await;
         assert!(
-            warns(&alpha_host, "overlaps that of box beta (30400-30899)"),
+            warns(&alpha_host, "overlaps box beta (30400-30899)"),
             "the box connected first learns of the overlap too: {alpha_host}"
         );
         let response = http_get(client.proxy_port, "web.boxapp.localhost").await;
@@ -682,7 +682,7 @@ async fn box_https_port_is_served_here() {
             let host = client.host_named("busybox").await;
             warns(
                 &host,
-                &format!("HTTPS port {busy_https}, which this machine cannot serve: in use by"),
+                &format!("cannot serve the box's HTTPS port {busy_https}: in use by"),
             )
             .then_some(())
         })

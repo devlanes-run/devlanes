@@ -121,8 +121,8 @@ pub enum SshError {
     Probe(String),
     /// devlanes is neither on the box's `PATH` nor in `~/.devlanes/bin`.
     #[error(
-        "devlanes is not installed on {destination} (not on the ssh PATH or in ~/{INSTALL_DIR}); \
-         install it there, see {SETUP_GUIDE}"
+        "devlanes is not installed on {destination}. Put it on the ssh PATH or in \
+         ~/{INSTALL_DIR} as {SETUP_GUIDE} describes"
     )]
     NotInstalled {
         /// The ssh destination.
@@ -1057,7 +1057,7 @@ mod tests {
         assert!(matches!(error, SshError::Tunnel(_)), "{error:?}");
         let message = error.to_string();
         assert!(
-            message.ends_with("the box printed: exec failed"),
+            message.ends_with("The box printed: exec failed"),
             "{message}"
         );
         assert!(!message.contains("devlanes-probe"), "{message}");

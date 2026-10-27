@@ -83,8 +83,7 @@ pub(crate) fn external_infos(
 pub(crate) struct PortUse {
     pub port: u16,
     /// What holds it, worded to follow "port N is": `services.api's port in
-    /// acme@1`, or `the devlanes proxy's HTTPS port, which devlanes listens on
-    /// itself`.
+    /// acme@1`, or `the devlanes proxy's HTTPS port`.
     pub holder: String,
     /// devlanes itself listens on it, so there is nothing to move.
     pub daemon: bool,
@@ -118,10 +117,10 @@ pub(crate) fn collision(
         let advice = match pool {
             _ if used.daemon => String::new(),
             Some((first, last)) if (first..=last).contains(&port) => format!(
-                "; declare a port outside {first}-{last} (`ports.range` in the user config), the range devlanes allocates lane ports from"
+                ". Pick a port outside {first}-{last}, the ports.range devlanes allocates from"
             ),
             // A literal `PORT` or a port a Compose file publishes as written.
-            _ => "; declare another port, or change the one that unit uses".to_owned(),
+            _ => ". Pick another port, or change the one that unit uses".to_owned(),
         };
         let location = config.sources.position(&path).unwrap_or_default();
         return Some(RpcError::new(
@@ -264,7 +263,7 @@ impl Inner {
         .filter_map(|(port, what)| {
             Some(PortUse {
                 port: port?,
-                holder: format!("{what}, which devlanes listens on itself"),
+                holder: what.to_owned(),
                 daemon: true,
             })
         })
@@ -380,7 +379,7 @@ mod tests {
         assert_eq!(
             message(&[PortUse::unit(5050, "infra.db", "shop@0")]).as_deref(),
             Some(
-                "infra.external.pgadmin.address: port 5050 is infra.db's port in shop@0; declare another port, or change the one that unit uses"
+                "infra.external.pgadmin.address: port 5050 is infra.db's port in shop@0. Pick another port, or change the one that unit uses"
             )
         );
         let pooled = devlanes_config::parse_project(
@@ -396,18 +395,16 @@ mod tests {
         .expect("collides");
         assert_eq!(
             error.data["message"],
-            "infra.external.pgadmin.address: port 20004 is services.api's port in acme@1; declare a port outside 20000-32767 (`ports.range` in the user config), the range devlanes allocates lane ports from"
+            "infra.external.pgadmin.address: port 20004 is services.api's port in acme@1. Pick a port outside 20000-32767, the ports.range devlanes allocates from"
         );
         let own = PortUse {
             port: 5050,
-            holder: "the devlanes proxy's HTTPS port, which devlanes listens on itself".into(),
+            holder: "the devlanes proxy's HTTPS port".into(),
             daemon: true,
         };
         assert_eq!(
             message(&[own]).as_deref(),
-            Some(
-                "infra.external.pgadmin.address: port 5050 is the devlanes proxy's HTTPS port, which devlanes listens on itself"
-            )
+            Some("infra.external.pgadmin.address: port 5050 is the devlanes proxy's HTTPS port")
         );
         assert_eq!(
             infra_ports(&json!({"db": {"port": 5050, "ports": {"5432": 5050, "x": "y"}}})),

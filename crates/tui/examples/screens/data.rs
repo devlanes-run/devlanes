@@ -473,7 +473,7 @@ pub fn boxes() -> Value {
     let mut gateway = mirrored(24_100, "api-gateway", "bound", json!([]), Value::Null);
     gateway["last_error"] = json!({
         "reason": "dial_failed", "at_ms": NOW_MS - 120_000,
-        "message": "nothing on the box accepted it: connection refused",
+        "message": "nothing on the box accepted it (connection refused)",
     });
     let mut db = mirrored(24_110, "postgres", "bound", json!([]), Value::Null);
     db["kind"] = json!("container");
@@ -487,7 +487,7 @@ pub fn boxes() -> Value {
                 gateway,
                 mirrored(24_101, "web-app", "in_use", json!([{
                     "address": "127.0.0.1", "pid": 9131, "box": null, "holder": "node (pid 9131)",
-                    "message": "port 24101 is in use on this machine by node (pid 9131); not mirrored",
+                    "message": "port 24101 is not mirrored because node (pid 9131) uses it here",
                 }]), json!(53_001)),
                 mirrored(24_102, "wrk-email", "bound", json!([]), Value::Null),
                 mirrored(24_105, "ext-build", "bound", json!([]), Value::Null),
@@ -509,7 +509,7 @@ pub fn boxes() -> Value {
             "warnings": [
                 format!("the box runs devlanes 0.9.2 and this machine {VERSION}; install the same release on both"),
                 "the box stops your processes at logout; run `loginctl enable-linger` there or `devlanes daemon install`",
-                "the box's URLs use HTTPS port 443, which this machine cannot serve: permission denied (low ports may need privileges); open its hostnames on port 8443 instead",
+                "this machine cannot serve the box's HTTPS port 443: permission denied, since low ports may need privileges. Open its hostnames on port 8443 instead",
             ],
             "registry": {
                 "lanes": [
@@ -576,7 +576,7 @@ pub fn boxes_pairing() -> Value {
     if let Some(hetzner) = hetzner {
         hetzner["state"] = json!("needs_pairing");
         hetzner["error"] = json!(
-            "the box no longer accepts this machine's pairing (it was revoked, or dropped as the oldest of too many); get a new code with `devlanes daemon pair` on the box"
+            "the box no longer accepts this machine's pairing and needs a new code from `devlanes daemon pair` on the box"
         );
         hetzner["fix"] = json!(
             "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"

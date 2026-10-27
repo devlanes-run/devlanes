@@ -428,7 +428,7 @@ revoking laptop (x in the clients box): asks first, y revokes
 
 ## dialog-revoke-unpaired
 
-revoking laptop with remote.require_pairing false: it can connect again at once
+revoking laptop with remote.require_pairing false: it can reconnect without a code
 
 - 200x60: [txt](dialog-revoke-unpaired-200x60.txt) · [png](dialog-revoke-unpaired-200x60.png) · [ansi](dialog-revoke-unpaired-200x60.ansi)
 - 120x40: [txt](dialog-revoke-unpaired-120x40.txt) · [png](dialog-revoke-unpaired-120x40.png) · [ansi](dialog-revoke-unpaired-120x40.ansi)

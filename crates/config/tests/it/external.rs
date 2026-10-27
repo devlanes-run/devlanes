@@ -41,7 +41,7 @@ fn only_loopback_addresses_are_accepted() {
         ("127.0.0.2:5050", "not a loopback address"),
         (
             "localhost:5050",
-            "`localhost:5050` names a host; write `127.0.0.1:5050` or `[::1]:5050`",
+            "`localhost:5050` names a host. Write `127.0.0.1:5050` or `[::1]:5050`",
         ),
         ("'[::1%2]:5050'", "has an IPv6 scope id"),
         ("'5050'", "not an address with a port"),
@@ -69,11 +69,11 @@ fn collisions_and_bad_hosts_are_refused() {
     let cases = [
         (
             "infra:\n  external:\n    a: { address: '127.0.0.1:5050' }\n    b: { address: '[::1]:5050' }\n",
-            "infra.external.b.address: port 5050 is also infra.external.a's",
+            "infra.external.b.address: port 5050 is already infra.external.a's port",
         ),
         (
             "services:\n  api: { run: api, env: { PORT: 5050 } }\ninfra:\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
-            "services.api.env.PORT: port 5050 is infra.external.a's",
+            "services.api.env.PORT: port 5050 is already infra.external.a's port",
         ),
         (
             "services:\n  api: { run: api }\ninfra:\n  external:\n    api: { address: '127.0.0.1:5050' }\n",
@@ -109,19 +109,19 @@ fn collisions_and_bad_hosts_are_refused() {
         ),
         (
             "infra:\n  hidden: [a]\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
-            "infra.hidden: `a` is an infra.external entry; set `hidden: true` on the entry",
+            "infra.hidden: `a` is an infra.external entry. Set `hidden: true` on it instead",
         ),
         (
             "infra:\n  hosts: { a: a.localhost }\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
-            "infra.hosts.a: `a` is an infra.external entry; put its hostnames under its own `hosts`",
+            "infra.hosts.a: `a` is an infra.external entry. Set its hostnames in its own `hosts`",
         ),
         (
             "infra:\n  per_lane: [a]\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
-            "infra.per_lane: `a` is an infra.external entry; every lane shares it",
+            "infra.per_lane: `a` is an infra.external entry. per_lane only takes Compose services",
         ),
         (
             "infra:\n  exclude: [a]\n  external:\n    a: { address: '127.0.0.1:5050' }\n",
-            "infra.exclude: `a` is an infra.external entry; devlanes never starts it",
+            "infra.exclude: `a` is an infra.external entry. exclude only takes Compose services",
         ),
     ];
     for (body, expected) in cases {
@@ -147,7 +147,7 @@ fn local_files_keep_the_project_name() {
     assert_eq!(error.location.file, "devlanes.local.yaml", "{error:?}");
     assert_eq!(
         error.message,
-        "project: the project name belongs in devlanes.yaml; remove it from devlanes.local.yaml"
+        "project: set the project name in devlanes.yaml, not in devlanes.local.yaml"
     );
 }
 

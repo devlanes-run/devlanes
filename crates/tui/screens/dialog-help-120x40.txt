@@ -24,7 +24,7 @@
 │   ✕ wrk-export │   esc  ctrl+]       stop typing (ctrl+] in full-screen programs)                   │ob_8128 took=144│
 │   ◉ wrk-cron   │   z                 zoom the pane                                                  │                │
 │   ◉ wrk-webhook│   pgup pgdn  wheel  scroll; older lines come from stored logs                      │ob_8129 took=157│
-│   ◉ wrk-ledger │   c  v  y  drag     select text, mark, copy (OSC 52); a drag selects and copies    │                │
+│   ◉ wrk-ledger │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy              │                │
 │   ● stub-stripe│                                                                                    │ob_8130 took=170│
 │   ● stub-s3    │ monitor (M)                                                                        │                │
 │   ◆ stub-twilio│   < >               sort by the previous, next column                              │ob_8131 took=183│

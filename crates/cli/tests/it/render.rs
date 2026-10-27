@@ -2235,7 +2235,7 @@ fn failed_opens_are_one_line() {
         .stdout;
     assert_eq!(
         line,
-        "warn hetzner: a connection to port 20101 (acme@0:web) failed: the unit is not running on the box\n"
+        "warn hetzner: a connection to port 20101 of acme@0:web failed because the unit is not running on the box\n"
     );
 }
 
@@ -2323,14 +2323,14 @@ fn boxes_that_need_pairing_name_both_commands() {
     let host = |retry_at: u64| {
         json!({"items": [{
             "host": "hetzner", "state": "needs_pairing", "transport": "ssh",
-            "error": "the box no longer accepts this machine's pairing (it was revoked, or dropped as the oldest of too many); get a new code with `devlanes daemon pair` on the box",
+            "error": "the box no longer accepts this machine's pairing and needs a new code from `devlanes daemon pair` on the box",
             "fix": "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>",
             "pairing_retry_at_ms": retry_at, "ports": [],
         }], "truncated": false, "next_cursor": null})
     };
     let text = render_text(Method::HostList, &host(now + 3 * 60_000 - 5));
     assert!(text.contains("state: needs_pairing"), "{text}");
-    assert!(text.contains("it was revoked"), "{text}");
+    assert!(text.contains("no longer accepts"), "{text}");
     assert!(
         text.contains(
             "fix: devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"
@@ -2365,23 +2365,18 @@ fn daemon_pair_prints_the_code_in_every_mode() {
             .stdout
     };
     let human = render(OutputMode::Human, &data);
-    assert!(
-        human.starts_with("pairing code: K7QM-3XWD (works once, for 10 minutes)"),
-        "{human}"
+    assert_eq!(
+        human,
+        "pairing code: K7QM-3XWD\n\
+         it works once and expires in 10 minutes\n\
+         on your other machine, run: devlanes remote connect <box> --code K7QM-3XWD\n"
     );
-    assert!(
-        human.contains(
-            "on the machine you connect from, run: devlanes remote connect <box> --code K7QM-3XWD"
-        ),
-        "{human}"
-    );
-    assert!(!human.contains("require_pairing"), "{human}");
     let agent = render(OutputMode::Agent, &data);
     assert_eq!(
         agent,
         "pairing code K7QM-3XWD valid_for=10m single_use: ask the user to run \
-         `devlanes remote connect <box> --code K7QM-3XWD` on their machine, with <box> the name \
-         they reach this machine by (SSH host or remote.boxes name)\n"
+         `devlanes remote connect <box> --code K7QM-3XWD` on their machine. <box> is this \
+         machine's SSH host or remote.boxes name.\n"
     );
     assert_eq!(render(OutputMode::Plain, &data), "K7QM-3XWD\n");
     let json: Value = serde_json::from_str(&render(OutputMode::Json, &data)).expect("json output");
@@ -2391,7 +2386,7 @@ fn daemon_pair_prints_the_code_in_every_mode() {
                       "require_pairing": false});
     let human = render(OutputMode::Human, &open);
     assert!(
-        human.contains("remote.require_pairing is false in this machine's user config"),
+        human.contains("remote.require_pairing is false here, so clients connect without a code"),
         "{human}"
     );
     assert!(
@@ -2404,7 +2399,7 @@ fn daemon_pair_prints_the_code_in_every_mode() {
         .error(
             &RpcError::new(
                 "pairing_paused",
-                json!({"message": "5 wrong pairing codes in the last 10 minutes",
+                json!({"message": "the box paused pairing after 5 wrong codes in 10 minutes",
                        "retry_after_ms": 4 * 60_000 - 5}),
                 4,
             ),
@@ -2412,9 +2407,7 @@ fn daemon_pair_prints_the_code_in_every_mode() {
         )
         .stderr;
     assert!(
-        paused.contains(
-            "5 wrong pairing codes in the last 10 minutes; run `devlanes daemon pair` again in 4 minutes"
-        ),
+        paused.contains("pairing is paused for 4 minutes after 5 wrong codes"),
         "{paused}"
     );
 }
@@ -2461,7 +2454,7 @@ fn daemon_clients_and_revoke_name_each_client() {
     );
     let empty = render_text(Method::RemoteClients, &json!({"items": []}));
     assert!(
-        empty.contains("devlanes daemon pair prints a code"),
+        empty.contains("no paired or connected clients\nto pair one, run: devlanes daemon pair\n"),
         "{empty}"
     );
 
@@ -2479,8 +2472,8 @@ fn daemon_clients_and_revoke_name_each_client() {
 
 /// A box that needs pairing says what to run on the box and gives the
 /// client command as the only hint, with the wait after wrong codes from a
-/// time; an unknown or ambiguous client lists the paired ones, and one that
-/// is connected without pairing is named as such.
+/// time; an ambiguous client lists the matching ids, and one that is
+/// connected without pairing is named as such.
 #[test]
 fn pairing_errors_say_what_to_run() {
     let error = |code: &str, data: Value| {
@@ -2489,15 +2482,14 @@ fn pairing_errors_say_what_to_run() {
             .error(&RpcError::new(code, data, 4), None)
             .stderr
     };
-    let message =
-        "the box serves only paired clients; get a code with `devlanes daemon pair` on the box";
+    let message = "the box needs a pairing code from `devlanes daemon pair` on the box";
     let needs = error(
         "remote_needs_pairing",
         json!({"host": "hetzner", "message": message,
                "fix": "devlanes daemon pair on hetzner, then devlanes remote connect hetzner --code <code>"}),
     );
     assert!(
-        needs.contains(&format!("box hetzner: {message}")),
+        needs.contains("box hetzner needs a pairing code from `devlanes daemon pair` on the box"),
         "{needs}"
     );
     assert!(
@@ -2515,11 +2507,13 @@ fn pairing_errors_say_what_to_run() {
         .expect("clock");
     let paused = error(
         "remote_needs_pairing",
-        json!({"host": "hetzner", "message": "the box refused the pairing code: 5 wrong pairing codes in the last 10 minutes",
+        json!({"host": "hetzner", "message": "the box paused pairing after 5 wrong codes in 10 minutes",
                "retry_at_ms": now + 7 * 60_000 - 5}),
     );
     assert!(
-        paused.contains("; the box takes codes again in 7 minutes"),
+        paused.contains(
+            "box hetzner paused pairing after 5 wrong codes in 10 minutes. The box takes codes again in 7 minutes"
+        ),
         "{paused}"
     );
     let unpaired = error(
@@ -2527,7 +2521,9 @@ fn pairing_errors_say_what_to_run() {
         json!({"client": "laptop", "unpaired": true, "candidates": []}),
     );
     assert!(
-        unpaired.contains("laptop is connected without pairing (remote.require_pairing: false"),
+        unpaired.contains(
+            "laptop has no pairing to revoke because remote.require_pairing is false here"
+        ),
         "{unpaired}"
     );
     let missing = error(
@@ -2535,7 +2531,7 @@ fn pairing_errors_say_what_to_run() {
         json!({"client": "tablet", "candidates": [{"id": "dl_cid_ab", "name": "laptop"}]}),
     );
     assert!(
-        missing.contains("no paired client is called tablet; paired: laptop (dl_cid_ab)"),
+        missing.contains("no paired client is called tablet"),
         "{missing}"
     );
     assert!(missing.contains("devlanes daemon clients"), "{missing}");
@@ -2545,7 +2541,9 @@ fn pairing_errors_say_what_to_run() {
                                                   {"id": "dl_cid_cd", "name": "laptop"}]}),
     );
     assert!(
-        ambiguous.contains("give its id instead: laptop (dl_cid_ab), laptop (dl_cid_cd)"),
+        ambiguous.contains(
+            "laptop matches several paired clients, so give one of their ids: dl_cid_ab, dl_cid_cd"
+        ),
         "{ambiguous}"
     );
 }
@@ -2571,28 +2569,28 @@ fn box_collision_warnings_name_the_other_box() {
             json!({"host": "beta", "code": "lane_skipped", "lane": "acme@0",
             "hosts": ["web.acme.localhost"], "box": "alpha"})
         ),
-        "warn beta: lane acme@0 is not mirrored; box alpha, connected earlier, already serves web.acme.localhost; a stopped lane keeps its hostnames, so run devlanes lane clean for that lane on alpha or disconnect alpha\n"
+        "warn beta: lane acme@0 is not mirrored because box alpha already serves web.acme.localhost. Run devlanes lane clean for that lane on alpha, or disconnect alpha\n"
     );
     assert_eq!(
         line(
             json!({"host": "beta", "code": "lane_skipped", "lane": "acme@0",
             "hosts": ["web.acme.localhost"], "box": null, "local_lanes": ["acme@0"]})
         ),
-        "warn beta: lane acme@0 is not mirrored; lane acme@0 on this machine already serves web.acme.localhost; a stopped lane keeps its hostnames, devlanes lane clean acme@0 releases them\n"
+        "warn beta: lane acme@0 is not mirrored because lane acme@0 on this machine already serves web.acme.localhost. Stopped lanes keep their hostnames, so run devlanes lane clean acme@0 to free them\n"
     );
     assert_eq!(
         line(
             json!({"host": "beta", "code": "port_in_use", "port": 20004, "box": "alpha",
             "held_by": "acme@0:db", "message": "…"})
         ),
-        "warn beta: port 20004 is not mirrored; box alpha already mirrors it for acme@0:db\n"
+        "warn beta: port 20004 is not mirrored because box alpha already mirrors it for acme@0:db\n"
     );
     assert_eq!(
         line(
             json!({"host": "hetzner", "code": "proxy_port_in_use", "port": 8443,
             "own_port": 443, "holder": "in use by nginx (pid 812)", "message": "…"})
         ),
-        "warn hetzner: the box's URLs use HTTPS port 8443, which this machine cannot serve: in use by nginx (pid 812); open its hostnames on port 443 instead\n"
+        "warn hetzner: this machine cannot serve the box's HTTPS port 8443: in use by nginx (pid 812). Open its hostnames on port 443 instead\n"
     );
     assert_eq!(
         line(
@@ -2600,6 +2598,6 @@ fn box_collision_warnings_name_the_other_box() {
             "overlaps": ["box alpha (20000-29999)", "box gamma (30000-32767)"],
             "message": "…"})
         ),
-        "warn beta: the box's ports.range 20000-32767 overlaps that of box alpha (20000-29999) and box gamma (30000-32767), so lanes on both can get the same ports and only one box's are mirrored here; give one box a different ports.range\n"
+        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767), so their lanes can get the same ports. Give one box a different ports.range\n"
     );
 }

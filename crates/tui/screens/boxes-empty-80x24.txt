@@ -2,10 +2,10 @@
 ┌ boxes ───────────────────────────────────────────────────────────────────────┐
 │ no boxes connected                                                           │
 │                                                                              │
-│   devlanes remote connect <box>   mirrors a box's lanes here: their ports,   │
-│                                   hostnames and synced folders               │
+│   devlanes remote connect <box>   mirrors a box's lanes here                 │
 │                                                                              │
-│ The box keeps running them; this view is read-only.                          │
+│ The lanes keep running on the box. This view is read-only.                   │
+│                                                                              │
 │                                                                              │
 │                                                                              │
 │                                                                              │
@@ -28,10 +28,10 @@
 1: 0 darkgray, 1-7 bold, 8-79 darkgray
 2: 0 darkgray, 2-19 bold, 79 darkgray
 3: 0 darkgray, 79 darkgray
-4: 0 darkgray, 4-32 bold, 36-75 dim, 79 darkgray
-5: 0 darkgray, 36-63 dim, 79 darkgray
-6: 0 darkgray, 79 darkgray
-7: 0 darkgray, 2-52 dim, 79 darkgray
+4: 0 darkgray, 4-32 bold, 36-61 dim, 79 darkgray
+5: 0 darkgray, 79 darkgray
+6: 0 darkgray, 2-59 dim, 79 darkgray
+7: 0 darkgray, 79 darkgray
 8: 0 darkgray, 79 darkgray
 9: 0 darkgray, 79 darkgray
 10: 0 darkgray, 79 darkgray

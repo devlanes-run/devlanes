@@ -77,9 +77,7 @@ async fn ports_devlanes_or_other_projects_hold_are_refused() {
             assert_eq!(refused.code, "config_error", "{refused:?}");
             assert_eq!(
                 refused.data["message"],
-                format!(
-                    "infra.external.docs.address: port {port} is {what}, which devlanes listens on itself"
-                )
+                format!("infra.external.docs.address: port {port} is {what}")
             );
         }
 
@@ -108,7 +106,7 @@ async fn ports_devlanes_or_other_projects_hold_are_refused() {
         let message = refused.data["message"].as_str().unwrap_or_default();
         assert!(
             message.starts_with(&format!(
-                "infra.external.docs.address: port {web} is services.web's port in other@0; declare a port outside"
+                "infra.external.docs.address: port {web} is services.web's port in other@0. Pick a port outside"
             )),
             "{message}"
         );

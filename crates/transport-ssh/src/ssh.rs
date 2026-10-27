@@ -112,8 +112,8 @@ pub enum SshError {
     Probe(String),
     /// The box's shell cannot run the devlanes found there by that path.
     #[error(
-        "devlanes on {destination} is {program}, a path {shell} cannot run as a command \
-         (it holds `%`, `!` or `\"`); install it in a folder without them"
+        "{shell} on {destination} cannot run devlanes from {program} because the path holds \
+         `%`, `!` or `\"`. Install it in another folder"
     )]
     Unquotable {
         /// The ssh destination.
@@ -125,8 +125,8 @@ pub enum SshError {
     },
     /// devlanes is neither on the box's `PATH` nor in `~/.devlanes/bin`.
     #[error(
-        "devlanes is not installed on {destination} (not on the ssh PATH or in ~/{INSTALL_DIR}); \
-         install it there, see {SETUP_GUIDE}"
+        "devlanes is not installed on {destination}. Put it on the ssh PATH or in \
+         ~/{INSTALL_DIR} as {SETUP_GUIDE} describes"
     )]
     NotInstalled {
         /// The ssh destination.

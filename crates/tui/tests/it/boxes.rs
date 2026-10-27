@@ -31,11 +31,11 @@ fn hosts() -> Value {
                 {"port": 24101, "lane": "acme@1", "unit": "worker", "kind": "service",
                  "state": "in_use", "addresses": [], "relay": null, "last_error": null,
                  "conflicts": [{"holder": "postgres (pid 812)",
-                                "message": "port 24101 is in use on this machine by postgres (pid 812); not mirrored"}]},
+                                "message": "port 24101 is not mirrored because postgres (pid 812) uses it here"}]},
                 {"port": 24110, "lane": "acme@1", "unit": "db", "kind": "container",
                  "state": "failed", "addresses": [], "relay": null, "last_error": null,
                  "conflicts": [{"holder": null,
-                                "message": "port 24110 cannot be bound on 127.0.0.1: access denied; not mirrored"}]},
+                                "message": "port 24110 is not mirrored because binding it on 127.0.0.1 failed: access denied"}]},
             ],
             "routes": [{"host": "web.acme-1.localhost", "port": 24100, "lane": "acme@1",
                         "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
@@ -340,15 +340,15 @@ async fn a_box_the_restore_could_not_reopen_shows_as_failed_with_its_error() -> 
         "host": "devbox", "transport": "command", "address": "devbox",
         "daemon_version": "devlanes 0.0.1", "last_connected_ms": 1_792_000_000_000u64,
         "state": "failed",
-        "error": "box devbox was connected with remote.boxes.devbox.command, which the user \
-                  config no longer has; add it back and run `devlanes remote connect devbox`, \
-                  or run `devlanes remote disconnect devbox`",
+        "error": "the user config no longer has remote.boxes.devbox.command for box devbox. \
+                  Add it back and run `devlanes remote connect devbox`, or run \
+                  `devlanes remote disconnect devbox`",
     }]}))));
     let text = screen_text(&draw(&app)?);
     for expected in [
         "Boxes · 1 issue",
         "failed · command",
-        "failed; nothing is mirrored",
+        "failed, so nothing is mirrored",
         "remote.boxes.devbox.command",
         "fix       devlanes remote connect devbox",
     ] {
@@ -397,11 +397,11 @@ async fn sections_and_containers_of_a_box_lane_show_their_details() -> TestResul
     );
     let text = screen_text(&draw(&app)?);
     assert!(
-        text.contains("cannot be bound on") && text.contains("access denied"),
+        text.contains("binding") && text.contains("access denied"),
         "a failed bind shows the daemon's words: {text}"
     );
     assert!(!text.contains("in use here"), "{text}");
-    assert!(text.contains("It starts and stops with its lane"), "{text}");
+    assert!(text.contains("Read-only here."), "{text}");
     app.update(key(KeyCode::Char('s')));
     assert_eq!(notice(&app), "on hetzner: devlanes start --lane acme@1");
     Ok(())

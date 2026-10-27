@@ -61,7 +61,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "c  v  y  drag",
-                "select text, mark, copy (OSC 52); a drag selects and copies",
+                "select text, mark, copy (OSC 52), or drag to copy",
             ),
         ],
     ),

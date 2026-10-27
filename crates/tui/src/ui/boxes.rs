@@ -75,11 +75,7 @@ pub(super) fn pane(
                 lines.extend(endpoint_lines(app, host, box_lane, registered, width));
             }
             let command = format!("devlanes logs {box_lane}:{name}");
-            let text = format!(
-                "Read-only here. Its output stays on {}: {}",
-                host.host,
-                host.there(&command)
-            );
+            let text = format!("Read-only here. On {}: {}", host.host, host.there(&command));
             lines.extend(read_only(theme, &text, width));
         }
         Some(RowId::Container(name)) => {
@@ -95,11 +91,7 @@ pub(super) fn pane(
                 lines.extend(endpoint_lines(app, host, box_lane, registered, width));
             }
             let command = format!("devlanes status {box_lane}");
-            let text = format!(
-                "Read-only here. It starts and stops with its lane on {}: {}",
-                host.host,
-                host.there(&command)
-            );
+            let text = format!("Read-only here. On {}: {}", host.host, host.there(&command));
             lines.extend(read_only(theme, &text, width));
         }
         Some(RowId::Section(_) | RowId::Group(..)) => {
@@ -154,27 +146,35 @@ fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'s
     let name = clean(&host.host);
     let down = match host.state.as_str() {
         "connected" => None,
-        "needs_auth" => Some(format!(
-            "{name} needs a sign-in; this is its last known state. devlanes remote connect {name} resumes it."
+        "needs_auth" => Some((
+            format!("{name} needs you to sign in again, so this is its last known state."),
+            vec![format!("Run devlanes remote connect {name}.")],
         )),
-        "needs_pairing" => Some(format!(
-            "{name} needs this machine to pair again; this is its last known state. Run devlanes daemon pair on {name}, then devlanes remote connect {name} --code <code>."
+        "needs_pairing" => Some((
+            format!("{name} needs a new pairing code, so this is its last known state."),
+            vec![format!(
+                "Run devlanes daemon pair on {name}, then devlanes remote connect {name} --code <code>."
+            )],
         )),
-        "reconnecting" | "connecting" => Some(format!(
-            "{name} is reconnecting; this is its last known state."
+        "reconnecting" | "connecting" => Some((
+            format!("{name} is reconnecting, so this is its last known state."),
+            Vec::new(),
         )),
-        state => Some(format!(
-            "{name} is {}; this is its last known state.",
-            clean(state)
+        state => Some((
+            format!(
+                "{name} is {}, so this is its last known state.",
+                clean(state)
+            ),
+            Vec::new(),
         )),
     };
-    if let Some(down) = down {
-        lines.extend(attention(&down, &[]));
+    if let Some((down, rest)) = down {
+        lines.extend(attention(&down, &rest));
     }
     if let Some(skipped) = host.skipped(box_lane) {
         let reason = skip_reason(app, skipped);
         lines.extend(attention(
-            &format!("Not mirrored here: {reason}."),
+            &format!("Not mirrored here because {reason}."),
             &["Its ports and hostnames are mirrored once that changes.".to_owned()],
         ));
     }
@@ -324,8 +324,8 @@ fn endpoint_lines(
             .and_then(|p| p.last_error.as_ref());
         if let Some(error) = error {
             let pad = " ".repeat(text::width(&lead));
-            // `nothing on the box accepted it: connection refused` reads
-            // `last try: nothing on the box accepted it (connection refused)`.
+            // `the link to the box was lost: reset` reads
+            // `last try: the link to the box was lost (reset)`.
             let message = clean(&error.message);
             let text = match message.split_once(": ") {
                 Some((what, detail)) => format!("last try: {what} ({detail})"),
@@ -376,7 +376,7 @@ fn endpoint_lines(
         lines.extend(field(
             theme,
             "hidden",
-            "yes, on the box: never mirrored",
+            "yes, so it is never mirrored",
             width,
             theme.quiet(),
         ));
@@ -398,13 +398,13 @@ fn port_status(host: &BoxHost, box_lane: &str, unit: &RegistryUnit, port: u16) -
                 "bound"
             });
         let relayed = if mirrored.relay.is_some() {
-            "; its hostnames still open it"
+            ", but its hostnames still open it"
         } else {
             ""
         };
         return match (state, local) {
             ("local_lane", Some(local)) => (
-                format!("kept for {}; not mirrored", clean(local)),
+                format!("not mirrored, kept for {}", clean(local)),
                 Tone::Attention,
             ),
             ("bound", _) => {
@@ -464,7 +464,7 @@ fn host_status(theme: &Theme, host: &BoxHost, box_lane: &str, name: &str) -> (St
     }
     let why = if host.refused(&name) {
         suffixes(host).map_or_else(
-            || "not routed here (outside the names this machine routes)".to_owned(),
+            || "outside the names this machine routes".to_owned(),
             |names| format!("not routed here (not under {names})"),
         )
     } else if host.skipped(box_lane).is_some() {
@@ -624,9 +624,9 @@ fn proxy_line(host: &BoxHost) -> Option<String> {
     let theirs = proxy.box_port?;
     let own = proxy.https_port?;
     Some(if proxy.open {
-        format!("this machine serves its hostnames on {own}, and on {theirs} too as its URLs say")
+        format!("this machine serves its hostnames on {own} and on {theirs}, which its URLs use")
     } else {
-        format!("this machine serves its hostnames on {own} (the box's URLs use {theirs})")
+        format!("this machine serves its hostnames on {own}, but its URLs use {theirs}")
     })
 }
 
@@ -763,7 +763,7 @@ fn empty_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
         Line::from(""),
     ];
     lines.extend(sentence(
-        "mirrors a box's lanes here: their ports, hostnames and synced folders",
+        "mirrors a box's lanes here",
         width,
         vec![
             Span::raw("  "),
@@ -774,7 +774,7 @@ fn empty_lines(theme: &Theme, width: usize) -> Vec<Line<'static>> {
     ));
     lines.push(Line::from(""));
     lines.extend(sentence(
-        "The box keeps running them; this view is read-only.",
+        "The lanes keep running on the box. This view is read-only.",
         width,
         Vec::new(),
         theme.quiet(),
@@ -862,25 +862,25 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
         "needs_auth" => {
             lines.extend(fact(
                 "link",
-                "waiting for you to sign in again; ports and hostnames stay",
+                "waiting for you to sign in again, with ports and hostnames kept",
                 theme.tone(Tone::Attention),
             ));
         }
         "needs_pairing" => {
             lines.extend(fact(
                 "link",
-                "waiting for you to pair again with a code from devlanes daemon pair on the box; ports and hostnames stay",
+                "waiting for a new pairing code, with ports and hostnames kept",
                 theme.tone(Tone::Attention),
             ));
         }
         "failed" => lines.extend(fact(
             "link",
-            "failed; nothing is mirrored",
+            "failed, so nothing is mirrored",
             theme.tone(Tone::Failure),
         )),
         _ => {
             let link = match host.last_connected_ms {
-                Some(ms) => format!("not connected; last connected {}", when(app, ms)),
+                Some(ms) => format!("not connected since {}", when(app, ms)),
                 None => "not connected".to_owned(),
             };
             lines.extend(fact("link", &link, quiet));

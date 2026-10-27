@@ -9,7 +9,7 @@
 │state     schema 7 · /Users/acme/.devlanes/…││                                                                                                                                                        │
 └────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ remote clients ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 2 connected · 3 paired ┐
-│ remote.require_pairing is false: clients connect without a code.                                                                                                                                     │
+│ remote.require_pairing is false, so clients connect without a code.                                                                                                                                  │
 │ ● laptop     dl_cid_3f2a9c1e  203.0.113.24  connected for 2h 14m  2 pairings  mirrors 5 of 6 ports, 1 lane skipped                                                                                   │
 │ ● tablet     dl_cid_e5d8a1c4  198.51.100.7  connected for 5m      not paired                                                                                                                         │
 │ · ci-runner  dl_cid_0b9e44d1                last seen 1h ago      paired                                                                                                                             │
@@ -71,7 +71,7 @@
 8: 0 darkgray, 1-10 dim, 45-46 darkgray, 199 darkgray
 9: 0-199 darkgray
 10: 0 darkgray, 1-16 bold, 17-174 darkgray, 176-186 green, 187-197 dim, 199 darkgray
-11: 0 darkgray, 2-65 yellow, 199 darkgray
+11: 0 darkgray, 2-68 yellow, 199 darkgray
 12: 0 darkgray, 2-3 green, 4-14 bold, 15-45 dim, 68-115 dim, 199 darkgray
 13: 0 darkgray, 2-3 green, 4-14 bold, 15-45 dim, 68-79 yellow, 199 darkgray
 14: 0 darkgray, 2-3 dim, 4-14 bold, 15-79 dim, 199 darkgray

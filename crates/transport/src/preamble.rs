@@ -48,8 +48,8 @@ pub enum PreambleError {
     },
     /// The box printed more than [`PREAMBLE_LIMIT`] bytes without one.
     #[error(
-        "the box printed more than {} KiB before `devlanes tunnel --stdio` started; check what \
-         the login shell or its profile files print{}",
+        "the box printed more than {} KiB before `devlanes tunnel --stdio` started. Check what \
+         the login shell and its profile files print{}",
         PREAMBLE_LIMIT / 1024,
         shown(.output)
     )]
@@ -60,8 +60,8 @@ pub enum PreambleError {
     /// Nothing arrived in time. The box may run a release from before the
     /// preamble (protocol 4), whose tunnel waits for the client to speak first.
     #[error(
-        "`devlanes tunnel --stdio` did not answer within {}s; the box may run an older \
-         devlanes release (protocol below 4), so install the same release on both machines{}",
+        "`devlanes tunnel --stdio` did not answer within {}s. If the box runs an older devlanes \
+         release, install the same release on both machines{}",
         .waited.as_secs(),
         shown(.output)
     )]
@@ -74,7 +74,7 @@ pub enum PreambleError {
     /// The preamble names another protocol revision than [`PROTOCOL_VERSION`].
     #[error(
         "the box runs another devlanes release (protocol {found}) but this client speaks \
-         protocol {PROTOCOL_VERSION}; install the same release on both machines"
+         protocol {PROTOCOL_VERSION}. Install the same release on both machines"
     )]
     Protocol {
         /// The box's revision.
@@ -126,7 +126,7 @@ fn shown(output: &[u8]) -> String {
     if text.is_empty() {
         String::new()
     } else {
-        format!("; the box printed: {text}")
+        format!(". The box printed: {text}")
     }
 }
 
@@ -311,7 +311,6 @@ mod tests {
         assert!(matches!(error, PreambleError::Silent { .. }), "{error:?}");
         let message = error.to_string();
         assert!(message.contains("older devlanes release"), "{message}");
-        assert!(message.contains("protocol below 4"), "{message}");
         assert!(
             message.contains("install the same release on both machines"),
             "{message}"
@@ -340,7 +339,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("install the same release on both machines"),
+            message.contains("Install the same release on both machines"),
             "{message}"
         );
         assert!(error.is_permanent(true));

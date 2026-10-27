@@ -1,8 +1,8 @@
  devlanes  1 acme   2 billing   3 shop                            starting feat/checkout: 4 of 8 ready  Monitor  Daemon
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                            1-9 or [ ] switch lanes
 ┌ @1 · 4/8 up · starting ──────────────────────┐┌ pgadmin  external ───────────────────────────────────────────────────┐
-│ ▾ services                                 6 ││ Declared in infra.external: the proxy routes its hostnames to port   │
-│   ● api-gateway                              ││ 5050. devlanes runs and checks nothing there.                        │
+│ ▾ services                                 6 ││ A server on port 5050 from infra.external. The proxy routes its      │
+│   ● api-gateway                              ││ hostnames there, and devlanes does not run it.                       │
 │   ⠋ api-orders                      starting ││ Machines connected with devlanes remote connect mirror it while a    │
 │   ⠋ api-users                       starting ││ lane of the project runs.                                            │
 │   … web-app                           queued ││                                                                      │

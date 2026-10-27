@@ -190,7 +190,7 @@ impl Collision {
     /// The reason `remote ls` shows next to the skipped lane.
     fn reason(&self) -> String {
         match self.other_box() {
-            Some(other) => format!("box {other}, connected earlier, serves its hostnames"),
+            Some(other) => format!("box {other} already serves its hostnames"),
             None => "this machine serves its hostnames".to_owned(),
         }
     }
@@ -522,7 +522,8 @@ impl Mirror {
                     .as_ref()
                     .is_none_or(|(_, known)| known != owner)
                 {
-                    let message = format!("port {port} is allocated to {owner}; not mirrored");
+                    let message =
+                        format!("port {port} is not mirrored because it belongs to {owner} here");
                     tracing::warn!(host = %self.conn.name, %message, "cannot mirror port");
                     engine.bus.emit(
                         wire::WARNING_EVENT,
@@ -628,10 +629,10 @@ impl Mirror {
                 };
                 let message = match &holder {
                     Some(holder) => {
-                        format!("port {port} is in use on this machine by {holder}; not mirrored")
+                        format!("port {port} is not mirrored because {holder} uses it here")
                     }
                     None => format!(
-                        "port {port} cannot be bound on {address}: {}; not mirrored",
+                        "port {port} is not mirrored because binding it on {address} failed: {}",
                         failure.describe()
                     ),
                 };
@@ -717,7 +718,7 @@ impl Mirror {
                         format!("Sign in to {box_name} again: devlanes remote connect {box_name}")
                     }
                     Phase::Pairing => format!(
-                        "Pair with {box_name} again: run devlanes daemon pair on {box_name}, then devlanes remote connect {box_name} --code <code>"
+                        "Pair with {box_name} again: devlanes daemon pair on {box_name}, then devlanes remote connect {box_name} --code <code>"
                     ),
                     _ => format!("Start it on {box_name}: devlanes start --lane {reference}"),
                 };
@@ -1032,7 +1033,7 @@ pub(super) fn bind_failure(error: &std::io::Error) -> String {
 /// need privileges, and macOS lets users bind them on the wildcard address only.
 #[cfg(unix)]
 fn denied_hint() -> String {
-    "permission denied (low ports may need privileges)".to_owned()
+    "permission denied, since low ports may need privileges".to_owned()
 }
 
 /// Windows needs no privileges for low ports but refuses binds inside its
@@ -1041,7 +1042,7 @@ fn denied_hint() -> String {
 #[cfg(windows)]
 fn denied_hint() -> String {
     format!(
-        "access denied (the port may lie in a Windows reserved port range, which `{}` lists)",
+        "access denied, maybe by a Windows reserved port range that `{}` lists",
         crate::reserved_ports::LIST_COMMAND
     )
 }
@@ -1206,18 +1207,12 @@ async fn splice(stream: TcpStream, port: u16, conn: Arc<HostConn>, engine: Weak<
             // A disconnect in progress closes this listener anyway.
             None if conn.cancel.is_cancelled() => return,
             None if conn.needs_auth() => {
-                let message = format!(
-                    "box {} needs you to sign in again: run `devlanes remote connect {}`",
-                    conn.name, conn.name
-                );
+                let message = format!("box {} is waiting for you to sign in again", conn.name);
                 open_failed(&engine, &conn, port, "needs_auth", message);
                 return;
             }
             None if conn.needs_pairing() => {
-                let message = format!(
-                    "box {} needs this machine to pair again: run `devlanes daemon pair` there, then `devlanes remote connect {} --code <code>`",
-                    conn.name, conn.name
-                );
+                let message = format!("box {} is waiting for a new pairing code", conn.name);
                 open_failed(&engine, &conn, port, "needs_pairing", message);
                 return;
             }
@@ -1271,7 +1266,7 @@ fn open_error(error: &OpenError, port: u16) -> (&'static str, String) {
                     .map_or(message.as_str(), |rest| rest.trim_start_matches(':').trim());
                 (
                     "dial_failed",
-                    format!("nothing on the box accepted it: {detail}"),
+                    format!("nothing on the box accepted it ({detail})"),
                 )
             }
         },
@@ -1453,12 +1448,12 @@ mod tests {
                     "dial port 3000: connection refused",
                 ),
                 "dial_failed",
-                "nothing on the box accepted it: connection refused",
+                "nothing on the box accepted it (connection refused)",
             ),
             (
                 rejected(RejectReason::DialFailed, "dial port 3000 timed out"),
                 "dial_failed",
-                "nothing on the box accepted it: timed out",
+                "nothing on the box accepted it (timed out)",
             ),
             (
                 OpenError::Interrupted,

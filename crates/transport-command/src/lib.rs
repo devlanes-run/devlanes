@@ -154,7 +154,7 @@ impl Exit {
 #[derive(Debug, thiserror::Error)]
 pub enum CommandError {
     /// The command line has no program.
-    #[error("the command for {name} is empty; list the program and its arguments")]
+    #[error("the command for {name} lists no program")]
     Empty {
         /// The box.
         name: String,
@@ -186,9 +186,8 @@ pub enum CommandError {
     },
     /// The box daemon is not running and the box's `remote.start_daemon` is off.
     #[error(
-        "the devlanes daemon is not running on {name} and the box's user config turns off \
-         starting it (`remote.start_daemon: false`); run `devlanes daemon start` there, or \
-         `devlanes daemon install` to keep it running"
+        "the devlanes daemon is not running on {name}, and remote.start_daemon is false there. \
+         Run `devlanes daemon start` on the box"
     )]
     DaemonStopped {
         /// The box.
@@ -303,8 +302,8 @@ fn exited(name: &str, what: &str, exit: &Exit, output: &[u8]) -> String {
     let printed = shown(output);
     match &exit.status {
         Ok(status) if status.code() == Some(EXIT_NOT_FOUND) => format!(
-            "{what} exited with {status}, so a program it runs was not found; check that \
-             devlanes is installed on {name}{detail}{printed}"
+            "{what} exited with {status}{detail}{printed}. Check that devlanes is installed on \
+             {name}"
         ),
         Ok(status) => format!("{what} exited with {status}{detail}{printed}"),
         Err(error) => format!("{what} failed: {error}{detail}{printed}"),
@@ -329,7 +328,7 @@ fn shown(output: &[u8]) -> String {
     if text.is_empty() {
         String::new()
     } else {
-        format!("; the box printed: {text}")
+        format!(". The box printed: {text}")
     }
 }
 

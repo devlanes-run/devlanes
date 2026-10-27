@@ -223,12 +223,12 @@ without the daemon.",
         #[command(subcommand)]
         command: CertsCommand,
     },
-    /// Connect to boxes over SSH or a command and mirror their lanes here
+    /// Connect to boxes and mirror their lanes here
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,
     },
-    /// Run, stop and install the background daemon, and pair machines that connect to this one
+    /// Run, stop and install the background daemon, and pair other machines with it
     Daemon {
         #[command(subcommand)]
         command: DaemonCommand,
@@ -513,7 +513,7 @@ pub enum ExportShell {
 
 #[derive(Debug, Subcommand)]
 pub enum UrlCommand {
-    /// Print a service's URL, for scripts; on a box, a terminal also shows each connected client's URL
+    /// Print a service's URL, for scripts
     Print {
         /// Service whose URL to print ([lane:]unit) [default: pick from a list]
         #[arg(value_name = "UNIT")]
@@ -558,19 +558,19 @@ pub enum CertsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum RemoteCommand {
-    /// Connect to a box over SSH or a command and mirror its lanes, ports and hostnames here
+    /// Connect to a box and mirror its lanes, ports and hostnames here
     Connect {
-        /// A box name from remote.boxes in the user config, else an SSH destination as in ~/.ssh/config
+        /// Box name from remote.boxes in the user config, or an SSH destination
         #[arg(id = "connect_host", value_name = "HOST")]
         host: String,
         /// Return once connected instead of staying attached for prompts
         #[arg(long)]
         background: bool,
-        /// Pair with the box using this one-time code from devlanes daemon pair on the box, instead of entering it when asked (also with --background); used only by this request
+        /// One-time pairing code from devlanes daemon pair on the box
         #[arg(long, value_name = "CODE")]
         code: Option<String>,
     },
-    /// Disconnect from a box, remove its mirrored ports and hostnames, and stop reconnecting it after daemon restarts
+    /// Disconnect from a box and remove its mirrored ports and hostnames
     Disconnect {
         /// Box to disconnect [default: every box]
         #[arg(id = "disconnect_host", value_name = "HOST")]
@@ -717,13 +717,13 @@ pub enum DaemonCommand {
     Uninstall,
     /// Stop everything and empty the state database; lanes get new numbers and ports (needs --yes)
     ResetState,
-    /// Print a one-time code a machine enters on its next devlanes remote connect to this one
+    /// Print a one-time code that pairs another machine with this one
     Pair,
-    /// List machines paired with this one and the ones connected now (devlanes remote connect)
+    /// List the machines paired or connected to this one
     Clients,
-    /// End a client's connections and delete its pairings; a machine connected without pairing (remote.require_pairing: false) has none
+    /// Disconnect a client and delete its pairing
     Revoke {
-        /// The client's name or id from devlanes daemon clients (a unique start of the id works)
+        /// Client name or id, as devlanes daemon clients shows it
         #[arg(value_name = "CLIENT")]
         client: String,
     },

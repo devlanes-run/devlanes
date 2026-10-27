@@ -576,7 +576,7 @@ async fn keys_on_an_external_port_only_say_devlanes_does_not_run_it() -> TestRes
             .unwrap_or_default();
         assert!(
             notice.contains(
-                "pgadmin is an infra.external entry; devlanes does not run it, so there is nothing to start or stop"
+                "pgadmin is an infra.external port, which devlanes does not start or stop"
             ),
             "{code}: {notice}"
         );
@@ -627,7 +627,7 @@ async fn the_pane_of_an_external_entry_says_how_it_is_reached() -> TestResult {
     );
     let shown = text(&app)?;
     assert!(
-        shown.contains("Declared in infra.external: the proxy routes its hostnames to port 5050."),
+        shown.contains("A server on port 5050 from infra.external. The proxy routes"),
         "{shown}"
     );
     assert!(
@@ -640,11 +640,11 @@ async fn the_pane_of_an_external_entry_says_how_it_is_reached() -> TestResult {
     );
     let shown = text(&app)?;
     assert!(
-        shown.contains("port 8200 belongs to a server devlanes does not run or check."),
+        shown.contains("A server on port 8200 from infra.external. devlanes does not run it."),
         "{shown}"
     );
     assert!(
-        shown.contains("Hidden: machines connected with devlanes remote connect never get it."),
+        shown.contains("It is hidden from machines connected with devlanes remote connect."),
         "{shown}"
     );
     Ok(())

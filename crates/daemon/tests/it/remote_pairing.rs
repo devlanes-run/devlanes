@@ -439,7 +439,7 @@ async fn wrong_codes_void_codes_and_lock_out_pairing() {
         assert!(
             locked.data["message"]
                 .as_str()
-                .is_some_and(|message| message.contains("5 wrong pairing codes")),
+                .is_some_and(|message| message.contains("after 5 wrong codes")),
             "{locked:?}"
         );
         let now = std::time::SystemTime::now()

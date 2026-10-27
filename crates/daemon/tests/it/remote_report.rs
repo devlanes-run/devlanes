@@ -198,7 +198,7 @@ async fn a_mirror_report_reaches_status_and_url_on_the_box() {
         assert!(
             foreign["clients"][0]["reason"]
                 .as_str()
-                .is_some_and(|reason| reason.contains("not routed there")),
+                .is_some_and(|reason| reason.contains("outside the names that machine routes")),
             "{foreign}"
         );
 

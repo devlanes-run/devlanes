@@ -1,14 +1,14 @@
  devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                                                             Monitor  Daemon  Boxes · 3 issues
  lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
 ┌ @0 · 2/2 up ─────────────────────────────────┐┌ api-gateway  ready ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
-│ ▾ services                                 2 ││ ! Not mirrored here: acme@0 on this machine serves its hostnames.                                                                                    │
+│ ▾ services                                 2 ││ ! Not mirrored here because acme@0 on this machine serves its hostnames.                                                                             │
 │   ● api-gateway                              ││   Its ports and hostnames are mirrored once that changes.                                                                                            │
 │   ● web-app                                  ││                                                                                                                                                      │
 │                                              ││ state     ready on the box                                                                                                                           │
 │                                              ││ ports     default 24000  lane not mirrored                                                                                                           │
 │                                              ││ hosts     gateway.acme.localhost  not routed here (lane not mirrored)                                                                                │
 │                                              ││                                                                                                                                                      │
-│                                              ││ Read-only here. Its output stays on hetzner: ssh hetzner, then devlanes logs acme@0:api-gateway                                                      │
+│                                              ││ Read-only here. On hetzner: ssh hetzner, then devlanes logs acme@0:api-gateway                                                                       │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -70,7 +70,7 @@
 7: 0 darkgray, 47-48 darkgray, 50-59 dim, 75-91 yellow, 199 darkgray
 8: 0 darkgray, 47-48 darkgray, 50-59 dim, 60-118 yellow, 199 darkgray
 9: 0 darkgray, 47-48 darkgray, 199 darkgray
-10: 0 darkgray, 47-48 darkgray, 50-144 dim, 199 darkgray
+10: 0 darkgray, 47-48 darkgray, 50-127 dim, 199 darkgray
 11: 0 darkgray, 47-48 darkgray, 199 darkgray
 12: 0 darkgray, 47-48 darkgray, 199 darkgray
 13: 0 darkgray, 47-48 darkgray, 199 darkgray

@@ -2,10 +2,10 @@
  lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
 ┌ @4 · 6/7 up ─────────────────────────────────┐┌ web-app  ready · https://app.acme-4.localhost:8443 ────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
 │ ▾ services                                 6 ││ state     ready on the box                                                                                                                           │
-│   ● api-gateway                              ││ ports     default 24101  in use here by node (pid 9131); its hostnames still open it                                                                 │
+│   ● api-gateway                              ││ ports     default 24101  in use here by node (pid 9131), but its hostnames still open it                                                             │
 │   ● web-app                                  ││ hosts     https://app.acme-4.localhost:8443                                                                                                          │
 │   ◉ wrk-email                                ││                                                                                                                                                      │
-│   ● api-admin                                ││ Read-only here. Its output stays on hetzner: ssh hetzner, then devlanes logs acme@4:web-app                                                          │
+│   ● api-admin                                ││ Read-only here. On hetzner: ssh hetzner, then devlanes logs acme@4:web-app                                                                           │
 │   · web-docs                                 ││                                                                                                                                                      │
 │   ● ext-build                                ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -64,10 +64,10 @@
 1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-56 bold, 57-58 dim, 59-63 green, 64-99 dim, 101-186 darkgray, 188-197 dim, 199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-75 dim, 199 darkgray
-4: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 50-59 dim, 75-133 yellow, 199 darkgray
+4: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 50-59 dim, 75-137 yellow, 199 darkgray
 5: 0 darkgray, 1-46 reversed, 47-48 darkgray, 50-59 dim, 199 darkgray
 6: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 199 darkgray
-7: 0 darkgray, 4-5 green, 6-14 dim blue, 47-48 darkgray, 50-140 dim, 199 darkgray
+7: 0 darkgray, 4-5 green, 6-14 dim blue, 47-48 darkgray, 50-123 dim, 199 darkgray
 8: 0 darkgray, 4-5 dim, 6-13 dim green, 47-48 darkgray, 199 darkgray
 9: 0 darkgray, 4-14 green, 47-48 darkgray, 199 darkgray
 10: 0 darkgray, 47-48 darkgray, 199 darkgray

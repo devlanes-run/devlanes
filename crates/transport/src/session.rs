@@ -131,9 +131,8 @@ pub enum SessionError {
     Handshake(&'static str),
     /// Client and box speak different protocol revisions.
     #[error(
-        "{} but this client speaks protocol {local}. Install the matching devlanes release on \
-         the box, then run `devlanes daemon restart` there when its managed processes may stop. \
-         Box daemons are never upgraded automatically",
+        "{} but this client speaks protocol {local}. Install the same release on both machines, \
+         then run `devlanes daemon restart` on the box",
         box_protocol(server, *remote)
     )]
     IncompatibleProtocol {
@@ -152,7 +151,7 @@ pub enum SessionError {
     #[error("{}", needs_pairing_text(*.0))]
     NeedsPairing(PairingReason),
     /// The box refused the pairing code.
-    #[error("the box refused the pairing code: {message}")]
+    #[error("{message}")]
     PairingRefused {
         /// The box's reason.
         message: String,
@@ -201,11 +200,11 @@ fn box_protocol(server: &str, remote: u32) -> String {
 fn needs_pairing_text(reason: PairingReason) -> &'static str {
     match reason {
         PairingReason::Missing => {
-            "the box serves only paired clients; get a code with `devlanes daemon pair` on the box"
+            "the box needs a pairing code from `devlanes daemon pair` on the box"
         }
         PairingReason::Invalid => {
-            "the box no longer accepts this machine's pairing (it was revoked, or dropped as the \
-             oldest of too many); get a new code with `devlanes daemon pair` on the box"
+            "the box no longer accepts this machine's pairing and needs a new code from \
+             `devlanes daemon pair` on the box"
         }
     }
 }
@@ -1068,7 +1067,7 @@ mod tests {
                             error,
                             SessionError::NeedsPairing(PairingReason::Invalid)
                         ));
-                        assert!(error.to_string().contains("revoked"), "{error}");
+                        assert!(error.to_string().contains("no longer accepts"), "{error}");
                     }
                     (None, None) => {
                         assert!(matches!(
@@ -1173,7 +1172,11 @@ mod tests {
                 panic!("handshake with an incompatible box succeeded");
             };
             assert!(error.is_permanent());
-            assert!(error.to_string().contains("never upgraded automatically"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("Install the same release on both machines")
+            );
             fake_box.abort();
             Ok(())
         })

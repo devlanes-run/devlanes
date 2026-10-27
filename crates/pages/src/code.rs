@@ -217,10 +217,10 @@ impl ErrorCode {
                 "The service runs on a remote box and the connection to the box is down. The proxy held the request, but the reconnect is taking longer; reload in a moment."
             }
             Self::BoxSignInNeeded => {
-                "The service runs on a remote box whose connection needs you to sign in again, such as an SSH password prompt nobody answered or a changed host key. devlanes stopped retrying until you do."
+                "The service runs on a remote box, and SSH needs you to sign in again. devlanes stopped retrying until you do."
             }
             Self::BoxPairingNeeded => {
-                "The service runs on a remote box that serves only paired machines, and it does not accept this machine's pairing: the pairing was revoked or reset on the box, or no code was entered. devlanes stopped retrying until you pair again."
+                "The service runs on a remote box that needs a new pairing code from this machine. devlanes stopped retrying until you pair again."
             }
             Self::UpstreamUnreachable => {
                 "devlanes has the service as running, but nothing accepted connections on its port while the proxy retried."
@@ -279,15 +279,15 @@ impl ErrorCode {
                     "Sign in again in a terminal that can answer SSH prompts",
                     "devlanes remote connect <box>",
                 ),
-                run("Show the connection state and error", "devlanes remote ls"),
+                run("Show the connection state", "devlanes remote ls"),
             ],
             Self::BoxPairingNeeded => vec![
-                run("On the box, get a one-time code", "devlanes daemon pair"),
+                run("Get a code on the box", "devlanes daemon pair"),
                 run(
-                    "Here, pair again with that code",
+                    "Pair this machine with it",
                     "devlanes remote connect <box> --code <code>",
                 ),
-                run("Show the connection state and reason", "devlanes remote ls"),
+                run("Show the connection state", "devlanes remote ls"),
             ],
             Self::UpstreamUnreachable => vec![
                 note("Make the service listen on `PORT`, on 127.0.0.1 or ::1"),

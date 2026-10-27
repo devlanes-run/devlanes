@@ -99,7 +99,7 @@ mod tests {
             stderr: String::new(),
         }));
         assert!(
-            mismatch.to_string().contains("install the same release"),
+            mismatch.to_string().contains("Install the same release"),
             "{mismatch}"
         );
         assert!(TransportError::from(mismatch).is_permanent());

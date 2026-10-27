@@ -62,10 +62,8 @@ impl HostConn {
             .iter()
             .map(|skipped| {
                 let reason = match skipped.get("box").and_then(Value::as_str) {
-                    Some(other) => {
-                        format!("box {other}, connected there earlier, serves the same hostnames")
-                    }
-                    None => "a lane of that machine serves the same hostnames".to_owned(),
+                    Some(other) => format!("box {other} already serves its hostnames there"),
+                    None => "a lane on that machine serves its hostnames".to_owned(),
                 };
                 SkippedLane {
                     lane: skipped
@@ -110,7 +108,7 @@ pub(crate) struct UnitTarget<'a> {
 }
 
 /// [`UnitTarget::unmirrored`] of a hidden unit.
-pub(crate) const HIDDEN: &str = "the unit is hidden, so it is never mirrored";
+pub(crate) const HIDDEN: &str = "the unit is hidden";
 
 impl Inner {
     /// For each connected client that sent a mirror report, the URL it opens
@@ -196,7 +194,7 @@ fn client_url(
     }
     if let Some(skipped) = report.skipped_lanes.iter().find(|s| s.lane == target.lane) {
         return unreachable(format!(
-            "the lane is not mirrored there: {}",
+            "the lane is not mirrored there because {}",
             skipped.reason
         ));
     }
@@ -217,7 +215,7 @@ fn client_url(
             }) => Ok(format!("http://{address}:{port}")),
             Some(mirrored) => Err(port_reason(mirrored)),
             None => Err(format!(
-                "port {port} is not mirrored there: it is mirrored while the unit runs"
+                "port {port} is not mirrored there until the unit runs"
             )),
         }
     };
@@ -233,9 +231,7 @@ fn client_url(
                 .iter()
                 .any(|skipped| skipped.eq_ignore_ascii_case(host));
             let refusal = match https {
-                _ if skipped => format!(
-                    "{host} is not routed there: it is outside the names that machine routes"
-                ),
+                _ if skipped => format!("{host} is outside the names that machine routes"),
                 None => "that machine's proxy serves no HTTPS".to_owned(),
                 Some(https) => {
                     return entry(Some(devlanes_resolve::https_url(host, Some(https))), None);
@@ -368,7 +364,7 @@ mod tests {
         let skipped = MirrorReport {
             skipped_lanes: vec![SkippedLane {
                 lane: "acme@1".into(),
-                reason: "a lane of that machine serves the same hostnames".into(),
+                reason: "a lane on that machine serves its hostnames".into(),
             }],
             ..MirrorReport::default()
         };

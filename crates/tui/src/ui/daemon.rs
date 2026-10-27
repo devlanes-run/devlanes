@@ -137,7 +137,7 @@ fn clients_rows(app: &App, list: &Clients, width: usize) -> ClientRows {
     if list.require_pairing == Some(false) {
         note.extend(
             text::wrap(
-                "remote.require_pairing is false: clients connect without a code.",
+                "remote.require_pairing is false, so clients connect without a code.",
                 width.saturating_sub(1).max(1),
             )
             .into_iter()

@@ -183,7 +183,7 @@ async fn the_clients_box_at_80x24() -> TestResult {
     assert_clean(&buffer, "clients box at 80x24");
     let text = screen(&buffer);
     assert!(
-        text.contains("remote.require_pairing is false: clients connect without a code."),
+        text.contains("remote.require_pairing is false, so clients connect without a code."),
         "{text}"
     );
     assert!(!text.contains("203.0.113.24"), "{text}");
@@ -321,7 +321,7 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     assert!(app.dialog.is_none(), "x on the log revokes nothing");
     assert_eq!(
         notice(&app),
-        "x revokes a client in the clients box; tab gets you there"
+        "to revoke a client, tab to the clients box first"
     );
     app.update(key(KeyCode::Tab));
     app.update(key(KeyCode::Tab));
@@ -331,7 +331,7 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     app.update(key(KeyCode::Char('x')));
     assert!(app.dialog.is_none());
     assert!(
-        notice(&app).contains("tablet is connected without pairing"),
+        notice(&app).contains("tablet connected without pairing"),
         "{}",
         notice(&app)
     );
@@ -344,7 +344,7 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
                 detail,
                 &[
                     "It deletes the client's 2 pairings and ends its connection now.".to_owned(),
-                    "remote.require_pairing is false here, so it can connect again at once without a code."
+                    "remote.require_pairing is false here, so it can reconnect without a code."
                         .to_owned(),
                 ]
             );
@@ -511,7 +511,7 @@ async fn a_revoke_that_loses_the_daemon_has_an_unknown_outcome() -> TestResult {
         app.errors[1]
             .worded
             .summary
-            .contains("may or may not be revoked"),
+            .contains("Check the clients box after the TUI reconnects"),
         "{:?}",
         app.errors[1]
     );

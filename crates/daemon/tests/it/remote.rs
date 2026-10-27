@@ -903,11 +903,13 @@ async fn remote_box_end_to_end() {
 
         // A busy local port is reported with a clear message, not mirrored.
         let host = client.host().await;
-        let busy = format!("port {web} is in use on this machine by");
+        let busy = format!("port {web} is not mirrored because ");
         assert!(
-            host["warnings"].as_array().is_some_and(|w| w
-                .iter()
-                .any(|m| m.as_str().is_some_and(|m| m.starts_with(&busy)))),
+            host["warnings"]
+                .as_array()
+                .is_some_and(|w| w.iter().any(|m| m
+                    .as_str()
+                    .is_some_and(|m| m.starts_with(&busy) && m.ends_with(" uses it here")))),
             "{host}"
         );
         drop(squatter);
@@ -1208,7 +1210,9 @@ async fn shared_pool_keeps_box_and_local_ports_apart() {
         })
         .await
         .expect("mirror released the local port");
-        let local_wins = format!("port {echo_port} is allocated to local lane fixedapp@0");
+        let local_wins = format!(
+            "port {echo_port} is not mirrored because it belongs to local lane fixedapp@0 here"
+        );
         assert!(
             released["warnings"].as_array().is_some_and(|w| w
                 .iter()
@@ -1736,7 +1740,7 @@ async fn a_port_held_on_one_loopback_is_not_mirrored_on_the_other() {
             ClientSide::start_controlled(&tmp, "client", "19750-19999", &side, controls).await;
         client.connect("box").await;
 
-        let busy = format!("port {echo_port} is in use on this machine by");
+        let busy = format!("port {echo_port} is not mirrored because ");
         let port = eventually(SOON, || async {
             let host = client.host().await;
             let port = host["ports"]
@@ -1753,9 +1757,11 @@ async fn a_port_held_on_one_loopback_is_not_mirrored_on_the_other() {
         assert_eq!(port["addresses"], json!([]), "{port}");
         let host = client.host().await;
         assert!(
-            host["warnings"].as_array().is_some_and(|w| w
-                .iter()
-                .any(|m| m.as_str().is_some_and(|m| m.starts_with(&busy)))),
+            host["warnings"]
+                .as_array()
+                .is_some_and(|w| w.iter().any(|m| m
+                    .as_str()
+                    .is_some_and(|m| m.starts_with(&busy) && m.ends_with(" uses it here")))),
             "{host}"
         );
         assert!(!echo(echo_port).await, "[::1] stays unbound");

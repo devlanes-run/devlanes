@@ -99,7 +99,7 @@ pub(crate) enum FeedError {
     Daemon(#[from] devlanes_client::Error),
     /// The daemon predates `remote.registry`: it runs an older release than this tunnel.
     #[error(
-        "the box daemon runs an older devlanes than `devlanes tunnel`; run `devlanes daemon \
+        "the box daemon runs an older devlanes than `devlanes tunnel`. Run `devlanes daemon \
          restart` on the box"
     )]
     OldDaemon,

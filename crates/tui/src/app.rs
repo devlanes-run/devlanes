@@ -1791,7 +1791,7 @@ impl App {
                 Ok(value) => {
                     let ended = value.get("ended").and_then(Value::as_u64).unwrap_or(0);
                     let notice = match ended {
-                        0 => format!("revoked {name}; it was not connected"),
+                        0 => format!("revoked {name}"),
                         1 => format!("revoked {name} and ended its connection"),
                         n => format!("revoked {name} and ended its {n} connections"),
                     };
@@ -1804,7 +1804,7 @@ impl App {
                         &format!("revoke {name}"),
                         None,
                         Worded::local(
-                            "the daemon connection ended before it answered, so the client may or may not be revoked; the clients box shows which once the TUI reconnects",
+                            "the daemon did not answer. Check the clients box after the TUI reconnects",
                         ),
                     );
                     self.lost_connection(Some(&error), &mut effects);
@@ -3464,7 +3464,7 @@ impl App {
                 return true;
             }
             KeyCode::Char('c') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.set_notice("c copies in the checks or the log; tab gets you there".into());
+                self.set_notice("to copy, tab to the checks or the log first".into());
                 return true;
             }
             // Follow, level, folding, filter and targets act on the log, which
@@ -3489,7 +3489,7 @@ impl App {
         let name = text::clean(&client.name);
         if !client.revocable() {
             self.set_notice(format!(
-                "{name} is connected without pairing (remote.require_pairing: false); nothing to revoke"
+                "{name} connected without pairing, so there is nothing to revoke"
             ));
             return;
         }
@@ -3499,7 +3499,7 @@ impl App {
             n => format!("It deletes the client's {n} pairings"),
         };
         let connections = match client.connections.len() {
-            0 => format!("{pairing}; {name} is not connected now."),
+            0 => format!("{pairing}."),
             1 => format!("{pairing} and ends its connection now."),
             n => format!("{pairing} and ends its {n} connections now."),
         };
@@ -3516,7 +3516,7 @@ impl App {
             // instead of leaving `pair.` alone on the last one at 80 columns.
             "It can connect again only with a new code from devlanes\u{a0}daemon\u{a0}pair."
         } else {
-            "remote.require_pairing is false here, so it can connect again at once without a code."
+            "remote.require_pairing is false here, so it can reconnect without a code."
         };
         self.dialog = Some(Dialog::Confirm {
             title: format!("revoke {name}"),
@@ -3737,7 +3737,7 @@ impl App {
                 }
             }
             KeyCode::Char('x') if self.daemon.clients.shown() => {
-                self.set_notice("x revokes a client in the clients box; tab gets you there".into());
+                self.set_notice("to revoke a client, tab to the clients box first".into());
             }
             KeyCode::Char('s') => {
                 if self.connection == Connection::Online {
@@ -4979,7 +4979,7 @@ impl App {
                 .any(|u| u.name == *name && tree::role(u) == tree::Role::External)
         {
             self.set_notice(format!(
-                "{name} is an infra.external entry; devlanes does not run it, so there is nothing to start or stop"
+                "{name} is an infra.external port, which devlanes does not start or stop"
             ));
             return;
         }

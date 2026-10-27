@@ -716,16 +716,14 @@ fn external_lines(app: &App, unit: &UnitSummary, width: usize) -> Vec<Line<'stat
     let port = unit.ports.get("default").copied().unwrap_or_default();
     let what = if unit.public_url.is_some() {
         format!(
-            "Declared in infra.external: the proxy routes its hostnames to port {port}. devlanes runs and checks nothing there."
+            "A server on port {port} from infra.external. The proxy routes its hostnames there, and devlanes does not run it."
         )
     } else {
-        format!(
-            "Declared in infra.external: port {port} belongs to a server devlanes does not run or check."
-        )
+        format!("A server on port {port} from infra.external. devlanes does not run it.")
     };
     let mut lines = sentence(&what, width, Vec::new(), plain);
     let mirror = if unit.hidden {
-        "Hidden: machines connected with devlanes remote connect never get it."
+        "It is hidden from machines connected with devlanes remote connect."
     } else {
         "Machines connected with devlanes remote connect mirror it while a lane of the project runs."
     };

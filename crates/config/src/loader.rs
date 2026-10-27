@@ -703,7 +703,7 @@ fn parse_named<E: Extensions>(
         if overlay.project.is_some() {
             return Err(locate(
                 ConfigError::plain(
-                    "project: the project name belongs in devlanes.yaml; remove it from devlanes.local.yaml",
+                    "project: set the project name in devlanes.yaml, not in devlanes.local.yaml",
                 ),
                 file,
                 source,

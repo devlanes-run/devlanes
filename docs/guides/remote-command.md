@@ -33,7 +33,7 @@ The command must end in `devlanes tunnel --stdio` inside the box, with stdin and
 
 ## Inside the box
 
-devlanes has to be installed in the box, the same release as on the client. Unlike SSH, devlanes does not probe the box for the binary: the command names it, so it must be on the `PATH` the command gets, or written as a full path such as `/home/acme/.devlanes/bin/devlanes`. When it is missing, the command usually exits with status 127, and the first `remote connect` fails with `exited with exit status: 127, so a program it runs was not found` (`exit code: 127` on Windows) and stops retrying.
+devlanes has to be installed in the box, the same release as on the client. Unlike SSH, devlanes does not probe the box for the binary: the command names it, so it must be on the `PATH` the command gets, or written as a full path such as `/home/acme/.devlanes/bin/devlanes`. When it is missing, the command usually exits with status 127, and the first `remote connect` fails with `exited with exit status: 127 ... Check that devlanes is installed on <box>` (`exit code: 127` on Windows) and stops retrying.
 
 The tunnel starts the box's daemon when none runs, unless the box's own user config sets `remote.start_daemon: false`; the client then reports the stopped daemon and keeps retrying, as with SSH. The daemon belongs to the user the command runs as, with that user's `~/.devlanes`. It outlives the command, but not the container, pod or distribution it runs in.
 
@@ -100,7 +100,7 @@ The command ends with the connection, together with whatever it started: on Linu
 | Message | Cause | Fix |
 | --- | --- | --- |
 | ``cannot run `docker` for acme: ...`` | the program is not on the daemon's `PATH` | install it, or write its full path in the list |
-| `the command for acme exited with exit status: 127, so a program it runs was not found` (`exit code: 127` on Windows) | devlanes is not installed in the box, or not on the `PATH` the command gets | install it there, or write its full path |
+| `the command for acme exited with exit status: 127 ... Check that devlanes is installed on acme` (`exit code: 127` on Windows) | devlanes is not installed in the box, or not on the `PATH` the command gets | install it there, or write its full path |
 | `the command for acme exited with exit status: 1: Error response from daemon: container ... is not running` | the container is stopped | start it; the client keeps retrying |
 | `the devlanes daemon is not running on acme` | `remote.start_daemon: false` in the box and its daemon is stopped | `devlanes daemon start` in the box |
 | `` `devlanes tunnel --stdio` did not answer within 120s `` | the command waits for something, often a prompt or a codespace that is still starting, or the box runs a devlanes release from before protocol 4 | sign in to the tool first, or install the same release in the box, then connect again |

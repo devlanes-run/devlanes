@@ -467,7 +467,11 @@ mod session_job {
         assert!(!lab.daemon_running(), "a daemon ran before the tunnel");
         let ran = tunnel_session(&lab, true)?;
         assert_eq!(ran.preamble, devlanes_transport::TUNNEL_PREAMBLE);
-        assert!(!ran.stderr.contains("could not leave"), "{}", ran.stderr);
+        assert!(
+            !ran.stderr.contains("stops when this SSH session ends"),
+            "{}",
+            ran.stderr
+        );
         let members = ran.job.members()?;
         assert!(!members.contains(&ran.daemon), "{members:?}");
         drop(ran.job);
@@ -486,8 +490,7 @@ mod session_job {
         let ran = tunnel_session(&lab, false)?;
         assert_eq!(ran.preamble, devlanes_transport::TUNNEL_PREAMBLE);
         assert!(
-            ran.stderr
-                .contains("could not leave this ssh session's job"),
+            ran.stderr.contains("stops when this SSH session ends"),
             "{}",
             ran.stderr
         );

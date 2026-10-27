@@ -766,7 +766,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "dialog-revoke-unpaired",
-            what: "revoking laptop with remote.require_pairing false: it can connect again at once",
+            what: "revoking laptop with remote.require_pairing false: it can reconnect without a code",
             setup: |f| {
                 f.clients = data::clients_unpaired();
                 f.shifted('D');

@@ -111,7 +111,7 @@ async fn exit_127_is_permanent_before_the_first_connection() -> TestResult {
         let message = error.to_string();
         assert!(message.contains("executable file not found"), "{message}");
         assert!(
-            message.contains("check that devlanes is installed on acme"),
+            message.contains("Check that devlanes is installed on acme"),
             "{message}"
         );
 
@@ -150,7 +150,7 @@ async fn other_failures_are_transient_with_their_stderr() -> TestResult {
             "{message}"
         );
         assert!(
-            message.ends_with("; the box printed: starting"),
+            message.ends_with(". The box printed: starting"),
             "{message}"
         );
 

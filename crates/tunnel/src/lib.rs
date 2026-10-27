@@ -114,9 +114,8 @@ pub fn services(paths: Paths, client: RemoteClient, require_pairing: bool) -> Bo
 pub const SESSION_BOUND: &str = "(daemon stops with the session)";
 
 /// What the tunnel tells the client on stderr in that case.
-const SESSION_BOUND_HINT: &str = "the box daemon started here could not leave this ssh session's \
-     job, so it stops when the session ends; run `devlanes daemon install` on the box, or start \
-     the daemon outside ssh";
+const SESSION_BOUND_HINT: &str = "the box daemon started here stops when this SSH session ends. \
+     Run `devlanes daemon install` on the box";
 
 /// Version label sent to clients in the handshake: `devlanes <version>`, plus
 /// `(linger off)` on Linux boxes whose user services stop at logout.
