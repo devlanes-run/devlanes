@@ -48,25 +48,67 @@ pub fn default_listen() -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 53, 0, 1)), DEFAULT_PORT)
 }
 
-/// A bind failure on `addr`.
-#[cfg(unix)]
-fn bind_error(addr: SocketAddr, source: io::Error) -> DnsError {
-    DnsError::Bind { addr, source }
+/// Names of the two protocols in errors.
+const UDP: &str = "UDP";
+const TCP: &str = "TCP";
+
+/// First port and size of the dynamic range IANA sets aside, which Windows
+/// uses for ephemeral ports; ports the fallback of an ephemeral bind tries.
+const DYNAMIC_START: u16 = 49152;
+const DYNAMIC_PORTS: u64 = 16384;
+
+/// Steps between the ports the fallback tries: odd, so 16384 steps visit every
+/// port once, and near the golden ratio of the range, so any 17 of them in a
+/// row lie hundreds of ports apart, out of a 100-port reserved block.
+const STRIDE: u64 = 10125;
+
+/// Ports of the dynamic range, from a place `seed` picks, each far from the
+/// ones before it.
+fn spread_ports(seed: u64) -> impl Iterator<Item = u16> {
+    (0..DYNAMIC_PORTS).map(move |step| {
+        let offset = (seed % DYNAMIC_PORTS + step * STRIDE) % DYNAMIC_PORTS;
+        DYNAMIC_START.saturating_add(u16::try_from(offset).unwrap_or(0))
+    })
 }
 
-/// A bind failure on `addr`. When another program holds the address, the
-/// message says how to find it, since Windows names no owner in the error.
+/// A per-process random start for [`spread_ports`], so two daemons do not try
+/// the same ports in the same order.
+fn seed() -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(u64::from(std::process::id()));
+    hasher.finish()
+}
+
+/// A `protocol` bind failure on `addr`.
+#[cfg(unix)]
+fn bind_error(addr: SocketAddr, protocol: &'static str, source: io::Error) -> DnsError {
+    DnsError::Bind {
+        addr,
+        protocol,
+        source,
+    }
+}
+
+/// A `protocol` bind failure on `addr`. When another program holds the
+/// address, the message says how to find it, since Windows names no owner in
+/// the error.
 #[cfg(windows)]
-fn bind_error(addr: SocketAddr, source: io::Error) -> DnsError {
+fn bind_error(addr: SocketAddr, protocol: &'static str, source: io::Error) -> DnsError {
     // WSAEACCES (10013): another socket holds the address exclusively.
     let held = source.kind() == io::ErrorKind::AddrInUse || source.raw_os_error() == Some(10013);
     let source = if held && addr.port() != 0 {
+        let (netstat, cmdlet) = if protocol == TCP {
+            ("tcp", "Get-NetTCPConnection")
+        } else {
+            ("udp", "Get-NetUDPEndpoint")
+        };
         io::Error::new(
             source.kind(),
             format!(
                 "{source}; another program holds port {port} on {ip}; find it with \
-                 `netstat -ano -p udp | findstr {addr}` (the last column is its process id) \
-                 or `Get-NetUDPEndpoint -LocalAddress {ip} -LocalPort {port}` in PowerShell",
+                 `netstat -ano -p {netstat} | findstr {addr}` (the last column is its process id) \
+                 or `{cmdlet} -LocalAddress {ip} -LocalPort {port}` in PowerShell",
                 port = addr.port(),
                 ip = addr.ip(),
             ),
@@ -74,7 +116,11 @@ fn bind_error(addr: SocketAddr, source: io::Error) -> DnsError {
     } else {
         source
     };
-    DnsError::Bind { addr, source }
+    DnsError::Bind {
+        addr,
+        protocol,
+        source,
+    }
 }
 
 /// A bound DNS server over UDP and TCP on the same port.
@@ -111,36 +157,55 @@ impl DnsServer {
         if listen.port() != 0 {
             let udp = UdpSocket::bind(listen)
                 .await
-                .map_err(|e| bind_error(listen, e))?;
+                .map_err(|e| bind_error(listen, UDP, e))?;
             let tcp = TcpListener::bind(listen)
                 .await
-                .map_err(|e| bind_error(listen, e))?;
+                .map_err(|e| bind_error(listen, TCP, e))?;
             return Ok(Self::new(udp, tcp, zone));
         }
-        let mut last = io::Error::new(io::ErrorKind::AddrInUse, "no shared free port");
-        // Rejected ports stay bound until the end, so the OS cannot hand the
-        // same one out again on the next attempt.
-        let mut rejected = Vec::new();
-        for _ in 0..EPHEMERAL_ATTEMPTS {
-            // TCP first: Windows keeps its ephemeral TCP ports out of the TCP
-            // ranges Hyper-V and WSL reserve, but its ephemeral UDP ports can
-            // land inside those TCP ranges.
-            let tcp = TcpListener::bind(listen)
-                .await
-                .map_err(|e| bind_error(listen, e))?;
-            let addr = tcp.local_addr().map_err(|e| bind_error(listen, e))?;
+        // TCP first: Windows keeps its ephemeral TCP ports out of the TCP
+        // ranges Hyper-V and WSL reserve, but its ephemeral UDP ports can
+        // land inside those TCP ranges.
+        let tcp = TcpListener::bind(listen)
+            .await
+            .map_err(|e| bind_error(listen, TCP, e))?;
+        let addr = tcp.local_addr().map_err(|e| bind_error(listen, TCP, e))?;
+        let mut last = match UdpSocket::bind(addr).await {
+            Ok(udp) => return Ok(Self::new(udp, tcp, zone)),
+            // The TCP port's UDP twin is taken, or on Windows inside a
+            // reserved UDP range (WSAEACCES); another port will do.
+            Err(error) if retry_twin(&error) => (addr, UDP, error),
+            Err(error) => return Err(bind_error(addr, UDP, error)),
+        };
+        drop(tcp);
+        // Windows hands out ephemeral ports one after another, so asking it
+        // again lands next to the port that just failed, inside the same
+        // reserved block (Hyper-V reserves 100 at a time) or run of taken
+        // ports. Ports far apart from each other get out of it.
+        for port in spread_ports(seed()).take(EPHEMERAL_ATTEMPTS) {
+            let addr = SocketAddr::new(listen.ip(), port);
+            let tcp = match TcpListener::bind(addr).await {
+                Ok(tcp) => tcp,
+                Err(error) if retry_twin(&error) => {
+                    last = (addr, TCP, error);
+                    continue;
+                }
+                Err(error) => return Err(bind_error(addr, TCP, error)),
+            };
             match UdpSocket::bind(addr).await {
                 Ok(udp) => return Ok(Self::new(udp, tcp, zone)),
-                // The TCP port's UDP twin is taken, or on Windows inside a
-                // reserved UDP range (WSAEACCES); another ephemeral port will do.
-                Err(error) if retry_twin(&error) => {
-                    last = error;
-                    rejected.push(tcp);
-                }
-                Err(error) => return Err(bind_error(addr, error)),
+                Err(error) if retry_twin(&error) => last = (addr, UDP, error),
+                Err(error) => return Err(bind_error(addr, UDP, error)),
             }
         }
-        Err(bind_error(listen, last))
+        let (addr, protocol, source) = last;
+        Err(DnsError::NoSharedPort {
+            ip: listen.ip(),
+            attempts: EPHEMERAL_ATTEMPTS + 1,
+            addr,
+            protocol,
+            source,
+        })
     }
 
     /// Wraps bound sockets.
@@ -243,5 +308,33 @@ async fn serve_tcp(mut stream: TcpStream, zone: &Zone) -> io::Result<()> {
         tokio::time::timeout(TCP_IDLE_TIMEOUT, stream.write_all(&framed))
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "dns client stopped reading"))??;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The fallback visits every dynamic port once, and the ports one bind
+    /// tries are far enough apart that no 100-port reserved block holds two.
+    #[test]
+    fn spread_ports_stay_out_of_one_block() {
+        let mut all: Vec<u16> = spread_ports(7).collect();
+        all.sort_unstable();
+        all.dedup();
+        assert_eq!(all.len() as u64, DYNAMIC_PORTS);
+        assert_eq!(all.first(), Some(&DYNAMIC_START));
+        // A different seed shifts the sequence, so seed 0 covers every window.
+        let tried: Vec<u64> = spread_ports(0)
+            .take(EPHEMERAL_ATTEMPTS + 1)
+            .map(u64::from)
+            .collect();
+        for (i, a) in tried.iter().enumerate() {
+            for b in &tried[i + 1..] {
+                let apart = a.abs_diff(*b);
+                let apart = apart.min(DYNAMIC_PORTS - apart);
+                assert!(apart >= 100, "{a} and {b} are {apart} apart");
+            }
+        }
     }
 }
