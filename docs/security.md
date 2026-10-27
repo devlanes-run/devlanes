@@ -42,7 +42,7 @@ Units get the environment of the shell that sent the request (`start`, `lane res
 
 ### Logs and the update check
 
-The daemon writes `logs/daemon.log` in the home. It names boxes and their ssh destinations, and on a box each client's id, host name and address with every refused code or token; pairing codes and remote tokens themselves are never written. At debug level it also keeps whatever a box's shell printed before the tunnel's first line. On Linux and macOS, ssh writes each box's master log to `run/ssh/m-<hash>.log` while that master runs. Units' output goes to `logs` as well.
+The daemon writes `logs/daemon.log` in the home. It names boxes and their SSH destinations, and on a box each client's id, host name and address with every refused code or token; pairing codes and remote tokens themselves are never written. At debug level it also keeps whatever a box's shell printed before the tunnel's first line. On Linux and macOS, `ssh` writes each box's master log to `run/ssh/m-<hash>.log` while that master runs. Units' output goes to `logs` as well.
 
 Once a day the daemon reads the latest release's version from GitHub with `curl`; nothing is downloaded or installed. `updates.check: false` in the user config, `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment turns it off.
 
@@ -74,7 +74,7 @@ Environments, `.env` values, secrets, logs, terminal output, commands and either
 
 ### Client details on the box
 
-Anyone who runs commands on the box as you, an agent working there included, sees what clients tell it and what sshd adds: each connected client's id, host name, SSH address and connection time in `devlanes status --json`, `devlanes daemon clients` and the `remote clients` box on the TUI's daemon page (`D`), and from the mirror report the names of the client's local lanes and the names and pids of programs there that hold box ports, in `status --json` and `devlanes url --json`. Paired clients stay listed with their names and when they last connected.
+Anyone who runs commands on the box as you, an agent working there included, sees what clients tell it and what sshd adds: each connected client's id, host name, SSH address and connection time in `devlanes status --json`, `devlanes daemon clients` and the `remote clients` box on the TUI's daemon page (`D`), and from the mirror report the names of the client's local lanes and the names and pids of programs there that hold box ports, in `status --json` and `devlanes url print --json`. Paired clients stay listed with their names and when they last connected.
 
 ### Dial authorization on the box
 
@@ -94,7 +94,7 @@ Mirrored ports and the proxy listen on loopback, so every process on the client 
 
 Files from a box's `services.<name>.sync` entries land only in `~/.devlanes/sync/<box>/<project>/<lane>/<folder>` on the client, and the box's `to:` is never used. The project, lane and folder names the box sends must each be a single plain path component, and each file path must be relative, without empty, `.` or `..` components or NUL, and on Windows without names Windows cannot hold (device names such as `con`, `:` and the other reserved characters, a trailing dot or space). The client never follows a symlink in the destination, refuses to write into an existing folder it did not create, and skips files over 256 MiB. Only permission bits up to `0o777` travel, so a synced file can be executable, but devlanes never runs it. A client follows at most 16 entries per box, and a box serves at most 16 per client. There is no limit on a folder's total size or file count, and the box can delete any file in a folder it syncs.
 
-## Pairing
+### Pairing
 
 A box serves only clients it paired with; [pairing](remote.md#pairing) shows how to pair, revoke and turn it off. The rules:
 
@@ -105,15 +105,15 @@ A box serves only clients it paired with; [pairing](remote.md#pairing) shows how
 
 Until the box accepts its token or code, a client gets no registry, version label or box info, and the box answers no stream it opens except the control stream ([pairing](remote.md#pairing) lists what an unpaired client can still see).
 
-### Limits of pairing
+#### Limits of pairing
 
 Pairing sits behind SSH, or behind whatever the box command uses. SSH decides who reaches the box at all; pairing decides which of the machines that get in see its lanes. With ordinary SSH access, a machine that can run the tunnel can also run `devlanes daemon pair`, so pairing adds protection only when that machine's key or policy allows nothing but the tunnel, such as a key restricted to `devlanes tunnel --stdio` in `authorized_keys` and used through a box command ([pairing](remote.md#pairing) has the details). Anyone with a shell on the box as you can mint a code, or ask the box daemon for one directly, and so can an agent working there: the bundled devlanes skill tells an agent on a box with no client to run `daemon pair` and give you the code. A code pairs whichever machine sends it first.
 
 A token is a bearer secret. Anyone who can read the client's `state.db`, that is any process running as you there, can copy it with the client id and connect as that machine from anywhere SSH lets them reach the box. Revoking a client does not revoke its SSH access; remove its key from the box's `authorized_keys` as well. A client that can run the tunnel but has no code can still send wrong codes, which voids your outstanding codes and can pause pairing for 10 minutes. With `remote.require_pairing: false`, every machine SSH lets run the tunnel gets the registry, the data streams and the syncs.
 
-## SSH and other transports
+### SSH and other transports
 
-devlanes uses the system `ssh` with one ControlMaster per box on Linux and macOS, and one `ssh.exe` per connection on Windows. ssh reads your `~/.ssh/config`: the master on Linux and macOS, each `ssh.exe` on Windows. Host key checking (`known_hosts`, `StrictHostKeyChecking`), keys, agents, certificates, `ProxyJump` and `ProxyCommand` work as they do for `ssh` in a terminal, and so does a setting that weakens them, such as `StrictHostKeyChecking no`. On Unix the sessions over the master read no config (`-F none`), so a host's `RemoteCommand`, `RequestTTY` or `ForwardAgent` reaches the master only. devlanes adds only keepalives, a connect timeout, `ControlPersist=600` for the master and `BatchMode=yes` when it has no way to relay prompts. Passphrase, one-time password and host key prompts go to the terminal running `remote connect`; with none attached, a reconnect that needs one waits in `needs_auth` instead of retrying. The tunnel needs only a session channel, so `AllowTcpForwarding no` on the box works.
+devlanes uses the system `ssh` with one ControlMaster per box on Linux and macOS, and one `ssh.exe` per connection on Windows. `ssh` reads your `~/.ssh/config`: the master on Linux and macOS, each `ssh.exe` on Windows. Host key checking (`known_hosts`, `StrictHostKeyChecking`), keys, agents, certificates, `ProxyJump` and `ProxyCommand` work as they do for `ssh` in a terminal, and so does a setting that weakens them, such as `StrictHostKeyChecking no`. On Unix the sessions over the master read no config (`-F none`), so a host's `RemoteCommand`, `RequestTTY` or `ForwardAgent` reaches the master only. devlanes adds only keepalives, a connect timeout, `ControlPersist=600` for the master and `BatchMode=yes` when it has no way to relay prompts. Passphrase, one-time password and host key prompts go to the terminal running `remote connect`; with none attached, a reconnect that needs one waits in `needs_auth` instead of retrying. The tunnel needs only a session channel, so `AllowTcpForwarding no` on the box works.
 
 The master's socket lives in `run/ssh` in the devlanes home, a 0700 directory. devlanes asks the master to exit when it drops the connection, as on `remote disconnect`. A master left behind, as after a daemon crash, is reused by the next daemon and otherwise exits 10 minutes after its last session. While a master runs, any process of yours can open sessions on the box through it without authenticating.
 

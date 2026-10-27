@@ -6,8 +6,10 @@
 
 use std::{net::Ipv6Addr, sync::Arc};
 
+use devlanes_daemon::Handler as _;
+use devlanes_ipc::Frame;
 use devlanes_pki::CertificateAuthority;
-use devlanes_proto::{Context, Method};
+use devlanes_proto::{Context, Control, Method, Request};
 use devlanes_transport::{
     DialTarget, EXTERNAL_UNITS, FEATURES, MIRROR_REPORT, OpenError, RejectReason, Session,
     SessionOptions, UnitKind,
@@ -584,6 +586,115 @@ async fn external_ports_stay_out_of_port_blocks() {
         );
         let reason = &lane_of(&h, &late).await["reason"];
         assert_eq!(reason["code"], "config_error", "{reason}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// The next `remote.clients.changed` event on `frames` within `wait`.
+async fn clients_changed(
+    frames: &mut tokio::sync::mpsc::Receiver<Frame>,
+    wait: std::time::Duration,
+) -> bool {
+    tokio::time::timeout(wait, async {
+        while let Some(frame) = frames.recv().await {
+            if let Frame::Control(Control::Event(event)) = frame
+                && event.event == devlanes_proto::remote::CLIENTS_EVENT
+            {
+                return true;
+            }
+        }
+        false
+    })
+    .await
+    .unwrap_or(false)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A mirror report announces `remote.clients.changed` only when it differs
+/// from the one the box keeps for the client, so a client resending the same
+/// report does not make a TUI fetch the clients again.
+async fn a_mirror_report_announces_only_a_change() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        // Starts no lane, so no port of the range is taken.
+        let h = engine_with(&tmp.path.join("box"), "18900-18999", None, None).await;
+        let (watcher, mut events) = devlanes_daemon::Session::local(9_101);
+        let subscribe = Request {
+            id: 1,
+            method: Method::Subscribe,
+            params: json!({"follow": true}),
+            context: Context::default(),
+        };
+        let engine = h.engine.clone();
+        let watching = watcher.clone();
+        let watch = tokio::spawn(async move { engine.handle(subscribe, watching).await });
+        let subscribed = tokio::time::timeout(SOON, async {
+            while let Some(frame) = events.recv().await {
+                if let Frame::Control(Control::Event(event)) = frame
+                    && event.event == devlanes_proto::events::RESYNC
+                {
+                    return true;
+                }
+            }
+            false
+        })
+        .await;
+        assert_eq!(subscribed, Ok(true), "the subscription started");
+
+        let id = id_of("0e0e0e0e");
+        let (feed_session, mut feed_frames) = devlanes_daemon::Session::local(9_102);
+        let request = Request {
+            id: 1,
+            method: Method::RemoteRegistry,
+            params: json!({"client": {"pid": 7, "since_ms": 0, "id": id, "name": "laptop"}}),
+            context: Context::default(),
+        };
+        let engine = h.engine.clone();
+        let feeding = feed_session.clone();
+        let feed = tokio::spawn(async move { engine.handle(request, feeding).await });
+        let snapshot = tokio::time::timeout(SOON, feed_frames.recv())
+            .await
+            .expect("the feed sent nothing")
+            .expect("the session closed");
+        let Frame::Control(Control::Event(snapshot)) = snapshot else {
+            panic!("the feed did not start with an event");
+        };
+        let serial = snapshot.data["client_serial"].clone();
+        assert!(serial.is_u64(), "{}", snapshot.data);
+        assert!(
+            clients_changed(&mut events, SOON).await,
+            "the client is listed"
+        );
+
+        let report = |alias: &str| {
+            let h = &h;
+            let params = json!({"id": id, "serial": serial, "report": {"alias": alias}});
+            async move {
+                let stored = h
+                    .call(Method::RemoteReport, params, Context::default())
+                    .await
+                    .expect("remote.report");
+                assert_eq!(stored["stored"], true, "{stored}");
+            }
+        };
+        report("box").await;
+        assert!(clients_changed(&mut events, SOON).await, "a first report");
+        // The event goes out within the call, so a second one would be
+        // queued by now; the wait covers forwarding it to the session.
+        report("box").await;
+        assert!(
+            !clients_changed(&mut events, std::time::Duration::from_millis(500)).await,
+            "the same report again announces nothing"
+        );
+        report("hetzner").await;
+        assert!(clients_changed(&mut events, SOON).await, "a changed report");
+
+        feed_session.close();
+        let _ = feed.await;
+        watcher.close();
+        let _ = watch.await;
         h.close().await;
     })
     .await

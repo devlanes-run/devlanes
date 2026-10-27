@@ -394,8 +394,9 @@ impl Default for UpdatesConfig {
 #[schemars(extend("examples" = [{"exit_when_idle":false}]))]
 pub struct DaemonConfig {
     /// Stop the daemon about 30 seconds after the last TUI closes when no service, task
-    /// or start is running and no remote box is connected, reconnecting or waiting for
-    /// a sign-in; the next devlanes command starts it again. Containers keep
+    /// or start is running, no remote box is connected, reconnecting or waiting for a
+    /// sign-in or pairing, no client is connected to this machine and no pairing code
+    /// is outstanding; the next devlanes command starts it again. Containers keep
     /// running either way. Defaults to true. Only a daemon a command started on demand
     /// exits; one installed with `devlanes daemon install` keeps running.
     #[schemars(extend("examples" = [true,false]))]

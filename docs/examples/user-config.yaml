@@ -119,6 +119,8 @@ daemon:
 # with daemon.exit_when_idle: false) so the daemon keeps running between connections.
 remote:
   start_daemon: true
+  # On a box: serve only machines paired with `devlanes daemon pair` (the default).
+  require_pairing: true
   # Boxes devlanes remote connect reaches by running a command here instead of SSH,
   # by the name you connect with: `devlanes remote connect acme` runs this command.
   # It must run `devlanes tunnel --stdio` in the box with stdin and stdout passed

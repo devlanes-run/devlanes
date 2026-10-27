@@ -58,7 +58,8 @@ pub struct SessionOptions {
     /// State replaced by each session's snapshot; share it across reconnects.
     pub registry: ClientRegistry,
     /// Limit for one whole attempt in a [`crate::Link`]: transport connect
-    /// (including SSH prompts) plus handshake.
+    /// plus handshake, including the time a person takes to answer SSH
+    /// prompts and the pairing code prompt.
     pub connect_timeout: Duration,
     /// The remote token for the box and the person with a pairing code;
     /// without one the client sends no token and cannot pair.

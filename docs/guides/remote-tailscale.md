@@ -13,7 +13,7 @@ Host devbox
 ```
 
 ```sh
-devlanes daemon pair                            # in an ssh shell on the box: a one-time code
+devlanes daemon pair                            # in an SSH shell on the box: a one-time code
 devlanes remote connect devbox --code K7QM-3XWD # here, for the first connection
 ```
 
@@ -73,7 +73,7 @@ On Linux, Tailscale SSH runs commands through `su -l` when it can, which starts 
 
 An `ssh` rule with `"action": "check"` asks you to sign in again in a browser before a connection is allowed, and accepts further connections from that device for the rule's `checkPeriod` (12 hours by default; `always` asks every time). The default policy of a new tailnet uses `check` for SSH to your own devices. When a check rule and an accept rule both match a connection, the check rule wins, so adding an `accept` rule next to the default one changes nothing; edit or narrow the default rule instead.
 
-Tailscale sends the sign-in URL as an SSH banner while the connection authenticates, and OpenSSH prints banners to its standard error. devlanes does not pass ssh's standard error to your terminal; it relays only the prompts ssh asks through askpass, so `remote connect` never shows the URL. The attempt waits for a sign-in that nobody can complete. On macOS and Linux devlanes gives up on it after 120 seconds and the daemon tries again with backoff, each time with a new URL.
+Tailscale sends the sign-in URL as an SSH banner while the connection authenticates, and OpenSSH prints banners to its standard error. devlanes does not pass the standard error of `ssh` to your terminal; it relays only the prompts `ssh` asks through askpass, so `remote connect` never shows the URL. The attempt waits for a sign-in that nobody can complete. On macOS and Linux devlanes gives up on it after 120 seconds and the daemon tries again with backoff, each time with a new URL.
 
 Either use `accept` for the box and the account devlanes logs in as (the rule above), or pass the check yourself first:
 
@@ -101,7 +101,7 @@ devlanes exposes nothing on the tailnet, so `tailscale serve`, Funnel and bindin
 ```sh
 tailscale status                                 # both machines online in the tailnet
 ssh devbox true                                  # same name, same account as devlanes uses
-devlanes remote ls                               # connected, reconnecting or needs_auth (with the error), failed
+devlanes remote ls                               # connected, reconnecting, needs_auth or needs_pairing (with the error), failed
 devlanes status --json | jq .clients             # on the box: who is connected
 ```
 

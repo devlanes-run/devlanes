@@ -1229,14 +1229,35 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
         .join(", ");
     let other_box = text(data, "box");
     match code {
+        // A stopped lane keeps its hostnames, so the hint names the clean.
         "lane_skipped" if !other_box.is_empty() => format!(
-            "{host}: lane {} is not mirrored; box {other_box}, connected earlier, already serves {hosts}",
+            "{host}: lane {} is not mirrored; box {other_box}, connected earlier, already serves {hosts}; a stopped lane keeps its hostnames, so run devlanes lane clean for that lane on {other_box} or disconnect {other_box}",
             field(data, "lane")
         ),
-        "lane_skipped" => format!(
-            "{host}: lane {} is not mirrored; this machine already serves {hosts}",
-            field(data, "lane")
-        ),
+        "lane_skipped" => {
+            let lanes: Vec<String> = list(data, "local_lanes")
+                .iter()
+                .map(display_value)
+                .collect();
+            let (holders, clean) = match lanes.as_slice() {
+                [] => (
+                    "this machine already serves".to_owned(),
+                    "<lane>".to_owned(),
+                ),
+                [one] => (
+                    format!("lane {one} on this machine already serves"),
+                    one.clone(),
+                ),
+                many => (
+                    format!("lanes {} on this machine already serve", many.join(", ")),
+                    "<lane>".to_owned(),
+                ),
+            };
+            format!(
+                "{host}: lane {} is not mirrored; {holders} {hosts}; a stopped lane keeps its hostnames, devlanes lane clean {clean} releases them",
+                field(data, "lane")
+            )
+        }
         "hosts_skipped" => format!(
             "{host}: {hosts} are not mirrored; they are outside the hostnames this machine routes"
         ),

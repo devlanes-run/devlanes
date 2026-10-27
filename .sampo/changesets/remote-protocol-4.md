@@ -8,6 +8,6 @@ cargo/devlanes-transport-ssh: minor
 cargo/devlanes-tunnel: minor
 ---
 
-Changed the remote protocol to version 4, so `devlanes remote connect` works with boxes whose login shell prints to stdout.
+Changed the remote protocol to version 4, so `devlanes remote connect` works with boxes whose login shell or profile prints to stdout; the client and the box both need this release.
 
-Install the same release on the client and the box, then run `devlanes daemon restart` on the box. A client and a box on different sides of this change cannot connect; a newer client says the box may run an older release. On a box, `devlanes status --json` now lists each connected client with a stable `id` and its host `name`.
+To upgrade, install this release on the box yourself (devlanes no longer installs it there) and on this machine, then run `devlanes daemon restart` on both. Each daemon upgrades its state database on that first start, and earlier releases cannot open it afterwards. Then connect each box once with a pairing code: `devlanes daemon pair` on the box, `devlanes remote connect <box> --code <code>` here.

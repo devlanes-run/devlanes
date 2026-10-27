@@ -170,8 +170,8 @@ impl View {
 #[derive(Debug, Default)]
 struct Collision {
     hosts: BTreeSet<String>,
-    /// A local lane serves at least one of them.
-    local: bool,
+    /// Local lanes serving any of them (`acme@1`), which win over every box.
+    local: BTreeSet<String>,
     /// Boxes connected earlier that serve the others.
     boxes: BTreeSet<String>,
 }
@@ -180,7 +180,11 @@ impl Collision {
     /// The earlier box to name, unless a local lane is involved: local lanes
     /// win over every box, so they are the reason then.
     fn other_box(&self) -> Option<&String> {
-        if self.local { None } else { self.boxes.first() }
+        if self.local.is_empty() {
+            self.boxes.first()
+        } else {
+            None
+        }
     }
 
     /// The reason `remote ls` shows next to the skipped lane.
@@ -386,10 +390,11 @@ impl Mirror {
 
     /// Binds new ports, drops stale ones, retries conflicts and republishes routes.
     async fn reconcile(&mut self, engine: &Arc<Inner>, registry: &Registry, phase: Phase) {
-        let local_hosts: BTreeSet<String> = engine
+        // Hostname and lane of each local route; a stopped lane keeps its routes.
+        let local_hosts: Vec<(String, String)> = engine
             .local_route_entries()
             .into_iter()
-            .map(|route| route.host)
+            .map(|route| (route.host, route.lane))
             .collect();
         let suffixes = route_suffixes(engine);
         // Tasks are listed by the box but never mirrored. A box sends no hidden
@@ -425,24 +430,26 @@ impl Mirror {
                 .iter()
                 .filter_map(|host| accepted(&host.host, &suffixes))
             {
-                let owner = if local_hosts.iter().any(|local| overlap(local, &name)) {
-                    None
-                } else if let Some((other, _)) = earlier
+                let holders: BTreeSet<&String> = local_hosts
                     .iter()
-                    .find(|(_, hosts)| hosts.iter().any(|held| overlap(held, &name)))
-                {
-                    Some(other.clone())
+                    .filter(|(local, _)| overlap(local, &name))
+                    .map(|(_, lane)| lane)
+                    .collect();
+                let other = if holders.is_empty() {
+                    match earlier
+                        .iter()
+                        .find(|(_, hosts)| hosts.iter().any(|held| overlap(held, &name)))
+                    {
+                        Some((other, _)) => Some(other.clone()),
+                        None => continue,
+                    }
                 } else {
-                    continue;
+                    None
                 };
                 let collision = collisions.entry(unit.key.lane.clone()).or_default();
                 collision.hosts.insert(name);
-                match owner {
-                    Some(other) => {
-                        collision.boxes.insert(other);
-                    }
-                    None => collision.local = true,
-                }
+                collision.local.extend(holders.into_iter().cloned());
+                collision.boxes.extend(other);
             }
         }
         for (lane, collision) in &collisions {
@@ -457,6 +464,7 @@ impl Mirror {
                         "lane": lane_ref(lane),
                         "hosts": collision.hosts,
                         "box": other,
+                        "local_lanes": collision.local,
                     }),
                 );
             }

@@ -1209,7 +1209,8 @@ async fn shared_pool_keeps_box_and_local_ports_apart() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A box lane whose hostname a local lane already serves is skipped whole, with a
-/// warning, and none of its ports are mirrored.
+/// warning, and none of its ports are mirrored. Stopping the local lane keeps it
+/// skipped; cleaning the local lane mirrors it.
 async fn colliding_lane_is_skipped() {
     if !ipv6_loopback().await {
         eprintln!("skipping colliding_lane_is_skipped: no IPv6 loopback");
@@ -1275,6 +1276,55 @@ async fn colliding_lane_is_skipped() {
         assert!(warned, "skip is announced");
         session.close();
         let _ = events.await;
+
+        // A stopped local lane keeps its view and routes, so the box lane stays
+        // skipped through the reconciles the start and the stop trigger.
+        client
+            .h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
+            .await
+            .expect("local start");
+        client
+            .h
+            .call(Method::Stop, json!({}), cx(&local_repo))
+            .await
+            .expect("local stop");
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline {
+            let host = client.host().await;
+            assert!(
+                host["skipped_lanes"]
+                    .as_array()
+                    .is_some_and(|lanes| lanes.iter().any(|l| l["lane"] == "boxapp@0")),
+                "a stopped local lane still holds its hostnames: {host}"
+            );
+            assert_eq!(host["ports"], json!([]), "{host}");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+
+        // Cleaning the local lane releases its hostnames: the box lane is mirrored.
+        let yes = Context {
+            yes: true,
+            ..cx(&local_repo)
+        };
+        client
+            .h
+            .call(Method::LaneClean, json!({}), yes)
+            .await
+            .expect("local clean");
+        let mirrored = eventually(SOON, || async {
+            let host = client.host().await;
+            let skipped = host["skipped_lanes"]
+                .as_array()
+                .is_some_and(|lanes| lanes.iter().any(|l| l["lane"] == "boxapp@0"));
+            let ports = host["ports"].as_array().is_some_and(|p| !p.is_empty());
+            (!skipped && ports).then_some(host)
+        })
+        .await;
+        assert!(
+            mirrored.is_some(),
+            "box lane mirrored after the local clean"
+        );
         client.stop().await;
         side.stop().await;
     })

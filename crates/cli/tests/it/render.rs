@@ -2571,7 +2571,14 @@ fn box_collision_warnings_name_the_other_box() {
             json!({"host": "beta", "code": "lane_skipped", "lane": "acme@0",
             "hosts": ["web.acme.localhost"], "box": "alpha"})
         ),
-        "warn beta: lane acme@0 is not mirrored; box alpha, connected earlier, already serves web.acme.localhost\n"
+        "warn beta: lane acme@0 is not mirrored; box alpha, connected earlier, already serves web.acme.localhost; a stopped lane keeps its hostnames, so run devlanes lane clean for that lane on alpha or disconnect alpha\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "beta", "code": "lane_skipped", "lane": "acme@0",
+            "hosts": ["web.acme.localhost"], "box": null, "local_lanes": ["acme@0"]})
+        ),
+        "warn beta: lane acme@0 is not mirrored; lane acme@0 on this machine already serves web.acme.localhost; a stopped lane keeps its hostnames, devlanes lane clean acme@0 releases them\n"
     );
     assert_eq!(
         line(

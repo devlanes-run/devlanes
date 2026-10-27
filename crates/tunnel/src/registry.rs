@@ -203,8 +203,8 @@ impl RegistrySource for DaemonRegistry {
             .unwrap_or_else(PoisonError::into_inner)
             .get(&client.id)
             .copied();
-        // A daemon from before serials lists the client but cannot tell
-        // which entry is this tunnel's, so the report waits for one that can.
+        // Until the snapshot names this tunnel's `status` entry, the report
+        // has no entry to go to and the next change sends a fresh one.
         let Some(serial) = serial.filter(|_| !client.id.is_empty()) else {
             return;
         };

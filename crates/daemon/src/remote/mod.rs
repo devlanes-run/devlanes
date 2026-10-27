@@ -73,7 +73,10 @@ use crate::{
 
 /// `connect --background` returns once connected, failed, or after this long.
 const CONNECT_WAIT: Duration = Duration::from_secs(150);
-/// Unanswered ssh prompts are cancelled after this long.
+/// Unanswered SSH and pairing code prompts are cancelled after this long. The
+/// attempt's `connect_timeout` (3 minutes) counts the time a person takes too,
+/// so a late SSH answer leaves less of it for the code; past it the attempt
+/// times out, its prompt is dropped and the link retries.
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a local spawn waits for box mirrors to release its ports.
 const RELEASE_WAIT: Duration = Duration::from_secs(3);
@@ -286,6 +289,11 @@ impl RemotePrompter for HostPrompter {
         let stream_id = NEXT_STREAM.fetch_add(1, Ordering::Relaxed);
         let (answer_tx, answer) = oneshot::channel();
         lock(&self.board.pending).insert((session.id(), stream_id), answer_tx);
+        // Also when the attempt's timeout or a disconnect drops this future.
+        let _pending = PendingGuard {
+            board: self.board.clone(),
+            key: (session.id(), stream_id),
+        };
         let event = Event {
             seq: 0,
             event: wire::PROMPT_EVENT.into(),
@@ -296,7 +304,7 @@ impl RemotePrompter for HostPrompter {
                 "stream_id": stream_id,
             }),
         };
-        let reply = if session.event(event).await.is_ok() {
+        if session.event(event).await.is_ok() {
             let disconnected = session.disconnected();
             tokio::select! {
                 reply = answer => reply.ok().flatten(),
@@ -305,9 +313,21 @@ impl RemotePrompter for HostPrompter {
             }
         } else {
             None
-        };
-        lock(&self.board.pending).remove(&(session.id(), stream_id));
-        reply
+        }
+    }
+}
+
+/// Removes a prompt from the pending ones once its `ask` ends or is dropped,
+/// so an answer that comes later is not taken for a prompt.
+struct PendingGuard {
+    board: Arc<PromptBoard>,
+    key: (u64, u64),
+}
+
+impl Drop for PendingGuard {
+    /// Forgets the prompt.
+    fn drop(&mut self) {
+        lock(&self.board.pending).remove(&self.key);
     }
 }
 
@@ -748,7 +768,7 @@ fn sign_in_command(host: &str) -> String {
     format!("devlanes remote connect {host}")
 }
 
-/// The command that pairs with `host` again, with the code `devlanes remote
+/// The command that pairs with `host` again, with the code `devlanes daemon
 /// pair` printed on the box.
 fn pair_command(host: &str) -> String {
     format!("devlanes daemon pair on {host}, then devlanes remote connect {host} --code <code>")
@@ -2150,6 +2170,34 @@ mod tests {
         assert!(retrying, "the link retries: {:?}", *link.state().borrow());
         link.shutdown().await;
         Ok(())
+    }
+
+    /// A prompt whose `ask` is dropped while it waits, as when the attempt
+    /// times out, leaves no pending entry behind for a late answer.
+    #[tokio::test]
+    async fn a_dropped_prompt_is_forgotten() {
+        let board = Arc::new(PromptBoard::default());
+        let (session, mut frames) = Session::local(1);
+        let _watching = board.watch(&session);
+        let prompter = HostPrompter {
+            board: board.clone(),
+        };
+        let mut asking = Box::pin(prompter.ask(RemotePrompt {
+            host: "box".into(),
+            prompt: "pairing code:".into(),
+            kind: "code",
+        }));
+        let asked = tokio::time::timeout(Duration::from_secs(5), async {
+            tokio::select! {
+                _ = &mut asking => false,
+                frame = frames.recv() => frame.is_some(),
+            }
+        })
+        .await;
+        assert_eq!(asked, Ok(true), "the prompt reached the session");
+        assert_eq!(lock(&board.pending).len(), 1);
+        drop(asking);
+        assert!(lock(&board.pending).is_empty());
     }
 
     /// A connection to `box` whose link state is whatever the test sends.

@@ -136,6 +136,9 @@ impl Inner {
         let reporting = lock(&self.remote.clients)
             .values()
             .any(|(_, client)| client.mirror.is_some());
+        // With external units for every client, although the box keeps no
+        // client's features: `mirror_report` and `external_units` came in one
+        // release, so a client that sends reports also gets external units.
         let registry = reporting.then(|| self.registry_now(true));
         move |lane, unit| {
             let registry = registry.as_ref()?;
