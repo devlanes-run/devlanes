@@ -30,5 +30,6 @@ Start with [getting started](getting-started.md). The two references are generat
 ## Other
 
 - [Remote boxes](remote.md): what mirroring does once connected.
+- [Security](security.md): who can reach the daemon, what the CA signs, what crosses a remote connection and what pairing protects.
 - [Design](design.md): lanes, ports, the daemon and startup order.
 - [Observability](observability.md): spans, diagnostics and plans for tracing.

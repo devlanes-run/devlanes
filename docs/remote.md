@@ -1,6 +1,6 @@
 # Remote boxes
 
-A box is any machine you can reach with `ssh`, or with a command such as `docker exec`, that runs devlanes for its own lanes. Another machine connects to it and gets the box's lanes locally: the same hostnames, the same port numbers and the synced folders. Remote is mirroring only. You start, stop and inspect lanes on the box itself (over `ssh`, or in an editor's remote terminal); the connection never runs commands there and never carries environments or secrets.
+A box is any machine you can reach with `ssh`, or with a command such as `docker exec`, that runs devlanes for its own lanes. Another machine connects to it and gets the box's lanes locally: the same hostnames, the same port numbers and the synced folders. Remote is mirroring only. You start, stop and inspect lanes on the box itself (over `ssh`, or in an editor's remote terminal); the connection never runs commands there and never carries environments or secrets. [Security](security.md) lists what crosses the connection, what each side checks and what pairing does not protect against.
 
 ## Connect
 
