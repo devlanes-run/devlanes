@@ -1131,15 +1131,27 @@ pub struct Grey {
     /// `local_running`, `local_stopped`, `box_chosen` or `box_earlier`;
     /// `None` from daemons without `remote.use`.
     pub cause: Option<String>,
+    /// For `local_running`, what of this machine's lane keeps running:
+    /// `processes`, which a stop ends, or only `containers`, which no
+    /// devlanes command stops alone.
+    pub holds: Option<String>,
     /// The daemon's words, for daemons that send no `cause`.
     pub reason: String,
 }
 
 impl Grey {
     /// Whether `m` does something: switches to it, or for a box lane this
-    /// machine's running lane keeps out, stops that lane first.
+    /// machine's running lane keeps out, stops that lane first. With only
+    /// containers up, it asks the daemon, whose answer names the command
+    /// that stops them.
     pub fn switchable(&self) -> bool {
         self.can_use || (self.cause.as_deref() == Some("local_running") && self.host.is_some())
+    }
+
+    /// Whether only this machine's lane's own containers keep it running.
+    pub fn held_by_containers(&self) -> bool {
+        self.cause.as_deref() == Some("local_running")
+            && self.holds.as_deref() == Some("containers")
     }
 }
 
@@ -2632,12 +2644,16 @@ impl App {
                 if event.data.get("code").and_then(Value::as_str) == Some("choice_cleared") =>
             {
                 let field = |key: &str| event.data.get(key).and_then(Value::as_str);
-                if let (Some(lane), Some(host)) = (field("lane"), field("host")) {
+                let message = warning_message(&event.data).or_else(|| {
+                    let (lane, host) = (field("lane")?, field("host")?);
                     // Another project's lane may be the one that clashes.
                     let local = field("local_lane").unwrap_or(lane);
-                    self.set_notice(format!(
+                    Some(format!(
                         "{local} started on this machine, so {host}'s {lane} is no longer mirrored or chosen"
-                    ));
+                    ))
+                });
+                if let Some(message) = message {
+                    self.set_notice(message);
                 }
             }
             // The one notice of a switch, whichever client asked for it.
@@ -2645,7 +2661,7 @@ impl App {
                 if event.data.get("code").and_then(Value::as_str) == Some("lane_switched") =>
             {
                 let field = |key: &str| event.data.get(key).and_then(Value::as_str);
-                let message = field("message").map(str::to_owned).or_else(|| {
+                let message = warning_message(&event.data).or_else(|| {
                     let lane = field("lane")?;
                     Some(format!(
                         "{lane} now comes from {}",
@@ -2893,6 +2909,11 @@ impl App {
     pub fn grey(&self, reference: &str) -> Option<Grey> {
         if let Some((host, lane)) = self.box_lane(reference) {
             let skipped = host.skipped(&lane)?;
+            let holds = skipped.holds.clone().or_else(|| {
+                (skipped.cause.as_deref() == Some("local_running"))
+                    .then(|| self.local_holds(skipped.serving()))
+                    .flatten()
+            });
             return Some(Grey {
                 serving: skipped.serving().to_owned(),
                 winner: skipped.served_by().map(str::to_owned),
@@ -2900,6 +2921,7 @@ impl App {
                 host: Some(host.host.clone()),
                 can_use: skipped.can_use,
                 cause: skipped.cause.clone(),
+                holds,
                 reason: skipped.reason.clone(),
             });
         }
@@ -2925,8 +2947,31 @@ impl App {
             serving: serving.unwrap_or_else(|| yielded.lane.clone()),
             can_use: true,
             cause: Some("box_chosen".into()),
+            holds: None,
             reason: String::new(),
         })
+    }
+
+    /// What keeps this machine's lane `reference` running, as status shows
+    /// it: `processes` while a unit or an orphan runs, else `containers`
+    /// while one of its own containers is up, as the daemon counts them.
+    /// Shared containers hold no port of the lane.
+    fn local_holds(&self, reference: &str) -> Option<String> {
+        let lane = self.lanes.iter().find(|lane| lane.reference == reference)?;
+        if lane.units.iter().any(|unit| is_active(&unit.state)) {
+            return Some("processes".into());
+        }
+        // Status lists started containers, so one without a state is up.
+        let up = |state: Option<&str>| {
+            state.is_none_or(|s| {
+                !matches!(s, "created" | "dead" | "removing" | "stopped")
+                    && !s.starts_with("exited")
+            })
+        };
+        lane.containers
+            .iter()
+            .any(|c| !c.shared && up(c.state.as_deref()))
+            .then(|| "containers".into())
     }
 
     /// Whether lane `reference` is the one in use for hostnames that a grey
@@ -4542,7 +4587,16 @@ impl App {
             return;
         };
         if !grey.can_use {
+            let containers = grey.held_by_containers();
             match (grey.cause.as_deref(), grey.host) {
+                // No devlanes command stops only a lane's containers, so there
+                // is nothing to offer. The daemon's refusal names the command.
+                (Some("local_running"), Some(host)) if containers => {
+                    effects.push(Effect::UseLane {
+                        lane: grey.lane,
+                        host: Some(host),
+                    });
+                }
                 (Some("local_running"), Some(host)) => {
                     self.switch_prompt(grey.serving, grey.lane, host);
                 }
@@ -4644,9 +4698,15 @@ impl App {
             .switch
             .as_ref()
             .is_some_and(|s| s.sent && s.lane == lane && Some(s.host.as_str()) == host);
+        // `holds: containers`: the lane's units are down but its own
+        // containers still hold the ports, which no stop here ends.
+        let containers = matches!(&result, Err(ApiError::Rpc(error))
+            if error.code == "local_lane_running"
+                && error.data.get("holds").and_then(Value::as_str) == Some("containers"));
         if ours {
             if let Err(ApiError::Rpc(error)) = &result
                 && error.code == "local_lane_running"
+                && !containers
                 && let Some(switch) = self.switch.as_mut()
             {
                 switch.sent = false;
@@ -4675,8 +4735,11 @@ impl App {
             }
             // A local lane started meanwhile: offer the same stop and switch
             // as `m` on a lane it keeps out, for the lane the daemon names.
+            // Containers alone get the daemon's words, which name the
+            // command that stops them.
             Err(ApiError::Rpc(ref error))
                 if error.code == "local_lane_running"
+                    && !containers
                     && let Some(host) = host
                     && let Some(local) = error.data.get("local_lane").and_then(Value::as_str) =>
             {
@@ -7655,6 +7718,19 @@ fn log_query(lane: &str, unit: &str, cursor: Option<String>) -> LogQuery {
         styled: true,
         ..LogQuery::default()
     }
+}
+
+/// A `remote.warning`'s `message` as a header notice: without the
+/// `fork-b: ` the CLI prints it with, since the message names the box, and
+/// without the final period, as the TUI's notices go.
+fn warning_message(data: &Value) -> Option<String> {
+    let message = data.get("message").and_then(Value::as_str)?;
+    let message = data
+        .get("host")
+        .and_then(Value::as_str)
+        .and_then(|host| message.strip_prefix(&format!("{host}: ")))
+        .unwrap_or(message);
+    Some(message.trim_end_matches('.').to_owned())
 }
 
 /// `fork-b's shop@0`, or `this machine's shop@0` without a box: how every

@@ -119,6 +119,10 @@ pub struct SkippedLane {
     /// `remote.use` can make it the one in use: false while this machine's
     /// lane runs, and from daemons without `remote.use`.
     pub can_use: bool,
+    /// What keeps this machine's lane running for `local_running`:
+    /// `processes` or `containers`. The contract does not promise it here,
+    /// so the TUI tells them apart from status when it is absent.
+    pub holds: Option<String>,
 }
 
 impl SkippedLane {
@@ -577,7 +581,7 @@ mod tests {
     }
 
     /// `remote.use`'s fields: the chosen lanes, what wins over a skipped
-    /// lane, and this machine's lanes that gave way. Daemons without them
+    /// lane, and this machine's lanes not in use. Daemons without them
     /// leave a skipped lane unusable and name the earlier box by `box`.
     #[test]
     fn choices_parse_with_what_wins_over_a_skipped_lane() {

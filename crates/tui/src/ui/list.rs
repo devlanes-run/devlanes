@@ -59,8 +59,8 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         .as_ref()
         .map(|power| Span::styled(format!(" {}", clean(&power.level)), theme.quiet()));
     let on_box = app.box_lane(&lane.reference);
-    // This machine's own lane that gave way is not in use; a box's is not
-    // mirrored here.
+    // This machine's own lane, whose hostnames a chosen box lane took, is
+    // not in use. A box's grey lane is not mirrored here.
     let grey = app.grey(&lane.reference).map(|grey| {
         if grey.host.is_none() {
             " · not in use"

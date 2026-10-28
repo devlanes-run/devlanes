@@ -558,7 +558,9 @@ pub fn rpc(error: &RpcError) -> Worded {
             let fallback = match code.as_str() {
                 "box_unknown" => "this machine knows no box by that name",
                 "lane_not_on_box" => "the box does not run that lane",
-                "local_lane_running" => "the lane runs on this machine. Stop it there first",
+                "local_lane_running" => {
+                    "the lane runs on this machine. Stop it first, then switch."
+                }
                 _ => "this machine has no such lane",
             };
             let summary = if message.is_empty() {
