@@ -1,0 +1,122 @@
+ devlanes  1 acme   2 billing   3 shop                                                                                                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
+┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 2 of 2 connected ┐
+│ ● fork-a                                                                                                                                                                             connected · ssh │
+│   link      connected since 2026-10-14 16:46                                                                                                                                                         │
+│   box       devlanes 1.0.0 · proxy on 8443 · ports.range 31000-31999                                                                                                                                 │
+│   mirror    1 lane · 2 of 2 ports bound here · 2 hostnames routed                                                                                                                                    │
+│   chosen    shop@0                                                                                                                                                                                   │
+│                                                                                                                                                                                                      │
+│ ● fork-b                                                                                                                                                                             connected · ssh │
+│   link      connected since 2026-10-14 16:46                                                                                                                                                         │
+│   box       devlanes 1.0.0 · proxy on 8443 · ports.range 31000-31999                                                                                                                                 │
+│   mirror    1 lane · no ports bound here · 0 hostnames routed                                                                                                                                        │
+│   skipped   shop@0: fork-a's shop@0 is in use. Press m on this box's lane to use it.                                                                                                                 │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ this machine ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ No other machine connects here yet. Press p for a pairing code.                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ enter disconnect   n new box   p pairing code   j k select   esc back                                                                                                            ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194-198 bold underlined
+1: 0-180 bold, 181-198 bold dim, 199 bold
+2: 0 bold, 2-3 reversed, 4-9 bold reversed, 10-197 reversed, 199 bold
+3: 0 bold, 4-13 dim, 199 bold
+4: 0 bold, 4-13 dim, 199 bold
+5: 0 bold, 4-13 dim, 199 bold
+6: 0 bold, 4-13 dim, 199 bold
+7: 0 bold, 199 bold
+8: 0 bold, 2-3 green, 4-9 bold, 183-191 green, 192-197 dim, 199 bold
+9: 0 bold, 4-13 dim, 199 bold
+10: 0 bold, 4-13 dim, 199 bold
+11: 0 bold, 4-13 dim, 199 bold
+12: 0 bold, 4-13 dim, 14-85 yellow, 199 bold
+13: 0 bold, 199 bold
+14: 0 bold, 199 bold
+15: 0 bold, 199 bold
+16: 0 bold, 199 bold
+17: 0 bold, 199 bold
+18: 0 bold, 199 bold
+19: 0 bold, 199 bold
+20: 0 bold, 199 bold
+21: 0 bold, 199 bold
+22: 0 bold, 199 bold
+23: 0 bold, 199 bold
+24: 0 bold, 199 bold
+25: 0 bold, 199 bold
+26: 0 bold, 199 bold
+27: 0 bold, 199 bold
+28: 0 bold, 199 bold
+29: 0 bold, 199 bold
+30: 0 bold, 199 bold
+31: 0 bold, 199 bold
+32: 0 bold, 199 bold
+33: 0 bold, 199 bold
+34: 0 bold, 199 bold
+35: 0 bold, 199 bold
+36: 0 bold, 199 bold
+37: 0 bold, 199 bold
+38: 0 bold, 199 bold
+39: 0 bold, 199 bold
+40: 0 bold, 199 bold
+41: 0 bold, 199 bold
+42: 0 bold, 199 bold
+43: 0 bold, 199 bold
+44: 0 bold, 199 bold
+45: 0 bold, 199 bold
+46: 0 bold, 199 bold
+47: 0 bold, 199 bold
+48: 0 bold, 199 bold
+49: 0 bold, 199 bold
+50: 0 bold, 199 bold
+51: 0 bold, 199 bold
+52: 0 bold, 199 bold
+53: 0 bold, 199 bold
+54: 0 bold, 199 bold
+55: 0-199 bold
+56: 0 darkgray, 1-14 bold, 15-199 darkgray
+57: 0 darkgray, 2-64 dim, 199 darkgray
+58: 0-199 darkgray
+59: 1-5 bold, 6-19 dim, 20 bold, 21-31 dim, 32 bold, 33-48 dim, 49-51 bold, 52-61 dim, 62-64 bold, 65-72 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

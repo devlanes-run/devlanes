@@ -581,6 +581,96 @@ pub fn boxes() -> Value {
     ], "truncated": false, "next_cursor": null})
 }
 
+/// [`lanes`] with `shop@0` stopped, so a box lane chosen for it can take
+/// its hostnames.
+pub fn shop_stopped() -> Vec<LaneSummary> {
+    let mut lanes = lanes();
+    if let Some(shop) = lanes.iter_mut().find(|lane| lane.reference == "shop@0") {
+        shop.state = "idle".into();
+        shop.config_changed = false;
+        for unit in &mut shop.units {
+            unit.state = "idle".into();
+            unit.started_at_ms = None;
+            unit.drift = None;
+        }
+    }
+    lanes
+}
+
+/// `host.list` with two forks of one box image, `fork-a` and `fork-b`, both
+/// running `shop@0` with the same hostnames. `shop@0` was chosen for
+/// fork-a, so fork-a's lane is mirrored, and fork-b's and this machine's
+/// stopped one are not.
+pub fn forks() -> Value {
+    let key = json!({"project": "shop", "lane": "0"});
+    let unit = |name: &str, port: u16, host: &str| {
+        json!({"key": {"lane": key, "kind": "service", "name": name}, "hidden": false,
+               "state": "ready", "ports": [{"name": "default", "port": port}],
+               "hosts": [{"host": host, "port": port, "fallback": false, "host_header": "keep"}]})
+    };
+    let registry = json!({
+        "lanes": [{"key": key, "index": 0, "domain": "shop.localhost"}],
+        "units": [
+            unit("storefront", 31_000, "storefront.shop.localhost"),
+            unit("checkout-api", 31_001, "checkout.shop.localhost"),
+        ],
+    });
+    let bound = |port: u16, unit: &str| {
+        json!({"port": port, "lane": "shop@0", "unit": unit, "kind": "service", "state": "bound",
+               "addresses": ["127.0.0.1", "::1"], "conflicts": [], "relay": null, "last_error": null})
+    };
+    let route = |host: &str, unit: &str| {
+        json!({"host": host, "port": 0, "lane": "shop@0", "unit": unit,
+               "url": format!("https://{host}:8443"), "state": "ready"})
+    };
+    let fork = |host: &str| {
+        json!({
+            "host": host, "state": "connected", "transport": "ssh",
+            "connected_since_ms": NOW_MS - 3_600_000, "last_connected_ms": NOW_MS - 3_600_000,
+            "ports": [], "routes": [], "skipped_lanes": [], "skipped_hosts": [], "syncs": [],
+            "warnings": [], "chosen_lanes": [], "registry": registry,
+            "box": {"version": VERSION, "https_port": 8443, "ports_range": "31000-31999"},
+            "suffixes": ["localhost"],
+        })
+    };
+    let mut chosen = fork("fork-a");
+    chosen["chosen_lanes"] = json!(["shop@0"]);
+    chosen["ports"] = json!([bound(31_000, "storefront"), bound(31_001, "checkout-api")]);
+    chosen["routes"] = json!([
+        route("storefront.shop.localhost", "storefront"),
+        route("checkout.shop.localhost", "checkout-api"),
+    ]);
+    let mut other = fork("fork-b");
+    other["skipped_lanes"] = json!([{
+        "lane": "shop@0", "hosts": ["storefront.shop.localhost", "checkout.shop.localhost"],
+        "box": "fork-a", "reason": "this machine uses fork-a's shop@0",
+        "cause": "box_chosen", "winner": "fork-a", "can_use": true,
+    }]);
+    json!({
+        "items": [chosen, other],
+        "yielded_local_lanes": [{"lane": "shop@0", "winner": "fork-a"}],
+        "truncated": false, "next_cursor": null,
+    })
+}
+
+/// [`forks`] while this machine runs `shop@0`: its lane keeps the
+/// hostnames, both forks' lanes are skipped, and `m` cannot switch.
+pub fn forks_local_running() -> Value {
+    let mut list = forks();
+    for item in list["items"].as_array_mut().into_iter().flatten() {
+        item["chosen_lanes"] = json!([]);
+        item["ports"] = json!([]);
+        item["routes"] = json!([]);
+        item["skipped_lanes"] = json!([{
+            "lane": "shop@0", "hosts": ["storefront.shop.localhost", "checkout.shop.localhost"],
+            "box": null, "reason": "shop@0 runs on this machine",
+            "cause": "local_running", "winner": null, "can_use": false,
+        }]);
+    }
+    list["yielded_local_lanes"] = json!([]);
+    list
+}
+
 /// [`boxes`] after `hetzner` revoked this machine's pairing: its link waits
 /// for a new code, its ports and routes stay, and the routes serve the
 /// pairing page.

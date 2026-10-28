@@ -156,7 +156,7 @@ a project whose devlanes.yaml does not load (Shift+2)
 
 ## box-lane
 
-a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the pane says what to run on the box
+a connected box's lane in the tab of its project (@4 hetzner), selected: read-only, the pane says what to run on the box
 
 - 200x60: [txt](box-lane-200x60.txt) · [png](box-lane-200x60.png) · [ansi](box-lane-200x60.ansi)
 - 120x40: [txt](box-lane-120x40.txt) · [png](box-lane-120x40.png) · [ansi](box-lane-120x40.ansi)
@@ -178,13 +178,45 @@ a box service with a synced folder and a hostname this machine does not route
 - 120x40: [txt](box-unit-sync-120x40.txt) · [png](box-unit-sync-120x40.png) · [ansi](box-unit-sync-120x40.ansi)
 - 80x24: [txt](box-unit-sync-80x24.txt) · [png](box-unit-sync-80x24.png) · [ansi](box-unit-sync-80x24.ansi)
 
-## box-lane-skipped
+## lanes-boxes
 
-a box lane that is not mirrored because a local lane serves its hostnames
+two forks of one box run shop@0, chosen for fork-a: the lanes row goes by number, this machine's lane first, then the boxes by name; fork-b's lane and this machine's stopped one are grey
 
-- 200x60: [txt](box-lane-skipped-200x60.txt) · [png](box-lane-skipped-200x60.png) · [ansi](box-lane-skipped-200x60.ansi)
-- 120x40: [txt](box-lane-skipped-120x40.txt) · [png](box-lane-skipped-120x40.png) · [ansi](box-lane-skipped-120x40.ansi)
-- 80x24: [txt](box-lane-skipped-80x24.txt) · [png](box-lane-skipped-80x24.png) · [ansi](box-lane-skipped-80x24.ansi)
+- 200x60: [txt](lanes-boxes-200x60.txt) · [png](lanes-boxes-200x60.png) · [ansi](lanes-boxes-200x60.ansi)
+- 120x40: [txt](lanes-boxes-120x40.txt) · [png](lanes-boxes-120x40.png) · [ansi](lanes-boxes-120x40.ansi)
+- 80x24: [txt](lanes-boxes-80x24.txt) · [png](lanes-boxes-80x24.png) · [ansi](lanes-boxes-80x24.ansi)
+
+## lane-box-grey
+
+fork-b's grey shop@0: which lane is in use, and m to use this one
+
+- 200x60: [txt](lane-box-grey-200x60.txt) · [png](lane-box-grey-200x60.png) · [ansi](lane-box-grey-200x60.ansi)
+- 120x40: [txt](lane-box-grey-120x40.txt) · [png](lane-box-grey-120x40.png) · [ansi](lane-box-grey-120x40.ansi)
+- 80x24: [txt](lane-box-grey-80x24.txt) · [png](lane-box-grey-80x24.png) · [ansi](lane-box-grey-80x24.ansi)
+
+## lane-box-local-running
+
+a box lane while this machine runs shop@0: grey, the pane says to stop the local lane first, and the footer has no m
+
+- 200x60: [txt](lane-box-local-running-200x60.txt) · [png](lane-box-local-running-200x60.png) · [ansi](lane-box-local-running-200x60.ansi)
+- 120x40: [txt](lane-box-local-running-120x40.txt) · [png](lane-box-local-running-120x40.png) · [ansi](lane-box-local-running-120x40.ansi)
+- 80x24: [txt](lane-box-local-running-80x24.txt) · [png](lane-box-local-running-80x24.png) · [ansi](lane-box-local-running-80x24.ansi)
+
+## boxes-forks
+
+the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one with the lane in use and m
+
+- 200x60: [txt](boxes-forks-200x60.txt) · [png](boxes-forks-200x60.png) · [ansi](boxes-forks-200x60.ansi)
+- 120x40: [txt](boxes-forks-120x40.txt) · [png](boxes-forks-120x40.png) · [ansi](boxes-forks-120x40.ansi)
+- 80x24: [txt](boxes-forks-80x24.txt) · [png](boxes-forks-80x24.png) · [ansi](boxes-forks-80x24.ansi)
+
+## lane-local-yielded
+
+this machine's stopped shop@0 after shop@0 was chosen for fork-a: grey, and m gives its hostnames back
+
+- 200x60: [txt](lane-local-yielded-200x60.txt) · [png](lane-local-yielded-200x60.png) · [ansi](lane-local-yielded-200x60.ansi)
+- 120x40: [txt](lane-local-yielded-120x40.txt) · [png](lane-local-yielded-120x40.png) · [ansi](lane-local-yielded-120x40.ansi)
+- 80x24: [txt](lane-local-yielded-80x24.txt) · [png](lane-local-yielded-80x24.png) · [ansi](lane-local-yielded-80x24.ansi)
 
 ## box-reconnecting
 

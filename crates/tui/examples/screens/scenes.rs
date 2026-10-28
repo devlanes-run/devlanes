@@ -414,6 +414,13 @@ fn idle(f: &mut Fake) {
     f.send(Msg::Status(Ok(data::idle_lanes())));
 }
 
+/// This machine with `shop@0` stopped, and the forks `boxes` lists.
+fn forks(f: &mut Fake, boxes: fn() -> serde_json::Value) {
+    f.lanes = data::shop_stopped;
+    f.send(Msg::Status(Ok(data::shop_stopped())));
+    f.show_boxes(boxes());
+}
+
 /// The scene `lanes-unit` in another color tier and glyph set.
 fn themed(f: &mut Fake, tier: Tier, glyphs: Glyphs) {
     f.app.theme = Theme { tier, glyphs };
@@ -585,7 +592,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "box-lane",
-            what: "a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the pane says what to run on the box",
+            what: "a connected box's lane in the tab of its project (@4 hetzner), selected: read-only, the pane says what to run on the box",
             setup: |f| {
                 f.connect_boxes();
                 f.lane("acme@4 @hetzner");
@@ -608,11 +615,43 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
-            name: "box-lane-skipped",
-            what: "a box lane that is not mirrored because a local lane serves its hostnames",
+            name: "lanes-boxes",
+            what: "two forks of one box run shop@0, chosen for fork-a: the lanes row goes by number, this machine's lane first, then the boxes by name; fork-b's lane and this machine's stopped one are grey",
             setup: |f| {
-                f.connect_boxes();
-                f.unit("acme@0 @hetzner", "api-gateway");
+                forks(f, data::forks);
+                f.lane("shop@0 @fork-a");
+            },
+        },
+        Scene {
+            name: "lane-box-grey",
+            what: "fork-b's grey shop@0: which lane is in use, and m to use this one",
+            setup: |f| {
+                forks(f, data::forks);
+                f.lane("shop@0 @fork-b");
+            },
+        },
+        Scene {
+            name: "lane-box-local-running",
+            what: "a box lane while this machine runs shop@0: grey, the pane says to stop the local lane first, and the footer has no m",
+            setup: |f| {
+                f.show_boxes(data::forks_local_running());
+                f.unit("shop@0 @fork-b", "storefront");
+            },
+        },
+        Scene {
+            name: "boxes-forks",
+            what: "the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one with the lane in use and m",
+            setup: |f| {
+                forks(f, data::forks);
+                f.shifted('B');
+            },
+        },
+        Scene {
+            name: "lane-local-yielded",
+            what: "this machine's stopped shop@0 after shop@0 was chosen for fork-a: grey, and m gives its hostnames back",
+            setup: |f| {
+                forks(f, data::forks);
+                f.lane("shop@0");
             },
         },
         Scene {
