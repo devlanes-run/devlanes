@@ -16,7 +16,7 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     #[schemars(skip)]
     pub sources: crate::ConfigSources,
     /// Project name, the same in every worktree of the repository. It builds each lane's
-    /// default domain (`<project>.localhost` for lane 0, `<project>-<N>.localhost` for lane N),
+    /// default domain (`<project>.localhost` for lane 0, `<project><N>.localhost` for lane N),
     /// names lanes in commands (`acme@2`), the containers devlanes creates and
     /// `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`.
     /// Lowercase letters, digits, dots, underscores and dashes.
@@ -134,7 +134,7 @@ pub struct LanesConfig {
     /// Fixed values per lane instead of computed `vars`: entry N holds lane N's values,
     /// read as `lane.<name>`. A lane whose index has no entry fails to resolve. Cannot be
     /// combined with `vars`.
-    #[schemars(extend("examples" = [[{"port":20000,"domain":"acme.localhost"},{"port":20100,"domain":"acme-1.localhost"}]]))]
+    #[schemars(extend("examples" = [[{"port":20000,"domain":"acme.localhost"},{"port":20100,"domain":"acme1.localhost"}]]))]
     pub matrix: Option<Vec<Env>>,
 }
 
@@ -508,7 +508,7 @@ pub struct HostRoute {
 #[schemars(extend("examples" = ["preserve","upstream"]))]
 /// Host header sent to the unit behind a hostname.
 pub enum HostHeader {
-    /// Send the hostname the client requested, such as `api.acme-2.localhost`.
+    /// Send the hostname the client requested, such as `api.acme2.localhost`.
     #[schemars(extend("examples" = ["preserve"]))]
     Preserve,
     /// Send the local address and port the proxy connects to, such as `127.0.0.1:<port>`.

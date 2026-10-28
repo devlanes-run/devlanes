@@ -660,9 +660,9 @@
         "public"
       ],
       "enumDescriptions": [
-        "Lane domains end in `.localhost` (`acme.localhost`, `acme-2.localhost`), which browsers and many system resolvers send to loopback by themselves. `hosts_file` covers programs that do not.",
+        "Lane domains end in `.localhost` (`acme.localhost`, `acme2.localhost`), which browsers and many system resolvers send to loopback by themselves. `hosts_file` covers programs that do not.",
         "Keep `.localhost` names and always write exact hostnames to `/etc/hosts`, as `hosts_file: always` does, whatever `hosts_file` says; a project's `lanes.hosts_file` still takes precedence. Needs the helper from `devlanes certs trust --hosts`.",
-        "Lane domains become `<project>.<tld>` and `<project>-<N>.<tld>`, answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`; projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains.",
+        "Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the names `domain()` returns. They are answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`; projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains.",
         "Reserved for public DNS names with DNS-01 certificates; not supported yet, so the config is rejected."
       ],
       "examples": [
@@ -673,9 +673,9 @@
       ],
       "markdownDescription": "Strategy that makes lane hostnames resolve to this machine.",
       "markdownEnumDescriptions": [
-        "Lane domains end in `.localhost` (`acme.localhost`, `acme-2.localhost`), which browsers and many system resolvers send to loopback by themselves. `hosts_file` covers programs that do not.",
+        "Lane domains end in `.localhost` (`acme.localhost`, `acme2.localhost`), which browsers and many system resolvers send to loopback by themselves. `hosts_file` covers programs that do not.",
         "Keep `.localhost` names and always write exact hostnames to `/etc/hosts`, as `hosts_file: always` does, whatever `hosts_file` says; a project's `lanes.hosts_file` still takes precedence. Needs the helper from `devlanes certs trust --hosts`.",
-        "Lane domains become `<project>.<tld>` and `<project>-<N>.<tld>`, answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`; projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains.",
+        "Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the names `domain()` returns. They are answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`; projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains.",
         "Reserved for public DNS names with DNS-01 certificates; not supported yet, so the config is rejected."
       ],
       "type": "string"
@@ -1393,7 +1393,7 @@
         "resolver": "localhost",
         "tld": null
       },
-      "description": "How lane hostnames such as `api.acme-2.localhost` resolve to this machine: the strategy (`resolver`), its `tld`, and whether names also go into `/etc/hosts` (`hosts_file`). The defaults need no setup for browsers that resolve `*.localhost`.",
+      "description": "How lane hostnames such as `api.acme2.localhost` resolve to this machine: the strategy (`resolver`), its `tld`, and whether names also go into `/etc/hosts` (`hosts_file`). The defaults need no setup for browsers that resolve `*.localhost`.",
       "examples": [
         {
           "hosts_file": "auto",
@@ -1404,7 +1404,7 @@
           "tld": "test"
         }
       ],
-      "markdownDescription": "How lane hostnames such as `api.acme-2.localhost` resolve to this machine: the strategy (`resolver`), its `tld`, and whether names also go into `/etc/hosts` (`hosts_file`). The defaults need no setup for browsers that resolve `*.localhost`."
+      "markdownDescription": "How lane hostnames such as `api.acme2.localhost` resolve to this machine: the strategy (`resolver`), its `tld`, and whether names also go into `/etc/hosts` (`hosts_file`). The defaults need no setup for browsers that resolve `*.localhost`."
     },
     "lanes": {
       "$ref": "#/$defs/UserLanesConfig",

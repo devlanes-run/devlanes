@@ -427,7 +427,7 @@
         "upstream"
       ],
       "enumDescriptions": [
-        "Send the hostname the client requested, such as `api.acme-2.localhost`.",
+        "Send the hostname the client requested, such as `api.acme2.localhost`.",
         "Send the local address and port the proxy connects to, such as `127.0.0.1:<port>`."
       ],
       "examples": [
@@ -436,7 +436,7 @@
       ],
       "markdownDescription": "Host header sent to the unit behind a hostname.",
       "markdownEnumDescriptions": [
-        "Send the hostname the client requested, such as `api.acme-2.localhost`.",
+        "Send the hostname the client requested, such as `api.acme2.localhost`.",
         "Send the local address and port the proxy connects to, such as `127.0.0.1:<port>`."
       ],
       "type": "string"
@@ -1399,7 +1399,7 @@
                 "port": 20000
               },
               {
-                "domain": "acme-1.localhost",
+                "domain": "acme1.localhost",
                 "port": 20100
               }
             ]
@@ -1420,7 +1420,7 @@
                 "port": 20000
               },
               {
-                "domain": "acme-1.localhost",
+                "domain": "acme1.localhost",
                 "port": 20100
               }
             ],
@@ -3376,11 +3376,11 @@
       "type": "object"
     },
     "project": {
-      "description": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project>-<N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
+      "description": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project><N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
       "examples": [
         "acme"
       ],
-      "markdownDescription": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project>-<N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
+      "markdownDescription": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project><N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
       "type": "string"
     },
     "services": {

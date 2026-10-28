@@ -28,7 +28,7 @@ services:
     run_script:
       file: api/package.json
       name: dev
-    # HTTPS hostnames routed by the proxy; lane.domain is acme.localhost or acme-<N>.localhost.
+    # HTTPS hostnames routed by the proxy; lane.domain is acme.localhost or acme<N>.localhost.
     hosts: "api.${{ lane.domain }}"
   web:
     # Adds Vite's port and host flags to the command.

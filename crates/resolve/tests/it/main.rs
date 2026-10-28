@@ -223,7 +223,7 @@ async fn injected_variables() {
     // Services set their own public URL through `${{ self.public_url }}` when they need it.
     assert!(!env.contains_key("DEVLANES_PUBLIC_URL"));
     let origins = &env["DEVLANES_ORIGINS"];
-    assert!(origins.contains("https://crm.acme-2.localhost"));
+    assert!(origins.contains("https://crm.acme2.localhost"));
     assert!(origins.contains(&format!("http://localhost:{}", env["PORT"])));
     assert!(!origins.contains('*'));
     let task = lane.tasks["build-deps"].launch.as_ref().expect("launch");
@@ -594,8 +594,8 @@ async fn public_https_port() {
         let layout = lane_layout(&input).expect("layout");
         let lane = resolve_lane(input).await.expect("resolves");
         assert!(lane.errors.is_empty(), "{:?}", lane.errors);
-        let api_url = format!("https://api.acme-1.localhost{suffix}");
-        let web_url = format!("https://acme-1.localhost{suffix}");
+        let api_url = format!("https://api.acme1.localhost{suffix}");
+        let web_url = format!("https://acme1.localhost{suffix}");
         assert_eq!(
             layout.services["api"].public_url.as_deref(),
             Some(api_url.as_str())
@@ -617,7 +617,7 @@ async fn public_https_port() {
         let origins = &api.launch.env.values["DEVLANES_ORIGINS"];
         assert!(origins.split(',').any(|o| o == api_url), "{origins}");
         // Routes keep bare hostnames: the proxy matches on Host without the port.
-        assert!(lane.routes.iter().any(|r| r.host == "api.acme-1.localhost"));
+        assert!(lane.routes.iter().any(|r| r.host == "api.acme1.localhost"));
     }
     assert_eq!(
         devlanes_resolve::https_url("a.localhost", Some(443)),
@@ -706,19 +706,96 @@ async fn domain_and_lane_vars() {
     assert_eq!(main.domain, "acme.localhost");
     assert_eq!(main.services["web"].hosts, ["acme.localhost"]);
     let third = plain(MINIMAL, 3).await;
-    assert_eq!(third.domain, "acme-3.localhost");
+    assert_eq!(third.domain, "acme3.localhost");
     assert_eq!(
         third.services["web"].launch.env.values["VITE_API_URL"],
-        "https://api.acme-3.localhost"
+        "https://api.acme3.localhost"
     );
     let full = plain(FULL, 2).await;
-    assert_eq!(full.domain, "acme-2.localhost");
+    assert_eq!(full.domain, "acme2.localhost");
     assert_eq!(full.vars["db_name"].to_string(), "acme_lane2");
     assert_eq!(full.vars["redis_db"].to_string(), "2");
     assert_eq!(
         full.setup["database"].launch.args[1],
         r#"psql "postgres://postgres:postgres@127.0.0.1:15432/postgres" -c "CREATE DATABASE acme_lane2""#
     );
+}
+
+/// A project with `pages_domain: ${{ domain('pages') }}` in `lanes.vars`, a
+/// `pages` service on its own site and `web` on the lane's domain.
+const PAGES: &str = "project: shop\nlanes:\n  vars:\n    pages_domain: \"${{ domain('pages') }}\"\nservices:\n  web:\n    run: a\n    hosts: [\"web.${{ lane.domain }}\"]\n  pages:\n    run: b\n    hosts: [\"*.${{ lane.pages_domain }}\", \"${{ domain('docs') }}\"]\n";
+
+/// The layout of `yaml` in lane `index`, with domains ending in `suffix`.
+fn layout_in(yaml: &str, index: u32, suffix: &str) -> devlanes_resolve::LaneLayout {
+    let config = parse(yaml);
+    let facts = facts(&config.project, index, None).with_domain_suffix(suffix);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    lane_layout(&ResolveInput::new(&config, &facts, block, &offsets)).expect("layout")
+}
+
+#[test]
+/// `domain()` gives a name its own site per lane, in `lanes.vars` and in
+/// hosts, with the lane's suffix. The default domain follows the same rule in
+/// both hostname modes.
+fn domain_follows_the_lane_and_the_mode() {
+    let hosts = |layout: &devlanes_resolve::LaneLayout, service: &str| {
+        layout.services[service].hosts.clone()
+    };
+    let main = layout_in(PAGES, 0, "localhost");
+    assert_eq!(main.domain, "shop.localhost");
+    assert_eq!(main.vars["pages_domain"].to_string(), "pages.localhost");
+    assert_eq!(hosts(&main, "web"), ["web.shop.localhost"]);
+    assert_eq!(
+        hosts(&main, "pages"),
+        ["*.pages.localhost", "docs.localhost"]
+    );
+    let second = layout_in(PAGES, 2, "localhost");
+    assert_eq!(second.domain, "shop2.localhost");
+    assert_eq!(hosts(&second, "web"), ["web.shop2.localhost"]);
+    assert_eq!(
+        hosts(&second, "pages"),
+        ["*.pages2.localhost", "docs2.localhost"]
+    );
+    let resolver = layout_in(PAGES, 2, "test");
+    assert_eq!(resolver.domain, "shop2.test");
+    assert_eq!(hosts(&resolver, "pages"), ["*.pages2.test", "docs2.test"]);
+    assert_eq!(layout_in(PAGES, 0, "test").domain, "shop.test");
+}
+
+#[test]
+/// A project's own `lanes.vars.domain` still wins, and may itself call
+/// `domain()`.
+fn lane_vars_domain_still_wins() {
+    let fixed = layout_in(
+        "project: shop\nlanes:\n  vars:\n    domain: store.localhost\nservices:\n  web: { run: a, hosts: [\"web.${{ lane.domain }}\"] }\n",
+        3,
+        "localhost",
+    );
+    assert_eq!(fixed.domain, "store.localhost");
+    assert_eq!(fixed.services["web"].hosts, ["web.store.localhost"]);
+    let named = layout_in(
+        "project: shop\nlanes:\n  vars:\n    domain: \"${{ domain('store') }}\"\nservices:\n  web: { run: a, hosts: [\"web.${{ lane.domain }}\"] }\n",
+        3,
+        "localhost",
+    );
+    assert_eq!(named.domain, "store3.localhost");
+}
+
+#[test]
+/// A `domain()` argument that isn't hostname labels is a config error that
+/// names the setting and the call.
+fn domain_refuses_names_that_are_not_labels() {
+    let config = parse(
+        "project: shop\nservices:\n  web: { run: a, hosts: [\"${{ domain('my_pages') }}\"] }\n",
+    );
+    let facts = facts("shop", 1, None);
+    let (block, offsets) = allocation(&config, 21_000, &[]);
+    let error = lane_layout(&ResolveInput::new(&config, &facts, block, &offsets))
+        .expect_err("an underscore is no label")
+        .to_string();
+    assert!(error.contains("services.web.hosts"), "{error}");
+    assert!(error.contains("domain('my_pages')"), "{error}");
+    assert!(error.contains("is not a hostname label"), "{error}");
 }
 
 #[tokio::test]
@@ -736,7 +813,7 @@ async fn projects_namespace_with_default() {
     let facts = facts("acme", 1, Some("feature"));
     let (block, offsets) = allocation(&config, 21_000, &[]);
     let infra = infra();
-    let projects = json!({"workflows": {"services": {"referee": {"public_url": "https://referee.workflows-1.localhost"}}}});
+    let projects = json!({"workflows": {"services": {"referee": {"public_url": "https://referee.workflows1.localhost"}}}});
     let client = BTreeMap::from([("SENTRY_DSN".to_owned(), "dsn".to_owned())]);
     let mut input = ResolveInput::new(&config, &facts, block, &offsets);
     input.infra = &infra;
@@ -744,7 +821,7 @@ async fn projects_namespace_with_default() {
     input.client_env = &client;
     let lane = resolve_lane(input).await.expect("resolves");
     let env = &lane.services["catalog"].launch.env.values;
-    assert_eq!(env["REFEREE_URL"], "https://referee.workflows-1.localhost");
+    assert_eq!(env["REFEREE_URL"], "https://referee.workflows1.localhost");
     assert_eq!(env["SENTRY_DSN"], "dsn");
 }
 
@@ -846,11 +923,11 @@ async fn public_url_variables() {
     let env = lane.lane_env();
     assert_eq!(
         env["DEVLANES_PUBLIC_URL_CRM_API"],
-        "https://crm.acme-2.localhost"
+        "https://crm.acme2.localhost"
     );
     assert_eq!(
         env["DEVLANES_PUBLIC_URL_USER_WEB"],
-        "https://app.acme-2.localhost"
+        "https://app.acme2.localhost"
     );
     assert_eq!(
         env["DEVLANES_PUBLIC_URL_PAGES_SERVER"],
@@ -1001,7 +1078,7 @@ fn evaluated_hosts_are_checked_and_normalised() {
     let (block, offsets) = allocation(&config, 21_000, &[]);
     let layout = lane_layout(&ResolveInput::new(&config, &facts, block, &offsets)).expect("layout");
     let hosts: Vec<&str> = layout.routes.iter().map(|r| r.host.as_str()).collect();
-    assert_eq!(hosts, ["web.demo-1.localhost"]);
+    assert_eq!(hosts, ["web.demo1.localhost"]);
     assert_eq!(layout.routes[0].port_name, "default");
     assert!(
         layout.warnings.iter().any(|w| w.contains("already routed")),

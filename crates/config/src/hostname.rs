@@ -13,6 +13,35 @@ pub fn normalize_host(host: &str) -> Result<String, String> {
     broken_rule(&host).map_or(Ok(host), |why| Err(format!("`{trimmed}`: {why}")))
 }
 
+/// What lane domains end in by default. The `resolver` strategy uses its TLD
+/// instead.
+pub const DEFAULT_DOMAIN_SUFFIX: &str = "localhost";
+
+/// The domain of `name` in lane `index`, ending in `suffix`: `pages.localhost`
+/// in lane 0 and `pages3.localhost` in lane 3. The index joins the last label
+/// of `name`, so every lane gets a site of its own for cookies. `name` is used
+/// as written; [`checked_lane_domain`] validates it first.
+pub fn lane_domain(name: &str, index: u64, suffix: &str) -> String {
+    if index == 0 {
+        format!("{name}.{suffix}")
+    } else {
+        format!("{name}{index}.{suffix}")
+    }
+}
+
+/// [`lane_domain`] for a `name` that must be one or more hostname labels,
+/// lowercased. The error names `name` and the rule it breaks.
+pub fn checked_lane_domain(name: &str, index: u64, suffix: &str) -> Result<String, String> {
+    let lowered = name.to_ascii_lowercase();
+    match broken_rule(&lowered) {
+        _ if lowered.contains('*') => Err(format!(
+            "`{name}` is not a hostname label: a wildcard is not allowed here"
+        )),
+        Some(why) => Err(format!("`{name}` is not a hostname label: {why}")),
+        None => Ok(lane_domain(&lowered, index, suffix)),
+    }
+}
+
 /// Checks the literal parts of a host template, with each `${{ ... }}` standing for
 /// one valid label; the evaluated name is checked again when a lane resolves it.
 pub(crate) fn check_host_template(template: &str) -> Result<(), String> {

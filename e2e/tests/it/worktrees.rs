@@ -100,7 +100,7 @@ fn worktree_add_move_and_remove_reach_the_running_daemon() -> Result<()> {
     assert_eq!(one["branch"], "feat/watch", "{one}");
     assert_eq!(one["state"], "idle", "{one}");
     assert!(one["port_block"].is_array(), "lane 1 has ports: {one}");
-    assert_eq!(one["domain"], "fixture-two-1.localhost", "{one}");
+    assert_eq!(one["domain"], "fixture-two1.localhost", "{one}");
     let api = need(unit(&one, "api"), "lane 1 api")?;
     assert!(port(api).is_some(), "{api}");
     assert!(
@@ -108,7 +108,7 @@ fn worktree_add_move_and_remove_reach_the_running_daemon() -> Result<()> {
             .as_array()
             .is_some_and(|urls| urls.iter().any(|u| u
                 .as_str()
-                .is_some_and(|u| u.starts_with("https://api.fixture-two-1.localhost")))),
+                .is_some_and(|u| u.starts_with("https://api.fixture-two1.localhost")))),
         "lane 1 api has its hostname: {api}"
     );
 

@@ -198,7 +198,7 @@ async fn lane_indices_and_primary_moves() {
         assert_eq!(lane_at(&list, &b).reference, "demo@2");
         assert_eq!(
             lane_at(&list, &b).domain.as_deref(),
-            Some("demo-2.localhost")
+            Some("demo2.localhost")
         );
 
         git(&main, &["checkout", "-q", "-b", "other"]);
