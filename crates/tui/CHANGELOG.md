@@ -1,5 +1,51 @@
 # devlanes-tui
 
+## 0.7.0 — 2026-10-28
+
+### Minor changes
+
+- [0e02c1b](https://github.com/devlanes-run/devlanes/commit/0e02c1b8e218bb470869e1e98c0631a5586ebf85) Changed how devlanes keeps a unit's output: `devlanes logs` holds each line once, as the unit's terminal showed it, also after a Windows console repaints its window on a resize, and the TUI's unit pane scrolls from the screen into older output and on into the log as one view, without flickering or switching to a separate stored-logs view.
+  
+  Typing into a unit or zooming its pane keeps its output on screen instead of reopening the stream. Lines a program rewrites in place (progress lines) are logged again with their new text, and output a program draws on the alternate screen (editors, pagers) is not logged.
+
+### Patch changes
+
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Added `remote.start_daemon` to the user config of a box: set to `false`, `devlanes remote connect` no longer starts the box's daemon, and the client reports the stopped daemon and retries until it runs.
+- [01fb93f](https://github.com/devlanes-run/devlanes/commit/01fb93f56d3265cfe7756d4742dba08c93cc1fd0) Changed `s` in the TUI to mark the service queued at once, say what it waits for (`waiting for migrate-db`, `3rd in line`), ignore a second `s` on a queued service, and name start steps in the header as `containers` or the running task instead of raw phase names.
+- [2af244b](https://github.com/devlanes-run/devlanes/commit/2af244b6c8eec77b6612f01f916b06d8d21e0638) Fixed the TUI daemon page (`D`) scrolling its log seconds behind the mouse wheel.
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Added `infra.external.<name>` for a server devlanes does not run: every lane lists it as a unit of kind `external`, the proxy routes its `hosts` to its loopback `address`, and machines connected with `devlanes remote connect` mirror it while a lane of the project runs.
+  
+  A server only you run goes in `devlanes.local.yaml`; see `docs/guides/infra.md#external-ports`:
+  
+  ```yaml
+  infra:
+    external:
+      pgadmin:
+        address: 127.0.0.1:5050
+        hosts: "pgadmin.${{ lane.domain }}"
+  ```
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Added a boxes view to the TUI (`B`) that connects, resumes and disconnects boxes and asks ssh's prompts and the pairing code there.
+  
+  Connected boxes' projects get tabs after the local ones (`acme @hetzner`), read-only, and a box unit's pane shows its ports, mirror state and the URLs that open it here. The view also lists this machine's clients: `x` revokes one after asking and `p` shows a pairing code for another machine. `devlanes remote ls --json` entries also carry the box's `registry`, each port's `state` and each route's `url`.
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Changed `devlanes remote connect` so a box serves only machines it paired with, and added `devlanes daemon pair`, `devlanes daemon clients`, `devlanes daemon revoke`, `remote.require_pairing` and `remote.allow_connections`.
+  
+  A machine's first connection to a box needs a one-time code: run `devlanes daemon pair` on the box, then `devlanes remote connect <box> --code <code>` here, or enter the code when `devlanes remote connect <box>` asks. Later connections, including those after a daemon restart, need none. To let every machine that gets in over SSH connect without a code, as before, set `remote.require_pairing: false` in the box's user config. To turn every machine away, set `remote.allow_connections: false`. See "Pairing" in `docs/remote.md`.
+- [45730f6](https://github.com/devlanes-run/devlanes/commit/45730f6934a93a72ef532c225ec8eff85422004b) Changed the TUI monitor to sort units by name by default and switch the sort with the left and right arrows (`h` and `l` still fold lanes), and to draw each row's CPU history as dotted braille with two seconds per cell.
+  
+  The kind, peak and uptime headers now show their sort arrow instead of `…`, and uptimes of 10 hours or more no longer push the rest of the row out of line.
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Added `remote.boxes.<name>.command` to the user config, so `devlanes remote connect <name>` reaches a container, pod, WSL distribution or codespace by running a command such as `docker exec` instead of SSH.
+  
+  ```yaml
+  remote:
+    boxes:
+      acme:
+        command: [docker, exec, -i, acme, devlanes, tunnel, --stdio]
+  ```
+  
+  See `docs/guides/remote-command.md`.
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Changed the TUI's view buttons to `Monitor`, `Daemon` and `Boxes`, always shown, with the first letter as the key. When the top bar is too narrow, Monitor, then Daemon, then Boxes shrink to their letter.
+- [76f6716](https://github.com/devlanes-run/devlanes/commit/76f67163f90f6857092f8e42e44f1cbdc1acaf6d) Changed the TUI while the daemon restarts, stops or does not answer: every view shows what is happening above the live daemon log, the `devlanes` logo turns grey or red, and the view comes back once the daemon answers. Confirm dialogs no longer repeat their question as a title.
+
 ## 0.6.1 — 2026-10-27
 
 Version bump only, to follow other packages.

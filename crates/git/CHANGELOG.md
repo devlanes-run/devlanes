@@ -1,5 +1,11 @@
 # devlanes-git
 
+## 0.6.0 — 2026-10-28
+
+### Patch changes
+
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Fixed the daemon on Linux listing each project's Git worktrees several times a second while nothing changed.
+
 ## 0.5.0 — 2026-10-26
 
 Version bump only, to follow other packages.
