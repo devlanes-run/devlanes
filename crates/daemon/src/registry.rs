@@ -477,7 +477,6 @@ impl Inner {
         let project = Arc::new(ProjectRt {
             id,
             config_dir,
-            git: common_dir.is_some(),
             sync: tokio::sync::Mutex::new(()),
             st: std::sync::Mutex::new(ProjectSt {
                 name,

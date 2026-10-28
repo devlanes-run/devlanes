@@ -361,7 +361,7 @@ pub(crate) struct LaneSt {
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
-    /// devlanes ran in this worktree (or `lane new` made it), so it gets a lane.
+    /// devlanes ran in this worktree (or `lane new` added it), so it gets a lane.
     /// Worktrees that merely exist get none, except the primary one.
     pub wanted: bool,
     /// A clean of this lane, whose worktree is gone, is under way or scheduled.
@@ -984,7 +984,6 @@ pub(crate) struct ProjectRt {
     pub id: ProjectId,
     /// `devlanes.yaml`'s directory relative to each worktree root.
     pub config_dir: PathBuf,
-    pub git: bool,
     /// Serializes re-listing and registration.
     pub sync: tokio::sync::Mutex<()>,
     pub st: Mutex<ProjectSt>,

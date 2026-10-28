@@ -16,7 +16,7 @@
 │     ● postgres                               ││ ▌ spike/old-search @3      worktree missing                          │
 │     ● redis                                  ││                                                                      │
 │                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip      │
-│                                              ││ switch lanes. devlanes lane new <branch> adds one.                   │
+│                                              ││ switch lanes. devlanes start in a new git worktree adds one.         │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
@@ -58,7 +58,7 @@
 15: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-51 bold, 77-92 yellow, 119 darkgray
 16: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 119 darkgray
 17: 0 darkgray, 47-48 darkgray, 50-112 dim, 119 darkgray
-18: 0 darkgray, 47-48 darkgray, 50-99 dim, 119 darkgray
+18: 0 darkgray, 47-48 darkgray, 50-109 dim, 119 darkgray
 19: 0 darkgray, 47-48 darkgray, 119 darkgray
 20: 0 darkgray, 47-48 darkgray, 119 darkgray
 21: 0 darkgray, 47-48 darkgray, 119 darkgray

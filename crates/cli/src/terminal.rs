@@ -56,7 +56,7 @@ pub fn command_title(request: &Request) -> Option<CommandTitle> {
         Method::Start => ("start", strings("units")),
         Method::Restart => ("restart", strings("units")),
         Method::Resume => ("lane resume", Vec::new()),
-        Method::LaneNew if flag("start") => ("lane new", strings("branch")),
+        Method::LaneNew if flag("start") => ("lane new", strings("name")),
         Method::Wait => ("wait", strings("target")),
         Method::Logs if flag("follow") => ("logs -f", strings("units")),
         Method::InfraLogs if flag("follow") => ("infra logs -f", strings("container")),

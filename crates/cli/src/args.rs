@@ -589,20 +589,18 @@ pub enum RemoteCommand {
 pub enum LaneCommand {
     /// List lanes, including moved, unassigned and missing ones
     Ls,
-    /// Create a worktree and lane for a branch, or another lane for this folder
+    /// Add another lane for this folder
     #[command(
-        long_about = "Create a git worktree for a branch under lanes.worktree_dir and register its lane.\n\n\
-Without a branch, add another lane for the current folder: it has its own index, ports\n\
+        long_about = "Add another lane for the current folder. It has its own index, ports\n\
 and domain, and `--lane <name>` or `--lane <index>` addresses it. Commands run in the\n\
 folder keep using the folder's first lane.\n\n\
+For a lane on another branch, create a worktree with `git worktree add <path> <branch>`\n\
+and run `devlanes start` in it.\n\n\
 Without --start, a terminal asks whether to start the new lane right away."
     )]
     New {
-        /// Branch to check out in the new worktree [default: another lane for this folder]
-        #[arg(value_name = "BRANCH")]
-        branch: Option<String>,
         /// Name of the extra lane for this folder, used by `--lane` [default: <folder>-<n>]
-        #[arg(long, conflicts_with = "branch")]
+        #[arg(long)]
         name: Option<String>,
         /// Start the new lane right away
         #[arg(long)]
@@ -1065,14 +1063,9 @@ impl Cli {
                     json!({"timeout_ms": timeout_ms, "all_at_once": all_at_once, "events": start_events}),
                 ),
                 LaneCommand::Ls => (Method::LaneList, json!({})),
-                LaneCommand::New {
-                    branch,
-                    name,
-                    start,
-                    ..
-                } => (
+                LaneCommand::New { name, start, .. } => (
                     Method::LaneNew,
-                    json!({"branch": branch, "name": name, "start": start, "events": *start && start_events}),
+                    json!({"name": name, "start": start, "events": *start && start_events}),
                 ),
                 LaneCommand::Clean { lane } => {
                     context.lane.clone_from(lane);

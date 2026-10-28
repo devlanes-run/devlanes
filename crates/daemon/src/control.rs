@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use devlanes_config::{ExpressionContext, OpaqueExtensions};
+use devlanes_config::OpaqueExtensions;
 use devlanes_core::{LaunchSpec, TerminalSize, ports::PortName};
 use devlanes_proto::{
     Context, ExecParams, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary, events,
@@ -46,7 +46,8 @@ struct ResumeParams {
 /// `lane.new` parameters.
 #[derive(Debug, Deserialize)]
 struct LaneNewParams {
-    /// Without one, another lane for the cwd's folder.
+    /// Sent by CLIs that still had `lane new <branch>`. It is refused so such
+    /// a CLI does not add an extra lane for the folder instead.
     #[serde(default)]
     branch: Option<String>,
     /// Name of that extra lane.
@@ -441,7 +442,7 @@ impl Inner {
         futures_util::future::join_all(starts).await;
     }
 
-    /// `lane.new`: `git worktree add` under `lanes.worktree_dir`, then registration.
+    /// `lane.new`: another lane for the cwd's folder, started when asked.
     pub(crate) async fn lane_new(
         self: &Arc<Self>,
         value: Value,
@@ -450,33 +451,24 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let arrival = self.arrive();
         let args: LaneNewParams = required(value)?;
+        if let Some(branch) = &args.branch {
+            return Err(RpcError::new(
+                "bad_request",
+                json!({"message": format!(
+                    "devlanes no longer creates worktrees; run `git worktree add <path> {branch}`, then `devlanes start` in it"
+                )}),
+                2,
+            ));
+        }
         let Some(project) = self.project_for_cwd(&context.cwd).await? else {
             return Err(crate::engine::no_config(&context.cwd).await);
         };
-        let (lane, extra) = match &args.branch {
-            Some(branch) => {
-                if args.name.is_some() {
-                    return Err(RpcError::new(
-                        "bad_request",
-                        json!({"message": "--name names another lane for this folder; leave out the branch"}),
-                        2,
-                    ));
-                }
-                (self.worktree_lane(&project, branch).await?, None)
-            }
-            None => {
-                let (lane, name) = self
-                    .extra_lane(&project, context, args.name.as_deref())
-                    .await?;
-                (lane, Some(name))
-            }
-        };
+        let (lane, extra) = self
+            .extra_lane(&project, context, args.name.as_deref())
+            .await?;
         let name = project.name();
         let summary = lane_summary(&name, &lane.st());
-        let mut result = json!({"lane": summary});
-        if let Some(extra) = extra {
-            result["name"] = json!(extra);
-        }
+        let mut result = json!({"lane": summary, "name": extra});
         if args.start {
             let env = carries_env(context).or_else(|| project.st().last_env.clone());
             let start_id = self.new_start_id();
@@ -507,7 +499,7 @@ impl Inner {
         Ok(result)
     }
 
-    /// Another lane for the cwd's folder (`lane new` without a branch): its own
+    /// Another lane for the cwd's folder (`lane new`): its own
     /// worktree row, `<base identity>#lane=<name>`, so it gets its own index,
     /// ports and domain while the folder's first lane stays the default.
     async fn extra_lane(
@@ -619,72 +611,6 @@ impl Inner {
             }));
         }
         Ok((lane, name))
-    }
-
-    /// `lane new <branch>`: `git worktree add` under `lanes.worktree_dir`, then
-    /// the new worktree's lane.
-    async fn worktree_lane(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        branch: &str,
-    ) -> Result<Arc<crate::model::LaneRt>, RpcError> {
-        let project = project.clone();
-        if !project.git {
-            return Err(RpcError::new(
-                "not_a_git_project",
-                json!({"project": project.name()}),
-                1,
-            ));
-        }
-        let primary = self.primary_path(&project);
-        let config = project
-            .lanes()
-            .iter()
-            .find_map(|lane| lane.st().config.loaded().cloned())
-            .ok_or_else(|| RpcError::new("no_config", json!({}), 1))?;
-        let name = project.name();
-        let context_ns = ExpressionContext {
-            project: json!({"name": name, "primary_path": primary.display().to_string()}),
-            ..ExpressionContext::default()
-        };
-        let dir = match &config.lanes.worktree_dir {
-            Some(value) => value.evaluate(&context_ns).map_err(|error| {
-                RpcError::new(
-                    "config_error",
-                    json!({"path": "lanes.worktree_dir", "message": error.message}),
-                    1,
-                )
-            })?,
-            None => format!("../{name}-lanes"),
-        };
-        let base = primary.join(&project.config_dir).join(dir);
-        let destination = base.join(devlanes_resolve::branch_label(branch));
-        let root = project.st().root.clone();
-        devlanes_git::add(&root, &destination, branch)
-            .await
-            .map_err(|error| {
-                RpcError::new("git_failed", json!({"message": error.to_string()}), 1)
-            })?;
-        let canonical = tokio::task::spawn_blocking({
-            let destination = destination.clone();
-            // dunce: Git lists `C:\...`, never the verbatim `\\?\C:\...` form.
-            move || dunce::canonicalize(&destination).unwrap_or(destination)
-        })
-        .await
-        .unwrap_or(destination);
-        let report = self.relist(&project).await?;
-        drop(report);
-        let lane = project
-            .lanes()
-            .into_iter()
-            .find(|lane| {
-                let st = lane.st();
-                devlanes_core::paths::same_path(&st.path, &canonical) && st.alias().is_none()
-            })
-            .ok_or_else(|| RpcError::new("not_found", json!({"reference": canonical}), 3))?;
-        // Made by devlanes, so it is a lane like one devlanes ran in.
-        self.claim_lane(&project, &lane).await;
-        Ok(lane)
     }
 
     /// `lane.clean` (requires `yes`).

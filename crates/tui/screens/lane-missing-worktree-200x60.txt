@@ -15,7 +15,7 @@
 │     ● pgbouncer                              ││   fix/cache @2             not running · config changed                                                                                              │
 │     ● postgres                               ││ ▌ spike/old-search @3      worktree missing                                                                                                          │
 │     ● redis                                  ││                                                                                                                                                      │
-│                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes lane new <branch> adds one.                                   │
+│                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes start in a new git worktree adds one.                         │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -77,7 +77,7 @@
 14: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
 15: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
 16: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 199 darkgray
-17: 0 darkgray, 47-48 darkgray, 50-163 dim, 199 darkgray
+17: 0 darkgray, 47-48 darkgray, 50-173 dim, 199 darkgray
 18: 0 darkgray, 47-48 darkgray, 199 darkgray
 19: 0 darkgray, 47-48 darkgray, 199 darkgray
 20: 0 darkgray, 47-48 darkgray, 199 darkgray

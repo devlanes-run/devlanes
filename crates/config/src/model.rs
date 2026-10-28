@@ -41,8 +41,8 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     #[serde(default)]
     #[schemars(extend("examples" = [{"fastify-api":{"platform":"node","tags":["api"],"ready":{"http":{"path":"/-/health"}}}}]))]
     pub templates: IndexMap<String, ServiceConfig<E>>,
-    /// Which worktrees get a lane, where new worktrees are created, how many ports each
-    /// lane reserves, and values computed per lane (`lane.<name>`).
+    /// Which worktrees get a lane, how many ports each lane reserves, and values computed
+    /// per lane (`lane.<name>`).
     #[serde(default)]
     pub lanes: LanesConfig,
     /// Containers the lanes depend on (databases, brokers, object stores), started and
@@ -83,8 +83,8 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"primary":"main","hosts_file":"always","vars":{"db_name":"acme_${{ lane.name }}"}}]))]
 /// Each Git worktree of the project is a lane with its own ports, hostnames and data.
-/// These settings decide which worktrees get a lane, where new ones are created, how
-/// many ports each lane reserves, and the values each lane computes.
+/// These settings decide which worktrees get a lane, how many ports each lane reserves,
+/// and the values each lane computes.
 pub struct LanesConfig {
     /// Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the
     /// only worktree that gets a lane by itself. Defaults to the remote's default branch,
@@ -94,17 +94,12 @@ pub struct LanesConfig {
     pub primary: Option<String>,
     /// What devlanes does when a worktree gets its lane: only reserve it, also set it up,
     /// or also start it. Defaults to `register`. A worktree gets a lane the first time
-    /// devlanes runs in it or `devlanes lane new` creates it, not merely because it exists.
+    /// devlanes runs in it, not merely because it exists.
     pub new_worktrees: Option<NewWorktrees>,
     /// What happens to a running lane whose worktree folder is deleted. Defaults to `stop`.
     /// A lane whose folder is gone and that runs nothing is cleaned; its logs stay until
     /// log retention removes them.
     pub removed_worktrees: Option<RemovedWorktrees>,
-    /// Directory where `devlanes lane new` creates worktrees, relative to the project
-    /// directory of the primary worktree. Defaults to `../<project>-lanes`. Expressions
-    /// can only use `project.*` here.
-    #[schemars(extend("examples" = ["../${{ project.name }}-lanes"]))]
-    pub worktree_dir: Option<Templated<String>>,
     /// Number of ports reserved for each lane. By default devlanes counts the ports the
     /// config needs and adds half again, rounded up to ten. A fixed size smaller than what
     /// the config needs is an error.

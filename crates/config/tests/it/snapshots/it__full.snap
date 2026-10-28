@@ -45,7 +45,6 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     "primary": "main",
     "new_worktrees": "register",
     "removed_worktrees": "stop",
-    "worktree_dir": "../${{ project.name }}-lanes",
     "block_size": null,
     "max": null,
     "hosts_file": "always",

@@ -18,8 +18,8 @@
 │                              ││ ▌ spike/old-search @3      worktree missing  │
 │                              ││                                              │
 │                              ││ 1-9 (the lane's place in the bar), [ and ] or│
-│                              ││ a click on a chip switch lanes. devlanes lane│
-│                              ││ new <branch> adds one.                       │
+│                              ││ a click on a chip switch lanes. devlanes     │
+│                              ││ start in a new git worktree adds one.        │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
  C clean lane   [ ] switch lane                           ? all keys   q quit
 
@@ -44,7 +44,7 @@
 17: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-76 yellow, 79 darkgray
 18: 0 darkgray, 31-32 darkgray, 79 darkgray
 19: 0 darkgray, 31-32 darkgray, 34-78 dim, 79 darkgray
-20: 0 darkgray, 31-32 darkgray, 34-78 dim, 79 darkgray
-21: 0 darkgray, 31-32 darkgray, 34-55 dim, 79 darkgray
+20: 0 darkgray, 31-32 darkgray, 34-73 dim, 79 darkgray
+21: 0 darkgray, 31-32 darkgray, 34-70 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-15 dim, 16-18 bold, 19-33 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

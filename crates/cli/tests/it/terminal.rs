@@ -56,8 +56,8 @@ fn long_commands_get_a_title_and_short_ones_none() {
         (&["restart", "api"][..], "devlanes restart api"),
         (&["lane", "resume"][..], "devlanes lane resume"),
         (
-            &["lane", "new", "feat", "--start"][..],
-            "devlanes lane new feat",
+            &["lane", "new", "--name", "review", "--start"][..],
+            "devlanes lane new review",
         ),
         (&["wait", "api"][..], "devlanes wait api"),
         (&["logs", "-f", "api"][..], "devlanes logs -f api"),
@@ -77,7 +77,7 @@ fn long_commands_get_a_title_and_short_ones_none() {
         &["stop"][..],
         &["url", "ls"][..],
         &["doctor"][..],
-        &["lane", "new", "feat"][..],
+        &["lane", "new"][..],
         &["run", "test"][..],
     ] {
         assert!(command_title(&request(args)).is_none(), "{args:?}");

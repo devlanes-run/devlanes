@@ -37,7 +37,7 @@ async fn fresh_repository_reports_no_config() {
         for (method, params) in [
             (Method::Start, json!({})),
             (Method::ConfigCheck, json!({})),
-            (Method::LaneNew, json!({"branch": "feature"})),
+            (Method::LaneNew, json!({})),
         ] {
             let error = h
                 .call(method, params, cx(&cwd))

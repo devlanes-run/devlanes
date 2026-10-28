@@ -125,7 +125,7 @@ fn entire_command_inventory_builds_actions() {
         (&["lane", "resume"], Some(Method::Resume)),
         (&["lane", "ls"], Some(Method::LaneList)),
         (
-            &["lane", "new", "feat/checkout", "--start"],
+            &["lane", "new", "--name", "review", "--start"],
             Some(Method::LaneNew),
         ),
         (
@@ -532,7 +532,7 @@ fn environment_is_captured_only_for_relevant_methods() {
         (vec!["run", "--list"], false),
         (vec!["env", "show"], false),
         (vec!["status"], false),
-        (vec!["lane", "new", "feature", "--start"], false),
+        (vec!["lane", "new", "--start"], false),
     ] {
         let cli = Cli::parse_from(std::iter::once("devlanes").chain(args));
         let called = std::cell::Cell::new(false);

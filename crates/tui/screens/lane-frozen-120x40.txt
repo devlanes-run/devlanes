@@ -22,7 +22,7 @@
 │   ❄ wrk-index                                ││   spike/old-search @3      worktree missing                          │
 │   ❄ wrk-thumbs                               ││                                                                      │
 │   ❄ wrk-export                               ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip      │
-│   ❄ wrk-cron                                 ││ switch lanes. devlanes lane new <branch> adds one.                   │
+│   ❄ wrk-cron                                 ││ switch lanes. devlanes start in a new git worktree adds one.         │
 │   ❄ wrk-webhooks                             ││                                                                      │
 │   ❄ wrk-ledger                               ││                                                                      │
 │   ❄ stub-stripe                              ││                                                                      │
@@ -64,7 +64,7 @@
 21: 0 darkgray, 4-5 blue, 6-14 magenta, 47-48 darkgray, 50-51 bold, 77-92 yellow, 119 darkgray
 22: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 119 darkgray
 23: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 50-112 dim, 119 darkgray
-24: 0 darkgray, 4-5 blue, 6-13 magenta, 47-48 darkgray, 50-99 dim, 119 darkgray
+24: 0 darkgray, 4-5 blue, 6-13 magenta, 47-48 darkgray, 50-109 dim, 119 darkgray
 25: 0 darkgray, 4-5 blue, 6-17 magenta, 47-48 darkgray, 119 darkgray
 26: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 119 darkgray
 27: 0 darkgray, 4-5 blue, 6-16 darkgray, 47-48 darkgray, 119 darkgray

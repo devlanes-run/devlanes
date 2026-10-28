@@ -124,7 +124,6 @@ fn merge_lanes(base: &mut LanesConfig, overlay: LanesConfig) {
         primary,
         new_worktrees,
         removed_worktrees,
-        worktree_dir,
         block_size,
         max,
         hosts_file,

@@ -19,7 +19,7 @@
 │     ● pgbouncer                 │   runs its lane.clean tasks and infra teardown  │ missing                          │
 │     ● postgres                  │   removes the lane's own containers and volumes │                                  │
 │     ● redis                     │   frees its ports and setup records             │[ and ] or a click on a chip      │
-│                                 │ Files in /work/acme-cache stay as they are.     │anch> adds one.                   │
+│                                 │ Files in /work/acme-cache stay as they are.     │ew git worktree adds one.         │
 │                                 │                                                 │                                  │
 │                                 │ enter clean   esc cancel                        │                                  │
 │                                 └─────────────────────────────────────────────────┘                                  │
@@ -61,7 +61,7 @@
 18: 0 darkgray, 6-7 green, 8-16 dim magenta, 34 bold, 84 bold, 85-92 yellow, 119 darkgray
 19: 0 darkgray, 6-7 green, 8-15 cyan, 34 bold, 84 bold, 119 darkgray
 20: 0 darkgray, 6-7 green, 8-12 cyan, 34 bold, 84 bold, 85-112 dim, 119 darkgray
-21: 0 darkgray, 34 bold, 84 bold, 85-99 dim, 119 darkgray
+21: 0 darkgray, 34 bold, 84 bold, 85-109 dim, 119 darkgray
 22: 0 darkgray, 34 bold, 84 bold, 119 darkgray
 23: 0 darkgray, 34 bold, 36-40 bold, 41-46 dim, 50-52 bold, 53-59 dim, 84 bold, 119 darkgray
 24: 0 darkgray, 34-84 bold, 119 darkgray

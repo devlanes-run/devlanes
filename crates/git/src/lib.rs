@@ -283,40 +283,6 @@ pub fn parse_porcelain(bytes: &[u8]) -> Result<Vec<Worktree>, Error> {
     Ok(result)
 }
 
-/// Branch names are passed after an option boundary and never interpreted by a shell.
-pub async fn add(root: &Path, destination: &Path, branch: &str) -> Result<(), Error> {
-    git(root, &["check-ref-format", "--branch", branch]).await?;
-    let exists = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
-        .stdin(Stdio::null())
-        .status()
-        .await?
-        .success();
-    let mut command = Command::new("git");
-    command.arg("-C").arg(root).args(["worktree", "add"]);
-    if !exists {
-        command.args(["-b", branch]);
-    }
-    command.arg("--").arg(destination);
-    if exists {
-        command.arg(branch);
-    }
-    let output = command.stdin(Stdio::null()).output().await?;
-    if !output.status.success() {
-        return Err(Error::Git(
-            String::from_utf8_lossy(&output.stderr).trim().into(),
-        ));
-    }
-    Ok(())
-}
-
 /// Periodic reconciliation covers dropped notifications and newly created admin dirs.
 pub fn watch(
     repository: Repository,
@@ -487,6 +453,14 @@ mod tests {
         fn path(&self) -> &Path {
             &self.0
         }
+    }
+
+    /// Adds a linked worktree on a new branch. Only tests create worktrees;
+    /// devlanes itself never writes to a repository.
+    async fn add(root: &Path, destination: &Path, branch: &str) -> Result<(), Error> {
+        let destination = destination.to_str().ok_or(Error::Encoding)?;
+        git(root, &["worktree", "add", "-b", branch, "--", destination]).await?;
+        Ok(())
     }
 
     /// Creates a repository with one commit and a linked worktree under

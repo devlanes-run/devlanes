@@ -1,6 +1,6 @@
 # devlanes-git
 
-Git worktree discovery for devlanes. The daemon uses it to find a project's `devlanes.yaml`, list the worktrees that become lanes, create new ones for `devlanes lane new`, and watch for worktrees being added or removed; it runs the `git` CLI.
+Git worktree discovery for devlanes. The daemon uses it to find a project's `devlanes.yaml`, list the worktrees that become lanes, and watch for worktrees being added or removed. It runs read-only `git` commands and never creates or changes a worktree.
 
 ## Usage
 
@@ -28,7 +28,6 @@ async fn lanes(cwd: &Path) -> Result<(), Error> {
 - `find_config`, `search_config`: the nearest `devlanes.yaml` in `cwd` or its ancestors, never above the repository root; `search_config` also says where a fruitless search stopped.
 - `discover`: the repository's common directory, root, primary branch and worktrees; `None` outside Git.
 - `list` and `parse_porcelain`: the worktree list from `git worktree list --porcelain -z`.
-- `add`: `git worktree add` for a new or existing branch, after `git check-ref-format` accepts its name.
 - `watch`: a channel that receives the full worktree list again after each change.
 
 ## Config example
@@ -38,11 +37,7 @@ async fn lanes(cwd: &Path) -> Result<(), Error> {
 lanes:
   # Branch that gets lane 0.
   primary: main
-  # Where devlanes lane new creates worktrees, relative to the project; this is the default.
-  worktree_dir: ../${{ project.name }}-lanes
 ```
-
-`devlanes lane new feat/login` runs `add` for `../acme-lanes/feat-login`.
 
 ## Behaviour
 

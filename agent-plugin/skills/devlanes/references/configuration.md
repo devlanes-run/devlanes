@@ -129,7 +129,6 @@ Layers, lowest first: the client's environment, contributors (mise, direnv, Node
 ```yaml
 lanes:
   primary: main                        # branch of lane 0
-  worktree_dir: ../${{ project.name }}-lanes
   max: 6
   vars:
     db_name: acme_${{ lane.name }}

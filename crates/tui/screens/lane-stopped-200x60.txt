@@ -17,7 +17,7 @@
 │ ▾ infra                                      ││ ▌ fix/cache @2             not running · config changed                                                                                              │
 │   ▾ shared                              3 up ││   spike/old-search @3      worktree missing                                                                                                          │
 │     ● pgbouncer                              ││                                                                                                                                                      │
-│     ● postgres                               ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes lane new <branch> adds one.                                   │
+│     ● postgres                               ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes start in a new git worktree adds one.                         │
 │     ● redis                                  ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -79,7 +79,7 @@
 16: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
 17: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
 18: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 199 darkgray
-19: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-163 dim, 199 darkgray
+19: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-173 dim, 199 darkgray
 20: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 199 darkgray
 21: 0 darkgray, 47-48 darkgray, 199 darkgray
 22: 0 darkgray, 47-48 darkgray, 199 darkgray

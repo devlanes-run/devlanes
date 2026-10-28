@@ -442,10 +442,6 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             },
             logs_hint(data),
         ),
-        "not_a_git_project" => (
-            format!("project {} is not a git repository", field(data, "project")),
-            None,
-        ),
         "git_failed" => (format!("git failed: {}", text(data, "message")), None),
         "unsupported" | "unsupported_method" => (
             format!(

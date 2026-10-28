@@ -65,7 +65,7 @@ cd ../acme-checkout
 devlanes start
 ```
 
-A worktree becomes a lane the first time devlanes runs in it (here, `start`), or when `devlanes lane new <branch>` creates it; a worktree that only exists gets no lane, except the one on the primary branch. The daemon follows moved and removed worktrees by itself. `devlanes lane ls` lists every lane, and commands take a lane reference such as `2`, `feat/checkout` or `acme@2:api` from any directory. Removing a worktree stops its lane, and a lane whose folder is gone is cleaned once nothing runs in it; its logs stay until log retention removes them. `devlanes lane clean <lane> --yes` removes a lane's data and frees its ports by hand.
+A worktree becomes a lane the first time devlanes runs in it (here, `start`); a worktree that only exists gets no lane, except the one on the primary branch. The daemon follows moved and removed worktrees by itself. `devlanes lane ls` lists every lane, and commands take a lane reference such as `2`, `feat/checkout` or `acme@2:api` from any directory. Removing a worktree stops its lane, and a lane whose folder is gone is cleaned once nothing runs in it; its logs stay until log retention removes them. `devlanes lane clean <lane> --yes` removes a lane's data and frees its ports by hand.
 
 To run a folder twice, for example with two profiles, `devlanes lane new --name review` in it adds a second lane with its own index, ports and domain. `--lane review` addresses it; commands run in the folder keep using its first lane.
 
