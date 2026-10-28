@@ -14,14 +14,14 @@
 │ ⠋ devbox                                                                                      reconnecting · command │
 │   link      next try in 8s                                                                                           │
 │   error     docker exec exited 1: Error response from daemon: container devbox is not running                        │
-│   box       devlanes 1.0┌ revoke laptop · dl_cid_3f2a9c1e ────────────────────────────────┐                          │
-│   proxy     this machine│ It deletes the client's 2 pairings and ends its connection now. │                          │
+│   box       devlanes 1.0┌─────────────────────────────────────────────────────────────────┐                          │
+│   proxy     this machine│ Revoke laptop (dl_cid_3f2a9c1e)?                                │                          │
 │   mirror    1 lane · no │                                                                 │                          │
-│                         │ It needs a new pairing code to connect again.                   │                          │
-│ ! gpu                   │                                                                 │    needs a sign-in · ssh │
-│   link      waiting for │ y revoke   n cancel                                             │                          │
-│   error     ssh to gpu f└─────────────────────────────────────────────────────────────────┘                          │
-│   fix       enter signs in again                                                                                     │
+│                         │ It deletes the client's 2 pairings and ends its connection now. │                          │
+│ ! gpu                   │ It needs a new pairing code to connect again.                   │    needs a sign-in · ssh │
+│   link      waiting for │                                                                 │                          │
+│   error     ssh to gpu f│ y revoke   n cancel                                             │                          │
+│   fix       enter signs └─────────────────────────────────────────────────────────────────┘                          │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -57,13 +57,13 @@
 14: 0 darkgray, 4-13 dim, 14-27 yellow, 119 darkgray
 15: 0 darkgray, 4-13 dim, 14-94 yellow, 119 darkgray
 16: 0 darkgray, 4-13 dim, 26-92 bold, 119 darkgray
-17: 0 darkgray, 4-13 dim, 26 bold, 28-90 bold, 92 bold, 119 darkgray
+17: 0 darkgray, 4-13 dim, 26 bold, 28-59 bold, 92 bold, 119 darkgray
 18: 0 darkgray, 4-13 dim, 26 bold, 92 bold, 119 darkgray
 19: 0 darkgray, 26 bold, 92 bold, 119 darkgray
 20: 0 darkgray, 2-3 yellow, 4-6 bold, 26 bold, 92 bold, 97-111 yellow, 112-117 dim, 119 darkgray
-21: 0 darkgray, 4-13 dim, 14-25 yellow, 26 bold, 28 bold, 29-35 dim, 39 bold, 40-46 dim, 92 bold, 119 darkgray
-22: 0 darkgray, 4-13 dim, 14-25 yellow, 26-92 bold, 119 darkgray
-23: 0 darkgray, 4-13 dim, 14-33 bold, 119 darkgray
+21: 0 darkgray, 4-13 dim, 14-25 yellow, 26 bold, 92 bold, 119 darkgray
+22: 0 darkgray, 4-13 dim, 14-25 yellow, 26 bold, 28 bold, 29-35 dim, 39 bold, 40-46 dim, 92 bold, 119 darkgray
+23: 0 darkgray, 4-13 dim, 14-92 bold, 119 darkgray
 24: 0 darkgray, 119 darkgray
 25: 0 darkgray, 119 darkgray
 26: 0 darkgray, 119 darkgray

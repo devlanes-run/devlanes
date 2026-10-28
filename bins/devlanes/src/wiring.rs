@@ -94,12 +94,14 @@ const IDLE_EXIT_GRACE: Duration = Duration::from_secs(30);
 /// a client started this daemon, so it may exit when idle (`daemon.exit_when_idle`).
 /// `step` is called as each startup step begins, for the spawning client; a
 /// client waiting on a daemon it did not spawn counts these steps in its hang
-/// guard (`STARTING_WAIT_LIMIT` in devlanes-client).
+/// guard (`STARTING_WAIT_LIMIT` in devlanes-client). `resume` holds the lanes a
+/// restart starts again once the daemon is ready.
 pub async fn engine(
     paths: &Paths,
     shutdown: CancellationToken,
     spawned: bool,
     step: &dyn Fn(&str),
+    resume: Option<devlanes_proto::ResumePlan>,
 ) -> anyhow::Result<Arc<dyn devlanes_daemon::Handler>> {
     step("user config");
     match tokio::task::spawn_blocking(devlanes_sys::raise_nofile_limit).await? {
@@ -191,6 +193,7 @@ pub async fn engine(
     options.logs = paths.logs.clone();
     // A service manager would not start the daemon again, so only a spawned one exits.
     options.idle_exit = (spawned && user.daemon.exit_when_idle).then_some(IDLE_EXIT_GRACE);
+    options.resume = resume;
     options.idle = idle;
     options.user = user;
     let engine: Arc<dyn Handler> = Arc::new(Engine::new(options, store, integ, shutdown));

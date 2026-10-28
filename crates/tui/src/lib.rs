@@ -6,6 +6,7 @@
 //! Quitting closes connections and units keep running in the daemon, unless
 //! the user chooses to stop the project's lanes on the way out.
 
+mod ansi;
 pub mod api;
 pub mod app;
 pub mod banner;
@@ -28,6 +29,7 @@ mod runtime;
 pub mod screen;
 pub mod settings;
 pub mod start;
+pub mod steps;
 pub mod text;
 pub mod theme;
 pub mod tree;

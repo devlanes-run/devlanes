@@ -25,6 +25,10 @@ const INPUT_QUEUE: usize = 256;
 const OUTPUT_QUEUE: usize = 1024;
 const EVENT_QUEUE: usize = 1024;
 
+/// Where [`DaemonApi::stop_daemon`] and [`DaemonApi::restart_daemon`] send
+/// their steps as they happen. Unbounded, so a busy UI never holds up a stop.
+pub type ProgressSender = mpsc::UnboundedSender<devlanes_client::restart::Progress>;
+
 /// Failures the TUI shows in its status line or reacts to by reconnecting.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum ApiError {
@@ -510,11 +514,13 @@ pub trait DaemonApi: Send + Sync {
     async fn clean_lane(&self, lane: String) -> Result<Value, ApiError>;
     /// `lane.gc`. Sends `yes`, so call it only after the user confirmed.
     async fn lane_gc(&self) -> Result<Value, ApiError>;
-    /// Stops the daemon and everything it manages. Sends `yes`; confirm first.
-    async fn stop_daemon(&self) -> Result<Value, ApiError>;
-    /// Stops the daemon, waits for it to exit and starts a new one; returns
-    /// the new daemon's status. Sends `yes`; confirm first.
-    async fn restart_daemon(&self) -> Result<Value, ApiError>;
+    /// Stops the daemon and everything it manages and waits until it exited,
+    /// sending each step to `progress`. Sends `yes`; confirm first.
+    async fn stop_daemon(&self, progress: ProgressSender) -> Result<Value, ApiError>;
+    /// Restarts the daemon, sending each step to `progress`; returns the new
+    /// daemon's status once it answers, with the lanes it starts again as
+    /// `resuming`. Sends `yes`; confirm first.
+    async fn restart_daemon(&self, progress: ProgressSender) -> Result<Value, ApiError>;
     /// Starts the daemon when none is running; returns its status.
     async fn start_daemon(&self) -> Result<Value, ApiError>;
     /// `profile.list` for a lane: the profiles its config defines.
@@ -1082,20 +1088,22 @@ impl DaemonApi for ClientApi {
         self.oneshot(Method::LaneGc, json!({}), context).await
     }
 
-    /// Calls `daemon.shutdown`; the shared connection dies with the daemon.
-    async fn stop_daemon(&self) -> Result<Value, ApiError> {
-        let mut context = self.context(None, false);
-        context.yes = true;
-        let result = self
-            .oneshot(Method::DaemonShutdown, json!({}), context)
-            .await;
+    /// Stops the daemon as `devlanes daemon stop` does; the shared connection
+    /// dies with it. `null` when none ran.
+    async fn stop_daemon(&self, progress: ProgressSender) -> Result<Value, ApiError> {
+        // A TUI that quit meanwhile no longer listens; the stop goes on.
+        let mut report = move |step| {
+            let _ = progress.send(step);
+        };
+        let result = devlanes_client::restart::stop(&self.paths, &mut report).await;
         *self.shared.lock().await = None;
-        result
+        Ok(result?.unwrap_or(Value::Null))
     }
 
-    /// Shutdown, then a new daemon from this binary that starts again what
-    /// ran, as `devlanes daemon restart` does.
-    async fn restart_daemon(&self) -> Result<Value, ApiError> {
+    /// Restarts the daemon as `devlanes daemon restart` does: the new daemon
+    /// starts the lanes that ran with this TUI's environment, as ordinary
+    /// starts whose events every client sees.
+    async fn restart_daemon(&self, progress: ProgressSender) -> Result<Value, ApiError> {
         // The new daemon refuses an invalid user config, so check it before the old
         // one stops every lane, as `devlanes daemon restart` does.
         let path = self.paths.home.join("config.yaml");
@@ -1121,41 +1129,29 @@ impl DaemonApi for ClientApi {
         .await
         .map_err(|error| ApiError::Disconnected(error.to_string()))?;
         checked.map_err(ApiError::Rpc)?;
-        // What runs now; a failure to read it only means nothing is resumed
-        // (the restart itself still goes ahead, as in the CLI).
-        let running = match self.fresh().await {
-            Ok(mut client) => client.running_lanes().await.unwrap_or_default(),
-            Err(_) => Vec::new(),
+        let context = self.context(None, true);
+        // A TUI that quit meanwhile no longer listens; the restart goes on.
+        let mut report = move |step| {
+            let _ = progress.send(step);
         };
-        self.stop_daemon().await?;
-        // The old daemon releases its socket only after stopping everything.
-        let mut released = false;
-        for _ in 0..200 {
-            if Client::connect(&self.paths).await.is_err() {
-                released = true;
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        }
-        if !released {
-            return Err(ApiError::Rpc(RpcError::new(
-                "timeout",
-                json!({"message": "the old daemon did not exit within 10 seconds"}),
-                1,
-            )));
-        }
-        let mut status = self.start_daemon().await?;
-        if !running.is_empty() {
-            let context = self.context(None, true);
-            let mut client = Client::connect_or_spawn(&self.paths).await?;
-            let resumed = client
-                .resume_running(&running, &context.env.unwrap_or_default(), &context.actor)
-                .await;
-            // The starts' results ride along; lanes report their progress
-            // through events like any start.
-            if status.is_object() {
-                status["resumed"] = json!(resumed);
-            }
+        let restarted = devlanes_client::restart::restart(
+            &self.paths,
+            context.env.unwrap_or_default(),
+            context.actor,
+            &mut report,
+        )
+        .await;
+        // The old daemon took the shared connection with it either way.
+        *self.shared.lock().await = None;
+        let restarted = restarted?;
+        let mut status = restarted.status;
+        if status.is_object() {
+            let lanes: Vec<&str> = restarted
+                .resuming
+                .iter()
+                .map(|lane| lane.lane.as_str())
+                .collect();
+            status["resuming"] = json!(lanes);
         }
         Ok(status)
     }

@@ -19,7 +19,7 @@ use devlanes_core::{
     LaneId, ProjectId,
     refs::{LaneCandidate, LaneRef, ReferenceError, ResolveContext, UnitRef},
 };
-use devlanes_proto::{Context, Method, Request, RpcError};
+use devlanes_proto::{Context, Method, Request, RpcError, StoppingStep};
 use devlanes_state::Store;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -30,10 +30,16 @@ use crate::{
     bus::EventBus,
     integrations::Integrations,
     model::{LaneRt, ProjectRt, lock},
+    stopping::StopSteps,
 };
 
+/// How many grace periods ([`EngineOptions::idle_exit`]) a daemon that no
+/// subscriber ever watched waits before it exits: one only commands used has
+/// no TUI whose closing would mark the end of the work.
+pub const UNWATCHED_IDLE_FACTOR: u32 = 10;
+
 /// Paths and policy the engine needs; supplied by the composition root.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EngineOptions {
     pub home: PathBuf,
     pub socket: PathBuf,
@@ -50,12 +56,38 @@ pub struct EngineOptions {
     /// Release checks (see `update`); never downloads or installs anything.
     pub update_check: crate::update::UpdateCheckOptions,
     /// Exit this long after the last event subscriber (a TUI) left while
-    /// nothing runs; `None` keeps the daemon up. Only for a daemon a client
-    /// spawned: a service manager would not start it again.
+    /// nothing runs; a daemon no subscriber ever watched waits
+    /// [`UNWATCHED_IDLE_FACTOR`] times as long. `None` keeps the daemon up.
+    /// Only for a daemon a client spawned: a service manager would not start
+    /// it again.
     pub idle_exit: Option<Duration>,
     /// Lane activity shared with the proxy, which records requests in it and
     /// waits on it for frozen lanes to thaw.
     pub idle: Arc<crate::idle::IdleBoard>,
+    /// The lanes a replacing daemon starts once it announced readiness (a
+    /// `daemon restart`). Kept in memory only and dropped once used: it
+    /// carries the restarting client's environment.
+    pub resume: Option<devlanes_proto::ResumePlan>,
+}
+
+impl std::fmt::Debug for EngineOptions {
+    /// Every field but the resume plan's environment, which is never logged.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EngineOptions")
+            .field("home", &self.home)
+            .field("socket", &self.socket)
+            .field("db_path", &self.db_path)
+            .field("logs", &self.logs)
+            .field("user", &self.user)
+            .field("watch", &self.watch)
+            .field("start_timeout", &self.start_timeout)
+            .field("dns_listen", &self.dns_listen)
+            .field("update_check", &self.update_check)
+            .field("idle_exit", &self.idle_exit)
+            .field("idle", &self.idle)
+            .field("resume", &self.resume.as_ref().map(|plan| plan.lanes.len()))
+            .finish()
+    }
 }
 
 impl EngineOptions {
@@ -74,6 +106,7 @@ impl EngineOptions {
             update_check: crate::update::UpdateCheckOptions::from_env(),
             idle_exit: None,
             idle: Arc::default(),
+            resume: None,
         }
     }
 }
@@ -106,9 +139,12 @@ pub(crate) struct Inner {
     pub update: crate::update::UpdateState,
     /// Coalesces route snapshots for the proxy and `/etc/hosts`.
     pub route_publisher: crate::routes::RoutePublisher,
-    /// An event subscriber (a TUI) was seen; until then the daemon never
-    /// exits on its own.
+    /// An event subscriber (a TUI) was seen; until then the idle exit waits
+    /// [`UNWATCHED_IDLE_FACTOR`] grace periods.
     pub watched: AtomicBool,
+    /// [`EngineOptions::resume`], taken out of the options so it can be
+    /// dropped once [`Handler::on_ready`] used it.
+    pub resume: Mutex<Option<devlanes_proto::ResumePlan>>,
 }
 
 /// Cheap handle implementing [`Handler`].
@@ -121,11 +157,12 @@ impl Engine {
     /// Builds an engine. Background work (watchers, sampler, retention) starts in
     /// [`Handler::reconcile`], which the server calls before accepting clients.
     pub fn new(
-        opts: EngineOptions,
+        mut opts: EngineOptions,
         store: Store,
         integ: Integrations,
         shutdown: CancellationToken,
     ) -> Self {
+        let resume = opts.resume.take();
         Self {
             inner: Arc::new(Inner {
                 opts,
@@ -148,6 +185,7 @@ impl Engine {
                 update: crate::update::UpdateState::default(),
                 route_publisher: crate::routes::RoutePublisher::default(),
                 watched: AtomicBool::new(false),
+                resume: Mutex::new(resume),
             }),
         }
     }
@@ -196,23 +234,28 @@ impl Handler for Engine {
     /// units. Records the exits, then closes state.db so its WAL is checkpointed
     /// before exit. Returns `{reason, stopped: [{lane, unit}], tasks: [{lane,
     /// task, exit_code | error}]}`.
+    /// Each step is reported as a `daemon.stopping` event and logged with its
+    /// time.
     async fn shutdown(&self, request: Shutdown) -> Result<Value, RpcError> {
         // Usually the server's token already fired; an embedder may call this
         // directly. Either way, new mutations and spawns are refused from here on.
         self.inner.shutdown.cancel();
-        self.inner.remote_shutdown().await;
+        let steps = StopSteps::new(&self.inner.bus, request.reason, request.restart);
+        self.inner.remote_shutdown(&steps).await;
         let hooks = (request.reason == ShutdownReason::Explicit).then_some(&request.interrupt);
-        let (stopped, tasks) = self.inner.stop_everything(hooks).await;
+        let (stopped, tasks) = self.inner.stop_everything(hooks, &steps).await;
         tracing::info!(
             reason = request.reason.as_str(),
             stopped = stopped.len(),
             tasks = tasks.len(),
             "daemon shutdown stopped units"
         );
+        let state = steps.started(StoppingStep::State, None, None);
         self.inner.finish_stopped_runs().await;
         if let Err(error) = self.inner.store.close().await {
             tracing::warn!(%error, "state.db did not close cleanly");
         }
+        steps.done(&state);
         Ok(json!({
             "reason": request.reason.as_str(),
             "stopped": stopped,
@@ -220,8 +263,9 @@ impl Handler for Engine {
         }))
     }
 
-    /// With `idle_exit`, resolves once a subscriber was seen, none is left,
-    /// and nothing ran or was in flight for the whole grace period.
+    /// With `idle_exit`, resolves once no subscriber is left and nothing ran
+    /// or was in flight for the whole grace period, or for
+    /// [`UNWATCHED_IDLE_FACTOR`] grace periods when no subscriber ever came.
     async fn idle(&self) {
         let Some(grace) = self.inner.opts.idle_exit else {
             return std::future::pending().await;
@@ -235,15 +279,29 @@ impl Handler for Engine {
                 quiet_since = None;
                 continue;
             }
-            if !self.inner.watched.load(Ordering::Relaxed) || !self.inner.is_idle() {
+            if !self.inner.is_idle() {
                 quiet_since = None;
                 continue;
             }
+            let wait = if self.inner.watched.load(Ordering::Relaxed) {
+                grace
+            } else {
+                grace * UNWATCHED_IDLE_FACTOR
+            };
             let since = *quiet_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= grace {
+            if since.elapsed() >= wait {
                 return;
             }
         }
+    }
+
+    /// Starts the lanes of the resume plan, if any, in the background.
+    fn on_ready(&self) {
+        let Some(plan) = lock(&self.inner.resume).take() else {
+            return;
+        };
+        let inner = self.inner.clone();
+        tokio::spawn(async move { inner.resume_planned(plan).await });
     }
 }
 

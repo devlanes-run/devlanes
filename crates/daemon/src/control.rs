@@ -11,7 +11,7 @@ use std::{
 use devlanes_config::{ExpressionContext, OpaqueExtensions};
 use devlanes_core::{LaunchSpec, TerminalSize, ports::PortName};
 use devlanes_proto::{
-    Context, ExecParams, Page, RpcError, RunParams, Selection, UnitSummary, events,
+    Context, ExecParams, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary, events,
 };
 use devlanes_resolve::ResolvedLane;
 use devlanes_state::DesiredState;
@@ -372,6 +372,73 @@ impl Inner {
             Ok(json!({"items": items, "truncated": false, "next_cursor": null}))
         };
         self.with_lane_events(session, stream, resume).await
+    }
+
+    /// Starts the lanes of a replacing daemon's resume plan, concurrently under
+    /// one arrival as [`Self::resume_method`] does, with the plan's services,
+    /// profiles, environment and actor. Ordinary starts: their events reach
+    /// every subscriber. A lane that no longer resolves or fails to start is
+    /// logged and never stops the daemon. The plan, with the client's
+    /// environment, is dropped when this returns.
+    pub(crate) async fn resume_planned(self: &Arc<Self>, plan: ResumePlan) {
+        let arrival = self.arrive();
+        let ResumePlan { lanes, env, actor } = plan;
+        let context = Context {
+            env: Some(env),
+            actor,
+            ..Context::default()
+        };
+        let env = carries_env(&context);
+        tracing::info!(
+            lanes = lanes.len(),
+            "resuming the lanes that ran before the restart"
+        );
+        let starts = lanes.into_iter().map(|planned| {
+            let (context, env) = (&context, env.clone());
+            async move {
+                let (project, lane) = match self.resolve_lane_ref(&planned.lane, context).await {
+                    Ok(pair) => pair,
+                    Err(error) => {
+                        tracing::warn!(lane = %planned.lane, code = %error.code, "a lane to resume was not found");
+                        return;
+                    }
+                };
+                self.fresh_config(&project, &lane).await;
+                let started = self
+                    .start_lane(
+                        &project,
+                        &lane,
+                        StartOptions {
+                            selectors: planned.units,
+                            profiles: planned.profiles,
+                            transient: false,
+                            env,
+                            overrides: EnvMap::new(),
+                            actor: context.actor.clone(),
+                            timeout: self.opts.start_timeout,
+                            session: None,
+                            setup_only: false,
+                            all_at_once: false,
+                            start_id: None,
+                            arrival,
+                        },
+                    )
+                    .await;
+                match started {
+                    Ok(result) => tracing::info!(
+                        lane = %planned.lane,
+                        ready = result.ready,
+                        failures = result.failures.len(),
+                        timed_out = result.timed_out,
+                        "lane resumed"
+                    ),
+                    Err(error) => {
+                        tracing::warn!(lane = %planned.lane, code = %error.code, "a lane did not resume");
+                    }
+                }
+            }
+        });
+        futures_util::future::join_all(starts).await;
     }
 
     /// `lane.new`: `git worktree add` under `lanes.worktree_dir`, then registration.
@@ -1243,7 +1310,7 @@ impl Inner {
         for (_, lane) in &lanes {
             closed.push(lane.close_adhoc().await);
         }
-        let stopped = Self::stop_lanes_locked(&lanes).await.len();
+        let stopped = Self::stop_lanes_locked(&lanes, None).await.len();
         // The reset would erase the only record of orphans (of known and unknown
         // lanes) and their escaped descendants, so they are terminated first.
         let terminated = self.end_recorded_runs().await?;

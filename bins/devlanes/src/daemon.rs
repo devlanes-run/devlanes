@@ -44,6 +44,15 @@ pub fn run() -> ExitCode {
     let _log_guard = init_logging(&paths);
     // Panics would otherwise go to the detached stderr and leave no trace.
     devlanes_daemon::process::install_panic_hook();
+    // `daemon restart` starts this daemon before it stops the running one.
+    let replace = match replacement() {
+        Ok(replace) => replace,
+        Err(message) => {
+            tracing::error!(%message, "unreadable restart plan");
+            let _ = readiness.failed(&message);
+            return ExitCode::from(1);
+        }
+    };
     let tokio = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -54,76 +63,193 @@ pub fn run() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let code = tokio.block_on(async move {
-        let options = Options {
-            home: paths.home.clone(),
-            socket: paths.socket.clone(),
-        };
-        readiness.step("singleton lock");
-        let server = match Server::bind(options).await {
-            Ok(server) => server,
-            Err(devlanes_daemon::Error::AlreadyRunning) => {
-                // Losing the race is success for the client that spawned us.
-                let _ = readiness.already_running();
-                return 0;
-            }
-            Err(error) => {
-                tracing::error!(%error, "bind failed");
-                let message = match &error {
-                    devlanes_daemon::Error::UnsafeDirectory(path) => {
-                        let data = crate::driver::unsafe_directory(path).data;
-                        match data.get("fix").and_then(serde_json::Value::as_str) {
-                            Some(fix) => format!("{error}; fix: {fix}"),
-                            None => error.to_string(),
-                        }
+    let code =
+        tokio.block_on(async move {
+            let options = Options {
+                home: paths.home.clone(),
+                socket: paths.socket.clone(),
+            };
+            readiness.step("singleton lock");
+            let (bound, plan) = match replace {
+                Some(Replacement {
+                    pid,
+                    plan,
+                    handover,
+                }) => {
+                    let waiting = || readiness.step(devlanes_proto::REPLACE_STEP);
+                    (
+                        Server::bind_replacing(options, pid, waiting, handover).await,
+                        Some(plan),
+                    )
+                }
+                None => (Server::bind(options).await, None),
+            };
+            let server = match bound {
+                Ok(server) => server,
+                Err(devlanes_daemon::Error::AlreadyRunning) => {
+                    // Another daemon took over meanwhile; the lanes start there.
+                    if let Some(plan) = plan
+                        && let Err(message) = hand_off(&paths, plan).await
+                    {
+                        tracing::warn!(%message, "the restart's lanes were not handed over");
+                        let _ = readiness.failed(&message);
+                        return 1;
                     }
-                    _ => error.to_string(),
-                };
-                let _ = readiness.failed(&message);
-                return 1;
-            }
-        };
-        let spawned = readiness.spawned_by_client();
-        let step = |step: &str| readiness.step(step);
-        let handler =
-            match crate::wiring::engine(&paths, server.shutdown_token(), spawned, &step).await {
-                Ok(handler) => handler,
+                    // Losing the race is success for the client that spawned us.
+                    let _ = readiness.already_running();
+                    return 0;
+                }
+                // Nothing was stopped for this restart; the old daemon runs on.
+                Err(devlanes_daemon::Error::Abandoned) => {
+                    tracing::info!("the restart was abandoned before the old daemon stopped");
+                    let _ = readiness.failed(&devlanes_daemon::Error::Abandoned.to_string());
+                    return 0;
+                }
                 Err(error) => {
-                    tracing::error!(%error, "engine startup failed");
-                    let _ = readiness.failed(&error.to_string());
+                    tracing::error!(%error, "bind failed");
+                    let message = match &error {
+                        devlanes_daemon::Error::UnsafeDirectory(path) => {
+                            let data = crate::driver::unsafe_directory(path).data;
+                            match data.get("fix").and_then(serde_json::Value::as_str) {
+                                Some(fix) => format!("{error}; fix: {fix}"),
+                                None => error.to_string(),
+                            }
+                        }
+                        _ => error.to_string(),
+                    };
+                    let _ = readiness.failed(&message);
                     return 1;
                 }
             };
-        tracing::info!(
-            version = env!("CARGO_PKG_VERSION"),
-            pid = std::process::id(),
-            "daemon started"
-        );
-        watch_signals(server.shutdown_token(), server.interrupt_token());
-        readiness.step("reconcile");
-        // Taken by whichever comes first: readiness, or a failed reconcile.
-        let readiness = std::sync::Mutex::new(Some(readiness));
-        let take = || readiness.lock().ok().and_then(|mut slot| slot.take());
-        let served = server
-            .run(handler, || take().map_or(Ok(()), Readiness::ready))
-            .await;
-        match served {
-            Ok(()) => 0,
-            Err(error) => {
-                tracing::error!(%error, "daemon stopped with an error");
-                if let (devlanes_daemon::Error::Reconcile(message), Some(readiness)) =
-                    (&error, take())
+            let spawned = readiness.spawned_by_client();
+            let step = |step: &str| readiness.step(step);
+            let handler =
+                match crate::wiring::engine(&paths, server.shutdown_token(), spawned, &step, plan)
+                    .await
                 {
-                    let _ = readiness.failed(message);
+                    Ok(handler) => handler,
+                    Err(error) => {
+                        tracing::error!(%error, "engine startup failed");
+                        let _ = readiness.failed(&error.to_string());
+                        return 1;
+                    }
+                };
+            tracing::info!(
+                version = env!("CARGO_PKG_VERSION"),
+                pid = std::process::id(),
+                "daemon started"
+            );
+            watch_signals(server.shutdown_token(), server.interrupt_token());
+            readiness.step("reconcile");
+            // Taken by whichever comes first: readiness, or a failed reconcile.
+            let readiness = std::sync::Mutex::new(Some(readiness));
+            let take = || readiness.lock().ok().and_then(|mut slot| slot.take());
+            let served = server
+                .run(handler, || take().map_or(Ok(()), Readiness::ready))
+                .await;
+            match served {
+                Ok(()) => 0,
+                Err(error) => {
+                    tracing::error!(%error, "daemon stopped with an error");
+                    if let (devlanes_daemon::Error::Reconcile(message), Some(readiness)) =
+                        (&error, take())
+                    {
+                        let _ = readiness.failed(message);
+                    }
+                    1
                 }
-                1
             }
-        }
-    });
+        });
     // Dropping the runtime waits for every spawn_blocking task (git, getaddrinfo, file
     // watchers), which can keep a stopped daemon alive indefinitely; bound the wait.
     tokio.shutdown_timeout(std::time::Duration::from_secs(5));
     ExitCode::from(code)
+}
+
+/// What a daemon started by `daemon restart` takes over with.
+struct Replacement {
+    /// The daemon it replaces.
+    pid: u32,
+    /// The lanes to start again, with the restarting client's environment;
+    /// kept in memory only.
+    plan: devlanes_proto::ResumePlan,
+    /// Whether the client asked the old daemon to stop yet.
+    handover: tokio::sync::watch::Receiver<devlanes_daemon::Handover>,
+}
+
+/// With [`devlanes_proto::REPLACE_ENV`] set, what this daemon replaces: the
+/// plan is the first line of stdin, and a thread then watches stdin for
+/// [`devlanes_proto::REPLACE_GO`] or its end.
+fn replacement() -> Result<Option<Replacement>, String> {
+    use std::io::BufRead;
+    let Some(pid) = std::env::var(devlanes_proto::REPLACE_ENV).ok() else {
+        return Ok(None);
+    };
+    let pid = pid
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| format!("{} is not a pid: {pid:?}", devlanes_proto::REPLACE_ENV))?;
+    let mut stdin = std::io::BufReader::new(std::io::stdin());
+    let mut line = String::new();
+    stdin
+        .read_line(&mut line)
+        .map_err(|error| format!("cannot read the restart plan: {error}"))?;
+    // serde's message can quote a value, and the plan holds environment values.
+    let plan = serde_json::from_str(&line).map_err(|error| {
+        format!(
+            "cannot read the restart plan: {:?} error at column {}",
+            error.classify(),
+            error.column()
+        )
+    })?;
+    let (said, handover) = tokio::sync::watch::channel(devlanes_daemon::Handover::Pending);
+    std::thread::Builder::new()
+        .name("restart-handover".into())
+        .spawn(move || {
+            let mut line = String::new();
+            let word = match stdin.read_line(&mut line) {
+                Ok(_) if line.trim() == devlanes_proto::REPLACE_GO => devlanes_daemon::Handover::Go,
+                _ => devlanes_daemon::Handover::Abandoned,
+            };
+            let _ = said.send(word);
+        })
+        .map_err(|error| format!("cannot watch the restarting client: {error}"))?;
+    Ok(Some(Replacement {
+        pid,
+        plan,
+        handover,
+    }))
+}
+
+/// Asks the daemon that took the lock instead of this one to start the
+/// plan's lanes, as this one would have. That daemon may still be starting,
+/// so this waits for it as a spawning client would. The starts run detached
+/// from this connection, so nothing waits for them.
+async fn hand_off(paths: &Paths, plan: devlanes_proto::ResumePlan) -> Result<(), String> {
+    let mut client = devlanes_client::Client::connect_while_starting(paths)
+        .await
+        .map_err(|error| format!("another daemon took over, but did not answer: {error}"))?;
+    for lane in plan.lanes {
+        let selection = devlanes_proto::Selection {
+            units: lane.units,
+            profiles: lane.profiles,
+            ..devlanes_proto::Selection::default()
+        };
+        let context = devlanes_proto::Context {
+            lane: Some(lane.lane.clone()),
+            env: Some(plan.env.clone()),
+            actor: plan.actor.clone(),
+            ..devlanes_proto::Context::default()
+        };
+        let params = serde_json::to_value(selection).unwrap_or_default();
+        client
+            .begin_request(devlanes_proto::Method::Start, params, context)
+            .await
+            .map_err(|error| {
+                format!("{} was not handed to the other daemon: {error}", lane.lane)
+            })?;
+    }
+    Ok(())
 }
 
 /// SIGTERM and SIGINT (a service manager, logout, `kill`) shut the daemon down

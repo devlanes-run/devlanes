@@ -8,7 +8,7 @@ expression: screen(&render(&app)?)
 "│ ▾ services                 3 ││ failed    exited with code 1                 │"
 "│   ● api                      ││ next      r restarts it                      │"
 "│   ⠋ web             starting ││           devlanes logs acme@0:worker prints │"
-"│   ✕ worker  ┌ clean acme@0 ───────────────────────────────────┐              │"
+"│   ✕ worker  ┌─────────────────────────────────────────────────┐              │"
 "│             │ Clean main (acme@0)?                            │──────────────┤"
 "│ ▾ tasks     │                                                 │              │"
 "│   ✓ migrate │ It stops every unit in the lane, then:          │              │"

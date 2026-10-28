@@ -25,6 +25,7 @@ mod profiles;
 mod pty;
 mod remote;
 mod resolver;
+mod resume;
 mod retention;
 mod runs;
 mod server;
@@ -184,6 +185,8 @@ pub struct Setup {
     pub idle_exit: Option<Duration>,
     /// Contributors applied to every planned unit.
     pub contributors: Vec<Arc<dyn devlanes_core::contrib::Contributor>>,
+    /// `EngineOptions::resume`, started by `Handler::on_ready`.
+    pub resume: Option<devlanes_proto::ResumePlan>,
 }
 
 /// Opens an engine over `home` (reusing its state.db when present).
@@ -222,6 +225,7 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
     options.watch = setup.watch;
     options.start_timeout = Duration::from_secs(10);
     options.idle_exit = setup.idle_exit;
+    options.resume = setup.resume;
     if let Some(logs) = setup.logs {
         options.logs = logs;
     }

@@ -23,10 +23,10 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                 ┌ revoke laptop · dl_cid_3f2a9c1e ────────────────────────────────┐                                                                  │
-│                                                                 │ It deletes the client's 2 pairings and ends its connection now. │                                                                  │
+│                                                                 ┌─────────────────────────────────────────────────────────────────┐                                                                  │
+│                                                                 │ Revoke laptop (dl_cid_3f2a9c1e)?                                │                                                                  │
 │                                                                 │                                                                 │                                                                  │
+│                                                                 │ It deletes the client's 2 pairings and ends its connection now. │                                                                  │
 │                                                                 │ remote.require_pairing is false here, so it can reconnect       │                                                                  │
 │                                                                 │ without a code.                                                 │                                                                  │
 │                                                                 │                                                                 │                                                                  │
@@ -85,9 +85,9 @@
 22: 0 darkgray, 199 darkgray
 23: 0 darkgray, 199 darkgray
 24: 0 darkgray, 199 darkgray
-25: 0 darkgray, 199 darkgray
-26: 0 darkgray, 66-132 bold, 199 darkgray
-27: 0 darkgray, 66 bold, 68-130 bold, 132 bold, 199 darkgray
+25: 0 darkgray, 66-132 bold, 199 darkgray
+26: 0 darkgray, 66 bold, 68-99 bold, 132 bold, 199 darkgray
+27: 0 darkgray, 66 bold, 132 bold, 199 darkgray
 28: 0 darkgray, 66 bold, 132 bold, 199 darkgray
 29: 0 darkgray, 66 bold, 132 bold, 199 darkgray
 30: 0 darkgray, 66 bold, 132 bold, 199 darkgray

@@ -37,7 +37,7 @@ use tokio::{
 
 use crate::{
     Error, Options,
-    api::{AttachEvent, AttachInput, ConnectEvent, DaemonApi},
+    api::{AttachEvent, AttachInput, ConnectEvent, DaemonApi, ProgressSender},
     app::{App, Effect, Msg},
     input,
     start::{StartExit, StartFrame, StartHandoff},
@@ -375,6 +375,24 @@ fn altgr(mut key: crossterm::event::KeyEvent) -> crossterm::event::KeyEvent {
 /// Sends a result to the loop; false once the loop has quit.
 async fn deliver(sender: &mpsc::Sender<Msg>, msg: Msg) -> bool {
     sender.send(msg).await.is_ok()
+}
+
+/// Runs a daemon stop or restart (`call`), delivering each step it reports
+/// as [`Msg::DaemonStep`] while it runs; every step arrives before the result.
+async fn with_steps<F, Fut, T>(sender: &mpsc::Sender<Msg>, call: F) -> T
+where
+    F: FnOnce(ProgressSender) -> Fut,
+    Fut: Future<Output = T>,
+{
+    let (steps, mut reports) = mpsc::unbounded_channel();
+    let forward = async {
+        while let Some(step) = reports.recv().await {
+            deliver(sender, Msg::DaemonStep(step)).await;
+        }
+    };
+    // The call drops its sender when it returns, which ends `forward`.
+    let (result, ()) = tokio::join!(call(steps), forward);
+    result
 }
 
 /// [`deliver`] from a blocking thread (URL opener, terminal launcher).
@@ -895,12 +913,14 @@ impl Executor {
             }
             Effect::StopDaemon => {
                 tokio::spawn(async move {
-                    deliver(&sender, Msg::DaemonStopped(api.stop_daemon().await)).await;
+                    let result = with_steps(&sender, |steps| api.stop_daemon(steps)).await;
+                    deliver(&sender, Msg::DaemonStopped(result)).await;
                 });
             }
             Effect::RestartDaemon => {
                 tokio::spawn(async move {
-                    deliver(&sender, Msg::DaemonRestarted(api.restart_daemon().await)).await;
+                    let result = with_steps(&sender, |steps| api.restart_daemon(steps)).await;
+                    deliver(&sender, Msg::DaemonRestarted(result)).await;
                 });
             }
             Effect::StartDaemon => {

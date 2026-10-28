@@ -40,12 +40,13 @@ mod routes;
 mod sampler;
 mod screen;
 mod spawn_error;
+mod stopping;
 mod stream;
 pub mod units;
 pub mod update;
 mod wsl;
 
-pub use engine::{Engine, EngineOptions};
+pub use engine::{Engine, EngineOptions, UNWATCHED_IDLE_FACTOR};
 
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
@@ -92,6 +93,14 @@ pub enum Error {
     /// other startup reasons, so the spawning client keeps the code.
     #[error("{0}")]
     Reconcile(String),
+    /// [`Server::bind_replacing`]: the daemon being replaced still held the
+    /// lock after [`DAEMON_EXIT_WAIT`].
+    #[error("the old daemon (pid {0}) did not exit within {secs} s", secs = DAEMON_EXIT_WAIT.as_secs())]
+    OldDaemonRunning(u32),
+    /// [`Server::bind_replacing`]: the client that started this daemon went
+    /// away before it asked the old one to stop, which keeps running.
+    #[error("the restart was abandoned before the old daemon was asked to stop")]
+    Abandoned,
 }
 
 /// Paths are supplied explicitly so tests never touch the user's daemon.
@@ -206,6 +215,10 @@ pub trait Handler: Send + Sync + 'static {
     async fn idle(&self) {
         std::future::pending::<()>().await;
     }
+
+    /// Called once the daemon announced readiness, before the first client is
+    /// accepted. Must return at once; work it starts runs in the background.
+    fn on_ready(&self) {}
 }
 
 /// Why the daemon shuts down. Only an explicit shutdown runs the lanes'
@@ -237,16 +250,21 @@ impl ShutdownReason {
 #[derive(Debug, Clone)]
 pub struct Shutdown {
     pub reason: ShutdownReason,
+    /// A new daemon takes over once this one exits
+    /// ([`devlanes_proto::ShutdownParams::restart`]); the
+    /// [`devlanes_proto::events::DAEMON_STOPPING`] events say so.
+    pub restart: bool,
     /// Fires on a signal during an explicit shutdown: the running `lane.stop`
     /// tasks stop and the rest are skipped, so the units still stop in time.
     pub interrupt: CancellationToken,
 }
 
 impl Shutdown {
-    /// A shutdown for `reason` that nothing interrupts.
+    /// A shutdown for `reason`, not a restart, that nothing interrupts.
     pub fn new(reason: ShutdownReason) -> Self {
         Self {
             reason,
+            restart: false,
             interrupt: CancellationToken::new(),
         }
     }
@@ -267,6 +285,8 @@ struct Stops {
 
 struct StopState {
     explicit: bool,
+    /// An explicit request asked for a restart.
+    restart: bool,
     /// The server left its loop because the handler went idle.
     idle: bool,
     /// The run loop read the reason; later requests no longer change it.
@@ -290,6 +310,7 @@ impl Stops {
         let stops = Self {
             state: std::sync::Mutex::new(StopState {
                 explicit: false,
+                restart: false,
                 idle: false,
                 decided: false,
                 answering: Some(answering),
@@ -300,11 +321,13 @@ impl Stops {
         (Arc::new(stops), answered)
     }
 
-    /// Records an explicit request, unless a signal's shutdown already began.
-    fn join(&self) -> StopWaiter {
+    /// Records an explicit request, a restart when `restart`, unless a
+    /// signal's shutdown already began.
+    fn join(&self, restart: bool) -> StopWaiter {
         let mut state = model::lock(&self.state);
         if !state.decided {
             state.explicit = true;
+            state.restart |= restart;
         }
         (self.report.subscribe(), state.answering.clone())
     }
@@ -318,16 +341,16 @@ impl Stops {
         }
     }
 
-    /// The reason, fixed from here on.
-    fn decide(&self) -> ShutdownReason {
+    /// The reason and whether a restart was asked, fixed from here on.
+    fn decide(&self) -> (ShutdownReason, bool) {
         let mut state = model::lock(&self.state);
         state.decided = true;
         if state.explicit {
-            ShutdownReason::Explicit
+            (ShutdownReason::Explicit, state.restart)
         } else if state.idle {
-            ShutdownReason::Idle
+            (ShutdownReason::Idle, false)
         } else {
-            ShutdownReason::Signal
+            (ShutdownReason::Signal, false)
         }
     }
 
@@ -370,12 +393,34 @@ impl Server {
     /// Acquires the lock before inspecting a stale socket, preventing spawn races.
     pub async fn bind(options: Options) -> Result<Self, Error> {
         let prepared = options.clone();
-        let lock = tokio::task::spawn_blocking(move || {
-            let lock = prepare(&prepared)?;
-            std::fs::write(starting_marker(&prepared.home), b"")?;
-            Ok::<_, Error>(lock)
-        })
-        .await??;
+        let lock = tokio::task::spawn_blocking(move || lock_and_mark(&prepared)).await??;
+        Self::listen(options, lock).await
+    }
+
+    /// Like [`Server::bind`] for the daemon that replaces the one with pid
+    /// `replaced` (`daemon restart`). Writes [`REPLACING_MARKER`] with this
+    /// process's pid, runs `waiting` (which reports [`REPLACE_STEP`]), waits
+    /// up to [`HANDOVER_WAIT`] for `handover` to say [`Handover::Go`], then
+    /// retries the lock every [`LOCK_RETRY`] while the old daemon stops, for
+    /// up to [`DAEMON_EXIT_WAIT`]. The marker goes once the lock is held, and
+    /// on every error.
+    ///
+    /// Fails with [`Error::Abandoned`] when the client never said go, with
+    /// [`Error::OldDaemonRunning`] when the wait for the lock times out, and
+    /// with [`Error::AlreadyRunning`] when `replaced` is gone but something
+    /// else holds the lock (a daemon a client started meanwhile).
+    pub async fn bind_replacing(
+        options: Options,
+        replaced: u32,
+        waiting: impl FnOnce(),
+        handover: tokio::sync::watch::Receiver<Handover>,
+    ) -> Result<Self, Error> {
+        let lock = take_over(&options, replaced, DAEMON_EXIT_WAIT, waiting, handover).await?;
+        Self::listen(options, lock).await
+    }
+
+    /// Binds the endpoint once `lock` is held.
+    async fn listen(options: Options, lock: File) -> Result<Self, Error> {
         let listener = match LocalListener::bind(&options.socket).await {
             Ok(listener) => listener,
             Err(BindError::AlreadyListening(_)) => return Err(Error::AlreadyRunning),
@@ -435,6 +480,7 @@ impl Server {
             tracing::warn!(%error, "the starting marker was not removed");
         }
         ready()?;
+        handler.on_ready();
         let Self {
             mut listener,
             options,
@@ -500,11 +546,13 @@ impl Server {
         drop(listener);
         shutdown.cancel();
         // Stop resources before closing subscribers so they can observe final state.
+        let (reason, restart) = stops.decide();
         let request = Shutdown {
-            reason: stops.decide(),
+            reason,
+            restart,
             interrupt: stops.interrupt.clone(),
         };
-        tracing::info!(reason = request.reason.as_str(), "daemon shutting down");
+        tracing::info!(reason = reason.as_str(), restart, "daemon shutting down");
         let stopped = handler.shutdown(request).await;
         stops.finish(stopped.clone());
         // `recv` ends once every waiting request delivered its answer.
@@ -553,6 +601,149 @@ pub const STARTING_MARKER: &str = "daemon.starting";
 /// The [`STARTING_MARKER`] path under `home`.
 fn starting_marker(home: &Path) -> PathBuf {
     home.join("run").join(STARTING_MARKER)
+}
+
+/// Name of the file under `run` that holds the pid of a daemon waiting for
+/// the lock to replace the running one ([`Server::bind_replacing`]). Until
+/// that daemon holds the lock, clients wait while the pid lives instead of
+/// spawning another daemon; then [`STARTING_MARKER`] takes over.
+pub const REPLACING_MARKER: &str = "daemon.replacing";
+
+/// Longest a replacing daemon waits for the old one to release the lock once
+/// its client asked the old one to stop. Long, since `lane.stop` tasks and
+/// stop policies set how long that shutdown takes, and the lanes are lost if
+/// the wait ends first.
+pub const DAEMON_EXIT_WAIT: Duration = Duration::from_secs(30 * 60);
+
+/// Longest a replacing daemon waits for its client to say it asked the old
+/// daemon to stop; the client does so as soon as it reads [`REPLACE_STEP`].
+const HANDOVER_WAIT: Duration = Duration::from_secs(30);
+
+pub use devlanes_proto::REPLACE_STEP;
+
+/// What the client that started a replacing daemon said on its stdin after
+/// the plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handover {
+    /// Nothing yet.
+    Pending,
+    /// It asked the old daemon to stop: take over once the lock is free.
+    Go,
+    /// Its stdin closed without that: it went away or gave up before
+    /// stopping anything, so the old daemon keeps running.
+    Abandoned,
+}
+
+/// How often a replacing daemon tries the lock.
+pub const LOCK_RETRY: Duration = Duration::from_millis(100);
+
+/// How long the lock may stay held after the replaced daemon's pid is gone
+/// before the holder counts as another daemon. Covers the moment between a
+/// process exit and the system releasing its lock.
+const FOREIGN_GRACE: Duration = Duration::from_secs(1);
+
+/// Takes the lock and writes [`STARTING_MARKER`] (blocking I/O).
+fn lock_and_mark(options: &Options) -> Result<File, Error> {
+    let lock = prepare(options)?;
+    std::fs::write(starting_marker(&options.home), b"")?;
+    Ok(lock)
+}
+
+/// [`Server::bind_replacing`] with a wait for the lock bounded by `limit`.
+async fn take_over(
+    options: &Options,
+    replaced: u32,
+    limit: Duration,
+    waiting: impl FnOnce(),
+    mut handover: tokio::sync::watch::Receiver<Handover>,
+) -> Result<File, Error> {
+    let marker = options.home.join("run").join(REPLACING_MARKER);
+    let (home, path) = (options.home.clone(), marker.clone());
+    tokio::task::spawn_blocking(move || write_replacing_marker(&home, &path)).await??;
+    // From here on clients wait for this daemon instead of spawning one, so
+    // only now may the client stop the old daemon.
+    tracing::info!(replaced, "waiting for the old daemon to exit");
+    waiting();
+    let told = tokio::time::timeout(
+        HANDOVER_WAIT,
+        handover.wait_for(|said| *said != Handover::Pending),
+    )
+    .await;
+    let locked = match told.ok().and_then(Result::ok).map(|said| *said) {
+        Some(Handover::Go) => wait_for_lock(options, replaced, limit).await,
+        _ => Err(Error::Abandoned),
+    };
+    // On success the starting marker already exists, so clients never see neither.
+    if let Err(error) = tokio::fs::remove_file(&marker).await
+        && error.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::warn!(%error, "the replacing marker was not removed");
+    }
+    locked
+}
+
+/// Retries [`lock_and_mark`] every [`LOCK_RETRY`] while the lock is held, up
+/// to `limit`; see [`Server::bind_replacing`] for the errors.
+async fn wait_for_lock(options: &Options, replaced: u32, limit: Duration) -> Result<File, Error> {
+    let begun = Instant::now();
+    let mut gone_since: Option<Instant> = None;
+    loop {
+        let prepared = options.clone();
+        match tokio::task::spawn_blocking(move || lock_and_mark(&prepared)).await? {
+            Ok(lock) => {
+                tracing::info!(
+                    replaced,
+                    waited_ms = begun.elapsed().as_millis() as u64,
+                    "took over from the old daemon"
+                );
+                return Ok(lock);
+            }
+            Err(Error::AlreadyRunning) => {}
+            Err(error) => return Err(error),
+        }
+        // 0: the client could not read the old daemon's pid, so only the lock tells.
+        if replaced == 0 || process_alive(replaced).await {
+            gone_since = None;
+        } else if gone_since.get_or_insert_with(Instant::now).elapsed() >= FOREIGN_GRACE {
+            tracing::info!(
+                replaced,
+                "another process holds the lock after the old daemon exited"
+            );
+            return Err(Error::AlreadyRunning);
+        }
+        if begun.elapsed() >= limit {
+            return Err(Error::OldDaemonRunning(replaced));
+        }
+        tokio::time::sleep(LOCK_RETRY).await;
+    }
+}
+
+/// Whether `pid` runs; a failed lookup counts as running, so the wait goes on.
+async fn process_alive(pid: u32) -> bool {
+    match tokio::task::spawn_blocking(move || devlanes_sys::process(pid)).await {
+        Ok(Ok(found)) => found.is_some(),
+        _ => true,
+    }
+}
+
+/// Writes this process's pid to `path`, the [`REPLACING_MARKER`] under
+/// `home`, after making `home` and its `run` directory private as the lock
+/// does (blocking I/O).
+fn write_replacing_marker(home: &Path, path: &Path) -> Result<(), Error> {
+    use std::io::Write;
+    secure_directory(home)?;
+    secure_directory(&home.join("run"))?;
+    // Written aside and renamed, so a client never reads a half-written pid.
+    let partial = path.with_extension("partial");
+    let mut file = OpenOptions::new();
+    file.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    file.mode(0o600)
+        .custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    file.open(&partial)?
+        .write_all(std::process::id().to_string().as_bytes())?;
+    std::fs::rename(&partial, path)?;
+    Ok(())
 }
 
 /// Uses no-follow opens inside owner-only directories to protect the singleton lock.
@@ -919,7 +1110,10 @@ async fn serve_client(
                                     // after the accept loop), with what it stopped and ran.
                                     Method::DaemonShutdown => {
                                         let processes = handler.managed_processes();
-                                        let (mut report, guard) = stops.join();
+                                        // Params a client of another protocol sent mean no restart.
+                                        let restart = serde_json::from_value::<devlanes_proto::ShutdownParams>(request.params.clone())
+                                            .is_ok_and(|params| params.restart);
+                                        let (mut report, guard) = stops.join(restart);
                                         answering = guard;
                                         shutdown.cancel();
                                         let report = report.wait_for(Option::is_some).await.ok().and_then(|report| report.clone());
@@ -1130,11 +1324,13 @@ mod tests {
     }
 
     /// Answers every request with `reply`; reconciliation fails when `broken`.
-    /// `shut_down` records the reason of its shutdown.
+    /// `shut_down` records the reason of its shutdown, `restarted` whether it
+    /// was a restart.
     struct Fixed {
         reply: Value,
         broken: bool,
         shut_down: std::sync::Mutex<Option<ShutdownReason>>,
+        restarted: std::sync::atomic::AtomicBool,
         /// Goes idle this long after each ask; never without.
         idle_after: Option<Duration>,
     }
@@ -1162,6 +1358,8 @@ mod tests {
         }
         async fn shutdown(&self, request: Shutdown) -> Result<Value, RpcError> {
             *model::lock(&self.shut_down) = Some(request.reason);
+            self.restarted
+                .store(request.restart, std::sync::atomic::Ordering::Relaxed);
             Ok(json!({"reason": request.reason.as_str(), "stopped": []}))
         }
         async fn idle(&self) {
@@ -1227,6 +1425,7 @@ mod tests {
                 reply: json!("x".repeat(devlanes_proto::MAX_FRAME_SIZE + 1)),
                 broken: false,
                 shut_down: Default::default(),
+                restarted: Default::default(),
                 idle_after: None,
             });
             let running = tokio::spawn(server.run(handler, || Ok(())));
@@ -1262,6 +1461,7 @@ mod tests {
             reply: Value::Null,
             broken: true,
             shut_down: Default::default(),
+            restarted: Default::default(),
             idle_after: None,
         });
         let mut announced = false;
@@ -1306,6 +1506,7 @@ mod tests {
             reply: Value::Null,
             broken: false,
             shut_down: Default::default(),
+            restarted: Default::default(),
             idle_after: None,
         });
         let running = tokio::spawn(server.run(handler.clone(), || Ok(())));
@@ -1335,6 +1536,36 @@ mod tests {
                 *model::lock(&handler.shut_down),
                 Some(ShutdownReason::Explicit)
             );
+            assert!(!handler.restarted.load(std::sync::atomic::Ordering::Relaxed));
+            running.await.expect("join").expect("clean shutdown");
+        })
+        .await
+        .expect("timeout");
+    }
+
+    #[tokio::test]
+    /// `daemon.shutdown` with `restart: true` hands the restart to the handler.
+    async fn daemon_shutdown_carries_the_restart() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (_dir, handler, _token, running, mut connection) = serve().await;
+            connection
+                .send(Frame::Control(Control::Request(Request {
+                    id: 1,
+                    method: Method::DaemonShutdown,
+                    params: json!({"restart": true, "events": true}),
+                    context: devlanes_proto::Context::default(),
+                })))
+                .await
+                .expect("send");
+            loop {
+                if let Frame::Control(Control::Response(response)) =
+                    connection.recv().await.expect("recv")
+                {
+                    assert!(matches!(response.result, Outcome::Ok { .. }));
+                    break;
+                }
+            }
+            assert!(handler.restarted.load(std::sync::atomic::Ordering::Relaxed));
             running.await.expect("join").expect("clean shutdown");
         })
         .await
@@ -1353,6 +1584,7 @@ mod tests {
                 reply: Value::Null,
                 broken: false,
                 shut_down: Default::default(),
+                restarted: Default::default(),
                 idle_after: Some(Duration::from_millis(20)),
             });
             let running = tokio::spawn(server.run(handler.clone(), || Ok(())));
@@ -1372,6 +1604,128 @@ mod tests {
             running.await.expect("join").expect("clean shutdown");
             assert_eq!(*model::lock(&handler.shut_down), Some(ShutdownReason::Idle));
             assert!(!socket.exists());
+        })
+        .await
+        .expect("timeout");
+    }
+
+    #[tokio::test]
+    /// A replacing daemon waits while the old one holds the lock, reports the
+    /// wait once, and takes the lock once it is released; the replacing marker
+    /// held its pid meanwhile and gives way to the starting marker.
+    async fn a_replacing_daemon_waits_for_the_lock() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (_dir, options) = short_options();
+            let old = lock_singleton(&options.home).expect("old daemon's lock");
+            let marker = options.home.join("run").join(REPLACING_MARKER);
+            let waits = std::sync::atomic::AtomicUsize::new(0);
+            let wait = take_over(
+                &options,
+                std::process::id(),
+                Duration::from_secs(20),
+                || {
+                    waits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                },
+                go(),
+            );
+            let release = async {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+                let pid = std::fs::read_to_string(&marker).expect("replacing marker");
+                assert_eq!(pid, std::process::id().to_string());
+                drop(old);
+            };
+            let (lock, ()) = tokio::join!(wait, release);
+            lock.expect("the lock once released");
+            assert_eq!(waits.load(std::sync::atomic::Ordering::Relaxed), 1);
+            assert!(!marker.exists(), "the replacing marker is gone");
+            assert!(starting_marker(&options.home).exists());
+        })
+        .await
+        .expect("timeout");
+    }
+
+    #[tokio::test]
+    /// A lock the old daemon never releases ends the wait with an error, and
+    /// the replacing marker goes.
+    async fn a_replacing_daemon_gives_up() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (_dir, options) = short_options();
+            let _old = lock_singleton(&options.home).expect("old daemon's lock");
+            let result = take_over(
+                &options,
+                std::process::id(),
+                Duration::from_millis(300),
+                || {},
+                go(),
+            )
+            .await;
+            assert!(
+                matches!(result, Err(Error::OldDaemonRunning(pid)) if pid == std::process::id()),
+                "{result:?}"
+            );
+            assert!(!options.home.join("run").join(REPLACING_MARKER).exists());
+        })
+        .await
+        .expect("timeout");
+    }
+
+    #[tokio::test]
+    /// A client that goes away before it asked the old daemon to stop ends
+    /// the wait at once, even with the lock free: nothing may take over a
+    /// daemon nobody stopped for this restart.
+    async fn a_replacing_daemon_abandoned_by_its_client_never_takes_over() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (_dir, options) = short_options();
+            let (said, handover) = tokio::sync::watch::channel(Handover::Pending);
+            let abandon = async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                let _ = said.send(Handover::Abandoned);
+            };
+            let (result, ()) = tokio::join!(
+                take_over(
+                    &options,
+                    std::process::id(),
+                    Duration::from_secs(20),
+                    || {},
+                    handover
+                ),
+                abandon
+            );
+            assert!(matches!(result, Err(Error::Abandoned)), "{result:?}");
+            assert!(!options.home.join("run").join(REPLACING_MARKER).exists());
+            assert!(
+                !starting_marker(&options.home).exists(),
+                "no lock was taken"
+            );
+        })
+        .await
+        .expect("timeout");
+    }
+
+    /// A handover that already said go.
+    fn go() -> tokio::sync::watch::Receiver<Handover> {
+        tokio::sync::watch::channel(Handover::Go).1
+    }
+
+    #[tokio::test]
+    /// The lock held after the replaced daemon exited belongs to another
+    /// daemon: the wait ends with `AlreadyRunning` instead of timing out.
+    async fn a_replacing_daemon_finds_another_daemon() {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let (_dir, options) = short_options();
+            let _other = lock_singleton(&options.home).expect("another daemon's lock");
+            let mut child = std::process::Command::new("git")
+                .arg("--version")
+                .stdout(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn");
+            let exited = child.id();
+            child.wait().expect("wait");
+            // On Windows an open handle keeps the exited process visible.
+            drop(child);
+            let result = take_over(&options, exited, Duration::from_secs(20), || {}, go()).await;
+            assert!(matches!(result, Err(Error::AlreadyRunning)), "{result:?}");
+            assert!(!options.home.join("run").join(REPLACING_MARKER).exists());
         })
         .await
         .expect("timeout");

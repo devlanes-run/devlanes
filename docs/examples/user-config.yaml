@@ -109,7 +109,8 @@ tui:
   glyphs: auto
   on_quit: ask
 # A daemon a command started on demand stops about 30 seconds after the last TUI
-# closes while nothing runs; the next command starts it again. false keeps it up.
+# (or command showing progress) closes while nothing runs, or after about 5 minutes
+# when nothing ever watched it; the next command starts it again. false keeps it up.
 # A daemon installed with `devlanes daemon install` never stops on its own.
 daemon:
   exit_when_idle: true

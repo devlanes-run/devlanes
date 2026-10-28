@@ -1594,8 +1594,9 @@ impl Inner {
 
     /// Closes every box connection; called on daemon shutdown so ssh masters
     /// exit. Waits for the restore first, so it opens nothing afterwards and
-    /// is done with the store before the store closes.
-    pub(crate) async fn remote_shutdown(self: &Arc<Self>) {
+    /// is done with the store before the store closes. Reported as the
+    /// `remote` step of `steps`.
+    pub(crate) async fn remote_shutdown(self: &Arc<Self>, steps: &crate::stopping::StopSteps<'_>) {
         let restore = lock(&self.remote.restore).take();
         if let Some(restore) = restore {
             let _ = restore.await;
@@ -1603,10 +1604,14 @@ impl Inner {
         let hosts: Vec<Arc<HostConn>> = std::mem::take(&mut *lock(&self.remote.hosts))
             .into_values()
             .collect();
+        let run = steps.begin(devlanes_proto::StoppingStep::Remote, hosts.len(), None);
         for conn in hosts {
             conn.close().await;
         }
         self.reconcile_box_ports().await;
+        if let Some(run) = run {
+            steps.done(&run);
+        }
     }
 
     /// Opens the extra HTTPS port of every box whose proxy port differs from

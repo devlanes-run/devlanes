@@ -321,6 +321,14 @@ impl Client {
             }
             Err(error) => return Err(error),
         }
+        // Between the old daemon's exit and the new one's first accept, a
+        // restart has no daemon listening; spawning one now would race it.
+        if replacing(paths).await.is_some() {
+            tracing::debug!("a daemon waits to replace the running one; waiting for it");
+            if let Some(client) = Self::connect_while_replacing(paths).await? {
+                return Ok(client);
+            }
+        }
         if let Some(reason) = sandbox_reason() {
             tracing::debug!(reason, "no daemon, and a sandbox forbids spawning one");
             return Err(Error::Sandbox(reason));
@@ -349,30 +357,13 @@ impl Client {
                 error
             }
         })?;
-        let (lines, in_job) = start_daemon(paths, remove_env, begun).await?;
+        let (lines, in_job, _) = start_daemon(paths, remove_env, begun, None).await?;
         let Answer {
             line: message,
             step,
         } = read_answer(paths, lines, begun).await?;
         if message != b"ready\n" && message != b"already-running\n" {
-            let reason = String::from_utf8_lossy(&message).trim().to_owned();
-            // A refused user config is a structured error, so the CLI and the TUI word it
-            // like any `config_error` instead of a transport failure.
-            if let Some(error) = user_config_startup_error(&reason) {
-                return Err(Error::Rpc(error));
-            }
-            // A daemon that died before writing a reason left it in its own log.
-            let log = paths.logs.join("daemon.log");
-            return Err(Error::Startup(match (reason.is_empty(), step) {
-                (false, _) => reason,
-                (true, Some(step)) => format!(
-                    "the daemon exited in step {step:?} without a reason; see {}",
-                    log.display()
-                ),
-                (true, None) => {
-                    format!("the daemon exited without a reason; see {}", log.display())
-                }
-            }));
+            return Err(startup_failure(paths, &message, step));
         }
         // Losing the race to another client's daemon means this invocation did not spawn it.
         let spawned = message == b"ready\n";
@@ -396,7 +387,7 @@ impl Client {
     /// gives up after [`STARTING_WAIT_LIMIT`] on one that never answers. An
     /// unanswered hello without the [`STARTING_MARKER`] fails at once: that
     /// daemon finished starting and hangs.
-    async fn connect_while_starting(paths: &Paths) -> Result<Self> {
+    pub async fn connect_while_starting(paths: &Paths) -> Result<Self> {
         let deadline = Instant::now() + STARTING_WAIT_LIMIT;
         loop {
             // A marker gone during an attempt was removed right before the
@@ -424,6 +415,43 @@ impl Client {
                 return Err(Error::Timeout);
             }
             sleep(Duration::from_millis(25)).await;
+        }
+    }
+
+    /// Connects to the daemon a restart is bringing up, while the process in
+    /// the [`REPLACING_MARKER`] still waits for its lock or starts. `None`
+    /// once that process is gone without a daemon answering, so the caller
+    /// spawns one as usual.
+    async fn connect_while_replacing(paths: &Paths) -> Result<Option<Self>> {
+        let deadline = Instant::now() + REPLACE_WAIT + STARTING_WAIT_LIMIT;
+        let mut free_since: Option<Instant> = None;
+        loop {
+            match Self::connect(paths).await {
+                Ok(client) => return Ok(Some(client)),
+                Err(error) if error.is_not_running() || matches!(error, Error::Timeout) => {}
+                Err(error) => return Err(error),
+            }
+            let held = lock_held(paths).await;
+            if replacing(paths).await.is_none() {
+                // It took the lock and is starting; that wait has its own rules.
+                if held {
+                    return Self::connect_while_starting(paths).await.map(Some);
+                }
+                return Ok(None);
+            }
+            // A waiting daemon takes a free lock within a tenth of a second; a
+            // marker that outlives a free lock was left by one that died, and
+            // its pid now belongs to some other process.
+            if held {
+                free_since = None;
+            } else if free_since.get_or_insert_with(Instant::now).elapsed() >= STALE_REPLACING {
+                tracing::debug!("the replacing marker is stale; spawning a daemon");
+                return Ok(None);
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::Timeout);
+            }
+            sleep(Duration::from_millis(100)).await;
         }
     }
 
@@ -733,31 +761,102 @@ type ReadyLines = tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>;
 /// Most lines the readiness reader holds before the client takes them.
 const READY_LINES_QUEUED: usize = 16;
 
+/// A daemon that takes over from a running one ([`devlanes_proto::REPLACE_ENV`]).
+pub(crate) struct Replace {
+    /// The pid of the daemon it replaces, or 0 when unknown.
+    pub pid: u32,
+    /// The [`devlanes_proto::ResumePlan`] as one line of JSON, written on its stdin.
+    pub plan: Vec<u8>,
+}
+
+/// This client's end of a replacing daemon's stdin, which holds the plan.
+/// [`Handover::go`] tells the daemon the old one is being stopped; dropping
+/// it closes stdin without that, and the daemon gives up.
+pub(crate) struct Handover {
+    go: tokio::sync::oneshot::Sender<tokio::sync::oneshot::Sender<std::io::Result<()>>>,
+}
+
+impl Handover {
+    /// Writes [`devlanes_proto::REPLACE_GO`] and closes stdin; returns once written.
+    pub(crate) async fn go(self) -> std::io::Result<()> {
+        let gone = || std::io::Error::other("the replacing daemon's stdin writer stopped");
+        let (ack, written) = tokio::sync::oneshot::channel();
+        self.go.send(ack).map_err(|_| gone())?;
+        written.await.map_err(|_| gone())?
+    }
+}
+
+/// The two lines a replacing daemon reads on stdin: the plan, and
+/// [`devlanes_proto::REPLACE_GO`] for when the old daemon is being stopped.
+fn handover_lines(plan: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut first = plan.to_vec();
+    first.push(b'\n');
+    let mut go = devlanes_proto::REPLACE_GO.as_bytes().to_vec();
+    go.push(b'\n');
+    (first, go)
+}
+
 /// Spawns `devlanes daemon run` and returns the lines of its readiness pipe
-/// and `false`: Unix has no jobs to stay inside.
+/// and `false`: Unix has no jobs to stay inside. With `replace`, the daemon
+/// waits for the running one to exit and reads its plan from stdin; the
+/// returned [`Handover`] lets it go.
 #[cfg(unix)]
 async fn start_daemon(
     paths: &Paths,
     remove_env: &[&str],
     begun: Instant,
-) -> Result<(ReadyLines, bool)> {
+    replace: Option<Replace>,
+) -> Result<(ReadyLines, bool, Option<Handover>)> {
+    use tokio::io::AsyncWriteExt;
     let mut command = Command::new(std::env::current_exe()?);
     // The daemon outlives this shell and serves every later one, so it keeps
     // only what it needs itself; services get each request's client env.
     command
         .env_clear()
         .envs(daemon_env(std::env::vars_os(), remove_env));
+    // A daemon a restart started passes the variable on through its env; a
+    // later spawn must not wait to replace anything.
+    match &replace {
+        Some(replace) => command.env(devlanes_proto::REPLACE_ENV, replace.pid.to_string()),
+        None => command.env_remove(devlanes_proto::REPLACE_ENV),
+    };
     let mut child = command
         .args(["daemon", "run"])
         .env("DEVLANES_HOME", &paths.home)
         .env("DEVLANES_READY_FD", "1")
         .env(READY_STEPS_ENV, "1")
         .current_dir(&paths.home)
-        .stdin(Stdio::null())
+        .stdin(if replace.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(false)
         .spawn()?;
+    let handover = match (replace, child.stdin.take()) {
+        (Some(replace), Some(mut stdin)) => {
+            let (go, said) = tokio::sync::oneshot::channel::<
+                tokio::sync::oneshot::Sender<std::io::Result<()>>,
+            >();
+            let (first, word) = handover_lines(&replace.plan);
+            // A task, so a plan bigger than the pipe never holds up the readiness read.
+            tokio::spawn(async move {
+                let planned = stdin.write_all(&first).await;
+                // Dropped without a go: stdin closes and the daemon gives up.
+                let Ok(ack) = said.await else { return };
+                let result = match planned {
+                    Ok(()) => stdin.write_all(&word).await,
+                    Err(error) => Err(error),
+                };
+                drop(stdin);
+                let _ = ack.send(result);
+            });
+            Some(Handover { go })
+        }
+        _ => None,
+    };
     let stdout = child
         .stdout
         .take()
@@ -769,7 +868,7 @@ async fn start_daemon(
     );
     // Tokio reaps the child after this handle is dropped; never kill a potentially live daemon.
     drop(child);
-    Ok((read_lines(stdout), false))
+    Ok((read_lines(stdout), false, handover))
 }
 
 /// Whether the reader goes on after `read`: only a whole step line has more
@@ -847,7 +946,8 @@ async fn start_daemon(
     paths: &Paths,
     remove_env: &[&str],
     begun: Instant,
-) -> Result<(ReadyLines, bool)> {
+    replace: Option<Replace>,
+) -> Result<(ReadyLines, bool, Option<Handover>)> {
     use std::ffi::{OsStr, OsString};
     use std::os::windows::io::AsHandle;
 
@@ -862,6 +962,7 @@ async fn start_daemon(
         "DEVLANES_READY_FD",
         READY_STEPS_ENV,
         devlanes_proto::remote::ASKPASS_ENV,
+        devlanes_proto::REPLACE_ENV,
     ];
     let mut variables: Vec<(OsString, OsString)> = daemon_env(std::env::vars_os(), remove_env)
         .into_iter()
@@ -873,6 +974,12 @@ async fn start_daemon(
     variables.push(("DEVLANES_HOME".into(), paths.home.clone().into()));
     variables.push(("DEVLANES_READY_FD".into(), "1".into()));
     variables.push((READY_STEPS_ENV.into(), "1".into()));
+    if let Some(replace) = &replace {
+        variables.push((
+            devlanes_proto::REPLACE_ENV.into(),
+            replace.pid.to_string().into(),
+        ));
+    }
     let environment = Environment::new(variables)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     // A path holds no `"`, so quoting is enough for the program's argv[0].
@@ -880,13 +987,16 @@ async fn start_daemon(
     command_line.push(&exe);
     command_line.push("\" daemon run");
     let (reader, writer) = spawn::pipe()?;
+    let plan_pipe = replace.as_ref().map(|_| spawn::pipe()).transpose()?;
     let spec = |breakaway_from_job: bool| Spawn {
         program: &exe,
         command_line: OsStr::new(&command_line),
         environment: Some(&environment),
         cwd: Some(&paths.home),
         stdio: Stdio::Handles {
-            stdin: Stream::Null,
+            stdin: plan_pipe.as_ref().map_or(Stream::Null, |(plan_reader, _)| {
+                Stream::Handle(plan_reader.as_handle())
+            }),
             stdout: Stream::Handle(writer.as_handle()),
             stderr: Stream::Null,
         },
@@ -908,6 +1018,36 @@ async fn start_daemon(
     };
     // Only the daemon may hold the writing end, or the reader never sees its end.
     drop(writer);
+    let handover = match (replace, plan_pipe) {
+        (Some(replace), Some((plan_reader, mut plan_writer))) => {
+            // Only the daemon may hold the reading end, or closing ours is no end of file.
+            drop(plan_reader);
+            let (go, said) = tokio::sync::oneshot::channel::<
+                tokio::sync::oneshot::Sender<std::io::Result<()>>,
+            >();
+            let (first, word) = handover_lines(&replace.plan);
+            // Anonymous pipes block, and the plan can outgrow their small
+            // buffer: a thread, so the readiness read goes on meanwhile.
+            std::thread::Builder::new()
+                .name("daemon-plan".into())
+                .spawn(move || {
+                    use std::io::Write;
+                    let planned = plan_writer.write_all(&first);
+                    // Dropped without a go: stdin closes and the daemon gives up.
+                    let Ok(ack) = said.blocking_recv() else {
+                        return;
+                    };
+                    let result = match planned {
+                        Ok(()) => plan_writer.write_all(&word),
+                        Err(error) => Err(error),
+                    };
+                    drop(plan_writer);
+                    let _ = ack.send(result);
+                })?;
+            Some(Handover { go })
+        }
+        _ => None,
+    };
     tracing::debug!(
         pid = child.pid(),
         elapsed_ms = begun.elapsed().as_millis() as u64,
@@ -915,7 +1055,27 @@ async fn start_daemon(
     );
     // Dropping the handle leaves the daemon running.
     drop(child);
-    Ok((read_lines_blocking(reader)?, in_job))
+    Ok((read_lines_blocking(reader)?, in_job, handover))
+}
+
+/// The error for a spawned daemon's readiness answer `line` other than
+/// `ready`: a refused user config is a structured `config_error`, so the CLI
+/// and the TUI word it like any other; a daemon that died before writing a
+/// reason points at its log, with the last `step` it reported.
+fn startup_failure(paths: &Paths, line: &[u8], step: Option<String>) -> Error {
+    let reason = String::from_utf8_lossy(line).trim().to_owned();
+    if let Some(error) = user_config_startup_error(&reason) {
+        return Error::Rpc(error);
+    }
+    let log = paths.logs.join("daemon.log");
+    Error::Startup(match (reason.is_empty(), step) {
+        (false, _) => reason,
+        (true, Some(step)) => format!(
+            "the daemon exited in step {step:?} without a reason; see {}",
+            log.display()
+        ),
+        (true, None) => format!("the daemon exited without a reason; see {}", log.display()),
+    })
 }
 
 /// The end of a spawned daemon's readiness pipe.
@@ -973,6 +1133,49 @@ const PROBE_FAILED: &str = "named pipe probe failed";
 /// until it accepts connections; the daemon names it
 /// `devlanes_daemon::STARTING_MARKER`.
 pub const STARTING_MARKER: &str = "daemon.starting";
+
+/// Name of the file under `paths.run` that holds the pid of a daemon waiting
+/// to replace the running one (`daemon restart`); the daemon names it
+/// `devlanes_daemon::REPLACING_MARKER`.
+pub const REPLACING_MARKER: &str = "daemon.replacing";
+
+/// Longest a replacing daemon waits for the one it replaces to exit; the
+/// daemon waits as long for its lock.
+pub const REPLACE_WAIT: Duration = Duration::from_secs(30 * 60);
+
+/// How long the lock may stay free while a [`REPLACING_MARKER`] names a live
+/// process before the marker counts as stale.
+const STALE_REPLACING: Duration = Duration::from_secs(1);
+
+/// The pid in the [`REPLACING_MARKER`] while that process runs. A marker
+/// left by a daemon that died counts as none.
+async fn replacing(paths: &Paths) -> Option<u32> {
+    let text = tokio::fs::read_to_string(paths.run.join(REPLACING_MARKER))
+        .await
+        .ok()?;
+    let pid: u32 = text.trim().parse().ok()?;
+    tokio::task::spawn_blocking(move || process_alive(pid))
+        .await
+        .unwrap_or(false)
+        .then_some(pid)
+}
+
+/// Whether a process with `pid` runs (blocking on Windows). A reused pid can
+/// read as alive, which only makes a caller wait until its deadline.
+#[cfg(unix)]
+fn process_alive(pid: u32) -> bool {
+    i32::try_from(pid)
+        .ok()
+        .and_then(rustix::process::Pid::from_raw)
+        .is_some_and(|pid| rustix::process::test_kill_process(pid) != Err(rustix::io::Errno::SRCH))
+}
+
+/// Whether a process with `pid` runs (blocking). A reused pid can read as
+/// alive, which only makes a caller wait until its deadline.
+#[cfg(windows)]
+fn process_alive(pid: u32) -> bool {
+    matches!(devlanes_sys_windows::proc::start_time(pid), Ok(Some(_)))
+}
 
 /// Whether the [`STARTING_MARKER`] exists. Alone it proves nothing: a daemon
 /// that died while starting leaves it behind with its lock free.
@@ -1057,6 +1260,8 @@ mod tests {
     use std::ffi::OsString;
 
     use std::time::Duration;
+
+    use crate::{REPLACING_MARKER, replacing};
 
     use tokio::time::Instant;
 
@@ -1236,6 +1441,34 @@ mod tests {
     /// starting marker the client waits to the hang guard, without it (the
     /// daemon finished starting and hangs) it gives up after one connect
     /// timeout. The paused clock jumps over each wait.
+    /// A replacing marker whose pid runs while the lock stays free was left by
+    /// a daemon that died: the client stops waiting on it within a second or
+    /// two and spawns as usual, instead of waiting out the restart's bound.
+    #[tokio::test]
+    async fn a_stale_replacing_marker_is_not_waited_for() {
+        let home = tempfile::tempdir().expect("home");
+        let paths = Paths::new(home.path()).expect("paths");
+        paths.prepare().expect("directories");
+        // This test's own pid: a live process, as a reused pid would be.
+        std::fs::write(
+            paths.run.join(REPLACING_MARKER),
+            std::process::id().to_string(),
+        )
+        .expect("marker");
+        assert_eq!(replacing(&paths).await, Some(std::process::id()));
+        let waited = tokio::time::timeout(
+            Duration::from_secs(10),
+            Client::connect_while_replacing(&paths),
+        )
+        .await
+        .expect("gives up on the marker in time");
+        assert!(
+            matches!(waited, Ok(None)),
+            "{:?}",
+            waited.map(|c| c.is_some())
+        );
+    }
+
     #[tokio::test(start_paused = true)]
     async fn only_a_starting_daemon_is_waited_for() {
         let home = tempfile::tempdir().expect("home");

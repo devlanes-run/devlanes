@@ -421,6 +421,118 @@ pub struct Selection {
 /// Profile name that resets a lane to its default selection (see [`Selection::profiles`]).
 pub const DEFAULT_PROFILE: &str = "default";
 
+/// Params of `daemon.shutdown`. Every protocol accepts the method; a daemon
+/// from before these fields ignores them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShutdownParams {
+    /// A new daemon takes over once this one exits (`daemon restart`); the
+    /// [`events::DAEMON_STOPPING`] events say so, so other clients wait for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub restart: bool,
+}
+
+/// A step of a daemon's shutdown, in the order it runs them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoppingStep {
+    /// Closing the links to remote boxes; `total` boxes.
+    Remote,
+    /// Waking throttled and frozen lanes so their processes can stop; `total` lanes.
+    Thaw,
+    /// Running the `lane.stop` tasks of an explicit shutdown; `total` tasks.
+    Tasks,
+    /// Stopping the managed processes; `total` processes in `lanes` lanes, `left` still running.
+    Units,
+    /// Recording the exits and closing state.db.
+    State,
+    /// A step of a newer daemon this client does not know.
+    #[serde(other)]
+    Other,
+}
+
+/// How far a [`StoppingStep`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoppingState {
+    Started,
+    /// Sent while the step runs, each time `left` changes.
+    Progress,
+    /// The step ended; `elapsed_ms` is how long it took.
+    Done,
+    /// Nothing to do in this step; clients draw nothing for it.
+    Skipped,
+    /// A state of a newer daemon this client does not know.
+    #[serde(other)]
+    Other,
+}
+
+/// Payload of [`events::DAEMON_STOPPING`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonStopping {
+    /// `explicit`, `idle` or `signal`.
+    pub reason: String,
+    /// A new daemon takes over afterwards ([`ShutdownParams::restart`]).
+    #[serde(default)]
+    pub restart: bool,
+    pub step: StoppingStep,
+    pub state: StoppingState,
+    /// How many boxes, lanes, tasks or processes the step handles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<u64>,
+    /// Of `total`, how many are not finished yet (`units` only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left: Option<u64>,
+    /// The lanes the processes of the `units` step belong to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lanes: Option<u64>,
+    /// How long the step took, on `done`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elapsed_ms: Option<u64>,
+}
+
+/// One lane a restart starts again: its services that were running and the
+/// profiles of its last start.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResumeLane {
+    /// `project@index`.
+    pub lane: String,
+    /// Its services that were starting, queued or up.
+    pub units: Vec<String>,
+    /// The profiles of its last start, in order.
+    pub profiles: Vec<String>,
+}
+
+/// What a replacing daemon (`daemon run` with [`REPLACE_ENV`]) starts once it
+/// runs: the client that spawned it writes this as one JSON document on the
+/// daemon's stdin. The daemon keeps it in memory only, since it carries the
+/// restarting client's environment. Deliberately not `Debug`, like
+/// [`Context`].
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct ResumePlan {
+    pub lanes: Vec<ResumeLane>,
+    /// The environment of the client that asked for the restart, for these starts.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub actor: Actor,
+}
+
+/// Set to the pid of the daemon being replaced in the environment of a
+/// `daemon run` that takes over after it exits: that daemon waits for the
+/// singleton lock instead of reporting `already-running`. Its stdin carries
+/// the [`ResumePlan`] as one line, then [`REPLACE_GO`] once the client asked
+/// the old daemon to stop; stdin closing without it abandons the restart.
+pub const REPLACE_ENV: &str = "DEVLANES_REPLACE_PID";
+
+/// The readiness step a replacing daemon reports once clients wait for it
+/// instead of spawning one: its client asks the old daemon to stop only after
+/// reading this step.
+pub const REPLACE_STEP: &str = "waiting for the old daemon";
+
+/// The line a restarting client writes on the replacing daemon's stdin, after
+/// the plan, right before it asks the old daemon to stop.
+pub const REPLACE_GO: &str = "go";
+
 impl Selection {
     /// Requested profiles: `profile` first, then `profiles`, without repeats and
     /// blank names. Empty means "the lane's saved profiles".
@@ -1368,6 +1480,9 @@ pub mod events {
     pub const RESULT: &str = "result";
     /// Sent instead of dropped events after a subscriber overflowed; clients must re-query.
     pub const RESYNC: &str = "resync";
+    /// [`super::DaemonStopping`] for each step of a shutdown, from the moment
+    /// it begins; the connection closes once every step is done.
+    pub const DAEMON_STOPPING: &str = "daemon.stopping";
     /// `{lane, code, data}` for advice that never blocks a start. Code
     /// `memory_baseline`: `{peak_memory_bytes, available_memory_bytes, units}` when
     /// the units being started usually peak above the memory available now.

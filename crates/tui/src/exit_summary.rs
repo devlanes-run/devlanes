@@ -8,21 +8,16 @@ use std::{
     time::Duration,
 };
 
-use crossterm::{
-    Command,
-    style::{Attribute, SetAttribute, SetForegroundColor},
-};
 use devlanes_proto::LaneSummary;
 use ratatui::{
-    backend::IntoCrossterm,
-    buffer::{Buffer, Cell},
+    buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::{
+    ansi,
     api::{ApiError, DaemonApi},
     banner,
     theme::{Theme, Tone},
@@ -32,8 +27,9 @@ use crate::{
 /// How long the daemon gets to answer `status` before the summary says it
 /// did not.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(1);
-/// Columns before the banner and each line.
-const INDENT: u16 = 2;
+/// Columns before the banner and each line; the step block of `daemon stop`
+/// and `daemon restart` uses it too, so both line up in the shell.
+pub(crate) const INDENT: u16 = 2;
 /// The banner's tallest font is too much for a shell: the medium and small
 /// ones fit in this many rows.
 const BANNER_ROWS: u16 = 5;
@@ -97,7 +93,7 @@ pub fn render(theme: &Theme, width: u16, lane: Option<&str>, daemon: &Daemon) ->
     for (y, line) in (banner_rows + 1..).zip(&lines) {
         buf.set_line(INDENT, y, line, content);
     }
-    format!("\n{}\n", ansi(&buf))
+    format!("\n{}\n", ansi::text(&buf))
 }
 
 /// The lane, daemon and stop lines; the lane's state only when the daemon
@@ -165,58 +161,6 @@ fn lane_state(lane: &LaneSummary) -> (String, Tone) {
         let _ = write!(text, ", {} failed", counts.failed);
     }
     (text, tone)
-}
-
-/// `buf` as text, one line per row with trailing blanks cut, its colors and
-/// bold or dim as SGR sequences.
-fn ansi(buf: &Buffer) -> String {
-    let plain = Cell::EMPTY.style();
-    let mut out = String::new();
-    for y in 0..buf.area.height {
-        let row: Vec<&Cell> = (0..buf.area.width).map(|x| &buf[(x, y)]).collect();
-        let end = row
-            .iter()
-            .rposition(|cell| cell.symbol() != " ")
-            .map_or(0, |last| last + 1);
-        let mut current = plain;
-        // A wide character covers the cells after it, which hold a blank.
-        let mut covered = 0;
-        for cell in &row[..end] {
-            if covered > 0 {
-                covered -= 1;
-                continue;
-            }
-            let style = cell.style();
-            if style != current {
-                sgr(&mut out, style);
-                current = style;
-            }
-            out.push_str(cell.symbol());
-            covered = cell.symbol().width().saturating_sub(1);
-        }
-        if current != plain {
-            let _ = SetAttribute(Attribute::Reset).write_ansi(&mut out);
-        }
-        out.push('\n');
-    }
-    out
-}
-
-/// Writes the sequences that switch to `style` from whatever came before:
-/// a reset, then its color and modifiers. The summary uses only these.
-fn sgr(out: &mut String, style: Style) {
-    let _ = SetAttribute(Attribute::Reset).write_ansi(out);
-    if let Some(color) = style.fg.filter(|color| *color != Color::Reset) {
-        let _ = SetForegroundColor(color.into_crossterm()).write_ansi(out);
-    }
-    for (modifier, attribute) in [
-        (Modifier::BOLD, Attribute::Bold),
-        (Modifier::DIM, Attribute::Dim),
-    ] {
-        if style.add_modifier.contains(modifier) {
-            let _ = SetAttribute(attribute).write_ansi(out);
-        }
-    }
 }
 
 #[cfg(test)]

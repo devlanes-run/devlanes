@@ -1,0 +1,48 @@
+ devlanes  1 acme   2 billing   3 shop   daemon not answering · retry…  M  D  B
+
+  ▀▀▀▀▀    the daemon is not answering · retrying on its own, s starts it
+   ▀▀▀▀▀
+    ▀▀▀▀▀
+
+┌ daemon.log ────────────── following · all levels · repeats folded · 40 lines ┐
+│10:32:02 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-gateway       │
+│                                    took=1.5s                                 │
+│10:33:03 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-auth took=1.6s│
+│10:34:04 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-users         │
+│                                    took=1.7s                                 │
+│10:35:12 WARN  daemon::gate         start window full           ×5 since 10:03│
+│                                    lane=acme@1 queued=2                      │
+│10:36:06 INFO  daemon::lifecycle    unit ready                  ×2 since 10:00│
+│                                    unit=acme@0:api-gateway took=1.0s         │
+│10:37:07 INFO  daemon::lifecycle    unit ready                  ×2 since 10:01│
+│                                    unit=acme@0:api-auth took=1.1s            │
+│10:38:40 ERROR daemon::lifecycle    unit exited                 ×5 since 10:06│
+│                                    unit=acme@0:wrk-export code=1             │
+│10:39:09 INFO  daemon::lifecycle    unit ready  unit=acme@0:api-orders        │
+│                                    took=1.3s                                 │
+└──────────────────────────────────────────────────────────────────────────────┘
+ s start daemon   j k scroll   F pause   w level   / filter   c copy   q quit
+
+--- styles (row: columns style) ---
+0: 1-8 bold red, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-69 red, 72 bold, 75 bold, 78 bold
+2: 2-6 red, 11-37 bold, 38-72 dim
+3: 3-7 red
+4: 4-8 red
+6: 0-26 bold, 27-78 bold dim, 79 bold
+7: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 79 bold
+8: 0 bold, 37-41 dim, 79 bold
+9: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 79 bold
+10: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 79 bold
+11: 0 bold, 37-41 dim, 79 bold
+12: 0 bold, 1-9 dim, 10-14 yellow, 65-78 dim, 79 bold
+13: 0 bold, 37-41 dim, 49-55 dim, 79 bold
+14: 0 bold, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold
+15: 0 bold, 37-41 dim, 42-59 blue, 61-65 dim, 79 bold
+16: 0 bold, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold
+17: 0 bold, 37-41 dim, 42-56 blue, 58-62 dim, 79 bold
+18: 0 bold, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold
+19: 0 bold, 37-41 dim, 42-58 magenta, 60-64 dim, 79 bold
+20: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 79 bold
+21: 0 bold, 37-41 dim, 79 bold
+22: 0-79 bold
+23: 1 bold, 2-17 dim, 18-20 bold, 21-30 dim, 31 bold, 32-40 dim, 41 bold, 42-50 dim, 51 bold, 52-61 dim, 62 bold, 63-67 dim, 71 bold, 72-79 dim

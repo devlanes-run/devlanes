@@ -12,6 +12,7 @@ mod dialog;
 mod list;
 mod monitor;
 mod pane;
+mod unavailable;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use devlanes_proto::{LaneSummary, ORPHANED, UnitSummary};
@@ -24,8 +25,10 @@ use ratatui::{
 };
 
 use crate::app::{
-    App, AttachState, Click, Connection, Focus, MIN_HEIGHT, MIN_WIDTH, PaneMode, Target, View,
+    App, AttachState, Click, Connection, DaemonState, Focus, MIN_HEIGHT, MIN_WIDTH, PaneMode,
+    Target, View,
 };
+use crate::steps::LogoState;
 use crate::text::{self, clean, clip};
 use crate::theme::{Glyph, Theme, Tier, Tone};
 use crate::tree::{self, Role, RowId};
@@ -43,7 +46,9 @@ pub fn render(app: &App, frame: &mut Frame) {
         return;
     };
     render_header(app, frame, layout.header);
+    // Nothing switches views: the old one draws again once the daemon is back.
     match app.view {
+        _ if app.unavailable() => unavailable::render(app, frame, layout.body),
         View::Project => {
             if app.lanes.is_empty() && app.boxes.lanes.is_empty() {
                 render_welcome(app, frame, layout.body);
@@ -484,14 +489,20 @@ fn render_header(app: &App, frame: &mut Frame, area: Rect) {
     }
     right.push(Span::raw(" "));
 
-    // Brand, letter by letter from yellow to orange, and project tabs.
+    // Brand, letter by letter from yellow to orange while the daemon is
+    // online, else in the logo's color for its state; then project tabs.
     let mut left = vec![Span::raw(" ")];
     let brand = "devlanes";
-    left.extend(
-        brand.chars().enumerate().map(|(index, letter)| {
-            Span::styled(letter.to_string(), theme.brand(index, brand.len()))
-        }),
-    );
+    let logo = app.daemon_state.logo();
+    left.extend(brand.chars().enumerate().map(|(index, letter)| {
+        let style = match logo {
+            LogoState::Online => theme.brand(index, brand.len()),
+            LogoState::Busy | LogoState::Down => {
+                crate::steps::logo_style(theme, logo, 0).add_modifier(Modifier::BOLD)
+            }
+        };
+        Span::styled(letter.to_string(), style)
+    }));
     let mut used = 9;
     let projects = app.projects();
     let single = projects.len() <= 1;
@@ -745,28 +756,33 @@ fn boxes_badge(app: &App) -> Option<(String, Tone)> {
 fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
     let theme = &app.theme;
     let plain = |text: String, tone: Tone| Some((vec![Span::styled(text, theme.tone(tone))], None));
-    if let Some(busy) = app.daemon.busy {
-        let busy = if busy == "collecting lanes" {
-            "cleaning lanes with missing worktrees"
-        } else {
-            busy
+    if let Some(words) = app.daemon_state.words() {
+        // `daemon restarting · stopping 26 processes in 1 lane`: the step under way.
+        let (after, tone) = match &app.daemon_state {
+            DaemonState::Stopped { .. } => (Some("s starts it".to_owned()), Tone::Quiet),
+            DaemonState::Unreachable => (Some("retrying".to_owned()), Tone::Failure),
+            state => (
+                state
+                    .steps()
+                    .and_then(|steps| steps.running())
+                    .map(|row| clean(&row.text)),
+                Tone::Busy,
+            ),
         };
-        return plain(format!("daemon {busy}…"), Tone::Busy);
+        let text = match after {
+            Some(after) => format!("daemon {words} · {after}"),
+            None => format!("daemon {words}"),
+        };
+        return plain(text, tone);
     }
-    if app.daemon.stopped {
+    if app.daemon.collecting {
         return plain(
-            "daemon stopped. S on the daemon page starts it".into(),
-            Tone::Quiet,
+            "daemon cleaning lanes with missing worktrees…".into(),
+            Tone::Busy,
         );
     }
-    match app.connection {
-        Connection::Reconnecting { .. } => {
-            return plain("daemon not responding, retrying…".into(), Tone::Failure);
-        }
-        Connection::Connecting if app.start_line().is_none() => {
-            return plain("connecting to the daemon…".into(), Tone::Busy);
-        }
-        _ => {}
+    if app.connection == Connection::Connecting && app.start_line().is_none() {
+        return plain("connecting to the daemon…".into(), Tone::Busy);
     }
     if let Some(notice) = &app.notice
         && notice.error
@@ -1079,9 +1095,64 @@ fn render_welcome(app: &App, frame: &mut Frame, area: Rect) {
 /// A footer hint: the key as shown, its label, and the key a click presses.
 type Hint = (&'static str, &'static str, KeyCode);
 
+/// The daemon log's copy mode or text filter keys, wherever the log shows.
+fn log_mode_hints(app: &App) -> Vec<Hint> {
+    let ch = KeyCode::Char;
+    if app.daemon.filter_editing && app.daemon.copy.is_none() {
+        return vec![
+            ("type", "to filter", KeyCode::Null),
+            ("enter", "keep", KeyCode::Enter),
+            ("esc", "clear", KeyCode::Esc),
+        ];
+    }
+    vec![
+        ("h j k l", "move", KeyCode::Null),
+        ("v", "mark", ch('v')),
+        ("y", "copy", ch('y')),
+        ("Y", "copy whole entries", ch('Y')),
+        ("esc", "cancel", KeyCode::Esc),
+    ]
+}
+
+/// `G follow` while the log is paused, else `F pause`.
+fn follow_hint(app: &App) -> Hint {
+    if app.daemon.paused {
+        ("G", "follow", KeyCode::Char('G'))
+    } else {
+        ("F", "pause", KeyCode::Char('F'))
+    }
+}
+
+/// The keys the unavailable screen takes: starting the daemon where that
+/// helps, then the log's.
+fn unavailable_hints(app: &App) -> Vec<Hint> {
+    let ch = KeyCode::Char;
+    if app.daemon.copy.is_some() || app.daemon.filter_editing {
+        return log_mode_hints(app);
+    }
+    let mut hints = Vec::new();
+    if matches!(
+        app.daemon_state,
+        DaemonState::Stopped { .. } | DaemonState::Unreachable
+    ) {
+        hints.push(("s", "start daemon", ch('s')));
+    }
+    hints.extend([
+        ("j k", "scroll", ch('k')),
+        follow_hint(app),
+        ("w", "level", ch('w')),
+        ("/", "filter", ch('/')),
+        ("c", "copy", ch('c')),
+    ]);
+    hints
+}
+
 /// The hints that apply to the selection and mode, most important first.
 fn hints(app: &App) -> Vec<Hint> {
     let ch = KeyCode::Char;
+    if app.unavailable() {
+        return unavailable_hints(app);
+    }
     match app.view {
         View::Monitor => {
             let swap = if app.monitor.memory_first {
@@ -1101,14 +1172,8 @@ fn hints(app: &App) -> Vec<Hint> {
                 ("esc", "back", KeyCode::Esc),
             ];
         }
-        View::Daemon if app.daemon.copy.is_some() => {
-            return vec![
-                ("h j k l", "move", KeyCode::Null),
-                ("v", "mark", ch('v')),
-                ("y", "copy", ch('y')),
-                ("Y", "copy whole entries", ch('Y')),
-                ("esc", "cancel", KeyCode::Esc),
-            ];
+        View::Daemon if app.daemon.copy.is_some() || app.daemon.filter_editing => {
+            return log_mode_hints(app);
         }
         View::Daemon if app.daemon.checks_copy.is_some() => {
             return vec![
@@ -1119,19 +1184,8 @@ fn hints(app: &App) -> Vec<Hint> {
                 ("esc", "cancel", KeyCode::Esc),
             ];
         }
-        View::Daemon if app.daemon.filter_editing => {
-            return vec![
-                ("type", "to filter", KeyCode::Null),
-                ("enter", "keep", KeyCode::Enter),
-                ("esc", "clear", KeyCode::Esc),
-            ];
-        }
         View::Daemon => {
-            let follow = if app.daemon.paused {
-                ("G", "follow", ch('G'))
-            } else {
-                ("F", "pause", ch('F'))
-            };
+            let follow = follow_hint(app);
             let fold = if app.daemon.filters.unfolded {
                 ("d", "fold", ch('d'))
             } else {
@@ -1141,7 +1195,7 @@ fn hints(app: &App) -> Vec<Hint> {
                 crate::app::DaemonBox::Log => ("tab", "to checks", KeyCode::Tab),
                 crate::app::DaemonBox::Checks => ("tab", "to log", KeyCode::Tab),
             };
-            let mut hints = vec![
+            return vec![
                 ("j k", "scroll", ch('k')),
                 follow,
                 ("w", "level", ch('w')),
@@ -1154,12 +1208,6 @@ fn hints(app: &App) -> Vec<Hint> {
                 ("R", "restart", ch('R')),
                 ("S", "stop", ch('S')),
             ];
-            // Stopped, starting it is what matters: first, and S no longer stops.
-            if app.daemon.stopped {
-                hints.pop();
-                hints.insert(0, ("S", "start daemon", ch('S')));
-            }
-            return hints;
         }
         View::Boxes => {
             let mut hints = Vec::new();
@@ -1388,10 +1436,16 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         frame.render_widget(Paragraph::new(fit(spans, width)), area);
         return;
     }
-    let fixed: [Hint; 2] = [
-        ("?", "all keys", KeyCode::Char('?')),
-        ("q", "quit", KeyCode::Char('q')),
-    ];
+    let unavailable = app.unavailable();
+    // `?` waits for the daemon like every key the unavailable screen does not take.
+    let fixed: &[Hint] = if unavailable {
+        &[("q", "quit", KeyCode::Char('q'))]
+    } else {
+        &[
+            ("?", "all keys", KeyCode::Char('?')),
+            ("q", "quit", KeyCode::Char('q')),
+        ]
+    };
     // `key label` and three spaces, as the mockups' footer.
     let size = |(key, label, _): &Hint| text::width(key) + text::width(label) + 4;
     let fixed_width: usize = fixed.iter().map(size).sum();
@@ -1404,6 +1458,7 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         .is_some_and(|a| matches!(a.mode, PaneMode::Copy(_)));
     let typing = app.filter.as_ref().is_some_and(|f| f.editing);
     if app.view == View::Project
+        && !unavailable
         && app.notice.as_ref().is_some_and(|n| n.error)
         && !copying
         && !typing
@@ -1445,7 +1500,7 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         record(&mut left, &mut x, hint);
     }
     // On a box lane, where its start, stop and logs are, in what is left.
-    if !typing && !copying {
+    if !typing && !copying && !unavailable {
         let room = budget.saturating_sub(used);
         // The longest form that fits with the three spaces hints keep apart.
         if let Some(note) = box_note(app)
@@ -1457,8 +1512,15 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
     }
     let mut right = Vec::new();
     let mut rx = area.right().saturating_sub(fixed_width as u16);
-    for hint in fixed {
+    for hint in fixed.iter().copied() {
         record(&mut right, &mut rx, hint);
+    }
+    // Hints that fill the budget exactly leave no room for the gap `spread`
+    // keeps; the last one's padding goes instead of being cut into `…`.
+    if spans_width(&left) + spans_width(&right) >= width
+        && let Some(last) = left.last_mut()
+    {
+        last.content = last.content.trim_end().to_owned().into();
     }
     frame.render_widget(Paragraph::new(spread(left, right, width)), area);
 }

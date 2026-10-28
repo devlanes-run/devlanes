@@ -85,6 +85,8 @@ impl Fake {
     fn new(width: u16, height: u16) -> Self {
         let mut app = App::new(width, height);
         app.version = data::VERSION;
+        // Step times count from here, so they draw the same on every run.
+        app.clock = Some(std::time::Instant::now());
         // Opened from the monorepo's main worktree.
         app.prefer_path("/work/acme".into());
         let mut fake = Self {
@@ -107,6 +109,14 @@ impl Fake {
     fn send(&mut self, msg: Msg) {
         self.queue.push_back(msg);
         self.drain();
+    }
+
+    /// Moves the app's pinned clock on by `ms`, for step times.
+    fn later(&mut self, ms: u64) {
+        self.app.clock = self
+            .app
+            .clock
+            .map(|now| now + std::time::Duration::from_millis(ms));
     }
 
     /// Presses `code`.
@@ -311,6 +321,17 @@ fn start_event(name: &str, data: serde_json::Value) -> Msg {
         event: name.into(),
         data,
     }))
+}
+
+/// A `daemon.stopping` report of the `units` step: 26 processes in 1 lane.
+fn stopping(f: &mut Fake, restart: bool, state: &str, left: Option<u64>) {
+    let elapsed = (state == "done").then_some(5_800);
+    f.send(Msg::Event(Event {
+        seq: 1,
+        event: events::DAEMON_STOPPING.into(),
+        data: json!({"reason": "explicit", "restart": restart, "step": "units", "state": state,
+            "total": 26, "lanes": 1, "left": left, "elapsed_ms": elapsed}),
+    }));
 }
 
 /// The user config the options page reads.
@@ -954,6 +975,33 @@ fn scenes() -> Vec<Scene> {
             name: "daemon",
             what: "the daemon page (D): facts, doctor checks and the daemon log",
             setup: |f| f.shifted('D'),
+        },
+        Scene {
+            name: "daemon-restarting",
+            what: "a restart someone else ran, 3.4 s into stopping: the unavailable screen with its steps and the daemon log",
+            setup: |f| {
+                f.unit("acme@0", "api-gateway");
+                stopping(f, true, "started", None);
+                f.later(3_400);
+                stopping(f, true, "progress", Some(4));
+            },
+        },
+        Scene {
+            name: "daemon-stopped",
+            what: "after a stop someone else asked for: s starts the daemon",
+            setup: |f| {
+                stopping(f, false, "started", None);
+                stopping(f, false, "done", None);
+                f.send(Msg::EventsEnded(None));
+            },
+        },
+        Scene {
+            name: "daemon-not-answering",
+            what: "the daemon gone without a word for a tick: the TUI retries on its own",
+            setup: |f| {
+                f.send(Msg::EventsEnded(None));
+                f.send(Msg::Tick);
+            },
         },
         Scene {
             name: "dialog-revoke",

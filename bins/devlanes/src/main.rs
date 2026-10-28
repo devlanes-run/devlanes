@@ -15,6 +15,7 @@ mod driver;
 #[cfg(windows)]
 mod follow;
 mod hosts;
+mod lifecycle;
 mod local;
 mod local_doctor;
 mod notices;

@@ -4,10 +4,10 @@
 │                                                                              │
 │   n   connect to a box by its SSH name or a command                          │
 │                                                                              │
-│ A box is another machine that runs devlanes. Its projects show up in the top │
-│ bar.┌ revoke laptop · dl_cid_3f2a9c1e ────────────────────────────────┐      │
-│     │ It deletes the client's 2 pairings and ends its connection now. │      │
+│ A bo┌─────────────────────────────────────────────────────────────────┐e top │
+│ bar.│ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
 │     │                                                                 │      │
+│     │ It deletes the client's 2 pairings and ends its connection now. │      │
 │     │ remote.require_pairing is false here, so it can reconnect       │      │
 │     │ without a code.                                                 │      │
 │     │                                                                 │      │
@@ -30,9 +30,9 @@
 3: 0 darkgray, 79 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 79 darkgray
 5: 0 darkgray, 79 darkgray
-6: 0 darkgray, 2-77 dim, 79 darkgray
-7: 0 darkgray, 2-5 dim, 6-72 bold, 79 darkgray
-8: 0 darkgray, 6 bold, 8-70 bold, 72 bold, 79 darkgray
+6: 0 darkgray, 2-5 dim, 6-72 bold, 73-77 dim, 79 darkgray
+7: 0 darkgray, 2-5 dim, 6 bold, 8-39 bold, 72 bold, 79 darkgray
+8: 0 darkgray, 6 bold, 72 bold, 79 darkgray
 9: 0 darkgray, 6 bold, 72 bold, 79 darkgray
 10: 0 darkgray, 6 bold, 72 bold, 79 darkgray
 11: 0 darkgray, 6 bold, 72 bold, 79 darkgray

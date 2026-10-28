@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use devlanes_daemon::{Handler, Shutdown, ShutdownReason};
-use devlanes_proto::Method;
+use devlanes_proto::{DaemonStopping, Event, Method, StoppingState, StoppingStep};
 use serde_json::{Value, json};
 
 use crate::{LIMIT, Setup, cx, eventually, harness, repo, temp};
@@ -41,7 +41,7 @@ async fn the_engine_goes_idle_after_the_last_subscriber_with_nothing_running() {
         )
         .await;
         let wait = Duration::from_millis(800);
-        // Never watched: a daemon only commands used stays.
+        // Never watched: a daemon only commands used waits ten grace periods.
         assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());
         h.call(Method::Start, json!({}), cx(&main))
             .await
@@ -61,6 +61,168 @@ async fn the_engine_goes_idle_after_the_last_subscriber_with_nothing_running() {
         let _watching = h.engine.subscribe();
         assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());
         h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A daemon no subscriber ever watched goes idle after
+/// `UNWATCHED_IDLE_FACTOR` grace periods of quiet, never while a unit runs.
+async fn an_unwatched_engine_goes_idle_after_ten_grace_periods() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(
+            &tmp.path,
+            "r",
+            "project: quiet\nservices:\n  api: { run: sleep }\n",
+        );
+        let grace = Duration::from_millis(100);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                idle_exit: Some(grace),
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let unwatched = grace * devlanes_daemon::UNWATCHED_IDLE_FACTOR;
+        assert!(
+            tokio::time::timeout(unwatched * 2, h.engine.idle())
+                .await
+                .is_err(),
+            "a running unit keeps it up"
+        );
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        let begun = std::time::Instant::now();
+        tokio::time::timeout(Duration::from_secs(10), h.engine.idle())
+            .await
+            .expect("idle once quiet long enough");
+        assert!(begun.elapsed() >= unwatched, "{:?}", begun.elapsed());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+/// One `daemon.stopping` event as (step, state, total, left, lanes).
+type StepRow = (
+    StoppingStep,
+    StoppingState,
+    Option<u64>,
+    Option<u64>,
+    Option<u64>,
+);
+
+/// The `daemon.stopping` events in `events`, as [`StepRow`]s.
+fn steps(events: &[Event]) -> Vec<StepRow> {
+    stopping(events)
+        .iter()
+        .map(|step| (step.step, step.state, step.total, step.left, step.lanes))
+        .collect()
+}
+
+/// The `daemon.stopping` payloads in `events`.
+fn stopping(events: &[Event]) -> Vec<DaemonStopping> {
+    events
+        .iter()
+        .filter(|event| event.event == devlanes_proto::events::DAEMON_STOPPING)
+        .map(|event| serde_json::from_value(event.data.clone()).expect("payload"))
+        .collect()
+}
+
+/// Everything `bus` received so far.
+fn received(bus: &mut tokio::sync::broadcast::Receiver<Event>) -> Vec<Event> {
+    std::iter::from_fn(|| bus.try_recv().ok()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// An explicit restart reports each step in order with its counts: steps with
+/// nothing to do are skipped, the units count down, and every event carries
+/// the reason and the restart.
+async fn shutdown_reports_its_steps() {
+    tokio::time::timeout(LIMIT, async {
+        use StoppingState::{Done, Progress, Skipped, Started};
+        use StoppingStep::{Remote, State, Tasks, Thaw, Units};
+        let tmp = temp();
+        let config = "project: bye\nservices:\n  api: { run: sleep }\n  web: { run: sleep }\ntasks:\n  note: { run: echo stop-hook, when: lane.stop }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let mut bus = h.engine.subscribe();
+        let mut request = Shutdown::new(ShutdownReason::Explicit);
+        request.restart = true;
+        h.engine.shutdown(request).await.expect("shutdown");
+        let events = received(&mut bus);
+        assert_eq!(
+            steps(&events),
+            [
+                (Remote, Skipped, None, None, None),
+                (Thaw, Skipped, None, None, None),
+                (Tasks, Started, Some(1), None, None),
+                (Tasks, Done, Some(1), None, None),
+                (Units, Started, Some(2), None, Some(1)),
+                (Units, Progress, Some(2), Some(1), Some(1)),
+                (Units, Progress, Some(2), Some(0), Some(1)),
+                (Units, Done, Some(2), None, Some(1)),
+                (State, Started, None, None, None),
+                (State, Done, None, None, None),
+            ]
+        );
+        let payloads = stopping(&events);
+        assert!(
+            payloads
+                .iter()
+                .all(|step| step.reason == "explicit" && step.restart)
+        );
+        assert!(
+            payloads
+                .iter()
+                .all(|step| (step.state == Done) == step.elapsed_ms.is_some())
+        );
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A signal shutdown with nothing running skips every step but `state`, and
+/// says it is no restart.
+async fn an_empty_signal_shutdown_skips_its_steps() {
+    tokio::time::timeout(LIMIT, async {
+        use StoppingState::{Done, Skipped, Started};
+        use StoppingStep::{Remote, State, Tasks, Thaw, Units};
+        let tmp = temp();
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mut bus = h.engine.subscribe();
+        h.engine
+            .shutdown(crate::signal_shutdown())
+            .await
+            .expect("shutdown");
+        let events = received(&mut bus);
+        assert_eq!(
+            steps(&events),
+            [
+                (Remote, Skipped, None, None, None),
+                (Thaw, Skipped, None, None, None),
+                (Tasks, Skipped, None, None, None),
+                (Units, Skipped, None, None, None),
+                (State, Started, None, None, None),
+                (State, Done, None, None, None),
+            ]
+        );
+        assert!(
+            stopping(&events)
+                .iter()
+                .all(|step| step.reason == "signal" && !step.restart)
+        );
     })
     .await
     .expect("timeout");

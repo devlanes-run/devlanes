@@ -317,15 +317,15 @@ async fn enter_acts_on_the_box_by_its_state() -> TestResult {
     let mut app = boxes_app(100, 30, hosts).await;
     app.update(key(KeyCode::Enter));
     match &app.dialog {
-        Some(Dialog::Confirm {
-            title,
-            prompt,
-            detail,
-            ..
-        }) => {
-            assert_eq!(title, "disconnect hetzner");
-            assert_eq!(prompt, "Its ports and hostnames stop working here.");
-            assert_eq!(detail, &["Its lanes keep running on the box.".to_owned()]);
+        Some(Dialog::Confirm { prompt, detail, .. }) => {
+            assert_eq!(prompt, "Disconnect hetzner?");
+            assert_eq!(
+                detail,
+                &[
+                    "Its ports and hostnames stop working here.".to_owned(),
+                    "Its lanes keep running on the box.".to_owned()
+                ]
+            );
         }
         other => return Err(format!("no confirm dialog: {other:?}").into()),
     }
