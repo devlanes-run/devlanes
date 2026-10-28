@@ -134,7 +134,7 @@ Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is
 
 | Function | Result |
 | --- | --- |
-| `domain(name)` | `name`'s domain in this lane, by the rule `lane.domain` follows: `pages.localhost` in lane 0, `pages2.localhost` in lane 2. A site apart from the app's ([a site of its own](https.md#a-site-of-its-own)). Works in `lanes.vars` too |
+| `domain(name)` | The domain of `name` in this lane, such as `pages.localhost` in lane 0 and `pages2.localhost` in lane 2. Use it for names that must not share the app's cookies ([a site of its own](https.md#a-site-of-its-own)). It works in `lanes.vars` too. |
 
 | Namespace | Contents |
 | --- | --- |
@@ -159,7 +159,7 @@ global_env:
   REDIS_URL: redis://127.0.0.1:${{ infra.redis.port }}/${{ lane.redis_db }}
 ```
 
-A var named `domain` replaces the default lane domain, `domain(project.name)`, and `port` fixes where the block starts. `lanes.matrix` is the explicit alternative: entry N describes lane N.
+A var named `domain` replaces the default lane domain, which is `domain(project.name)`. A var named `port` fixes where the block starts. `lanes.matrix` is the explicit alternative: entry N describes lane N.
 
 Not every field sees every namespace. `lanes.vars` see `project`, `lane` and `env`. `infra.*` fields see `project`, `lane`, `infra` and `env`, but not `services`. Tasks and infra commands have an empty `self` apart from `name`.
 

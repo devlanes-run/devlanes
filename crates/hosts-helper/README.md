@@ -28,7 +28,7 @@ loopback address, but support is uneven:
 names, and no implementation (glibc `nss-files`, macOS, musl, Go) supports
 patterns, so a wildcard such as `*.acme2.localhost` cannot be written there.
 devlanes writes every exact name it routes instead. Wildcard routes (for example
-`*.pages-2.acme.localhost`) are left out, so only the exact names devlanes knows
+`*.pages2.localhost`) are left out, so only the exact names devlanes knows
 about resolve through the file.
 
 `/etc/hosts` is owned by root. Writing it from the daemon would mean running the

@@ -716,22 +716,22 @@ devlanes remote sync [OPTIONS]
 
 Choose which box serves a lane that clashes with others.
 
-Lanes clash when their hostnames overlap, and the same lane on two boxes always
-clashes, as forks of one box image do. This machine mirrors one of them. A lane running
-here comes first, then the chosen box lane, then a stopped lane here, then the box
-connected first. The latest choice wins and deletes the choices it clashes with. A
-choice stays until another one replaces it, the box is disconnected, or a lane here
-that clashes with it starts. A box that is not connected can be chosen too.
+Lanes clash when their hostnames overlap. The same lane on two boxes always clashes,
+as on forks of one box image. This machine mirrors one of them. A lane running here
+comes first, then the chosen box lane, then a stopped lane here, then the box connected
+first. The latest choice wins and deletes the choices it clashes with. A choice stays
+until another one replaces it, the box is disconnected, or a lane here that clashes
+with it starts. A box that is not connected can be chosen too.
 
 --local gives the hostnames back to this machine's lane.
 
 ```text
 devlanes remote use <BOX> <LANE>
-       devlanes remote use --local <LANE>
+devlanes remote use --local <LANE>
 ```
 
-- `[BOX]`: Box whose lane serves the hostnames
-- `[LANE]`: Lane reference, such as acme@0
+- `<BOX>`: Box whose lane serves the hostnames
+- `<LANE>`: Lane reference, such as acme@0
 - `--local <LANE>`: Give the lane's hostnames back to this machine
 
 ```text

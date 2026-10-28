@@ -486,7 +486,7 @@ mod tests {
     fn routes() -> Vec<RouteEntry> {
         vec![
             route("acme@2", "web.acme2.localhost"),
-            route("acme@2", "*.pages-2.acme.localhost"),
+            route("acme@2", "*.pages2.localhost"),
             route("worker@0", "api.worker.localhost"),
             route("box:remote@1", "web.remote1.localhost"),
         ]
@@ -545,7 +545,7 @@ mod tests {
         );
         assert!(desired.names.iter().all(|name| !name.contains('*')));
         assert_eq!(desired.skipped.len(), 1);
-        assert_eq!(desired.skipped[0].name, "*.pages-2.acme.localhost");
+        assert_eq!(desired.skipped[0].name, "*.pages2.localhost");
     }
 
     /// Windows reports the probe and writes nothing, whatever the mode.

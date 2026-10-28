@@ -47,7 +47,7 @@ lanes:
   # Values computed per lane and read as lane.<name>; lane.index is 0 for the primary worktree.
   vars:
     # Replaces the default domain, <project>.localhost or <project><index>.localhost.
-    # domain('acme') is that rule for another name: acme.localhost, acme2.localhost.
+    # domain('acme') applies that rule to the name acme, so lane 2 is acme2.localhost.
     domain: ${{ domain('acme') }}
     db_name: acme_${{ lane.name }}
     redis_db: ${{ lane.index }}
@@ -285,7 +285,8 @@ services:
     env:
       # http://127.0.0.1:<port> of another service in this lane.
       ACME_PAGES_SERVER_URL: ${{ services.pages_server.url }}
-    # User pages get a site of their own per lane, so they never share the app's cookies.
+    # pages.acme2.localhost stays on the app's site. User pages under *.pages2.localhost get
+    # a site of their own, so they never share the app's cookies.
     hosts: ["pages.${{ lane.domain }}", "*.${{ domain('pages') }}"]
   pages-server:
     platform: node

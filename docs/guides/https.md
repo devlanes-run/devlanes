@@ -73,7 +73,7 @@ infra:
     minio: "s3.${{ lane.domain }}"   # a container's published port
 ```
 
-`lane.domain` is `acme.localhost` in lane 0 and `acme<N>.localhost` elsewhere, such as `acme2.localhost`. Keep every hostname under it or under a name from [`domain()`](#a-site-of-its-own), so lanes never share a name. That value must also end in `.localhost`, or in your `hostnames.tld` with the resolver strategy; anything else does not resolve to your machine. Matching is exact first, then wildcards (longest first), then fallbacks. A wildcard covers any depth below its parent but not the parent itself; list the apex too when you need it. A name claimed by two lanes goes to the one with running units and both get a `host_conflict` warning.
+`lane.domain` is `acme.localhost` in lane 0 and `acme<N>.localhost` elsewhere, such as `acme2.localhost`. Keep every hostname under it or under a name from [`domain()`](#a-site-of-its-own), so lanes never share a name. A domain you write yourself in `lanes.vars` must also end in `.localhost`, or in your `hostnames.tld` with the resolver strategy. Anything else does not resolve to your machine. Matching is exact first, then wildcards (longest first), then fallbacks. A wildcard covers any depth below its parent but not the parent itself; list the apex too when you need it. A name claimed by two lanes goes to the one with running units and both get a `host_conflict` warning.
 
 `hosts` also change the default readiness check to `tcp` on the service's port.
 
@@ -83,22 +83,22 @@ Tenant-style subdomains (`*.pages2.localhost`) are fine as long as the lane inde
 
 A browser treats `app.acme2.localhost` and `api.acme2.localhost` as one site: `acme2.localhost`. A cookie the app sets with `Domain=acme2.localhost` reaches every name under it. That is what you want for the app and its API. It is wrong for names that serve content you don't control, such as user-generated pages, which must not read or set the app's cookies.
 
-`domain(name)` gives such a name a site of its own in every lane, by the rule `lane.domain` follows. `domain('pages')` is `pages.localhost` in lane 0 and `pages2.localhost` in lane 2, and `pages2.test` with the [resolver strategy](#programs-that-cannot-resolve-localhost). Use it in `lanes.vars` to name the site once:
+`domain(name)` gives such a name a site of its own in every lane, by the rule `lane.domain` follows. `domain('pages')` is `pages.localhost` in lane 0 and `pages2.localhost` in lane 2. With the [resolver strategy](#programs-that-cannot-resolve-localhost) it is `pages2.test`, unless the project sets `lanes.vars.domain` or `lanes.matrix`. Those projects keep `.localhost`. Use it in `lanes.vars` to name the site once:
 
 ```yaml
 lanes:
   vars:
-    pages_domain: ${{ domain('pages') }}
+    pages_domain: ${{ domain('acme-pages') }}
 services:
   web:
     hosts: app.${{ lane.domain }}            # app.acme2.localhost, the app's site
   pages:
-    hosts: "*.${{ lane.pages_domain }}"      # alice.pages2.localhost, a site apart
+    hosts: "*.${{ lane.pages_domain }}"      # alice.acme-pages2.localhost, a site apart
     env:
       PAGES_DOMAIN: ${{ lane.pages_domain }}
 ```
 
-Write `pages.${{ lane.domain }}` instead when the name may share the app's cookies. The argument is one or more hostname labels, such as `pages` or `docs.pages`, and anything else is a config error. `lane.domain` itself is `domain(project.name)` unless `lanes.vars.domain` sets it. Names from different projects can meet: lane 1 of `web2` and lane 0 of `web21` are both `web21.localhost`, and then both lanes get a `host_conflict` warning.
+Write `pages.${{ lane.domain }}` instead when the name may share the app's cookies. Pick a name only this project uses, such as `domain('acme-pages')`. Two projects that both call `domain('pages')` get the same names. Requests from those pages to the app also count as same-site, so `SameSite` cookies don't keep them out. The argument must be hostname labels, and anything else is a config error. `lane.domain` itself is `domain(project.name)` unless `lanes.vars.domain` sets it. Names from different projects can meet: lane 1 of `web2` and lane 0 of `web21` are both `web21.localhost`, and then both lanes get a `host_conflict` warning.
 
 ## Programs that cannot resolve *.localhost
 

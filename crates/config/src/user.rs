@@ -731,11 +731,11 @@ pub enum Resolver {
     #[schemars(extend("examples" = ["hosts_file"]))]
     HostsFile,
     /// Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the
-    /// names `domain()` returns. They are answered by a DNS
-    /// server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for
-    /// programs that use the system resolver. Needs `tld` and a one-time
-    /// `devlanes certs trust --resolver`; projects that set `lanes.vars.domain` or
-    /// `lanes.matrix` keep their own domains.
+    /// names `domain()` returns. They are answered by a DNS server the daemon runs on
+    /// `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the
+    /// system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`.
+    /// Projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains,
+    /// and `domain()` gives them `.localhost` names.
     #[schemars(extend("examples" = ["resolver"]))]
     Resolver,
     /// Reserved for public DNS names with DNS-01 certificates; not supported yet, so the

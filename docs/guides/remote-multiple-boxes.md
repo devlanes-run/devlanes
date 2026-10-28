@@ -6,21 +6,13 @@ This machine mirrors a box's lane: its proxy routes the lane's hostnames to the 
 
 Take two forks, `fork-a` and `fork-b`. Both run `acme@0`, with `web` at `https://web.acme.localhost` on port 20000 and Postgres on port 20012.
 
-A hostname goes through the proxy here, which picks the target by its name. A port number on this machine leads to exactly one place. Everything that uses a port reaches whatever holds it: a page or app here that got `services.web.url` (`http://127.0.0.1:20000`) from the box, `psql -p 20012`, a debugger. So only one of the forks can serve `acme@0` here.
+A hostname goes through the proxy here, which picks the target by its name. Both forks serve `web.acme.localhost`, so the name alone can't pick a fork. A port number on this machine leads to exactly one place. Anything that uses a port reaches whatever holds it, such as `psql -p 20012` or a page here that calls `services.web.url` (`http://127.0.0.1:20000`). So only one of the forks can serve `acme@0` here.
 
 Giving each box its own domain, such as `web.acme.fork-b.localhost`, wouldn't help. The hostnames would differ, but anything that uses a port would still reach whichever box holds it, without any warning. Renaming hostnames or remapping ports here would break the URLs the box already handed out.
 
 ## Switching instead of renaming
 
-The box chose its hostnames and ports and gave them to its processes, its URLs, its CORS origins and its cookies. A switch passes all of it through unchanged, so everything the box generated keeps working here.
-
-Every reference to a lane reaches the same box, by hostname or by port. A lane is never half on one box and half on another.
-
-The boxes don't change. Nothing restarts on them, and their lanes keep their numbers, ports and data. This machine only changes where its own hostnames and ports lead.
-
-The other boxes stay connected and visible, and a switch reconnects nothing.
-
-The cost is that you see one box per lane at a time.
+The box chose its hostnames and ports and gave them to its processes, which put them in URLs and cookies. A switch passes them through unchanged, so what the box generated keeps working here, and every reference to the lane reaches the same box. Nothing changes on the boxes, and the other boxes stay connected. The cost is that you see one box per lane at a time.
 
 ## Clashing lanes
 
@@ -35,11 +27,11 @@ Of the lanes that clash, this machine mirrors one, in this order:
 3. A lane of this machine that is stopped.
 4. The lane of the box that connected first.
 
-The lane in use gets all its hostnames and ports, and the others are skipped whole, also the names and ports that don't clash. Without a choice, a stopped lane here keeps its hostnames, and of the box lanes the one whose box connected first is in use.
+The lane in use gets all its hostnames and ports. The others are skipped whole, including names and ports that don't clash.
 
 ## Choosing
 
-In the TUI, a box lane joins the lanes row of the project with the same name: `@0  @0 fork-a  @0 fork-b  @1`. The lanes this machine does not mirror are grey. Select one and press `m` to make it the one in use. On this machine's own grey lane, `m` gives the hostnames back to it. When this machine's lane runs, `m` on a box lane offers to stop it and switch, after you confirm.
+In the TUI, a box lane joins the lanes row of the project with the same name: `@0  @0 fork-a  @0 fork-b  @1`. The lanes this machine does not mirror are grey. Select one and press `m` to make it the one in use. On this machine's own grey lane, `m` gives the hostnames back to it. When this machine's lane runs, `m` on a box lane asks to stop it, then switches. In the boxes view (`B`), `m` works on a box's skipped lane too.
 
 From a shell:
 
@@ -51,7 +43,7 @@ devlanes remote ls                    # skipped lanes say which lane is in use
 
 You can choose a box that is not connected right now. `remote use` then says `acme@0 will come from fork-b once it connects`, and the box takes the lane when it connects.
 
-The latest choice wins. When the lane you choose clashes with a lane chosen before, such as another project's lane with overlapping names, that older choice is deleted, and `remote use` says so. `remote use --local` also deletes the choices that took this machine's lane's names.
+The latest choice wins. When the lane you choose clashes with a lane chosen before, such as another project's lane with overlapping names, that older choice is deleted, and `remote use` says so. `remote use --local` also deletes the choices that took the names of this machine's lane.
 
 A choice stays across reconnects and daemon restarts. Another `remote use` replaces it. `devlanes remote disconnect <box>` deletes the box's choices, and so does the cleanup that forgets boxes not connected for `history.remote_hosts_retention`.
 
@@ -59,7 +51,7 @@ A choice stays across reconnects and daemon restarts. Another `remote use` repla
 
 All of the lane's hostnames and ports move to the new box together. This machine keeps listening on the ports throughout, so no other program can take them meanwhile, and the routes switch in one step. A hostname is never routed to both boxes, or to neither. `remote use` returns once the routes and ports lead to the new box. If the new box's service is still starting, a request waits for it or gets the usual starting page.
 
-Open connections to the old box close. That covers database clients, keep-alive connections and WebSockets. An answer already under way gets through first. Dev servers' HMR clients reconnect and reload the page, so an open tab moves to the new box by itself.
+Open connections to the old box close, database clients among them. That includes keep-alive connections and WebSockets. An answer already under way gets through first. Dev servers' HMR clients reconnect and reload the page, so an open tab moves to the new box by itself.
 
 A chosen box that connects, or reconnects after a restart, takes the lane the same way, once this machine has its routes.
 
@@ -69,7 +61,9 @@ Every box serves the same origins, such as `https://web.acme.localhost`. The bro
 
 ## Lanes running on this machine
 
-A lane running here holds its ports, so it always keeps its hostnames, and so does a lane whose own containers are up. Choosing a box for it, or for a box lane it clashes with, is refused with the commands to run: `devlanes stop --lane acme@0`, then `devlanes remote use fork-b acme@0`. `devlanes stop` leaves containers running, so when only the lane's own containers are up, the message names the commands that stop exactly those, such as `docker compose -p acme-lane0 stop` for its Compose project and `docker stop devlanes-acme-lane0-cerbos` for a plain container. Shared containers keep running and hold nothing the box needs. Starting a lane here takes its hostnames and ports back as soon as the start passed its checks, whatever it runs. It deletes the choice of a box lane it clashes with, and any choice of its own lane, connected or not, with a `choice_cleared` notice such as `acme@0 started on this machine, so fork-b's acme@0 is no longer mirrored or chosen.` Stopping it later doesn't bring the box back. Run `devlanes remote use` again.
+A lane running here holds its ports, so it always keeps its hostnames. So does a lane whose own containers are up and publish a host port. Shared containers, and containers without a published port, hold nothing a box needs. Choosing a box for such a lane, or for a box lane it clashes with, is refused with the commands to run: `devlanes stop --lane acme@0`, then `devlanes remote use fork-b acme@0`. `devlanes stop` leaves containers running, so the message also names the commands that stop exactly the lane's own containers, such as `docker compose -p acme-lane0 stop` for its Compose project and `docker stop devlanes-acme-lane0-cerbos` for a plain container. When only containers are up, it names just those.
+
+Starting a lane here takes its hostnames and ports back as soon as the start passed its checks, whatever it runs. Once a unit, a task or a container runs, it deletes the choice of a box lane it clashes with, and any choice of its own lane, whether or not its box is connected. A `choice_cleared` notice says so, such as `acme@0 started on this machine, so fork-b's acme@0 is no longer mirrored or chosen.` Containers that came back by themselves, after a reboot say, do the same, and the notice says the containers run. A start that fails before anything runs gives the box its lane back. Stopping the lane later doesn't bring the box back. Run `devlanes remote use` again.
 
 ## Overlapping port ranges
 

@@ -2116,7 +2116,7 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     } else {
         let before = match previous {
             Some(previous) => format!("{previous}'s lane is no longer mirrored."),
-            None => "It is in use instead of this machine's lane until that one starts.".to_owned(),
+            None => "This machine's lane gets the hostnames back when it starts.".to_owned(),
         };
         vec![format!("{lane} now comes from {from}. {before}")]
     };

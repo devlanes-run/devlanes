@@ -51,7 +51,7 @@ fn render(root: &Command) -> String {
         .get_arguments()
         .filter(|arg| shown(arg) && arg.is_global_set())
     {
-        page.push_str(&argument(arg));
+        page.push_str(&argument(arg, ""));
     }
     page.push_str("\n## Commands\n");
     for sub in visible(root) {
@@ -67,7 +67,8 @@ fn command(page: &mut String, command: &Command, parent: &str) {
     if let Some(about) = command.get_long_about().or(command.get_about()) {
         page.push_str(&format!("{}\n\n", about.to_string().trim()));
     }
-    page.push_str(&format!("```text\n{}\n```\n", usage(command)));
+    let usage = usage(command);
+    page.push_str(&format!("```text\n{usage}\n```\n"));
     let arguments: Vec<&Arg> = command
         .get_arguments()
         .filter(|arg| shown(arg) && !arg.is_global_set())
@@ -75,7 +76,7 @@ fn command(page: &mut String, command: &Command, parent: &str) {
     if !arguments.is_empty() {
         page.push('\n');
         for arg in arguments {
-            page.push_str(&argument(arg));
+            page.push_str(&argument(arg, &usage));
         }
     }
     if let Some(after) = command.get_after_long_help().or(command.get_after_help()) {
@@ -98,23 +99,42 @@ fn shown(arg: &Arg) -> bool {
     !arg.is_hide_set() && !matches!(arg.get_id().as_str(), "help" | "version")
 }
 
-/// The usage line without its `Usage: ` prefix.
+/// The usage lines without the `Usage: ` prefix, and without the indent that
+/// lines a second usage up under the first in a terminal.
 fn usage(command: &Command) -> String {
     let mut command = command.clone();
     let text = command.render_usage().to_string();
-    text.trim()
-        .strip_prefix("Usage: ")
-        .unwrap_or(text.trim())
-        .to_owned()
+    let text = text.trim().strip_prefix("Usage: ").unwrap_or(text.trim());
+    text.lines()
+        .map(|line| line.strip_prefix("       ").unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Whether a usage line names `<value>` outside any `[...]`, as a required
+/// positional.
+fn required_in(usage: &str, value: &str) -> bool {
+    let wanted = format!("<{value}>");
+    usage.lines().any(|line| {
+        let mut depth = 0_i32;
+        line.split_whitespace().any(|word| {
+            let found = depth == 0 && word.trim_end_matches("...") == wanted;
+            depth += i32::try_from(word.matches('[').count()).unwrap_or(0);
+            depth -= i32::try_from(word.matches(']').count()).unwrap_or(0);
+            found
+        })
+    })
 }
 
 /// A list item: the flag or positional, its help, possible values and default.
-fn argument(arg: &Arg) -> String {
+/// A positional reads as required when the command's `usage` names it so,
+/// as for one that is required unless another argument is given.
+fn argument(arg: &Arg, usage: &str) -> String {
     let takes_value = arg.get_action().takes_values();
     let mut name = match (arg.get_short(), arg.get_long()) {
         (None, None) => {
             let value = value_name(arg);
-            if arg.is_required_set() {
+            if arg.is_required_set() || required_in(usage, &value) {
                 format!("<{value}>")
             } else {
                 format!("[{value}]")

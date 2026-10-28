@@ -2814,7 +2814,7 @@ fn box_collision_warnings_name_the_other_box() {
             "overlaps": ["box alpha (20000-29999)", "box gamma (30000-32767)"],
             "message": "…"})
         ),
-        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767). Lanes both boxes run go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.\n"
+        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767). Lanes the boxes share go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.\n"
     );
 }
 
@@ -2919,7 +2919,7 @@ fn remote_use_says_where_the_lane_comes_from() {
     );
     assert_eq!(
         human(reply(json!("fork-b"), Value::Null, true)),
-        "clickmax@0 now comes from fork-b. It is in use instead of this machine's lane until that one starts.\n"
+        "clickmax@0 now comes from fork-b. This machine's lane gets the hostnames back when it starts.\n"
     );
     assert_eq!(
         human(reply(Value::Null, json!("fork-b"), true)),

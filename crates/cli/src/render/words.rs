@@ -1464,7 +1464,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             field(data, "own_port")
         ),
         "ports_range_overlap" => format!(
-            "{host}: the box's ports.range {} overlaps {}. Lanes both boxes run go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
+            "{host}: the box's ports.range {} overlaps {}. Lanes the boxes share go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
             field(data, "range"),
             list(data, "overlaps")
                 .iter()
