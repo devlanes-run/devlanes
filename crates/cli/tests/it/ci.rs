@@ -243,6 +243,19 @@ async fn github_escaping_and_append_only_summary() {
     );
 }
 
+/// The reply of a daemon from before the averages still reads, with the new
+/// fields absent.
+#[test]
+fn usage_from_an_older_daemon_reads() {
+    let usage: LaneUsage = serde_json::from_value(json!({"lane": "acme@0", "peaks": [
+        {"unit": "api", "peak_memory_bytes": 1024, "peak_cpu_percent": 2.0}
+    ]}))
+    .expect("older reply");
+    let api = &usage.peaks[0];
+    assert_eq!(api.peak_memory_bytes, Some(1024));
+    assert_eq!((api.avg_cpu_percent, api.state.as_deref()), (None, None));
+}
+
 /// A noisy failure cannot push the step summary past GitHub's size limit: each
 /// tail line is cut, and blocks past the total cap are left out with one line.
 #[test]

@@ -509,7 +509,7 @@ impl Inner {
                     .usage
                     .entry(target.name.clone())
                     .or_default()
-                    .add(sample.cpu_percent, sample.footprint_bytes);
+                    .add(sample.cpu_percent, sample.footprint_bytes, now);
             }
             let rollups = state.history.drain_rollups(now);
             state.prune(now, &sampled);
