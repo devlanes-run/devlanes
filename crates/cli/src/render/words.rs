@@ -1021,6 +1021,43 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 Some(Hint::command(["remote", "connect", host.as_str()])),
             )
         }
+        // `remote use` refusals.
+        "box_unknown" => (
+            format!("this machine knows no box called {}", field(data, "host")),
+            Some(Hint::command(["remote", "ls"])),
+        ),
+        "box_not_connected" => {
+            let host = text(data, "host");
+            (
+                format!("box {host} is not connected"),
+                Some(Hint::command(["remote", "connect", host.as_str()])),
+            )
+        }
+        "lane_not_on_box" => (
+            format!(
+                "box {} has no lane {}",
+                field(data, "host"),
+                field(data, "lane")
+            ),
+            Some(Hint::command(["remote", "ls"])),
+        ),
+        "local_lane_running" => {
+            let local = text(data, "local_lane");
+            (
+                format!("{local} runs on this machine, so it keeps the hostnames"),
+                Some(Hint::command(["stop", "--lane", local.as_str()])),
+            )
+        }
+        "local_lane_unknown" => {
+            let lane = text(data, "lane");
+            (
+                format!("this machine has no lane {lane}"),
+                Some(Hint(format!(
+                    "devlanes remote use <box> {}",
+                    crate::shell_quote(&lane)
+                ))),
+            )
+        }
         // A box's own reason, such as connections being off there, starts
         // with "the box", which this names. It says what to do, so it gets
         // no hint.
@@ -1299,8 +1336,33 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     let other_box = text(data, "box");
+    let lane = field(data, "lane");
+    let winner_lane = field(data, "winner_lane");
+    let switch = format!("devlanes remote use {host} {lane} switches");
     match code {
-        // A stopped lane keeps its hostnames, so the hint names the clean.
+        "lane_skipped" if text(data, "cause") == "local_running" => format!(
+            "{host}: lane {lane} is not mirrored because {winner_lane} runs on this machine. Stop it there, then {switch}"
+        ),
+        "lane_skipped" if !text(data, "cause").is_empty() && !other_box.is_empty() => format!(
+            "{host}: lane {lane} is not mirrored because {other_box}'s {winner_lane} is in use. {switch}"
+        ),
+        "lane_skipped" if !text(data, "cause").is_empty() => format!(
+            "{host}: lane {lane} is not mirrored because this machine's {winner_lane} is in use. {switch}"
+        ),
+        "choice_cleared" => {
+            let local = text(data, "local_lane");
+            if local == lane || local.is_empty() {
+                format!(
+                    "{host}: {lane} started on this machine and takes its hostnames back from {host}"
+                )
+            } else {
+                format!(
+                    "{host}: {local} started on this machine and takes the hostnames of {host}'s {lane}"
+                )
+            }
+        }
+        // A daemon from before lane choices. A stopped lane keeps its
+        // hostnames, so the hint names the clean.
         "lane_skipped" if !other_box.is_empty() => format!(
             "{host}: lane {} is not mirrored because box {other_box} already serves {hosts}. Run devlanes lane clean for that lane on {other_box}, or disconnect {other_box}",
             field(data, "lane")

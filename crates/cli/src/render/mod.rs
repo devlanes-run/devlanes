@@ -206,6 +206,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::DaemonShutdown => other::daemon_shutdown(data),
         Method::DaemonResetState => other::reset_state(data),
         Method::HostList => other::host_list(data),
+        Method::RemoteUse => other::remote_use(data, cx),
         Method::RemotePair => other::daemon_pair(data, cx),
         Method::RemoteClients => other::daemon_clients(data, cx),
         Method::RemoteRevoke => other::daemon_revoke(data, cx),

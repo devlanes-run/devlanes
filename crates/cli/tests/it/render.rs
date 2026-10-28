@@ -2817,3 +2817,195 @@ fn box_collision_warnings_name_the_other_box() {
         "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767), so their lanes can get the same ports. Give one box a different ports.range\n"
     );
 }
+
+/// A skipped lane's warning names the lane in use and the command that
+/// switches, or what to stop first; `choice_cleared` says which local lane
+/// took the hostnames back.
+#[test]
+fn lane_choice_warnings_say_how_to_switch() {
+    let line = |data: serde_json::Value| {
+        let event = Event {
+            seq: 1,
+            event: "remote.warning".into(),
+            data,
+        };
+        runtime(OutputMode::Agent)
+            .reporter()
+            .event(Method::Subscribe, &event)
+            .expect("event")
+            .stdout
+    };
+    let skipped = |cause: &str, winner: Value| {
+        json!({"host": "fork-b", "code": "lane_skipped", "lane": "acme@0",
+               "hosts": ["web.acme.localhost"], "box": winner, "local_lanes": [],
+               "cause": cause, "winner_lane": "acme@0"})
+    };
+    assert_eq!(
+        line(skipped("box_earlier", json!("fork-a"))),
+        "warn fork-b: lane acme@0 is not mirrored because fork-a's acme@0 is in use. devlanes remote use fork-b acme@0 switches\n"
+    );
+    assert_eq!(
+        line(skipped("local_stopped", Value::Null)),
+        "warn fork-b: lane acme@0 is not mirrored because this machine's acme@0 is in use. devlanes remote use fork-b acme@0 switches\n"
+    );
+    assert_eq!(
+        line(skipped("local_running", Value::Null)),
+        "warn fork-b: lane acme@0 is not mirrored because acme@0 runs on this machine. Stop it there, then devlanes remote use fork-b acme@0 switches\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "choice_cleared", "lane": "acme@0",
+                    "local_lane": "acme@0", "message": "…"})
+        ),
+        "warn fork-b: acme@0 started on this machine and takes its hostnames back from fork-b\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "choice_cleared", "lane": "shop@0",
+                    "local_lane": "acme@1", "message": "…"})
+        ),
+        "warn fork-b: acme@1 started on this machine and takes the hostnames of fork-b's shop@0\n"
+    );
+}
+
+/// `remote use` says where the lane comes from now and which lane stopped
+/// serving it; agents get one line, and `--json` the daemon's reply.
+#[test]
+fn remote_use_says_where_the_lane_comes_from() {
+    let human = |data: Value| {
+        runtime(OutputMode::Human)
+            .reporter()
+            .result(&Report::new(Method::RemoteUse, &data))
+            .expect("render")
+            .stdout
+    };
+    let reply = |host: Value, previous: Value, mirrored: bool| json!({"lane": "clickmax@0", "host": host, "previous": previous, "mirrored": mirrored});
+    assert_eq!(
+        human(reply(json!("fork-b"), json!("fork-a"), true)),
+        "clickmax@0 now comes from fork-b. fork-a's lane is no longer mirrored.\n"
+    );
+    assert_eq!(
+        human(reply(json!("fork-b"), Value::Null, true)),
+        "clickmax@0 now comes from fork-b. This machine's lane gives way until it starts.\n"
+    );
+    assert_eq!(
+        human(reply(Value::Null, json!("fork-b"), true)),
+        "clickmax@0 now comes from this machine. fork-b's lane is no longer mirrored.\n"
+    );
+    assert_eq!(
+        human(reply(json!("fork-b"), json!("fork-b"), true)),
+        "clickmax@0 already comes from fork-b.\n"
+    );
+    assert_eq!(
+        human(reply(json!("fork-b"), json!("fork-a"), false)),
+        "clickmax@0 is chosen from fork-b but not mirrored yet. devlanes remote ls shows why.\n"
+    );
+    let data = reply(json!("fork-b"), json!("fork-a"), true);
+    let agent = runtime(OutputMode::Agent)
+        .reporter()
+        .result(&Report::new(Method::RemoteUse, &data))
+        .expect("render")
+        .stdout;
+    assert_eq!(
+        agent,
+        "remote use lane=clickmax@0 from=fork-b previous=fork-a mirrored=true\n"
+    );
+    let json = runtime(OutputMode::Json)
+        .reporter()
+        .result(&Report::new(Method::RemoteUse, &data))
+        .expect("json")
+        .stdout;
+    assert_eq!(serde_json::from_str::<Value>(&json).expect("json"), data);
+}
+
+/// `remote ls` gives each skipped lane a note with the lane in use and the
+/// command that switches, marks the lanes chosen for a box, and lists this
+/// machine's lanes that gave way. `--json` keeps every field.
+#[test]
+fn remote_ls_names_the_lane_in_use() {
+    let hosts = json!({"items": [
+        {"host": "fork-a", "state": "connected", "transport": "ssh", "ports": [],
+         "chosen_lanes": [],
+         "skipped_lanes": [
+            {"lane": "clickmax@0", "hosts": ["web.clickmax.localhost"], "box": "fork-b",
+             "reason": "fork-b's clickmax@0 is in use", "cause": "box_chosen",
+             "winner": "fork-b", "winner_lane": "clickmax@0", "can_use": true},
+            {"lane": "shop@0", "hosts": ["shop.localhost"], "box": null,
+             "reason": "shop@0 runs on this machine", "cause": "local_running",
+             "winner": null, "winner_lane": "shop@0", "can_use": false}]},
+        {"host": "fork-b", "state": "connected", "transport": "ssh", "ports": [],
+         "chosen_lanes": ["clickmax@0"], "skipped_lanes": []},
+    ], "yielded_local_lanes": [{"lane": "clickmax@0", "winner": "fork-b"}],
+       "truncated": false, "next_cursor": null});
+    let text = render_text(Method::HostList, &hosts);
+    for expected in [
+        "note: not mirrored because fork-b's clickmax@0 is in use. devlanes remote use fork-a clickmax@0 switches.",
+        "note: not mirrored because shop@0 runs on this machine. Stop it there, then devlanes remote use fork-a shop@0 switches.",
+        "chosen: clickmax@0",
+        "note: fork-b's lane is in use instead. devlanes remote use --local clickmax@0 switches back.",
+    ] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
+    for hidden in [
+        "cause:",
+        "can_use",
+        "winner_lane",
+        "chosen_lanes",
+        "yielded",
+    ] {
+        assert!(!text.contains(hidden), "{hidden}: {text}");
+    }
+    let json = runtime(OutputMode::Json)
+        .reporter()
+        .result(&Report::new(Method::HostList, &hosts))
+        .expect("json")
+        .stdout;
+    assert_eq!(serde_json::from_str::<Value>(&json).expect("json"), hosts);
+}
+
+/// Each `remote use` refusal says what is wrong and what to run.
+#[test]
+fn remote_use_refusals_say_what_to_do() {
+    let stderr = |code: &str, data: Value| {
+        runtime(OutputMode::Agent)
+            .reporter()
+            .error(&RpcError::new(code, data, 1), None)
+            .stderr
+    };
+    for (code, data, says, fix) in [
+        (
+            "box_unknown",
+            json!({"host": "fork-c", "message": "…"}),
+            "this machine knows no box called fork-c",
+            "devlanes remote ls",
+        ),
+        (
+            "box_not_connected",
+            json!({"host": "fork-b", "message": "…"}),
+            "box fork-b is not connected",
+            "devlanes remote connect fork-b",
+        ),
+        (
+            "lane_not_on_box",
+            json!({"host": "fork-b", "lane": "acme@9", "message": "…"}),
+            "box fork-b has no lane acme@9",
+            "devlanes remote ls",
+        ),
+        (
+            "local_lane_running",
+            json!({"host": "fork-b", "lane": "acme@0", "local_lane": "acme@0", "message": "…"}),
+            "acme@0 runs on this machine, so it keeps the hostnames",
+            "devlanes stop --lane acme@0",
+        ),
+        (
+            "local_lane_unknown",
+            json!({"lane": "acme@4", "message": "…"}),
+            "this machine has no lane acme@4",
+            "devlanes remote use <box> acme@4",
+        ),
+    ] {
+        let text = stderr(code, data);
+        assert!(text.contains(says), "{code}: {text}");
+        assert!(text.contains(fix), "{code}: {text}");
+    }
+}

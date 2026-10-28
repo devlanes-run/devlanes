@@ -712,6 +712,31 @@ List the synced folders of running lanes
 devlanes remote sync [OPTIONS]
 ```
 
+### devlanes remote use
+
+Choose which box serves a lane that clashes with others.
+
+Lanes clash when their hostnames overlap, as forks of one box image do. This machine
+mirrors one of them. A lane running here comes first, then the chosen box lane, then
+a stopped lane here, then the box connected first. The choice stays until another one
+replaces it, the box is disconnected, or a lane here that clashes with it starts.
+
+--local gives the hostnames back to this machine's lane.
+
+```text
+devlanes remote use [OPTIONS] [BOX] [LANE]
+```
+
+- `[BOX]`: Box whose lane serves the hostnames
+- `[LANE]`: Lane reference, such as acme@0
+- `--local <LANE>`: Give the lane's hostnames back to this machine
+
+```text
+Examples:
+  devlanes remote use fork-b acme@0
+  devlanes remote use --local acme@0
+```
+
 ### devlanes daemon
 
 Run, stop and install the background daemon, and pair other machines with it

@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use devlanes_proto::{Event, LogLine, Method, RpcError, events};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{
     Ctx, Outcome, age, bytes, cap_line, clean, compact_fields, display_value, duration,
@@ -1951,20 +1951,65 @@ fn old_copy_checks(copies: &Value) -> Vec<Check> {
 /// line (`last_error: <message> (<reason>, 5m ago)`) and left out when there is none.
 /// The box's `registry`, `box`, `proxy` and `suffixes` are for the TUI and
 /// `--json`: the tree has its mirrored ports, routes and warnings already.
-/// `connected_since_ms` reads `connected_since: 5m ago`.
+/// `connected_since_ms` reads `connected_since: 5m ago`. A skipped lane gets
+/// a `note` naming the lane in use and how to switch, `chosen_lanes` reads
+/// `chosen`, and this machine's lanes that gave way are listed with a note.
 pub(super) fn host_list(data: &Value) -> Vec<String> {
     let mut data = data.clone();
+    if let Some(fields) = data.as_object_mut()
+        && let Some(yielded) = fields.remove("yielded_local_lanes")
+    {
+        let notes: Vec<Value> = yielded
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|entry| {
+                let lane = text(entry, "lane");
+                json!({
+                    "lane": lane,
+                    "note": format!(
+                        "{}'s lane is in use instead. devlanes remote use --local {lane} switches back.",
+                        text(entry, "winner")
+                    ),
+                })
+            })
+            .collect();
+        if !notes.is_empty() {
+            fields.insert("local_lanes_given_way".into(), Value::Array(notes));
+        }
+    }
     for item in data
         .get_mut("items")
         .and_then(Value::as_array_mut)
         .into_iter()
         .flatten()
     {
+        let host = text(item, "host");
         let Some(fields) = item.as_object_mut() else {
             continue;
         };
         for key in ["registry", "box", "proxy", "suffixes"] {
             fields.remove(key);
+        }
+        if let Some(chosen) = fields.remove("chosen_lanes")
+            && chosen.as_array().is_some_and(|lanes| !lanes.is_empty())
+        {
+            fields.insert("chosen".into(), chosen);
+        }
+        for skipped in fields
+            .get_mut("skipped_lanes")
+            .and_then(Value::as_array_mut)
+            .into_iter()
+            .flatten()
+        {
+            let note = skipped_note(&host, skipped);
+            if let Some(entry) = skipped.as_object_mut() {
+                // The note says all of these in words.
+                for key in ["box", "reason", "cause", "winner", "winner_lane", "can_use"] {
+                    entry.remove(key);
+                }
+                entry.insert("note".into(), Value::String(note));
+            }
         }
         if let Some(since) = fields.remove("connected_since_ms")
             && let Some(ms) = since.as_u64()
@@ -2006,6 +2051,51 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
         fields.insert("last_error".into(), Value::String(line));
     }
     tree(&data)
+}
+
+/// The `remote ls` note of a lane box `host` skips: why, from the daemon's
+/// `reason`, and the command that switches to it, or what to do first while
+/// a lane running here keeps the hostnames.
+fn skipped_note(host: &str, skipped: &Value) -> String {
+    let lane = text(skipped, "lane");
+    let reason = super::clean(&text(skipped, "reason"));
+    let switch = format!("devlanes remote use {host} {lane} switches.");
+    match skipped.get("can_use").and_then(Value::as_bool) {
+        Some(true) => format!("not mirrored because {reason}. {switch}"),
+        Some(false) => format!("not mirrored because {reason}. Stop it there, then {switch}"),
+        // A daemon from before lane choices.
+        None => format!("not mirrored because {reason}"),
+    }
+}
+
+/// `remote use`: where the lane's hostnames come from now, and the lane that
+/// no longer serves them.
+pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let lane = text(data, "lane");
+    let host = data.get("host").and_then(Value::as_str);
+    let previous = data.get("previous").and_then(Value::as_str);
+    let mirrored = data.get("mirrored").and_then(Value::as_bool) != Some(false);
+    if cx.agent() {
+        return vec![format!(
+            "remote use lane={lane} from={} previous={} mirrored={mirrored}",
+            host.unwrap_or("local"),
+            previous.unwrap_or("local")
+        )];
+    }
+    let from = host.map_or_else(|| "this machine".to_owned(), str::to_owned);
+    if !mirrored {
+        return vec![format!(
+            "{lane} is chosen from {from} but not mirrored yet. devlanes remote ls shows why."
+        )];
+    }
+    if previous == host {
+        return vec![format!("{lane} already comes from {from}.")];
+    }
+    let before = match previous {
+        Some(previous) => format!("{previous}'s lane is no longer mirrored."),
+        None => "This machine's lane gives way until it starts.".to_owned(),
+    };
+    vec![format!("{lane} now comes from {from}. {before}")]
 }
 
 /// `daemon pair`: the code and what to run on the client. Plain output is the

@@ -617,6 +617,37 @@ pub enum RemoteCommand {
     Ls,
     /// List the synced folders of running lanes
     Sync,
+    /// Choose which box serves a lane that clashes with others
+    #[command(
+        long_about = "Choose which box serves a lane that clashes with others.\n\n\
+Lanes clash when their hostnames overlap, as forks of one box image do. This machine\n\
+mirrors one of them. A lane running here comes first, then the chosen box lane, then\n\
+a stopped lane here, then the box connected first. The choice stays until another one\n\
+replaces it, the box is disconnected, or a lane here that clashes with it starts.\n\n\
+--local gives the hostnames back to this machine's lane.",
+        after_help = "Examples:\n  devlanes remote use fork-b acme@0\n  devlanes remote use --local acme@0"
+    )]
+    Use {
+        /// Box whose lane serves the hostnames
+        #[arg(
+            id = "use_host",
+            value_name = "BOX",
+            required_unless_present = "local",
+            conflicts_with = "local"
+        )]
+        host: Option<String>,
+        /// Lane reference, such as acme@0
+        #[arg(
+            id = "use_lane",
+            value_name = "LANE",
+            required_unless_present = "local",
+            conflicts_with = "local"
+        )]
+        lane: Option<String>,
+        /// Give the lane's hostnames back to this machine
+        #[arg(long, value_name = "LANE")]
+        local: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -1221,6 +1252,13 @@ impl Cli {
                 RemoteCommand::Disconnect { host } => (Method::Disconnect, json!({"host": host})),
                 RemoteCommand::Ls => (Method::HostList, json!({})),
                 RemoteCommand::Sync => (Method::SyncStatus, json!({})),
+                RemoteCommand::Use { host, lane, local } => (
+                    Method::RemoteUse,
+                    match local {
+                        Some(lane) => json!({"lane": lane, "host": null}),
+                        None => json!({"lane": lane, "host": host}),
+                    },
+                ),
             },
             Some(Command::Completions { shell }) => return Ok(Action::Completions(*shell)),
             Some(Command::Tunnel { .. }) => return Ok(Action::Tunnel),
