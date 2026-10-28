@@ -554,11 +554,9 @@ pub fn rpc(error: &RpcError) -> Worded {
             Some("devlanes daemon clients".into()),
         ),
         // `remote.use`: the daemon's message says what is wrong and what to do.
-        "box_unknown" | "box_not_connected" | "lane_not_on_box" | "local_lane_running"
-        | "local_lane_unknown" => {
+        "box_unknown" | "lane_not_on_box" | "local_lane_running" | "local_lane_unknown" => {
             let fallback = match code.as_str() {
                 "box_unknown" => "this machine knows no box by that name",
-                "box_not_connected" => "the box is not connected. Connect it in the boxes view (B)",
                 "lane_not_on_box" => "the box does not run that lane",
                 "local_lane_running" => "the lane runs on this machine. Stop it there first",
                 _ => "this machine has no such lane",

@@ -482,9 +482,9 @@ async fn m_on_a_lane_in_use_only_says_so() -> TestResult {
 async fn a_refused_switch_shows_the_daemons_words() -> TestResult {
     let mut app = with_forks(120, 30).await;
     let error = RpcError::new(
-        "box_not_connected",
-        json!({"message": "fork-b is not connected. Connect it with devlanes remote connect fork-b"}),
-        4,
+        "lane_not_on_box",
+        json!({"message": "box fork-b has no lane acme@1. Run devlanes remote ls to see its lanes"}),
+        1,
     );
     app.update(Msg::LaneUsed {
         lane: "acme@1".into(),
@@ -495,9 +495,29 @@ async fn a_refused_switch_shows_the_daemons_words() -> TestResult {
     assert!(shown.error);
     assert_eq!(
         shown.text,
-        "use acme@1 from fork-b failed: fork-b is not connected. Connect it with devlanes remote connect fork-b"
+        "use acme@1 from fork-b failed: box fork-b has no lane acme@1. Run devlanes remote ls to see its lanes"
     );
     Ok(())
+}
+
+/// A box that is not connected keeps the choice for when it connects.
+#[tokio::test]
+async fn a_choice_for_a_box_that_is_not_connected_waits_for_it() {
+    let mut app = with_forks(120, 30).await;
+    let effects = app.update(Msg::LaneUsed {
+        lane: "acme@1".into(),
+        host: Some("fork-b".into()),
+        result: Ok(
+            json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
+                          "mirrored": false, "pending": true}),
+        ),
+    });
+    let shown = app.notice.as_ref().map(|n| (n.text.as_str(), n.error));
+    assert_eq!(
+        shown,
+        Some(("acme@1 will come from fork-b once it connects", false))
+    );
+    assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
 }
 
 #[tokio::test]

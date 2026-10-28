@@ -4550,11 +4550,14 @@ impl App {
         let from = host.unwrap_or("this machine");
         match result {
             Ok(reply) => {
-                let mirrored = reply.get("mirrored").and_then(Value::as_bool) != Some(false);
-                self.set_notice(if mirrored {
-                    format!("{lane} now comes from {from}")
-                } else {
+                let flag = |key: &str| reply.get(key).and_then(Value::as_bool);
+                // A box that is not connected gets the choice when it connects.
+                self.set_notice(if flag("pending") == Some(true) {
+                    format!("{lane} will come from {from} once it connects")
+                } else if flag("mirrored") == Some(false) {
                     format!("{lane} from {from} is chosen but not mirrored yet")
+                } else {
+                    format!("{lane} now comes from {from}")
                 });
             }
             Err(error) => self.api_error(&format!("use {lane} from {from}"), None, error, effects),
