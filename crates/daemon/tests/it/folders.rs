@@ -190,6 +190,20 @@ async fn lanes_of_one_folder_have_their_own_data_folders() {
         h.call(Method::Stop, json!({}), on_lane(&main, "review"))
             .await
             .expect("stop review");
+        // Each lane's logs live under its index.
+        let log_lanes = || -> Vec<String> {
+            let mut names: Vec<String> = std::fs::read_dir(home.join("logs").join("demo"))
+                .map(|entries| {
+                    entries
+                        .filter_map(Result::ok)
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                        .collect()
+                })
+                .unwrap_or_default();
+            names.sort();
+            names
+        };
+        assert_eq!(log_lanes(), ["0", "1"]);
         h.call(
             Method::LaneClean,
             json!({}),
@@ -202,6 +216,7 @@ async fn lanes_of_one_folder_have_their_own_data_folders() {
         .expect("clean review");
         assert!(!paths[1].exists(), "the cleaned lane's folder is gone");
         assert!(paths[0].is_dir(), "the other lane keeps its folder");
+        assert_eq!(log_lanes(), ["0"], "the cleaned lane's logs are gone");
         h.call(Method::Stop, json!({}), cx(&main))
             .await
             .expect("stop main");

@@ -271,6 +271,7 @@ impl Terminal {
             &mut text,
             BasicFormattedCaptureRange::Full(&mut BasicFormattedCaptureState::default()),
         );
+        let text = trim_blank_ends(&text);
         let columns = usize::from(size.columns.max(1));
         let rows_of = |width: usize| width.div_ceil(columns).max(1);
         let mut bytes = Vec::new();
@@ -488,16 +489,16 @@ impl Terminal {
     /// its first row continues them.
     fn joined(&self, starts: bool, capture: String) -> String {
         if starts {
-            capture
+            trim_blank_ends(&capture)
         } else {
-            format!("{}{}{capture}", self.open_style, self.open)
+            trim_blank_ends(&format!("{}{}{capture}", self.open_style, self.open))
         }
     }
 
     /// A line whose last row left the screen: into the history, and into
     /// the log unless the log has it as it reads.
     fn scrolled(&mut self, raw: String) {
-        let line = styled(&self.open_style, &raw);
+        let line = trim_blank_ends(&styled(&self.open_style, &raw));
         apply_style(&mut self.open_style, &raw);
         let hash = hash(&line);
         let seq = match self.logged.pop_front() {
@@ -824,16 +825,125 @@ fn hash(line: &str) -> u64 {
     hasher.finish()
 }
 
-/// The columns of `row` up to its last cell that a capture writes: one with
-/// text or with attributes of its own.
+/// The columns of `row` up to its last cell that shows something: text, or
+/// a space with a background, inverse or underline (see [`trim_blank_ends`]).
 pub(crate) fn written_end(screen: &vt100::Screen, row: u16) -> u16 {
-    let fresh = vt100::Parser::new(NonZeroU16::MIN, NonZeroU16::MIN, 0);
-    let blank = fresh.screen().cell(0, 0);
     let columns = screen.size().1.get();
     (0..columns)
         .rev()
-        .find(|&column| screen.cell(row, column) != blank)
+        .find(|&column| {
+            screen.cell(row, column).is_some_and(|cell| {
+                !cell.contents().trim().is_empty()
+                    || cell.bgcolor() != vt100::Color::Default
+                    || cell.inverse()
+                    || cell.underline()
+            })
+        })
         .map_or(0, |column| column + 1)
+}
+
+/// `capture` without the spaces its lines end with that show nothing. A
+/// console host draws the rest of a row as spaces in the color the text
+/// ended in; counted as text, they make a line as wide as the console, and
+/// it wraps into an empty-looking row in any narrower viewer. A space keeps
+/// its place when a background, inverse or underline makes it visible.
+/// Color sequences stay, so the style carried into the next line is the same.
+fn trim_blank_ends(capture: &str) -> String {
+    let mut out = String::with_capacity(capture.len());
+    let mut shows = Shows::default();
+    for (index, line) in capture.split('\n').enumerate() {
+        if index > 0 {
+            out.push('\n');
+        }
+        // What follows the last visible character, held until another comes.
+        let mut tail = String::new();
+        let mut rest = line;
+        while let Some(c) = rest.chars().next() {
+            if let Some(sequence) = sgr_at(rest) {
+                shows.apply(sequence);
+                tail.push_str(sequence);
+                rest = &rest[sequence.len()..];
+                continue;
+            }
+            if c == ' ' && !shows.any() {
+                tail.push(c);
+            } else {
+                out.push_str(&tail);
+                tail.clear();
+                out.push(c);
+            }
+            rest = &rest[c.len_utf8()..];
+        }
+        // The trailing spaces go; the sequences among them stay.
+        let mut sequences = tail.as_str();
+        while let Some(start) = sequences.find('\x1b') {
+            let sequence = sgr_at(&sequences[start..]).unwrap_or(&sequences[start..]);
+            out.push_str(sequence);
+            sequences = &sequences[start + sequence.len()..];
+        }
+    }
+    out
+}
+
+/// The SGR sequence (`ESC [ … m`) `text` starts with.
+fn sgr_at(text: &str) -> Option<&str> {
+    let params = text.strip_prefix("\x1b[")?;
+    let end = params.find(|c: char| !(c.is_ascii_digit() || c == ';' || c == ':'))?;
+    (params.as_bytes()[end] == b'm').then(|| &text[..2 + end + 1])
+}
+
+/// The attributes in effect that make a space visible.
+#[derive(Default)]
+struct Shows {
+    background: bool,
+    inverse: bool,
+    underline: bool,
+}
+
+impl Shows {
+    /// Whether a space drawn now shows.
+    fn any(&self) -> bool {
+        self.background || self.inverse || self.underline
+    }
+
+    /// Follows the SGR `sequence` (`ESC [ … m`).
+    fn apply(&mut self, sequence: &str) {
+        let mut params = sequence[2..sequence.len() - 1].split(';');
+        while let Some(param) = params.next() {
+            let value = |text: &str| {
+                text.split(':')
+                    .next()
+                    .unwrap_or("")
+                    .parse::<u16>()
+                    .unwrap_or(0)
+            };
+            match value(param) {
+                0 => *self = Self::default(),
+                4 => self.underline = true,
+                24 => self.underline = false,
+                7 => self.inverse = true,
+                27 => self.inverse = false,
+                40..=47 | 100..=107 => self.background = true,
+                49 => self.background = false,
+                color @ (38 | 48) => {
+                    self.background |= color == 48;
+                    // `38;5;n` or `38;2;r;g;b` take the next parameters; the
+                    // `38:5:n` form keeps them inside this one.
+                    if !param.contains(':') {
+                        let extra = match params.next().map(value) {
+                            Some(5) => 1,
+                            Some(2) => 3,
+                            _ => 0,
+                        };
+                        for _ in 0..extra {
+                            params.next();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 /// `text` with `\r\n` line ends; captured rows end lines with `\n` alone.
@@ -907,7 +1017,8 @@ mod tests {
         let mut terminal = unix();
         assert!(feed(&mut terminal, b"continue? ").is_empty());
         terminal.settle_paused();
-        assert_eq!(terminal.take_log(), ["continue? "]);
+        // A trailing space shows nothing; the cursor still waits after it.
+        assert_eq!(terminal.take_log(), ["continue?"]);
         assert!(feed(&mut terminal, b"\r\n").is_empty());
         terminal.settle_paused();
         assert!(terminal.take_log().is_empty());
@@ -1044,6 +1155,45 @@ mod tests {
         terminal.process(b"\x1b[?1049l\r\nafter\r\n");
         terminal.settle();
         assert_eq!(terminal.take_log(), ["after"]);
+    }
+
+    #[test]
+    /// A console host draws the rest of a colored line's row as spaces in
+    /// that color. They are not part of the line: a narrower viewer gets one
+    /// row per line, not an empty-looking second one, and the scrollback and
+    /// the log hold the line without them. Spaces with a background stay.
+    fn spaces_a_console_pads_a_row_with_are_not_text() {
+        let mut terminal = unix();
+        let pad = " ".repeat(25);
+        let output = format!(
+            "\x1b[36mready\x1b[K\x1b[39m\r\n\x1b[32mlisten {pad}\x1b[39m\r\n\x1b[44m   \x1b[m bar\r\n"
+        );
+        let log = feed(&mut terminal, output.as_bytes());
+        let texts: Vec<String> = log
+            .iter()
+            .map(|line| devlanes_logs::strip_sgr(line))
+            .collect();
+        assert_eq!(texts, ["ready", "listen", "    bar"]);
+        let narrow = TerminalSize {
+            columns: 20,
+            rows: 4,
+        };
+        let drawn = terminal.view(narrow, None).render(None);
+        assert_eq!(drawn.size.rows, 4, "one row per line, then the cursor's");
+        let rows: Vec<String> = drawn.screen.rows(0, 20).collect();
+        assert_eq!(rows[..3], ["ready", "listen", "    bar"]);
+        assert_eq!(
+            drawn.screen.cell(2, 0).map(vt100::Cell::bgcolor),
+            Some(vt100::Color::Idx(4))
+        );
+        feed(&mut terminal, b"a\r\nb\r\nc\r\n");
+        assert_eq!(history(&terminal), ["ready", "listen", "    bar"]);
+        assert!(
+            terminal
+                .history_since(0)
+                .1
+                .all(|line| !devlanes_logs::strip_sgr(&line.styled).ends_with(' '))
+        );
     }
 
     #[test]

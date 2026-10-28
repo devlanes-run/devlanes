@@ -646,7 +646,13 @@ impl Inner {
         if !context.yes {
             return Err(confirmation(json!({"lane": name, "flag": "--yes"})));
         }
-        self.clean_lane(&project, &lane, Some(&context.actor)).await
+        self.clean_lane(
+            &project,
+            &lane,
+            Some(&context.actor),
+            crate::lifecycle::Logs::Delete,
+        )
+        .await
     }
 
     /// `lane.gc`: cleans lanes whose worktrees are gone or whose worktree no longer
@@ -704,8 +710,13 @@ impl Inner {
             if !context.yes {
                 continue;
             }
-            self.clean_lane(&project, &lane, Some(&context.actor))
-                .await?;
+            self.clean_lane(
+                &project,
+                &lane,
+                Some(&context.actor),
+                crate::lifecycle::Logs::Keep,
+            )
+            .await?;
             cleaned.push(reference);
         }
         let mut removed = 0;

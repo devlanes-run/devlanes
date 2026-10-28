@@ -643,7 +643,7 @@ Without --start, a terminal asks whether to start the new lane right away."
         #[arg(long, requires = "start")]
         no_ui: bool,
     },
-    /// Stop a lane, run its clean tasks and teardown, and free its ports (needs --yes)
+    /// Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
     Clean {
         // Own id: `lane` would collide with the global `--lane`.
         /// Lane to clean ([project@]lane) [default: pick from a list]

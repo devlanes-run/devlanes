@@ -310,7 +310,7 @@ devlanes lane new [OPTIONS]
 
 ### devlanes lane clean
 
-Stop a lane, run its clean tasks and teardown, and free its ports (needs --yes)
+Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
 
 ```text
 devlanes lane clean [OPTIONS] [LANE]
