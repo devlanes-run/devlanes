@@ -1,5 +1,13 @@
 # devlanes-git
 
+## 0.7.0 — 2026-10-28
+
+### Minor changes
+
+- [0befd1d](https://github.com/devlanes-run/devlanes/commit/0befd1d1c48705308b4dbd6c9759f8ee6d71d05c) Removed `devlanes lane new <branch>` and the `lanes.worktree_dir` config key; devlanes no longer creates worktrees.
+  
+  Create one with `git worktree add <path> <branch>` and run `devlanes start` in it. Configs that still set `lanes.worktree_dir` fail to load until it is removed. `devlanes lane new --name` still adds another lane for the current folder.
+
 ## 0.6.0 — 2026-10-28
 
 ### Patch changes
