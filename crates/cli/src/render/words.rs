@@ -1340,7 +1340,10 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
     let switch = format!("devlanes remote use {host} {lane} switches");
     match code {
         "lane_skipped" if text(data, "cause") == "local_running" => format!(
-            "{host}: lane {lane} is not mirrored because {winner_lane} runs on this machine. Stop it with devlanes stop --lane {winner_lane}, then {switch}"
+            "{host}: lane {lane} is not mirrored because {winner_lane} runs on this machine. Stop it with devlanes stop --lane {}, then run devlanes remote use {} {}.",
+            crate::shell_quote(&text(data, "winner_lane")),
+            crate::shell_quote(&text(data, "host")),
+            crate::shell_quote(&text(data, "lane"))
         ),
         "lane_skipped" if !text(data, "cause").is_empty() && !other_box.is_empty() => format!(
             "{host}: lane {lane} is not mirrored because {other_box}'s {winner_lane} is in use. {switch}"
@@ -1353,16 +1356,15 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             None => format!("{lane} now comes from this machine"),
         },
         "choice_cleared" => {
-            let local = text(data, "local_lane");
-            if local == lane || local.is_empty() {
-                format!(
-                    "{host}: {lane} started on this machine and takes its hostnames back from {host}"
-                )
+            let local = field(data, "local_lane");
+            let local = if local.is_empty() {
+                lane.clone()
             } else {
-                format!(
-                    "{host}: {local} started on this machine and takes the hostnames of {host}'s {lane}"
-                )
-            }
+                local
+            };
+            format!(
+                "{host}: {local} started on this machine, so {host}'s {lane} is no longer mirrored or chosen."
+            )
         }
         // A daemon from before lane choices. A stopped lane keeps its
         // hostnames, so the hint names the clean.
@@ -1413,7 +1415,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             field(data, "own_port")
         ),
         "ports_range_overlap" => format!(
-            "{host}: the box's ports.range {} overlaps {}, so their lanes can get the same ports. Give one box a different ports.range",
+            "{host}: the box's ports.range {} overlaps {}. Lanes both boxes run go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
             field(data, "range"),
             list(data, "overlaps")
                 .iter()

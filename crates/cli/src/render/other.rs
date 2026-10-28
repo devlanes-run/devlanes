@@ -1953,7 +1953,8 @@ fn old_copy_checks(copies: &Value) -> Vec<Check> {
 /// `--json`: the tree has its mirrored ports, routes and warnings already.
 /// `connected_since_ms` reads `connected_since: 5m ago`. A skipped lane gets
 /// a `note` naming the lane in use and how to switch, `chosen_lanes` reads
-/// `chosen`, and this machine's lanes that gave way are listed with a note.
+/// `chosen`, and this machine's lanes a box lane is in use instead of are
+/// listed with a note.
 pub(super) fn host_list(data: &Value) -> Vec<String> {
     let mut data = data.clone();
     if let Some(fields) = data.as_object_mut()
@@ -1975,7 +1976,7 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
             })
             .collect();
         if !notes.is_empty() {
-            fields.insert("local_lanes_given_way".into(), Value::Array(notes));
+            fields.insert("local_lanes_not_in_use".into(), Value::Array(notes));
         }
     }
     for item in data
@@ -2057,14 +2058,16 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
 /// `reason`, and the command that switches to it, or what to do first while
 /// a lane running here keeps the hostnames.
 fn skipped_note(host: &str, skipped: &Value) -> String {
-    let lane = text(skipped, "lane");
+    let lane = crate::shell_quote(&text(skipped, "lane"));
+    let host = crate::shell_quote(host);
     let reason = super::clean(&text(skipped, "reason"));
-    let switch = format!("devlanes remote use {host} {lane} switches.");
     match skipped.get("can_use").and_then(Value::as_bool) {
-        Some(true) => format!("not mirrored because {reason}. {switch}"),
+        Some(true) => {
+            format!("not mirrored because {reason}. devlanes remote use {host} {lane} switches.")
+        }
         Some(false) => format!(
-            "not mirrored because {reason}. Stop it with devlanes stop --lane {}, then {switch}",
-            text(skipped, "winner_lane")
+            "not mirrored because {reason}. Stop it with devlanes stop --lane {}, then run devlanes remote use {host} {lane}.",
+            crate::shell_quote(&text(skipped, "winner_lane"))
         ),
         // A daemon from before lane choices.
         None => format!("not mirrored because {reason}"),
@@ -2091,18 +2094,33 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         return vec![format!("{lane} will come from {from} once it connects.")];
     }
     if !mirrored {
+        let owner = host.map_or_else(|| "this machine's".to_owned(), |host| format!("{host}'s"));
         return vec![format!(
-            "{lane} is chosen from {from} but not mirrored yet. devlanes remote ls shows why."
+            "{owner} {lane} is chosen but not mirrored yet. devlanes remote ls shows why."
         )];
     }
-    if previous == host {
-        return vec![format!("{lane} already comes from {from}.")];
-    }
-    let before = match previous {
-        Some(previous) => format!("{previous}'s lane is no longer mirrored."),
-        None => "This machine's lane gives way until it starts.".to_owned(),
+    let mut lines = if previous == host {
+        vec![format!("{lane} already comes from {from}.")]
+    } else {
+        let before = match previous {
+            Some(previous) => format!("{previous}'s lane is no longer mirrored."),
+            None => "It is in use instead of this machine's lane until that one starts.".to_owned(),
+        };
+        vec![format!("{lane} now comes from {from}. {before}")]
     };
-    vec![format!("{lane} now comes from {from}. {before}")]
+    for replaced in data
+        .get("replaced")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        lines.push(format!(
+            "The choice of {}'s {} is deleted, since it clashes.",
+            text(replaced, "host"),
+            text(replaced, "lane")
+        ));
+    }
+    lines
 }
 
 /// `daemon pair`: the code and what to run on the client. Plain output is the

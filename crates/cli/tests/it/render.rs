@@ -2814,7 +2814,7 @@ fn box_collision_warnings_name_the_other_box() {
             "overlaps": ["box alpha (20000-29999)", "box gamma (30000-32767)"],
             "message": "…"})
         ),
-        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767), so their lanes can get the same ports. Give one box a different ports.range\n"
+        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767). Lanes both boxes run go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.\n"
     );
 }
 
@@ -2850,7 +2850,7 @@ fn lane_choice_warnings_say_how_to_switch() {
     );
     assert_eq!(
         line(skipped("local_running", Value::Null)),
-        "warn fork-b: lane acme@0 is not mirrored because acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, then devlanes remote use fork-b acme@0 switches\n"
+        "warn fork-b: lane acme@0 is not mirrored because acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, then run devlanes remote use fork-b acme@0.\n"
     );
     // A switch someone asked for is a plain line, not a warning.
     assert_eq!(
@@ -2872,14 +2872,14 @@ fn lane_choice_warnings_say_how_to_switch() {
             json!({"host": "fork-b", "code": "choice_cleared", "lane": "acme@0",
                     "local_lane": "acme@0", "message": "…"})
         ),
-        "warn fork-b: acme@0 started on this machine and takes its hostnames back from fork-b\n"
+        "warn fork-b: acme@0 started on this machine, so fork-b's acme@0 is no longer mirrored or chosen.\n"
     );
     assert_eq!(
         line(
             json!({"host": "fork-b", "code": "choice_cleared", "lane": "shop@0",
                     "local_lane": "acme@1", "message": "…"})
         ),
-        "warn fork-b: acme@1 started on this machine and takes the hostnames of fork-b's shop@0\n"
+        "warn fork-b: acme@1 started on this machine, so fork-b's shop@0 is no longer mirrored or chosen.\n"
     );
 }
 
@@ -2901,7 +2901,7 @@ fn remote_use_says_where_the_lane_comes_from() {
     );
     assert_eq!(
         human(reply(json!("fork-b"), Value::Null, true)),
-        "clickmax@0 now comes from fork-b. This machine's lane gives way until it starts.\n"
+        "clickmax@0 now comes from fork-b. It is in use instead of this machine's lane until that one starts.\n"
     );
     assert_eq!(
         human(reply(Value::Null, json!("fork-b"), true)),
@@ -2913,7 +2913,13 @@ fn remote_use_says_where_the_lane_comes_from() {
     );
     assert_eq!(
         human(reply(json!("fork-b"), json!("fork-a"), false)),
-        "clickmax@0 is chosen from fork-b but not mirrored yet. devlanes remote ls shows why.\n"
+        "fork-b's clickmax@0 is chosen but not mirrored yet. devlanes remote ls shows why.\n"
+    );
+    let mut replacing = reply(Value::Null, json!("fork-a"), true);
+    replacing["replaced"] = json!([{"lane": "shop@0", "host": "fork-a"}]);
+    assert_eq!(
+        human(replacing),
+        "clickmax@0 now comes from this machine. fork-a's lane is no longer mirrored.\nThe choice of fork-a's shop@0 is deleted, since it clashes.\n"
     );
     let mut offline = reply(json!("fork-b"), json!("fork-a"), false);
     offline["pending"] = json!(true);
@@ -2941,7 +2947,8 @@ fn remote_use_says_where_the_lane_comes_from() {
 
 /// `remote ls` gives each skipped lane a note with the lane in use and the
 /// command that switches, marks the lanes chosen for a box, and lists this
-/// machine's lanes that gave way. `--json` keeps every field.
+/// machine's lanes a box lane is in use instead of. `--json` keeps every
+/// field.
 #[test]
 fn remote_ls_names_the_lane_in_use() {
     let hosts = json!({"items": [
@@ -2961,7 +2968,7 @@ fn remote_ls_names_the_lane_in_use() {
     let text = render_text(Method::HostList, &hosts);
     for expected in [
         "note: not mirrored because fork-b's clickmax@0 is in use. devlanes remote use fork-a clickmax@0 switches.",
-        "note: not mirrored because shop@0 runs on this machine. Stop it with devlanes stop --lane shop@0, then devlanes remote use fork-a shop@0 switches.",
+        "note: not mirrored because shop@0 runs on this machine. Stop it with devlanes stop --lane shop@0, then run devlanes remote use fork-a shop@0.",
         "chosen: clickmax@0",
         "note: fork-b's lane is in use instead. devlanes remote use --local clickmax@0 switches back.",
     ] {
