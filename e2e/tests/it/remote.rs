@@ -265,8 +265,9 @@ fn remote_use_switches_a_lane_between_two_boxes() -> Result<()> {
     })?;
 
     // Requests one after another through the proxy across the switch, each
-    // as `(curl exit, HTTP status, answering pid)`.
-    let stop = std::sync::atomic::AtomicBool::new(false);
+    // as `(curl exit, HTTP status, answering pid)`, until fork-b answered
+    // `NEW_ANSWERS` of them.
+    const NEW_ANSWERS: usize = 5;
     let request = || {
         let output = devlanes_e2e::curl()
             .args(["-sS", "--max-time", "10", "--cacert"])
@@ -286,27 +287,44 @@ fn remote_use_switches_a_lane_between_two_boxes() -> Result<()> {
             .and_then(|reflected| reflected["pid"].as_i64());
         (output.status.code(), status.to_owned(), pid)
     };
+    let (first, started) = std::sync::mpsc::channel();
     let (used, seen) = std::thread::scope(|scope| {
-        let looping = scope.spawn(|| {
-            let mut seen = Vec::new();
-            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+        let looping = scope.spawn(move || {
+            let deadline = std::time::Instant::now() + CONNECT;
+            let mut seen: Vec<(Option<i32>, String, Option<i64>)> = Vec::new();
+            while seen
+                .iter()
+                .filter(|(_, _, pid)| *pid == Some(fork_b))
+                .count()
+                < NEW_ANSWERS
+                && std::time::Instant::now() < deadline
+            {
                 seen.push(request());
+                if seen.len() == 1 {
+                    let _ = first.send(());
+                }
             }
             seen
         });
-        std::thread::sleep(Duration::from_millis(500));
+        // The switch happens while the loop runs, after its first answer.
+        let _ = started.recv_timeout(CONNECT);
         let used = client.json(
             client.repo(),
             &["remote", "use", "fork-b", "fixture-two@0", "--json"],
         );
-        std::thread::sleep(Duration::from_millis(1500));
-        stop.store(true, std::sync::atomic::Ordering::SeqCst);
         (used, looping.join().unwrap_or_default())
     });
     assert_eq!(
         used?,
         json!({"lane": "fixture-two@0", "host": "fork-b", "previous": "fork-a",
-               "mirrored": true, "pending": false})
+               "mirrored": true, "pending": false, "replaced": []})
+    );
+    assert_eq!(
+        seen.iter()
+            .filter(|(_, _, pid)| *pid == Some(fork_b))
+            .count(),
+        NEW_ANSWERS,
+        "{seen:?}"
     );
     let first_b = seen
         .iter()
