@@ -133,13 +133,9 @@ impl Inner {
     /// client cwd is seen. Lanes without a client env show `needs_env` when wanted.
     async fn load_known_projects(self: &Arc<Self>) -> Result<(), RpcError> {
         let projects = self.store.projects().await.map_err(store_error)?;
-        let dirs = self
-            .store
-            .project_config_dirs()
-            .await
-            .map_err(store_error)?;
+        let configs = self.store.project_configs().await.map_err(store_error)?;
         for record in projects {
-            let Some((_, config_dir)) = dirs.iter().find(|(id, _)| *id == record.id) else {
+            let Some(config) = configs.iter().find(|config| config.project == record.id) else {
                 continue;
             };
             let project = self
@@ -149,7 +145,7 @@ impl Inner {
                     record.root_path.clone(),
                     record.common_dir.clone(),
                     record.primary_branch.clone(),
-                    config_dir.clone(),
+                    (config.dir.clone(), config.file.clone()),
                 )
                 .await?;
             for lane in project.lanes() {

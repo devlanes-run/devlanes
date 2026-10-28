@@ -7,7 +7,7 @@ use crate::{
     schema::*,
 };
 use devlanes_core::{Actor, LaneId, ProjectId, UnitRunId};
-use diesel::{dsl::exists, prelude::*};
+use diesel::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -24,7 +24,35 @@ pub struct SetupRecord {
     /// Unix milliseconds when the entry last completed.
     pub done_at: i64,
     pub container_started_at: Option<String>,
+    /// Hash of the entry's declaration when it completed. `None` for records
+    /// from before hashing, which callers treat as matching any declaration.
+    #[serde(default)]
+    pub spec_hash: Option<String>,
 }
+
+/// Where a project's config lives: `file` inside `dir`, which is relative to
+/// the worktree root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectConfigPath {
+    pub project: ProjectId,
+    pub dir: PathBuf,
+    /// `devlanes.yaml` for projects recorded before the file was stored.
+    pub file: String,
+}
+
+/// The successful-once marker of a task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskCompletion {
+    /// Unix milliseconds of the last successful run.
+    pub succeeded_at: i64,
+    /// Hash of the task's declaration at that run. `None` for markers from
+    /// before hashing, which callers treat as matching any declaration.
+    pub spec_hash: Option<String>,
+}
+
+/// The config file of a project whose `config_file` is NULL, as recorded by
+/// daemons before migration 11.
+const DEFAULT_CONFIG_FILE: &str = "devlanes.yaml";
 
 /// Task invocation with a hook name or `manual` trigger and client attribution.
 #[derive(Debug, Clone)]
@@ -127,32 +155,47 @@ pub struct RemoteHost {
 }
 
 impl Store {
-    /// Records the configuration directory relative to the worktree root.
-    pub async fn set_project_config_dir(
+    /// Records the configuration directory, relative to the worktree root, and
+    /// the project's config file name inside it.
+    pub async fn set_project_config(
         &self,
         project: ProjectId,
         config_dir: PathBuf,
+        config_file: String,
     ) -> Result<(), Error> {
+        if config_file.is_empty() {
+            return Err(Error::Invalid("empty config file name".into()));
+        }
         self.call(move |c| {
             require_changed(
                 diesel::update(projects::table.find(project.0))
-                    .set(projects::config_dir.eq(path_bytes(&config_dir)))
+                    .set((
+                        projects::config_dir.eq(path_bytes(&config_dir)),
+                        projects::config_file.eq(config_file),
+                    ))
                     .execute(c)?,
                 "project",
             )
         })
         .await
     }
-    /// Lists project configuration locations without decoding YAML.
-    pub async fn project_config_dirs(&self) -> Result<Vec<(ProjectId, PathBuf)>, Error> {
+    /// Lists project configuration locations without decoding YAML, in project
+    /// ID order. Projects without a recorded directory are left out.
+    pub async fn project_configs(&self) -> Result<Vec<ProjectConfigPath>, Error> {
         self.call(|c| {
             Ok(projects::table
                 .filter(projects::config_dir.is_not_null())
                 .order(projects::id)
-                .select((projects::id, projects::config_dir))
-                .load::<(i64, Option<Vec<u8>>)>(c)?
+                .select((projects::id, projects::config_dir, projects::config_file))
+                .load::<(i64, Option<Vec<u8>>, Option<String>)>(c)?
                 .into_iter()
-                .filter_map(|(id, path)| path.map(|path| (ProjectId(id), path_from_bytes(path))))
+                .filter_map(|(id, dir, file)| {
+                    dir.map(|dir| ProjectConfigPath {
+                        project: ProjectId(id),
+                        dir: path_from_bytes(dir),
+                        file: file.unwrap_or_else(|| DEFAULT_CONFIG_FILE.into()),
+                    })
+                })
                 .collect())
         })
         .await
@@ -171,17 +214,20 @@ impl Store {
                     entry: row.entry,
                     done_at: row.done_at,
                     container_started_at: row.container_started_at,
+                    spec_hash: row.spec_hash,
                 })
                 .collect())
         })
         .await
     }
-    /// Marks an entry done, replacing an earlier container timestamp, including NULL.
+    /// Marks an entry done, replacing an earlier container timestamp and spec
+    /// hash, including with NULL.
     pub async fn record_setup(
         &self,
         lane: LaneId,
         entry: String,
         container_started_at: Option<String>,
+        spec_hash: Option<String>,
     ) -> Result<(), Error> {
         if entry.is_empty() {
             return Err(Error::Invalid("empty setup entry".into()));
@@ -192,6 +238,7 @@ impl Store {
                 entry,
                 done_at: now()?,
                 container_started_at,
+                spec_hash,
             };
             diesel::insert_into(lane_setup::table)
                 .values(&row)
@@ -237,11 +284,14 @@ impl Store {
         })
         .await
     }
-    /// Completes a task once and retains its successful-once marker across retention.
+    /// Completes a task once and retains its successful-once marker across
+    /// retention. A success stores `spec_hash` on the marker, replacing the
+    /// previous one.
     pub async fn finish_task_run(
         &self,
         id: TaskRunId,
         exit_code: Option<i32>,
+        spec_hash: Option<String>,
     ) -> Result<(), Error> {
         self.call(move |c| {
             c.immediate_transaction(|c| {
@@ -264,10 +314,14 @@ impl Store {
                             task_completions::lane_id.eq(lane),
                             task_completions::task.eq(task),
                             task_completions::succeeded_at.eq(ended),
+                            task_completions::spec_hash.eq(&spec_hash),
                         ))
                         .on_conflict((task_completions::lane_id, task_completions::task))
                         .do_update()
-                        .set(task_completions::succeeded_at.eq(ended))
+                        .set((
+                            task_completions::succeeded_at.eq(ended),
+                            task_completions::spec_hash.eq(&spec_hash),
+                        ))
                         .execute(c)?;
                 }
                 Ok(())
@@ -275,13 +329,23 @@ impl Store {
         })
         .await
     }
-    /// Reports successful-once state independently of retained task history.
-    pub async fn task_succeeded(&self, lane: LaneId, task: String) -> Result<bool, Error> {
+    /// Returns the successful-once marker of a task, kept independently of
+    /// retained task history, or `None` when the task never succeeded.
+    pub async fn task_completion(
+        &self,
+        lane: LaneId,
+        task: String,
+    ) -> Result<Option<TaskCompletion>, Error> {
         self.call(move |c| {
-            Ok(
-                diesel::select(exists(task_completions::table.find((lane.0, task))))
-                    .get_result(c)?,
-            )
+            Ok(task_completions::table
+                .find((lane.0, task))
+                .select((task_completions::succeeded_at, task_completions::spec_hash))
+                .first::<(i64, Option<String>)>(c)
+                .optional()?
+                .map(|(succeeded_at, spec_hash)| TaskCompletion {
+                    succeeded_at,
+                    spec_hash,
+                }))
         })
         .await
     }

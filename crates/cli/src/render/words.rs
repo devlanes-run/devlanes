@@ -247,6 +247,10 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 1..=12 => message.push_str(&format!("; options: {}", candidates(data))),
                 n => message.push_str(&format!("; {n} options")),
             }
+            // An unknown `--project`: its file may simply never have been named yet.
+            if let Some(hint) = data.get("hint").and_then(Value::as_str) {
+                message.push_str(&format!("; {}", super::clean(hint)));
+            }
             (message, Some(Hint::command(["lane", "ls"])))
         }
         "ambiguous" => (
@@ -309,15 +313,14 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 (!command.is_empty()).then_some(Hint(command)),
             )
         }
-        "project_running_elsewhere" => (
-            format!(
-                "{} is already running from {}",
-                field(data, "project"),
-                field(data, "path")
-            ),
-            data.get("project")
+        // The daemon's message says which files or repositories claim the name.
+        "project_name_taken" | "duplicate_project_name" | "config_names_other_project" => (
+            data.get("message")
                 .and_then(Value::as_str)
-                .map(|project| Hint::command(["stop", "--project", project])),
+                .map(super::clean)
+                .unwrap_or_else(|| error.code.replace('_', " ")),
+            (error.code == "config_names_other_project")
+                .then(|| Hint::command(["lane", "gc", "--yes"])),
         ),
         "port_in_use" => (
             format!(
@@ -754,7 +757,7 @@ fn no_config(data: &Value) -> (String, Option<Hint>) {
     (
         message,
         Some(Hint(format!(
-            "create devlanes.yaml in {place}; a minimal one: {EXAMPLE_CONFIG}"
+            "create devlanes.yaml in {place} (a minimal one: {EXAMPLE_CONFIG}), or name another project file with --file"
         ))),
     )
 }

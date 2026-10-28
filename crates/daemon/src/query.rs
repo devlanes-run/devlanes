@@ -139,10 +139,25 @@ impl Inner {
         if all {
             return Ok(self.all_lanes());
         }
-        let cwd_project = if context.cwd.as_os_str().is_empty() {
+        // A `--file` names the project outright, and fails loudly when it cannot load.
+        let cwd_project = if context.file.is_some() {
+            self.project_for(context).await?
+        } else if context.cwd.as_os_str().is_empty() {
             None
         } else {
-            self.project_for_cwd(&context.cwd).await.ok().flatten()
+            match self.project_for_cwd(&context.cwd).await {
+                Ok(project) => project,
+                // A name another file or repository holds is the answer, not every lane.
+                Err(error)
+                    if matches!(
+                        error.code.as_str(),
+                        "project_name_taken" | "duplicate_project_name"
+                    ) =>
+                {
+                    return Err(error);
+                }
+                Err(_) => None,
+            }
         };
         if context.lane.is_some() {
             return Ok(vec![self.target_lane(context).await?]);
@@ -736,6 +751,11 @@ impl Inner {
         match &config {
             ConfigState::Missing => push(&mut reasons, "no_config", json!({})),
             ConfigState::Invalid(error) => push(&mut reasons, "config_error", error.data.clone()),
+            ConfigState::Elsewhere(other) => push(
+                &mut reasons,
+                "config_names_other_project",
+                crate::model::elsewhere_error(other).data,
+            ),
             ConfigState::Loaded(_) => {}
         }
         if host.is_none() && service.is_none() && reasons.is_empty() {

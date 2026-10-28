@@ -1959,8 +1959,13 @@ fn daemon_errors_are_worded_with_hints() {
         ),
         RpcError::new("terminal_required", json!({"task": "console"}), 2),
         RpcError::new(
-            "project_running_elsewhere",
-            json!({"project": "acme", "path": "/work/other-acme"}),
+            "project_name_taken",
+            json!({"project": "acme", "other": "/work/other-acme", "message": "project `acme` is already used by /work/other-acme; give this one another `project:`"}),
+            1,
+        ),
+        RpcError::new(
+            "config_names_other_project",
+            json!({"project": "acme-next", "message": "the project file here now names project `acme-next`; this lane keeps its ports and data until `devlanes lane gc --yes` collects it"}),
             1,
         ),
         RpcError::new(

@@ -95,7 +95,7 @@ async fn age_retention_preserves_live_rows_and_once_markers() {
         .await
         .expect("allocation");
     store
-        .record_setup(lane.id, "database".into(), None)
+        .record_setup(lane.id, "database".into(), None, None)
         .await
         .expect("setup");
     let old = run(&store, lane.id, "old", true).await;
@@ -111,7 +111,7 @@ async fn age_retention_preserves_live_rows_and_once_markers() {
         .await
         .expect("task");
     store
-        .finish_task_run(task.id, Some(0))
+        .finish_task_run(task.id, Some(0), None)
         .await
         .expect("task finish");
     let active_task = store
@@ -220,9 +220,10 @@ async fn age_retention_preserves_live_rows_and_once_markers() {
     );
     assert!(
         store
-            .task_succeeded(lane.id, "seed".into())
+            .task_completion(lane.id, "seed".into())
             .await
             .expect("once marker")
+            .is_some()
     );
     assert_eq!(store.setup_records(lane.id).await.expect("setup").len(), 1);
     assert_eq!(
@@ -337,7 +338,7 @@ async fn size_budget_reclaims_pages_and_keeps_history_until_metrics_are_gone() {
         .await
         .expect("task");
     store
-        .finish_task_run(completed_task.id, Some(0))
+        .finish_task_run(completed_task.id, Some(0), None)
         .await
         .expect("completed task");
     let active_task = store
@@ -459,9 +460,10 @@ async fn size_budget_reclaims_pages_and_keeps_history_until_metrics_are_gone() {
     );
     assert!(
         store
-            .task_succeeded(lane.id, "seed".into())
+            .task_completion(lane.id, "seed".into())
             .await
             .expect("once marker")
+            .is_some()
     );
     assert!(
         store

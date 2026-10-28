@@ -348,11 +348,19 @@ pub fn rpc(error: &RpcError) -> Worded {
                 None,
             )
         }
-        "project_running_elsewhere" => (
+        "config_names_other_project" => (
             format!(
-                "{} is already running from {}",
+                "the project file here now names project {}",
+                known(data, "project")
+            ),
+            Vec::new(),
+            Some("devlanes lane gc --yes".into()),
+        ),
+        "project_name_taken" => (
+            format!(
+                "project {} is already used by {}",
                 known(data, "project"),
-                known(data, "path")
+                known(data, "other")
             ),
             Vec::new(),
             None,

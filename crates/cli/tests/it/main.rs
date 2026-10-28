@@ -57,6 +57,28 @@ fn parser_definition_is_consistent() {
 }
 
 #[test]
+/// `--file` reaches the daemon as a path from the cwd, `-p` names the project, and
+/// `logs -f` keeps meaning `--follow`.
+fn project_file_and_short_project_flags() {
+    let cli = Cli::parse_from([
+        "devlanes",
+        "-p",
+        "acme-prod",
+        "--file",
+        "devlanes.prod.yaml",
+        "status",
+    ]);
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.project.as_deref(), Some("acme-prod"));
+    assert_eq!(
+        req.context.file,
+        Some(PathBuf::from("/fixture/worktree").join("devlanes.prod.yaml"))
+    );
+    let cli = Cli::parse_from(["devlanes", "logs", "-f", "api"]);
+    assert!(cli.file.is_none());
+}
+
+#[test]
 fn entire_command_inventory_builds_actions() {
     let cases: &[(&[&str], Option<Method>)] = &[
         (

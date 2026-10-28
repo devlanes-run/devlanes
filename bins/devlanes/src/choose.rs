@@ -42,9 +42,9 @@ pub async fn choose(
     args: &[String],
 ) -> Result<Chosen, RpcError> {
     let cwd = context.cwd.display().to_string();
-    // Without --lane or --project the lane comes from the directory; with no
+    // Without --lane, --project or --file the lane comes from the directory; with no
     // devlanes.yaml above it there is nothing to ask the daemon.
-    let scoped = context.lane.is_some() || context.project.is_some();
+    let scoped = context.lane.is_some() || context.project.is_some() || context.file.is_some();
     if choice.kind != ChoiceKind::Lane && !scoped && !has_config(&context.cwd).await {
         emit(&no_options(choice, &NoOptions::NoConfig { cwd }, runtime));
         return Ok(Chosen::Exit(devlanes_cli::exit::NOT_FOUND));
@@ -159,13 +159,12 @@ async fn lane_name(client: &mut Client, context: &Context) -> String {
         .map_or_else(|| "this lane".into(), |lane| lane.reference.clone())
 }
 
-/// Whether `dir` or a parent holds a devlanes.yaml (or the `.devlanes/` form).
+/// Whether `dir` or a parent up to the repository root holds a devlanes.yaml, as the
+/// daemon looks for it.
 async fn has_config(dir: &Path) -> bool {
     let dir = dir.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        dir.ancestors().any(|dir| {
-            dir.join("devlanes.yaml").is_file() || dir.join(".devlanes/devlanes.yaml").is_file()
-        })
+        devlanes_config::find_project_file(&dir).map_or(true, |found| found.is_some())
     })
     .await
     .unwrap_or(true)
@@ -272,7 +271,7 @@ mod tests {
         assert!(text.ends_with("c\r\n"), "{text:?}");
     }
 
-    /// The config search walks up to the filesystem root.
+    /// The config search walks up through parent directories.
     #[tokio::test]
     async fn config_is_found_in_a_parent() {
         let temp = tempfile::tempdir().expect("tempdir");

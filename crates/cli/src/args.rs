@@ -73,9 +73,13 @@ pub struct Cli {
     /// Output mode [default: agent when an AI agent runs devlanes, plain in CI or without a terminal, else human]
     #[arg(long, global = true, value_enum, value_name = "MODE", help_heading = GLOBAL)]
     pub output: Option<OutputMode>,
-    /// Use this project instead of the one containing the current directory
-    #[arg(long, global = true, value_name = "PROJECT", help_heading = GLOBAL)]
+    /// Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
+    #[arg(short = 'p', long, global = true, env = "DEVLANES_PROJECT", hide_env = true, value_name = "PROJECT", help_heading = GLOBAL)]
     pub project: Option<String>,
+    /// Use this project file instead of the nearest devlanes.yaml, such as devlanes.prod.yaml; once used, --project <name> finds it
+    // No `-f`: `logs -f` and the other `--follow` flags already take it.
+    #[arg(long, global = true, value_name = "FILE", help_heading = GLOBAL)]
+    pub file: Option<PathBuf>,
     /// Use this lane ([project@]lane) instead of the current worktree's
     #[arg(long, global = true, value_name = "LANE", help_heading = GLOBAL)]
     pub lane: Option<String>,
@@ -847,8 +851,11 @@ impl Cli {
                 "--env is supported only by start, restart, run TASK, and exec".into(),
             ));
         }
+        // The daemon resolves the file, so a relative one names a path below the cwd.
+        let file = self.file.as_ref().map(|file| cwd.join(file));
         let mut context = Context {
             cwd,
+            file,
             actor: runtime.actor.clone(),
             project: self.project.clone(),
             lane: self.lane.clone(),

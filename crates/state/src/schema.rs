@@ -11,6 +11,7 @@ diesel::table! {
         primary_branch -> Text,
         last_start -> Nullable<BigInt>,
         config_dir -> Nullable<Binary>,
+        config_file -> Nullable<Text>,
     }
 }
 diesel::table! {
@@ -92,6 +93,7 @@ diesel::table! {
         entry -> Text,
         done_at -> BigInt,
         container_started_at -> Nullable<Text>,
+        spec_hash -> Nullable<Text>,
     }
 }
 diesel::table! {
@@ -113,6 +115,7 @@ diesel::table! {
         lane_id -> BigInt,
         task -> Text,
         succeeded_at -> BigInt,
+        spec_hash -> Nullable<Text>,
     }
 }
 diesel::table! {

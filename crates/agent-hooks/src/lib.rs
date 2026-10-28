@@ -311,9 +311,18 @@ const LONG_RUNNING_WORDS: &str =
 const SERVER_TOOLS: &str = "vite next nuxt astro wrangler nodemon webpack-dev-server uvicorn \
                             gunicorn flask hugo http-server live-server";
 
-/// devlanes exec and devlanes start only make sense inside a devlanes project.
+/// devlanes exec and devlanes start only make sense inside a devlanes project. The
+/// search stops at the repository root, as the daemon's does (`devlanes-config`'s
+/// `search_project_file`, not a dependency here to keep the hook small): a
+/// `devlanes.yaml` above it belongs to another project.
 fn in_project(dir: &Path) -> bool {
-    dir.ancestors()
-        .filter(|dir| !dir.as_os_str().is_empty())
-        .any(|dir| dir.join("devlanes.yaml").is_file())
+    for dir in dir.ancestors().filter(|dir| !dir.as_os_str().is_empty()) {
+        if dir.join("devlanes.yaml").is_file() {
+            return true;
+        }
+        if dir.join(".git").exists() {
+            return false;
+        }
+    }
+    false
 }

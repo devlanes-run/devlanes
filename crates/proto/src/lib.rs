@@ -77,6 +77,10 @@ pub struct Context {
     pub actor: Actor,
     #[serde(default)]
     pub project: Option<String>,
+    /// Absolute path of a project file given with `--file`, which registers the project
+    /// it names; otherwise the nearest `devlanes.yaml` above the cwd is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
     #[serde(default)]
     pub lane: Option<String>,
     #[serde(default)]

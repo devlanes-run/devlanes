@@ -249,6 +249,36 @@ async fn write_files(
     .map_err(|e| internal("io", e))?
 }
 
+/// FNV-1a over the JSON of a config declaration, such as one `infra.setup` entry or
+/// task as written, so an edited entry counts as not done. The declaration, not the
+/// evaluated command, keeps environment values out of state.db; FNV because std's
+/// hasher is not stable across releases.
+pub(crate) fn declaration_hash<T: serde::Serialize>(declaration: Option<&T>) -> Option<String> {
+    let text = serde_json::to_string(declaration?).ok()?;
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    Some(format!("{hash:016x}"))
+}
+
+/// Whether a completion recorded with `recorded` still covers a declaration hashing to
+/// `current`. Records from before hashing match, so an upgrade reruns nothing.
+pub(crate) fn same_declaration(recorded: Option<&str>, current: Option<&str>) -> bool {
+    recorded.is_none() || recorded == current
+}
+
+/// The [`declaration_hash`] of task `name` in the lane's loaded config.
+fn task_hash(lane: &LaneRt, name: &str) -> Option<String> {
+    let config = lane.st().config.loaded().cloned()?;
+    declaration_hash(config.tasks.get(name))
+}
+
+/// The [`declaration_hash`] of `infra.setup.<name>` in the lane's loaded config.
+fn setup_hash(lane: &LaneRt, name: &str) -> Option<String> {
+    let config = lane.st().config.loaded().cloned()?;
+    declaration_hash(config.infra.setup.get(name))
+}
+
 /// Maps a resolved readiness spec to the checker's form. `env` is the unit's launch
 /// environment, which a `cmd` probe runs with.
 pub(crate) fn readiness(spec: &ReadySpec, env: BTreeMap<String, String>) -> Readiness {
@@ -752,11 +782,17 @@ impl LanePhase for SetupPhase {
                 .as_ref()
                 .and_then(|container| started.get(container).cloned());
             let done = records.iter().find(|r| &r.entry == name);
+            let hash = declaration_hash(cx.config.infra.setup.get(name));
             let current = match (done, &command.container) {
                 (None, _) => false,
-                (Some(_), None) => true,
+                (Some(record), None) => {
+                    same_declaration(record.spec_hash.as_deref(), hash.as_deref())
+                }
                 // A restarted backing container lost the entry's effect (tmpfs data).
-                (Some(record), Some(_)) => record.container_started_at == started_at,
+                (Some(record), Some(_)) => {
+                    same_declaration(record.spec_hash.as_deref(), hash.as_deref())
+                        && record.container_started_at == started_at
+                }
             };
             if !current {
                 pending.push((name.clone(), started_at));
@@ -825,9 +861,10 @@ impl LanePhase for SetupPhase {
                     .iter()
                     .find(|(n, _)| *n == name)
                     .and_then(|(_, at)| at.clone());
+                let hash = declaration_hash(cx.config.infra.setup.get(&name));
                 if let Err(error) = engine
                     .store
-                    .record_setup(lane_id, name.clone(), started_at)
+                    .record_setup(lane_id, name.clone(), started_at, hash)
                     .await
                 {
                     return PhaseResult::Error(store_error(error));
@@ -894,9 +931,15 @@ impl LanePhase for TasksPhase {
                 continue;
             }
             if hook == "lane.create" {
-                match engine.store.task_succeeded(lane_id, name.clone()).await {
-                    Ok(true) => continue,
-                    Ok(false) => {}
+                // Once per lane, and again after its declaration changed.
+                let hash = declaration_hash(cx.config.tasks.get(name));
+                match engine.store.task_completion(lane_id, name.clone()).await {
+                    Ok(Some(done))
+                        if same_declaration(done.spec_hash.as_deref(), hash.as_deref()) =>
+                    {
+                        continue;
+                    }
+                    Ok(_) => {}
                     Err(error) => return PhaseResult::Error(store_error(error)),
                 }
             }
@@ -2332,14 +2375,17 @@ impl Inner {
                     Some(json!({"code": error.code, "data": error.data})),
                 ),
             };
-            self.close_task_run(run.id, &reference, name, code, state, reason)
+            let hash = task_hash(lane, name);
+            self.close_task_run(run.id, &reference, name, code, state, reason, hash)
                 .await;
             guard.run = None;
             result
         })
     }
 
-    /// Finishes a task run row and emits its closing `task` event.
+    /// Finishes a task run row and emits its closing `task` event. `spec_hash` is the
+    /// task's [`declaration_hash`], kept with a success so an edit runs it again.
+    #[allow(clippy::too_many_arguments)]
     async fn close_task_run(
         &self,
         id: devlanes_state::TaskRunId,
@@ -2348,8 +2394,9 @@ impl Inner {
         code: Option<i32>,
         state: &str,
         reason: Option<Value>,
+        spec_hash: Option<String>,
     ) {
-        if let Err(error) = self.store.finish_task_run(id, code).await {
+        if let Err(error) = self.store.finish_task_run(id, code, spec_hash).await {
             tracing::warn!(%error, task, "task run not recorded as finished");
         }
         self.task_event(reference, task, state, code, reason);
@@ -2429,7 +2476,12 @@ impl Inner {
                 };
                 let _ = self
                     .store
-                    .record_setup(lane_id, entry.to_owned(), started_at)
+                    .record_setup(
+                        lane_id,
+                        entry.to_owned(),
+                        started_at,
+                        setup_hash(lane, entry),
+                    )
                     .await;
             } else if phase == "teardown" && ok {
                 let _ = self
@@ -2528,8 +2580,12 @@ impl Inner {
             if let Some(reason) = &st.unassigned {
                 return Err(fail(reason.clone()));
             }
-            if let crate::model::ConfigState::Invalid(error) = &st.config {
-                return Err(fail(error.clone()));
+            match &st.config {
+                crate::model::ConfigState::Invalid(error) => return Err(fail(error.clone())),
+                crate::model::ConfigState::Elsewhere(other) => {
+                    return Err(fail(crate::model::elsewhere_error(other)));
+                }
+                _ => {}
             }
             if st.record.is_none() {
                 return Err(fail(RpcError::new(
@@ -2546,7 +2602,6 @@ impl Inner {
                 )));
             }
         }
-        self.check_name_conflict(project).map_err(fail)?;
         {
             let mut st = lane.st();
             if let Some(env) = options.env.clone() {
@@ -2581,7 +2636,7 @@ impl Inner {
             .loaded()
             .cloned()
             .ok_or_else(|| fail(RpcError::new("no_config", json!({"lane": reference}), 1)))?;
-        let config_dir = lane.st().path.join(&project.config_dir);
+        let config_dir = lane.st().path.join(project.config_path().0);
         check_compose_files(&config, config_dir)
             .instrument(tracing::debug_span!("compose files"))
             .await
@@ -2934,25 +2989,6 @@ impl Inner {
                 summary
             })
             .collect()
-    }
-
-    /// Decision 9: refuse while a running project with the same name has another identity.
-    fn check_name_conflict(&self, project: &ProjectRt) -> Result<(), RpcError> {
-        let name = project.name();
-        for other in self.all_projects() {
-            if other.id == project.id || other.name() != name {
-                continue;
-            }
-            if other.lanes().iter().any(|lane| lane.st().any_running()) {
-                let path = other.st().root.clone();
-                return Err(RpcError::new(
-                    "project_running_elsewhere",
-                    json!({"project": name, "path": path}),
-                    1,
-                ));
-            }
-        }
-        Ok(())
     }
 
     /// Stops units of a lane. Without selectors (and without `mine`) the whole lane
@@ -4097,9 +4133,9 @@ impl Inner {
 }
 
 /// `config_error`, located like `config check`'s, when an `infra.compose` file is
-/// missing from `config_dir`: the daemon parses the config from text, so the
-/// loader's file check never ran, and Docker would only report it later and
-/// less clearly.
+/// missing from `config_dir`: the daemon's load leaves that check out, since a missing
+/// file must not unload a running lane's config, and Docker would only report it later
+/// and less clearly.
 async fn check_compose_files(
     config: &Arc<devlanes_config::ProjectConfig>,
     config_dir: std::path::PathBuf,
@@ -4109,16 +4145,8 @@ async fn check_compose_files(
     }
     let config = config.clone();
     tokio::task::spawn_blocking(move || {
-        devlanes_config::check_compose_files(&config, &config_dir).map_err(|error| {
-            let mut shaped = crate::model::config_error(&error);
-            let file = if error.location.file == "devlanes.local.yaml" {
-                "devlanes.local.yaml"
-            } else {
-                "devlanes.yaml"
-            };
-            shaped.data["file"] = json!(config_dir.join(file));
-            shaped
-        })
+        devlanes_config::check_compose_files(&config, &config_dir)
+            .map_err(|error| crate::model::config_error(&error))
     })
     .await
     .map_err(|error| internal("config_error", error))?
@@ -4181,6 +4209,7 @@ impl Drop for TaskRunGuard {
                     None,
                     "failed",
                     Some(json!({"code": "cancelled"})),
+                    None,
                 )
                 .await;
         });

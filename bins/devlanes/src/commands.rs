@@ -1010,11 +1010,7 @@ fn more_hint(method: Method, request: &Request) -> Option<Hint> {
 /// Common hints for daemon error codes; the CLI owns all wording.
 fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
     match error.code.as_str() {
-        "project_running_elsewhere" => error
-            .data
-            .get("project")
-            .and_then(Value::as_str)
-            .map(|project| Hint::command(["stop", "--project", project])),
+        "config_names_other_project" => Some(Hint::command(["lane", "gc", "--yes"])),
         "unit_failed" | "ready_timeout" => {
             // A non-2xx answer to an http check is fixed in the config, not found in logs.
             if let Some(hint) = devlanes_cli::status_hint(&error.data) {
