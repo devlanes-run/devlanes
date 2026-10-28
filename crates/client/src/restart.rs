@@ -141,10 +141,14 @@ pub async fn restart(
                 break;
             }
             line = lines.recv(), if answer.is_none() => {
-                let line = line.ok_or_else(reader_stopped)??;
-                match crate::startup_step(&line) {
-                    Some(next) => step = next,
-                    None => answer = Some(line),
+                // A new daemon that dies now is a failure for after the old one
+                // stopped, when the lanes can still start elsewhere.
+                match line.ok_or_else(reader_stopped).and_then(|line| Ok(line?)) {
+                    Ok(line) => match crate::startup_step(&line) {
+                        Some(next) => step = next,
+                        None => answer = Some(Ok(line)),
+                    },
+                    Err(error) => answer = Some(Err(error)),
                 }
             }
         }
@@ -153,7 +157,7 @@ pub async fn restart(
     progress(Progress::Stopped);
     progress(Progress::Starting(step.clone()));
     let answer = match answer {
-        Some(answer) => Ok(answer),
+        Some(answer) => answer,
         None => loop {
             let line = match next_line(&mut lines, Some(STARTUP_STEP_TIMEOUT), paths).await {
                 Ok(line) => line,
@@ -199,6 +203,12 @@ async fn take_over_here(
     failure: Error,
 ) -> Result<Restarted> {
     tracing::warn!(error = %failure, "the new daemon did not take over; starting another");
+    // The old daemon answers its shutdown before it exits; a daemon spawned
+    // while it still holds the lock would only report `already-running`.
+    let deadline = tokio::time::Instant::now() + STARTUP_STEP_TIMEOUT;
+    while crate::lock_held(paths).await && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     let Ok(mut client) = Client::connect_or_spawn(paths).await else {
         return Err(failure);
     };
@@ -308,8 +318,25 @@ async fn subscribe(old: &Client, paths: &Paths) -> Option<Client> {
         .begin_request(Method::Subscribe, json!({}), Context::default())
         .await
         .ok()?;
-    Some(client)
+    // The daemon greets a new subscriber with a `resync` once it is
+    // registered; asking for the shutdown before then could miss its first steps.
+    let registered = async {
+        loop {
+            match client.next_frame().await {
+                Ok(Frame::Control(Control::Event(_))) => return true,
+                Ok(_) => {}
+                Err(_) => return false,
+            }
+        }
+    };
+    match tokio::time::timeout(SUBSCRIBE_WAIT, registered).await {
+        Ok(false) => None,
+        Ok(true) | Err(_) => Some(client),
+    }
 }
+
+/// How long [`subscribe`] waits for the daemon to register the subscription.
+const SUBSCRIBE_WAIT: Duration = Duration::from_secs(2);
 
 /// The next [`DaemonStopping`] on `events`; `None` once the subscription
 /// ended. Never resolves without one, so it can sit in a `select!`.

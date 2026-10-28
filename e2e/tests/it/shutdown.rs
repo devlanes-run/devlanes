@@ -195,6 +195,40 @@ fn a_restart_survives_its_client() -> Result<()> {
     Ok(())
 }
 
+/// A new daemon that dies while the old one stops does not cost the lanes:
+/// the restarting client starts a daemon itself and brings them back there.
+#[test]
+fn a_restart_survives_a_new_daemon_that_dies() -> Result<()> {
+    let config = format!(
+        "{CONFIG}  linger:\n    run: [fixture-server, --port, \"0\", --exit-after, 3s]\n    when: lane.stop\n"
+    );
+    let lab = Lab::with_config(&config, BUDGET)?;
+    start(&lab)?;
+    let daemon = need(lab.daemon_pid()?, "daemon pid")?;
+    let restart = std::thread::scope(|scope| -> Result<devlanes_e2e::Output> {
+        let cli = scope.spawn(|| lab.devlanes(lab.repo(), &["daemon", "restart", "--yes"]));
+        let marker = lab.home().join("run").join("daemon.replacing");
+        let successor =
+            lab.eventually("the new daemon to wait", Duration::from_secs(20), || {
+                Ok(std::fs::read_to_string(&marker)
+                    .ok()
+                    .and_then(|pid| pid.trim().parse::<i32>().ok()))
+            })?;
+        // The client says go and asks the old daemon to stop right after the
+        // marker appears; `linger` keeps that shutdown going for 3 s.
+        std::thread::sleep(Duration::from_secs(1));
+        devlanes_e2e::kill(successor);
+        cli.join()
+            .map_err(|_| devlanes_e2e::Error::Setup("restart thread panicked".into()))?
+    })?;
+    restart.expect_code(0)?;
+    lab.eventually("the old daemon to exit", Duration::from_secs(30), || {
+        Ok((!alive(daemon)).then_some(()))
+    })?;
+    api_ready(&lab)?;
+    Ok(())
+}
+
 /// An on-demand service next to the default one, for a selection a plain start
 /// would not pick by itself.
 const ON_DEMAND: &str = r#"project: fixture-restore

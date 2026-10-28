@@ -459,6 +459,7 @@ fn tui_shows_the_steps_through_restarts() -> Result<()> {
     api_ready_again(&lab)?;
 
     tui.keys(b"D")?;
+    tui.wait_for_text("daemon.log")?;
     tui.keys(b"R")?;
     tui.wait_for_text("Restart the daemon?")?;
     let before = lab.daemon_pid()?;

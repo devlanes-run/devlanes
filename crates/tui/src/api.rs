@@ -831,22 +831,33 @@ impl ClientApi {
         context: Context,
     ) -> Result<Value, ApiError> {
         let mut guard = self.shared.lock().await;
-        if guard.is_none() {
+        let reused = guard.is_some();
+        if !reused {
             *guard = Some(self.fresh().await?);
         }
         let Some(client) = guard.as_mut() else {
             return Err(ApiError::Disconnected("no connection".into()));
         };
-        match client.request(method, params, context).await {
-            Ok(value) => Ok(value),
-            Err(error) => {
-                let error = ApiError::from(error);
-                if error.is_disconnect() {
-                    *guard = None;
-                }
-                Err(error)
-            }
+        let error = match client
+            .request(method, params.clone(), context.clone())
+            .await
+        {
+            Ok(value) => return Ok(value),
+            Err(error) => ApiError::from(error),
+        };
+        if !error.is_disconnect() {
+            return Err(error);
         }
+        *guard = None;
+        // A connection kept from before the daemon restarted is dead even
+        // though a new daemon answers; one fresh try tells a lost daemon from that.
+        if !reused {
+            return Err(error);
+        }
+        let mut client = self.fresh().await?;
+        let value = client.request(method, params, context).await?;
+        *guard = Some(client);
+        Ok(value)
     }
 
     /// Sends one request on its own connection.
