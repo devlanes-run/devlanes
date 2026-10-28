@@ -381,6 +381,8 @@ struct FakeDriver {
     missing_command: bool,
     /// The daemon's start result, `null` for a driver without one.
     result: Value,
+    /// The lane env carries `DEVLANES_CA_CERT` and `DEVLANES_CA_BUNDLE`.
+    ca: bool,
 }
 
 impl Default for FakeDriver {
@@ -397,6 +399,7 @@ impl Default for FakeDriver {
             start_failure: None,
             missing_command: false,
             result: Value::Null,
+            ca: true,
         }
     }
 }
@@ -450,14 +453,18 @@ impl WithDriver for FakeDriver {
     async fn env(&mut self, lane: &str) -> Result<BTreeMap<String, String>, RpcError> {
         assert_eq!(lane, "acme@0");
         self.calls.push("env".into());
-        Ok(BTreeMap::from([
+        let mut env = BTreeMap::from([
             ("LAYER".into(), "lane".into()),
             (
                 "DEVLANES_PUBLIC_URL_API".into(),
                 "https://api.acme.localhost".into(),
             ),
-            ("SSL_CERT_FILE".into(), "/ca.pem".into()),
-        ]))
+        ]);
+        if self.ca {
+            env.insert("DEVLANES_CA_CERT".into(), "/ca/ca.pem".into());
+            env.insert("DEVLANES_CA_BUNDLE".into(), "/ca/bundle.pem".into());
+        }
+        Ok(env)
     }
     /// Artifact queries must never inherit the agent's hundred-line presentation default.
     async fn logs(&mut self, lane: &str, query: LaneLogQuery) -> Result<Vec<UnitLogs>, RpcError> {
@@ -540,8 +547,18 @@ impl WithDriver for FakeDriver {
         assert_eq!(cwd, Path::new("/fixture"));
         assert_eq!(env["LAYER"], "lane");
         assert_eq!(env["CLIENT"], "kept");
-        assert_eq!(env["SSL_CERT_FILE"], "/ca.pem");
         assert_eq!(env["DEVLANES_PUBLIC_URL_API"], "https://api.acme.localhost");
+        // The shell's own value wins; the others follow the CA variables when they exist.
+        assert_eq!(env["SSL_CERT_FILE"], "/shell.pem");
+        let runtime_ca = |name: &str| env.get(name).map(String::as_str);
+        let (cert, bundle) = if self.ca {
+            (Some("/ca/ca.pem"), Some("/ca/bundle.pem"))
+        } else {
+            (None, None)
+        };
+        assert_eq!(runtime_ca("NODE_EXTRA_CA_CERTS"), cert);
+        assert_eq!(runtime_ca("DENO_CERT"), cert);
+        assert_eq!(runtime_ca("REQUESTS_CA_BUNDLE"), bundle);
         if self.missing_command {
             return Err(RpcError::new(
                 "spawn_failed",
@@ -562,6 +579,7 @@ fn plan(directory: &Path, keep: bool) -> (WithPlan, Runtime) {
             BTreeMap::from([
                 ("LAYER".into(), "client".into()),
                 ("CLIENT".into(), "kept".into()),
+                ("SSL_CERT_FILE".into(), "/shell.pem".into()),
             ])
         })
         .expect("plan")
@@ -628,6 +646,23 @@ async fn with_success_and_command_failure_preserve_exit_codes_and_summary() {
       "3": "exit=3\n::group::services\n::endgroup::\n| Unit | Peak memory | Peak CPU |\n| --- | ---: | ---: |\n| api | 1.0 MiB | 20.0% |\n"
     }
     "#);
+}
+
+/// The command gets the runtime CA variables only when the lane has a CA;
+/// [`FakeDriver::spawn_command`] checks the values.
+#[tokio::test]
+async fn with_sets_runtime_ca_variables_only_with_a_ca() {
+    for ca in [true, false] {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (plan, runtime) = plan(temp.path(), false);
+        let mut driver = FakeDriver {
+            ca,
+            ..FakeDriver::default()
+        };
+        let outcome = run_with(&plan, &runtime, &mut driver, &mut |_| {}).await;
+        assert_eq!(outcome.exit_code, 0, "ca: {ca}");
+        assert!(driver.calls.contains(&"command".to_owned()), "ca: {ca}");
+    }
 }
 
 #[tokio::test]

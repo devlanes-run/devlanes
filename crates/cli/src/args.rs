@@ -150,10 +150,11 @@ when --timeout passes first [default: 180s].")]
         long_about = "Start the lane, run a command against it, then stop what was started.\n\n\
 Waits for ready first; when a unit fails it prints the failure and exits 1\n\
 without running the command. The command gets the lane's environment, including\n\
-DEVLANES_PUBLIC_URL_<SERVICE> for every service. Afterwards devlanes writes\n\
---logs-dir, prints peak CPU and memory when output is not a terminal (CI logs,\n\
-pipes), stops what it started (and the daemon, if it started it) and exits with\n\
-the command's exit code.",
+DEVLANES_PUBLIC_URL_<SERVICE> for every service, plus NODE_EXTRA_CA_CERTS,\n\
+DENO_CERT, SSL_CERT_FILE and REQUESTS_CA_BUNDLE for the devlanes CA unless the\n\
+shell sets them. Afterwards devlanes writes --logs-dir, prints peak CPU and\n\
+memory when output is not a terminal (CI logs, pipes), stops what it started\n\
+(and the daemon, if it started it) and exits with the command's exit code.",
         after_help = WITH_AFTER
     )]
     With(WithArgs),
