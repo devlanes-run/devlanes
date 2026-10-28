@@ -1,5 +1,11 @@
 # devlanes-runner-windows
 
+## 0.6.0 — 2026-10-28
+
+### Patch changes
+
+- [9c1090e](https://github.com/devlanes-run/devlanes/commit/9c1090e6d6e5bc7557453415dc9732bcab1dfe84) Fixed `devlanes stop` on Windows sometimes waiting out the stop timeout for a service run through a `.cmd` shim such as `npm.cmd`, when its `Terminate batch job (Y/N)?` prompt missed the answer.
+
 ## 0.5.0 — 2026-10-26
 
 ### Minor changes

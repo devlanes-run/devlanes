@@ -1,5 +1,11 @@
 # devlanes-infra-compose
 
+## 0.5.0 — 2026-10-28
+
+### Patch changes
+
+- [01fb93f](https://github.com/devlanes-run/devlanes/commit/01fb93f56d3265cfe7756d4742dba08c93cc1fd0) Changed `devlanes start` to leave Compose services that already run healthy with unchanged config alone instead of running `docker compose up` again, and to reuse `docker compose config` until a compose or env file changes. After `docker compose pull`, a running container keeps its old image until it is recreated.
+
 ## 0.4.0 — 2026-10-26
 
 ### Minor changes
