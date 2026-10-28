@@ -4,6 +4,7 @@ mod artifacts;
 mod diagnostics;
 mod external;
 mod merging;
+mod project_files;
 mod reference_docs;
 mod references;
 mod retention;

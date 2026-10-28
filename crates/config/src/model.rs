@@ -22,6 +22,14 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// Lowercase letters, digits, dots, underscores and dashes.
     #[schemars(extend("examples" = ["acme"]))]
     pub project: String,
+    /// Other project files this one builds on: one path or a list, relative to this file,
+    /// such as `devlanes.yaml` for a `devlanes.prod.yaml` that runs the same apps another
+    /// way. They are merged in order, each with its own `.local.yaml`, then this file and its
+    /// `.local.yaml` go last, so later files win. Mappings merge by key and lists and single
+    /// values replace, as with local overrides. An extended file may be partial and its
+    /// `project` is ignored; paths in it mean what they would in this file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<ProjectExtends>,
     /// Optional color and description per tag. Services list their tags in their own `tags`,
     /// and tags group them: `+api` selects every service tagged `api` in profiles and in
     /// commands such as `devlanes start +api`. A unit's color comes from the first of its tags
@@ -37,7 +45,7 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the
     /// inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the
     /// inherited probe. Templates may extend other templates, are never started themselves,
-    /// and are applied after `devlanes.local.yaml` is merged.
+    /// and are applied after every project file and local override is merged.
     #[serde(default)]
     #[schemars(extend("examples" = [{"fastify-api":{"platform":"node","tags":["api"],"ready":{"http":{"path":"/-/health"}}}}]))]
     pub templates: IndexMap<String, ServiceConfig<E>>,
@@ -639,6 +647,29 @@ pub enum ComposeFiles {
     /// Compose files merged in order, like repeated `-f` arguments.
     #[schemars(extend("examples" = [["docker-compose.yml","docker-compose.dev.yml"]]))]
     Files(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("examples" = ["devlanes.yaml",["devlanes.yaml","devlanes.shared.yaml"]]))]
+/// Project file, or files merged in order, that a project file builds on.
+pub enum ProjectExtends {
+    /// One project file, relative to the file that names it.
+    #[schemars(extend("examples" = ["devlanes.yaml"]))]
+    File(String),
+    /// Project files merged in order, later ones winning.
+    #[schemars(extend("examples" = [["devlanes.yaml","devlanes.shared.yaml"]]))]
+    Files(Vec<String>),
+}
+
+impl ProjectExtends {
+    /// The named files in merge order.
+    pub fn files(&self) -> &[String] {
+        match self {
+            Self::File(file) => std::slice::from_ref(file),
+            Self::Files(files) => files,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]

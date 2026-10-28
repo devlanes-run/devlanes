@@ -221,7 +221,7 @@ service_fields! {
     /// merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run`
     /// or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`,
     /// `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are
-    /// resolved after devlanes.local.yaml is merged.
+    /// resolved after every project file and local override is merged.
     #[schemars(extend("examples" = ["fastify-api"]))]
     extends: String,
     /// Command that starts the service. A string runs with `/bin/sh -c`, so pipes, `&&` and
