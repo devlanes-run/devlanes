@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use devlanes_proto::{
     Actor, ActorKind, ContainerSummary, LanePower, LaneSummary, LogLine, ORPHANED, RpcError,
-    UnitSummary,
+    UnitDrift, UnitSummary,
 };
 use devlanes_tui::{
     DaemonMetrics, LaneMetrics, Metrics, SystemMetrics, UnitMetrics,
@@ -309,7 +309,6 @@ pub fn lanes() -> Vec<LaneSummary> {
         branch: Some("fix/cache".into()),
         path: "/work/acme-cache".into(),
         state: "idle".into(),
-        config_changed: true,
         units: vec![
             unit("acme@2", "api-gateway", "idle", "service"),
             unit("acme@2", "web-app", "idle", "service"),
@@ -330,6 +329,23 @@ pub fn lanes() -> Vec<LaneSummary> {
         )),
         ..LaneSummary::default()
     };
+    // The project file changed since shop@0 started: storefront's command and an
+    // env var, checkout-api is gone from it and mailer is new.
+    let drift = |kind: &str, fields: &[&str]| {
+        Some(UnitDrift {
+            kind: kind.into(),
+            fields: fields.iter().map(|f| (*f).to_owned()).collect(),
+        })
+    };
+    let mut shop_units = vec![
+        unit("shop@0", "storefront", "ready", "service"),
+        unit("shop@0", "checkout-api", "ready", "service"),
+        unit("shop@0", "mailer", "idle", "service"),
+        unit("shop@0", "admin", "stopped", "service"),
+    ];
+    shop_units[0].drift = drift("changed", &["run", "env API_URL"]);
+    shop_units[1].drift = drift("removed", &[]);
+    shop_units[2].drift = drift("added", &[]);
     let shop = LaneSummary {
         reference: "shop@0".into(),
         project: "shop".into(),
@@ -337,11 +353,8 @@ pub fn lanes() -> Vec<LaneSummary> {
         branch: Some("main".into()),
         path: "/work/shop".into(),
         state: "running".into(),
-        units: vec![
-            unit("shop@0", "storefront", "ready", "service"),
-            unit("shop@0", "checkout-api", "ready", "service"),
-            unit("shop@0", "admin", "stopped", "service"),
-        ],
+        config_changed: true,
+        units: shop_units,
         ..LaneSummary::default()
     };
     let shop_feature = LaneSummary {

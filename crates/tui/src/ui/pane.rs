@@ -1297,10 +1297,37 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
         lines.extend(field(
             theme,
             "config",
-            "changed since the lane started; r restarts with it",
+            "changed since the lane started; r reloads the changes",
             width,
             plain,
         ));
+        // One line per unit, in the list's order: `web: run, env API_URL`, `api: removed`.
+        let drifted = lane
+            .units
+            .iter()
+            .filter_map(|unit| unit.drift.as_ref().map(|drift| (unit, drift)));
+        for (unit, drift) in drifted {
+            let what = match drift.kind.as_str() {
+                "changed" if !drift.fields.is_empty() => drift.fields.join(", "),
+                kind => kind.to_owned(),
+            };
+            lines.extend(field(
+                theme,
+                "",
+                &format!("{}: {what}", unit.label()),
+                width,
+                plain,
+            ));
+        }
+        if lane.infra_changed {
+            lines.extend(field(
+                theme,
+                "",
+                "infra: changed, so r restarts the whole lane",
+                width,
+                plain,
+            ));
+        }
     }
     if let Some(next) = lane.moves_to {
         lines.extend(field(

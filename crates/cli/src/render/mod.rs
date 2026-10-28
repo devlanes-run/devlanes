@@ -16,7 +16,7 @@ pub(crate) use lanes::display_url;
 pub(crate) use other::doctor_failed;
 pub use other::{DoctorCheck, DoctorState, doctor_checks_of};
 pub use words::status_hint;
-pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording};
+pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
 
 use crate::{OutputMode, Runtime};
 
@@ -177,7 +177,7 @@ pub(crate) enum Outcome {
 /// Lines for a final result of `method`.
 pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     match method {
-        Method::Start | Method::Restart => lanes::start_like(data, cx),
+        Method::Start | Method::Restart | Method::Reload => lanes::start_like(data, cx),
         Method::Resume => lanes::resume(data, cx),
         Method::Stop => lanes::stop(data, cx),
         Method::Status | Method::LaneList => lanes::status(data, cx),
@@ -218,7 +218,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
 pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> {
     let starting = matches!(
         method,
-        Method::Start | Method::Restart | Method::Resume | Method::LaneNew
+        Method::Start | Method::Restart | Method::Reload | Method::Resume | Method::LaneNew
     );
     match event.event.as_str() {
         events::PHASE if starting => other::phase_line(&event.data, cx).into_iter().collect(),

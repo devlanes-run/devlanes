@@ -36,7 +36,7 @@ pub struct CommandTitle {
     tracker: Option<StartTracker>,
 }
 
-/// The title for `request` when it runs long: `start`, `restart`,
+/// The title for `request` when it runs long: `start`, `restart`, `reload`,
 /// `lane resume`, `lane new --start`, `wait`, `logs -f`, `infra logs -f` and `attach`. `None`
 /// for everything else, which ends too soon for a title.
 pub fn command_title(request: &Request) -> Option<CommandTitle> {
@@ -55,6 +55,7 @@ pub fn command_title(request: &Request) -> Option<CommandTitle> {
     let (verb, subject) = match request.method {
         Method::Start => ("start", strings("units")),
         Method::Restart => ("restart", strings("units")),
+        Method::Reload => ("reload", strings("units")),
         Method::Resume => ("lane resume", Vec::new()),
         Method::LaneNew if flag("start") => ("lane new", strings("name")),
         Method::Wait => ("wait", strings("target")),

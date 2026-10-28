@@ -14,7 +14,7 @@ pub const LISTED: usize = 20;
 /// What a missing argument chooses from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChoiceKind {
-    /// Any unit of the lane (logs, debug why, restart).
+    /// Any unit of the lane (logs, debug why).
     Unit,
     /// Services with a URL (url print, url open).
     Url,
@@ -48,7 +48,7 @@ pub struct Choice {
     /// The command's one-line description.
     pub about: String,
     pub kind: ChoiceKind,
-    /// Whether several options may be chosen (logs, restart).
+    /// Whether several options may be chosen (logs).
     pub multi: bool,
 }
 

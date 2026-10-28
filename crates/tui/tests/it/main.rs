@@ -650,11 +650,28 @@ async fn start_stop_restart_dispatch_lane_and_unit_refs() -> TestResult {
         return Err(format!("unexpected {effects:?}").into());
     };
     assert_eq!(*method, Method::Restart);
-    assert_eq!(
-        selection.units,
-        ["acme@0:api", "acme@0:web"],
-        "only running services"
-    );
+    assert!(selection.units.is_empty(), "r restarts the whole lane");
+
+    // Once the project file changed what the lane runs, r applies that instead.
+    let mut changed = mixed_lanes();
+    changed[0].config_changed = true;
+    app.update(Msg::Status(Ok(changed)));
+    let effects = app.update(key(KeyCode::Char('r')));
+    let [
+        Effect::Control {
+            method,
+            selection,
+            label,
+            ..
+        },
+    ] = effects.as_slice()
+    else {
+        return Err(format!("unexpected {effects:?}").into());
+    };
+    assert_eq!(*method, Method::Reload);
+    assert!(selection.units.is_empty());
+    assert_eq!(label, "reload acme@0");
+    app.update(Msg::Status(Ok(mixed_lanes())));
 
     select_unit(&mut app, "worker").ok_or("worker not reachable")?;
     let effects = app.update(key(KeyCode::Char('x')));

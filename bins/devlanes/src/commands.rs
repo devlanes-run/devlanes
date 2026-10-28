@@ -471,7 +471,12 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         cli.streams()
             && !matches!(
                 method,
-                Method::Start | Method::Restart | Method::Wait | Method::Resume | Method::Run
+                Method::Start
+                    | Method::Restart
+                    | Method::Reload
+                    | Method::Wait
+                    | Method::Resume
+                    | Method::Run
             )
     });
     let open_ended = matches!(
@@ -1035,7 +1040,8 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
             | Method::Attach
             | Method::Wait
             | Method::Stop
-            | Method::Restart => Some(scoped(request, &["status"])),
+            | Method::Restart
+            | Method::Reload => Some(scoped(request, &["status"])),
             _ => None,
         },
         // `config check` is the command that just failed; point at the file instead.

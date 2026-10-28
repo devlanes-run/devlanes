@@ -2,7 +2,7 @@
 //! codes with data; every sentence and hint lives here.
 
 use devlanes_core::paths::names_a_path;
-use devlanes_proto::RpcError;
+use devlanes_proto::{LaneSummary, RpcError, UnitDrift};
 use serde_json::{Value, json};
 
 use super::{compact_fields, display_value, list, text};
@@ -1442,16 +1442,16 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             }
             line
         }
-        // The new block is allocated only when nothing in the lane runs.
+        // The new block is allocated only when nothing in the lane runs, which a
+        // reload arranges by restarting the whole lane.
         "ports_pending" => {
             let lane = text(data, "lane");
             if lane.is_empty() {
                 "config changed ports; they apply at the next full start of the lane".into()
             } else {
                 format!(
-                    "config changed ports; they apply at the next full start: {}, then {}",
-                    Hint::command(["stop", "--lane", lane.as_str()]).0,
-                    Hint::command(["start", "--lane", lane.as_str()]).0
+                    "config changed ports; they apply at the next full start: {}",
+                    Hint::command(["reload", "--lane", lane.as_str()]).0
                 )
             }
         }
@@ -1506,6 +1506,51 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             None => super::clean(other).replace('_', " "),
         },
     }
+}
+
+/// How the project file changed one unit: `run, env API_URL changed`,
+/// `removed from the file` or `added to the file`.
+pub(crate) fn unit_drift(drift: &UnitDrift) -> String {
+    match drift.kind.as_str() {
+        "changed" if drift.fields.is_empty() => "changed in the file".into(),
+        "changed" => {
+            let fields: Vec<String> = drift.fields.iter().map(|f| super::clean(f)).collect();
+            format!("{} changed", fields.join(", "))
+        }
+        "removed" => "removed from the file".into(),
+        "added" => "added to the file".into(),
+        other => super::clean(other).replace('_', " "),
+    }
+}
+
+/// The lane's `config changed` note: what differs, counted, and the command that
+/// applies it. Without drift (the file does not load) only `config changed`,
+/// because a reload would refuse.
+pub(crate) fn lane_drift(lane: &LaneSummary) -> String {
+    let count = |kind: &str| {
+        lane.units
+            .iter()
+            .filter(|unit| unit.drift.as_ref().is_some_and(|d| d.kind == kind))
+            .count()
+    };
+    let mut parts: Vec<String> = ["changed", "removed", "added"]
+        .into_iter()
+        .filter_map(|kind| match count(kind) {
+            0 => None,
+            n => Some(format!("{n} {kind}")),
+        })
+        .collect();
+    if lane.infra_changed {
+        parts.push("infra".into());
+    }
+    if parts.is_empty() {
+        return "config changed".into();
+    }
+    format!(
+        "config changed: {}; apply: {}",
+        parts.join(", "),
+        Hint::command(["reload", "--lane", lane.reference.as_str()]).0
+    )
 }
 
 /// How a change to WSL's own files takes effect, for fixes that edit them.

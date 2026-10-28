@@ -178,6 +178,30 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "failures": [], "skipped_tasks": [], "units": [unit("api", "ready")],
             }),
         ),
+        // `reload` after the file dropped worker and changed api: worker stopped,
+        // api restarted.
+        (
+            "reload_units_removed",
+            Method::Reload,
+            json!({
+                "lane": "acme@2", "branch": "feat/billing", "started": ["acme@2:api"],
+                "already_running": [], "whole_lane": false, "ready": true, "timed_out": false,
+                "failures": [], "skipped_tasks": [], "units": [unit("api", "ready")],
+                "warnings": [{"code": "units_removed", "data": {"lane": "acme@2", "units": ["worker"],
+                    "message": "stopped worker, which the project file no longer has"}}],
+            }),
+        ),
+        // Nothing to apply: only the warning, no `nothing to start`.
+        (
+            "reload_nothing",
+            Method::Reload,
+            json!({
+                "lane": "acme@2", "started": [], "already_running": [], "whole_lane": false,
+                "ready": true, "timed_out": false, "failures": [], "skipped_tasks": [], "units": [],
+                "warnings": [{"code": "nothing_to_reload", "data": {"lane": "acme@2",
+                    "message": "acme@2 already runs what its project file says"}}],
+            }),
+        ),
         (
             "resume",
             Method::Resume,
@@ -213,6 +237,23 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             ]),
         ),
         ("status_one_lane", Method::Status, page(vec![status_lane])),
+        // The file changed api, dropped worker and added mailer since the lane started.
+        ("status_drift", Method::Status, {
+            let mut api = unit("api", "ready");
+            api["drift"] = json!({"kind": "changed", "fields": ["run", "env API_URL"]});
+            let mut worker = unit("worker", "ready");
+            worker["drift"] = json!({"kind": "removed"});
+            let mut mailer = unit("mailer", "idle");
+            mailer["drift"] = json!({"kind": "added"});
+            let mut drifted = lane(
+                Some(2),
+                "feat/billing",
+                "running",
+                vec![api, unit("web", "ready"), worker, mailer],
+            );
+            drifted["config_changed"] = json!(true);
+            page(vec![drifted])
+        }),
         // An `infra.external` entry: no process, its own state word.
         ("status_external", Method::Status, {
             let mut pgadmin = unit("pgadmin", "external");

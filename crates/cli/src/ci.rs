@@ -279,8 +279,10 @@ impl Reporter for CiPlainReporter {
         let mut result = self.plain.result(report)?;
         // A start result (units, URLs, failure tails) belongs to its phase group;
         // the annotations follow it and GitHub lists them on the run regardless.
-        let start = matches!(report.method, Method::Start | Method::Restart)
-            && report.data.get("ready").is_some();
+        let start = matches!(
+            report.method,
+            Method::Start | Method::Restart | Method::Reload
+        ) && report.data.get("ready").is_some();
         result.stdout = if start {
             format!(
                 "{}{}{}",

@@ -1352,7 +1352,12 @@ fn hints(app: &App) -> Vec<Hint> {
             }
             let live = tree::lane_is_live(lane);
             let mut hints = if live {
-                vec![("x", "stop lane", ch('x')), ("r", "restart lane", ch('r'))]
+                let r = if tree::reloads_on_r(lane) {
+                    "reload changes"
+                } else {
+                    "restart lane"
+                };
+                vec![("x", "stop lane", ch('x')), ("r", r, ch('r'))]
             } else {
                 vec![("s", "start lane", ch('s')), ("S", "start all", ch('S'))]
             };

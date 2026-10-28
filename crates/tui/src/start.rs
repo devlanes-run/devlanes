@@ -31,7 +31,7 @@ pub enum StartFrame {
 /// A start the daemon accepted, handed to the TUI.
 #[derive(Debug)]
 pub struct StartHandoff {
-    /// The command's verb: `start`, `restart`, `resume` or `new lane`.
+    /// The command's verb: `start`, `restart`, `reload`, `resume` or `new lane`.
     pub label: String,
     /// Frames that arrived before the TUI opened.
     pub frames: Vec<StartFrame>,
@@ -228,10 +228,11 @@ impl StartRun {
         Some(lane)
     }
 
-    /// `starting` or `restarting`, from the command's verb.
+    /// `starting`, `restarting` or `reloading`, from the command's verb.
     fn running_verb(&self) -> String {
         match self.label.as_str() {
             "restart" => "restarting".into(),
+            "reload" => "reloading".into(),
             "start" => "starting".into(),
             other => format!("{other}:"),
         }
@@ -311,6 +312,7 @@ impl StartRun {
         if parts.is_empty() {
             parts.push(match self.label.as_str() {
                 "restart" => "restarted".into(),
+                "reload" => "reloaded".into(),
                 "start" => "started".into(),
                 other => format!("{other} done"),
             });
@@ -357,6 +359,8 @@ fn result_line(start: &StartResult) -> String {
         format!("✕ {} timed out: {count}", start.lane)
     } else if !start.ready {
         format!("{} not ready: {count}", start.lane)
+    } else if services.is_empty() && start.warnings.iter().any(|w| w.code == "nothing_to_reload") {
+        format!("{} has nothing to reload", start.lane)
     } else if services.is_empty() {
         format!("{} up", start.lane)
     } else {

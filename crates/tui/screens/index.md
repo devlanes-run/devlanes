@@ -138,6 +138,14 @@ another project tab (Shift+3)
 - 120x40: [txt](project-shop-120x40.txt) · [png](project-shop-120x40.png) · [ansi](project-shop-120x40.ansi)
 - 80x24: [txt](project-shop-80x24.txt) · [png](project-shop-80x24.png) · [ansi](project-shop-80x24.ansi)
 
+## lane-drift
+
+a lane whose project file changed since it started: a marker on each changed unit, one line per unit in the pane, r reloads the changes
+
+- 200x60: [txt](lane-drift-200x60.txt) · [png](lane-drift-200x60.png) · [ansi](lane-drift-200x60.ansi)
+- 120x40: [txt](lane-drift-120x40.txt) · [png](lane-drift-120x40.png) · [ansi](lane-drift-120x40.ansi)
+- 80x24: [txt](lane-drift-80x24.txt) · [png](lane-drift-80x24.png) · [ansi](lane-drift-80x24.ansi)
+
 ## project-config-error
 
 a project whose devlanes.yaml does not load (Shift+2)

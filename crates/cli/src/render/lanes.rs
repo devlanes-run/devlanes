@@ -122,6 +122,9 @@ fn unit_block(unit: &UnitSummary, tail: &[Value], styled: &[Value], cx: &Ctx<'_>
     if orphaned(unit) {
         lines.push(format!("  {}", orphan_note(unit)));
     }
+    if let Some(drift) = &unit.drift {
+        lines.push(format!("  {}", words::unit_drift(drift)));
+    }
     lines.extend(leftover_notes("  ", &unit.left_running, &unit.escaped));
     if unit.state == "failed" {
         lines.extend(super::tail_lines_in(tail, styled, cx));
@@ -143,8 +146,8 @@ fn loose_unit(value: &Value) -> Option<UnitSummary> {
         return None;
     };
     for (key, field) in fields {
-        // These lists are left out of the defaults' JSON while empty.
-        let listed = matches!(key.as_str(), "left_running" | "escaped");
+        // These are left out of the defaults' JSON while empty.
+        let listed = matches!(key.as_str(), "left_running" | "escaped" | "drift");
         if (listed || target.contains_key(key)) && !field.is_null() {
             target.insert(key.clone(), field.clone());
         }
@@ -180,7 +183,7 @@ fn units(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         .collect()
 }
 
-/// `start`, `restart` and the start part of `lane new --start`: a [`StartResult`].
+/// `start`, `restart`, `reload` and the start part of `lane new --start`: a [`StartResult`].
 /// Anything else (`with` passes failure pages and an empty object) renders as units.
 pub(super) fn start_like(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     if data.get("ready").is_none() || data.get("lane").is_none() {
@@ -301,6 +304,15 @@ fn nothing_started(result: &StartResult) -> bool {
     result.started.is_empty() && !result.already_running.is_empty() && result.failures.is_empty()
 }
 
+/// A reload that started nothing: it only stopped removed units or found no
+/// change, which its warnings say, so `nothing to start` would only repeat them.
+fn reload_only(result: &StartResult) -> bool {
+    result
+        .warnings
+        .iter()
+        .any(|warning| matches!(warning.code.as_str(), "units_removed" | "nothing_to_reload"))
+}
+
 /// The cli-design 3.5 start summary.
 fn start_result(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
     let view = StartView::new(result);
@@ -416,7 +428,7 @@ fn start_result(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
             view.ready_services(),
             view.services.len()
         ));
-    } else if result.ready {
+    } else if result.ready && !reload_only(result) {
         lines.push(format!("{} nothing to start", cx.mark(Outcome::Ok)));
     }
     if nothing_started(result) {
@@ -652,7 +664,7 @@ fn lane_notes(lane: &LaneSummary) -> Vec<String> {
         notes.push(format!("moves to lane {index}"));
     }
     if lane.config_changed {
-        notes.push("config changed".into());
+        notes.push(words::lane_drift(lane));
     }
     if lane.needs_env {
         notes.push(format!(
@@ -1009,6 +1021,13 @@ fn unit_table(lane: &LaneSummary, cx: &Ctx<'_>) -> Vec<String> {
         if orphaned(unit) {
             let note = format!("{}: {}", clean(&unit.name), orphan_note(unit));
             extra.push(format!("  {}", cx.state_text(&unit.state, &note)));
+        }
+        if let Some(drift) = &unit.drift {
+            extra.push(format!(
+                "  {}: {}",
+                clean(&unit.name),
+                words::unit_drift(drift)
+            ));
         }
         extra.extend(leftover_notes(
             &format!("  {}: ", clean(&unit.name)),

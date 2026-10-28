@@ -15,7 +15,8 @@ Usage: devlanes [OPTIONS] [COMMAND]
 Commands:
   start        Bring up a lane: infra, setup, tasks and services, then wait until ready
   stop         Stop units, or the whole lane when none are named
-  restart      Stop and start units again with a fresh environment
+  restart      Stop and start units again with a fresh environment, or the whole lane when none are named
+  reload       Apply project file changes to the running lane
   status       Show lanes and units with state, ports, URLs, CPU and memory
   logs         Read unit logs; each line carries a cursor to continue from
   wait         Wait until a unit or lane is ready or failed

@@ -127,8 +127,20 @@ Stopped services are left out of what a plain devlanes start brings back. A\n\
 whole-lane stop also forgets the lane's profiles, so its next plain start uses\n\
 the default profile.")]
     Stop(StopArgs),
-    /// Stop and start units again with a fresh environment
+    /// Stop and start units again with a fresh environment, or the whole lane when none are named
+    #[command(
+        long_about = "Stop and start units again with a fresh environment, or the whole lane when none are named.\n\n\
+A whole-lane restart stops everything, keeping the lane's profiles and\n\
+services, then starts it like a plain devlanes start: infra, setup, tasks and\n\
+services, with ports the edited project file needs."
+    )]
     Restart(RestartArgs),
+    /// Apply project file changes to the running lane
+    #[command(long_about = "Apply project file changes to the running lane.\n\n\
+Stops the units the file removed, restarts the ones it changed and starts the\n\
+ones it added. When infra or ports changed it restarts the whole lane instead.\n\
+With units, it applies only their changes. devlanes status shows what changed.")]
+    Reload(ReloadArgs),
     /// Show lanes and units with state, ports, URLs, CPU and memory
     Status(StatusArgs),
     /// Read unit logs; each line carries a cursor to continue from
@@ -320,13 +332,26 @@ pub struct WithArgs {
 
 #[derive(Debug, Args)]
 pub struct RestartArgs {
-    /// Units to restart ([lane:]unit, globs, +tag) [default: pick from a list]
+    /// Units to restart ([lane:]unit, globs, +tag) [default: the whole lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start every selected service immediately, bypassing the machine-wide start gate for this run
     #[arg(long)]
     pub all_at_once: bool,
     /// Print the restart as text instead of running it in the TUI
+    #[arg(long)]
+    pub no_ui: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ReloadArgs {
+    /// Units whose changes to apply ([lane:]unit) [default: every change of the lane]
+    #[arg(value_name = "UNIT")]
+    pub units: Vec<String>,
+    /// Start every selected service immediately, bypassing the machine-wide start gate for this run
+    #[arg(long)]
+    pub all_at_once: bool,
+    /// Print the reload as text instead of running it in the TUI
     #[arg(long)]
     pub no_ui: bool,
 }
@@ -946,6 +971,13 @@ impl Cli {
                 }
                 (Method::Restart, params)
             }
+            Some(Command::Reload(args)) => {
+                let mut params = selection(&args.units, &[], &[], false, args.all_at_once)?;
+                if start_events {
+                    params["events"] = json!(true);
+                }
+                (Method::Reload, params)
+            }
             Some(Command::Status(args)) => {
                 if runtime.mode == OutputMode::Agent && args.watch && self.timeout.is_none() {
                     return Err(Error::Usage(
@@ -1185,7 +1217,12 @@ impl Cli {
         };
         if matches!(
             method,
-            Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
+            Method::Start
+                | Method::Restart
+                | Method::Reload
+                | Method::Run
+                | Method::Exec
+                | Method::Resume
         ) {
             context.env = Some(environment());
         }
@@ -1245,7 +1282,7 @@ impl Cli {
     }
 
     /// Whether this start runs inside the TUI, like mprocs: `start`, `restart`,
-    /// `lane resume` and `lane new --start` on a terminal in human output,
+    /// `reload`, `lane resume` and `lane new --start` on a terminal in human output,
     /// outside CI, without `--no-ui`, `DEVLANES_NO_UI` or `-v`. `Some(true)` when
     /// `start --attach` asked for it, which also overrides `DEVLANES_NO_UI` and
     /// `tui.open_on_start: false`; the caller applies that config setting.
@@ -1253,6 +1290,7 @@ impl Cli {
         let (no_ui, forced) = match &self.command {
             Some(Command::Start(args)) => (args.no_ui, args.attach),
             Some(Command::Restart(args)) => (args.no_ui, false),
+            Some(Command::Reload(args)) => (args.no_ui, false),
             Some(Command::Lane {
                 command: LaneCommand::Resume { no_ui, .. },
             }) => (*no_ui, false),
@@ -1286,9 +1324,6 @@ impl Cli {
             Some(Command::Debug {
                 command: DebugCommand::Why { unit: None },
             }) => (vec!["debug", "why"], K::Unit, false),
-            Some(Command::Restart(args)) if args.units.is_empty() => {
-                (vec!["restart"], K::Unit, true)
-            }
             Some(Command::Logs(args)) if args.units.is_empty() && !args.mine && !args.all => {
                 (vec!["logs"], K::Unit, true)
             }
@@ -1332,6 +1367,7 @@ impl Cli {
                 Command::Start(_)
                     | Command::With(_)
                     | Command::Restart(_)
+                    | Command::Reload(_)
                     | Command::Wait { .. }
                     | Command::Debug {
                         command: DebugCommand::Events { .. }

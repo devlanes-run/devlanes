@@ -71,6 +71,8 @@ fn starting_commands_follow_progress_and_others_do_not() {
     for (method, params) in [
         (Method::Start, json!({})),
         (Method::Restart, json!({"units": ["api"]})),
+        (Method::Restart, json!({"units": []})),
+        (Method::Reload, json!({})),
         (Method::Resume, json!({})),
         (Method::LaneNew, json!({"name": "review", "start": true})),
         (Method::Wait, json!({"target": "acme@1:api"})),
@@ -120,6 +122,7 @@ fn starts_ask_for_their_lane_events() {
     for args in [
         &["devlanes", "start"][..],
         &["devlanes", "restart", "api"][..],
+        &["devlanes", "reload"][..],
         &["devlanes", "lane", "resume"][..],
         &["devlanes", "lane", "new", "--name", "review", "--start"][..],
     ] {

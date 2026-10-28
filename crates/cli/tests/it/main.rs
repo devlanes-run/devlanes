@@ -90,6 +90,10 @@ fn entire_command_inventory_builds_actions() {
             Some(Method::Stop),
         ),
         (&["restart", "2:api"], Some(Method::Restart)),
+        (&["restart"], Some(Method::Restart)),
+        (&["reload"], Some(Method::Reload)),
+        (&["reload", "web"], Some(Method::Reload)),
+        (&["reload", "web", "--all-at-once"], Some(Method::Reload)),
         (
             &["status", "acme@2", "--watch", "--mine", "--timeout", "30s"],
             Some(Method::Status),
@@ -390,6 +394,7 @@ fn all_at_once_reaches_every_starting_request() {
     for args in [
         vec!["start", "--all-at-once"],
         vec!["restart", "api", "--all-at-once"],
+        vec!["reload", "--all-at-once"],
         vec!["lane", "resume", "--all-at-once"],
     ] {
         let cli = Cli::parse_from(std::iter::once("devlanes").chain(args.clone()));
@@ -406,6 +411,24 @@ fn all_at_once_reaches_every_starting_request() {
         Action::With(plan) => assert_eq!(plan.start.params["all_at_once"], true),
         _ => panic!("expected with"),
     }
+}
+
+#[test]
+/// `restart` without units asks for nothing and sends an empty list, which the
+/// daemon takes as the whole lane; `reload` sends only the units it was given.
+fn restart_and_reload_without_units_name_the_whole_lane() {
+    let params = |args: &[&str]| {
+        let cli = Cli::parse_from(std::iter::once("devlanes").chain(args.iter().copied()));
+        let request = request(action(&cli, &runtime(&cli, OutputMode::Plain)));
+        (request.method, request.params)
+    };
+    let (method, restart) = params(&["restart"]);
+    assert_eq!(method, Method::Restart);
+    assert_eq!(restart["units"], json!([]));
+    let (method, reload) = params(&["reload"]);
+    assert_eq!(method, Method::Reload);
+    assert_eq!(reload["units"], json!([]));
+    assert_eq!(params(&["reload", "web"]).1["units"], json!(["web"]));
 }
 
 #[test]
@@ -553,6 +576,7 @@ fn environment_is_captured_only_for_relevant_methods() {
     for (args, capture) in [
         (vec!["start"], true),
         (vec!["restart", "api"], true),
+        (vec!["reload"], true),
         (vec!["run", "migrate"], true),
         (vec!["exec", "--name", "demo", "--", "echo"], true),
         (vec!["lane", "resume"], true),
@@ -1293,8 +1317,16 @@ fn exit_codes_follow_the_method() {
     );
     let failure = json!([{"unit": "seed", "exit_code": 3, "log_tail": []}]);
     assert_eq!(
-        code(Method::Restart, start(true, false, failure)),
+        code(Method::Restart, start(true, false, failure.clone())),
         exit::FAILED
+    );
+    assert_eq!(
+        code(Method::Reload, start(true, false, failure)),
+        exit::FAILED
+    );
+    assert_eq!(
+        code(Method::Reload, start(false, true, json!([]))),
+        exit::TIMEOUT
     );
     assert_eq!(
         code(Method::Start, start(false, false, json!([]))),

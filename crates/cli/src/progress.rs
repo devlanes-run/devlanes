@@ -31,7 +31,9 @@ pub fn start_tracker(request: &Request) -> Option<StartTracker> {
             .unwrap_or_default()
     };
     match request.method {
-        Method::Start | Method::Restart => Some(StartTracker::command().with_units(units())),
+        Method::Start | Method::Restart | Method::Reload => {
+            Some(StartTracker::command().with_units(units()))
+        }
         Method::Resume => Some(StartTracker::command()),
         Method::LaneNew if request.params.get("start").and_then(Value::as_bool) == Some(true) => {
             Some(StartTracker::command())

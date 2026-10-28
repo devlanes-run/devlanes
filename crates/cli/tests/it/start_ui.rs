@@ -41,6 +41,8 @@ fn starts_on_a_terminal_run_in_the_tui() {
         &["devlanes", "start"][..],
         &["devlanes", "start", "api", "--profile", "e2e"][..],
         &["devlanes", "restart", "api"][..],
+        &["devlanes", "restart"][..],
+        &["devlanes", "reload"][..],
         &["devlanes", "lane", "resume"][..],
         &["devlanes", "lane", "new", "--start"][..],
     ] {
@@ -56,6 +58,7 @@ fn other_commands_and_opt_outs_keep_the_cli() {
     for args in [
         &["devlanes", "start", "--no-ui"][..],
         &["devlanes", "restart", "api", "--no-ui"][..],
+        &["devlanes", "reload", "--no-ui"][..],
         &["devlanes", "lane", "resume", "--no-ui"][..],
         &["devlanes", "lane", "new", "--start", "--no-ui"][..],
         &["devlanes", "lane", "new"][..],

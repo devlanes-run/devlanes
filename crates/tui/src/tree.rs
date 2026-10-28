@@ -195,6 +195,12 @@ pub fn lane_is_live(lane: &LaneSummary) -> bool {
         .any(|u| role(u) == Role::Service && is_active(&u.state))
 }
 
+/// Whether `r` on the lane applies the project file's changes (`reload`)
+/// instead of restarting the whole lane: only when the file changed what it runs.
+pub fn reloads_on_r(lane: &LaneSummary) -> bool {
+    lane.config_changed
+}
+
 /// Whether `text` matches the filter: a `+tag` matches tags, anything else a
 /// part of the name or display name, ignoring case.
 pub fn matches(filter: &str, name: &str, label: &str, tags: &[String]) -> bool {

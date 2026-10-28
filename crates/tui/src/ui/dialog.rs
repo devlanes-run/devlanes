@@ -40,6 +40,10 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
                 "start, stop, restart the selection; s runs a task",
             ),
             ("s  S", "on the lane: its default services; every service"),
+            (
+                "r",
+                "on the lane: apply config changes, else restart all of it",
+            ),
             ("p", "start the lane with chosen profiles"),
             ("C", "clean the lane (asks first)"),
             ("o", "open the unit's address in a browser"),

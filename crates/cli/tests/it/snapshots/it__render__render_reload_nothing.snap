@@ -1,0 +1,13 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+acme@2
+! acme@2 already runs what its project file says
+--- plain (exit 0)
+acme@2
+warn acme@2 already runs what its project file says
+--- agent (exit 0)
+acme@2: ready
+warn acme@2 already runs what its project file says

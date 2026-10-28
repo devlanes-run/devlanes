@@ -1,4 +1,4 @@
-//! `devlanes start` (and `restart`, `lane resume`, `lane new --start`) inside
+//! `devlanes start` (and `restart`, `reload`, `lane resume`, `lane new --start`) inside
 //! the TUI, as mprocs does. The request goes out first: a start the daemon
 //! refuses at once (no config, unknown unit) is printed as a CLI error with its
 //! usual exit status, and the TUI only opens once the start is underway.
@@ -34,6 +34,7 @@ pub fn open_on_start(paths: &Paths) -> bool {
 fn label(method: Method) -> &'static str {
     match method {
         Method::Restart => "restart",
+        Method::Reload => "reload",
         Method::Resume => "resume",
         Method::LaneNew => "new lane",
         _ => "start",

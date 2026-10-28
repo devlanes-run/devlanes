@@ -1,6 +1,6 @@
  devlanes  1 acme   2 billing   3 shop                                                                                                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
  lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                                                                                                            1-9 or [ ] switch lanes
-┌ @2 · 0/2 up ─────────────────────────────────┐┌ fix/cache @2 · not running · config changed ─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+┌ @2 · 0/2 up ─────────────────────────────────┐┌ fix/cache @2 · not running ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ ▾ services                                 2 ││ Not running. s starts the lane with its default profile, p picks profiles.                                                                           │
 │   · api-gateway                              ││                                                                                                                                                      │
 │   · web-app                                  ││ branch    fix/cache                                                                                                                                  │
@@ -9,15 +9,15 @@
 │   · migrate          not run · runs at start ││           · api-gateway      stopped                                                                                                                 │
 │   · seed                             not run ││           · web-app          stopped                                                                                                                 │
 │   · lint                             not run ││ tasks     7 not run                                                                                                                                  │
-│   · typecheck                        not run ││ config    changed since the lane started; r restarts with it                                                                                         │
-│   · test-e2e                         not run ││                                                                                                                                                      │
-│   · codegen                          not run ││ lanes in acme                                                                                                                                        │
-│   · clean-cache                      not run ││   main @0                  1 failed · 1 starting · 34 up                                                                                             │
-│                                              ││   feat/checkout @1         starting · 4 of 8 ready                                                                                                   │
-│ ▾ infra                                      ││ ▌ fix/cache @2             not running · config changed                                                                                              │
-│   ▾ shared                              3 up ││   spike/old-search @3      worktree missing                                                                                                          │
-│     ● pgbouncer                              ││                                                                                                                                                      │
-│     ● postgres                               ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes start in a new git worktree adds one.                         │
+│   · typecheck                        not run ││                                                                                                                                                      │
+│   · test-e2e                         not run ││ lanes in acme                                                                                                                                        │
+│   · codegen                          not run ││   main @0                  1 failed · 1 starting · 34 up                                                                                             │
+│   · clean-cache                      not run ││   feat/checkout @1         starting · 4 of 8 ready                                                                                                   │
+│                                              ││ ▌ fix/cache @2             not running                                                                                                               │
+│ ▾ infra                                      ││   spike/old-search @3      worktree missing                                                                                                          │
+│   ▾ shared                              3 up ││                                                                                                                                                      │
+│     ● pgbouncer                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes start in a new git worktree adds one.                         │
+│     ● postgres                               ││                                                                                                                                                      │
 │     ● redis                                  ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -62,7 +62,7 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
 1: 0-6 dim, 8-9 dim, 10-13 red, 16-17 dim, 18-34 yellow, 36-48 bold reversed, 50-51 dim, 52-67 yellow, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
-2: 0 darkgray, 1-13 bold reversed, 14-48 darkgray, 50-58 bold, 62-92 dim, 94-199 darkgray
+2: 0 darkgray, 1-13 bold reversed, 14-48 darkgray, 50-58 bold, 62-75 dim, 77-199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 199 darkgray
 4: 0 darkgray, 4-5 dim, 6-16 dim blue, 47-48 darkgray, 199 darkgray
 5: 0 darkgray, 4-5 dim, 6-12 dim green, 47-48 darkgray, 50-59 dim, 199 darkgray
@@ -71,15 +71,15 @@
 8: 0 darkgray, 4-12 dim, 23-45 dim, 47-48 darkgray, 60-61 dim, 79-85 dim, 199 darkgray
 9: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-85 dim, 199 darkgray
 10: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 199 darkgray
-11: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 199 darkgray
-12: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 199 darkgray
-13: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 50-62 bold, 199 darkgray
-14: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 199 darkgray
-15: 0 darkgray, 47-48 darkgray, 50-51 bold, 85-99 dim, 199 darkgray
-16: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
-17: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
-18: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 199 darkgray
-19: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-173 dim, 199 darkgray
+11: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 199 darkgray
+12: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 50-62 bold, 199 darkgray
+13: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 199 darkgray
+14: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-51 bold, 85-99 dim, 199 darkgray
+15: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-87 dim, 199 darkgray
+16: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
+17: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 199 darkgray
+18: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 50-173 dim, 199 darkgray
+19: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 199 darkgray
 20: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 199 darkgray
 21: 0 darkgray, 47-48 darkgray, 199 darkgray
 22: 0 darkgray, 47-48 darkgray, 199 darkgray
