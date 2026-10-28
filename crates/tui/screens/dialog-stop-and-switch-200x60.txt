@@ -24,14 +24,14 @@
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
-│                                              ││                      ┌────────────────────────────────────────────────────────┐                                                                      │
-│                                              ││                      │ shop@0 runs on this machine. Stop it and use fork-b's? │                                                                      │
-│                                              ││                      │                                                        │                                                                      │
-│                                              ││                      │ It stops every unit of shop@0 here.                    │                                                                      │
-│                                              ││                      │ Then fork-b's shop@0 serves its hostnames and ports.   │                                                                      │
-│                                              ││                      │                                                        │                                                                      │
-│                                              ││                      │ y stop and switch   n cancel                           │                                                                      │
-│                                              ││                      └────────────────────────────────────────────────────────┘                                                                      │
+│                                              ││                  ┌───────────────────────────────────────────────────────────────┐                                                                   │
+│                                              ││                  │ shop@0 runs on this machine. Stop it and use fork-b's shop@0? │                                                                   │
+│                                              ││                  │                                                               │                                                                   │
+│                                              ││                  │ It stops every unit of shop@0 here.                           │                                                                   │
+│                                              ││                  │ Then fork-b's shop@0 serves its hostnames and ports.          │                                                                   │
+│                                              ││                  │                                                               │                                                                   │
+│                                              ││                  │ y stop and switch   n cancel                                  │                                                                   │
+│                                              ││                  └───────────────────────────────────────────────────────────────┘                                                                   │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -86,14 +86,14 @@
 23: 0 darkgray, 47-48 darkgray, 199 darkgray
 24: 0 darkgray, 47-48 darkgray, 199 darkgray
 25: 0 darkgray, 47-48 darkgray, 199 darkgray
-26: 0 darkgray, 47-48 darkgray, 71-128 bold, 199 darkgray
-27: 0 darkgray, 47-48 darkgray, 71 bold, 73-126 bold, 128 bold, 199 darkgray
-28: 0 darkgray, 47-48 darkgray, 71 bold, 128 bold, 199 darkgray
-29: 0 darkgray, 47-48 darkgray, 71 bold, 128 bold, 199 darkgray
-30: 0 darkgray, 47-48 darkgray, 71 bold, 128 bold, 199 darkgray
-31: 0 darkgray, 47-48 darkgray, 71 bold, 128 bold, 199 darkgray
-32: 0 darkgray, 47-48 darkgray, 71 bold, 73 bold, 74-89 dim, 93 bold, 94-100 dim, 128 bold, 199 darkgray
-33: 0 darkgray, 47-48 darkgray, 71-128 bold, 199 darkgray
+26: 0 darkgray, 47-48 darkgray, 67-131 bold, 199 darkgray
+27: 0 darkgray, 47-48 darkgray, 67 bold, 69-129 bold, 131 bold, 199 darkgray
+28: 0 darkgray, 47-48 darkgray, 67 bold, 131 bold, 199 darkgray
+29: 0 darkgray, 47-48 darkgray, 67 bold, 131 bold, 199 darkgray
+30: 0 darkgray, 47-48 darkgray, 67 bold, 131 bold, 199 darkgray
+31: 0 darkgray, 47-48 darkgray, 67 bold, 131 bold, 199 darkgray
+32: 0 darkgray, 47-48 darkgray, 67 bold, 69 bold, 70-85 dim, 89 bold, 90-96 dim, 131 bold, 199 darkgray
+33: 0 darkgray, 47-48 darkgray, 67-131 bold, 199 darkgray
 34: 0 darkgray, 47-48 darkgray, 199 darkgray
 35: 0 darkgray, 47-48 darkgray, 199 darkgray
 36: 0 darkgray, 47-48 darkgray, 199 darkgray

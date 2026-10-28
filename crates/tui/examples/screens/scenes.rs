@@ -818,8 +818,10 @@ fn scenes() -> Vec<Scene> {
                 };
                 f.connect_boxes();
                 f.shifted('B');
-                f.key(KeyCode::Char('j'));
-                f.key(KeyCode::Char('j'));
+                // Past hetzner, its skipped lane and devbox.
+                for _ in 0..3 {
+                    f.key(KeyCode::Char('j'));
+                }
                 f.key(KeyCode::Enter);
                 f.type_text("hunter2");
             },
@@ -838,6 +840,8 @@ fn scenes() -> Vec<Scene> {
                 };
                 f.connect_boxes();
                 f.shifted('B');
+                // Past hetzner and its skipped lane.
+                f.key(KeyCode::Char('j'));
                 f.key(KeyCode::Char('j'));
                 f.key(KeyCode::Enter);
             },

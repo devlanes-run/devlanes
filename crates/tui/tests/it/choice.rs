@@ -220,15 +220,70 @@ async fn m_on_a_grey_box_lane_asks_the_daemon_to_use_it() -> TestResult {
         lane: "acme@1".into(),
         host: Some("fork-b".into()),
         result: Ok(
-            json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a", "mirrored": true}),
+            json!({"lane": "acme@1", "host": "fork-b", "previous": "fork-a",
+                          "mirrored": true, "pending": false}),
         ),
     });
-    assert_eq!(notice(&app), "acme@1 now comes from fork-b");
+    // The daemon's notice says it switched, not the reply.
+    assert_eq!(notice(&app), "switching acme@1 to fork-b…");
     assert!(
         effects.iter().any(|e| matches!(e, Effect::FetchBoxes)),
         "{effects:?}"
     );
+    app.update(switched(
+        "acme@1",
+        Some("fork-b"),
+        Some("acme@1 now comes from fork-b"),
+    ));
+    assert_eq!(notice(&app), "acme@1 now comes from fork-b");
     Ok(())
+}
+
+/// A `lane_switched` notice from the daemon, for a switch any client made.
+fn switched(lane: &str, to: Option<&str>, message: Option<&str>) -> Msg {
+    Msg::Event(Event {
+        seq: 11,
+        event: WARNING_EVENT.into(),
+        data: json!({"code": "lane_switched", "lane": lane, "to": to, "from": "fork-a",
+                     "host": to.unwrap_or("fork-a"), "message": message}),
+    })
+}
+
+/// A switch made from the CLI or another TUI shows here too, once.
+#[tokio::test]
+async fn a_switch_from_another_client_shows_the_daemons_notice() {
+    let mut app = with_forks(120, 30).await;
+    let effects = app.update(switched(
+        "acme@1",
+        Some("fork-b"),
+        Some("acme@1 now comes from fork-b"),
+    ));
+    assert_eq!(notice(&app), "acme@1 now comes from fork-b");
+    assert!(app.notice.as_ref().is_some_and(|n| !n.error));
+    assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
+    // Without a message, the same words from its fields.
+    app.update(switched("acme@1", None, None));
+    assert_eq!(notice(&app), "acme@1 now comes from this machine");
+}
+
+#[tokio::test]
+async fn a_reply_that_switched_nothing_says_why() {
+    let mut app = with_forks(120, 30).await;
+    let reply = |mirrored: bool, previous: &str| Msg::LaneUsed {
+        lane: "acme@1".into(),
+        host: Some("fork-b".into()),
+        result: Ok(
+            json!({"lane": "acme@1", "host": "fork-b", "previous": previous,
+                          "mirrored": mirrored, "pending": false}),
+        ),
+    };
+    app.update(reply(false, "fork-a"));
+    assert_eq!(
+        notice(&app),
+        "fork-b's acme@1 is chosen but not mirrored yet"
+    );
+    app.update(reply(true, "fork-b"));
+    assert_eq!(notice(&app), "fork-b's acme@1 is already in use");
 }
 
 #[tokio::test]
@@ -246,8 +301,15 @@ async fn m_on_a_yielded_local_lane_gives_the_hostnames_back_to_this_machine() ->
     app.update(Msg::LaneUsed {
         lane: "acme@1".into(),
         host: None,
-        result: Ok(json!({"lane": "acme@1", "host": null, "previous": "fork-a", "mirrored": true})),
+        result: Ok(json!({"lane": "acme@1", "host": null, "previous": "fork-a",
+                          "mirrored": true, "pending": false})),
     });
+    assert_eq!(notice(&app), "switching acme@1 to this machine…");
+    app.update(switched(
+        "acme@1",
+        None,
+        Some("acme@1 now comes from this machine"),
+    ));
     assert_eq!(notice(&app), "acme@1 now comes from this machine");
     Ok(())
 }
@@ -279,8 +341,31 @@ fn acme_stopped() -> Vec<devlanes_proto::LaneSummary> {
     lanes
 }
 
-/// While this machine runs the lane, `m` asks to stop it, stops it, waits
-/// until status shows it stopped and only then sends `remote.use`.
+/// `local_lane_running` for `acme@0`, as the daemon answers while it still
+/// counts the stopped lane as running.
+fn still_running() -> Result<Value, ApiError> {
+    Err(ApiError::Rpc(RpcError::new(
+        "local_lane_running",
+        json!({"host": "fork-b", "lane": "acme@0", "local_lane": "acme@0",
+               "message": "acme@0 runs on this machine and keeps the hostnames"}),
+        1,
+    )))
+}
+
+/// The stop answered for `action`.
+fn stopped(action: u64) -> Msg {
+    Msg::ActionDone {
+        action,
+        label: "stop acme@0".into(),
+        target: Target::Lane("acme@0".into()),
+        units: Vec::new(),
+        result: Ok(json!({})),
+    }
+}
+
+/// While this machine runs the lane, `m` asks to stop it and stops it. The
+/// stop's answer sends `remote.use` at once, and a `local_lane_running`
+/// answer sends it again on the next tick.
 #[tokio::test]
 async fn m_stops_this_machines_lane_after_a_confirm_then_switches() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -304,7 +389,7 @@ async fn m_stops_this_machines_lane_after_a_confirm_then_switches() -> TestResul
     );
     let dialog = pane_and_dialog(&app)?;
     assert!(
-        dialog.contains("acme@0 runs on this machine. Stop it and use fork-b's?"),
+        dialog.contains("acme@0 runs on this machine. Stop it and use fork-b's acme@0?"),
         "{dialog}"
     );
     assert!(dialog.contains("y stop and switch"), "{dialog}");
@@ -316,21 +401,36 @@ async fn m_stops_this_machines_lane_after_a_confirm_then_switches() -> TestResul
     assert_eq!(lane, "acme@0");
     assert!(uses(&effects).is_empty(), "{effects:?}");
     assert_eq!(notice(&app), "stopping acme@0 to use fork-b's acme@0…");
-    // The stop answered while status still shows the lane running.
-    let effects = app.update(Msg::ActionDone {
-        action,
-        label: "stop acme@0".into(),
-        target: Target::Lane("acme@0".into()),
-        units: Vec::new(),
-        result: Ok(json!({})),
-    });
-    assert!(uses(&effects).is_empty(), "{effects:?}");
-    assert!(effects.iter().any(|e| matches!(e, Effect::Refresh)));
-    let effects = app.update(Msg::Status(Ok(acme_stopped())));
-    assert_eq!(uses(&effects), [("acme@0".into(), Some("fork-b".into()))]);
+    // The stop answered while status still says the lane failed: its worker
+    // failed before, which the daemon does not count as running.
+    let mut failed = acme_stopped();
+    failed[0].state = "failed".into();
+    app.update(Msg::Status(Ok(failed)));
+    let use_fork_b = [("acme@0".to_owned(), Some("fork-b".to_owned()))];
+    let effects = app.update(stopped(action));
+    assert_eq!(uses(&effects), use_fork_b);
     assert_eq!(notice(&app), "switching acme@0 to fork-b…");
-    // Once is enough.
-    let effects = app.update(Msg::Status(Ok(acme_stopped())));
+    // Nothing more while it is on its way.
+    let effects = app.update(Msg::Tick);
+    assert!(uses(&effects).is_empty(), "{effects:?}");
+    // Still counted as running: no dialog, no error, and the next tick asks again.
+    app.update(Msg::LaneUsed {
+        lane: "acme@0".into(),
+        host: Some("fork-b".into()),
+        result: still_running(),
+    });
+    assert!(app.dialog.is_none());
+    assert!(app.notice.as_ref().is_some_and(|n| !n.error));
+    let effects = app.update(Msg::Tick);
+    assert_eq!(uses(&effects), use_fork_b);
+    app.update(Msg::LaneUsed {
+        lane: "acme@0".into(),
+        host: Some("fork-b".into()),
+        result: Ok(json!({"lane": "acme@0", "host": "fork-b", "previous": null,
+                          "mirrored": true, "pending": false})),
+    });
+    // Done: no more asking.
+    let effects = app.update(Msg::Tick);
     assert!(uses(&effects).is_empty(), "{effects:?}");
     Ok(())
 }
@@ -361,7 +461,7 @@ async fn a_failed_stop_ends_the_switch_with_the_daemons_words() -> TestResult {
         "{}",
         shown.text
     );
-    let effects = app.update(Msg::Status(Ok(acme_stopped())));
+    let effects = app.update(Msg::Tick);
     assert!(
         uses(&effects).is_empty(),
         "no switch after a failed stop: {effects:?}"
@@ -370,20 +470,19 @@ async fn a_failed_stop_ends_the_switch_with_the_daemons_words() -> TestResult {
 }
 
 #[tokio::test]
-async fn a_lane_that_never_shows_stopped_ends_the_switch() -> TestResult {
+async fn a_lane_the_daemon_keeps_counting_as_running_ends_the_switch() -> TestResult {
     let mut app = with_forks(120, 30).await;
     select(&mut app, Selected::lane("acme@0 @fork-b"));
     app.update(key(KeyCode::Char('m')));
     let effects = app.update(key(KeyCode::Char('y')));
     let [(action, _)] = stops(&effects).try_into().map_err(|_| "one stop")?;
-    app.update(Msg::ActionDone {
-        action,
-        label: "stop acme@0".into(),
-        target: Target::Lane("acme@0".into()),
-        units: Vec::new(),
-        result: Ok(json!({})),
-    });
+    app.update(stopped(action));
     for _ in 0..30 {
+        app.update(Msg::LaneUsed {
+            lane: "acme@0".into(),
+            host: Some("fork-b".into()),
+            result: still_running(),
+        });
         app.update(Msg::Tick);
     }
     let shown = app.notice.as_ref().ok_or("no notice")?;
@@ -392,7 +491,7 @@ async fn a_lane_that_never_shows_stopped_ends_the_switch() -> TestResult {
         shown.text,
         "use acme@0 from fork-b failed: acme@0 is still running. Stop it, then press m again"
     );
-    let effects = app.update(Msg::Status(Ok(acme_stopped())));
+    let effects = app.update(Msg::Tick);
     assert!(uses(&effects).is_empty(), "{effects:?}");
     Ok(())
 }
@@ -451,7 +550,7 @@ async fn the_pane_names_the_lane_in_use_when_another_project_clashes() -> TestRe
     app.update(key(KeyCode::Char('m')));
     let dialog = pane_and_dialog(&app)?;
     assert!(
-        dialog.contains("acme@0 runs on this machine. Stop it and use fork-c's?"),
+        dialog.contains("acme@0 runs on this machine. Stop it and use fork-c's billing@0?"),
         "{dialog}"
     );
     Ok(())
@@ -461,8 +560,8 @@ async fn the_pane_names_the_lane_in_use_when_another_project_clashes() -> TestRe
 async fn m_on_a_lane_in_use_only_says_so() -> TestResult {
     let mut app = with_forks(120, 30).await;
     let cases = [
-        ("acme@1 @fork-a", "acme@1 from fork-a is already in use"),
-        ("acme@0", "acme@0 on this machine is already in use"),
+        ("acme@1 @fork-a", "fork-a's acme@1 is already in use"),
+        ("acme@0", "this machine's acme@0 is already in use"),
         (
             "acme@2",
             "no box runs acme@2, so there is nothing to switch to",
@@ -518,7 +617,7 @@ async fn a_switch_refused_for_a_running_lane_offers_to_stop_it() -> TestResult {
     });
     let dialog = pane_and_dialog(&app)?;
     assert!(
-        dialog.contains("shop@0 runs on this machine. Stop it and use fork-b's?"),
+        dialog.contains("shop@0 runs on this machine. Stop it and use fork-b's acme@1?"),
         "{dialog}"
     );
     assert!(dialog.contains("Then fork-b's acme@1 serves"), "{dialog}");
@@ -558,7 +657,7 @@ async fn a_local_start_that_clears_a_choice_says_so() {
     }));
     assert_eq!(
         notice(&app),
-        "acme@1 started here, so fork-a's acme@1 is no longer mirrored"
+        "acme@1 started on this machine, so fork-a's acme@1 is no longer mirrored or chosen"
     );
     assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
     // Another project's lane that clashes on a hostname.
@@ -570,7 +669,7 @@ async fn a_local_start_that_clears_a_choice_says_so() {
     }));
     assert_eq!(
         notice(&app),
-        "shop@0 started here, so fork-a's acme@1 is no longer mirrored"
+        "shop@0 started on this machine, so fork-a's acme@1 is no longer mirrored or chosen"
     );
 }
 
@@ -625,7 +724,7 @@ async fn m_on_a_skipped_lane_row_of_the_boxes_view_uses_it() -> TestResult {
     app.update(key(KeyCode::Char('m')));
     let dialog = pane_and_dialog(&app)?;
     assert!(
-        dialog.contains("acme@0 runs on this machine. Stop it and use fork-b's?"),
+        dialog.contains("acme@0 runs on this machine. Stop it and use fork-b's acme@0?"),
         "{dialog}"
     );
     app.update(key(KeyCode::Char('n')));
@@ -657,7 +756,8 @@ async fn m_on_a_skipped_lane_row_of_the_boxes_view_uses_it() -> TestResult {
 }
 
 /// The whole loop: `3`, `m` and `y` on fork-b's `acme@0` stop this
-/// machine's `acme@0`, then send `remote.use` once status shows it stopped.
+/// machine's `acme@0`, then send `remote.use`, and the daemon's
+/// `lane_switched` notice shows.
 #[tokio::test]
 async fn drive_stop_and_switch_stops_the_local_lane_then_uses_the_box() -> TestResult {
     let mut fake = FakeApi::with_lanes(mixed_lanes());
@@ -669,25 +769,20 @@ async fn drive_stop_and_switch_stops_the_local_lane_then_uses_the_box() -> TestR
         key(KeyCode::Char('3')),
         key(KeyCode::Char('m')),
     ]));
-    steps.push(crate::daemon::Step::Screen("Stop it and use fork-b's?"));
+    steps.push(crate::daemon::Step::Screen("stop and switch"));
     steps.extend(presses(vec![key(KeyCode::Char('y'))]));
-    run_keys(Arc::clone(&api), steps, &["now comes from"], |calls| {
-        calls.iter().any(|c| c == "remote.use acme@0 fork-b")
-    })
+    run_keys(
+        Arc::clone(&api),
+        steps,
+        &["acme@0 now comes from fork-b"],
+        |calls| calls.iter().any(|c| c == "remote.use acme@0 fork-b"),
+    )
     .await?;
     let calls = api.calls();
     let stop = calls.iter().position(|c| c == "Stop acme@0 []");
     let switch = calls.iter().position(|c| c == "remote.use acme@0 fork-b");
     assert!(
         matches!((stop, switch), (Some(stop), Some(switch)) if stop < switch),
-        "{calls:?}"
-    );
-    // Status was read again between them, so the switch saw the lane stopped.
-    let (Some(stop), Some(switch)) = (stop, switch) else {
-        return Err("no stop or no switch".into());
-    };
-    assert!(
-        calls[stop..switch].iter().any(|c| c == "status"),
         "{calls:?}"
     );
     Ok(())
@@ -709,7 +804,7 @@ async fn drive_a_failed_stop_never_switches() -> TestResult {
         key(KeyCode::Char('3')),
         key(KeyCode::Char('m')),
     ]));
-    steps.push(crate::daemon::Step::Screen("Stop it and use fork-b's?"));
+    steps.push(crate::daemon::Step::Screen("stop and switch"));
     steps.extend(presses(vec![key(KeyCode::Char('y'))]));
     run_keys(Arc::clone(&api), steps, &["stop acme@0 failed"], |calls| {
         calls.iter().any(|c| c == "Stop acme@0 []")

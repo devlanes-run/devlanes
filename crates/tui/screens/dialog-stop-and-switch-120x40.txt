@@ -14,14 +14,14 @@
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
-│                              ┌────────────────────────────────────────────────────────┐                              │
-│                              │ shop@0 runs on this machine. Stop it and use fork-b's? │                              │
-│                              │                                                        │                              │
-│                              │ It stops every unit of shop@0 here.                    │                              │
-│                              │ Then fork-b's shop@0 serves its hostnames and ports.   │                              │
-│                              │                                                        │                              │
-│                              │ y stop and switch   n cancel                           │                              │
-│                              └────────────────────────────────────────────────────────┘                              │
+│                          ┌───────────────────────────────────────────────────────────────┐                           │
+│                          │ shop@0 runs on this machine. Stop it and use fork-b's shop@0? │                           │
+│                          │                                                               │                           │
+│                          │ It stops every unit of shop@0 here.                           │                           │
+│                          │ Then fork-b's shop@0 serves its hostnames and ports.          │                           │
+│                          │                                                               │                           │
+│                          │ y stop and switch   n cancel                                  │                           │
+│                          └───────────────────────────────────────────────────────────────┘                           │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
@@ -56,14 +56,14 @@
 13: 0 darkgray, 47-48 darkgray, 119 darkgray
 14: 0 darkgray, 47-48 darkgray, 119 darkgray
 15: 0 darkgray, 47-48 darkgray, 119 darkgray
-16: 0 darkgray, 31-88 bold, 119 darkgray
-17: 0 darkgray, 31 bold, 33-86 bold, 88 bold, 119 darkgray
-18: 0 darkgray, 31 bold, 88 bold, 119 darkgray
-19: 0 darkgray, 31 bold, 88 bold, 119 darkgray
-20: 0 darkgray, 31 bold, 88 bold, 119 darkgray
-21: 0 darkgray, 31 bold, 88 bold, 119 darkgray
-22: 0 darkgray, 31 bold, 33 bold, 34-49 dim, 53 bold, 54-60 dim, 88 bold, 119 darkgray
-23: 0 darkgray, 31-88 bold, 119 darkgray
+16: 0 darkgray, 27-91 bold, 119 darkgray
+17: 0 darkgray, 27 bold, 29-89 bold, 91 bold, 119 darkgray
+18: 0 darkgray, 27 bold, 91 bold, 119 darkgray
+19: 0 darkgray, 27 bold, 91 bold, 119 darkgray
+20: 0 darkgray, 27 bold, 91 bold, 119 darkgray
+21: 0 darkgray, 27 bold, 91 bold, 119 darkgray
+22: 0 darkgray, 27 bold, 29 bold, 30-45 dim, 49 bold, 50-56 dim, 91 bold, 119 darkgray
+23: 0 darkgray, 27-91 bold, 119 darkgray
 24: 0 darkgray, 47-48 darkgray, 119 darkgray
 25: 0 darkgray, 47-48 darkgray, 119 darkgray
 26: 0 darkgray, 47-48 darkgray, 119 darkgray
