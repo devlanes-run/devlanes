@@ -195,6 +195,7 @@ pub async fn engine(
     options.idle_exit = (spawned && user.daemon.exit_when_idle).then_some(IDLE_EXIT_GRACE);
     options.resume = resume;
     options.idle = idle;
+    options.ci = devlanes_daemon::update::ci_detected(|name| std::env::var(name).ok());
     options.user = user;
     let engine: Arc<dyn Handler> = Arc::new(Engine::new(options, store, integ, shutdown));
     Ok(engine)

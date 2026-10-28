@@ -69,7 +69,7 @@ impl UpdateCheckOptions {
 }
 
 /// The CI markers the CLI's output-mode detection uses.
-pub(crate) fn ci_detected(lookup: impl Fn(&str) -> Option<String>) -> bool {
+pub fn ci_detected(lookup: impl Fn(&str) -> Option<String>) -> bool {
     [
         "CI",
         "GITHUB_ACTIONS",

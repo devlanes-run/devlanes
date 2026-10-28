@@ -733,7 +733,8 @@ impl Inner {
     }
 
     /// Gives present worktrees with a config a lane index and port block
-    /// (decision 2: lane 0 for the primary branch, else lowest free index >= 1).
+    /// (decision 2: lane 0 for the primary branch, or any branch under
+    /// [`crate::EngineOptions::ci`], else lowest free index >= 1).
     async fn assign_lanes(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -776,12 +777,14 @@ impl Inner {
                 continue;
             }
             // An extra lane of a folder never takes lane 0 from its first lane.
-            let index =
-                if !alias && branch.as_deref() == Some(primary.as_str()) && !used.contains(&0) {
-                    0
-                } else {
-                    (1..).find(|i| !used.contains(i)).unwrap_or(1)
-                };
+            let index = if !alias
+                && (self.opts.ci || branch.as_deref() == Some(primary.as_str()))
+                && !used.contains(&0)
+            {
+                0
+            } else {
+                (1..).find(|i| !used.contains(i)).unwrap_or(1)
+            };
             let record = self
                 .store
                 .upsert_lane(LaneInput {
@@ -826,6 +829,7 @@ impl Inner {
     }
 
     /// Computes `moves_to` for every assigned lane (applied at its next start).
+    /// Under CI a lane that holds lane 0 keeps it on any branch.
     pub(crate) fn update_moves(&self, project: &ProjectRt) {
         let primary = project.st().primary_branch.clone();
         let lanes = project.lanes();
@@ -845,6 +849,7 @@ impl Inner {
             st.moves_to = match (on_primary, index) {
                 (true, 0) | (false, 1..) => None,
                 (true, _) => Some(0),
+                (false, 0) if self.opts.ci => None,
                 (false, 0) => Some(free),
             };
         }

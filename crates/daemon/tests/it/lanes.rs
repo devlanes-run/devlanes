@@ -512,6 +512,36 @@ async fn a_start_in_flight_keeps_lane_zero() {
     .expect("timeout");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+/// A detached checkout, as CI makes for a pull request, gets lane 0 under CI
+/// and keeps it across a start; outside CI it gets lane 1 as before.
+async fn a_detached_checkout_takes_lane_zero_under_ci() {
+    tokio::time::timeout(LIMIT, async {
+        for (ci, index) in [(true, 0), (false, 1)] {
+            let tmp = temp();
+            let main = repo(&tmp.path, "r", WEB);
+            git(&main, &["checkout", "-q", "--detach"]);
+            let h = harness(
+                &tmp.path.join("home"),
+                Setup {
+                    ci,
+                    ..Setup::default()
+                },
+            )
+            .await;
+            h.call(Method::Start, json!({}), cx(&main))
+                .await
+                .expect("start");
+            let lane = lane_at(&h, &main, &main).await;
+            assert_eq!(lane.reference, format!("demo@{index}"), "ci: {ci}");
+            assert_eq!(lane.moves_to, None, "ci: {ci}");
+            h.close().await;
+        }
+    })
+    .await
+    .expect("timeout");
+}
+
 /// One web service in a two-port block.
 const SMALL: &str = "project: demo\nlanes: { block_size: 2 }\nservices:\n  web: { run: sleep, ready: started, hosts: [\"web.${{ lane.domain }}\"] }\n";
 
