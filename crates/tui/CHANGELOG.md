@@ -1,5 +1,13 @@
 # devlanes-tui
 
+## 0.8.0 — 2026-10-28
+
+### Patch changes
+
+- [0befd1d](https://github.com/devlanes-run/devlanes/commit/0befd1d1c48705308b4dbd6c9759f8ee6d71d05c) Added `devlanes reload`, which applies project file and `.env` edits to a running lane: it stops removed services, restarts changed ones and starts added ones.
+  
+  `devlanes status` and the TUI show what each edit changed, `r` on a changed lane in the TUI reloads it, and `devlanes restart` without services restarts the whole lane instead of asking which to restart.
+
 ## 0.7.1 — 2026-10-28
 
 Version bump only, to follow other packages.
