@@ -380,7 +380,7 @@ a task from task.list that never ran
 
 ## unit-logs
 
-stored logs of a unit after scrolling past its screen (PgUp)
+a unit scrolled back past its screen into its log (PgUp)
 
 - 200x60: [txt](unit-logs-200x60.txt) · [png](unit-logs-200x60.png) · [ansi](unit-logs-200x60.ansi)
 - 120x40: [txt](unit-logs-120x40.txt) · [png](unit-logs-120x40.png) · [ansi](unit-logs-120x40.ansi)

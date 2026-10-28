@@ -9,7 +9,10 @@ use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use devlanes_core::{TerminalSize, WorktreeId};
-use devlanes_proto::{AttachParams, AttachResult, Context, ResizeParams, RpcError};
+use devlanes_proto::{
+    AttachParams, AttachResult, AttachRoleParams, AttachView, Context, ResizeParams, RpcError,
+    ScrolledLine, events,
+};
 use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
@@ -45,6 +48,10 @@ struct Stream {
     interactive: bool,
     /// The viewer's last requested size, applied when it owns the unit.
     size: Option<TerminalSize>,
+    /// Wakes a stream that redraws its viewer (see [`AttachParams::history`])
+    /// when its size or role changed, so the viewer gets the screen at its
+    /// size without waiting for output.
+    redraw: Arc<tokio::sync::Notify>,
 }
 
 impl AttachTable {
@@ -137,6 +144,7 @@ impl Inner {
             }
             _ => None,
         };
+        let redraw = Arc::new(tokio::sync::Notify::new());
         {
             let mut table = lock(&self.attach);
             table.streams.insert(
@@ -146,6 +154,7 @@ impl Inner {
                     key: key.clone(),
                     interactive: args.interactive,
                     size,
+                    redraw: redraw.clone(),
                 },
             );
             if args.interactive {
@@ -155,14 +164,22 @@ impl Inner {
         if args.interactive && size.is_some() {
             let _ = self.apply_owner_size(&key, &host).await;
         }
-        // Drawn at this viewer's size: an observer's pane rarely matches the PTY.
-        let (snapshot, live) = host.attach(size).await;
         let engine = self.clone();
         let session = session.clone();
-        tokio::spawn(async move {
-            pump(&engine, &session, stream_id, &host, snapshot, live).await;
-            engine.close_stream(session.id(), stream_id).await;
-        });
+        if args.history {
+            let live = host.subscribe_output();
+            tokio::spawn(async move {
+                pump_view(&engine, &session, stream_id, &host, live, &redraw).await;
+                engine.close_stream(session.id(), stream_id).await;
+            });
+        } else {
+            // Drawn at this viewer's size: an observer's pane rarely matches the PTY.
+            let (snapshot, live) = host.attach(size).await;
+            tokio::spawn(async move {
+                pump(&engine, &session, stream_id, &host, snapshot, live).await;
+                engine.close_stream(session.id(), stream_id).await;
+            });
+        }
         serde_json::to_value(AttachResult {
             stream_id,
             unit: name,
@@ -257,6 +274,8 @@ impl Inner {
             })?;
             // Remembered even while another viewer owns the unit, for a later handover.
             stream.size = Some(size);
+            // An observer's redraws follow its size too.
+            stream.redraw.notify_one();
             let (key, host) = (stream.key.clone(), stream.host.clone());
             (table.active.get(&key) == Some(&owner)).then_some((key, host))
         };
@@ -265,6 +284,52 @@ impl Inner {
         };
         let size = self.apply_owner_size(&key, &host).await?;
         Ok(json!({"applied": true, "columns": size.columns, "rows": size.rows}))
+    }
+
+    /// `attach.role`: makes a stream of this session the unit's interactive
+    /// viewer, which takes the unit's size, or an observer again, which hands
+    /// the size to the newest remaining interactive viewer.
+    pub(crate) async fn attach_role_method(
+        self: &Arc<Self>,
+        value: Value,
+        session: &Session,
+    ) -> Result<Value, RpcError> {
+        let args: AttachRoleParams = required(value)?;
+        let owner = (session.id(), args.stream_id);
+        let (key, host, resize) = {
+            let mut table = lock(&self.attach);
+            let stream = table.streams.get_mut(&owner).ok_or_else(|| {
+                RpcError::new("unknown_stream", json!({"stream_id": args.stream_id}), 1)
+            })?;
+            let was = std::mem::replace(&mut stream.interactive, args.interactive);
+            stream.redraw.notify_one();
+            let (key, host) = (stream.key.clone(), stream.host.clone());
+            let resize = match (was, args.interactive) {
+                (_, true) => {
+                    table.active.insert(key.clone(), owner);
+                    true
+                }
+                (true, false) => table.hand_over(&key, owner.0, owner.1),
+                (false, false) => false,
+            };
+            (key, host, resize)
+        };
+        if args.interactive {
+            // Someone about to type needs a running unit.
+            let worktree = key.0;
+            if let Some((project, lane)) = self
+                .all_lanes()
+                .into_iter()
+                .find(|(_, lane)| lane.worktree == worktree)
+            {
+                self.wake_lane(&project, &lane, Some(crate::idle::Activity::Command))
+                    .await;
+            }
+        }
+        if resize && host.is_alive() {
+            self.apply_owner_size(&key, &host).await?;
+        }
+        Ok(json!({"interactive": args.interactive}))
     }
 }
 
@@ -320,6 +385,99 @@ async fn pump(
                 return;
             }
         }
+    }
+}
+
+/// Redraws until exit or disconnect, for a viewer that keeps its own
+/// scrollback ([`AttachParams::history`]): each [`events::ATTACH_VIEW`]
+/// carries the lines that left the unit's screen since the last one and the
+/// screen's rows that changed. Output brings a redraw at most once per
+/// [`REDRAW_GAP`], as for [`pump_rendered`]; a resize or role change brings
+/// one at once.
+async fn pump_view(
+    engine: &Inner,
+    session: &Session,
+    stream_id: u64,
+    host: &UnitHost,
+    mut live: broadcast::Receiver<Bytes>,
+    wake: &tokio::sync::Notify,
+) {
+    use broadcast::error::{RecvError, TryRecvError};
+    let skip_queued = |live: &mut broadcast::Receiver<Bytes>| {
+        while let Ok(_) | Err(TryRecvError::Lagged(_)) = live.try_recv() {}
+    };
+    let log_unit = host.info().name.replace('#', "_");
+    // What the viewer shows, and the index of the next line it needs.
+    let mut shown: Option<vt100::Screen> = None;
+    let mut since: Option<u64> = None;
+    let mut redraw = async || {
+        let size = lock(&engine.attach)
+            .streams
+            .get(&(session.id(), stream_id))
+            .and_then(|stream| stream.size);
+        // An unreadable screen gives nothing to send.
+        let Some((view, drawn)) = host.view(size, since, shown.take()).await else {
+            return Ok(());
+        };
+        since = Some(view.from + view.lines.len() as u64);
+        shown = Some(drawn.screen);
+        let view = AttachView {
+            stream_id,
+            from: view.from,
+            lines: view
+                .lines
+                .into_iter()
+                .map(|line| ScrolledLine {
+                    styled: line.styled,
+                    seq: line.seq,
+                })
+                .collect(),
+            log_unit: log_unit.clone(),
+            before_seq: view.before_seq,
+            columns: drawn.size.columns,
+            rows: drawn.size.rows,
+            screen: drawn.bytes,
+            whole: drawn.whole,
+        };
+        let data = serde_json::to_value(view).unwrap_or_default();
+        session
+            .event(devlanes_proto::Event {
+                seq: 0,
+                event: events::ATTACH_VIEW.into(),
+                data,
+            })
+            .await
+    };
+    if redraw().await.is_err() {
+        return;
+    }
+    let disconnected = session.disconnected();
+    let mut next_redraw = tokio::time::Instant::now();
+    loop {
+        let open = tokio::select! {
+            () = disconnected.cancelled() => return,
+            _ = host.wait_exit() => false,
+            () = wake.notified() => true,
+            received = live.recv() => !matches!(received, Err(RecvError::Closed)),
+        };
+        if !open {
+            // The last output may have arrived after the last redraw.
+            skip_queued(&mut live);
+            if redraw().await.is_err() {
+                return;
+            }
+            let _ = session.bytes(stream_id, Bytes::new()).await;
+            return;
+        }
+        tokio::select! {
+            () = disconnected.cancelled() => return,
+            () = tokio::time::sleep_until(next_redraw) => {}
+        }
+        skip_queued(&mut live);
+        if redraw().await.is_err() {
+            return;
+        }
+        next_redraw = tokio::time::Instant::now() + REDRAW_GAP;
     }
 }
 

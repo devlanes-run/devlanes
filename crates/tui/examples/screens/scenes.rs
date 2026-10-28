@@ -198,6 +198,8 @@ impl Fake {
                 generation,
                 lane,
                 unit,
+                columns,
+                rows,
                 ..
             } => vec![
                 Msg::AttachOpened {
@@ -208,11 +210,19 @@ impl Fake {
                         lane,
                     }),
                 },
-                Msg::AttachOutput {
+                Msg::AttachView {
                     generation,
-                    bytes: data::screen(&unit_name(&unit)),
+                    view: Box::new(screen_view(&unit_name(&unit), columns, rows)),
                 },
             ],
+            // The daemon redraws a unit's stream at its viewer's new size.
+            Effect::ResizePty { columns, rows } => match &self.app.attached {
+                Some(attached) if !attached.container => vec![Msg::AttachView {
+                    generation: attached.generation,
+                    view: Box::new(screen_view(&attached.unit, columns, rows)),
+                }],
+                _ => Vec::new(),
+            },
             Effect::FollowContainer {
                 generation,
                 container,
@@ -228,10 +238,7 @@ impl Fake {
                 },
             ],
             Effect::FetchLogs {
-                generation,
-                query,
-                older,
-                ..
+                generation, query, ..
             } => {
                 let unit = query
                     .units
@@ -240,7 +247,6 @@ impl Fake {
                     .unwrap_or_default();
                 vec![Msg::Logs {
                     generation,
-                    older,
                     result: Ok(Page::complete(data::log_page(&unit))),
                 }]
             }
@@ -294,6 +300,22 @@ impl Fake {
             _ => Vec::new(),
         };
         self.queue.extend(reply);
+    }
+}
+
+/// The daemon's whole redraw of `unit`'s stream at `columns`x`rows`: its
+/// screen, with older lines in the log as `log_page` has them.
+fn screen_view(unit: &str, columns: u16, rows: u16) -> devlanes_proto::AttachView {
+    devlanes_proto::AttachView {
+        stream_id: 1,
+        from: 0,
+        lines: Vec::new(),
+        log_unit: unit.to_owned(),
+        before_seq: 60,
+        columns,
+        rows,
+        screen: String::from_utf8_lossy(&data::screen(unit)).into_owned(),
+        whole: true,
     }
 }
 
@@ -808,7 +830,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "unit-logs",
-            what: "stored logs of a unit after scrolling past its screen (PgUp)",
+            what: "a unit scrolled back past its screen into its log (PgUp)",
             setup: |f| {
                 f.unit("acme@0", "api-orders");
                 f.key(KeyCode::PageUp);

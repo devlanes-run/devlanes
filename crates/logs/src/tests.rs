@@ -781,6 +781,37 @@ fn styled_lines_round_trip_through_storage() {
 }
 
 #[test]
+/// Appended lines take one sequence each, or as many as `line_records` says
+/// for a line past the record bound, and keep their colors and blank lines.
+fn appended_lines_take_the_sequences_line_records_counts() {
+    let (_directory, mut log) = store(LogOptions::default());
+    let long = format!("\x1b[32m{}\x1b[m", "x".repeat(MAX_LINE_BYTES + 10));
+    let lines = ["\x1b[31mERROR\x1b[m boom", "", long.as_str(), "plain"];
+    let first = log.next_sequence();
+    for line in lines {
+        log.append_line(line, 1).unwrap();
+    }
+    let records: u64 = lines.iter().map(|line| crate::line_records(line)).sum();
+    assert_eq!(records, 5);
+    assert_eq!(log.next_sequence(), first + records);
+    let page = log
+        .query(&LogQuery {
+            styled: true,
+            ..LogQuery::default()
+        })
+        .unwrap();
+    let texts: Vec<&str> = page.items.iter().map(|line| line.text.as_str()).collect();
+    assert_eq!(texts[..2], ["ERROR boom", ""]);
+    assert_eq!(texts[4], "plain");
+    assert_eq!(
+        page.items[0].styled.as_deref(),
+        Some("\x1b[31mERROR\x1b[m boom\x1b[0m")
+    );
+    assert_eq!(page.items[0].level.as_deref(), Some("error"));
+    assert_eq!(texts[2].len() + texts[3].len(), MAX_LINE_BYTES + 10);
+}
+
+#[test]
 /// `head` returns the first lines of the range, and cannot go with `tail`.
 fn head_returns_the_first_lines() {
     let (_directory, mut log) = store(LogOptions::default());

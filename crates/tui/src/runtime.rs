@@ -636,6 +636,8 @@ impl Executor {
                     interactive,
                     columns: Some(columns),
                     rows: Some(rows),
+                    // The pane keeps its own scrollback above the unit's screen.
+                    history: true,
                 };
                 let task =
                     tokio::spawn(pump_attach(api, sender, generation, lane, params, input_rx));
@@ -667,6 +669,7 @@ impl Executor {
             Effect::ResizePty { columns, rows } => {
                 self.send_attach(AttachInput::Resize { columns, rows });
             }
+            Effect::AttachRole(interactive) => self.send_attach(AttachInput::Role(interactive)),
             Effect::Control {
                 method,
                 lane,
@@ -785,15 +788,10 @@ impl Executor {
                 generation,
                 lane,
                 query,
-                older,
             } => {
                 tokio::spawn(async move {
                     let result = api.logs(lane, query).await;
-                    let msg = Msg::Logs {
-                        generation,
-                        older,
-                        result,
-                    };
+                    let msg = Msg::Logs { generation, result };
                     deliver(&sender, msg).await;
                 });
             }
@@ -1002,8 +1000,10 @@ async fn pump_attach(
             event = output.recv() => {
                 let msg = match event {
                     Some(AttachEvent::Output(bytes)) => Msg::AttachOutput { generation, bytes: bytes.to_vec() },
+                    Some(AttachEvent::View(view)) => Msg::AttachView { generation, view },
                     Some(AttachEvent::Error(error)) => Msg::StreamError { generation, error },
                     Some(AttachEvent::ResizeRefused(error)) => Msg::ResizeRefused { generation, error },
+                    Some(AttachEvent::RoleRefused(error)) => Msg::RoleRefused { generation, error },
                     None => break,
                 };
                 if !deliver(&sender, msg).await {

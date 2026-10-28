@@ -31,6 +31,11 @@ Timestamps are receive times in Unix milliseconds. During capture, call
 `flush_partial(now_ms, false)` every 200 ms to expose incomplete lines.
 Use `ingest_stream` for separate stdout and stderr streams.
 
+The daemon logs a unit's output as its screen model shows it instead: it
+decides where lines end and calls `append_line` with each finished line, which
+takes the sequences `line_records` counts, so it knows each line's sequence
+before the line is written.
+
 ## Config example
 
 ```yaml

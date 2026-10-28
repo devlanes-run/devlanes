@@ -143,6 +143,10 @@ pub enum Method {
     Input,
     #[serde(rename = "resize")]
     Resize,
+    /// Makes an attach stream an interactive viewer or an observer again,
+    /// without reopening it ([`AttachRoleParams`]). Reply `{interactive}`.
+    #[serde(rename = "attach.role")]
+    AttachRole,
     #[serde(rename = "infra.up")]
     InfraUp,
     #[serde(rename = "infra.down")]
@@ -824,6 +828,55 @@ pub struct AttachParams {
     pub columns: Option<u16>,
     #[serde(default)]
     pub rows: Option<u16>,
+    /// The viewer keeps its own scrollback: the stream sends
+    /// [`events::ATTACH_VIEW`] events instead of terminal bytes, each with the
+    /// lines that left the unit's screen and a redraw of the screen. Its
+    /// binary frames carry only the empty frame that marks the exit.
+    #[serde(default)]
+    pub history: bool,
+}
+
+/// Switches an attach stream between interactive viewer and observer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachRoleParams {
+    pub stream_id: u64,
+    pub interactive: bool,
+}
+
+/// One redraw of an attach stream opened with [`AttachParams::history`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttachView {
+    pub stream_id: u64,
+    /// Index of the first of `lines` among the lines that left the unit's
+    /// screen. It continues the last view's lines unless the viewer fell
+    /// behind what the daemon keeps; the first view starts anywhere.
+    pub from: u64,
+    /// Lines that left the screen since the last view, oldest first.
+    pub lines: Vec<ScrolledLine>,
+    /// The log's name for the unit, for cursors (`before:<log_unit>#<seq>`)
+    /// that read lines older than the stream's first.
+    pub log_unit: String,
+    /// The log holds the lines above `lines` (or above the screen, when there
+    /// are none) below this sequence: `before:<log_unit>#<before_seq>` reads
+    /// them. Only a viewer's first view needs it.
+    pub before_seq: u64,
+    /// The screen's size: the viewer's width, and the rows the unit's
+    /// screen takes at that width down to its cursor (the viewer's rows on
+    /// the alternate screen). The lines above fill the rest of a taller pane.
+    pub columns: u16,
+    pub rows: u16,
+    /// Terminal bytes that draw the screen: over the last view's screen, or
+    /// over any screen when `whole`.
+    pub screen: String,
+    pub whole: bool,
+}
+
+/// A line that left a unit's screen: as drawn (text with SGR colors) and
+/// the log sequence it was stored at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrolledLine {
+    pub styled: String,
+    pub seq: u64,
 }
 
 /// Stream ids are unique per connection; closing the connection detaches.
@@ -1364,6 +1417,9 @@ pub mod events {
     pub const TASK: &str = "task";
     /// `{unit, line: LogLine}` for followed logs.
     pub const LOG: &str = "log";
+    /// [`super::AttachView`], sent only to the attached connection, for a
+    /// stream opened with [`super::AttachParams::history`].
+    pub const ATTACH_VIEW: &str = "attach.view";
     /// `{lane, unit?}` sent once when a waited-for target is ready or failed.
     pub const RESULT: &str = "result";
     /// Sent instead of dropped events after a subscriber overflowed; clients must re-query.

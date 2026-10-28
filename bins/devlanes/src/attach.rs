@@ -58,6 +58,8 @@ pub async fn run(runtime: &Runtime, paths: &Paths, request: Request) -> anyhow::
         interactive,
         columns: Some(columns),
         rows: Some(rows),
+        // The user's own terminal keeps the scrollback: it gets raw bytes.
+        history: false,
     })?;
     let attach: AttachResult = serde_json::from_value(
         client

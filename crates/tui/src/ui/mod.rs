@@ -1204,23 +1204,13 @@ fn hints(app: &App) -> Vec<Hint> {
             ("esc", "clear", KeyCode::Esc),
         ];
     }
-    let mode = app.attached.as_ref().map(|a| &a.mode);
-    match mode {
-        Some(PaneMode::Copy(_)) => {
-            return vec![
-                ("h j k l", "move", KeyCode::Null),
-                ("v", "mark", ch('v')),
-                ("y", "copy", ch('y')),
-                ("esc", "cancel", KeyCode::Esc),
-            ];
-        }
-        Some(PaneMode::Logs(_)) => {
-            return vec![
-                ("pgup pgdn", "scroll", KeyCode::PageUp),
-                ("esc", "back to live", KeyCode::Esc),
-            ];
-        }
-        _ => {}
+    if let Some(PaneMode::Copy(_)) = app.attached.as_ref().map(|a| &a.mode) {
+        return vec![
+            ("h j k l", "move", KeyCode::Null),
+            ("v", "mark", ch('v')),
+            ("y", "copy", ch('y')),
+            ("esc", "cancel", KeyCode::Esc),
+        ];
     }
     if app
         .attached

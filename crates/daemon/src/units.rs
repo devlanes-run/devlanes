@@ -17,15 +17,19 @@ use devlanes_proto::{Actor, LogLine, LogQuery, Page, RpcError};
 use serde_json::json;
 use tokio::sync::{broadcast, watch};
 
-use crate::{rendered::Rendered, screen::Screen};
+use crate::{
+    rendered::Rendered,
+    screen::Screen,
+    terminal::{Drawn, Terminal, View},
+};
 
 /// Most output chunks fed to the screen model per blocking-pool trip.
 const PUMP_BATCH: usize = 64;
-/// Output chunks queued for the log thread; beyond this, chunks are dropped from
-/// the log (and counted) rather than buffered without bound.
-const LOG_QUEUE: usize = 1024;
-/// Partial-line and file-buffer flush cadence, matching `devlanes_logs::PARTIAL_FLUSH_MS`.
+/// File-buffer flush cadence, matching `devlanes_logs::PARTIAL_FLUSH_MS`.
 const LOG_TICK: Duration = Duration::from_millis(devlanes_logs::PARTIAL_FLUSH_MS);
+/// How long output pauses before the line it stopped on is logged, so a
+/// prompt waiting for input shows in the log.
+const PAUSE: Duration = Duration::from_millis(devlanes_logs::PARTIAL_FLUSH_MS);
 
 /// Lifecycle as exposed through `UnitSummary.state`.
 #[derive(Debug, Clone, PartialEq)]
@@ -108,7 +112,9 @@ impl LogRetention {
 
 /// Commands for the log thread; blocking file I/O never runs on the async executor.
 enum LogCommand {
-    Output(Bytes, u64),
+    /// Lines the screen model logged (see [`Terminal::take_log`]), each
+    /// taking the sequences it reserved there, at a receive time.
+    Lines(Vec<String>, u64),
     /// Answered once every earlier command was applied, so queries see all output.
     Sync(tokio::sync::oneshot::Sender<()>),
     /// The maintenance pass's share of the total budget, applied with
@@ -121,12 +127,10 @@ enum LogCommand {
     Finish,
 }
 
-/// State the async side shares with the log thread outside the bounded queue.
+/// State the async side shares with the log thread outside the queue.
 #[derive(Default)]
 struct LogSignals {
-    /// Output chunks dropped because the queue was full, since the run started.
-    dropped: AtomicU64,
-    /// Set by the exit; covers a `Finish` that found the queue full.
+    /// Set by the exit, so the thread finishes once the queue drains.
     finish: AtomicBool,
 }
 
@@ -149,7 +153,9 @@ struct Inner {
     rendered: bool,
     live: broadcast::Sender<Bytes>,
     log: Arc<StdMutex<UnitLog>>,
-    log_tx: std::sync::mpsc::SyncSender<LogCommand>,
+    /// Unbounded: every logged line holds sequences the screen model already
+    /// handed out (to viewers' scrollback), so none may be dropped.
+    log_tx: std::sync::mpsc::Sender<LogCommand>,
     log_signals: Arc<LogSignals>,
     /// Set when someone asked for a stop, so a signal exit reads as `stopped`, not `failed`.
     stop_requested: std::sync::atomic::AtomicBool,
@@ -176,12 +182,13 @@ enum Model {
 }
 
 impl Model {
-    /// The model `unit` needs, at the size its terminal starts at.
-    fn for_unit(unit: &dyn Unit) -> Self {
+    /// The model `unit` needs, at the size its terminal starts at, logging
+    /// from sequence `first_seq`.
+    fn for_unit(unit: &dyn Unit, first_seq: u64) -> Self {
         if unit.renders_screen() {
-            Self::Rendered(Rendered::new(TerminalSize::RENDERED_HEADLESS))
+            Self::Rendered(Rendered::new(TerminalSize::RENDERED_HEADLESS, first_seq))
         } else {
-            Self::Replay(Screen::new(TerminalSize::default()))
+            Self::Replay(Screen::new(TerminalSize::default(), first_seq))
         }
     }
 
@@ -190,6 +197,22 @@ impl Model {
         match self {
             Self::Replay(screen) => screen.process(bytes),
             Self::Rendered(screen) => screen.process(bytes),
+        }
+    }
+
+    /// The terminal that decides which lines are logged and scrolled back.
+    fn terminal(&self) -> &Terminal {
+        match self {
+            Self::Replay(screen) => screen.terminal(),
+            Self::Rendered(screen) => screen.terminal(),
+        }
+    }
+
+    /// [`Self::terminal`], to settle it and take its log.
+    fn terminal_mut(&mut self) -> &mut Terminal {
+        match self {
+            Self::Replay(screen) => screen.terminal_mut(),
+            Self::Rendered(screen) => screen.terminal_mut(),
         }
     }
 
@@ -251,10 +274,10 @@ impl UnitHost {
         .await?;
         let first_seq = log.next_sequence();
         let log = Arc::new(StdMutex::new(log));
-        let (log_tx, log_rx) = std::sync::mpsc::sync_channel(LOG_QUEUE);
+        let (log_tx, log_rx) = std::sync::mpsc::channel();
         let log_signals = Arc::new(LogSignals::default());
         let log_done = watch::channel(false).0;
-        let model = Model::for_unit(unit.as_ref());
+        let model = Model::for_unit(unit.as_ref(), first_seq);
         spawn_log_thread(
             log.clone(),
             log_rx,
@@ -467,6 +490,9 @@ impl UnitHost {
     pub async fn resize(&self, size: TerminalSize) -> Result<(), RpcError> {
         if let Ok(mut screen) = self.inner.screen.lock() {
             screen.resize(size);
+            // A shorter grid pushes lines off its top.
+            let lines = screen.terminal_mut().take_log();
+            self.inner.log_lines(lines);
         }
         tracing::debug!(
             unit = %self.inner.info.name,
@@ -517,6 +543,32 @@ impl UnitHost {
         })
         .await;
         snapshot.unwrap_or_else(|_| (Bytes::new(), self.inner.live.subscribe()))
+    }
+
+    /// A redraw at `size` (the unit's own size when `None`) for a viewer that
+    /// keeps its own scrollback: the lines that left the screen from index
+    /// `since` on (the newest few for a new viewer), and the screen drawn
+    /// over `shown`, what the last redraw left. Only the copy of the model
+    /// holds the screen lock.
+    pub(crate) async fn view(
+        &self,
+        size: Option<TerminalSize>,
+        since: Option<u64>,
+        shown: Option<vt100::Screen>,
+    ) -> Option<(View, Drawn)> {
+        let inner = self.inner.clone();
+        tokio::task::spawn_blocking(move || {
+            let view = {
+                let model = inner.screen.lock().ok()?;
+                let terminal = model.terminal();
+                terminal.view(size.unwrap_or_else(|| terminal.size()), since)
+            };
+            let drawn = view.render(shown.as_ref());
+            Some((view, drawn))
+        })
+        .await
+        .ok()
+        .flatten()
     }
 
     /// Fresh redraw at `size` for a viewer that lagged behind the live channel.
@@ -583,17 +635,10 @@ impl UnitHost {
     /// Queries this unit's logs off the executor.
     pub async fn logs(&self, query: LogQuery) -> Result<Page<LogLine>, RpcError> {
         let (synced, applied) = tokio::sync::oneshot::channel();
-        let log_tx = self.inner.log_tx.clone();
-        // The queue is bounded, so a full one is waited on off the executor. A finished
-        // log thread has nothing queued; its send failure is fine.
-        let queued =
-            tokio::task::spawn_blocking(move || log_tx.send(LogCommand::Sync(synced)).is_ok());
-        let _ = tokio::time::timeout(PUMP_DRAIN, async {
-            if matches!(queued.await, Ok(true)) {
-                let _ = applied.await;
-            }
-        })
-        .await;
+        // A finished log thread has nothing queued; its send failure is fine.
+        if self.inner.log_tx.send(LogCommand::Sync(synced)).is_ok() {
+            let _ = tokio::time::timeout(PUMP_DRAIN, applied).await;
+        }
         let log = self.inner.log.clone();
         tokio::task::spawn_blocking(move || {
             // The snapshot flushes under the lock; reading happens after releasing it,
@@ -678,7 +723,8 @@ impl UnitHost {
         self.inner.live.subscribe()
     }
 
-    /// Feeds the screen, re-broadcasts under the screen lock, then hands bytes to the log thread.
+    /// Feeds the screen, re-broadcasts under the screen lock and hands the lines
+    /// the screen logged to the log thread.
     fn spawn_pump(&self) {
         use broadcast::error::{RecvError, TryRecvError};
         let inner = self.inner.clone();
@@ -691,9 +737,22 @@ impl UnitHost {
             // Whether the last pipe byte was `\r`, so a `\r\n` split across chunks
             // gets no second carriage return.
             let mut after_cr = false;
+            // Output came since it last paused.
+            let mut running = false;
             while !closed {
                 let mut batch = Vec::new();
-                match output.recv().await {
+                let received = if running {
+                    tokio::time::timeout(PAUSE, output.recv()).await.ok()
+                } else {
+                    Some(output.recv().await)
+                };
+                let Some(received) = received else {
+                    running = false;
+                    let screen = inner.clone();
+                    let _ = tokio::task::spawn_blocking(move || screen.settle_paused()).await;
+                    continue;
+                };
+                match received {
                     Ok(chunk) => batch.push(chunk.bytes),
                     Err(RecvError::Lagged(skipped)) => {
                         tracing::warn!(unit = %inner.info.name, skipped, "output pump lagged");
@@ -732,15 +791,11 @@ impl UnitHost {
                 };
                 let redraw = std::mem::take(&mut stale);
                 let _ = tokio::task::spawn_blocking(move || screen.feed_screen(&fed, redraw)).await;
-                for bytes in batch {
-                    // Never wait on disk here: a stalled pump would block the PTY.
-                    if let Err(std::sync::mpsc::TrySendError::Full(_)) =
-                        inner.log_tx.try_send(LogCommand::Output(bytes, now_ms()))
-                    {
-                        inner.log_signals.dropped.fetch_add(1, Ordering::Relaxed);
-                    }
-                }
+                running = true;
             }
+            // Output ended: what the screen still shows goes to the log.
+            let screen = inner.clone();
+            let _ = tokio::task::spawn_blocking(move || screen.finish_screen()).await;
             // send_replace: the waiter may subscribe only after this flips.
             inner.pump_done.send_replace(true);
         });
@@ -780,6 +835,36 @@ impl Inner {
         if redraw {
             let _ = self.live.send(screen.snapshot(None));
         }
+        let terminal = screen.terminal_mut();
+        terminal.settle();
+        self.log_lines(terminal.take_log());
+    }
+
+    /// Logs the line output paused on. Blocking.
+    fn settle_paused(&self) {
+        if let Ok(mut screen) = self.screen.lock() {
+            let terminal = screen.terminal_mut();
+            terminal.settle_paused();
+            self.log_lines(terminal.take_log());
+        }
+    }
+
+    /// Logs what the screen still shows once output ended. Blocking.
+    fn finish_screen(&self) {
+        if let Ok(mut screen) = self.screen.lock() {
+            let terminal = screen.terminal_mut();
+            terminal.finish();
+            self.log_lines(terminal.take_log());
+        }
+    }
+
+    /// Hands lines to the log thread. Callers hold the screen lock, so lines
+    /// reach the log in the order the screen gave out their sequences.
+    fn log_lines(&self, lines: Vec<String>) {
+        if !lines.is_empty() {
+            // A finished log thread takes nothing more; the run is over.
+            let _ = self.log_tx.send(LogCommand::Lines(lines, now_ms()));
+        }
     }
 
     /// Classifies the run, then publishes the exit and closes the log, once per run.
@@ -817,9 +902,9 @@ impl Inner {
         // Before the exit goes out, so whoever sees it also sees the time.
         self.ended_at_ms.store(now_ms(), Ordering::SeqCst);
         self.exit.send_replace(Some(outcome));
-        // The flag finishes the log once the queue drains if this send finds it full.
+        // The flag also finishes a log thread that is between commands.
         self.log_signals.finish.store(true, Ordering::SeqCst);
-        let _ = self.log_tx.try_send(LogCommand::Finish);
+        let _ = self.log_tx.send(LogCommand::Finish);
     }
 }
 
@@ -840,26 +925,15 @@ impl crate::maintenance::LiveLog for UnitHost {
     /// Queues a trim behind pending output and waits for the answer, both within
     /// [`TRIM_WAIT`]. Blocking: the maintenance pass calls it from the blocking pool.
     fn release(&self, bytes: u64, close_active: bool) -> Option<u64> {
-        use std::sync::mpsc::TrySendError;
         let deadline = Instant::now() + TRIM_WAIT;
         let (reply, answer) = std::sync::mpsc::sync_channel(1);
-        let mut command = LogCommand::Trim {
+        let command = LogCommand::Trim {
             bytes,
             close_active,
             reply,
         };
-        // try_send: a blocking send could wait forever on a stuck writer.
-        loop {
-            match self.inner.log_tx.try_send(command) {
-                Ok(()) => break,
-                Err(TrySendError::Full(back)) if Instant::now() < deadline => {
-                    command = back;
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                // Full past the deadline, or the log closed meanwhile.
-                Err(_) => return None,
-            }
-        }
+        // A log that closed meanwhile has nothing left to trim.
+        self.inner.log_tx.send(command).ok()?;
         match answer.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
             Ok(Ok(left)) => Some(left),
             Ok(Err(error)) => {
@@ -946,11 +1020,10 @@ fn spawn_log_thread(
             // Dropped on every return path, so waiters never hang on a dead thread.
             let _done = DoneGuard(done);
             let mut last_tick = Instant::now();
-            let mut reported_drops = 0;
             let mut warned = false;
             loop {
-                // A deadline rather than an idle timeout, so partial lines and the file
-                // buffer also flush while output keeps arriving.
+                // A deadline rather than an idle timeout, so the file buffer also
+                // flushes while output keeps arriving.
                 let command = commands.recv_timeout(LOG_TICK.saturating_sub(last_tick.elapsed()));
                 let Ok(mut log) = log.lock() else { return };
                 let finishing = matches!(
@@ -958,11 +1031,6 @@ fn spawn_log_thread(
                     Ok(LogCommand::Finish) | Err(RecvTimeoutError::Disconnected)
                 ) || (matches!(command, Err(RecvTimeoutError::Timeout))
                     && signals.finish.load(Ordering::SeqCst));
-                let dropped = signals.dropped.load(Ordering::Relaxed);
-                if dropped > reported_drops && (finishing || last_tick.elapsed() >= LOG_TICK) {
-                    tracing::warn!(unit, chunks = dropped - reported_drops, total = dropped, "log writer fell behind; output chunks were not logged");
-                    reported_drops = dropped;
-                }
                 if finishing {
                     if let Err(error) = log.finish(now_ms()) {
                         tracing::warn!(unit, %error, "log finish failed");
@@ -970,7 +1038,9 @@ fn spawn_log_thread(
                     return;
                 }
                 let mut result = match command {
-                    Ok(LogCommand::Output(bytes, ts)) => log.ingest(&bytes, ts),
+                    Ok(LogCommand::Lines(lines, ts)) => lines
+                        .iter()
+                        .try_for_each(|line| log.append_line(line, ts)),
                     Ok(LogCommand::Sync(done)) => {
                         let _ = done.send(());
                         Ok(())
@@ -1251,7 +1321,8 @@ mod tests {
         output
             .send(OutputChunk {
                 stream: OutputStream::Terminal,
-                bytes: Bytes::from_static(b"hello\nprompt> "),
+                // A PTY's line discipline ends lines with `\r\n`.
+                bytes: Bytes::from_static(b"hello\r\nprompt> "),
             })
             .expect("send");
         let deadline = Instant::now() + STEP;

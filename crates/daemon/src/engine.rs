@@ -451,6 +451,7 @@ impl Inner {
                 2,
             )),
             Method::Resize => self.resize_method(params, &session).await,
+            Method::AttachRole => self.attach_role_method(params, &session).await,
             Method::InfraUp => self.infra_up_method(&context).await,
             Method::InfraDown => self.infra_down_method(&context).await,
             Method::InfraStatus => self.infra_status_method(&context).await,

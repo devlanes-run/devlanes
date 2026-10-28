@@ -53,7 +53,9 @@ Quitting closes connections; units, tasks and containers keep running in the dae
 
 Once the TUI closed, `run_with` and `run_start` print the devlanes banner, the lane shown last with its state, whether the daemon still runs and how many lanes it runs, and `devlanes stop --lane <lane>` while that lane runs (`exit_summary`). The daemon gets one second to answer `status` for it.
 
-Moving through the list watches a unit without resizing its PTY. Enter, a double click or a click in the pane types into it: the stream reopens as the PTY's owner and the pane takes over its size, as zoom does. Esc or Ctrl+] ends typing; inside full-screen programs only Ctrl+], which crossterm may report as Ctrl+5. Units on pipes (`pty: false` from the daemon) are never resized.
+Moving through the list watches a unit without resizing its PTY. Enter, a double click or a click in the pane types into it: the stream becomes the PTY's owner where it is (`attach.role`) and the pane takes over its size, as zoom does. Esc or Ctrl+] ends typing; inside full-screen programs only Ctrl+], which crossterm may report as Ctrl+5. Units on pipes (`pty: false` from the daemon) are never resized.
+
+A unit's pane is one surface: the lines that left the unit's screen above the screen itself, both from the daemon's `attach.view` events, and above those the unit's log, read a page at a time as scrolling nears the top of what the pane keeps. Scrolling moves over all of it alike.
 
 Connecting a box from the boxes view sends `connect` on a connection of its own and stays attached while the link settles, so the daemon relays ssh's prompts and the box's pairing code to the TUI, as it does to `remote connect`. Answers go back as binary frames on that connection. Esc drops it, and the daemon keeps the connection to the box. A box reached by a command is first saved as `remote.boxes.<name>.command` in `config.yaml`, with the same edit `devlanes config set` makes.
 

@@ -496,18 +496,7 @@ pub struct ProfileChoice {
 #[derive(Debug)]
 pub enum PaneMode {
     Live,
-    Logs(LogView),
     Copy(CopyState),
-}
-
-/// Deep scrollback served from the daemon's log store.
-#[derive(Debug, Default)]
-pub struct LogView {
-    pub lines: Vec<LogLine>,
-    /// Lines scrolled up from the newest line.
-    pub offset: usize,
-    pub older: Option<String>,
-    pub loading: bool,
 }
 
 /// Keyboard selection over the visible grid.
@@ -537,10 +526,10 @@ pub struct Attached {
     /// Interactive streams own the unit's PTY size. Browsing attaches as an
     /// observer so moving through the list never resizes anyone's terminal.
     pub interactive: bool,
-    /// The frame drawn while a resize or zoom waits for the reopened stream:
-    /// the last one before it, so the pane goes from that frame straight to
-    /// the daemon's redraw at the new size, never through a locally cut grid
-    /// or a blank one.
+    /// The frame drawn while a container's stream, reopened after a resize,
+    /// waits for its redraw at the new size: the last one before it, so the
+    /// pane never goes through a locally cut grid or a blank one. A unit's
+    /// stream redraws in place and keeps its screen until the redraw comes.
     pub held: Option<vt100::Screen>,
     /// `unit` names an infra container and the screen shows its Docker logs:
     /// nothing to type into and no stored history behind the scrollback.
@@ -602,6 +591,12 @@ pub enum Msg {
         generation: u64,
         bytes: Vec<u8>,
     },
+    /// A redraw of a unit's stream: the lines that left its screen and the
+    /// screen's changed rows.
+    AttachView {
+        generation: u64,
+        view: Box<devlanes_proto::AttachView>,
+    },
     AttachClosed {
         generation: u64,
     },
@@ -619,6 +614,12 @@ pub enum Msg {
         generation: u64,
         error: ApiError,
     },
+    /// The daemon refused [`Effect::AttachRole`], as one without
+    /// `attach.role` does; the stream goes on in its old role.
+    RoleRefused {
+        generation: u64,
+        error: ApiError,
+    },
     ActionDone {
         label: String,
         target: Target,
@@ -629,9 +630,9 @@ pub enum Msg {
         task: String,
         result: Result<Value, ApiError>,
     },
+    /// A page of a unit's log older than what its pane keeps.
     Logs {
         generation: u64,
-        older: bool,
         result: Result<Page<LogLine>, ApiError>,
     },
     Metrics(Result<Metrics, ApiError>),
@@ -758,6 +759,9 @@ pub enum Effect {
         columns: u16,
         rows: u16,
     },
+    /// Makes the attached stream the unit's interactive viewer (it types and
+    /// owns the size), or an observer again, without reopening it.
+    AttachRole(bool),
     Control {
         method: Method,
         lane: String,
@@ -816,11 +820,12 @@ pub enum Effect {
     },
     /// `remote.pair`, answered with [`Msg::Paired`].
     Pair,
+    /// Reads a page of a unit's log older than what its pane keeps,
+    /// answered with [`Msg::Logs`].
     FetchLogs {
         generation: u64,
         lane: String,
         query: LogQuery,
-        older: bool,
     },
     /// Samples over the monitor's range.
     FetchMetrics(MetricsQuery),
@@ -1621,6 +1626,29 @@ impl App {
                     }
                 }
             }
+            Msg::AttachView { generation, view } => {
+                if let Some(attached) = self.attached_mut(generation) {
+                    attached.screen.apply_view(&view);
+                    attached.held = None;
+                }
+            }
+            Msg::RoleRefused { generation, error } => {
+                // A daemon without `attach.role` takes a reopened stream instead.
+                let old = matches!(
+                    &error,
+                    ApiError::Rpc(rpc) if rpc.code == "unknown_method" || rpc.code == "unsupported_method"
+                );
+                let Some(attached) = self.attached_mut(generation) else {
+                    return effects;
+                };
+                let interactive = attached.interactive;
+                if old {
+                    self.reopen_as(interactive, &mut effects);
+                } else {
+                    let unit = unit_ref(&attached.lane, &attached.unit);
+                    self.report(&format!("type into {unit}"), None, words::api(&error));
+                }
+            }
             Msg::AttachClosed { generation } => {
                 let Some(attached) = self.attached_mut(generation) else {
                     return effects;
@@ -1694,11 +1722,7 @@ impl App {
                 }
             }
             Msg::RunDone { lane, task, result } => self.run_done(lane, task, result, &mut effects),
-            Msg::Logs {
-                generation,
-                older,
-                result,
-            } => self.logs(generation, older, result, &mut effects),
+            Msg::Logs { generation, result } => self.logs(generation, result, &mut effects),
             Msg::Metrics(Ok(metrics)) => {
                 self.last_metrics_error = None;
                 self.metrics = Some(metrics);
@@ -3150,7 +3174,7 @@ impl App {
             lane: lane.clone(),
             unit: unit.clone(),
             state: AttachState::Opening,
-            screen: TerminalScreen::new(rows, columns),
+            screen: TerminalScreen::with_history(rows, columns),
             mode: PaneMode::Live,
             interactive,
             held: None,
@@ -3175,9 +3199,12 @@ impl App {
     }
 
     /// Reopens the current stream as `interactive`, at the pane's size. The
-    /// frame on screen stays until the new stream draws; a copy selection
-    /// does not survive the reopen, so its frame is not kept.
+    /// frame on screen stays until the new stream draws: a unit's screen and
+    /// the lines above it until its first view replaces them, a container's
+    /// frame as a held one. A copy selection does not survive the reopen, so
+    /// its frame is not kept.
     fn reopen_as(&mut self, interactive: bool, effects: &mut Vec<Effect>) {
+        let (columns, rows) = self.attach_size();
         let Some(attached) = self.attached.as_mut() else {
             return;
         };
@@ -3186,6 +3213,10 @@ impl App {
         let held = attached.held.take().or_else(|| {
             matches!(attached.mode, PaneMode::Live).then(|| attached.screen.screen().clone())
         });
+        let kept = std::mem::replace(
+            &mut attached.screen,
+            TerminalScreen::with_history(rows, columns),
+        );
         // A container's logs are read-only: a reopen only redraws them at the new size.
         if container {
             self.open_container(lane, unit, effects);
@@ -3193,7 +3224,13 @@ impl App {
             self.open_attach(lane, unit, interactive, effects);
         }
         if let Some(attached) = self.attached.as_mut() {
-            attached.held = held;
+            if container {
+                attached.held = held;
+            } else {
+                attached.screen = kept;
+                attached.screen.restart();
+                attached.screen.resize(rows, columns);
+            }
         }
     }
 
@@ -3211,14 +3248,28 @@ impl App {
         (columns.max(MIN_PTY.0), rows.max(MIN_PTY.1))
     }
 
-    /// Resizes the local grid and, for an interactive stream, the PTY; once
-    /// resizing pauses the stream is reopened, because a grid that shrank
-    /// cannot redraw what it cut off. Until the reopened stream draws, the
-    /// pane keeps the frame from before the resize.
+    /// Resizes the pane. A unit's stream tells the daemon, which redraws it
+    /// at the new size (and resizes the PTY when the stream owns it). A
+    /// container's grid is resized here and its stream reopened once
+    /// resizing pauses, because a grid that shrank cannot redraw what it cut
+    /// off; until the reopened stream draws, the pane keeps the frame from
+    /// before the resize.
     fn resize_pane(&mut self, effects: &mut Vec<Effect>) {
         let (columns, rows) = self.attach_size();
         self.ensure_visible();
         let no_pty = self.attached_has_no_pty();
+        if let Some(attached) = self.attached.as_mut()
+            && attached.screen.has_history()
+            && attached.screen.size() != (rows, columns)
+        {
+            attached.screen.resize(rows, columns);
+            if let PaneMode::Copy(state) = &mut attached.mode {
+                state.cursor.0 = state.cursor.0.min(rows - 1);
+                state.cursor.1 = state.cursor.1.min(columns - 1);
+            }
+            effects.push(Effect::ResizePty { columns, rows });
+            return;
+        }
         if let Some(attached) = self.attached.as_mut()
             && attached.screen.size() != (rows, columns)
         {
@@ -3346,8 +3397,9 @@ impl App {
                     self.copy_key(key, effects);
                     return;
                 }
-                PaneMode::Logs(_) if key.code == KeyCode::Esc => {
-                    attached.mode = PaneMode::Live;
+                PaneMode::Live
+                    if key.code == KeyCode::Esc && attached.screen.scroll_offset() > 0 =>
+                {
                     attached.screen.scroll_to_bottom();
                     return;
                 }
@@ -4180,8 +4232,22 @@ impl App {
         self.want_terminal = false;
     }
 
+    /// Makes a watching stream interactive where it is, so the unit takes the
+    /// pane's size; the pane keeps showing it meanwhile. A stream that already
+    /// is stays as it is.
+    fn make_interactive(&mut self, effects: &mut Vec<Effect>) {
+        if let Some(attached) = self
+            .attached
+            .as_mut()
+            .filter(|a| !a.interactive && !a.container)
+        {
+            attached.interactive = true;
+            effects.push(Effect::AttachRole(true));
+        }
+    }
+
     /// Starts typing into the pane, only onto a live stream. A watching
-    /// stream is reopened as interactive first, so typing comes with the size.
+    /// stream becomes interactive first, so typing comes with the size.
     fn focus_terminal(&mut self, effects: &mut Vec<Effect>) {
         if self.view != View::Project {
             self.set_notice("the terminal is in the project view".into());
@@ -4207,10 +4273,14 @@ impl App {
         }
         match (&attached.state, attached.interactive) {
             (AttachState::Live, true) => self.focus = Focus::Terminal,
-            (AttachState::Live | AttachState::Opening, false) => {
+            // Input goes on the same stream, so keys typed now reach the unit.
+            (AttachState::Live, false) => {
+                self.make_interactive(effects);
+                self.focus = Focus::Terminal;
+            }
+            (AttachState::Opening, false) => {
+                self.make_interactive(effects);
                 self.want_terminal = true;
-                let (lane, unit) = (attached.lane.clone(), attached.unit.clone());
-                self.open_attach(lane, unit, true, effects);
             }
             (AttachState::Opening, true) => self.want_terminal = true,
             (AttachState::Closed, _) => {
@@ -4662,10 +4732,11 @@ impl App {
                 self.zoom = !self.zoom;
                 // Zooming means looking at this terminal: take its size.
                 let watching = self.attached.as_ref().is_some_and(|a| !a.interactive);
-                if watching {
+                if watching && self.attached.as_ref().is_some_and(|a| a.container) {
                     self.ensure_visible();
                     self.reopen_as(true, effects);
                 } else {
+                    self.make_interactive(effects);
                     self.resize_pane(effects);
                 }
             }
@@ -5602,7 +5673,7 @@ impl App {
                 self.select(Selected::unit(&lane, &unit), effects);
                 let interactive = value.get("interactive").and_then(Value::as_bool) == Some(true);
                 if interactive {
-                    // Reopens the task's stream as interactive; focus follows once it is live.
+                    // The task's stream becomes interactive; focus follows once it is live.
                     self.focus_terminal(effects);
                 }
             }
@@ -5680,103 +5751,41 @@ impl App {
         isize::try_from(self.pane_size().1 / 2).unwrap_or(1).max(1)
     }
 
-    /// Scrolls the pane; going past the client-side scrollback loads log pages.
+    /// Scrolls the pane over the lines above the unit's screen; nearing the
+    /// oldest kept reads the page before it from the log.
     fn scroll(&mut self, delta: isize, effects: &mut Vec<Effect>) {
-        let height = usize::from(self.pane_size().1);
         let Some(attached) = self.attached.as_mut() else {
             return;
         };
-        match &mut attached.mode {
-            PaneMode::Copy(_) => {}
-            PaneMode::Live => {
-                // A container's older lines stay with Docker; devlanes stores none.
-                if let Some(wanted) = attached.screen.scroll_by(delta)
-                    && attached.state != AttachState::Opening
-                    && !attached.container
-                {
-                    // The stored lines continue from where the live screen
-                    // was scrolled to instead of starting again at the newest.
-                    attached.mode = PaneMode::Logs(LogView {
-                        offset: wanted,
-                        loading: true,
-                        ..LogView::default()
-                    });
-                    effects.push(Effect::FetchLogs {
-                        generation: attached.generation,
-                        lane: attached.lane.clone(),
-                        query: log_query(&attached.lane, &attached.unit, None),
-                        older: false,
-                    });
-                }
-            }
-            PaneMode::Logs(view) => {
-                if delta < 0 && view.offset == 0 {
-                    // Scrolling down past the newest stored line returns to the live screen.
-                    attached.mode = PaneMode::Live;
-                    attached.screen.scroll_to_bottom();
-                    return;
-                }
-                if view.loading && view.lines.is_empty() {
-                    // Nothing to clamp to yet; the first page clamps it.
-                    view.offset = view.offset.saturating_add_signed(delta);
-                    return;
-                }
-                let max = view.lines.len().saturating_sub(height);
-                view.offset = view.offset.saturating_add_signed(delta).min(max);
-                if delta > 0
-                    && view.offset == max
-                    && !view.loading
-                    && let Some(cursor) = view.older.clone()
-                {
-                    view.loading = true;
-                    effects.push(Effect::FetchLogs {
-                        generation: attached.generation,
-                        lane: attached.lane.clone(),
-                        query: log_query(&attached.lane, &attached.unit, Some(cursor)),
-                        older: true,
-                    });
-                }
-            }
+        if matches!(attached.mode, PaneMode::Copy(_)) {
+            return;
         }
+        attached.screen.scroll_by(delta);
+        effects.extend(older_page(attached));
     }
 
-    /// Stores a page of log lines; older pages go above the loaded ones.
+    /// Puts a page of log lines above the oldest the pane keeps.
     fn logs(
         &mut self,
         generation: u64,
-        older: bool,
         result: Result<Page<LogLine>, ApiError>,
         effects: &mut Vec<Effect>,
     ) {
-        let height = usize::from(self.pane_size().1);
         // A page for a unit that is no longer shown has no place to go.
         let Some(attached) = self.attached_mut(generation) else {
             return;
         };
-        let what = format!("load logs of {}", unit_ref(&attached.lane, &attached.unit));
-        let PaneMode::Logs(view) = &mut attached.mode else {
-            return;
-        };
-        view.loading = false;
         match result {
             Ok(page) => {
-                view.older = if page.truncated {
-                    page.next_cursor
-                } else {
-                    None
-                };
-                if older {
-                    let mut lines = page.items;
-                    lines.append(&mut view.lines);
-                    view.lines = lines;
-                } else {
-                    view.lines = page.items;
-                    // The offset carried over from the live screen may ask
-                    // for more lines than the first page holds.
-                    view.offset = view.offset.min(view.lines.len().saturating_sub(height));
-                }
+                attached.screen.prepend(page);
+                // A short page leaves the top in view: the next one is due.
+                effects.extend(older_page(attached));
             }
-            Err(error) => self.api_error(&what, None, error, effects),
+            Err(error) => {
+                attached.screen.older_failed();
+                let what = format!("load logs of {}", unit_ref(&attached.lane, &attached.unit));
+                self.api_error(&what, None, error, effects);
+            }
         }
     }
 
@@ -5789,11 +5798,6 @@ impl App {
         // The pane shows the container's facts then, not a grid to select in.
         if attached.container && matches!(attached.state, AttachState::Failed(_)) {
             self.set_notice("no logs to select: the pane says why".into());
-            return;
-        }
-        // Selection works on the live grid; entering it here would jump there.
-        if matches!(attached.mode, PaneMode::Logs(_)) {
-            self.set_notice("stored logs can't be selected: esc returns to live output".into());
             return;
         }
         let (rows, _) = attached.screen.size();
@@ -5823,6 +5827,7 @@ impl App {
                 if state.cursor.0 == 0 {
                     // At the top edge the view scrolls instead of the cursor.
                     attached.screen.scroll_by(1);
+                    effects.extend(older_page(attached));
                 } else {
                     state.cursor.0 -= 1;
                 }
@@ -6622,6 +6627,21 @@ pub fn target_lane(target: &Target) -> &str {
     match target {
         Target::Lane(lane) | Target::Unit { lane, .. } => lane,
     }
+}
+
+/// The read of the log page before the oldest line `attached`'s pane keeps,
+/// when the pane shows near the top of what it keeps.
+fn older_page(attached: &mut Attached) -> Option<Effect> {
+    if attached.container {
+        // A container's older lines stay with Docker; devlanes stores none.
+        return None;
+    }
+    let cursor = attached.screen.wants_older()?;
+    Some(Effect::FetchLogs {
+        generation: attached.generation,
+        lane: attached.lane.clone(),
+        query: log_query(&attached.lane, &attached.unit, Some(cursor)),
+    })
 }
 
 /// Newest lines of one unit, older than `cursor` when given, with their colors.

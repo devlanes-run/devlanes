@@ -229,7 +229,6 @@ impl Tui {
 
     /// Says which line the pane shows more than once or out of order, with
     /// the screen; the service numbers its lines one by one.
-    #[cfg(windows)]
     fn repeated(&self, stage: &str, prefix: char) -> Option<String> {
         let (_, rows) = self.pane()?;
         let numbers: Vec<u32> = rows
@@ -435,6 +434,91 @@ fn tui_pane_survives_repeated_zooms_of_a_pty_unit() -> Result<()> {
         let stage = format!("unzoom {round}");
         problems.extend(tui.unfilled(&stage, 'P', |width| width == split));
         problems.extend(tui.repeated(&stage, 'P'));
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Error::Unexpected(problems.join("\n\n")))
+    }
+}
+
+/// Typing into a PTY unit keeps its output in the pane, zooming it in and out
+/// repaints it at each size, and scrolling back moves from its screen into
+/// the lines that left it and on into its log with no line repeated or
+/// missing at either seam. The log then holds every line once, whatever the
+/// repaints were.
+#[test]
+fn tui_scrollback_joins_the_screen_and_the_log() -> Result<()> {
+    let yaml = format!(
+        "project: fixture-zoom\nservices:\n{}",
+        service("ttyloop", 'P', true)
+    );
+    let lab = Lab::with_config(&yaml, BUDGET)?;
+    let started = lab.json(lab.repo(), &["start"])?;
+    assert_eq!(started["ready"], true, "{started}");
+    let mut tui = Tui::open(&lab)?;
+    tui.wait_for_text("ttyloop")?;
+    select(&mut tui, "ttyloop", 'P')?;
+    let mut problems = Vec::new();
+    // Typing takes the unit's size where its stream is; Ctrl+] goes back.
+    tui.keys(b"\r")?;
+    problems.extend(tui.unfilled("typing", 'P', |_| true));
+    problems.extend(tui.repeated("typing", 'P'));
+    tui.keys(b"\x1d")?;
+    for round in 1..=2 {
+        for stage in ["zoom", "unzoom"] {
+            tui.keys(b"z")?;
+            let stage = format!("{stage} {round}");
+            problems.extend(tui.unfilled(&stage, 'P', |_| true));
+            problems.extend(tui.repeated(&stage, 'P'));
+        }
+    }
+    // PgUp until the first line shows: older lines come from the log.
+    let mut top = false;
+    for page in 1..=40 {
+        tui.keys(b"\x1b[5~")?;
+        thread::sleep(Duration::from_millis(250));
+        problems.extend(tui.repeated(&format!("page {page}"), 'P'));
+        if tui.dump().contains("P00001 ") {
+            top = true;
+            break;
+        }
+    }
+    if !top {
+        problems.push(format!("the first line never showed\n{}", tui.dump()));
+    }
+    // The whole log, page by page: one answer holds a bounded number of bytes.
+    let mut numbers: Vec<u32> = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..20 {
+        let mut args = vec!["logs", "ttyloop", "--head", "1000", "--json"];
+        if let Some(cursor) = &cursor {
+            args.extend(["--cursor", cursor.as_str()]);
+        }
+        let page = lab.json(lab.repo(), &args)?;
+        let items = page["items"].as_array().cloned().unwrap_or_default();
+        numbers.extend(
+            items
+                .iter()
+                .filter_map(|line| line["text"].as_str())
+                .filter(|text| starts_line(text, 'P'))
+                .filter_map(|text| text.get(1..6)?.parse::<u32>().ok()),
+        );
+        let last = items.last().and_then(|line| {
+            Some(format!(
+                "{}#{}",
+                line["unit"].as_str()?,
+                line["seq"].as_u64()?
+            ))
+        });
+        match last {
+            Some(last) if page["truncated"] == true => cursor = Some(last),
+            _ => break,
+        }
+    }
+    let expected: Vec<u32> = (1..=u32::try_from(numbers.len()).unwrap_or(0)).collect();
+    if numbers.len() < BURST || numbers != expected {
+        problems.push(format!("the log does not hold each line once: {numbers:?}"));
     }
     if problems.is_empty() {
         Ok(())
