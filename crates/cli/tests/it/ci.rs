@@ -246,6 +246,36 @@ fn phase_groups_and_failed_unit_annotation() {
     "#);
 }
 
+/// A start's phase events through [`PhaseLines`], as the binary prints them,
+/// keep each `::group::` that opens a phase.
+#[test]
+fn start_phase_groups_survive_phase_lines() {
+    let cli = Cli::parse_from(["devlanes", "start"]);
+    let runtime = ci_runtime(&cli, &[("GITHUB_ACTIONS", "true")]);
+    let reporter = runtime.reporter();
+    let mut phases = PhaseLines::new(&runtime);
+    let mut output = String::new();
+    for (phase, state) in [
+        ("infra", "started"),
+        ("infra", "done"),
+        ("services", "started"),
+        ("services", "done"),
+    ] {
+        let event = Event {
+            seq: 1,
+            event: events::PHASE.into(),
+            data: json!({"lane": "acme@0", "phase": phase, "state": state, "start_id": 1}),
+        };
+        let mut stdout = reporter.event(Method::Start, &event).expect("event").stdout;
+        phases.rewrite(&event, &mut stdout);
+        output.push_str(&stdout);
+    }
+    assert_eq!(
+        output,
+        "::group::infra\nok infra\n::endgroup::\n::group::services\n::endgroup::\n"
+    );
+}
+
 /// `failures` carries the log tails and the tasks that are not units.
 #[test]
 fn start_failures_merge_with_units_and_annotate_tasks() {
