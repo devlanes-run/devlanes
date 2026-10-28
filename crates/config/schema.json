@@ -737,11 +737,11 @@
               "type": "null"
             }
           ],
-          "description": "Working directory, relative to the lane's worktree; defaults to the worktree root.",
+          "description": "Working directory, relative to the project file's directory in the lane's worktree; defaults to that directory.",
           "examples": [
             "infra"
           ],
-          "markdownDescription": "Working directory, relative to the lane's worktree; defaults to the worktree root."
+          "markdownDescription": "Working directory, relative to the project file's directory in the lane's worktree; defaults to that directory."
         },
         "env": {
           "additionalProperties": {
@@ -1340,7 +1340,7 @@
     },
     "LanesConfig": {
       "additionalProperties": false,
-      "description": "Each Git worktree of the project is a lane with its own ports, hostnames and data. These settings decide which worktrees get a lane, where new ones are created, how many ports each lane reserves, and the values each lane computes.",
+      "description": "Each Git worktree of the project is a lane with its own ports, hostnames and data. These settings decide which worktrees get a lane, how many ports each lane reserves, and the values each lane computes.",
       "examples": [
         {
           "hosts_file": "always",
@@ -1350,7 +1350,7 @@
           }
         }
       ],
-      "markdownDescription": "Each Git worktree of the project is a lane with its own ports, hostnames and data. These settings decide which worktrees get a lane, where new ones are created, how many ports each lane reserves, and the values each lane computes.",
+      "markdownDescription": "Each Git worktree of the project is a lane with its own ports, hostnames and data. These settings decide which worktrees get a lane, how many ports each lane reserves, and the values each lane computes.",
       "properties": {
         "block_size": {
           "anyOf": [
@@ -1463,13 +1463,13 @@
               "type": "null"
             }
           ],
-          "description": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time devlanes runs in it or `devlanes lane new` creates it, not merely because it exists.",
+          "description": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time devlanes runs in it, not merely because it exists.",
           "examples": [
             "register",
             "setup",
             "start"
           ],
-          "markdownDescription": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time devlanes runs in it or `devlanes lane new` creates it, not merely because it exists."
+          "markdownDescription": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time devlanes runs in it, not merely because it exists."
         },
         "primary": {
           "description": "Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the only worktree that gets a lane by itself. Defaults to the remote's default branch, else `main` or `master`. In CI (a variable such as `CI` or `GITHUB_ACTIONS` is set) the checkout takes lane 0 on any branch when lane 0 is free.",
@@ -1519,24 +1519,6 @@
           ],
           "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`.",
           "type": "object"
-        },
-        "worktree_dir": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Templated_string",
-              "description": "",
-              "examples": [],
-              "markdownDescription": ""
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Directory where `devlanes lane new` creates worktrees, relative to the project directory of the primary worktree. Defaults to `../<project>-lanes`. Expressions can only use `project.*` here.",
-          "examples": [
-            "../${{ project.name }}-lanes"
-          ],
-          "markdownDescription": "Directory where `devlanes lane new` creates worktrees, relative to the project directory of the primary worktree. Defaults to `../<project>-lanes`. Expressions can only use `project.*` here."
         }
       },
       "type": "object"
@@ -1738,6 +1720,34 @@
       },
       "type": "object"
     },
+    "ProjectExtends": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "description": "Project files merged in order, later ones winning.",
+            "examples": [
+              "devlanes.yaml",
+              "devlanes.shared.yaml"
+            ],
+            "markdownDescription": "Project files merged in order, later ones winning.",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ],
+      "description": "Project file, or files merged in order, that a project file builds on.",
+      "examples": [
+        "devlanes.yaml",
+        [
+          "devlanes.yaml",
+          "devlanes.shared.yaml"
+        ]
+      ],
+      "markdownDescription": "Project file, or files merged in order, that a project file builds on."
+    },
     "ReadyCheck": {
       "additionalProperties": false,
       "description": "Readiness probe: exactly one of `tcp`, `http`, `log` or `cmd`, retried until it passes or `timeout` runs out.",
@@ -1895,7 +1905,7 @@
       ],
       "enumDescriptions": [
         "Stop the lane's processes; once nothing runs, the lane is cleaned.",
-        "Clean the lane right away: stop its processes, run `lane.clean` tasks and `infra.teardown`, and free its index and ports."
+        "Clean the lane right away: stop its processes, remove its own containers and free its index and ports. `lane.clean` tasks and `infra.teardown` need the folder to run in, so they are skipped; data they would drop from shared containers stays."
       ],
       "examples": [
         "stop",
@@ -1904,7 +1914,7 @@
       "markdownDescription": "What happens to a running lane whose worktree folder is deleted.",
       "markdownEnumDescriptions": [
         "Stop the lane's processes; once nothing runs, the lane is cleaned.",
-        "Clean the lane right away: stop its processes, run `lane.clean` tasks and `infra.teardown`, and free its index and ports."
+        "Clean the lane right away: stop its processes, remove its own containers and free its index and ports. `lane.clean` tasks and `infra.teardown` need the folder to run in, so they are skipped; data they would drop from shared containers stays."
       ],
       "type": "string"
     },
@@ -1957,13 +1967,13 @@
       "markdownDescription": "Script from a project file, as a mapping with `file` and `name`. devlanes picks the tool from the file name: package.json (the project's package manager), Makefile or `*.mk`, justfile or `*.just`, deno.json, pyproject.toml (uv or poetry) and Cargo.toml (a binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can be left out to keep the inherited one.",
       "properties": {
         "file": {
-          "description": "File that defines the script, relative to the worktree, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
+          "description": "File that defines the script, relative to the project file's directory, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
           "examples": [
             "apps/api/package.json",
             "Makefile",
             "justfile"
           ],
-          "markdownDescription": "File that defines the script, relative to the worktree, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
+          "markdownDescription": "File that defines the script, relative to the project file's directory, such as `apps/api/package.json`. The script runs in this file's directory. Required unless an override or `extends` child keeps the inherited file.",
           "type": "string"
         },
         "name": {
@@ -2129,11 +2139,11 @@
               "type": "null"
             }
           ],
-          "description": "Directory `run` starts in, relative to the lane's worktree; defaults to the worktree root. Platform detection also looks here. Cannot be combined with `run_script`, which runs in the script file's directory; `devlanes config check` refuses the pair, including a `cwd` inherited through `extends`.",
+          "description": "Directory `run` starts in, relative to the project file's directory in the lane's worktree; defaults to that directory. Platform detection also looks here. Cannot be combined with `run_script`, which runs in the script file's directory; `devlanes config check` refuses the pair, including a `cwd` inherited through `extends`.",
           "examples": [
             "apps/api"
           ],
-          "markdownDescription": "Directory `run` starts in, relative to the lane's worktree; defaults to the worktree root. Platform detection also looks here. Cannot be combined with `run_script`, which runs in the script file's directory; `devlanes config check` refuses the pair, including a `cwd` inherited through `extends`."
+          "markdownDescription": "Directory `run` starts in, relative to the project file's directory in the lane's worktree; defaults to that directory. Platform detection also looks here. Cannot be combined with `run_script`, which runs in the script file's directory; `devlanes config check` refuses the pair, including a `cwd` inherited through `extends`."
         },
         "env": {
           "additionalProperties": {
@@ -2155,11 +2165,11 @@
           "type": "object"
         },
         "extends": {
-          "description": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after devlanes.local.yaml is merged.",
+          "description": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after every project file and local override is merged.",
           "examples": [
             "fastify-api"
           ],
-          "markdownDescription": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after devlanes.local.yaml is merged.",
+          "markdownDescription": "Template under `templates` whose settings this service inherits; its own settings apply on top. Mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates and are resolved after every project file and local override is merged.",
           "type": [
             "string",
             "null"
@@ -2603,11 +2613,11 @@
       "properties": {
         "from": {
           "$ref": "#/$defs/Templated_string",
-          "description": "Folder to copy, relative to the lane's worktree.",
+          "description": "Folder to copy, relative to the project file's directory in the lane's worktree.",
           "examples": [
             "apps/extension/.output/chrome-mv3"
           ],
-          "markdownDescription": "Folder to copy, relative to the lane's worktree."
+          "markdownDescription": "Folder to copy, relative to the project file's directory in the lane's worktree."
         },
         "ignore": {
           "default": [],
@@ -2640,11 +2650,11 @@
               "type": "null"
             }
           ],
-          "description": "Local destination; `~/` is your home and other relative paths start at the worktree. Defaults to `~/devlanes/sync/<project>/<lane>/<folder>`. Machines connected with `devlanes remote connect` ignore it and use their own path.",
+          "description": "Local destination; `~/` is your home and other relative paths start at the project file's directory. Defaults to `~/devlanes/sync/<project>/<lane>/<folder>`. Machines connected with `devlanes remote connect` ignore it and use their own path.",
           "examples": [
             "~/devlanes/sync/acme/${{ lane.name }}/chrome-mv3"
           ],
-          "markdownDescription": "Local destination; `~/` is your home and other relative paths start at the worktree. Defaults to `~/devlanes/sync/<project>/<lane>/<folder>`. Machines connected with `devlanes remote connect` ignore it and use their own path."
+          "markdownDescription": "Local destination; `~/` is your home and other relative paths start at the project file's directory. Defaults to `~/devlanes/sync/<project>/<lane>/<folder>`. Machines connected with `devlanes remote connect` ignore it and use their own path."
         }
       },
       "required": [
@@ -2857,11 +2867,11 @@
               "type": "null"
             }
           ],
-          "description": "Working directory for `run`, relative to the lane's worktree; defaults to the worktree root. Cannot be combined with `run_script`, which runs in the script file's directory.",
+          "description": "Working directory for `run`, relative to the project file's directory in the lane's worktree; defaults to that directory. Cannot be combined with `run_script`, which runs in the script file's directory.",
           "examples": [
             "apps/api"
           ],
-          "markdownDescription": "Working directory for `run`, relative to the lane's worktree; defaults to the worktree root. Cannot be combined with `run_script`, which runs in the script file's directory."
+          "markdownDescription": "Working directory for `run`, relative to the project file's directory in the lane's worktree; defaults to that directory. Cannot be combined with `run_script`, which runs in the script file's directory."
         },
         "env": {
           "additionalProperties": {
@@ -3234,6 +3244,28 @@
   ],
   "markdownDescription": "devlanes project config. Run a dev environment per git worktree, side by side. https://devlanes.run",
   "properties": {
+    "extends": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProjectExtends",
+          "description": "",
+          "examples": [],
+          "markdownDescription": ""
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Other project files this one builds on: one path or a list, relative to this file, such as `devlanes.yaml` for a `devlanes.prod.yaml` that runs the same apps another way. They are merged in order, each with its own `.local.yaml`, then this file and its `.local.yaml` go last, so later files win. Mappings merge by key and lists and single values replace, as with local overrides. An extended file may be partial and its `project` is ignored; paths in it mean what they would in this file.",
+      "examples": [
+        "devlanes.yaml",
+        [
+          "devlanes.yaml",
+          "devlanes.shared.yaml"
+        ]
+      ],
+      "markdownDescription": "Other project files this one builds on: one path or a list, relative to this file, such as `devlanes.yaml` for a `devlanes.prod.yaml` that runs the same apps another way. They are merged in order, each with its own `.local.yaml`, then this file and its `.local.yaml` go last, so later files win. Mappings merge by key and lists and single values replace, as with local overrides. An extended file may be partial and its `project` is ignored; paths in it mean what they would in this file."
+    },
     "global_env": {
       "additionalProperties": {
         "$ref": "#/$defs/Templated_Scalar",
@@ -3290,10 +3322,9 @@
         "new_worktrees": null,
         "primary": null,
         "removed_worktrees": null,
-        "vars": {},
-        "worktree_dir": null
+        "vars": {}
       },
-      "description": "Which worktrees get a lane, where new worktrees are created, how many ports each lane reserves, and values computed per lane (`lane.<name>`).",
+      "description": "Which worktrees get a lane, how many ports each lane reserves, and values computed per lane (`lane.<name>`).",
       "examples": [
         {
           "hosts_file": "always",
@@ -3303,7 +3334,7 @@
           }
         }
       ],
-      "markdownDescription": "Which worktrees get a lane, where new worktrees are created, how many ports each lane reserves, and values computed per lane (`lane.<name>`)."
+      "markdownDescription": "Which worktrees get a lane, how many ports each lane reserves, and values computed per lane (`lane.<name>`)."
     },
     "profiles": {
       "additionalProperties": {
@@ -3461,7 +3492,7 @@
         "markdownDescription": "A long-running process started with the lane, such as a dev server or a worker. Each service gets its own port from the lane's block (`PORT`, `${{ self.port }}`); devlanes stops it with the lane and never restarts it when it exits. A service needs `run` or `run_script`, directly or through `extends`."
       },
       "default": {},
-      "description": "Named service settings that services reuse with `extends: <template>`. The service inherits every setting of the template and its own settings win: mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates, are never started themselves, and are applied after `devlanes.local.yaml` is merged.",
+      "description": "Named service settings that services reuse with `extends: <template>`. The service inherits every setting of the template and its own settings win: mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates, are never started themselves, and are applied after every project file and local override is merged.",
       "examples": [
         {
           "fastify-api": {
@@ -3477,7 +3508,7 @@
           }
         }
       ],
-      "markdownDescription": "Named service settings that services reuse with `extends: <template>`. The service inherits every setting of the template and its own settings win: mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates, are never started themselves, and are applied after `devlanes.local.yaml` is merged.",
+      "markdownDescription": "Named service settings that services reuse with `extends: <template>`. The service inherits every setting of the template and its own settings win: mappings (`env`, `ready`, `stop`, preset options, `run_script`) merge by key, lists (`tags`, `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the inherited probe. Templates may extend other templates, are never started themselves, and are applied after every project file and local override is merged.",
       "type": "object"
     }
   },

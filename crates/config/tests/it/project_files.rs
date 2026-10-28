@@ -123,9 +123,18 @@ fn a_shared_base_merges_once() {
         dir.path(),
         &[
             ("shared.yaml", "services:\n  api: { run: shared }\n"),
-            ("a.yaml", "extends: shared.yaml\nservices:\n  api: { run: from-a }\n"),
-            ("b.yaml", "extends: shared.yaml\nservices:\n  web: { run: web }\n"),
-            ("devlanes.yaml", "project: acme\nextends: [a.yaml, b.yaml]\n"),
+            (
+                "a.yaml",
+                "extends: shared.yaml\nservices:\n  api: { run: from-a }\n",
+            ),
+            (
+                "b.yaml",
+                "extends: shared.yaml\nservices:\n  web: { run: web }\n",
+            ),
+            (
+                "devlanes.yaml",
+                "project: acme\nextends: [a.yaml, b.yaml]\n",
+            ),
         ],
     );
     let config = load_project(dir.path()).expect("loaded");

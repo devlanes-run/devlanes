@@ -39,7 +39,8 @@ Accepted by every command, before or after the command name.
 - `--json`: Print JSON: one document, or NDJSON for streams (same as --output json)
 - `--output <MODE>`: Output mode [default: agent when an AI agent runs devlanes, plain in CI or without a terminal, else human]
   Values: `human` (Colors and symbols, for a terminal), `plain` (The same information without color, one line per event), `agent` (Terse lines for AI agents: failures first, with next commands, size-capped), `json` (The daemon's data as JSON, or NDJSON for streams).
-- `--project <PROJECT>`: Use this project instead of the one containing the current directory
+- `-p, --project <PROJECT>`: Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
+- `--file <FILE>`: Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 - `--lane <LANE>`: Use this lane ([project@]lane) instead of the current worktree's
 - `--yes`: Confirm actions that would ask first; needed when no terminal can prompt
 - `--quiet`: Print nothing on success; errors still go to stderr
@@ -101,15 +102,36 @@ devlanes stop [OPTIONS] [UNIT]...
 
 ### devlanes restart
 
-Stop and start units again with a fresh environment
+Stop and start units again with a fresh environment, or the whole lane when none are named.
+
+A whole-lane restart stops everything, keeps the lane's saved profiles and
+services, and starts it again as a plain devlanes start does: infra, setup,
+tasks, services and any port change in the project file.
 
 ```text
 devlanes restart [OPTIONS] [UNIT]...
 ```
 
-- `[UNIT]...`: Units to restart ([lane:]unit, globs, +tag) [default: pick from a list]
+- `[UNIT]...`: Units to restart ([lane:]unit, globs, +tag) [default: the whole lane]
 - `--all-at-once`: Start every selected service immediately, bypassing the machine-wide start gate for this run
 - `--no-ui`: Print the restart as text instead of running it in the TUI
+
+### devlanes reload
+
+Apply project file and .env changes to the running lane.
+
+Stops the units the file removed, restarts the ones it changed and starts the
+ones it added. Without units, a change to infra or ports restarts the whole
+lane instead. With units, it applies only their changes. devlanes status shows
+what changed.
+
+```text
+devlanes reload [OPTIONS] [UNIT]...
+```
+
+- `[UNIT]...`: Apply only these units' changes ([lane:]unit) [default: every change in the lane]
+- `--all-at-once`: Start every selected service immediately, bypassing the machine-wide start gate for this run
+- `--no-ui`: Print the reload as text instead of running it in the TUI
 
 ### devlanes status
 
@@ -269,19 +291,19 @@ devlanes lane ls [OPTIONS]
 
 ### devlanes lane new
 
-Create a git worktree for a branch under lanes.worktree_dir and register its lane.
-
-Without a branch, add another lane for the current folder: it has its own index, ports
+Add another lane for the current folder. It has its own index, ports
 and domain, and `--lane <name>` or `--lane <index>` addresses it. Commands run in the
 folder keep using the folder's first lane.
+
+For a lane on another branch, create a worktree with `git worktree add <path> <branch>`
+and run `devlanes start` in it.
 
 Without --start, a terminal asks whether to start the new lane right away.
 
 ```text
-devlanes lane new [OPTIONS] [BRANCH]
+devlanes lane new [OPTIONS]
 ```
 
-- `[BRANCH]`: Branch to check out in the new worktree [default: another lane for this folder]
 - `--name <NAME>`: Name of the extra lane for this folder, used by `--lane` [default: <folder>-<n>]
 - `--start`: Start the new lane right away
 - `--no-ui`: With --start, print the start as text instead of running it in the TUI
@@ -298,7 +320,7 @@ devlanes lane clean [OPTIONS] [LANE]
 
 ### devlanes lane gc
 
-Clean lanes whose worktrees are gone and drop unused port offsets (needs --yes)
+Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
 
 ```text
 devlanes lane gc [OPTIONS]
@@ -385,6 +407,14 @@ devlanes debug thaw [OPTIONS] [LANE]
 ```
 
 - `[LANE]`: Lane to thaw ([project@]lane) [default: the current lane]
+
+### devlanes debug config
+
+Print the lane's project config as YAML after merging its files and templates; expressions stay unevaluated
+
+```text
+devlanes debug config [OPTIONS]
+```
 
 ### devlanes debug bundle
 
