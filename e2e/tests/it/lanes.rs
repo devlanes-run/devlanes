@@ -246,3 +246,18 @@ fn stop_with_logs_dir_uses_the_worktree_lane() -> Result<()> {
     assert!(units_in(one, "ready").is_empty(), "{one}");
     Ok(())
 }
+
+/// Under CI a detached checkout, as a pull request job has, gets lane 0 from the
+/// daemon its first command spawns.
+#[test]
+fn ci_gives_a_detached_checkout_lane_zero() -> Result<()> {
+    let lab = Lab::new("two-services", BUDGET)?;
+    lab.git(&["checkout", "-q", "--detach"])?;
+    let mut command = lab.command(lab.repo(), &["start"])?;
+    command.env("CI", "true");
+    lab.run(command, Duration::from_secs(90))?.expect_code(0)?;
+    let lanes = lab.lanes(lab.repo())?;
+    let zero = need(lane(&lanes, "fixture-two@0"), "lane 0")?;
+    assert_eq!(units_in(zero, "ready"), ["api", "web"], "{zero}");
+    Ok(())
+}
