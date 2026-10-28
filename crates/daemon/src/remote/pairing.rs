@@ -382,7 +382,11 @@ impl Inner {
         };
         let expires_at_ms = now_ms().saturating_add(PAIRING_CODE_TTL_MS);
         tracing::info!(expires_at_ms, "issued a pairing code");
-        Ok(json!({"code": code, "expires_at_ms": expires_at_ms}))
+        Ok(json!({
+            "code": code,
+            "expires_at_ms": expires_at_ms,
+            "valid_ms": PAIRING_CODE_TTL_MS,
+        }))
     }
 
     /// `remote.pairing.verify`: whether a client's token is one of its

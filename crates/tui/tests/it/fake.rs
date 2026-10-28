@@ -333,7 +333,7 @@ impl DaemonApi for FakeApi {
         self.record("remote.pair".into());
         match self.pairing.lock().ok().and_then(|p| p.clone()) {
             Some(answer) => answer.map_err(ApiError::Rpc),
-            None => Ok(json!({"code": "K7QM-3XWD", "valid_ms": 600_000})),
+            None => Ok(crate::connect::pair_reply("K7QM-3XWD")),
         }
     }
 

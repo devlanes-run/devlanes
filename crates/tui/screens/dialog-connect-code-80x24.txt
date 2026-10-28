@@ -7,10 +7,10 @@
 │ A box is another machine that runs devlanes. Its projects show up in the top │
 │ bar.┌ connect hetzner ─────────────────────────────────────────────────┐     │
 │     │ hetzner needs a pairing code.                                    │     │
-│     │ On hetzner, press p in the Boxes view or run devlanes daemon     │     │
-│     │ pair. Type the code here.                                        │     │
+│     │ On hetzner, press p in its Boxes view.                           │     │
+│     │ Or run devlanes daemon pair there.                               │     │
 │     │                                                                  │     │
-│     │ ▌Code        K7QM-3X▏                                            │     │
+│     │ ▌ Code       K7QM-3X▏                                            │     │
 │     │                                                                  │     │
 │     │ enter send   esc close                                           │     │
 │     └──────────────────────────────────────────────────────────────────┘     │
@@ -33,10 +33,10 @@
 6: 0 darkgray, 2-77 dim, 79 darkgray
 7: 0 darkgray, 2-5 dim, 6-73 bold, 79 darkgray
 8: 0 darkgray, 6 bold, 8-36 bold, 73 bold, 79 darkgray
-9: 0 darkgray, 6 bold, 8-67 dim, 73 bold, 79 darkgray
-10: 0 darkgray, 6 bold, 8-32 dim, 73 bold, 79 darkgray
+9: 0 darkgray, 6 bold, 8-45 dim, 73 bold, 79 darkgray
+10: 0 darkgray, 6 bold, 8-41 dim, 73 bold, 79 darkgray
 11: 0 darkgray, 6 bold, 73 bold, 79 darkgray
-12: 0 darkgray, 6 bold, 8-20 bold, 73 bold, 79 darkgray
+12: 0 darkgray, 6 bold, 8 bold reversed, 9-19 reversed, 20-71 bold, 73 bold, 79 darkgray
 13: 0 darkgray, 6 bold, 73 bold, 79 darkgray
 14: 0 darkgray, 6 bold, 8-12 bold, 13-17 dim, 21-23 bold, 24-29 dim, 73 bold, 79 darkgray
 15: 0 darkgray, 6-73 bold, 79 darkgray

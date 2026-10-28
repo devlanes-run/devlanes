@@ -601,7 +601,10 @@ impl PairDialog {
             Ok(value) => match value.get("code").and_then(Value::as_str) {
                 Some(code) => PairState::Code {
                     code: text::clean(code),
-                    valid_ms: value.get("valid_ms").and_then(Value::as_u64),
+                    valid_ms: value
+                        .get("valid_ms")
+                        .and_then(Value::as_u64)
+                        .or(Some(devlanes_proto::remote::PAIRING_CODE_TTL_MS)),
                 },
                 None => PairState::Failed(Worded::local("the daemon sent no code")),
             },
@@ -854,7 +857,11 @@ mod tests {
     #[test]
     fn pairing_states() {
         let mut dialog = PairDialog::loading();
-        dialog.answered(Ok(json!({"code": "K7QM-3XWD", "valid_ms": 600_000})));
+        dialog.answered(Ok(json!({
+            "code": "K7QM-3XWD",
+            "expires_at_ms": 1_793_000_600_000_u64,
+            "valid_ms": devlanes_proto::remote::PAIRING_CODE_TTL_MS,
+        })));
         dialog.age = 2;
         assert!(matches!(&dialog.state, PairState::Code { code, .. } if code == "K7QM-3XWD"));
         assert_eq!(countdown(dialog.left(600_000)), "9m 58s");

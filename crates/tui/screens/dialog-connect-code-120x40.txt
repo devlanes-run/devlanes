@@ -15,10 +15,10 @@
 │                                                                                                                      │
 │                         ┌ connect hetzner ─────────────────────────────────────────────────┐                         │
 │                         │ hetzner needs a pairing code.                                    │                         │
-│                         │ On hetzner, press p in the Boxes view or run devlanes daemon     │                         │
-│                         │ pair. Type the code here.                                        │                         │
+│                         │ On hetzner, press p in its Boxes view.                           │                         │
+│                         │ Or run devlanes daemon pair there.                               │                         │
 │                         │                                                                  │                         │
-│                         │ ▌Code        K7QM-3X▏                                            │                         │
+│                         │ ▌ Code       K7QM-3X▏                                            │                         │
 │                         │                                                                  │                         │
 │                         │ enter send   esc close                                           │                         │
 │                         └──────────────────────────────────────────────────────────────────┘                         │
@@ -57,10 +57,10 @@
 14: 0 darkgray, 119 darkgray
 15: 0 darkgray, 26-93 bold, 119 darkgray
 16: 0 darkgray, 26 bold, 28-56 bold, 93 bold, 119 darkgray
-17: 0 darkgray, 26 bold, 28-87 dim, 93 bold, 119 darkgray
-18: 0 darkgray, 26 bold, 28-52 dim, 93 bold, 119 darkgray
+17: 0 darkgray, 26 bold, 28-65 dim, 93 bold, 119 darkgray
+18: 0 darkgray, 26 bold, 28-61 dim, 93 bold, 119 darkgray
 19: 0 darkgray, 26 bold, 93 bold, 119 darkgray
-20: 0 darkgray, 26 bold, 28-40 bold, 93 bold, 119 darkgray
+20: 0 darkgray, 26 bold, 28 bold reversed, 29-39 reversed, 40-91 bold, 93 bold, 119 darkgray
 21: 0 darkgray, 26 bold, 93 bold, 119 darkgray
 22: 0 darkgray, 26 bold, 28-32 bold, 33-37 dim, 41-43 bold, 44-49 dim, 93 bold, 119 darkgray
 23: 0 darkgray, 26-93 bold, 119 darkgray

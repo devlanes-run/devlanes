@@ -224,8 +224,10 @@ pub enum Method {
     RemoteReport,
     /// Box side, for `devlanes daemon pair`: a one-time pairing code, valid
     /// once for [`remote::PAIRING_CODE_TTL_MS`] and kept in memory. Reply
-    /// `{code, expires_at_ms, retry_after_ms?}`; `retry_after_ms` is set while
-    /// failed attempts keep every code refused.
+    /// `{code, expires_at_ms, valid_ms}`: `valid_ms` is how long the code is
+    /// valid from the reply, for a countdown that needs no clock. Error
+    /// `pairing_paused` with `retry_after_ms` while failed attempts keep every
+    /// code refused, `connections_off` while `remote.allow_connections` is off.
     #[serde(rename = "remote.pair")]
     RemotePair,
     /// Box side, for `devlanes tunnel`: whether a client's remote token is

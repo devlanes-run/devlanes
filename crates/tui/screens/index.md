@@ -258,6 +258,14 @@ a new connection (n): a box reached by its SSH name
 - 120x40: [txt](dialog-connect-120x40.txt) · [png](dialog-connect-120x40.png) · [ansi](dialog-connect-120x40.ansi)
 - 80x24: [txt](dialog-connect-80x24.txt) · [png](dialog-connect-80x24.png) · [ansi](dialog-connect-80x24.ansi)
 
+## dialog-connect-empty
+
+the new connection form before anything is typed, with the keys on how the box is reached (shift+tab): the name's placeholder
+
+- 200x60: [txt](dialog-connect-empty-200x60.txt) · [png](dialog-connect-empty-200x60.png) · [ansi](dialog-connect-empty-200x60.ansi)
+- 120x40: [txt](dialog-connect-empty-120x40.txt) · [png](dialog-connect-empty-120x40.png) · [ansi](dialog-connect-empty-120x40.ansi)
+- 80x24: [txt](dialog-connect-empty-80x24.txt) · [png](dialog-connect-empty-80x24.png) · [ansi](dialog-connect-empty-80x24.ansi)
+
 ## dialog-connect-command
 
 a new connection reached by a command (shift+tab, space, tab, tab): saved as remote.boxes.acme.command
@@ -313,6 +321,14 @@ a pairing code for another machine (p): the code, its countdown and what to run 
 - 200x60: [txt](dialog-pair-200x60.txt) · [png](dialog-pair-200x60.png) · [ansi](dialog-pair-200x60.ansi)
 - 120x40: [txt](dialog-pair-120x40.txt) · [png](dialog-pair-120x40.png) · [ansi](dialog-pair-120x40.ansi)
 - 80x24: [txt](dialog-pair-80x24.txt) · [png](dialog-pair-80x24.png) · [ansi](dialog-pair-80x24.ansi)
+
+## dialog-pair-expired
+
+the pairing code modal once its code expired: p gets a new one
+
+- 200x60: [txt](dialog-pair-expired-200x60.txt) · [png](dialog-pair-expired-200x60.png) · [ansi](dialog-pair-expired-200x60.ansi)
+- 120x40: [txt](dialog-pair-expired-120x40.txt) · [png](dialog-pair-expired-120x40.png) · [ansi](dialog-pair-expired-120x40.ansi)
+- 80x24: [txt](dialog-pair-expired-80x24.txt) · [png](dialog-pair-expired-80x24.png) · [ansi](dialog-pair-expired-80x24.ansi)
 
 ## dialog-pair-paused
 

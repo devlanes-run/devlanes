@@ -23,16 +23,16 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
 │                                                                 ┌ connect a box ───────────────────────────────────────────────────┐                                                                 │
-│                                                                 │  Reach it by (•) SSH name   ( ) command                          │                                                                 │
+│                                                                 │   Reach by   (•) SSH name    ( ) command                         │                                                                 │
+│                                                                 │ ▌ Name       hetzner▏                                            │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │ ▌Name        hetzner▏                                            │                                                                 │
-│                                                                 │                                                                  │                                                                 │
-│                                                                 │ devlanes runs ssh with this name, so your SSH config applies.    │                                                                 │
-│                                                                 │ devlanes never edits it.                                         │                                                                 │
+│                                                                 │ devlanes runs ssh hetzner, so your SSH config applies.           │                                                                 │
 │                                                                 │                                                                  │                                                                 │
 │                                                                 │ tab next field   enter connect   esc cancel                      │                                                                 │
 │                                                                 └──────────────────────────────────────────────────────────────────┘                                                                 │
+│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -85,16 +85,16 @@
 22: 0 darkgray, 199 darkgray
 23: 0 darkgray, 199 darkgray
 24: 0 darkgray, 199 darkgray
-25: 0 darkgray, 66-133 bold, 199 darkgray
-26: 0 darkgray, 66 bold, 68 bold, 69-80 dim, 81-92 bold, 96-106 dim, 133 bold, 199 darkgray
-27: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-28: 0 darkgray, 66 bold, 68-80 bold, 133 bold, 199 darkgray
+25: 0 darkgray, 199 darkgray
+26: 0 darkgray, 66-133 bold, 199 darkgray
+27: 0 darkgray, 66 bold, 68 bold, 80-93 bold, 94-108 dim, 133 bold, 199 darkgray
+28: 0 darkgray, 66 bold, 68 bold reversed, 69-79 reversed, 80-131 bold, 133 bold, 199 darkgray
 29: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-30: 0 darkgray, 66 bold, 68-128 dim, 133 bold, 199 darkgray
-31: 0 darkgray, 66 bold, 68-91 dim, 133 bold, 199 darkgray
-32: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-33: 0 darkgray, 66 bold, 68-70 bold, 71-81 dim, 85-89 bold, 90-97 dim, 101-103 bold, 104-110 dim, 133 bold, 199 darkgray
-34: 0 darkgray, 66-133 bold, 199 darkgray
+30: 0 darkgray, 66 bold, 68-121 dim, 133 bold, 199 darkgray
+31: 0 darkgray, 66 bold, 133 bold, 199 darkgray
+32: 0 darkgray, 66 bold, 68-70 bold, 71-81 dim, 85-89 bold, 90-97 dim, 101-103 bold, 104-110 dim, 133 bold, 199 darkgray
+33: 0 darkgray, 66-133 bold, 199 darkgray
+34: 0 darkgray, 199 darkgray
 35: 0 darkgray, 199 darkgray
 36: 0 darkgray, 199 darkgray
 37: 0 darkgray, 199 darkgray

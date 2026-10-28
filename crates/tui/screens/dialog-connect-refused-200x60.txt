@@ -25,12 +25,12 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                             ┌ connect hetzner ─────────────────────────┐                                                                             │
-│                                                                             │ hetzner does not accept connections. Set │                                                                             │
-│                                                                             │ remote.allow_connections to true there   │                                                                             │
-│                                                                             │                                          │                                                                             │
-│                                                                             │ enter try again   esc close              │                                                                             │
-│                                                                             └──────────────────────────────────────────┘                                                                             │
+│                                                                           ┌ connect hetzner ────────────────────────────┐                                                                            │
+│                                                                           │ hetzner does not accept connections.        │                                                                            │
+│                                                                           │ Set remote.allow_connections to true there. │                                                                            │
+│                                                                           │                                             │                                                                            │
+│                                                                           │ enter try again   esc close                 │                                                                            │
+│                                                                           └─────────────────────────────────────────────┘                                                                            │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -87,12 +87,12 @@
 24: 0 darkgray, 199 darkgray
 25: 0 darkgray, 199 darkgray
 26: 0 darkgray, 199 darkgray
-27: 0 darkgray, 78-121 bold, 199 darkgray
-28: 0 darkgray, 78 bold, 80-119 bold red, 121 bold, 199 darkgray
-29: 0 darkgray, 78 bold, 80-117 bold red, 121 bold, 199 darkgray
-30: 0 darkgray, 78 bold, 121 bold, 199 darkgray
-31: 0 darkgray, 78 bold, 80-84 bold, 85-94 dim, 98-100 bold, 101-106 dim, 121 bold, 199 darkgray
-32: 0 darkgray, 78-121 bold, 199 darkgray
+27: 0 darkgray, 76-122 bold, 199 darkgray
+28: 0 darkgray, 76 bold, 78-113 bold red, 122 bold, 199 darkgray
+29: 0 darkgray, 76 bold, 122 bold, 199 darkgray
+30: 0 darkgray, 76 bold, 122 bold, 199 darkgray
+31: 0 darkgray, 76 bold, 78-82 bold, 83-92 dim, 96-98 bold, 99-104 dim, 122 bold, 199 darkgray
+32: 0 darkgray, 76-122 bold, 199 darkgray
 33: 0 darkgray, 199 darkgray
 34: 0 darkgray, 199 darkgray
 35: 0 darkgray, 199 darkgray

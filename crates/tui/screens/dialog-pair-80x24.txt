@@ -3,19 +3,19 @@
 │ no boxes yet                                                                 │
 │                                                                              │
 │   n   connect to a box by its SSH name or a command                          │
-│           ┌ pairing code ────────────────────────────────────────┐           │
-│ A box is a│   K7QM-3XWD                                          │in the top │
-│ bar. Their│                                                      │           │
-│           │ It works once and expires in 9m 57s.                 │           │
-│           │                                                      │           │
-│           │ On the other machine, run:                           │           │
-│           │ devlanes remote connect <box> --code K7QM-3XWD       │           │
-│           │ <box> is this machine's SSH name there.              │           │
-│           │                                                      │           │
-│           │ Or press n in its Boxes view. It asks for this code. │           │
-│           │                                                      │           │
-│           │ y copy code   p new code   esc close                 │           │
-│           └──────────────────────────────────────────────────────┘           │
+│                                                                              │
+│ A box is ano┌ pairing code ────────────────────────────────────┐p in the top │
+│ bar. Their p│                                                  │             │
+│             │                     K7QM-3XWD                    │             │
+│             │       It works once and expires in 9m 59s.       │             │
+│             │                                                  │             │
+│             │ On the other machine, run                        │             │
+│             │   devlanes remote connect <box> --code K7QM-3XWD │             │
+│             │ <box> is this machine's SSH name there.          │             │
+│             │ Or press n in its Boxes view and type the code.  │             │
+│             │                                                  │             │
+│             │ y copy code   p new code   esc close             │             │
+│             └──────────────────────────────────────────────────┘             │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────┐
@@ -29,19 +29,19 @@
 2: 0 darkgray, 2-13 bold, 79 darkgray
 3: 0 darkgray, 79 darkgray
 4: 0 darkgray, 4 bold, 8-52 dim, 79 darkgray
-5: 0 darkgray, 12-67 bold, 79 darkgray
-6: 0 darkgray, 2-11 dim, 12 bold, 16-24 bold, 67 bold, 68-77 dim, 79 darkgray
-7: 0 darkgray, 2-11 dim, 12 bold, 67 bold, 79 darkgray
-8: 0 darkgray, 12 bold, 67 bold, 79 darkgray
-9: 0 darkgray, 12 bold, 67 bold, 79 darkgray
-10: 0 darkgray, 12 bold, 14-39 dim, 67 bold, 79 darkgray
-11: 0 darkgray, 12 bold, 14-59 bold, 67 bold, 79 darkgray
-12: 0 darkgray, 12 bold, 14-52 dim, 67 bold, 79 darkgray
-13: 0 darkgray, 12 bold, 67 bold, 79 darkgray
-14: 0 darkgray, 12 bold, 14-65 dim, 67 bold, 79 darkgray
-15: 0 darkgray, 12 bold, 67 bold, 79 darkgray
-16: 0 darkgray, 12 bold, 14 bold, 15-24 dim, 28 bold, 29-37 dim, 41-43 bold, 44-49 dim, 67 bold, 79 darkgray
-17: 0 darkgray, 12-67 bold, 79 darkgray
+5: 0 darkgray, 79 darkgray
+6: 0 darkgray, 2-13 dim, 14-65 bold, 66-77 dim, 79 darkgray
+7: 0 darkgray, 2-13 dim, 14 bold, 65 bold, 79 darkgray
+8: 0 darkgray, 14 bold, 36-44 bold yellow, 65 bold, 79 darkgray
+9: 0 darkgray, 14 bold, 22-57 dim, 65 bold, 79 darkgray
+10: 0 darkgray, 14 bold, 65 bold, 79 darkgray
+11: 0 darkgray, 14 bold, 65 bold, 79 darkgray
+12: 0 darkgray, 14 bold, 16-63 bold, 65 bold, 79 darkgray
+13: 0 darkgray, 14 bold, 16-54 dim, 65 bold, 79 darkgray
+14: 0 darkgray, 14 bold, 16-62 dim, 65 bold, 79 darkgray
+15: 0 darkgray, 14 bold, 65 bold, 79 darkgray
+16: 0 darkgray, 14 bold, 16 bold, 17-26 dim, 30 bold, 31-39 dim, 43-45 bold, 46-51 dim, 65 bold, 79 darkgray
+17: 0 darkgray, 14-65 bold, 79 darkgray
 18: 0 darkgray, 79 darkgray
 19: 0-79 darkgray
 20: 0 darkgray, 1-14 bold, 15-79 darkgray

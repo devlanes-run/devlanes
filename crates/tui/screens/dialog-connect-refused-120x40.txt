@@ -15,12 +15,12 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                     ┌ connect hetzner ─────────────────────────┐                                     │
-│                                     │ hetzner does not accept connections. Set │                                     │
-│                                     │ remote.allow_connections to true there   │                                     │
-│                                     │                                          │                                     │
-│                                     │ enter try again   esc close              │                                     │
-│                                     └──────────────────────────────────────────┘                                     │
+│                                   ┌ connect hetzner ────────────────────────────┐                                    │
+│                                   │ hetzner does not accept connections.        │                                    │
+│                                   │ Set remote.allow_connections to true there. │                                    │
+│                                   │                                             │                                    │
+│                                   │ enter try again   esc close                 │                                    │
+│                                   └─────────────────────────────────────────────┘                                    │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -57,12 +57,12 @@
 14: 0 darkgray, 119 darkgray
 15: 0 darkgray, 119 darkgray
 16: 0 darkgray, 119 darkgray
-17: 0 darkgray, 38-81 bold, 119 darkgray
-18: 0 darkgray, 38 bold, 40-79 bold red, 81 bold, 119 darkgray
-19: 0 darkgray, 38 bold, 40-77 bold red, 81 bold, 119 darkgray
-20: 0 darkgray, 38 bold, 81 bold, 119 darkgray
-21: 0 darkgray, 38 bold, 40-44 bold, 45-54 dim, 58-60 bold, 61-66 dim, 81 bold, 119 darkgray
-22: 0 darkgray, 38-81 bold, 119 darkgray
+17: 0 darkgray, 36-82 bold, 119 darkgray
+18: 0 darkgray, 36 bold, 38-73 bold red, 82 bold, 119 darkgray
+19: 0 darkgray, 36 bold, 82 bold, 119 darkgray
+20: 0 darkgray, 36 bold, 82 bold, 119 darkgray
+21: 0 darkgray, 36 bold, 38-42 bold, 43-52 dim, 56-58 bold, 59-64 dim, 82 bold, 119 darkgray
+22: 0 darkgray, 36-82 bold, 119 darkgray
 23: 0 darkgray, 119 darkgray
 24: 0 darkgray, 119 darkgray
 25: 0 darkgray, 119 darkgray

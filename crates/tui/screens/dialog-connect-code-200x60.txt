@@ -25,10 +25,10 @@
 │                                                                                                                                                                                                      │
 │                                                                 ┌ connect hetzner ─────────────────────────────────────────────────┐                                                                 │
 │                                                                 │ hetzner needs a pairing code.                                    │                                                                 │
-│                                                                 │ On hetzner, press p in the Boxes view or run devlanes daemon     │                                                                 │
-│                                                                 │ pair. Type the code here.                                        │                                                                 │
+│                                                                 │ On hetzner, press p in its Boxes view.                           │                                                                 │
+│                                                                 │ Or run devlanes daemon pair there.                               │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │ ▌Code        K7QM-3X▏                                            │                                                                 │
+│                                                                 │ ▌ Code       K7QM-3X▏                                            │                                                                 │
 │                                                                 │                                                                  │                                                                 │
 │                                                                 │ enter send   esc close                                           │                                                                 │
 │                                                                 └──────────────────────────────────────────────────────────────────┘                                                                 │
@@ -87,10 +87,10 @@
 24: 0 darkgray, 199 darkgray
 25: 0 darkgray, 66-133 bold, 199 darkgray
 26: 0 darkgray, 66 bold, 68-96 bold, 133 bold, 199 darkgray
-27: 0 darkgray, 66 bold, 68-127 dim, 133 bold, 199 darkgray
-28: 0 darkgray, 66 bold, 68-92 dim, 133 bold, 199 darkgray
+27: 0 darkgray, 66 bold, 68-105 dim, 133 bold, 199 darkgray
+28: 0 darkgray, 66 bold, 68-101 dim, 133 bold, 199 darkgray
 29: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-30: 0 darkgray, 66 bold, 68-80 bold, 133 bold, 199 darkgray
+30: 0 darkgray, 66 bold, 68 bold reversed, 69-79 reversed, 80-131 bold, 133 bold, 199 darkgray
 31: 0 darkgray, 66 bold, 133 bold, 199 darkgray
 32: 0 darkgray, 66 bold, 68-72 bold, 73-77 dim, 81-83 bold, 84-89 dim, 133 bold, 199 darkgray
 33: 0 darkgray, 66-133 bold, 199 darkgray

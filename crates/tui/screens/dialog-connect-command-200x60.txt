@@ -22,14 +22,14 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
 │                                                                 ┌ connect a box ───────────────────────────────────────────────────┐                                                                 │
-│                                                                 │  Reach it by ( ) SSH name   (•) command                          │                                                                 │
+│                                                                 │   Reach by   ( ) SSH name    (•) command                         │                                                                 │
+│                                                                 │   Name       acme                                                │                                                                 │
+│                                                                 │ ▌ Command    docker exec -i acme devlanes tunnel --stdio▏        │                                                                 │
 │                                                                 │                                                                  │                                                                 │
-│                                                                 │  Name        acme                                                │                                                                 │
-│                                                                 │ ▌Command     docker exec -i acme devlanes tunnel --stdio▏        │                                                                 │
-│                                                                 │                                                                  │                                                                 │
-│                                                                 │ The command must run devlanes tunnel --stdio in the box. It is   │                                                                 │
-│                                                                 │ saved as remote.boxes.acme.command in config.yaml.               │                                                                 │
+│                                                                 │ The command must run devlanes tunnel --stdio in the box.         │                                                                 │
+│                                                                 │ devlanes saves it as remote.boxes.acme.command.                  │                                                                 │
 │                                                                 │                                                                  │                                                                 │
 │                                                                 │ tab next field   enter connect   esc cancel                      │                                                                 │
 │                                                                 └──────────────────────────────────────────────────────────────────┘                                                                 │
@@ -84,14 +84,14 @@
 21: 0 darkgray, 199 darkgray
 22: 0 darkgray, 199 darkgray
 23: 0 darkgray, 199 darkgray
-24: 0 darkgray, 66-133 bold, 199 darkgray
-25: 0 darkgray, 66 bold, 68 bold, 69-92 dim, 96-106 bold, 133 bold, 199 darkgray
-26: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-27: 0 darkgray, 66 bold, 68 bold, 69-80 dim, 133 bold, 199 darkgray
-28: 0 darkgray, 66 bold, 68-80 bold, 133 bold, 199 darkgray
+24: 0 darkgray, 199 darkgray
+25: 0 darkgray, 66-133 bold, 199 darkgray
+26: 0 darkgray, 66 bold, 68 bold, 80-95 dim, 96-108 bold, 133 bold, 199 darkgray
+27: 0 darkgray, 66 bold, 68 bold, 133 bold, 199 darkgray
+28: 0 darkgray, 66 bold, 68 bold reversed, 69-79 reversed, 80-131 bold, 133 bold, 199 darkgray
 29: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-30: 0 darkgray, 66 bold, 68-129 dim, 133 bold, 199 darkgray
-31: 0 darkgray, 66 bold, 68-117 dim, 133 bold, 199 darkgray
+30: 0 darkgray, 66 bold, 68-123 dim, 133 bold, 199 darkgray
+31: 0 darkgray, 66 bold, 68-114 dim, 133 bold, 199 darkgray
 32: 0 darkgray, 66 bold, 133 bold, 199 darkgray
 33: 0 darkgray, 66 bold, 68-70 bold, 71-81 dim, 85-89 bold, 90-97 dim, 101-103 bold, 104-110 dim, 133 bold, 199 darkgray
 34: 0 darkgray, 66-133 bold, 199 darkgray

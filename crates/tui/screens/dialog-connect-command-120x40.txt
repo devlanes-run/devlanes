@@ -12,14 +12,14 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
+│                                                                                                                      │
 │                         ┌ connect a box ───────────────────────────────────────────────────┐                         │
-│                         │  Reach it by ( ) SSH name   (•) command                          │                         │
+│                         │   Reach by   ( ) SSH name    (•) command                         │                         │
+│                         │   Name       acme                                                │                         │
+│                         │ ▌ Command    docker exec -i acme devlanes tunnel --stdio▏        │                         │
 │                         │                                                                  │                         │
-│                         │  Name        acme                                                │                         │
-│                         │ ▌Command     docker exec -i acme devlanes tunnel --stdio▏        │                         │
-│                         │                                                                  │                         │
-│                         │ The command must run devlanes tunnel --stdio in the box. It is   │                         │
-│                         │ saved as remote.boxes.acme.command in config.yaml.               │                         │
+│                         │ The command must run devlanes tunnel --stdio in the box.         │                         │
+│                         │ devlanes saves it as remote.boxes.acme.command.                  │                         │
 │                         │                                                                  │                         │
 │                         │ tab next field   enter connect   esc cancel                      │                         │
 │                         └──────────────────────────────────────────────────────────────────┘                         │
@@ -54,14 +54,14 @@
 11: 0 darkgray, 119 darkgray
 12: 0 darkgray, 119 darkgray
 13: 0 darkgray, 119 darkgray
-14: 0 darkgray, 26-93 bold, 119 darkgray
-15: 0 darkgray, 26 bold, 28 bold, 29-52 dim, 56-66 bold, 93 bold, 119 darkgray
-16: 0 darkgray, 26 bold, 93 bold, 119 darkgray
-17: 0 darkgray, 26 bold, 28 bold, 29-40 dim, 93 bold, 119 darkgray
-18: 0 darkgray, 26 bold, 28-40 bold, 93 bold, 119 darkgray
+14: 0 darkgray, 119 darkgray
+15: 0 darkgray, 26-93 bold, 119 darkgray
+16: 0 darkgray, 26 bold, 28 bold, 40-55 dim, 56-68 bold, 93 bold, 119 darkgray
+17: 0 darkgray, 26 bold, 28 bold, 93 bold, 119 darkgray
+18: 0 darkgray, 26 bold, 28 bold reversed, 29-39 reversed, 40-91 bold, 93 bold, 119 darkgray
 19: 0 darkgray, 26 bold, 93 bold, 119 darkgray
-20: 0 darkgray, 26 bold, 28-89 dim, 93 bold, 119 darkgray
-21: 0 darkgray, 26 bold, 28-77 dim, 93 bold, 119 darkgray
+20: 0 darkgray, 26 bold, 28-83 dim, 93 bold, 119 darkgray
+21: 0 darkgray, 26 bold, 28-74 dim, 93 bold, 119 darkgray
 22: 0 darkgray, 26 bold, 93 bold, 119 darkgray
 23: 0 darkgray, 26 bold, 28-30 bold, 31-41 dim, 45-49 bold, 50-57 dim, 61-63 bold, 64-70 dim, 93 bold, 119 darkgray
 24: 0 darkgray, 26-93 bold, 119 darkgray

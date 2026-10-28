@@ -633,6 +633,18 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "dialog-connect-empty",
+            what: "the new connection form before anything is typed, with the keys on how the box is reached (shift+tab): the name's placeholder",
+            setup: |f| {
+                f.shifted('B');
+                f.key(KeyCode::Char('n'));
+                f.send(Msg::Key(KeyEvent::new(
+                    KeyCode::BackTab,
+                    KeyModifiers::SHIFT,
+                )));
+            },
+        },
+        Scene {
             name: "dialog-connect-command",
             what: "a new connection reached by a command (shift+tab, space, tab, tab): saved as remote.boxes.acme.command",
             setup: |f| {
@@ -742,6 +754,17 @@ fn scenes() -> Vec<Scene> {
                 f.shifted('B');
                 f.key(KeyCode::Char('p'));
                 f.send(Msg::Tick);
+            },
+        },
+        Scene {
+            name: "dialog-pair-expired",
+            what: "the pairing code modal once its code expired: p gets a new one",
+            setup: |f| {
+                f.shifted('B');
+                f.key(KeyCode::Char('p'));
+                for _ in 0..600 {
+                    f.send(Msg::Tick);
+                }
             },
         },
         Scene {

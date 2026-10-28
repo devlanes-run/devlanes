@@ -4,7 +4,7 @@
 │   link      connected since 2026-10-14 15:32                                                                         │
 │   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999                                                  │
 │   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed                                                   │
-│   skipped   acme@0: acme@0 on this machine serves its hostnames                                                      │
+│   skipped   acme@0: the same lane on this machine serves its hostnames                                               │
 │             ext.example.com (acme@4:ext-build): not under .localhost                                                 │
 │   syncs     acme@4:ext-build  up to date, following changes                                                          │
 │   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same release on both.                            │
@@ -15,13 +15,13 @@
 │   link      next try in 8s                                                                                           │
 │   error     docker exec exited 1: Error response from daemon: container devbox is not running                        │
 │   box       devlanes 1.0.0 · proxy ┌ disconnect hetzner ────────────────────────┐                                    │
-│   proxy     this machine serves its│ Disconnect hetzner?                        │ use                                │
+│   proxy     this machine serves its│ Its ports and hostnames stop working here. │ use                                │
 │   mirror    1 lane · no ports bound│                                            │                                    │
-│                                    │ Its ports and hostnames stop working here. │                                    │
-│ ! gpu                              │ Its lanes keep running on the box.         │              needs a sign-in · ssh │
-│   link      waiting for you to sign│                                            │                                    │
-│   error     ssh to gpu failed (255)│ y disconnect   n cancel                    │                                    │
-│   fix       enter signs in again   └────────────────────────────────────────────┘                                    │
+│                                    │ Its lanes keep running on the box.         │                                    │
+│ ! gpu                              │                                            │              needs a sign-in · ssh │
+│   link      waiting for you to sign│ y disconnect   n cancel                    │                                    │
+│   error     ssh to gpu failed (255)└────────────────────────────────────────────┘                                    │
+│   fix       enter signs in again                                                                                     │
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
@@ -46,7 +46,7 @@
 3: 0 bold, 4-13 dim, 119 bold
 4: 0 bold, 4-13 dim, 119 bold
 5: 0 bold, 4-13 dim, 119 bold
-6: 0 bold, 4-13 dim, 14-64 yellow, 119 bold
+6: 0 bold, 4-13 dim, 14-71 yellow, 119 bold
 7: 0 bold, 4-13 dim, 14-69 yellow, 119 bold
 8: 0 bold, 4-13 dim, 14-60 green, 119 bold
 9: 0 bold, 4-90 yellow, 119 bold
@@ -57,13 +57,13 @@
 14: 0 bold, 4-13 dim, 14-27 yellow, 119 bold
 15: 0 bold, 4-13 dim, 14-94 yellow, 119 bold
 16: 0 bold, 4-13 dim, 37-82 bold, 119 bold
-17: 0 bold, 4-13 dim, 37 bold, 39-57 bold, 82 bold, 119 bold
+17: 0 bold, 4-13 dim, 37 bold, 39-80 bold, 82 bold, 119 bold
 18: 0 bold, 4-13 dim, 37 bold, 82 bold, 119 bold
 19: 0 bold, 37 bold, 82 bold, 119 bold
 20: 0 bold, 2-3 yellow, 4-6 bold, 37 bold, 82 bold, 97-111 yellow, 112-117 dim, 119 bold
-21: 0 bold, 4-13 dim, 14-36 yellow, 37 bold, 82 bold, 119 bold
-22: 0 bold, 4-13 dim, 14-36 yellow, 37 bold, 39 bold, 40-50 dim, 54 bold, 55-61 dim, 82 bold, 119 bold
-23: 0 bold, 4-13 dim, 14-33 bold, 37-82 bold, 119 bold
+21: 0 bold, 4-13 dim, 14-36 yellow, 37 bold, 39 bold, 40-50 dim, 54 bold, 55-61 dim, 82 bold, 119 bold
+22: 0 bold, 4-13 dim, 14-36 yellow, 37-82 bold, 119 bold
+23: 0 bold, 4-13 dim, 14-33 bold, 119 bold
 24: 0 bold, 119 bold
 25: 0 bold, 119 bold
 26: 0 bold, 119 bold

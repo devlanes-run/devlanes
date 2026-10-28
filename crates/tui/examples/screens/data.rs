@@ -599,10 +599,10 @@ pub fn no_clients_off() -> Value {
     json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": false})
 }
 
-/// `remote.pair`'s code, valid for 10 minutes less two seconds, as the TUI
-/// reads it.
+/// `remote.pair`'s code, valid for 10 minutes, as the daemon answers.
 pub fn pair_code() -> Value {
-    json!({"code": "K7QM-3XWD", "expires_at_ms": NOW_MS + 598_000, "valid_ms": 598_000})
+    let valid = devlanes_proto::remote::PAIRING_CODE_TTL_MS;
+    json!({"code": "K7QM-3XWD", "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
 }
 
 /// `remote.pair` while 5 wrong codes keep pairing paused for 4m 12s more.

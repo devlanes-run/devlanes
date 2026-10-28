@@ -6,6 +6,7 @@
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_proto::{
@@ -150,6 +151,13 @@ pub struct DaemonView {
     /// `doctor` facts; the UI words them as checks.
     pub doctor: Option<Value>,
     pub log: VecDeque<String>,
+    /// `log` parsed, again only when lines arrive: a wheel tick, a mouse
+    /// move or a frame reads these instead of parsing up to
+    /// [`MAX_DAEMON_LOG`] lines each time.
+    entries: Arc<Vec<crate::daemonlog::Entry>>,
+    /// The entries `entries` shows for the filters they were last asked
+    /// with; new lines clear it.
+    shown: RefCell<Option<(crate::daemonlog::Filters, Arc<Vec<crate::daemonlog::Shown>>)>>,
     pub log_position: crate::logfile::LogPosition,
     /// Why the log cannot be read, shown in place of the tail.
     pub log_error: Option<String>,
@@ -1811,6 +1819,10 @@ impl App {
                     .extend(chunk.lines.iter().map(|line| text::clean(line)));
                 while self.daemon.log.len() > MAX_DAEMON_LOG {
                     self.daemon.log.pop_front();
+                }
+                if added > 0 || chunk.reset {
+                    self.daemon.entries = Arc::new(crate::daemonlog::parse(&self.daemon.log));
+                    *self.daemon.shown.get_mut() = None;
                 }
                 self.daemon.log_position = chunk.position;
                 let after = self.daemon_shown().1.len();
@@ -3486,11 +3498,8 @@ impl App {
         }
         self.dialog = Some(Dialog::Confirm {
             title: format!("disconnect {name}"),
-            prompt: format!("Disconnect {name}?"),
-            detail: vec![
-                "Its ports and hostnames stop working here.".into(),
-                "Its lanes keep running on the box.".into(),
-            ],
+            prompt: "Its ports and hostnames stop working here.".into(),
+            detail: vec!["Its lanes keep running on the box.".into()],
             action: "disconnect",
             strict: true,
             effect: Box::new(Effect::Disconnect {
@@ -3845,9 +3854,9 @@ impl App {
             "remote.require_pairing is false here, so it can reconnect without a code."
         };
         self.dialog = Some(Dialog::Confirm {
-            title: format!("revoke {name}"),
-            prompt: format!("Revoke {name} ({short})?"),
-            detail: vec![connections, again.into()],
+            title: format!("revoke {name} · {short}"),
+            prompt: connections,
+            detail: vec![again.into()],
             action: "revoke",
             strict: true,
             effect: Box::new(Effect::RevokeClient {
@@ -4215,10 +4224,26 @@ impl App {
     }
 
     /// The parsed daemon log and the entries the page shows, oldest first.
-    pub fn daemon_shown(&self) -> (Vec<crate::daemonlog::Entry>, Vec<crate::daemonlog::Shown>) {
-        let entries = crate::daemonlog::parse(&self.daemon.log);
-        let shown = crate::daemonlog::shown(&entries, &self.daemon.filters);
-        (entries, shown)
+    /// The shown entries are worked out again only when lines arrived or the
+    /// filters changed since the last call.
+    pub fn daemon_shown(
+        &self,
+    ) -> (
+        Arc<Vec<crate::daemonlog::Entry>>,
+        Arc<Vec<crate::daemonlog::Shown>>,
+    ) {
+        let entries = Arc::clone(&self.daemon.entries);
+        let mut cache = self.daemon.shown.borrow_mut();
+        match cache.as_ref() {
+            Some((filters, shown)) if *filters == self.daemon.filters => {
+                (entries, Arc::clone(shown))
+            }
+            _ => {
+                let shown = Arc::new(crate::daemonlog::shown(&entries, &self.daemon.filters));
+                *cache = Some((self.daemon.filters.clone(), Arc::clone(&shown)));
+                (entries, shown)
+            }
+        }
     }
 
     /// Follows the file again from its newest entry.
