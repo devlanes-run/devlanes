@@ -1026,13 +1026,6 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             format!("this machine knows no box called {}", field(data, "host")),
             Some(Hint::command(["remote", "ls"])),
         ),
-        "box_not_connected" => {
-            let host = text(data, "host");
-            (
-                format!("box {host} is not connected"),
-                Some(Hint::command(["remote", "connect", host.as_str()])),
-            )
-        }
         "lane_not_on_box" => (
             format!(
                 "box {} has no lane {}",
@@ -1041,11 +1034,17 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             ),
             Some(Hint::command(["remote", "ls"])),
         ),
+        // Both commands in one sentence, in the order to run them.
         "local_lane_running" => {
             let local = text(data, "local_lane");
             (
-                format!("{local} runs on this machine, so it keeps the hostnames"),
-                Some(Hint::command(["stop", "--lane", local.as_str()])),
+                format!(
+                    "{local} runs on this machine. Stop it with devlanes stop --lane {}, then run devlanes remote use {} {}.",
+                    crate::shell_quote(&local),
+                    crate::shell_quote(&text(data, "host")),
+                    crate::shell_quote(&text(data, "lane"))
+                ),
+                None,
             )
         }
         "local_lane_unknown" => {
@@ -1341,7 +1340,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
     let switch = format!("devlanes remote use {host} {lane} switches");
     match code {
         "lane_skipped" if text(data, "cause") == "local_running" => format!(
-            "{host}: lane {lane} is not mirrored because {winner_lane} runs on this machine. Stop it there, then {switch}"
+            "{host}: lane {lane} is not mirrored because {winner_lane} runs on this machine. Stop it with devlanes stop --lane {winner_lane}, then {switch}"
         ),
         "lane_skipped" if !text(data, "cause").is_empty() && !other_box.is_empty() => format!(
             "{host}: lane {lane} is not mirrored because {other_box}'s {winner_lane} is in use. {switch}"
@@ -1349,6 +1348,10 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
         "lane_skipped" if !text(data, "cause").is_empty() => format!(
             "{host}: lane {lane} is not mirrored because this machine's {winner_lane} is in use. {switch}"
         ),
+        "lane_switched" => match data.get("to").and_then(Value::as_str) {
+            Some(to) => format!("{lane} now comes from {}", super::clean(to)),
+            None => format!("{lane} now comes from this machine"),
+        },
         "choice_cleared" => {
             let local = text(data, "local_lane");
             if local == lane || local.is_empty() {

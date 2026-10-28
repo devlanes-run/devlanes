@@ -2850,7 +2850,22 @@ fn lane_choice_warnings_say_how_to_switch() {
     );
     assert_eq!(
         line(skipped("local_running", Value::Null)),
-        "warn fork-b: lane acme@0 is not mirrored because acme@0 runs on this machine. Stop it there, then devlanes remote use fork-b acme@0 switches\n"
+        "warn fork-b: lane acme@0 is not mirrored because acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, then devlanes remote use fork-b acme@0 switches\n"
+    );
+    // A switch someone asked for is a plain line, not a warning.
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "lane_switched", "lane": "acme@0",
+                    "to": "fork-b", "from": "fork-a", "message": "…"})
+        ),
+        "acme@0 now comes from fork-b\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "lane_switched", "lane": "acme@0",
+                    "to": null, "from": "fork-b", "message": "…"})
+        ),
+        "acme@0 now comes from this machine\n"
     );
     assert_eq!(
         line(
@@ -2900,6 +2915,12 @@ fn remote_use_says_where_the_lane_comes_from() {
         human(reply(json!("fork-b"), json!("fork-a"), false)),
         "clickmax@0 is chosen from fork-b but not mirrored yet. devlanes remote ls shows why.\n"
     );
+    let mut offline = reply(json!("fork-b"), json!("fork-a"), false);
+    offline["pending"] = json!(true);
+    assert_eq!(
+        human(offline),
+        "clickmax@0 will come from fork-b once it connects.\n"
+    );
     let data = reply(json!("fork-b"), json!("fork-a"), true);
     let agent = runtime(OutputMode::Agent)
         .reporter()
@@ -2908,7 +2929,7 @@ fn remote_use_says_where_the_lane_comes_from() {
         .stdout;
     assert_eq!(
         agent,
-        "remote use lane=clickmax@0 from=fork-b previous=fork-a mirrored=true\n"
+        "remote use lane=clickmax@0 from=fork-b previous=fork-a mirrored=true pending=false\n"
     );
     let json = runtime(OutputMode::Json)
         .reporter()
@@ -2940,7 +2961,7 @@ fn remote_ls_names_the_lane_in_use() {
     let text = render_text(Method::HostList, &hosts);
     for expected in [
         "note: not mirrored because fork-b's clickmax@0 is in use. devlanes remote use fork-a clickmax@0 switches.",
-        "note: not mirrored because shop@0 runs on this machine. Stop it there, then devlanes remote use fork-a shop@0 switches.",
+        "note: not mirrored because shop@0 runs on this machine. Stop it with devlanes stop --lane shop@0, then devlanes remote use fork-a shop@0 switches.",
         "chosen: clickmax@0",
         "note: fork-b's lane is in use instead. devlanes remote use --local clickmax@0 switches back.",
     ] {
@@ -2980,12 +3001,6 @@ fn remote_use_refusals_say_what_to_do() {
             "devlanes remote ls",
         ),
         (
-            "box_not_connected",
-            json!({"host": "fork-b", "message": "…"}),
-            "box fork-b is not connected",
-            "devlanes remote connect fork-b",
-        ),
-        (
             "lane_not_on_box",
             json!({"host": "fork-b", "lane": "acme@9", "message": "…"}),
             "box fork-b has no lane acme@9",
@@ -2993,9 +3008,9 @@ fn remote_use_refusals_say_what_to_do() {
         ),
         (
             "local_lane_running",
-            json!({"host": "fork-b", "lane": "acme@0", "local_lane": "acme@0", "message": "…"}),
-            "acme@0 runs on this machine, so it keeps the hostnames",
-            "devlanes stop --lane acme@0",
+            json!({"host": "fork-b", "lane": "clickmax@0", "local_lane": "clickmax@0", "message": "…"}),
+            "clickmax@0 runs on this machine. Stop it with devlanes stop --lane clickmax@0, then run devlanes remote use fork-b clickmax@0.",
+            "devlanes stop --lane clickmax@0",
         ),
         (
             "local_lane_unknown",

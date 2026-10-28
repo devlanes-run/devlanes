@@ -242,6 +242,10 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
                 cx.warning(&format!("{lane}: {line}"))
             }]
         }
+        // A switch someone asked for is news, not a problem.
+        devlanes_proto::remote::WARNING_EVENT if text(&event.data, "code") == "lane_switched" => {
+            vec![words::remote_warning("lane_switched", &event.data)]
+        }
         devlanes_proto::remote::WARNING_EVENT => vec![cx.warning(&words::remote_warning(
             &text(&event.data, "code"),
             &event.data,

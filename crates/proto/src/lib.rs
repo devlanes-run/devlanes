@@ -250,14 +250,17 @@ pub enum Method {
     /// reconnects and restarts until another one replaces it, the box is
     /// disconnected, or a local lane it clashes with starts.
     ///
-    /// Replies once the mirrors applied it: `{lane, host, previous,
-    /// mirrored}`, where `previous` is the box that served the hostnames
-    /// before (null for this machine) and `mirrored` whether the chosen lane
-    /// serves them now. Errors, each with a `message`: `box_unknown`,
-    /// `box_not_connected`, `lane_not_on_box` (the box has no such lane),
-    /// `local_lane_running` (a running local lane, named by `local_lane`, keeps
-    /// the hostnames) and `local_lane_unknown` (`host: null` for a lane this
-    /// machine does not have).
+    /// Replies once the routes and listeners lead to the chosen lane:
+    /// `{lane, host, previous, mirrored, pending}`, where `previous` is the
+    /// box that served the hostnames before (null for this machine) and
+    /// `mirrored` whether the chosen lane serves them now. A box known here
+    /// but not connected keeps the choice until it connects: the reply then
+    /// has `mirrored: false` and `pending: true`. A switch emits one
+    /// `remote.warning` notice with code `lane_switched`. Errors, each with a
+    /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
+    /// such lane), `local_lane_running` (a running local lane, named by
+    /// `local_lane`, keeps the hostnames) and `local_lane_unknown`
+    /// (`host: null` for a lane this machine does not have).
     #[serde(rename = "remote.use")]
     RemoteUse,
     /// Box side, for `devlanes tunnel`: the registry a connected client mirrors,
@@ -1317,9 +1320,12 @@ pub mod remote {
     pub const STATE_EVENT: &str = "remote.state";
     /// `{host, code, ...}` for mirroring problems such as a skipped lane or a
     /// busy port. `lane_skipped` carries `lane`, `hosts`, `box`, `local_lanes`
-    /// and `cause` (as `host.list`'s `skipped_lanes`). `choice_cleared`
-    /// carries `lane` and `host` (the box whose choice a starting local lane
-    /// deleted).
+    /// and `cause` (as `host.list`'s `skipped_lanes`), and goes out when a
+    /// lane stops being mirrored for another reason than a choice.
+    /// `choice_cleared` carries `lane` and `host` (the box whose choice a
+    /// starting local lane deleted). `lane_switched` is a notice, not a
+    /// problem: `lane`, `to` and `from` (boxes, null for this machine) and
+    /// `message`, after `remote.use` moved a lane.
     pub const WARNING_EVENT: &str = "remote.warning";
     /// `{host}` on a client daemon, at most a few times a second, when what
     /// `host.list` says about the box changed apart from its link state (which

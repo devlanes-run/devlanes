@@ -423,7 +423,7 @@ impl Inner {
                 "local_lane_running",
                 json!({"host": host, "lane": lane, "local_lane": running}),
                 format!(
-                    "{running} runs on this machine. Stop it with devlanes stop {running}, then run devlanes remote use {host} {lane}."
+                    "{running} runs on this machine. Stop it with devlanes stop --lane {running}, then run devlanes remote use {host} {lane}."
                 ),
                 1,
             ));

@@ -2062,7 +2062,10 @@ fn skipped_note(host: &str, skipped: &Value) -> String {
     let switch = format!("devlanes remote use {host} {lane} switches.");
     match skipped.get("can_use").and_then(Value::as_bool) {
         Some(true) => format!("not mirrored because {reason}. {switch}"),
-        Some(false) => format!("not mirrored because {reason}. Stop it there, then {switch}"),
+        Some(false) => format!(
+            "not mirrored because {reason}. Stop it with devlanes stop --lane {}, then {switch}",
+            text(skipped, "winner_lane")
+        ),
         // A daemon from before lane choices.
         None => format!("not mirrored because {reason}"),
     }
@@ -2075,14 +2078,18 @@ pub(super) fn remote_use(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let host = data.get("host").and_then(Value::as_str);
     let previous = data.get("previous").and_then(Value::as_str);
     let mirrored = data.get("mirrored").and_then(Value::as_bool) != Some(false);
+    let pending = data.get("pending").and_then(Value::as_bool) == Some(true);
     if cx.agent() {
         return vec![format!(
-            "remote use lane={lane} from={} previous={} mirrored={mirrored}",
+            "remote use lane={lane} from={} previous={} mirrored={mirrored} pending={pending}",
             host.unwrap_or("local"),
             previous.unwrap_or("local")
         )];
     }
     let from = host.map_or_else(|| "this machine".to_owned(), str::to_owned);
+    if pending {
+        return vec![format!("{lane} will come from {from} once it connects.")];
+    }
     if !mirrored {
         return vec![format!(
             "{lane} is chosen from {from} but not mirrored yet. devlanes remote ls shows why."
