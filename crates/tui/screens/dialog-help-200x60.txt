@@ -15,9 +15,9 @@
 │   ● web-app                                  ││ 2026-10│   s  x  r           start, stop, restart the selection; s runs a task              │                                                        │
 │   ● web-admin                                ││ 2026-10│   s  S              on the lane: its default services; every service               │                                                        │
 │   ● web-docs                                 ││ 2026-10│   r                 on the lane: reload changes, else restart it                   │                                                        │
-│   · web-storybook                            ││ 2026-10│   p                 start the lane with chosen profiles                            │                                                        │
-│   ● web-landing                              ││ 2026-10│   C                 clean the lane (asks first)                                    │                                                        │
-│   ◉ wrk-email                                ││ 2026-10│   o                 open the unit's address in a browser                           │                                                        │
+│   · web-storybook                            ││ 2026-10│   p  C              start the lane with profiles, clean it (asks first)            │                                                        │
+│   ● web-landing                              ││ 2026-10│   o                 open the unit's address in a browser                           │                                                        │
+│   ◉ wrk-email                                ││ 2026-10│   m                 use a grey lane instead of the one in use                      │                                                        │
 │   ◉ wrk-billing                              ││ 2026-10│   /                 filter by name or +tag; enter keeps, esc clears                │                                                        │
 │   ◉ wrk-index                                ││        │                                                                                    │                                                        │
 │   ◉ wrk-thumbs                               ││        │ pane                                                                               │                                                        │

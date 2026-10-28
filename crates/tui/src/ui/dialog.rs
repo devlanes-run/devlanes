@@ -41,9 +41,13 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ),
             ("s  S", "on the lane: its default services; every service"),
             ("r", "on the lane: reload changes, else restart it"),
-            ("p", "start the lane with chosen profiles"),
-            ("C", "clean the lane (asks first)"),
+            // One line for both, so the whole list still fits 60 rows.
+            (
+                "p  C",
+                "start the lane with profiles, clean it (asks first)",
+            ),
             ("o", "open the unit's address in a browser"),
+            ("m", "use a grey lane instead of the one in use"),
             ("/", "filter by name or +tag; enter keeps, esc clears"),
         ],
     ),

@@ -15,9 +15,9 @@
 │   ● web-app    │   s  x  r           start, stop, restart the selection; s runs a task              │                │
 │   ● web-admin  │   s  S              on the lane: its default services; every service               │ob_8124 took=92m│
 │   ● web-docs   │   r                 on the lane: reload changes, else restart it                   │                │
-│   · web-storybo│   p                 start the lane with chosen profiles                            │ob_8125 took=105│
-│   ● web-landing│   C                 clean the lane (asks first)                                    │                │
-│   ◉ wrk-email  │   o                 open the unit's address in a browser                           │ob_8126 took=118│
+│   · web-storybo│   p  C              start the lane with profiles, clean it (asks first)            │ob_8125 took=105│
+│   ● web-landing│   o                 open the unit's address in a browser                           │                │
+│   ◉ wrk-email  │   m                 use a grey lane instead of the one in use                      │ob_8126 took=118│
 │   ◉ wrk-billing│   /                 filter by name or +tag; enter keeps, esc clears                │                │
 │   ◉ wrk-index  │                                                                                    │ob_8127 took=131│
 │   ◉ wrk-thumbs │ pane                                                                               │                │

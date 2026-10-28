@@ -1012,7 +1012,8 @@ async fn help_lists_clean_and_the_daemon_page() -> TestResult {
     app.update(key(KeyCode::Char('?')));
     let text = screen(&render(&app)?);
     for expected in [
-        "clean the lane (asks first)",
+        "clean it (asks first)",
+        "use a grey lane instead of the one in use",
         "copy mode: v select, y copy, Y whole entries as in the file",
         "restart or stop the daemon; s starts it again",
         "clean the lanes whose worktree is gone",
