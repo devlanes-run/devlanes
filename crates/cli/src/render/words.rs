@@ -194,8 +194,16 @@ fn int(data: &Value, key: &str) -> Option<i64> {
 }
 
 /// `queued: 6 of 40 starting, CPU 93%` from the start gate's `queued` reason data
-/// `{position, queued, in_flight, window, hold, cpu_percent?, memory_pressure?}`.
+/// `{position, queued, in_flight, window, hold, cpu_percent?, memory_pressure?}`,
+/// or `queued: waiting for migrate-db` while the unit's start waits for its lane
+/// (`{waiting_for}`: `containers`, `setup`, a task name, or `lane`).
 fn queued(data: &Value) -> String {
+    if let Some(step) = data.get("waiting_for").and_then(Value::as_str) {
+        return match step {
+            "lane" => "queued: waiting for the lane".into(),
+            step => format!("queued: waiting for {step}"),
+        };
+    }
     let mut text = match (int(data, "position"), int(data, "queued")) {
         (Some(position), Some(total)) => format!("queued: {position} of {total} starting"),
         (Some(position), None) => format!("queued: {position} in line to start"),

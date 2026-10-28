@@ -362,9 +362,13 @@ impl InfraEvent {
 pub trait InfraProvider: Send + Sync {
     /// Host ports the lane's infra needs from the lane or project block.
     async fn port_needs(&self, spec: &InfraSpec) -> Result<Vec<InfraPortNeed>, InfraError>;
-    /// Starts shared and per-lane infra and waits until healthy.
+    /// Starts shared and per-lane infra and waits until healthy. Containers that
+    /// already run healthy with their current config are left alone, so a call
+    /// with everything up only reads state.
     async fn up(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError>;
-    /// The `infra` namespace and setup env without starting anything.
+    /// The `infra` namespace and setup env without starting anything. Still reads
+    /// the containers' state from Docker; a lane that stored the result of
+    /// [`InfraProvider::up`] for its run needs no call.
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError>;
     /// Health and endpoints of a project's infra.
     async fn status(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
@@ -374,7 +378,8 @@ pub trait InfraProvider: Send + Sync {
     async fn remove_lane(&self, project: &str, lane: u32) -> Result<Value, InfraError>;
     /// `StartedAt` of the containers backing `containers` (compose service or plain
     /// container names) as seen from this lane, by name; one that does not run is
-    /// absent. One call answers every setup entry of a start.
+    /// absent. One call answers every setup entry of a start, from the engine alone
+    /// once the project's compose files were resolved.
     async fn containers_started_at(
         &self,
         spec: &InfraSpec,
@@ -400,8 +405,9 @@ pub trait InfraProvider: Send + Sync {
     fn events(&self) -> Option<broadcast::Receiver<InfraEvent>> {
         None
     }
-    /// Each container `up` brings up for `spec`, as it is now. Polled while `up`
-    /// runs, alongside it, for start progress; empty when the provider cannot tell.
+    /// Each container `up` brings up for `spec`, as it is now. Polled about once a
+    /// second while `up` runs, alongside it, for start progress, so it should only
+    /// list containers; empty when the provider cannot tell.
     async fn progress(&self, _spec: &InfraSpec) -> Vec<devlanes_proto::PhaseContainer> {
         Vec::new()
     }

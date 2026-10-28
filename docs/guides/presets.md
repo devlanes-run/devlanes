@@ -6,7 +6,7 @@ A preset makes a framework's dev server run in a lane: it adds the flags that pu
 | --- | --- | --- | --- |
 | `vite` | `--port <port> --strictPort --host 127.0.0.1` | | `vite.args` |
 | `next` | `--port <port> --hostname 127.0.0.1` | | `next.args` |
-| `wrangler` | `--port <port> --inspector-port <ports.inspector>`, `--var K:V` per var | `inspector` port, `WRANGLER_REGISTRY_PATH` in the lane data folder, flag checks | `wrangler.vars`, `wrangler.args`, `wrangler.isolate_registry` |
+| `wrangler` | `--port <port> --inspector-port <ports.inspector>`, `--var K:V` per var | `inspector` port, registry variables (`WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH`, `MINIFLARE_REGISTRY_PATH`) in the lane data folder, flag checks | `wrangler.vars`, `wrangler.args`, `wrangler.isolate_registry` |
 | `tauri` | `--config <overlay.json>` | overlay file in the lane data folder, `DEVLANES_TAURI_CONFIG`, identifier checks | `tauri.identifier`, `tauri.dev_url`, `tauri.product_name`, `tauri.before_dev_command` |
 
 A preset needs `run_script`. The flags go after the script name, placed per package manager (see [run and run_script](run-scripts.md#packagejson)), so `pnpm run dev --port 20012` and `npm run dev -- --port 20012` both reach the framework. The script's last command must be the framework binary: `"dev": "vite"` works, `"dev": "vite && echo done"` does not.
@@ -93,7 +93,7 @@ lanes:
 
 - `inspector` is allocated automatically for every wrangler service; `--inspector-port` gets it. Route a hostname to it with `hosts: [{ host: "inspect.${{ lane.domain }}", port: inspector }]`.
 - `vars` become `--var KEY:VALUE`, which override the `vars` in `wrangler.toml`. Numbers and booleans are stringified.
-- Each lane gets its own dev registry, `wrangler-registry` in the [lane data folder](ports-and-env.md#lane-data-folder) (`WRANGLER_REGISTRY_PATH=${{ lane.data_path }}/wrangler-registry`), so service bindings between workers of one lane resolve to that lane's workers, also when two lanes run from one folder. `isolate_registry: false` turns that off. The same variable is set for every unit of a project that contains a `wrangler.toml|json|jsonc`, so a plain `node` worker in the same repo talks to the right registry too. Do not set it yourself.
+- Each lane gets its own dev registry, `wrangler-registry` in the [lane data folder](ports-and-env.md#lane-data-folder), so service bindings between workers of one lane resolve to that lane's workers, also when two lanes run from one folder. devlanes points `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` at `${{ lane.data_path }}/wrangler-registry`. `wrangler dev` reads `WRANGLER_REGISTRY_PATH`, but Miniflare 5 prefers `CLOUDFLARE_DEV_REGISTRY_PATH` when it is set, and the Cloudflare Vite plugin reads `CLOUDFLARE_DEV_REGISTRY_PATH` (`MINIFLARE_REGISTRY_PATH` in releases up to 1.49.0). `isolate_registry: false` turns that off. The variables are set for every unit of every lane and replace values exported in your shell, so workers started by `wrangler dev`, the Vite plugin, a Next plugin, a script or a task such as `wrangler d1 migrations apply` all use the lane's registry. Other programs ignore them. Do not set them yourself.
 - A `dev` script that already passes `--port` or `--inspector-port` is refused with the fix in the message, and so are those flags in `args` (by `devlanes config check`). Move the default into `wrangler.toml` (`dev.port`, `dev.inspector_port`) and let the flag override it.
 - workerd does not resolve `*.localhost` itself. `lanes.hosts_file: always` writes the lane's exact hostnames to `/etc/hosts` (after `devlanes certs trust --hosts`), so worker-to-worker `fetch` by hostname works. Wildcards cannot go in `/etc/hosts`; use service bindings or the registry for those.
 
@@ -113,7 +113,7 @@ Everything the preset does:
 
 - Adds `--port <self.port> --inspector-port <self.ports.inspector>`, then `--var KEY:VALUE` per entry of `vars` (in key order), then `wrangler.args`.
 - Allocates the `inspector` port.
-- Sets `WRANGLER_REGISTRY_PATH`; with `isolate_registry: false` it also removes the value the Cloudflare platform integration set.
+- Sets `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH`; with `isolate_registry: false` it removes the values the Cloudflare platform integration set instead.
 - Refuses a var name that is empty or contains `:`, and `--port`, `--inspector-port` or `--inspectorPort` in the script or in `args`.
 
 By hand, without the checks:
@@ -125,7 +125,7 @@ By hand, without the checks:
       --var PUBLIC_BASE_URL:${{ self.public_url }}
 ```
 
-Referencing `self.ports.inspector` allocates the port, and `WRANGLER_REGISTRY_PATH` is already set for every unit of a project with a wrangler config.
+Referencing `self.ports.inspector` allocates the port, and the registry variables are already set for every unit.
 
 ## Tauri
 

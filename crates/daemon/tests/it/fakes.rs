@@ -556,6 +556,9 @@ type LiveLine = Option<(usize, String)>;
 #[derive(Default, Clone)]
 pub struct FakeInfra {
     pub calls: Journal,
+    /// Read-only questions (`port_needs`, `namespace`, `containers_started_at`),
+    /// which the real provider answers with Docker calls.
+    pub queries: Journal,
     /// `StartedAt` reported for every container.
     pub started_at: Arc<Mutex<Option<String>>>,
     /// When set, `up` fails with this error.
@@ -614,6 +617,13 @@ impl FakeInfra {
         }
     }
 
+    /// Records a read-only question.
+    fn query(&self, name: &str) {
+        if let Ok(mut queries) = self.queries.0.lock() {
+            queries.push(name.to_owned());
+        }
+    }
+
     /// Namespace from the allocated port.
     fn namespace(spec: &InfraSpec) -> Value {
         let port = spec.ports.get("infra.db/5432").copied();
@@ -645,6 +655,7 @@ impl FakeInfra {
 #[async_trait]
 impl InfraProvider for FakeInfra {
     async fn port_needs(&self, _: &InfraSpec) -> Result<Vec<InfraPortNeed>, InfraError> {
+        self.query("port_needs");
         Ok(vec![InfraPortNeed {
             scope: PortScope::Lane,
             unit: "infra.db".into(),
@@ -669,6 +680,7 @@ impl InfraProvider for FakeInfra {
         })
     }
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
+        self.query("namespace");
         Ok(InfraUp {
             namespace: Self::namespace(spec),
             // As Compose's provider: the same env `up` gives, nothing started.
@@ -697,6 +709,7 @@ impl InfraProvider for FakeInfra {
         _: &InfraSpec,
         containers: &[String],
     ) -> Result<BTreeMap<String, String>, InfraError> {
+        self.query("containers_started_at");
         let started = self.started_at.lock().ok().and_then(|s| s.clone());
         Ok(started
             .map(|at| {

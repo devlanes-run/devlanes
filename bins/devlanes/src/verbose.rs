@@ -27,16 +27,28 @@ fn start() -> Instant {
     *START.get_or_init(Instant::now)
 }
 
-/// `(label, milliseconds)` in the order they were measured.
-fn timings() -> &'static Mutex<Vec<(String, f64)>> {
-    static TIMINGS: OnceLock<Mutex<Vec<(String, f64)>>> = OnceLock::new();
+/// `(label, total milliseconds, count)` in the order labels were first measured.
+fn timings() -> &'static Mutex<Vec<(String, f64, u32)>> {
+    static TIMINGS: OnceLock<Mutex<Vec<(String, f64, u32)>>> = OnceLock::new();
     TIMINGS.get_or_init(Mutex::default)
 }
 
-/// Adds one row to the timing summary.
+/// Adds one measurement to the timing summary. Repeats of a label add up, so
+/// a span that runs per unit (`contributor cloudflare`) reads as one total.
 fn record(label: String, ms: f64) {
     if let Ok(mut rows) = timings().lock() {
-        rows.push((label, ms));
+        add(&mut rows, label, ms);
+    }
+}
+
+/// Folds `ms` into the row for `label`, or appends one.
+fn add(rows: &mut Vec<(String, f64, u32)>, label: String, ms: f64) {
+    match rows.iter_mut().find(|(known, _, _)| *known == label) {
+        Some((_, total, count)) => {
+            *total += ms;
+            *count += 1;
+        }
+        None => rows.push((label, ms, 1)),
     }
 }
 
@@ -175,9 +187,18 @@ pub fn finish(level: u8, code: u8) {
         .map(|rows| rows.clone())
         .unwrap_or_default();
     let mut text = String::from("timings:\n");
-    let width = rows.iter().map(|(label, _)| label.len()).max().unwrap_or(0);
-    for (label, ms) in &rows {
-        let _ = writeln!(text, "  {label:<width$}  {}", duration(*ms));
+    let width = rows
+        .iter()
+        .map(|(label, _, _)| label.len())
+        .max()
+        .unwrap_or(0);
+    for (label, ms, count) in &rows {
+        let times = if *count > 1 {
+            format!("  ({count}x)")
+        } else {
+            String::new()
+        };
+        let _ = writeln!(text, "  {label:<width$}  {}{times}", duration(*ms));
     }
     let _ = writeln!(
         text,
@@ -264,5 +285,21 @@ mod tests {
         assert_eq!(span_label("readiness", &json!({})), "readiness");
         assert_eq!(duration(12.4), "12ms");
         assert_eq!(duration(1834.0), "1.83s");
+    }
+
+    #[test]
+    /// Repeated labels add up into one row and keep their first position.
+    fn repeated_labels_add_up() {
+        let mut rows = Vec::new();
+        add(&mut rows, "plan api".into(), 2.0);
+        add(&mut rows, "contributor cloudflare".into(), 5.0);
+        add(&mut rows, "contributor cloudflare".into(), 7.0);
+        assert_eq!(
+            rows,
+            [
+                ("plan api".to_owned(), 2.0, 1),
+                ("contributor cloudflare".to_owned(), 12.0, 2)
+            ]
+        );
     }
 }

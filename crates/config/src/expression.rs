@@ -1,9 +1,13 @@
 use crate::ConfigError;
 use indexmap::IndexMap;
-use minijinja::{Environment, UndefinedBehavior, syntax::SyntaxConfig};
+use minijinja::{Environment, Expression, UndefinedBehavior, syntax::SyntaxConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeSet;
+use std::{
+    borrow::Cow,
+    collections::{BTreeSet, HashMap},
+    sync::{Arc, LazyLock, PoisonError, RwLock},
+};
 
 /// Runtime-owned values. No process environment is read implicitly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +39,102 @@ impl Default for ExpressionContext {
             replica: serde_json::json!({}),
         }
     }
+}
+
+impl ExpressionContext {
+    /// Converts the context once, with underscore aliases for dashed keys, so a unit's
+    /// expressions can all be evaluated against it without converting it again.
+    pub fn prepare(&self) -> PreparedContext {
+        let namespaces = [
+            ("project", &self.project),
+            ("lane", &self.lane),
+            ("lanes", &self.lanes),
+            ("self", &self.service),
+            ("services", &self.services),
+            ("infra", &self.infra),
+            ("env", &self.env),
+            ("projects", &self.projects),
+            ("replica", &self.replica),
+        ];
+        let mut json = Value::Object(
+            namespaces
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value.clone()))
+                .collect(),
+        );
+        if has_dashed_keys(&json) {
+            aliases(&mut json);
+        }
+        PreparedContext {
+            value: template_value(&json),
+            json,
+        }
+    }
+}
+
+/// An [`ExpressionContext`] in the form expressions read, built by
+/// [`ExpressionContext::prepare`].
+#[derive(Debug, Clone)]
+pub struct PreparedContext {
+    /// The namespaces with dashed-key aliases; `projects.*` placeholders are added to a copy.
+    json: Value,
+    /// `json` as MiniJinja values.
+    value: minijinja::Value,
+}
+
+impl PreparedContext {
+    /// The value to evaluate an expression with. `projects` lists the expression's
+    /// `projects.*` references: each gets empty parent objects, so a project that is not
+    /// running reads as undefined at the leaf and `default(...)` applies.
+    fn value_for(&self, projects: &[String]) -> minijinja::Value {
+        if projects.is_empty() {
+            return self.value.clone();
+        }
+        let mut value = self.json.clone();
+        for reference in projects {
+            let components: Vec<_> = reference.split('.').collect();
+            let mut node = &mut value;
+            for component in components.iter().take(components.len().saturating_sub(1)) {
+                if let Some(map) = node.as_object_mut() {
+                    node = map
+                        .entry(*component)
+                        .or_insert_with(|| serde_json::json!({}));
+                } else {
+                    break;
+                }
+            }
+        }
+        template_value(&value)
+    }
+}
+
+/// Values expressions can be evaluated against: an [`ExpressionContext`], converted on
+/// each call, or a [`PreparedContext`], reused as is.
+pub trait EvaluationContext {
+    /// The context in the form expressions read.
+    fn prepared(&self) -> Cow<'_, PreparedContext>;
+}
+
+impl EvaluationContext for ExpressionContext {
+    /// Converts the context; callers evaluating several values should prepare it once.
+    fn prepared(&self) -> Cow<'_, PreparedContext> {
+        Cow::Owned(self.prepare())
+    }
+}
+
+impl EvaluationContext for PreparedContext {
+    /// The context itself.
+    fn prepared(&self) -> Cow<'_, PreparedContext> {
+        Cow::Borrowed(self)
+    }
+}
+
+/// `json` as MiniJinja values; on Windows `env` also answers names in any case.
+fn template_value(json: &Value) -> minijinja::Value {
+    let value = minijinja::Value::from(minijinja::value::Serde(json));
+    #[cfg(windows)]
+    let value = env_lookups::fold(value);
+    value
 }
 
 /// Construct a strict expression-only template environment.
@@ -147,72 +247,167 @@ fn aliases(value: &mut Value) {
 /// Evaluate a scalar, preserving a single expression's native JSON type.
 /// Mixed text always produces a string. Missing values fail unless filtered with `default`.
 /// Write `${{ '${{' }}` for a literal `${{`.
-pub fn evaluate(text: &str, context: &ExpressionContext) -> Result<Value, ConfigError> {
-    let chunks = parts(text)?;
-    if chunks.is_empty() {
+///
+/// Evaluating many values against one [`ExpressionContext`] converts it each time; pass
+/// a [`PreparedContext`] from [`ExpressionContext::prepare`] instead.
+pub fn evaluate<C: EvaluationContext>(text: &str, context: &C) -> Result<Value, ConfigError> {
+    if !text.contains("${{") {
         return Ok(Value::String(text.into()));
     }
-    let projects: Vec<_> = references(text)?
-        .into_iter()
-        .filter(|r| r.starts_with("projects."))
-        .collect();
-    let namespaces = [
-        &context.project,
-        &context.lane,
-        &context.lanes,
-        &context.service,
-        &context.services,
-        &context.infra,
-        &context.env,
-        &context.projects,
-        &context.replica,
-    ];
-    // Copy the context only when aliases or project placeholders must be added to it.
-    let owned = if projects.is_empty() && !namespaces.into_iter().any(has_dashed_keys) {
-        None
-    } else {
-        let mut value =
-            serde_json::to_value(context).map_err(|e| ConfigError::plain(e.to_string()))?;
-        aliases(&mut value);
-        for reference in projects {
-            let components: Vec<_> = reference.split('.').collect();
-            let mut node = &mut value;
-            for component in components.iter().take(components.len().saturating_sub(1)) {
-                if let Some(map) = node.as_object_mut() {
-                    node = map
-                        .entry(*component)
-                        .or_insert_with(|| serde_json::json!({}));
-                } else {
-                    break;
-                }
+    let compiled = compiled(text)?;
+    let context = context.prepared().value_for(&compiled.projects);
+    match &compiled.form {
+        Form::Expression(expression) => {
+            let value = expression
+                .eval(&context)
+                .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e))))?;
+            if value.is_undefined() {
+                return Err(ConfigError::plain(
+                    "expression resolved to an undefined value",
+                ));
+            }
+            serde_json::to_value(value).map_err(|e| ConfigError::plain(e.to_string()))
+        }
+        Form::Template(env) => env
+            .get_template(TEMPLATE_NAME)
+            .and_then(|template| template.render(context))
+            .map(Value::String)
+            .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e)))),
+        Form::Broken(message) => Err(ConfigError::plain(message.clone())),
+    }
+}
+
+/// Name of the one template in a [`Form::Template`] environment; the same name
+/// `render_str` uses, so auto-escaping stays off.
+const TEMPLATE_NAME: &str = "<string>";
+
+/// Texts kept before the cache starts over. A daemon that reloads configs for weeks would
+/// otherwise keep every text it ever evaluated.
+const CACHE_LIMIT: usize = 8192;
+
+/// Compiled scalars by their text, shared by every config and lane in the process.
+static CACHE: LazyLock<RwLock<HashMap<String, Arc<Compiled>>>> = LazyLock::new(Default::default);
+
+/// The environment cached expressions borrow; it lives as long as they do.
+static EXPRESSIONS: LazyLock<Result<Environment<'static>, String>> =
+    LazyLock::new(|| environment().map_err(|e| e.message));
+
+/// How many times each text was compiled, so tests can check the cache.
+#[cfg(test)]
+static COMPILES: LazyLock<std::sync::Mutex<HashMap<String, usize>>> =
+    LazyLock::new(Default::default);
+
+/// One scalar text containing `${{`, compiled once.
+struct Compiled {
+    /// What [`references`] returns for the text.
+    references: BTreeSet<String>,
+    /// The `projects.*` references, which need placeholders in the context.
+    projects: Vec<String>,
+    form: Form,
+}
+
+/// How a [`Compiled`] text is evaluated.
+enum Form {
+    /// The whole text is one expression, whose value keeps its JSON type.
+    Expression(Expression<'static, 'static>),
+    /// Text around expressions, rendered to a string. Each holds its own environment
+    /// because a MiniJinja template borrows the environment it is stored in.
+    Template(Environment<'static>),
+    /// Text whose parts compile but whose template does not; evaluation reports this
+    /// message, while [`references`] still answers.
+    Broken(String),
+}
+
+/// The compiled form of `text`, from the cache or compiled now. Compile errors are not
+/// cached; such a text fails every time it is evaluated anyway.
+fn compiled(text: &str) -> Result<Arc<Compiled>, ConfigError> {
+    if let Some(found) = CACHE
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(text)
+    {
+        return Ok(found.clone());
+    }
+    let mut cache = CACHE.write().unwrap_or_else(PoisonError::into_inner);
+    // Another thread may have compiled it while this one waited for the write lock.
+    if let Some(found) = cache.get(text) {
+        return Ok(found.clone());
+    }
+    let compiled = Arc::new(compile(text)?);
+    if cache.len() >= CACHE_LIMIT {
+        cache.clear();
+    }
+    cache.insert(text.to_owned(), compiled.clone());
+    Ok(compiled)
+}
+
+/// Compiles `text`: each expression for its references, then the evaluation form.
+/// Errors keep the order and wording evaluation had before the cache: an unclosed
+/// `${{` first, then the first invalid expression.
+fn compile(text: &str) -> Result<Compiled, ConfigError> {
+    #[cfg(test)]
+    {
+        *COMPILES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(text.to_owned())
+            .or_default() += 1;
+    }
+    let env = EXPRESSIONS
+        .as_ref()
+        .map_err(|message| ConfigError::plain(message.clone()))?;
+    let chunks = parts(text)?;
+    let whole = chunks.len() == 1 && chunks[0].0 == 0 && chunks[0].1 == text.len();
+    let invalid =
+        |e: minijinja::Error| ConfigError::plain(format!("invalid expression: {}", describe(&e)));
+    let mut references = BTreeSet::new();
+    let mut single = None;
+    for (_, _, body) in chunks {
+        let expression = env
+            .compile_expression_owned(body.to_owned())
+            .map_err(invalid)?;
+        references.extend(expression.undeclared_variables(true));
+        let (normalized, original_keys) = normalize_static_subscripts(body);
+        if normalized != body {
+            let expression = env.compile_expression_owned(normalized).map_err(invalid)?;
+            for reference in expression.undeclared_variables(true) {
+                let original = reference
+                    .split('.')
+                    .map(|component| {
+                        original_keys
+                            .iter()
+                            .find(|(alias, _)| alias == component)
+                            .map_or(component, |(_, key)| key.as_str())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(".");
+                references.insert(reference);
+                references.insert(original);
             }
         }
-        Some(value)
-    };
-    let context = match &owned {
-        Some(value) => minijinja::Value::from(minijinja::value::Serde(value)),
-        None => minijinja::Value::from(minijinja::value::Serde(context)),
-    };
-    #[cfg(windows)]
-    let context = env_lookups::fold(context);
-    let env = environment()?;
-    if chunks.len() == 1 && chunks[0].0 == 0 && chunks[0].1 == text.len() {
-        let expression = env
-            .compile_expression(chunks[0].2)
-            .map_err(|e| ConfigError::plain(format!("invalid expression: {}", describe(&e))))?;
-        let value = expression
-            .eval(&context)
-            .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e))))?;
-        if value.is_undefined() {
-            return Err(ConfigError::plain(
-                "expression resolved to an undefined value",
-            ));
+        if whole {
+            single = Some(expression);
         }
-        return serde_json::to_value(value).map_err(|e| ConfigError::plain(e.to_string()));
     }
-    env.render_str(text, context)
-        .map(Value::String)
-        .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e))))
+    let form = match single {
+        Some(expression) => Form::Expression(expression),
+        None => {
+            let mut env = environment()?;
+            match env.add_template_owned(TEMPLATE_NAME, text.to_owned()) {
+                Ok(()) => Form::Template(env),
+                Err(e) => Form::Broken(format!("expression failed: {}", describe(&e))),
+            }
+        }
+    };
+    Ok(Compiled {
+        projects: references
+            .iter()
+            .filter(|r| r.starts_with("projects."))
+            .cloned()
+            .collect(),
+        references,
+        form,
+    })
 }
 
 /// `${{ env.X }}` on Windows, where variable names ignore case: the `env`
@@ -314,47 +509,23 @@ pub(crate) fn lane_port_offsets(text: &str) -> Result<Vec<u64>, ConfigError> {
 }
 
 /// Return static dotted references using MiniJinja's own expression analysis.
+/// The text is compiled once and shared with [`evaluate`].
 pub fn references(text: &str) -> Result<BTreeSet<String>, ConfigError> {
-    let env = environment()?;
-    let mut references = BTreeSet::new();
-    for (_, _, body) in parts(text)? {
-        let expression = env
-            .compile_expression(body)
-            .map_err(|e| ConfigError::plain(format!("invalid expression: {}", describe(&e))))?;
-        references.extend(expression.undeclared_variables(true));
-        let (normalized, original_keys) = normalize_static_subscripts(body);
-        if normalized != body {
-            let expression = env
-                .compile_expression(&normalized)
-                .map_err(|e| ConfigError::plain(format!("invalid expression: {}", describe(&e))))?;
-            for reference in expression.undeclared_variables(true) {
-                let original = reference
-                    .split('.')
-                    .map(|component| {
-                        original_keys
-                            .iter()
-                            .find(|(alias, _)| alias == component)
-                            .map_or(component, |(_, key)| key.as_str())
-                    })
-                    .collect::<Vec<_>>()
-                    .join(".");
-                references.insert(reference);
-                references.insert(original);
-            }
-        }
+    if !text.contains("${{") {
+        return Ok(BTreeSet::new());
     }
-    Ok(references)
+    Ok(compiled(text)?.references.clone())
 }
 
 /// Evaluate every templated scalar in a typed service, task, host, or integration value.
 /// Call separately per service/replica after allocating ports and assembling its context.
-pub fn evaluate_typed<T: Serialize + serde::de::DeserializeOwned>(
+pub fn evaluate_typed<T: Serialize + serde::de::DeserializeOwned, C: EvaluationContext>(
     value: &T,
-    context: &ExpressionContext,
+    context: &C,
 ) -> Result<T, ConfigError> {
     let mut value = serde_json::to_value(value)
         .map_err(|_| ConfigError::plain("cannot serialize typed configuration"))?;
-    evaluate_tree(&mut value, context, "")?;
+    evaluate_tree(&mut value, &context.prepared(), "")?;
     serde_path_to_error::deserialize(value).map_err(|error| {
         ConfigError::plain(format!(
             "{}: expression result has the wrong type: {}",
@@ -404,7 +575,7 @@ pub(crate) fn validate_constants<T: Serialize + serde::de::DeserializeOwned>(
 /// Traverse evaluated data without including resolved secrets in error messages.
 fn evaluate_tree(
     value: &mut Value,
-    context: &ExpressionContext,
+    context: &PreparedContext,
     path: &str,
 ) -> Result<(), ConfigError> {
     match value {
@@ -428,10 +599,12 @@ fn evaluate_tree(
 }
 
 /// Evaluate each override against the caller's outer environment, never sibling overrides.
-pub fn evaluate_env(
+pub fn evaluate_env<C: EvaluationContext>(
     values: &crate::Env,
-    context: &ExpressionContext,
+    context: &C,
 ) -> Result<indexmap::IndexMap<String, crate::Scalar>, ConfigError> {
+    let context = context.prepared();
+    let context = context.as_ref();
     values
         .iter()
         .map(|(name, value)| value.evaluate(context).map(|value| (name.clone(), value)))
@@ -629,6 +802,55 @@ mod tests {
             env: serde_json::json!({"PATH": "C:/bin", "A-B": "dashed"}),
             lane: serde_json::json!({"index": 2}),
             ..ExpressionContext::default()
+        }
+    }
+
+    #[test]
+    /// Evaluating and analysing one text many times, against raw and prepared
+    /// contexts, compiles it once.
+    fn a_text_compiles_once() {
+        let text = "${{ lane.index + 40 }}";
+        let mixed = "port-${{ lane.index }}-${{ env['A-B'] }}";
+        let raw = context();
+        let prepared = raw.prepare();
+        for _ in 0..50 {
+            assert_eq!(evaluate(text, &raw).expect("raw"), Value::from(42));
+            assert_eq!(
+                evaluate(text, &prepared).expect("prepared"),
+                Value::from(42)
+            );
+            assert_eq!(
+                evaluate(mixed, &prepared).expect("mixed"),
+                Value::String("port-2-dashed".into())
+            );
+            assert!(references(text).expect("references").contains("lane.index"));
+            assert!(references(mixed).expect("references").contains("env.A-B"));
+        }
+        let compiles = COMPILES.lock().expect("compiles");
+        assert_eq!(compiles.get(text), Some(&1));
+        assert_eq!(compiles.get(mixed), Some(&1));
+    }
+
+    #[test]
+    /// A prepared context evaluates like the context it came from, dashed-key
+    /// aliases and `projects` placeholders included.
+    fn prepared_context_matches_raw() {
+        let raw = ExpressionContext {
+            services: serde_json::json!({"crm-api": {"port": 7}}),
+            projects: serde_json::json!({}),
+            ..context()
+        };
+        let prepared = raw.prepare();
+        for text in [
+            "${{ services.crm_api.port }}",
+            "${{ services['crm-api'].port }}",
+            "x=${{ env.A_B }}",
+            "${{ projects.other.services.api.url | default('none') }}",
+            "${{ env.MISSING }}",
+        ] {
+            let raw = evaluate(text, &raw).map_err(|e| e.to_string());
+            let prepared = evaluate(text, &prepared).map_err(|e| e.to_string());
+            assert_eq!(raw, prepared, "{text}");
         }
     }
 

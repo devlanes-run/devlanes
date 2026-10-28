@@ -517,19 +517,37 @@ impl LanePhase for InfraPhase {
     }
 
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
-        let empty_spec = match engine.infra_spec(&cx.project, &cx.lane, &[]).await {
+        use tracing::Instrument as _;
+        // Adding units to a lane that is up needs nothing from Docker here: the
+        // bring-up stored the containers' namespace, and the setup phase checks
+        // its entries against the containers on its own.
+        if !cx.whole_lane && !cx.setup_only && cx.lane.st().infra_ns.is_some() {
+            return PhaseResult::Skipped(reason("lane_running", json!({})));
+        }
+        let empty_spec = match engine
+            .infra_spec(&cx.project, &cx.lane, &[])
+            .instrument(tracing::debug_span!("infra spec"))
+            .await
+        {
             Ok(spec) => spec,
             Err(error) => return PhaseResult::Error(error),
         };
         if empty_spec.is_empty() {
             return PhaseResult::Skipped(reason("no_infra", json!({})));
         }
-        let needs = match engine.integ.infra.port_needs(&empty_spec).await {
+        let needs = match engine
+            .integ
+            .infra
+            .port_needs(&empty_spec)
+            .instrument(tracing::debug_span!("infra port needs"))
+            .await
+        {
             Ok(needs) => needs,
             Err(error) => return PhaseResult::Error(infra_error(error)),
         };
         if let Err(error) = engine
             .allocate_lane_held(&cx.project, &cx.lane, &needs)
+            .instrument(tracing::debug_span!("allocate"))
             .await
         {
             return PhaseResult::Error(error);
@@ -537,6 +555,7 @@ impl LanePhase for InfraPhase {
         cx.infra_needs = needs;
         let spec = match engine
             .infra_spec(&cx.project, &cx.lane, &cx.infra_needs)
+            .instrument(tracing::debug_span!("infra spec"))
             .await
         {
             Ok(spec) => spec,
@@ -555,16 +574,28 @@ impl LanePhase for InfraPhase {
         // The containers' state last reported on `progress` events.
         let mut shown = Vec::new();
         let result = match &skip {
-            Some(_) => engine.integ.infra.namespace(&spec).await,
+            Some(_) => {
+                engine
+                    .integ
+                    .infra
+                    .namespace(&spec)
+                    .instrument(tracing::debug_span!("infra namespace"))
+                    .await
+            }
             // A hung `up` must not keep a stop waiting for the lane.
             None => tokio::select! {
-                up = engine.with_container_progress(cx, &spec, &mut shown, engine.integ.infra.up(&spec)) => up,
+                up = engine.with_container_progress(cx, &spec, &mut shown, engine.integ.infra.up(&spec)).instrument(tracing::debug_span!("infra up")) => up,
                 () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
             },
         };
         match result {
             Ok(up) => {
                 let mut st = cx.lane.st();
+                // The views route to the containers; resolution refreshes them
+                // when the namespace it plans with changed.
+                if st.infra_ns.as_ref() != Some(&up.namespace) {
+                    st.refresh_pending = true;
+                }
                 st.infra_ns = Some(up.namespace);
                 st.infra_containers = up.containers;
                 st.setup_env = up.setup_env;
@@ -578,7 +609,7 @@ impl LanePhase for InfraPhase {
             // Setup and services rely on the containers, so their `ready` checks
             // finish the phase; a stop still interrupts the wait.
             tokio::select! {
-                result = engine.with_container_progress(cx, &spec, &mut shown, engine.containers_ready(&cx.lane, &spec)) => {
+                result = engine.with_container_progress(cx, &spec, &mut shown, engine.containers_ready(&cx.lane, &spec)).instrument(tracing::debug_span!("containers ready")) => {
                     if let Err(error) = result {
                         return PhaseResult::Error(error);
                     }
@@ -604,7 +635,12 @@ impl LanePhase for ResolvePhase {
     }
 
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
-        engine.refresh_views_held(&cx.project, &cx.lane).await;
+        // A bring-up's infra phase may have changed the namespace the views
+        // route to; a start that adds units refreshes only for a reload that
+        // waited for the lane.
+        if cx.whole_lane || cx.lane.st().refresh_pending {
+            engine.refresh_views_held(&cx.project, &cx.lane).await;
+        }
         // A start that adds units to a running lane runs no tasks, so it plans only
         // its services and the setup entries; planning every service can cost a
         // contributor call each.
@@ -691,6 +727,10 @@ impl LanePhase for SetupPhase {
                 1,
             ));
         };
+        // Starts that add units run this phase side by side; one of them checks
+        // and runs the entries while the others wait, then finds them done.
+        let lane = cx.lane.clone();
+        let _setup = lane.setup.lock().await;
         let records = match engine.store.setup_records(lane_id).await {
             Ok(records) => records,
             Err(error) => return PhaseResult::Error(store_error(error)),
@@ -700,9 +740,11 @@ impl LanePhase for SetupPhase {
             .values()
             .filter_map(|command| command.container.clone())
             .collect();
-        let started = engine
-            .containers_started_at(&cx.project, &cx.lane, &cx.infra_needs, containers)
-            .await;
+        let started = tracing::Instrument::instrument(
+            engine.containers_started_at(&cx.project, &cx.lane, &cx.infra_needs, containers),
+            tracing::debug_span!("container start times"),
+        )
+        .await;
         let mut pending: Vec<(String, Option<String>)> = Vec::new();
         for (name, command) in &resolved.setup {
             let started_at = command
@@ -922,6 +964,9 @@ impl LanePhase for TasksPhase {
         let count = chosen.len();
         for (index, (name, hook)) in chosen.into_iter().enumerate() {
             engine.phase_step(cx, self.name(), &name, index + 1, count);
+            if !self.after {
+                engine.note_step(cx, Some(&name));
+            }
             // A stop naming the task or one of its steps interrupts the start.
             let _running = cx.ctl.running_tasks(task_units(&resolved, &name));
             // Checked after registering: a stop either saw it running (and
@@ -1080,6 +1125,41 @@ impl LanePhase for ServicesPhase {
                 to_spawn.push(service);
             }
         }
+        // A unit another start of the lane is about to spawn stays with that
+        // start; this one waits for it as for a running unit. Checked and
+        // claimed under the lane lock, so two starts never both spawn it.
+        let joined: Vec<(String, Arc<StartCtl>)> = {
+            let st = cx.lane.st();
+            let mut joined = Vec::new();
+            let mut alive = Vec::new();
+            to_spawn.retain(|service| {
+                // Another start spawned it since the check above.
+                if st
+                    .units
+                    .get(&service.unit)
+                    .is_some_and(|rec| rec.host.is_alive())
+                {
+                    alive.push(service.unit.clone());
+                    return false;
+                }
+                let other = st
+                    .starts
+                    .iter()
+                    .filter(|other| !Arc::ptr_eq(other, &cx.ctl))
+                    .find(|other| other.will_spawn(&service.unit));
+                match other {
+                    Some(other) => {
+                        joined.push((service.unit.clone(), other.clone()));
+                        false
+                    }
+                    None => true,
+                }
+            });
+            cx.ctl
+                .plan_spawns(to_spawn.iter().map(|service| service.unit.clone()));
+            cx.already_running.extend(alive);
+            joined
+        };
         if !engine.integ.launch_checks.is_empty() {
             let starting: Vec<PlannedUnit> = to_spawn
                 .iter()
@@ -1102,6 +1182,21 @@ impl LanePhase for ServicesPhase {
         }
         // Each spawn waits for a start slot; see `pacing`.
         engine.spawn_services(cx, &to_spawn, &resolved).await;
+        for (unit, other) in joined {
+            match joined_outcome(&cx.ctl, cx.deadline, &unit, &other).await {
+                // What the other start got for the unit is this start's answer too;
+                // waited for like a running unit, so its exit still counts.
+                Joined::Spawned => cx.already_running.push(unit),
+                Joined::Failed(error) => cx.failures.push(UnitFailureData {
+                    lane: cx.reference.clone(),
+                    unit,
+                    reason: Some(error),
+                    ..UnitFailureData::default()
+                }),
+                Joined::TimedOut => cx.timed_out = true,
+                Joined::Gone => {}
+            }
+        }
         PhaseResult::Done
     }
 }
@@ -1134,6 +1229,223 @@ fn restored_services(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The services a start selects. `saved` is the lane's record and
+/// `lane_profiles` the profiles in effect; `whole_lane` says the start brings
+/// the lane up. Pure, so a start can name its units before it waits for `op`.
+fn start_selection(
+    config: &devlanes_config::ProjectConfig,
+    saved: Option<&devlanes_state::Lane>,
+    lane_profiles: &[String],
+    options: &StartOptions,
+    whole_lane: bool,
+) -> Result<devlanes_resolve::Selection, devlanes_resolve::ResolveError> {
+    // The saved record, not the profiles in effect: a transient start changes
+    // those but must not be what the next plain start picks up.
+    let requested = if options.profiles.is_empty() {
+        saved.map_or_else(|| lane_profiles.to_vec(), |r| r.profiles.clone())
+    } else {
+        options.profiles.clone()
+    };
+    let restored = if options.selectors.is_empty() && options.profiles.is_empty() {
+        restored_services(saved, |name| config.services.contains_key(name))
+    } else {
+        Vec::new()
+    };
+    // An idle lane comes back as it ran; a running one also gets what its
+    // profiles select and it lacks, such as a service added to the config.
+    let selectors = if whole_lane && !restored.is_empty() {
+        restored.clone()
+    } else {
+        options.selectors.clone()
+    };
+    let mut selection = devlanes_resolve::select_profiles(config, &requested, &selectors)?;
+    if !whole_lane && !restored.is_empty() {
+        selection.services = config
+            .services
+            .keys()
+            .filter(|name| selection.services.contains(name) || restored.contains(name))
+            .cloned()
+            .collect();
+        selection
+            .autostart_pending
+            .retain(|name| !restored.contains(name));
+    }
+    Ok(selection)
+}
+
+/// How a unit another start was spawning ended for a start that joined it.
+enum Joined {
+    Spawned,
+    Failed(RpcError),
+    /// This start's deadline passed first.
+    TimedOut,
+    /// Taken out by a stop, or the other start ended without trying it.
+    Gone,
+}
+
+/// Waits until `other` settled `unit`: its spawn finished, a stop withdrew it,
+/// or the other start ended. Only this unit counts, not the other start's
+/// remaining services.
+async fn joined_outcome(
+    ours: &StartCtl,
+    deadline: Instant,
+    unit: &str,
+    other: &StartCtl,
+) -> Joined {
+    loop {
+        let changed = other.changed.notified();
+        tokio::pin!(changed);
+        // Registered before the checks, so an outcome recorded in between wakes it.
+        changed.as_mut().enable();
+        match other.outcome(unit) {
+            Some(None) => return Joined::Spawned,
+            Some(Some(error)) => return Joined::Failed(error),
+            None => {}
+        }
+        if other.withdrawn_by(unit).is_some() || ours.withdrawn_by(unit).is_some() {
+            return Joined::Gone;
+        }
+        tokio::select! {
+            () = changed => {}
+            // Ended without trying it (cancelled); a spawn still queued past the
+            // other start's deadline records its outcome later, so keep waiting.
+            () = other.cancel.cancelled() => return Joined::Gone,
+            () = ours.cancel.cancelled() => return Joined::Gone,
+            () = tokio::time::sleep_until(deadline) => return Joined::TimedOut,
+        }
+    }
+}
+
+/// The words a waiting unit shows for the bring-up's current phase; `None`
+/// once the bring-up reached its services.
+fn bringup_step(phase: &str) -> Option<&'static str> {
+    match phase {
+        "infra" => Some("containers"),
+        "setup" => Some("setup"),
+        "tasks" => Some("tasks"),
+        _ => None,
+    }
+}
+
+/// How a start holds its lane's `op`.
+struct Lease<'a> {
+    guard: LeaseGuard<'a>,
+    /// The start brings the lane up (it took `op` exclusively).
+    brings_up: bool,
+}
+
+/// The guard behind a [`Lease`].
+enum LeaseGuard<'a> {
+    Exclusive(tokio::sync::RwLockWriteGuard<'a, ()>),
+    /// Only held, never read: dropping it lets an exclusive holder in.
+    Shared {
+        _guard: tokio::sync::RwLockReadGuard<'a, ()>,
+    },
+}
+
+impl Lease<'_> {
+    /// Whether the start brings the lane up.
+    fn brings_up(&self) -> bool {
+        self.brings_up
+    }
+
+    /// Shares `op` from here on, so starts waiting to add units go ahead while
+    /// this one spawns its services.
+    fn share(self) -> Self {
+        let guard = match self.guard {
+            LeaseGuard::Exclusive(guard) => LeaseGuard::Shared {
+                _guard: guard.downgrade(),
+            },
+            shared => shared,
+        };
+        Self {
+            guard,
+            brings_up: self.brings_up,
+        }
+    }
+}
+
+/// Where one start spent its time, for the line every start leaves in
+/// `daemon.log`. A bug report then shows the slow step on the reporter's
+/// machine without a rerun under `-v`.
+struct StartTimings {
+    began: Instant,
+    /// Waiting for `op`: behind a bring-up's early phases or a whole-lane stop.
+    lock: Duration,
+    phases: Vec<(&'static str, Duration)>,
+}
+
+impl StartTimings {
+    /// Logs `start finished` with the total, the wait for the lane, each
+    /// phase that took time and the longest waits for a start slot.
+    fn log(&self, lane: &str, start_id: u64, whole_lane: bool, ctl: &StartCtl, outcome: &str) {
+        let ms = |duration: Duration| duration.as_millis() as u64;
+        let phases: Vec<String> = self
+            .phases
+            .iter()
+            .filter(|(_, took)| ms(*took) > 0)
+            .map(|(name, took)| format!("{name} {}ms", ms(*took)))
+            .collect();
+        let mut waits = ctl.gate_waits();
+        let queued = waits.iter().filter(|(_, waited)| *waited > 0).count();
+        waits.sort_by_key(|(_, waited)| std::cmp::Reverse(*waited));
+        let longest: Vec<String> = waits
+            .iter()
+            .filter(|(_, waited)| *waited > 0)
+            .take(3)
+            .map(|(unit, waited)| format!("{unit} {waited}ms"))
+            .collect();
+        tracing::info!(
+            lane,
+            start_id,
+            whole_lane,
+            outcome,
+            total_ms = ms(self.began.elapsed()),
+            lane_wait_ms = ms(self.lock),
+            phases = %phases.join(", "),
+            slot_waits = queued,
+            longest_slot_waits = %longest.join(", "),
+            "start finished"
+        );
+    }
+}
+
+/// Clears the lane's bring-up mark when the bring-up ends, however it ends.
+struct BringupMark {
+    lane: Arc<LaneRt>,
+    start_id: u64,
+}
+
+impl Drop for BringupMark {
+    /// Clears the mark unless a later bring-up owns it.
+    fn drop(&mut self) {
+        let mut st = self.lane.st();
+        if st
+            .bringup
+            .as_ref()
+            .is_some_and(|bringup| bringup.start_id == self.start_id)
+        {
+            st.bringup = None;
+        }
+    }
+}
+
+/// One start's share of the lane's `starting` state.
+struct StartingMark {
+    lane: Arc<LaneRt>,
+}
+
+impl Drop for StartingMark {
+    /// Lets the lane read its own state again once no start is in its phases.
+    fn drop(&mut self) {
+        let mut st = self.lane.st();
+        st.starting = st.starting.saturating_sub(1);
+        if st.starting == 0 && st.busy == Some("starting") {
+            st.busy = None;
+        }
+    }
 }
 
 /// `kept` and then `planned`, without repeats and without the services a stop
@@ -1614,6 +1926,158 @@ impl Inner {
         self.bus.emit(events::PHASE, data);
     }
 
+    /// Takes `op` for a start: exclusively when the start brings the lane up
+    /// (nothing runs and no other start is bringing it up), shared otherwise.
+    /// A shared start that finds the lane down once it gets `op` (the bring-up
+    /// it waited for failed before anything ran) tries again to bring it up
+    /// itself. `None` when `cancel` fired first.
+    async fn lane_lease<'a>(
+        &self,
+        lane: &'a LaneRt,
+        start_id: u64,
+        cancel: &CancellationToken,
+    ) -> Option<Lease<'a>> {
+        loop {
+            let deciding = tokio::select! {
+                deciding = lane.decide.lock() => deciding,
+                () = cancel.cancelled() => return None,
+            };
+            let brings_up = {
+                let st = lane.st();
+                !st.any_running() && st.bringup.is_none()
+            };
+            if brings_up {
+                // `decide` stays held through this wait: a start arriving
+                // meanwhile waits for the decision, then shares `op`.
+                let guard = tokio::select! {
+                    guard = lane.op.write() => guard,
+                    () = cancel.cancelled() => return None,
+                };
+                let mut st = lane.st();
+                // A stop may have left units running while this one waited.
+                if !st.any_running() && st.bringup.is_none() {
+                    st.bringup = Some(crate::model::Bringup {
+                        start_id,
+                        step: None,
+                    });
+                    drop(deciding);
+                    return Some(Lease {
+                        guard: LeaseGuard::Exclusive(guard),
+                        brings_up: true,
+                    });
+                }
+            } else {
+                drop(deciding);
+                let guard = tokio::select! {
+                    guard = lane.op.read() => guard,
+                    () = cancel.cancelled() => return None,
+                };
+                let st = lane.st();
+                if st.any_running() || st.bringup.is_some() {
+                    return Some(Lease {
+                        guard: LeaseGuard::Shared { _guard: guard },
+                        brings_up: false,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Shows the units `options` asks for as `queued` right away, before the
+    /// start waits for anything. Best effort: the start selects again once it
+    /// holds `op`, and anything it does not spawn leaves the list with it.
+    fn mark_waiting(
+        &self,
+        project: &ProjectRt,
+        lane: &LaneRt,
+        options: &StartOptions,
+        start_id: u64,
+    ) {
+        if options.setup_only {
+            return;
+        }
+        let (config, view, saved, lane_profiles, whole_lane) = {
+            let st = lane.st();
+            let (Some(config), Some(view)) = (st.config.loaded().cloned(), st.view.clone()) else {
+                return;
+            };
+            (
+                config,
+                view,
+                st.record.clone(),
+                st.profiles.clone(),
+                !st.any_running() && st.bringup.is_none(),
+            )
+        };
+        let Ok(selection) =
+            start_selection(&config, saved.as_ref(), &lane_profiles, options, whole_lane)
+        else {
+            return;
+        };
+        let marked = {
+            let mut st = lane.st();
+            let mut marked = false;
+            for service in &view.services {
+                if !selection.services.contains(&service.name)
+                    || st.orphans.contains_key(&service.unit)
+                    || st
+                        .units
+                        .get(&service.unit)
+                        .is_some_and(|rec| rec.host.is_alive())
+                {
+                    continue;
+                }
+                // An earlier start of the unit keeps it; this one joins it.
+                st.waiting
+                    .entry(service.unit.clone())
+                    .or_insert_with(|| crate::model::Waiting {
+                        start_id,
+                        actor: options.actor.clone(),
+                    });
+                marked = true;
+            }
+            marked
+        };
+        if marked {
+            self.emit_lane(project, lane);
+        }
+    }
+
+    /// Drops the `queued` marks of start `start_id` once its services phase is
+    /// over: what it spawned shows its own state, what it did not goes back to
+    /// idle.
+    fn forget_waiting(&self, project: &ProjectRt, lane: &LaneRt, start_id: u64) {
+        let forgot = {
+            let mut st = lane.st();
+            let before = st.waiting.len();
+            st.waiting.retain(|_, waiting| waiting.start_id != start_id);
+            st.waiting.len() != before
+        };
+        if forgot {
+            self.emit_lane(project, lane);
+        }
+    }
+
+    /// Records what the lane's bring-up runs now, when `cx` is that bring-up,
+    /// so units waiting for it say what they wait for.
+    pub(crate) fn note_step(&self, cx: &StartCx, step: Option<&str>) {
+        let waiting = {
+            let mut st = cx.lane.st();
+            let Some(bringup) = st
+                .bringup
+                .as_mut()
+                .filter(|bringup| bringup.start_id == cx.start_id)
+            else {
+                return;
+            };
+            bringup.step = step.map(str::to_owned);
+            !st.waiting.is_empty()
+        };
+        if waiting {
+            self.emit_lane(&cx.project, &cx.lane);
+        }
+    }
+
     /// A fresh `start_id`.
     pub(crate) fn new_start_id(&self) -> u64 {
         self.next_start
@@ -1985,21 +2449,78 @@ impl Inner {
         })
     }
 
-    /// Brings a lane up (decision 5). Idempotent: running units stay untouched.
+    /// Brings a lane up (decision 5), or adds units to a lane that runs or is
+    /// being brought up. Idempotent: running units stay untouched.
+    ///
+    /// A start that finds nothing running brings the lane up: it holds `op`
+    /// exclusively through infra, setup and tasks, then shares it for its
+    /// services. Any other start shares `op` from the beginning, so starts of
+    /// single units never wait for each other, only for a bring-up's earlier
+    /// phases or for a whole-lane stop, clean or reset.
     pub(crate) async fn start_lane(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
-        options: StartOptions,
+        mut options: StartOptions,
     ) -> Result<StartResult, RpcError> {
-        let op = lane.op.lock().await;
-        // Units already running are left alone, so a frozen lane would stay frozen.
-        self.wake_lane(project, lane, Some(Activity::Command)).await;
-        // Installed once `op` is ours, until the start answered: a whole-lane stop
-        // fires its token and waits for `op` next; a single-unit stop withdraws
-        // units through it without waiting. A later start installs its own.
-        let slot = lane.begin_start(&self.shutdown);
+        let start_id = options.start_id.unwrap_or_else(|| self.new_start_id());
+        options.start_id = Some(start_id);
+        // Installed before the wait for `op`, until the start answered: a
+        // whole-lane stop fires its token, a single-unit stop withdraws units
+        // through it without waiting.
+        let slot = lane.begin_start(&self.shutdown, start_id);
+        // Before anything that can wait, so the units read `queued` the moment
+        // the request arrives.
+        self.mark_waiting(project, lane, &options, start_id);
+        let result = self.run_start(project, lane, options, slot).await;
+        // Whatever the start did not get to goes back to its own state.
+        self.forget_waiting(project, lane, start_id);
+        result
+    }
+
+    /// The body of [`Self::start_lane`], from the wait for `op` to the answer.
+    async fn run_start(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        options: StartOptions,
+        slot: crate::model::StartSlot,
+    ) -> Result<StartResult, RpcError> {
+        use tracing::Instrument as _;
+        let start_id = slot.ctl.start_id();
         let cancel = slot.ctl.cancel.clone();
+        let began = Instant::now();
+        let lease = self
+            .lane_lease(lane, start_id, &cancel)
+            .instrument(tracing::debug_span!("lane lock"))
+            .await;
+        let mut timings = StartTimings {
+            began,
+            lock: began.elapsed(),
+            phases: Vec::new(),
+        };
+        let Some(mut lease) = lease else {
+            let reference = lane.st().reference(&project.name());
+            return Err(with_ownership(
+                RpcError::new("start_cancelled", json!({"lane": reference}), 1),
+                &reference,
+                &[],
+            ));
+        };
+        let whole_lane = lease.brings_up();
+        // Ends the bring-up mark however this start returns.
+        let bringup = whole_lane.then(|| BringupMark {
+            lane: lane.clone(),
+            start_id,
+        });
+        // Counted from here, so other starts and refreshes leave the block and
+        // index this one plans on alone; ends however the start returns.
+        lane.st().starting += 1;
+        let starting = StartingMark { lane: lane.clone() };
+        // Units already running are left alone, so a frozen lane would stay frozen.
+        self.wake_lane(project, lane, Some(Activity::Command))
+            .instrument(tracing::debug_span!("wake"))
+            .await;
         let initial = lane.st().reference(&project.name());
         let fail = |error: RpcError| with_ownership(error, &initial, &[]);
         {
@@ -2043,8 +2564,15 @@ impl Inner {
         if let Some(env) = options.env.clone() {
             project.st().last_env = Some(env);
         }
-        self.apply_move(project, lane).await.map_err(fail)?;
-        self.refresh_views_held(project, lane).await;
+        self.apply_move(project, lane)
+            .instrument(tracing::debug_span!("apply move"))
+            .await
+            .map_err(fail)?;
+        // A start that adds units resolves against the layout config reloads keep
+        // current; it refreshes only for a reload that waited for the lane.
+        if whole_lane || lane.st().refresh_pending {
+            self.refresh_views_held(project, lane).await;
+        }
         let reference = lane.st().reference(&project.name());
         let fail = |error: RpcError| with_ownership(error, &reference, &[]);
         let config = lane
@@ -2055,46 +2583,21 @@ impl Inner {
             .ok_or_else(|| fail(RpcError::new("no_config", json!({"lane": reference}), 1)))?;
         let config_dir = lane.st().path.join(&project.config_dir);
         check_compose_files(&config, config_dir)
+            .instrument(tracing::debug_span!("compose files"))
             .await
             .map_err(fail)?;
-        // The saved record, not the profiles in effect: a transient start changes
-        // those but must not be what the next plain start picks up.
-        let saved = lane.st().record.clone();
-        let requested = if options.profiles.is_empty() {
-            saved
-                .as_ref()
-                .map_or_else(|| lane.st().profiles.clone(), |r| r.profiles.clone())
-        } else {
-            options.profiles.clone()
+        let (saved, lane_profiles) = {
+            let st = lane.st();
+            (st.record.clone(), st.profiles.clone())
         };
-        let restored = if options.selectors.is_empty() && options.profiles.is_empty() {
-            restored_services(saved.as_ref(), |name| config.services.contains_key(name))
-        } else {
-            Vec::new()
-        };
-        // A previous daemon's orphan is part of the lane: with one running, this
-        // start only adds units, like with a live unit.
-        let whole_lane = !lane.st().any_running();
-        // An idle lane comes back as it ran; a running one also gets what its
-        // profiles select and it lacks, such as a service added to the config.
-        let selectors = if whole_lane && !restored.is_empty() {
-            restored.clone()
-        } else {
-            options.selectors.clone()
-        };
-        let mut selection = devlanes_resolve::select_profiles(&config, &requested, &selectors)
-            .map_err(|error| fail(crate::resolve::resolve_error(&error)))?;
-        if !whole_lane && !restored.is_empty() {
-            selection.services = config
-                .services
-                .keys()
-                .filter(|name| selection.services.contains(name) || restored.contains(name))
-                .cloned()
-                .collect();
-            selection
-                .autostart_pending
-                .retain(|name| !restored.contains(name));
-        }
+        let selection = start_selection(
+            &config,
+            saved.as_ref(),
+            &lane_profiles,
+            &options,
+            whole_lane,
+        )
+        .map_err(|error| fail(crate::resolve::resolve_error(&error)))?;
         // Kept only once valid, so a typo does not stick to the lane.
         lane.st().profiles = selection.profiles.clone();
         let infra_enabled = !matches!(
@@ -2146,7 +2649,7 @@ impl Inner {
             infra_needs: Vec::new(),
             timed_out: false,
             all_at_once: options.all_at_once,
-            start_id: options.start_id.unwrap_or_else(|| self.new_start_id()),
+            start_id,
             cancel,
             ctl: slot.ctl.clone(),
             config: config.clone(),
@@ -2171,18 +2674,25 @@ impl Inner {
                 hard_error = Some(error);
                 break;
             }
+            if phase.name() == "services" {
+                // From here other starts add their units alongside this one's.
+                lease = lease.share();
+            }
             if phase.visible() {
                 // Resolution ran before services, so the plan is known by now.
                 let units = (phase.name() == "services" && !cx.setup_only)
                     .then(|| Self::planned_units(&cx));
                 self.phase_event(&cx, phase.name(), "started", None, units);
+                self.note_step(&cx, bringup_step(phase.name()));
             }
             // Reaching services is what makes earlier phase failures stale.
             if phase.name() == "services" && !cx.setup_only {
                 lane.st().phase_reasons.clear();
             }
             let span = tracing::debug_span!("phase", name = phase.name(), lane = %cx.reference);
+            let phase_began = Instant::now();
             let mut result = tracing::Instrument::instrument(phase.run(self, &mut cx), span).await;
+            timings.phases.push((phase.name(), phase_began.elapsed()));
             // Whatever the phase made of it, an interrupted start ends here.
             if cx.cancel.is_cancelled() && !matches!(result, PhaseResult::Error(_)) {
                 result = PhaseResult::Error(start_cancelled(&cx));
@@ -2190,6 +2700,7 @@ impl Inner {
             if phase.name() == "services" {
                 // Nothing more spawns: a waiting restart of a withdrawn unit may go.
                 cx.ctl.services_done.cancel();
+                self.forget_waiting(project, lane, cx.start_id);
             }
             let (state, why) = result.event_state();
             if phase.visible() {
@@ -2208,11 +2719,17 @@ impl Inner {
                 }
             }
         }
+        // A start that arrives from now on finds the lane up, or brings it up
+        // again when this one failed before anything ran.
+        drop(bringup);
+        // Before the failure is recorded, so the units show it instead of `queued`.
+        self.forget_waiting(project, lane, start_id);
         if let Some((phase, error)) = &failed_phase
             && !cx.setup_only
         {
             self.mark_unstarted(project, lane, &cx, phase, error);
         }
+        let desired_guard = lane.desired.lock().await;
         let record = lane.st().record.clone();
         if let Some(record) = record
             && !options.transient
@@ -2236,16 +2753,18 @@ impl Inner {
             self.save_desired(lane, &record, desired, selection.profiles.clone(), services)
                 .await;
         }
+        drop(desired_guard);
         persist("project start time", || {
             self.store.mark_project_started(project.id)
         })
         .await;
-        {
-            let mut st = lane.st();
-            st.busy = None;
-            st.skipped_tasks = cx.skipped_tasks.clone();
+        // Only a bring-up runs tasks; a start that adds units must not erase
+        // what the bring-up skipped.
+        if whole_lane {
+            lane.st().skipped_tasks = cx.skipped_tasks.clone();
         }
-        drop(op);
+        drop(starting);
+        drop(lease);
         let started: Vec<String> = cx
             .started
             .iter()
@@ -2254,10 +2773,19 @@ impl Inner {
         if let Some(error) = hard_error {
             lane.st().last_error = Some(error.clone());
             self.emit_lane(project, lane);
+            timings.log(&reference, start_id, whole_lane, &slot.ctl, &error.code);
             return Err(with_ownership(error, &reference, &started));
         }
         let result = self.finish_start(cx, whole_lane).await;
         self.emit_lane(project, lane);
+        let outcome = if result.ready {
+            "ready"
+        } else if result.timed_out {
+            "timed_out"
+        } else {
+            "failed"
+        };
+        timings.log(&reference, start_id, whole_lane, &slot.ctl, outcome);
         // Answered: stops no longer reach this start.
         drop(slot);
         Ok(result)
@@ -2446,7 +2974,7 @@ impl Inner {
             lane = %queued_reference,
             units = %selectors.as_deref().map(|s| s.join(",")).unwrap_or_default(),
             mine = mine.is_some(),
-            interrupts_start = lane.running_start().is_some(),
+            interrupts_start = !lane.running_starts().is_empty(),
             "stop requested"
         );
         self.cancel_queued(lane, &queued_reference, selectors.as_deref(), mine);
@@ -2456,7 +2984,7 @@ impl Inner {
             if mine.is_none() {
                 lane.cancel_start();
             }
-            let _op = lane.op.lock().await;
+            let _op = lane.op.write().await;
             return self
                 .stop_locked(project, lane, selectors, mine, transient)
                 .await;
@@ -2465,13 +2993,14 @@ impl Inner {
         // `op` held by anything else (clean, a whole stop) is waited for, with a
         // look at the lane now and then for a start that took it meanwhile.
         loop {
-            if let Some(start) = lane.running_start() {
+            let starts = lane.running_starts();
+            if !starts.is_empty() {
                 return self
-                    .stop_in_start(project, lane, &start, selectors, mine, "stop", transient)
+                    .stop_in_start(project, lane, &starts, selectors, mine, "stop", transient)
                     .await;
             }
             tokio::select! {
-                op = lane.op.lock() => {
+                op = lane.op.write() => {
                     let _op = op;
                     return self.stop_locked(project, lane, selectors, mine, transient).await;
                 }
@@ -2480,18 +3009,18 @@ impl Inner {
         }
     }
 
-    /// Stops single units of a lane whose start (or restart) is running, without
-    /// its `op`: the start skips units it has not spawned, stops waiting for the
-    /// rest and reports them as stopped. Naming a task the start runs right now
-    /// interrupts the start, as a whole-lane stop does. `by` is `stop` or
-    /// `restart`; only a `stop` that is not `transient` takes the units out of
-    /// what a plain start brings back.
+    /// Stops single units of a lane whose starts (or restarts) are running,
+    /// without their `op`: each start skips units it has not spawned, stops
+    /// waiting for the rest and reports them as stopped. Naming a task a start
+    /// runs right now interrupts that start, as a whole-lane stop does. `by` is
+    /// `stop` or `restart`; only a `stop` that is not `transient` takes the
+    /// units out of what a plain start brings back.
     #[allow(clippy::too_many_arguments)]
     async fn stop_in_start(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
-        start: &Arc<StartCtl>,
+        starts: &[Arc<StartCtl>],
         selectors: Option<Vec<String>>,
         mine: Option<&Actor>,
         by: &'static str,
@@ -2499,9 +3028,9 @@ impl Inner {
     ) -> Result<Vec<UnitSummary>, RpcError> {
         let transient = transient || by != "stop";
         let reference = lane.st().reference(&project.name());
-        // Tasks the start runs or plans count even before the lane records their
+        // Tasks the starts run or plan count even before the lane records their
         // unit: the runner may have spawned one that is not registered yet.
-        let tasks = start.task_units();
+        let tasks: BTreeSet<String> = starts.iter().flat_map(|start| start.task_units()).collect();
         let mut names = Self::matching_units(lane, &reference, selectors.as_deref(), &tasks)?;
         if let Some(caller) = mine {
             // Only the caller's running units: the start's own were not theirs yet.
@@ -2512,11 +3041,22 @@ impl Inner {
                 })
             });
         }
-        start.withdraw(&names, by);
+        for start in starts {
+            start.withdraw(&names, by);
+        }
+        // Units waiting for their turn read idle again at once.
+        {
+            let mut st = lane.st();
+            for name in &names {
+                st.waiting.remove(name);
+            }
+        }
         // Again: one may have joined the queue before the withdrawal was visible.
         self.cancel_queued(lane, &reference, selectors.as_deref(), mine);
-        if names.iter().any(|name| start.runs_task(name)) {
-            start.cancel.cancel();
+        for start in starts {
+            if names.iter().any(|name| start.runs_task(name)) {
+                start.cancel.cancel();
+            }
         }
         // A spawn past its last withdrawal check is recorded before the targets
         // are picked; every later one sees the withdrawal.
@@ -2707,6 +3247,7 @@ impl Inner {
                 rec.host.acknowledge_failure();
             }
         }
+        let desired = lane.desired.lock().await;
         let record = lane.st().record.clone();
         match record {
             // The profiles of a short-lived start go with it.
@@ -2741,6 +3282,7 @@ impl Inner {
             }
             None => {}
         }
+        drop(desired);
         if owns_lane {
             lane.st().busy = None;
         }
@@ -2818,10 +3360,10 @@ impl Inner {
 
     /// Restarts selected services: stop, wait for their ports, spawn with fresh plans.
     ///
-    /// With a start of the lane running, the units leave that start first (as
-    /// with `stop`), and the restart spawns them once its services phase is over:
-    /// under `op` when the start is done by then, else alongside its remaining
-    /// phases, without `op`.
+    /// With starts of the lane running, the units leave them first (as with
+    /// `stop`), and the restart spawns them once those starts' services phases
+    /// are over. It shares `op` with starts that add units, so it waits only for
+    /// a bring-up's earlier phases or a whole-lane stop, clean or reset.
     pub(crate) async fn restart_units(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -2829,44 +3371,38 @@ impl Inner {
         selectors: &[String],
         options: StartOptions,
     ) -> Result<StartResult, RpcError> {
-        let (op, alongside) = loop {
-            if let Some(start) = lane.running_start() {
-                self.stop_in_start(
-                    project,
-                    lane,
-                    &start,
-                    Some(selectors.to_vec()),
-                    None,
-                    "restart",
-                    false,
-                )
-                .await?;
+        let starts = lane.running_starts();
+        if !starts.is_empty() {
+            self.stop_in_start(
+                project,
+                lane,
+                &starts,
+                Some(selectors.to_vec()),
+                None,
+                "restart",
+                false,
+            )
+            .await?;
+            for start in &starts {
                 start.services_done.cancelled().await;
-                break match lane.op.try_lock() {
-                    Ok(op) => (Some(op), None),
-                    Err(_) => (None, Some(start)),
-                };
             }
-            tokio::select! {
-                op = lane.op.lock() => break (Some(op), None),
-                () = tokio::time::sleep(START_POLL) => {}
+        }
+        let start_id = options.start_id.unwrap_or_else(|| self.new_start_id());
+        let slot = lane.begin_start(&self.shutdown, start_id);
+        let ctl = slot.ctl.clone();
+        let op = tokio::select! {
+            op = lane.op.read() => op,
+            () = ctl.cancel.cancelled() => {
+                let reference = lane.st().reference(&project.name());
+                return Err(with_ownership(
+                    RpcError::new("start_cancelled", json!({"lane": reference}), 1),
+                    &reference,
+                    &[],
+                ));
             }
         };
-        // With `op` held no freeze can begin after this; alongside a start the
-        // lane was never idle (a running start keeps it awake).
+        // With `op` held no freeze can begin after this.
         self.wake_lane(project, lane, Some(Activity::Stop)).await;
-        // Alongside a start: counted as a spawn in flight throughout, so a whole
-        // stop (which waits for spawns) sees what this restart spawns.
-        let spawning = alongside.as_ref().map(|_| lane.spawn_guard());
-        let (slot, ctl) = match &alongside {
-            None => {
-                let slot = lane.begin_start(&self.shutdown);
-                let ctl = slot.ctl.clone();
-                (Some(slot), ctl)
-            }
-            // Ends with the start it runs beside.
-            Some(start) => (None, Arc::new(StartCtl::new(&start.cancel))),
-        };
         let reference = lane.st().reference(&project.name());
         if let Some(env) = options.env.clone() {
             lane.st().env = Some(env.clone());
@@ -2883,6 +3419,7 @@ impl Inner {
                         with_ownership(crate::resolve::resolve_error(&error), &reference, &[])
                     })?;
                 lane.st().profiles = selection.profiles.clone();
+                let _desired = lane.desired.lock().await;
                 let record = lane.st().record.clone();
                 if let Some(record) = record {
                     self.save_desired(
@@ -3006,7 +3543,7 @@ impl Inner {
             infra_needs: Vec::new(),
             timed_out: false,
             all_at_once: options.all_at_once,
-            start_id: options.start_id.unwrap_or_else(|| self.new_start_id()),
+            start_id,
             cancel: ctl.cancel.clone(),
             ctl,
             config,
@@ -3027,6 +3564,7 @@ impl Inner {
         // Replicas not named by the selectors stay as they are.
         cx.already_running.retain(|unit| units.contains(unit));
         // A restarted service runs again, so a plain start after a crash brings it back.
+        let desired = lane.desired.lock().await;
         let record = lane.st().record.clone();
         if let Some(record) = record {
             let services = remembered_services(&record.services, &cx.services, &cx.ctl);
@@ -3041,8 +3579,8 @@ impl Inner {
                 .await;
             }
         }
+        drop(desired);
         drop(op);
-        drop(spawning);
         if let PhaseResult::Error(error) = result {
             let started: Vec<String> = cx
                 .started
@@ -3070,7 +3608,7 @@ impl Inner {
         // waiting for the lane must not run in between.
         self.cancel_queued(lane, &reference, None, None);
         lane.cancel_start();
-        let _op = lane.op.lock().await;
+        let _op = lane.op.write().await;
         // `exec` and `run` take no `op`: interrupt runs and wait for spawns in
         // flight, so the stop below sees every unit and none appears until the
         // records are gone.
@@ -3336,14 +3874,14 @@ impl Inner {
     pub(crate) async fn lock_lanes<'a>(
         &self,
         lanes: &'a [crate::engine::LanePair],
-    ) -> Vec<tokio::sync::MutexGuard<'a, ()>> {
+    ) -> Vec<tokio::sync::RwLockWriteGuard<'a, ()>> {
         self.pacing.cancel_all();
         for (_, lane) in lanes {
             lane.cancel_start();
         }
         let mut guards = Vec::with_capacity(lanes.len());
         for (_, lane) in lanes {
-            guards.push(lane.op.lock().await);
+            guards.push(lane.op.write().await);
         }
         guards
     }
@@ -3769,6 +4307,57 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+
+    /// A start's control under a fresh shutdown token.
+    fn ctl(start_id: u64) -> Arc<StartCtl> {
+        Arc::new(StartCtl::new(&CancellationToken::new(), start_id))
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// A start that joined `b` goes on once `b` spawned, while the start that
+    /// owns it still waits for its other services.
+    async fn a_joined_unit_settles_without_the_owners_other_services() {
+        let (ours, owner) = (ctl(2), ctl(1));
+        owner.plan_spawns(["b".to_owned(), "c".to_owned()]);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let joined = tokio::spawn({
+            let (ours, owner) = (ours.clone(), owner.clone());
+            async move { joined_outcome(&ours, deadline, "b", &owner).await }
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        owner.record_outcome("b", None);
+        let joined = tokio::time::timeout(Duration::from_secs(1), joined)
+            .await
+            .expect("settled by b alone")
+            .expect("join");
+        assert!(matches!(joined, Joined::Spawned));
+        assert!(!owner.services_done.is_cancelled(), "c still waits");
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// A failed spawn, a withdrawal and the joiner's deadline each end the wait.
+    async fn a_joined_unit_reports_failure_withdrawal_and_timeout() {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (ours, owner) = (ctl(2), ctl(1));
+        owner.record_outcome("b", Some(RpcError::new("spawn_failed", json!({}), 1)));
+        assert!(matches!(
+            joined_outcome(&ours, deadline, "b", &owner).await,
+            Joined::Failed(error) if error.code == "spawn_failed"
+        ));
+
+        let (ours, owner) = (ctl(2), ctl(1));
+        owner.withdraw(&["b".to_owned()], "stop");
+        assert!(matches!(
+            joined_outcome(&ours, deadline, "b", &owner).await,
+            Joined::Gone
+        ));
+
+        let (ours, owner) = (ctl(2), ctl(1));
+        assert!(matches!(
+            joined_outcome(&ours, deadline, "b", &owner).await,
+            Joined::TimedOut
+        ));
+    }
 
     #[tokio::test(start_paused = true)]
     /// A failing write is retried up to three times; a closed store is not retried.

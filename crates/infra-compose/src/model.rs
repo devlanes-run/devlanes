@@ -32,6 +32,26 @@ pub struct ServiceModel {
     pub labels: BTreeMap<String, String>,
     #[serde(default)]
     pub volumes: Vec<ServiceVolume>,
+    /// The legacy `scale:` key; `deploy.replicas` wins when both are set.
+    pub scale: Option<u64>,
+    pub deploy: Option<DeployModel>,
+}
+
+impl ServiceModel {
+    /// How many containers `up` runs for the service.
+    pub fn replicas(&self) -> u64 {
+        self.deploy
+            .as_ref()
+            .and_then(|deploy| deploy.replicas)
+            .or(self.scale)
+            .unwrap_or(1)
+    }
+}
+
+/// The part of a service's `deploy:` section devlanes reads.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct DeployModel {
+    pub replicas: Option<u64>,
 }
 
 /// A port in Compose's long syntax. `published` is `None` for ephemeral host ports and may
@@ -196,6 +216,34 @@ pub struct ContainerStatus {
     pub exit_code: i64,
     #[serde(rename = "Publishers", default, deserialize_with = "null_as_empty")]
     pub publishers: Vec<Publisher>,
+    /// The `com.docker.compose.config-hash` label: the service config the container
+    /// was created from, as `docker compose config --hash` prints it.
+    #[serde(rename = "Labels", default, deserialize_with = "config_hash_label")]
+    pub config_hash: Option<String>,
+}
+
+/// Compose's label holding a container's service config hash.
+const CONFIG_HASH_LABEL: &str = "com.docker.compose.config-hash";
+
+/// Reads [`CONFIG_HASH_LABEL`] from `ps`'s `Labels`, which Compose prints as one
+/// `key=value,key=value` string; a map is accepted too. Other labels can hold commas
+/// (paths), so only this one is kept.
+fn config_hash_label<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    Ok(
+        match Option::<serde_json::Value>::deserialize(deserializer)? {
+            Some(serde_json::Value::String(text)) => text.split(',').find_map(|pair| {
+                let (key, value) = pair.split_once('=')?;
+                (key == CONFIG_HASH_LABEL).then(|| value.to_owned())
+            }),
+            Some(serde_json::Value::Object(map)) => map
+                .get(CONFIG_HASH_LABEL)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            _ => None,
+        },
+    )
 }
 
 /// A published port of a running container. Docker lists IPv4 and IPv6 bindings separately.
@@ -282,6 +330,50 @@ pub fn service_containers(
             names.sort();
             (!names.is_empty()).then(|| (service.clone(), names))
         })
+        .collect()
+}
+
+/// Whether `service` already runs the way `up --wait` would leave it: as many
+/// containers as it has replicas, each running and healthy (or without a
+/// healthcheck), and, when `hashes` is given, each created from the config hash
+/// Compose computes now. A paused, starting or unhealthy container, or one left over
+/// from a bigger scale, makes it false.
+pub(crate) fn service_current(
+    model: &ComposeModel,
+    service: &str,
+    statuses: &[ContainerStatus],
+    hashes: Option<&BTreeMap<String, String>>,
+) -> bool {
+    let replicas = model
+        .services
+        .get(service)
+        .map_or(1, ServiceModel::replicas);
+    let containers: Vec<&ContainerStatus> = statuses
+        .iter()
+        .filter(|status| status.service == service)
+        .collect();
+    let expected = hashes.map(|hashes| hashes.get(service));
+    u64::try_from(containers.len()).is_ok_and(|count| count == replicas)
+        && containers.iter().all(|status| {
+            status.state == "running"
+                && (status.health == "healthy" || status.health.is_empty())
+                && expected.is_none_or(|hash| hash.is_some() && status.config_hash.as_ref() == hash)
+        })
+}
+
+/// The `services` that `up` has to act on: those [`service_current`] rejects with
+/// `hashes` from `docker compose config --hash`. An empty result means `up` would
+/// change nothing.
+pub(crate) fn stale_services(
+    model: &ComposeModel,
+    services: &[String],
+    statuses: &[ContainerStatus],
+    hashes: &BTreeMap<String, String>,
+) -> Vec<String> {
+    services
+        .iter()
+        .filter(|service| !service_current(model, service, statuses, Some(hashes)))
+        .cloned()
         .collect()
 }
 
@@ -430,6 +522,122 @@ mod tests {
             containers,
             BTreeMap::from([("web".into(), vec!["acme-web-1".into(), "acme-web-2".into()])])
         );
+    }
+
+    #[test]
+    fn config_hash_from_labels() {
+        let line = r#"{"ID":"a","Name":"n","Service":"s","State":"running","Labels":"com.docker.compose.project.working_dir=C:\\a,b,com.docker.compose.config-hash=10a2,com.docker.compose.service=s"}"#;
+        let statuses = parse_ps(line).unwrap_or_default();
+        assert_eq!(statuses[0].config_hash.as_deref(), Some("10a2"));
+        let line = r#"{"ID":"a","Name":"n","Service":"s","State":"running","Labels":{"com.docker.compose.config-hash":"10a2"}}"#;
+        let statuses = parse_ps(line).unwrap_or_default();
+        assert_eq!(statuses[0].config_hash.as_deref(), Some("10a2"));
+        let line = r#"{"ID":"a","Name":"n","Service":"s","State":"running","Labels":""}"#;
+        let statuses = parse_ps(line).unwrap_or_default();
+        assert_eq!(statuses[0].config_hash, None);
+    }
+
+    /// One `ps` row of service `service` labelled with config hash `hash`.
+    fn row(service: &str, state: &str, health: &str, hash: &str) -> ContainerStatus {
+        ContainerStatus {
+            id: format!("id-{service}"),
+            name: format!("acme-{service}-1"),
+            service: service.into(),
+            project: "acme".into(),
+            state: state.into(),
+            health: health.into(),
+            exit_code: 0,
+            publishers: Vec::new(),
+            config_hash: Some(hash.into()),
+        }
+    }
+
+    fn names(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+
+    fn hashes() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("postgres".to_owned(), "h-pg".to_owned()),
+            ("redis".to_owned(), "h-redis".to_owned()),
+        ])
+    }
+
+    #[test]
+    fn up_skips_services_running_with_the_current_hash() {
+        let model = model();
+        let services = names(&["postgres", "redis"]);
+        let statuses = [
+            row("postgres", "running", "healthy", "h-pg"),
+            row("redis", "running", "", "h-redis"),
+        ];
+        assert!(stale_services(&model, &services, &statuses, &hashes()).is_empty());
+    }
+
+    #[test]
+    fn up_selects_only_the_missing_service() {
+        let statuses = [row("postgres", "running", "healthy", "h-pg")];
+        assert_eq!(
+            stale_services(
+                &model(),
+                &names(&["postgres", "redis"]),
+                &statuses,
+                &hashes()
+            ),
+            ["redis"]
+        );
+    }
+
+    #[test]
+    fn up_selects_unhealthy_starting_paused_and_changed_services() {
+        let model = model();
+        let services = names(&["postgres", "redis"]);
+        for (state, health, hash) in [
+            ("running", "unhealthy", "h-pg"),
+            ("running", "starting", "h-pg"),
+            ("paused", "healthy", "h-pg"),
+            ("exited", "", "h-pg"),
+            ("running", "healthy", "old"),
+        ] {
+            let statuses = [
+                row("postgres", state, health, hash),
+                row("redis", "running", "", "h-redis"),
+            ];
+            assert_eq!(
+                stale_services(&model, &services, &statuses, &hashes()),
+                ["postgres"],
+                "{state} {health} {hash}"
+            );
+        }
+        // A service Compose printed no hash for is never taken as current.
+        let statuses = [row("postgres", "running", "healthy", "h-pg")];
+        assert_eq!(
+            stale_services(&model, &names(&["postgres"]), &statuses, &BTreeMap::new()),
+            ["postgres"]
+        );
+    }
+
+    #[test]
+    fn up_selects_services_short_of_their_replicas() {
+        let json =
+            r#"{"name":"acme","services":{"web":{"deploy":{"replicas":2}},"old":{"scale":2}}}"#;
+        let model = ComposeModel::from_json(json).expect("valid model");
+        assert_eq!(model.services["web"].replicas(), 2);
+        assert_eq!(model.services["old"].replicas(), 2);
+        let hashes = BTreeMap::from([("web".to_owned(), "h".to_owned())]);
+        let one = [row("web", "running", "", "h")];
+        assert_eq!(
+            stale_services(&model, &names(&["web"]), &one, &hashes),
+            ["web"]
+        );
+        let two = [
+            row("web", "running", "", "h"),
+            row("web", "running", "", "h"),
+        ];
+        assert!(stale_services(&model, &names(&["web"]), &two, &hashes).is_empty());
+        // Without hashes only the running state counts, which decides whether
+        // `config --hash` is worth running.
+        assert!(service_current(&model, "web", &two, None));
     }
 
     #[test]

@@ -5,8 +5,8 @@
 │   ● api-gateway                              ││                                                                                                                                                      │
 │   ⠋ api-orders                      starting ││ starting  api-orders, api-users                                                                                                                      │
 │   ⠋ api-users                       starting ││ queued    web-app, wrk-email: 4 services start at a time                                                                                             │
-│   … web-app                           queued ││ x stops the start. Select a unit to watch its output.                                                                                                │
-│   … wrk-email                         queued ││                                                                                                                                                      │
+│   … web-app            queued · next in line ││ x stops the start. Select a unit to watch its output.                                                                                                │
+│   … wrk-email           queued · 2nd in line ││                                                                                                                                                      │
 │   ● stub-stripe                              ││ branch    feat/checkout                                                                                                                              │
 │                                              ││ worktree  /work/acme-checkout                                                                                                                        │
 │ ▾ tasks                                    7 ││ profile   web                                                                                                                                        │
@@ -14,8 +14,8 @@
 │   · seed                             not run ││ services  2 of 6 up                                                                                                                                  │
 │   · lint                             not run ││           ⠋ api-orders       starting                                                                                                                │
 │   · typecheck                        not run ││           ⠋ api-users        starting                                                                                                                │
-│   · test-e2e                         not run ││           … web-app          queued                                                                                                                  │
-│   · codegen                          not run ││           … wrk-email        queued                                                                                                                  │
+│   · test-e2e                         not run ││           … web-app          queued, next in line                                                                                                    │
+│   · codegen                          not run ││           … wrk-email        queued, 2nd in line                                                                                                     │
 │   · clean-cache                      not run ││ tasks     1 running, 6 not run                                                                                                                       │
 │                                              ││ setup     1 of 1 done                                                                                                                                │
 │ ▾ infra                                      ││ infra     postgres :5432 (shared), redis :6379 (shared)                                                                                              │
@@ -67,8 +67,8 @@
 4: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 199 darkgray
 5: 0 darkgray, 6-15 blue, 47-48 darkgray, 50-59 dim, 199 darkgray
 6: 0 darkgray, 6-14 blue, 47-48 darkgray, 50-59 dim, 199 darkgray
-7: 0 darkgray, 4-5 dim, 6-12 dim green, 40-45 dim, 47-48 darkgray, 50-102 dim, 199 darkgray
-8: 0 darkgray, 4-5 dim, 6-14 dim magenta, 40-45 dim, 47-48 darkgray, 199 darkgray
+7: 0 darkgray, 4-5 dim, 6-12 dim green, 25-45 dim, 47-48 darkgray, 50-102 dim, 199 darkgray
+8: 0 darkgray, 4-5 dim, 6-14 dim magenta, 26-45 dim, 47-48 darkgray, 199 darkgray
 9: 0 darkgray, 4-5 green, 6-16 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
 10: 0 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
 11: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-59 dim, 199 darkgray
@@ -76,8 +76,8 @@
 13: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 199 darkgray
 14: 0 darkgray, 4-9 dim, 39-45 dim, 47-48 darkgray, 199 darkgray
 15: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 199 darkgray
-16: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-84 dim, 199 darkgray
-17: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-84 dim, 199 darkgray
+16: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-98 dim, 199 darkgray
+17: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 60-61 dim, 79-97 dim, 199 darkgray
 18: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 199 darkgray
 19: 0 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
 20: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-59 dim, 199 darkgray

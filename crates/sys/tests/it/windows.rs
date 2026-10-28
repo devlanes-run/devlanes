@@ -14,8 +14,10 @@ use devlanes_sys::{DescendantTracker, ProcessIdentity, SignalOutcome};
 
 use crate::eventually;
 
-/// How long a test waits for a child's output before failing.
-const PATIENCE: Duration = Duration::from_secs(20);
+/// How long a test waits for a child's output before failing. Windows
+/// PowerShell's cold start has taken over 20 s on a CI runner busy with the
+/// rest of the suite; the bound only ends a test that is broken.
+const PATIENCE: Duration = Duration::from_secs(60);
 
 /// Kills a test child and waits for it, even when an assertion fails first.
 struct Reaped(Child);

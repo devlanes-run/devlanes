@@ -261,14 +261,16 @@ fn starting() -> LaneSummary {
     ];
     units[6].role = Some("setup".into());
     units[6].exit_code = Some(0);
-    for unit in &mut units {
-        if unit.state == "queued" {
-            unit.reason = Some(RpcError::new(
-                "queued",
-                json!({"position": 1, "queued": 2, "in_flight": 4, "window": 4, "hold": "window_full"}),
-                0,
-            ));
-        }
+    for (unit, position) in units
+        .iter_mut()
+        .filter(|u| u.state == "queued")
+        .zip(1_u64..)
+    {
+        unit.reason = Some(RpcError::new(
+            "queued",
+            json!({"position": position, "queued": 2, "in_flight": 4, "window": 4, "hold": "window_full"}),
+            0,
+        ));
     }
     LaneSummary {
         reference: reference.into(),

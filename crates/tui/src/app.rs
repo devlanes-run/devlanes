@@ -702,9 +702,14 @@ pub enum Msg {
         generation: u64,
         error: ApiError,
     },
+    /// [`Effect::Control`] is done. `action` is that effect's id and `units`
+    /// the references its selection named: only the local `queued` this
+    /// action set on those units ends with this answer.
     ActionDone {
+        action: u64,
         label: String,
         target: Target,
+        units: Vec<String>,
         result: Result<Value, ApiError>,
     },
     RunDone {
@@ -847,7 +852,11 @@ pub enum Effect {
     /// Makes the attached stream the unit's interactive viewer (it types and
     /// owns the size), or an observer again, without reopening it.
     AttachRole(bool),
+    /// A start, stop or restart, answered with [`Msg::ActionDone`].
     Control {
+        /// Unique per effect, increasing; the answer carries it back so it
+        /// only ends the local `queued` this action set.
+        action: u64,
         method: Method,
         lane: String,
         selection: Selection,
@@ -1202,6 +1211,24 @@ pub struct App {
     watched: HashMap<String, (String, Option<std::time::Instant>)>,
     /// Each service's state when last seen, by `(lane, unit)`.
     watched_units: HashMap<(String, String), String>,
+    /// Units this TUI shows `queued` because it just sent their start, by
+    /// `(lane, unit)`. The daemon may take seconds to answer; the row
+    /// changes at once.
+    optimistic: HashMap<(String, String), Optimistic>,
+    /// The id of the last [`Effect::Control`].
+    last_action: u64,
+}
+
+/// A unit this TUI shows `queued` before the daemon reports it.
+struct Optimistic {
+    /// The [`Effect::Control`] whose start set it. Answers arrive in any
+    /// order, so the answer of an earlier start of the same unit must not
+    /// end it.
+    action: u64,
+    /// The state the daemon last reported.
+    state: String,
+    /// The reason the daemon last reported.
+    reason: Option<RpcError>,
 }
 
 /// Ticks (seconds) a failed start stays red in the tab's progress bar.
@@ -1278,6 +1305,8 @@ impl App {
             notify_after: devlanes_term::LONG_START,
             watched: HashMap::new(),
             watched_units: HashMap::new(),
+            optimistic: HashMap::new(),
+            last_action: 0,
         }
     }
 
@@ -1582,6 +1611,7 @@ impl App {
                 self.loaded = true;
                 self.lanes = lanes;
                 sort_lanes(&mut self.lanes);
+                self.keep_optimistic(None);
                 self.after_change(&mut effects);
                 self.focus_start(&mut effects);
                 self.show_welcome();
@@ -1788,13 +1818,25 @@ impl App {
                 }
             }
             Msg::ActionDone {
+                action,
                 label,
                 target,
+                units,
                 result,
             } => {
-                self.pending_end(target_lane(&target));
+                let lane = target_lane(&target).to_owned();
+                self.pending_end(&lane);
+                // The answer came; a unit this request still shows `queued` goes
+                // back to what the daemon said, and status catches up. Units
+                // another start in flight marked stay `queued` until its answer,
+                // even when an earlier start of the same unit answers late.
+                let guessed =
+                    !units.is_empty() && self.clear_optimistic(&lane, &units, Some(action));
                 match result {
                     Ok(value) => {
+                        if guessed {
+                            effects.push(Effect::Refresh);
+                        }
                         self.target_errors.remove(&target);
                         // A unit that could not spawn comes back in `failures` of an
                         // answer that succeeded; it never ran, so status says `stopped`.
@@ -2500,6 +2542,7 @@ impl App {
                     effects.push(Effect::Refresh);
                     return;
                 };
+                let reference = lane.reference.clone();
                 match self
                     .lanes
                     .iter_mut()
@@ -2509,6 +2552,7 @@ impl App {
                     None => self.lanes.push(lane),
                 }
                 sort_lanes(&mut self.lanes);
+                self.keep_optimistic(Some(&reference));
                 self.after_change(effects);
             }
             events::LANE_REMOVED => {
@@ -2535,6 +2579,9 @@ impl App {
                     .attached
                     .as_ref()
                     .is_some_and(|a| a.lane == unit.lane && a.unit == unit.name && !a.container);
+                // The daemon reported this unit: its state replaces the local `queued`.
+                self.optimistic
+                    .remove(&(unit.lane.clone(), unit.name.clone()));
                 match lane.units.iter_mut().find(|u| u.name == unit.name) {
                     Some(existing) => *existing = unit,
                     None => {
@@ -4958,6 +5005,89 @@ impl App {
         *self.pending.entry(lane.to_owned()).or_insert(0) += 1;
     }
 
+    /// A new id for an [`Effect::Control`], larger than every earlier one.
+    fn next_action(&mut self) -> u64 {
+        self.last_action += 1;
+        self.last_action
+    }
+
+    /// Shows `units` (references such as `acme@1:api`) of `lane` as `queued`
+    /// the moment start `action` is sent, the way the daemon shows them once
+    /// it has the request.
+    fn mark_queued(&mut self, lane: &str, units: &[String], action: u64) {
+        let Some(summary) = self.lanes.iter_mut().find(|l| l.reference == lane) else {
+            return;
+        };
+        for unit in summary
+            .units
+            .iter_mut()
+            .filter(|u| units.contains(&unit_ref(lane, &u.name)) && !is_active(&u.state))
+        {
+            let before = Optimistic {
+                action,
+                state: std::mem::replace(&mut unit.state, "queued".into()),
+                reason: unit.reason.take(),
+            };
+            self.optimistic
+                .insert((lane.to_owned(), unit.name.clone()), before);
+        }
+    }
+
+    /// Re-applies the local `queued` after the daemon's lanes replaced the
+    /// cached ones: all of them (`None`) or only `lane`. A summary that still
+    /// carries the state from before the start is older than the request, so
+    /// the unit stays `queued`; any other state is the daemon's answer.
+    fn keep_optimistic(&mut self, lane: Option<&str>) {
+        let lanes = &mut self.lanes;
+        self.optimistic.retain(|(reference, name), before| {
+            if lane.is_some_and(|lane| lane != reference) {
+                return true;
+            }
+            let Some(unit) = lanes
+                .iter_mut()
+                .find(|l| l.reference == *reference)
+                .and_then(|l| l.units.iter_mut().find(|u| u.name == *name))
+            else {
+                return false;
+            };
+            if unit.state != before.state {
+                return false;
+            }
+            before.reason = unit.reason.take();
+            unit.state = "queued".into();
+            true
+        });
+    }
+
+    /// Puts back the daemon's last state on units of `lane` shown `queued`
+    /// only by this TUI: those `units` names (references such as
+    /// `acme@1:api`), or every one when `units` is empty, as a selection
+    /// without units acts on the whole lane. An answer passes its `action` and
+    /// ends only what that start set; a stop or restart being sent passes
+    /// `None` and ends it whichever start set it. Returns whether there was any.
+    fn clear_optimistic(&mut self, lane: &str, units: &[String], action: Option<u64>) -> bool {
+        let cleared: Vec<_> = self
+            .optimistic
+            .extract_if(|(reference, name), before| {
+                reference == lane
+                    && action.is_none_or(|action| action == before.action)
+                    && (units.is_empty() || units.contains(&unit_ref(lane, name)))
+            })
+            .collect();
+        for ((reference, name), before) in &cleared {
+            if let Some(unit) = self
+                .lanes
+                .iter_mut()
+                .find(|l| l.reference == *reference)
+                .and_then(|l| l.units.iter_mut().find(|u| u.name == *name))
+            {
+                unit.state.clone_from(&before.state);
+                unit.reason.clone_from(&before.reason);
+            }
+        }
+        !cleared.is_empty()
+    }
+
     /// Records the end of an action on `lane`.
     fn pending_end(&mut self, lane: &str) {
         if let Some(count) = self.pending.get_mut(lane) {
@@ -5456,6 +5586,7 @@ impl App {
                 };
                 self.pending_begin(&lane);
                 effects.push(Effect::Control {
+                    action: self.next_action(),
                     method: Method::Start,
                     target: Target::Lane(lane.clone()),
                     lane,
@@ -5666,14 +5797,29 @@ impl App {
                 ));
             }
             Some(MonitorRow::Entry(entry)) => {
-                let active = entry.summary.as_ref().is_some_and(|u| is_active(&u.state));
+                let state = entry.summary.as_ref().map(|u| u.state.as_str());
                 let reference = unit_ref(&entry.lane, &entry.unit);
-                if method == Method::Start && active {
-                    self.set_notice(format!("{reference} already running"));
+                if method == Method::Start && state.is_some_and(is_active) {
+                    self.set_notice(if state == Some("queued") {
+                        format!("{reference} is already queued")
+                    } else {
+                        format!("{reference} already running")
+                    });
                     return;
                 }
                 self.pending_begin(&entry.lane);
+                let target = Target::Unit {
+                    lane: entry.lane.clone(),
+                    unit: entry.unit.clone(),
+                };
+                let action = self.next_action();
+                if method == Method::Start {
+                    self.mark_queued(&entry.lane, std::slice::from_ref(&reference), action);
+                } else {
+                    self.clear_optimistic(&entry.lane, std::slice::from_ref(&reference), None);
+                }
                 effects.push(Effect::Control {
+                    action,
                     method,
                     lane: entry.lane.clone(),
                     selection: devlanes_proto::Selection {
@@ -5681,20 +5827,22 @@ impl App {
                         ..Default::default()
                     },
                     label: format!("{verb} {reference}"),
-                    target: Target::Unit {
-                        lane: entry.lane.clone(),
-                        unit: entry.unit.clone(),
-                    },
+                    target,
                 });
             }
             Some(MonitorRow::Group(group)) if !group.shared => {
                 self.pending_begin(&group.key);
+                let target = Target::Lane(group.key.clone());
+                if method != Method::Start {
+                    self.clear_optimistic(&group.key, &[], None);
+                }
                 effects.push(Effect::Control {
+                    action: self.next_action(),
                     method,
                     lane: group.key.clone(),
                     selection: devlanes_proto::Selection::default(),
                     label: format!("{verb} {}", group.key),
-                    target: Target::Lane(group.key.clone()),
+                    target,
                 });
             }
             Some(MonitorRow::Group(group)) => {
@@ -5725,7 +5873,10 @@ impl App {
             return;
         }
         self.pending_begin(&reference);
+        let action = self.next_action();
+        self.mark_queued(&reference, &units, action);
         effects.push(Effect::Control {
+            action,
             method: Method::Start,
             lane: reference.clone(),
             selection: Selection {
@@ -5821,7 +5972,16 @@ impl App {
                         .iter()
                         .any(|u| u.name == *name && is_active(&u.state)) =>
             {
-                self.set_notice(format!("{} already running", unit_ref(&reference, name)));
+                let queued = lane
+                    .units
+                    .iter()
+                    .any(|u| u.name == *name && u.state == "queued");
+                let unit = unit_ref(&reference, name);
+                self.set_notice(if queued {
+                    format!("{unit} is already queued")
+                } else {
+                    format!("{unit} already running")
+                });
                 return;
             }
             RowId::Unit(name) => {
@@ -5840,18 +6000,25 @@ impl App {
                     .map(Node::leaves)
                     .unwrap_or_default();
                 // Start sends every unit; stop and restart only what runs.
-                let units: Vec<String> = members
+                let runnable: Vec<&UnitSummary> = members
                     .iter()
                     .filter_map(|id| match id {
                         RowId::Unit(name) => lane.units.iter().find(|u| u.name == *name),
                         _ => None,
                     })
                     .filter(|u| matches!(tree::role(u), tree::Role::Service | tree::Role::Exec))
+                    .collect();
+                let units: Vec<String> = runnable
+                    .iter()
                     .filter(|u| (method == Method::Start) != is_active(&u.state))
                     .map(|u| unit_ref(&reference, &u.name))
                     .collect();
                 if units.is_empty() {
+                    let queued = runnable.iter().any(|u| u.state == "queued");
                     self.set_notice(match method {
+                        Method::Start if queued => {
+                            "everything here is already running or queued".into()
+                        }
                         Method::Start => "everything here is already running".into(),
                         _ => "nothing running here".into(),
                     });
@@ -5900,7 +6067,18 @@ impl App {
             Vec::new()
         };
         self.pending_begin(&reference);
+        let action = self.next_action();
+        if method == Method::Start {
+            if matches!(row, RowId::Unit(_) | RowId::Section(_) | RowId::Group(..)) {
+                self.mark_queued(&reference, &units, action);
+            }
+        } else {
+            // A stop or restart decides what its units are next; the daemon
+            // reports them. Units it does not name keep their local `queued`.
+            self.clear_optimistic(&reference, &units, None);
+        }
         effects.push(Effect::Control {
+            action,
             method,
             lane: reference,
             selection: Selection {

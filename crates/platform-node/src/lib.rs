@@ -5,15 +5,11 @@
 //!   output often goes through pipes.
 //!   Node needs no unbuffering switch: `process.stdout` writes are not held back
 //!   in a userspace buffer.
-//! - [`CloudflareContributor`]: when the lane worktree contains a Wrangler config,
-//!   points every process at a dev registry in the lane data folder, so same-named
-//!   workers in two lanes do not bind to each other, even when both lanes run from
-//!   one folder.
+//! - [`CloudflareContributor`]: points every process of a lane at a dev registry in
+//!   the lane data folder, so same-named workers in two lanes do not bind to each
+//!   other, even when both lanes run from one folder.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
 use devlanes_core::{
@@ -42,22 +38,28 @@ async fn exists(path: &Path) -> bool {
     tokio::fs::try_exists(path).await.unwrap_or(false)
 }
 
-/// Wrangler's dev registry variable (see `devlanes-preset-wrangler`).
-pub const REGISTRY_ENV: &str = "WRANGLER_REGISTRY_PATH";
+/// Wrangler's dev registry folder, read by `wrangler dev` and passed to Miniflare
+/// (`getRegistryPath` in cloudflare/workers-sdk `packages/workers-utils`).
+pub const WRANGLER_REGISTRY_ENV: &str = "WRANGLER_REGISTRY_PATH";
+
+/// Miniflare 5's registry override. It wins over the folder Wrangler passes, and the
+/// Cloudflare Vite plugin (1.49.1 and later) reads it through Miniflare's
+/// `getDefaultDevRegistryPath`, so a value left in the shell would bypass the lane.
+pub const CLOUDFLARE_REGISTRY_ENV: &str = "CLOUDFLARE_DEV_REGISTRY_PATH";
+
+/// Miniflare 4's registry override, read by Cloudflare Vite plugin releases up to 1.49.0.
+pub const MINIFLARE_REGISTRY_ENV: &str = "MINIFLARE_REGISTRY_PATH";
+
+/// Every registry variable Wrangler, Miniflare or the Vite plugin reads, all set to the
+/// same lane folder so workers started by any of them find each other.
+pub const REGISTRY_ENVS: [&str; 3] = [
+    WRANGLER_REGISTRY_ENV,
+    CLOUDFLARE_REGISTRY_ENV,
+    MINIFLARE_REGISTRY_ENV,
+];
 
 /// Registry directory in the lane data folder, shared by the lane's workers.
 pub const REGISTRY_DIR: &str = "wrangler-registry";
-
-/// Wrangler config file names.
-const WRANGLER_FILES: &[&str] = &["wrangler.toml", "wrangler.json", "wrangler.jsonc"];
-
-/// Directories never searched for Wrangler configs: dependencies, VCS data and
-/// build output can be large and never hold the project's own worker configs.
-const SKIPPED_DIRS: &[&str] = &["node_modules", "target", "dist", "build", "out"];
-
-/// How deep below the worktree root to look; monorepos keep workers at
-/// `apps/<name>/wrangler.toml` or `workers/<group>/<name>/wrangler.jsonc`.
-const SEARCH_DEPTH: usize = 4;
 
 /// Contributor for `platform: node` units.
 #[derive(Debug, Default, Clone, Copy)]
@@ -113,8 +115,14 @@ impl Contributor for NodeContributor {
     }
 }
 
-/// Sets `WRANGLER_REGISTRY_PATH` to `<lane data>/wrangler-registry` for every process
-/// of lanes whose worktree contains a Wrangler config.
+/// Sets every variable in [`REGISTRY_ENVS`] to `<lane data>/wrangler-registry` for
+/// every process of every lane.
+///
+/// Wrangler and Miniflare often run inside processes devlanes cannot recognise: Vite or
+/// Next plugins, scripts that call `wrangler`, nested package scripts, and tasks such as
+/// `wrangler d1 migrations apply`. All of them must share the lane's registry, so the
+/// variables go on every unit instead of on detected ones. Only Wrangler and Miniflare
+/// read them, so they change nothing for other programs.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct CloudflareContributor;
 
@@ -128,25 +136,13 @@ impl Contributor for CloudflareContributor {
         60
     }
 
-    /// Scans the worktree once per lane resolution (cached in the memo).
+    /// Sets the lane's registry path in every registry variable, replacing values from
+    /// the shell. Wrangler and Miniflare create the folder when they register a worker,
+    /// so nothing touches the disk here.
     async fn apply(&self, draft: &mut LaunchDraft, cx: &ContribCx<'_>) -> Result<(), Error> {
-        let key = format!("cloudflare:{}", cx.lane_path.display());
-        let found = match cx.memo.get::<bool>(&key) {
-            Some(found) => *found,
-            None => {
-                let root = cx.lane_path.to_path_buf();
-                let found = tokio::task::spawn_blocking(move || has_wrangler_config(&root))
-                    .await
-                    .map_err(|e| Error::Integration(format!("wrangler config scan failed: {e}")))?;
-                cx.memo.insert(key, Arc::new(found));
-                found
-            }
-        };
-        if found {
-            draft.env.insert(
-                REGISTRY_ENV.to_owned(),
-                registry_path(cx.lane_data_path).display().to_string(),
-            );
+        let registry = registry_path(cx.lane_data_path).display().to_string();
+        for name in REGISTRY_ENVS {
+            draft.env.insert(name.to_owned(), registry.clone());
         }
         Ok(())
     }
@@ -155,33 +151,4 @@ impl Contributor for CloudflareContributor {
 /// Returns `<lane data>/wrangler-registry`.
 pub fn registry_path(lane_data: &Path) -> PathBuf {
     lane_data.join(REGISTRY_DIR)
-}
-
-/// Looks for `wrangler.toml|json|jsonc` up to [`SEARCH_DEPTH`] levels below
-/// `root`, skipping hidden directories and [`SKIPPED_DIRS`]. Blocking.
-pub fn has_wrangler_config(root: &Path) -> bool {
-    let mut pending = vec![(root.to_path_buf(), 0_usize)];
-    while let Some((dir, depth)) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            let Ok(kind) = entry.file_type() else {
-                continue;
-            };
-            if kind.is_file() && WRANGLER_FILES.contains(&name.as_ref()) {
-                return true;
-            }
-            if kind.is_dir()
-                && depth < SEARCH_DEPTH
-                && !name.starts_with('.')
-                && !SKIPPED_DIRS.contains(&name.as_ref())
-            {
-                pending.push((entry.path(), depth + 1));
-            }
-        }
-    }
-    false
 }

@@ -428,16 +428,25 @@ async fn a_connect_during_the_restore_answers_the_next_prompt() {
         let tmp = temp();
         let side = BoxSide::start(&tmp, "box", "20875-20937").await;
         let client = ClientSide::start(&tmp, "client", "20938-20999", &side).await;
-        client.connect("box").await;
-        client.stop().await;
+        // A first attempt that fails after it used the code asks for another
+        // one on a session nobody reads, and that prompt alone waits two
+        // minutes, past the test's limit.
+        step("the first connect", client.connect("box")).await;
+        step("stopping the first client daemon", client.stop()).await;
 
         let controls = Arc::new(Controls::default());
         controls.sign_in.store(true, Ordering::SeqCst);
         controls.unanswered.arm();
-        let client =
-            ClientSide::start_controlled(&tmp, "client", "20938-20999", &side, controls.clone())
-                .await;
-        controls.unanswered.reached().await;
+        let client = step(
+            "starting the second client daemon",
+            ClientSide::start_controlled(&tmp, "client", "20938-20999", &side, controls.clone()),
+        )
+        .await;
+        step(
+            "the restore's attempt asking its prompt with nobody attached",
+            controls.unanswered.reached(),
+        )
+        .await;
 
         let (session, mut frames) = Session::local(9_303);
         let engine = client.h.engine.clone();
@@ -457,7 +466,12 @@ async fn a_connect_during_the_restore_answers_the_next_prompt() {
             loop {
                 match frames.recv().await {
                     Some(Frame::Control(Control::Event(event))) if event.event == STATE_EVENT => {
-                        break event.data["state"].as_str().map(str::to_owned);
+                        break Some(event.data);
+                    }
+                    // Nothing answers it here, so the attempt would wait for
+                    // the prompt's own timeout.
+                    Some(Frame::Control(Control::Event(event))) if event.event == PROMPT_EVENT => {
+                        panic!("a prompt came before the first state: {}", event.data);
                     }
                     Some(_) => {}
                     None => break None,
@@ -473,45 +487,68 @@ async fn a_connect_during_the_restore_answers_the_next_prompt() {
         };
         controls.unanswered.release();
         let engine = client.h.engine.clone();
-        let mut prompts = 0;
+        // Whole `remote.state` payloads: a retried attempt's carries its error.
         let mut states = vec![first];
-        loop {
-            tokio::select! {
-                result = &mut connecting => {
-                    panic!("connect ended early: {result:?}, states {states:?}");
-                }
-                frame = frames.recv() => match frame {
-                    None => panic!("the session closed, states {states:?}"),
-                    Some(Frame::Control(Control::Event(event))) if event.event == PROMPT_EVENT => {
-                        prompts += 1;
-                        let stream = event.data["stream_id"].as_u64().expect("stream id");
-                        engine
-                            .input(stream, Bytes::from_static(PASSWORD.as_bytes()), session.clone())
-                            .await
-                            .expect("answer");
+        let mut prompts = 0;
+        let connected = tokio::time::timeout(SOON, async {
+            loop {
+                tokio::select! {
+                    result = &mut connecting => {
+                        panic!("connect ended early: {result:?}, states {states:?}");
                     }
-                    Some(Frame::Control(Control::Event(event))) if event.event == STATE_EVENT => {
-                        let state = event.data["state"].as_str().unwrap_or_default().to_owned();
-                        states.push(state.clone());
-                        if state == "connected" {
-                            break;
+                    frame = frames.recv() => match frame {
+                        None => panic!("the session closed, states {states:?}"),
+                        Some(Frame::Control(Control::Event(event))) if event.event == PROMPT_EVENT => {
+                            prompts += 1;
+                            // Answering a retried attempt's prompt would keep
+                            // a link that never connects going until the limit.
+                            assert_eq!(prompts, 1, "a second prompt {}, states {states:?}", event.data);
+                            let stream = event.data["stream_id"].as_u64().expect("stream id");
+                            engine
+                                .input(stream, Bytes::from_static(PASSWORD.as_bytes()), session.clone())
+                                .await
+                                .expect("answer");
                         }
-                    }
-                    Some(_) => {}
-                },
+                        Some(Frame::Control(Control::Event(event))) if event.event == STATE_EVENT => {
+                            let connected = event.data["state"] == "connected";
+                            states.push(event.data);
+                            if connected {
+                                break;
+                            }
+                        }
+                        Some(_) => {}
+                    },
+                }
             }
-        }
+        })
+        .await;
+        assert!(
+            connected.is_ok(),
+            "connect did not connect within {SOON:?}: {prompts} prompts, states {states:?}"
+        );
         assert_eq!(prompts, 1, "the resumed attempt asks once: {states:?}");
-        assert_eq!(client.host().await["state"], "connected");
+        let host = step("remote ls", client.host()).await;
+        assert_eq!(host["state"], "connected", "{host}");
 
         session.close();
-        let detached = connecting.await.expect("connect task");
+        let detached = step("connect returning after its CLI left", connecting)
+            .await
+            .expect("connect task");
         assert!(detached.is_ok(), "{detached:?}");
-        client.stop().await;
-        side.stop().await;
+        step("stopping the second client daemon", client.stop()).await;
+        step("stopping the box daemon", side.stop()).await;
     })
     .await
     .expect("timeout");
+}
+
+/// Runs `work` for at most [`SOON`], failing with `what` when it takes
+/// longer, so a hang names its step instead of running into the test limit.
+async fn step<T>(what: &str, work: impl std::future::Future<Output = T>) -> T {
+    match tokio::time::timeout(SOON, work).await {
+        Ok(done) => done,
+        Err(_) => panic!("{what} took over {SOON:?}"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

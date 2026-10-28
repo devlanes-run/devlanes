@@ -1242,12 +1242,12 @@
           ]
         },
         "isolate_registry": {
-          "description": "Points `WRANGLER_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane instead of same-named workers in another lane, also when two lanes run from one folder. Set `false` to drop the variable for this service, which then uses Wrangler's shared default registry. Default: `true`.",
+          "description": "Points `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane instead of same-named workers in another lane, also when two lanes run from one folder. Set `false` to drop these variables for this service, which then uses Wrangler's shared default registry. Default: `true`.",
           "examples": [
             true,
             false
           ],
-          "markdownDescription": "Points `WRANGLER_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane instead of same-named workers in another lane, also when two lanes run from one folder. Set `false` to drop the variable for this service, which then uses Wrangler's shared default registry. Default: `true`.",
+          "markdownDescription": "Points `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane instead of same-named workers in another lane, also when two lanes run from one folder. Set `false` to drop these variables for this service, which then uses Wrangler's shared default registry. Default: `true`.",
           "type": [
             "boolean",
             "null"
@@ -2255,15 +2255,16 @@
           "markdownDescription": "Options for `preset: next`, which adds `--port <self.port> --hostname 127.0.0.1` to the `next dev` command. Without the hostname flag Next listens on `0.0.0.0` instead of loopback."
         },
         "platform": {
-          "description": "Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong.",
+          "description": "Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
           "examples": [
             "node",
             "bun",
             "deno",
             "python",
-            "rust"
+            "rust",
+            "none"
           ],
-          "markdownDescription": "Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong.",
+          "markdownDescription": "Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working directory when omitted; set it only when detection is wrong. `none` skips detection and adds no platform variables.",
           "type": [
             "string",
             "null"

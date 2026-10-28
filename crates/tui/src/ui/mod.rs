@@ -269,7 +269,7 @@ pub(crate) fn unit_look(theme: &Theme, unit: &UnitSummary, spin: u64) -> Look {
             Tone::Quiet,
             "queued",
             Tone::Quiet,
-            None,
+            queued_detail(unit),
         ),
         ("failed", _) => look(
             theme.glyph(Glyph::Failed),
@@ -336,6 +336,43 @@ pub(crate) fn unit_look(theme: &Theme, unit: &UnitSummary, spin: u64) -> Look {
             None,
         ),
     }
+}
+
+/// What a queued unit waits for, from its `queued` reason: `waiting for
+/// migrate-db` while its lane comes up, `3rd in line` in the start gate,
+/// `held: memory` while the gate waits for memory. `None` without a reason,
+/// as on a row this TUI marked `queued` before the daemon answered.
+pub(crate) fn queued_detail(unit: &UnitSummary) -> Option<String> {
+    let data = &unit.reason.as_ref().filter(|r| r.code == "queued")?.data;
+    let text = |key: &str| data.get(key).and_then(serde_json::Value::as_str);
+    if let Some(step) = text("waiting_for") {
+        return Some(match step {
+            "lane" => "waiting for the lane".into(),
+            step => format!("waiting for {}", clean(step)),
+        });
+    }
+    let mut parts = Vec::new();
+    match data.get("position").and_then(serde_json::Value::as_u64) {
+        Some(1) => parts.push("next in line".to_owned()),
+        Some(position) => parts.push(format!("{} in line", ordinal(position))),
+        None => {}
+    }
+    if matches!(text("hold"), Some("memory" | "memory_critical")) {
+        parts.push("held: memory".into());
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
+/// `2nd`, `3rd`, `11th`, `22nd`.
+fn ordinal(n: u64) -> String {
+    let suffix = match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{n}{suffix}")
 }
 
 /// A task that is not a unit now, from its last stored run in `task.list`.
@@ -818,21 +855,24 @@ fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
     {
         let counts = tree::counts(lane);
         let what = lane.branch.as_deref().unwrap_or(&lane.reference);
-        let phase = app
+        // Only a running phase is named: one that ended, skipped included, says nothing now.
+        let step = app
             .phases
             .get(&lane.reference)
             .and_then(|phases| phases.steps.iter().rev().find(|s| s.state == "started"))
-            .map(|step| step.phase.clone())
-            .unwrap_or_else(|| "services".into());
-        let text = if phase == "services" {
-            format!(
+            .filter(|step| step.phase != "services");
+        let text = match step {
+            Some(step) => format!(
+                "starting {}: {}",
+                clean(what),
+                crate::start::phase_words(&step.phase, step.detail.as_deref())
+            ),
+            None => format!(
                 "starting {}: {} of {} ready",
                 clean(what),
                 counts.up,
                 counts.total
-            )
-        } else {
-            format!("starting {}: {}", clean(what), clean(&phase))
+            ),
         };
         return Some((
             vec![Span::styled(text, theme.tone(Tone::Busy))],

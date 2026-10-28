@@ -689,6 +689,7 @@ impl Executor {
             }
             Effect::AttachRole(interactive) => self.send_attach(AttachInput::Role(interactive)),
             Effect::Control {
+                action,
                 method,
                 lane,
                 selection,
@@ -696,10 +697,13 @@ impl Executor {
                 target,
             } => {
                 tokio::spawn(async move {
+                    let units = selection.units.clone();
                     let result = api.control(method, lane, selection).await;
                     let msg = Msg::ActionDone {
+                        action,
                         label,
                         target,
+                        units,
                         result,
                     };
                     deliver(&sender, msg).await;

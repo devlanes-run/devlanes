@@ -1113,11 +1113,13 @@ fn scenes() -> Vec<Scene> {
             setup: |f| {
                 f.unit("acme@0", "wrk-export");
                 f.send(Msg::ActionDone {
+                    action: 0,
                     label: "start acme@0:wrk-export".into(),
                     target: Target::Unit {
                         lane: "acme@0".into(),
                         unit: "wrk-export".into(),
                     },
+                    units: vec!["acme@0:wrk-export".into()],
                     result: Err(ApiError::Rpc(RpcError::new(
                         "compose_failed",
                         json!({"message": "`docker compose -p acme up -d --wait` failed (exit status: 1): container acme-postgres-1 is unhealthy\nlast lines of its log follow"}),
@@ -1132,11 +1134,13 @@ fn scenes() -> Vec<Scene> {
             setup: |f| {
                 f.unit("acme@0", "wrk-export");
                 f.send(Msg::ActionDone {
+                    action: 0,
                     label: "start acme@0:wrk-export".into(),
                     target: Target::Unit {
                         lane: "acme@0".into(),
                         unit: "wrk-export".into(),
                     },
+                    units: vec!["acme@0:wrk-export".into()],
                     result: Err(ApiError::Rpc(RpcError::new(
                         "not_found",
                         json!({"reference": "setup.buckets", "candidates": ["acme@0:api-auth", "acme@0:api-billing", "acme@0:api-users", "acme@0:wrk-export", "acme@0:wrk-mailer", "acme@0:web-portal"]}),

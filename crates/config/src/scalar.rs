@@ -89,7 +89,12 @@ pub(crate) fn plain_type_names(message: &str) -> String {
 
 impl<T: Clone + serde::de::DeserializeOwned> Templated<T> {
     /// Resolve a template without coercing an expression result into another type.
-    pub fn evaluate(&self, context: &crate::ExpressionContext) -> Result<T, crate::ConfigError> {
+    /// `context` is an [`crate::ExpressionContext`] or, to evaluate many values against
+    /// it, the [`crate::PreparedContext`] it converts to.
+    pub fn evaluate<C: crate::EvaluationContext>(
+        &self,
+        context: &C,
+    ) -> Result<T, crate::ConfigError> {
         match self {
             Self::Literal(value) => Ok(value.clone()),
             Self::Expression(text) => serde_json::from_value(crate::evaluate(text, context)?)

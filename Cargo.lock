@@ -1270,6 +1270,7 @@ version = "0.4.0"
 dependencies = [
  "devlanes-sys-windows",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1585,6 +1586,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

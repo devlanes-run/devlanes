@@ -409,7 +409,7 @@ impl Inner {
         self.remote.is_idle()
             && self.all_lanes().iter().all(|(_, lane)| {
                 // `op` is held by starts, stops, cleans and infra changes.
-                let Ok(_op) = lane.op.try_lock() else {
+                let Ok(_op) = lane.op.try_write() else {
                     return false;
                 };
                 let st = lane.st();
@@ -417,7 +417,7 @@ impl Inner {
                     return false;
                 };
                 !st.any_running()
-                    && st.start.is_none()
+                    && st.starts.is_empty()
                     && st.busy.is_none()
                     && st.spawning == 0
                     && !st.closing

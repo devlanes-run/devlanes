@@ -248,8 +248,9 @@ service_fields! {
     /// Runtime of the service: `node`, `bun`, `deno`, `python` or `rust`. It decides which
     /// variables devlanes adds, such as the devlanes CA (`NODE_EXTRA_CA_CERTS`,
     /// `SSL_CERT_FILE`) and color settings. Detected from the `run_script` file or the working
-    /// directory when omitted; set it only when detection is wrong.
-    #[schemars(extend("examples" = ["node","bun","deno","python","rust"]))]
+    /// directory when omitted; set it only when detection is wrong. `none` skips detection
+    /// and adds no platform variables.
+    #[schemars(extend("examples" = ["node","bun","deno","python","rust","none"]))]
     platform: String,
     /// Framework integration that adds the flags and variables a dev server needs to run in
     /// a lane, such as `--port <port> --strictPort --host 127.0.0.1` for `vite`, so you do

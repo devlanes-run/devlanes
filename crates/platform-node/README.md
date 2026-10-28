@@ -1,6 +1,6 @@
 # devlanes-platform-node
 
-Launch contributors for Node.js units and for projects with Wrangler configs. The binary registers them and `devlanes-resolve` applies them while planning each launch.
+Launch contributors for Node.js units and for Wrangler's dev registry. The binary registers them and `devlanes-resolve` applies them while planning each launch.
 
 ## Usage
 
@@ -36,7 +36,9 @@ Node units get:
 
 Without `platform`, `NodeContributor` claims a unit whose `run_script` source is a `package.json`, or whose working directory contains one. `devlanes-platform-bun` and `devlanes-platform-deno` claim the same directory more strongly when it has a Bun lockfile or a Deno config.
 
-`CloudflareContributor` applies to every unit of a lane whose worktree contains `wrangler.toml`, `wrangler.json` or `wrangler.jsonc` within four directory levels, skipping `node_modules`, build output and hidden directories. It sets `WRANGLER_REGISTRY_PATH=<lane data>/wrangler-registry` (the lane data folder, outside the worktree), so same-named workers in two lanes do not bind to each other, including lanes that run from one folder. The scan runs on a blocking thread once per lane resolution.
+`CloudflareContributor` sets `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` to `<lane data>/wrangler-registry` (the lane data folder, outside the worktree) on every unit of every lane, so same-named workers in two lanes do not bind to each other, including lanes that run from one folder. `wrangler dev` reads `WRANGLER_REGISTRY_PATH`, Miniflare 5 lets `CLOUDFLARE_DEV_REGISTRY_PATH` override the folder Wrangler passes, and the Cloudflare Vite plugin reads `CLOUDFLARE_DEV_REGISTRY_PATH` (`MINIFLARE_REGISTRY_PATH` up to 1.49.0). Setting all three keeps a value exported in the shell from pointing a lane at the shared registry.
+
+It applies to every unit because Wrangler and Miniflare often run inside processes devlanes cannot recognise: Vite or Next plugins, scripts and nested scripts that call `wrangler`, and tasks such as `wrangler d1 migrations apply`. Only Wrangler and Miniflare read the variables, and they create the folder when they register a worker.
 
 ## License
 

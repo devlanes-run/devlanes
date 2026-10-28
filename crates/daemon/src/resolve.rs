@@ -202,11 +202,16 @@ impl Inner {
         if let Some(extra) = extra {
             overrides.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+        use tracing::Instrument as _;
         let facts = self.facts(project, lane)?;
         // Every launch (service, task, hook, `exec`) is planned here, and may write to it.
-        self.ensure_lane_data(project, lane).await?;
+        self.ensure_lane_data(project, lane)
+            .instrument(tracing::debug_span!("lane data"))
+            .await?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
-        let dotenv = read_dotenv(lane_dir, primary_dir).await;
+        let dotenv = read_dotenv(lane_dir, primary_dir)
+            .instrument(tracing::debug_span!("dotenv"))
+            .await;
         let lanes_main = if index == Some(0) {
             None
         } else {
@@ -232,6 +237,10 @@ impl Inner {
         input.public_https_port = self.integ.routes.https_port();
         input.only = only;
         let resolved = devlanes_resolve::resolve_lane(input)
+            .instrument(tracing::debug_span!(
+                "resolve lane",
+                planned = only.map_or(-1, |only| only.len() as i64)
+            ))
             .await
             .map_err(|error| resolve_error(&error))?;
         // A unit must never be spawned on a port the config leaves to a server
@@ -325,7 +334,9 @@ impl Inner {
             Some(view) => (view.domain.clone(), view.port, view.vars.clone()),
             None => (String::new(), allocation.block.start, Default::default()),
         };
-        let context = lane_context(&facts, &domain, port, &vars, &infra_ns, &client, &dotenv);
+        let raw = lane_context(&facts, &domain, port, &vars, &infra_ns, &client, &dotenv);
+        // Prepared once: every infra value below is evaluated against it.
+        let context = raw.prepare();
         let infra = &config.infra;
         let evaluate = |path: &str, value: &devlanes_config::Templated<String>| {
             value.evaluate(&context).map_err(|error| {
@@ -409,13 +420,8 @@ impl Inner {
             let ready = match &container.ready {
                 Some(ready) => {
                     let cwd = if per_lane { &lane_dir } else { &primary_dir };
-                    devlanes_resolve::container_ready(
-                        ready,
-                        cwd,
-                        &context,
-                        &format!("{path}.ready"),
-                    )
-                    .map_err(|error| resolve_error(&error))?
+                    devlanes_resolve::container_ready(ready, cwd, &raw, &format!("{path}.ready"))
+                        .map_err(|error| resolve_error(&error))?
                 }
                 None => None,
             };

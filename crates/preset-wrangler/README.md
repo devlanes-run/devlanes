@@ -13,7 +13,7 @@ let ports = BTreeMap::from([("inspector".to_owned(), 20011)]);
 let added = contribution(&WranglerInput {
     port: 20010,
     ports: &ports,
-    lane_worktree: Path::new("/lanes/acme-1"),
+    lane_data: Path::new("/data/acme/1"),
     options: &WranglerOptions::default(),
     script_body: Some("wrangler dev --persist-to .state"),
 })?;
@@ -47,7 +47,7 @@ services:
       # isolate_registry: false    # default: true
 ```
 
-The preset adds `--port <self.port> --inspector-port <self.ports.inspector>`, then `--var KEY:VALUE` for each var in key order, then `args`. Vars go on the command line because `vars` in the Wrangler config override the process environment, while `--var` overrides the config. It also sets `WRANGLER_REGISTRY_PATH=<lane data>/wrangler-registry`, so same-named workers in two lanes do not bind to each other. The lane data folder (`ContribCx::lane_data_path`, `${{ lane.data_path }}`) is outside the worktree, so lanes that run from one folder get separate registries too. That variable is not in Wrangler's user docs; it is defined in cloudflare/workers-sdk.
+The preset adds `--port <self.port> --inspector-port <self.ports.inspector>`, then `--var KEY:VALUE` for each var in key order, then `args`. Vars go on the command line because `vars` in the Wrangler config override the process environment, while `--var` overrides the config. It also sets `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` to `<lane data>/wrangler-registry`, so same-named workers in two lanes do not bind to each other; `isolate_registry: false` removes all three, including the values `devlanes-platform-node` set. Miniflare 5 prefers `CLOUDFLARE_DEV_REGISTRY_PATH` over the folder Wrangler passes, and Miniflare 4 reads `MINIFLARE_REGISTRY_PATH`, so setting only Wrangler's variable would let a shell value win. The lane data folder (`ContribCx::lane_data_path`, `${{ lane.data_path }}`) is outside the worktree, so lanes that run from one folder get separate registries too. These variables are not in Wrangler's user docs; they are defined in cloudflare/workers-sdk.
 
 ## Behaviour
 

@@ -9,7 +9,7 @@ use devlanes_core::contrib::{
     CA_CERT_ENV, ContribCx, ContribMemo, Contributor, DETECT_MANIFEST, DETECT_SCRIPT_SOURCE,
     DetectCx, DraftCommand, LaunchDraft, ScriptInfo, UnitKind,
 };
-use devlanes_platform_node::{CloudflareContributor, NodeContributor, REGISTRY_ENV};
+use devlanes_platform_node::{CloudflareContributor, NodeContributor, REGISTRY_ENVS};
 
 /// Owned data behind a [`ContribCx`].
 struct Fixture {
@@ -110,7 +110,7 @@ async fn node_detection() {
 }
 
 #[tokio::test]
-/// Node units get the CA and color; other platforms are untouched.
+/// Node units get the CA and color; other platforms and `platform: none` are untouched.
 async fn node_env() {
     let fixture = Fixture::new("/w".into());
     let mut node = draft();
@@ -122,12 +122,14 @@ async fn node_env() {
     assert_eq!(node.env["FORCE_COLOR"], "1");
     assert!(node.notes.is_empty());
 
-    let mut python = draft();
-    NodeContributor
-        .apply(&mut python, &fixture.cx(Some("python")))
-        .await
-        .expect("apply");
-    assert!(python.env.is_empty());
+    for platform in ["python", "none"] {
+        let mut other = draft();
+        NodeContributor
+            .apply(&mut other, &fixture.cx(Some(platform)))
+            .await
+            .expect("apply");
+        assert!(other.env.is_empty(), "{platform}");
+    }
 }
 
 #[tokio::test]
@@ -148,44 +150,41 @@ async fn node_respects_client_choices() {
     assert_eq!(node.notes.len(), 1);
 }
 
+/// Expected draft env: every registry variable set to `<data>/wrangler-registry`.
+fn registry_env(data: &str) -> BTreeMap<String, String> {
+    let registry = Path::new(data)
+        .join("wrangler-registry")
+        .display()
+        .to_string();
+    REGISTRY_ENVS
+        .iter()
+        .map(|name| ((*name).to_owned(), registry.clone()))
+        .collect()
+}
+
 #[tokio::test]
-/// The registry variable appears only when the worktree holds a Wrangler config.
+/// Every unit gets the lane's registry in every registry variable, whatever its platform
+/// and whether or not the worktree holds a Wrangler config.
 async fn cloudflare_registry() {
+    assert_eq!(
+        REGISTRY_ENVS,
+        [
+            "WRANGLER_REGISTRY_PATH",
+            "CLOUDFLARE_DEV_REGISTRY_PATH",
+            "MINIFLARE_REGISTRY_PATH"
+        ]
+    );
     let dir = tempfile::tempdir().expect("tempdir");
     let fixture = Fixture::new(dir.path().to_path_buf());
-    let mut none = draft();
-    CloudflareContributor
-        .apply(&mut none, &fixture.cx(None))
-        .await
-        .expect("apply");
-    assert!(none.env.is_empty());
+    for platform in [None, Some("node"), Some("python"), Some("none")] {
+        let mut unit = draft();
+        CloudflareContributor
+            .apply(&mut unit, &fixture.cx(platform))
+            .await
+            .expect("apply");
+        assert_eq!(unit.env, registry_env("/data/acme/3"), "{platform:?}");
+    }
 
-    let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::create_dir_all(dir.path().join("apps/gateway")).expect("mkdir");
-    std::fs::create_dir_all(dir.path().join("node_modules/x")).expect("mkdir");
-    std::fs::write(dir.path().join("node_modules/x/wrangler.toml"), "").expect("write");
-    let fixture = Fixture::new(dir.path().to_path_buf());
-    let mut only_dependency = draft();
-    CloudflareContributor
-        .apply(&mut only_dependency, &fixture.cx(Some("python")))
-        .await
-        .expect("apply");
-    assert!(only_dependency.env.is_empty(), "node_modules is skipped");
-
-    std::fs::write(dir.path().join("apps/gateway/wrangler.jsonc"), "{}").expect("write");
-    let fixture = Fixture::new(dir.path().to_path_buf());
-    let mut found = draft();
-    CloudflareContributor
-        .apply(&mut found, &fixture.cx(Some("python")))
-        .await
-        .expect("apply");
-    let registry = |data: &str| {
-        Path::new(data)
-            .join("wrangler-registry")
-            .display()
-            .to_string()
-    };
-    assert_eq!(found.env[REGISTRY_ENV], registry("/data/acme/3"));
     // A second lane on the same folder gets its own registry.
     let mut other = Fixture::new(dir.path().to_path_buf());
     other.data = PathBuf::from("/data/acme/4");
@@ -194,13 +193,23 @@ async fn cloudflare_registry() {
         .apply(&mut second, &other.cx(None))
         .await
         .expect("apply");
-    assert_eq!(second.env[REGISTRY_ENV], registry("/data/acme/4"));
-    // Cached per lane: removing the file does not change this resolution.
-    std::fs::remove_file(dir.path().join("apps/gateway/wrangler.jsonc")).expect("remove");
-    let mut cached = draft();
+    assert_eq!(second.env, registry_env("/data/acme/4"));
+}
+
+#[tokio::test]
+/// A registry exported in the shell does not leak into the lane: the draft value is the
+/// one the launch uses, since contributor env wins over the client env.
+async fn cloudflare_registry_replaces_shell_values() {
+    let mut fixture = Fixture::new("/w".into());
+    for name in REGISTRY_ENVS {
+        fixture
+            .client
+            .insert(name.to_owned(), "/home/acme/.config/cloudflare".into());
+    }
+    let mut unit = draft();
     CloudflareContributor
-        .apply(&mut cached, &fixture.cx(None))
+        .apply(&mut unit, &fixture.cx(None))
         .await
         .expect("apply");
-    assert!(cached.env.contains_key(REGISTRY_ENV));
+    assert_eq!(unit.env, registry_env("/data/acme/3"));
 }

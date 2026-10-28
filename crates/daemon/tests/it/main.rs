@@ -3,6 +3,7 @@
 //! what it started.
 
 mod attach;
+mod concurrent_starts;
 mod containers;
 mod engine;
 mod external;

@@ -25,6 +25,7 @@ mod monitor;
 mod navigation;
 mod orphans;
 mod progress;
+mod queued;
 mod release;
 mod screens;
 mod start;
@@ -664,6 +665,7 @@ async fn start_stop_restart_dispatch_lane_and_unit_refs() -> TestResult {
             selection,
             label,
             target,
+            ..
         },
     ] = effects.as_slice()
     else {

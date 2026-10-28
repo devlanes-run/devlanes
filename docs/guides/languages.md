@@ -2,7 +2,7 @@
 
 devlanes runs any process. What it adds per language is small: a `platform` contributor that detects the runtime from project files and sets a few variables, mostly so HTTPS calls to other lane hostnames trust the devlanes CA. Everything else is the usual dev command with the port taken from `PORT` or `${{ self.port }}`.
 
-Set `platform` only when detection is wrong. Detection looks at the `run_script` file first, then the working directory.
+Set `platform` only when detection is wrong. Detection looks at the `run_script` file first, then the working directory. `platform: none` turns detection off for a service, which then gets none of the variables below.
 
 | Platform | Detected from | Variables set |
 | --- | --- | --- |

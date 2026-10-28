@@ -274,16 +274,16 @@ Templates resolve after local overrides. Mappings (`env`, `ready`, `stop`, prese
 
 ## Presets and platforms
 
-`platform` (node, bun, deno, python, rust) is detected from the run_script source or the working directory; set it only when detection is wrong. It adds CA and color variables.
+`platform` (node, bun, deno, python, rust) is detected from the run_script source or the working directory; set it only when detection is wrong, or to `none` to turn detection off. It adds CA and color variables.
 
 | Preset | Adds | Options |
 | --- | --- | --- |
 | `vite` | `--port <port> --strictPort --host 127.0.0.1` | `vite: { args }` |
 | `next` | `--port <port> --hostname 127.0.0.1` | `next: { args }` |
-| `wrangler` | `--port`, `--inspector-port` (a named `inspector` port), `--var` per var, `WRANGLER_REGISTRY_PATH` in the lane data folder | `wrangler: { vars, args, isolate_registry }` |
+| `wrangler` | `--port`, `--inspector-port` (a named `inspector` port), `--var` per var, `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` in the lane data folder | `wrangler: { vars, args, isolate_registry }` |
 | `tauri` | a per-lane, per-replica identifier and dev URL, through an overlay in the lane data folder | `tauri: { identifier, dev_url, product_name, before_dev_command }` |
 
-With `run_script`, a preset's flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script or `wrangler.args` that already passes `--port` or `--inspector-port`. Without a preset, pass the flags yourself with `${{ self.port }}`. Do not set `WRANGLER_REGISTRY_PATH`: devlanes sets it per lane for every unit of a project with a wrangler config. Wrangler's local state (`.wrangler/`) sits in the worktree, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
+With `run_script`, a preset's flags are passed to the script, so the framework command must be the script's last command. The wrangler preset refuses a script or `wrangler.args` that already passes `--port` or `--inspector-port`. Without a preset, pass the flags yourself with `${{ self.port }}`. Do not set `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` or `MINIFLARE_REGISTRY_PATH`: devlanes sets all three per lane for every unit, so workers started by `wrangler dev`, the Cloudflare Vite plugin, another plugin, a script or a task use the lane's registry. Wrangler's local state (`.wrangler/`) sits in the worktree, so give each lane its own with `wrangler: { args: [--persist-to, "${{ lane.data_path }}/wrangler/${{ self.name }}"] }`.
 
 ## Sync
 

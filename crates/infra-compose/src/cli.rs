@@ -193,6 +193,23 @@ impl ComposeCli {
         ComposeModel::from_json(&output).map_err(|source| Error::Json { command, source })
     }
 
+    /// The config hash of every service with `config --hash '*'`, keyed by service.
+    /// `up` with the same files labels each container with it
+    /// (`com.docker.compose.config-hash`) and recreates the ones whose label differs,
+    /// so pass the same `extra_files` as `up`.
+    pub async fn config_hashes(
+        &self,
+        project: &ComposeProject,
+        extra_files: &[PathBuf],
+    ) -> Result<BTreeMap<String, String>, Error> {
+        let mut args = project.args(extra_files);
+        args.extend(["config".into(), "--hash".into(), "*".into()]);
+        let output = self
+            .run(&project.working_dir, args, &project.env, QUERY_TIMEOUT)
+            .await?;
+        Ok(parse_hashes(&output))
+    }
+
     /// Starts `services` detached and waits for them to be running or healthy.
     /// `no_deps` keeps per-lane projects from starting their own copy of shared services.
     pub async fn up(
@@ -472,6 +489,19 @@ fn display(args: &[OsString]) -> String {
     text
 }
 
+/// Parses `config --hash` output: one `<service> <hash>` per line.
+fn parse_hashes(output: &str) -> BTreeMap<String, String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.split_whitespace();
+            let service = parts.next()?;
+            let hash = parts.next()?;
+            Some((service.to_owned(), hash.to_owned()))
+        })
+        .collect()
+}
+
 #[derive(Deserialize)]
 struct InspectEntry {
     #[serde(rename = "Id")]
@@ -730,6 +760,19 @@ mod tests {
                 .collect::<BTreeMap<_, _>>()
         );
         assert!(parse_unhealthy_causes("").expect("valid").is_empty());
+    }
+
+    #[test]
+    fn hashes_per_service() {
+        let output = "cache 10a2\nmail 252a\n\n";
+        assert_eq!(
+            parse_hashes(output),
+            BTreeMap::from([
+                ("cache".to_owned(), "10a2".to_owned()),
+                ("mail".to_owned(), "252a".to_owned()),
+            ])
+        );
+        assert!(parse_hashes("").is_empty());
     }
 
     #[test]
