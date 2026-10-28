@@ -634,7 +634,15 @@ impl WithDriver for ClientDriver {
             RpcError::new("bad_request", json!({"message": error.to_string()}), 1)
         })?;
         let data = self.call(Method::Logs, params, context).await?;
-        // `{lane, units: [{unit, lines, truncated}]}`.
+        // `{lane, units: [{unit, lines, truncated}]}`. Later pages name units as
+        // `lane:unit`, so an empty `lane` (the cwd's) takes the reference the
+        // daemon resolved.
+        let lane = data
+            .get("lane")
+            .and_then(Value::as_str)
+            .filter(|_| lane.is_empty())
+            .unwrap_or(lane)
+            .to_owned();
         let first = data
             .get("units")
             .and_then(Value::as_array)
@@ -655,7 +663,7 @@ impl WithDriver for ClientDriver {
             if truncated && let Some(last) = lines.last() {
                 let cursor = format!("{unit}#{}", last.seq);
                 let rest = self
-                    .rest_of_unit(lane, &unit, since.clone(), cursor)
+                    .rest_of_unit(&lane, &unit, since.clone(), cursor)
                     .await?;
                 lines.extend(rest);
             }
@@ -957,53 +965,61 @@ mod tests {
     }
 
     /// `with --logs-dir` gets every line: a truncated unit continues page by page
-    /// with its cursor until the daemon has no more.
+    /// with its cursor until the daemon has no more. Without a lane (`stop
+    /// --logs-dir` without `--lane`) the later pages use the lane the first
+    /// reply named.
     #[tokio::test]
     async fn logs_page_each_truncated_unit_to_the_end() {
-        tokio::time::timeout(std::time::Duration::from_secs(10), async {
-            let temp = tempfile::tempdir().expect("tempdir");
-            let paths = test_paths(&temp.path().join("h"));
-            let daemon = fake_daemon(&paths, 1, |request| {
-                let cursor = request.params.get("cursor").and_then(Value::as_str);
-                Some(match cursor {
-                    None => json!({"lane": "acme@0", "units": [
-                        {"unit": "api", "lines": [line("api", 1)], "truncated": true},
-                        {"unit": "web", "lines": [line("web", 1)], "truncated": false},
-                    ]}),
-                    Some("api#1") => json!({"items": [line("api", 2)], "truncated": true, "next_cursor": "api#2"}),
-                    Some(_) => json!({"items": [line("api", 3)], "truncated": false, "next_cursor": null}),
+        for lane in ["acme@0", ""] {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                let temp = tempfile::tempdir().expect("tempdir");
+                let paths = test_paths(&temp.path().join("h"));
+                let daemon = fake_daemon(&paths, 1, |request| {
+                    let cursor = request.params.get("cursor").and_then(Value::as_str);
+                    Some(match cursor {
+                        None => json!({"lane": "acme@0", "units": [
+                            {"unit": "api", "lines": [line("api", 1)], "truncated": true},
+                            {"unit": "web", "lines": [line("web", 1)], "truncated": false},
+                        ]}),
+                        Some("api#1") => json!({"items": [line("api", 2)], "truncated": true, "next_cursor": "api#2"}),
+                        Some(_) => json!({"items": [line("api", 3)], "truncated": false, "next_cursor": null}),
+                    })
                 })
+                .await
+                .expect("bind");
+                let client = Client::connect(&paths).await.expect("connect");
+                let mut driver = ClientDriver::new(client, Context::default(), paths.clone());
+                let query = LaneLogQuery {
+                    all: true,
+                    query: LogQuery {
+                        since: Some("start".into()),
+                        ..LogQuery::default()
+                    },
+                };
+                let logs = driver.logs(lane, query).await.expect("logs");
+                let seqs = |unit: &str| -> Vec<u64> {
+                    logs.iter()
+                        .find(|logs| logs.unit == unit)
+                        .map(|logs| logs.lines.iter().map(|line| line.seq).collect())
+                        .unwrap_or_default()
+                };
+                assert_eq!(seqs("api"), [1, 2, 3], "lane {lane:?}");
+                assert_eq!(seqs("web"), [1], "lane {lane:?}");
+                drop(driver);
+                let requests = daemon.await.expect("daemon");
+                assert_eq!(requests.len(), 3);
+                assert_eq!(requests[0].params["max_bytes"], FIRST_PAGE_BYTES);
+                assert_eq!(
+                    requests[0].context.lane.as_deref(),
+                    (!lane.is_empty()).then_some(lane)
+                );
+                assert_eq!(requests[1].params["units"], json!(["acme@0:api"]));
+                assert_eq!(requests[1].params["since"], "start");
+                assert_eq!(requests[2].params["cursor"], "api#2");
             })
             .await
-            .expect("bind");
-            let client = Client::connect(&paths).await.expect("connect");
-            let mut driver = ClientDriver::new(client, Context::default(), paths.clone());
-            let query = LaneLogQuery {
-                all: true,
-                query: LogQuery {
-                    since: Some("start".into()),
-                    ..LogQuery::default()
-                },
-            };
-            let logs = driver.logs("acme@0", query).await.expect("logs");
-            let seqs = |unit: &str| -> Vec<u64> {
-                logs.iter()
-                    .find(|logs| logs.unit == unit)
-                    .map(|logs| logs.lines.iter().map(|line| line.seq).collect())
-                    .unwrap_or_default()
-            };
-            assert_eq!(seqs("api"), [1, 2, 3]);
-            assert_eq!(seqs("web"), [1]);
-            drop(driver);
-            let requests = daemon.await.expect("daemon");
-            assert_eq!(requests.len(), 3);
-            assert_eq!(requests[0].params["max_bytes"], FIRST_PAGE_BYTES);
-            assert_eq!(requests[1].params["units"], json!(["acme@0:api"]));
-            assert_eq!(requests[1].params["since"], "start");
-            assert_eq!(requests[2].params["cursor"], "api#2");
-        })
-        .await
-        .expect("in time");
+            .expect("in time");
+        }
     }
 
     /// A connection that broke (say, on an oversized frame) does not cost the
