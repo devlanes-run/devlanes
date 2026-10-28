@@ -6,7 +6,7 @@
 │   mirror    1 lane · 2 of 2 ports bound here · 2 hostnames routed            │
 │   chosen    shop@0                                                           │
 │   ! box fork-a's ports.range 31000-31999 overlaps box fork-b (31000-31999).  │
-│     Lanes both boxes run go to one box at a time. Other lanes can get the    │
+│     Lanes the boxes share go to one box at a time. Other lanes can get the   │
 │     same ports, so give each box its own ports.range if that matters.        │
 │                                                                              │
 │ ● fork-b                                                     connected · ssh │
@@ -15,7 +15,7 @@
 │   mirror    no lanes · no ports bound here · 0 hostnames routed              │
 │   skipped   shop@0: fork-a's shop@0 is in use. Press m to use this one.      │
 │   ! box fork-b's ports.range 31000-31999 overlaps box fork-a (31000-31999).  │
-│     Lanes both boxes run go to one box at a time. Other lanes can get the    │
+│     Lanes the boxes share go to one box at a time. Other lanes can get the   │
 │     same ports, so give each box its own ports.range if that matters.        │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────┐
@@ -32,7 +32,7 @@
 5: 0 bold, 4-13 dim, 79 bold
 6: 0 bold, 4-13 dim, 79 bold
 7: 0 bold, 4-76 yellow, 79 bold
-8: 0 bold, 6-74 yellow, 79 bold
+8: 0 bold, 6-75 yellow, 79 bold
 9: 0 bold, 6-70 yellow, 79 bold
 10: 0 bold, 79 bold
 11: 0 bold, 2-3 green, 4-9 bold, 63-71 green, 72-77 dim, 79 bold
@@ -41,7 +41,7 @@
 14: 0 bold, 4-13 dim, 79 bold
 15: 0 bold, 2-77 reversed, 79 bold
 16: 0 bold, 4-76 yellow, 79 bold
-17: 0 bold, 6-74 yellow, 79 bold
+17: 0 bold, 6-75 yellow, 79 bold
 18: 0 bold, 6-70 yellow, 79 bold
 19: 0-79 bold
 20: 0 darkgray, 1-14 bold, 15-79 darkgray

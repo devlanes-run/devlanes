@@ -676,7 +676,7 @@ fn range_overlaps(list: &mut Value) {
             .map(|other| format!("box {other} (31000-31999)"))
             .collect();
         item["warnings"] = json!([format!(
-            "box {host}'s ports.range 31000-31999 overlaps {}. Lanes both boxes run go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
+            "box {host}'s ports.range 31000-31999 overlaps {}. Lanes the boxes share go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
             others.join(" and ")
         )]);
     }
