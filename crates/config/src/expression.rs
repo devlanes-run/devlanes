@@ -195,6 +195,15 @@ fn domain(state: &minijinja::State<'_, '_>, name: &str) -> Result<String, miniji
     crate::checked_lane_domain(name, index, &suffix).map_err(fail)
 }
 
+/// Why an evaluation failed, for its error. A `domain()` refusal already
+/// names the call and the rule, so it stands alone.
+fn failed(error: &minijinja::Error) -> String {
+    match error.detail() {
+        Some(detail) if detail.starts_with(&format!("{DOMAIN_FUNCTION}(")) => detail.to_owned(),
+        _ => format!("expression failed: {}", describe(error)),
+    }
+}
+
 /// A MiniJinja error without its `(in <string>:1)` suffix, which names no real file.
 fn describe(error: &minijinja::Error) -> String {
     match error.detail() {
@@ -304,7 +313,7 @@ pub fn evaluate<C: EvaluationContext>(text: &str, context: &C) -> Result<Value, 
         Form::Expression(expression) => {
             let value = expression
                 .eval(&context)
-                .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e))))?;
+                .map_err(|e| ConfigError::plain(failed(&e)))?;
             if value.is_undefined() {
                 return Err(ConfigError::plain(
                     "expression resolved to an undefined value",
@@ -316,7 +325,7 @@ pub fn evaluate<C: EvaluationContext>(text: &str, context: &C) -> Result<Value, 
             .get_template(TEMPLATE_NAME)
             .and_then(|template| template.render(context))
             .map(Value::String)
-            .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e)))),
+            .map_err(|e| ConfigError::plain(failed(&e))),
         Form::Broken(message) => Err(ConfigError::plain(message.clone())),
     }
 }
@@ -912,14 +921,24 @@ mod tests {
             references(text).expect("references"),
             BTreeSet::from(["lane.index".to_owned()])
         );
-        for bad in [
-            "${{ domain('a_b') }}",
-            "${{ domain('*.x') }}",
-            "${{ domain('') }}",
-        ] {
+        assert_eq!(
+            eval("${{ domain('a_b') }}", &lane(1, "localhost")),
+            Err("domain('a_b'): `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into())
+        );
+        assert_eq!(
+            eval("web.${{ domain('a_b') }}", &lane(1, "localhost")),
+            Err("domain('a_b'): `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into()),
+            "mixed text gives the same error"
+        );
+        let long = format!("${{{{ domain('{}') }}}}", "a".repeat(63));
+        let error = eval(&long, &lane(2, "localhost")).expect_err("too long with its index");
+        assert!(
+            error.ends_with("2` is longer than 63 characters"),
+            "{error}"
+        );
+        for bad in ["${{ domain('*.x') }}", "${{ domain('') }}"] {
             let error = eval(bad, &lane(1, "localhost")).expect_err(bad);
-            assert!(error.contains("is not a hostname label"), "{bad}: {error}");
-            assert!(error.contains("domain('"), "{bad}: {error}");
+            assert!(error.starts_with("domain('"), "{bad}: {error}");
         }
         let error = eval(text, &ExpressionContext::default()).expect_err("no lane");
         assert!(error.contains("where a lane is known"), "{error}");

@@ -30,16 +30,18 @@ pub fn lane_domain(name: &str, index: u64, suffix: &str) -> String {
 }
 
 /// [`lane_domain`] for a `name` that must be one or more hostname labels,
-/// lowercased. The error names `name` and the rule it breaks.
+/// lowercased. The result is checked too, since the index makes the last
+/// label longer. The error is the rule that breaks.
 pub fn checked_lane_domain(name: &str, index: u64, suffix: &str) -> Result<String, String> {
     let lowered = name.to_ascii_lowercase();
-    match broken_rule(&lowered) {
-        _ if lowered.contains('*') => Err(format!(
-            "`{name}` is not a hostname label: a wildcard is not allowed here"
-        )),
-        Some(why) => Err(format!("`{name}` is not a hostname label: {why}")),
-        None => Ok(lane_domain(&lowered, index, suffix)),
+    if lowered.contains('*') {
+        return Err("a wildcard is not allowed here. Put `*.` before the call instead.".into());
     }
+    if let Some(why) = broken_rule(&lowered) {
+        return Err(why);
+    }
+    let domain = lane_domain(&lowered, index, suffix);
+    broken_rule(&domain).map_or(Ok(domain), Err)
 }
 
 /// Checks the literal parts of a host template, with each `${{ ... }}` standing for
@@ -103,7 +105,7 @@ fn broken_rule(host: &str) -> Option<String> {
             .find(|c| !c.is_ascii_alphanumeric() && *c != '-')
         {
             return Some(format!(
-                "`{bad}` is not allowed in a hostname; use letters, digits and hyphens"
+                "`{bad}` is not allowed in a hostname label. Use letters, digits and hyphens."
             ));
         }
         if label.starts_with('-') || label.ends_with('-') {
@@ -145,9 +147,32 @@ mod tests {
         assert_eq!(
             normalize_host("api_v2.acme.localhost"),
             Err(
-                "`api_v2.acme.localhost`: `_` is not allowed in a hostname; use letters, digits and hyphens"
+                "`api_v2.acme.localhost`: `_` is not allowed in a hostname label. Use letters, digits and hyphens."
                     .into()
             )
+        );
+    }
+
+    #[test]
+    /// A lane domain is checked as written and with its index: a 63-letter
+    /// label is fine in lane 0 and too long in lane 2.
+    fn lane_domains_are_checked_whole() {
+        let long = "a".repeat(63);
+        assert_eq!(
+            checked_lane_domain(&long, 0, "localhost"),
+            Ok(format!("{long}.localhost"))
+        );
+        assert_eq!(
+            checked_lane_domain(&long, 2, "localhost"),
+            Err(format!("label `{long}2` is longer than 63 characters"))
+        );
+        assert_eq!(
+            checked_lane_domain("a_b", 1, "localhost"),
+            Err("`_` is not allowed in a hostname label. Use letters, digits and hyphens.".into())
+        );
+        assert_eq!(
+            checked_lane_domain("Docs.Pages", 3, "test"),
+            Ok("docs.pages3.test".into())
         );
     }
 
