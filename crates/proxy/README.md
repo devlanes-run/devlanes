@@ -47,7 +47,7 @@ The daemon binds these ports on both address families. When a port is denied or 
 
 ## Behaviour
 
-Host is preserved unless a route selects `HostHeader::Upstream`. `Upstream::Local` tries IPv4 loopback before IPv6. WebSockets and SSE stream without an idle timeout. Idle upstream connections are reused for a few seconds, only for requests to the same target; WebSocket upgrades always get their own connection.
+Host is preserved unless a route selects `HostHeader::Upstream`. `Upstream::Local` tries IPv4 loopback before IPv6. WebSockets and SSE stream without an idle timeout. Idle upstream connections are reused for a few seconds, only for requests to the same target with the same `Route::pool_key`; WebSocket upgrades always get their own connection. A box route's key names its box, so after the daemon moves the lane to another box behind the same local port, no request reuses a connection to the old one.
 
 Routes marked `fallback` apply only when no other route matches, even an exact fallback route against a wildcard. Within each group an exact host beats the longest matching wildcard.
 

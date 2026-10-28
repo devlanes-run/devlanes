@@ -6,7 +6,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -15,8 +15,8 @@ use devlanes_state::RemoteLaneChoice;
 use serde_json::{Value, json};
 
 use super::{
-    RELEASE_WAIT, Remotes,
-    assign::{Assignment, BoxLanes, Cause, LocalLane, assign},
+    Remotes,
+    assign::{Assignment, BoxLanes, Cause, LocalLane, PortUse, assign},
     mirror, now_ms,
 };
 use crate::{
@@ -25,43 +25,15 @@ use crate::{
     model::lock,
 };
 
-/// How long `remote.use` waits for the mirrors to apply a choice: a winner
-/// waits up to [`RELEASE_WAIT`] for the loser's ports, then binds them.
-const APPLY_WAIT: Duration = RELEASE_WAIT.saturating_add(Duration::from_secs(2));
-
-/// A lane of this machine counted as running while a start of it is under
-/// way; dropping it ends that.
-pub(crate) struct Starting<'a> {
-    starting: &'a Mutex<BTreeMap<String, usize>>,
-    lane: String,
-}
-
-impl Drop for Starting<'_> {
-    /// Counts the start as done.
-    fn drop(&mut self) {
-        let mut starting = lock(self.starting);
-        if let Some(count) = starting.get_mut(&self.lane) {
-            *count -= 1;
-            if *count == 0 {
-                starting.remove(&self.lane);
-            }
-        }
-    }
-}
+/// How long `remote.use` waits for the mirrors to show a choice in
+/// `host.list`. Nothing in a reconcile waits for a box, so this is a bound
+/// for a busy machine only.
+const APPLY_WAIT: Duration = Duration::from_secs(2);
 
 impl Remotes {
     /// The latest assignment.
     pub(crate) fn assignment(&self) -> Arc<Assignment> {
         lock(&self.assignment).1.clone()
-    }
-
-    /// Counts local lane `lane` as running until the guard drops.
-    pub(crate) fn starting(&self, lane: &str) -> Starting<'_> {
-        *lock(&self.starting).entry(lane.to_owned()).or_default() += 1;
-        Starting {
-            starting: &self.starting,
-            lane: lane.to_owned(),
-        }
     }
 }
 
@@ -151,6 +123,13 @@ impl Inner {
             }
         };
         let version = changed.unwrap_or_else(|| lock(&self.remote.assignment).0);
+        if changed.is_some() {
+            // Still under the lock: a listener a mirror binds right now is
+            // pointed after this, at the owner this assignment names.
+            self.remote
+                .listeners
+                .apply(&next, &|owner| self.remote.target(owner));
+        }
         // Before waking anything: a woken mirror and the route publisher
         // reassign in turn, and this lock is not reentrant.
         drop(computing);
@@ -165,17 +144,20 @@ impl Inner {
         (version, next)
     }
 
-    /// The assignment's inputs: this machine's lanes from `local`, a starting
-    /// one counted as running, and every box whose link has not ended, with
-    /// the hostnames this machine would route for each of its lanes.
+    /// The assignment's inputs: this machine's lanes from `local`, a lane in
+    /// a start counted as running whatever it starts, and every box whose
+    /// link has not ended, with the hostnames this machine would route and
+    /// the ports of each of its lanes.
     fn assign_inputs(&self, local: &[RouteEntry]) -> (Vec<LocalLane>, Vec<BoxLanes>) {
-        let starting: BTreeSet<String> = lock(&self.remote.starting).keys().cloned().collect();
         let running: BTreeMap<String, bool> = self
             .all_lanes()
             .iter()
             .map(|(project, lane)| {
                 let st = lane.st();
-                (st.reference(&project.name()), st.any_running())
+                (
+                    st.reference(&project.name()),
+                    st.starting > 0 || st.any_running(),
+                )
             })
             .collect();
         let mut hosts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -188,7 +170,7 @@ impl Inner {
         let lanes = hosts
             .into_iter()
             .map(|(lane, hosts)| LocalLane {
-                running: starting.contains(&lane) || running.get(&lane).copied().unwrap_or(false),
+                running: running.get(&lane).copied().unwrap_or(false),
                 lane,
                 hosts,
             })
@@ -202,20 +184,37 @@ impl Inner {
             .map(|conn| {
                 let registry = conn.registry.current();
                 let mut lanes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+                let mut ports: BTreeMap<String, Vec<PortUse>> = BTreeMap::new();
                 for unit in registry.units().filter(|unit| unit.mirrorable()) {
-                    lanes
-                        .entry(mirror::lane_ref(&unit.key.lane))
-                        .or_default()
-                        .extend(
-                            unit.hosts
-                                .iter()
-                                .filter_map(|host| mirror::accepted(&host.host, &suffixes)),
-                        );
+                    let lane = mirror::lane_ref(&unit.key.lane);
+                    let routed: BTreeSet<u16> = unit
+                        .hosts
+                        .iter()
+                        .filter(|host| mirror::accepted(&host.host, &suffixes).is_some())
+                        .map(|host| host.port)
+                        .collect();
+                    lanes.entry(lane.clone()).or_default().extend(
+                        unit.hosts
+                            .iter()
+                            .filter_map(|host| mirror::accepted(&host.host, &suffixes)),
+                    );
+                    let serving = devlanes_transport::serving(&unit.state);
+                    let bound: BTreeSet<u16> = unit.ports.iter().map(|port| port.port).collect();
+                    let uses = ports.entry(lane).or_default();
+                    for port in bound.union(&routed) {
+                        uses.push(PortUse {
+                            port: *port,
+                            unit: unit.key.name.clone(),
+                            serving: serving && bound.contains(port),
+                            routed: routed.contains(port),
+                        });
+                    }
                 }
                 BoxLanes {
                     host: conn.name.clone(),
                     serial: conn.serial,
                     lanes,
+                    ports,
                 }
             })
             .collect();
@@ -273,11 +272,19 @@ impl Inner {
         self.load_choices().await;
         let local = self.local_route_entries();
         let (_, before) = self.reassign_with(&local);
+        let mut pending = false;
         let previous = match &args.host {
             Some(host) => {
-                self.check_box_lane(host, &lane, &local).await?;
+                pending = !self.check_box_lane(host, &lane, &local).await?;
                 let previous = if before.mirrors(host, &lane) {
                     Some(host.clone())
+                } else if pending {
+                    // Whichever box serves the lane until the chosen one connects.
+                    before
+                        .mirrored
+                        .iter()
+                        .find(|(_, mirrored)| *mirrored == lane)
+                        .map(|(other, _)| other.clone())
                 } else {
                     before
                         .skip(host, &lane)
@@ -317,29 +324,57 @@ impl Inner {
                 before.yielded.get(&lane).cloned()
             }
         };
+        // The listeners and routes follow the new assignment by the time this
+        // returns. The wait only lets the mirrors bring `host.list` up to date.
         let (version, after) = self.reassign();
         self.await_applied(version).await;
         let mirrored = match &args.host {
             Some(host) => after.mirrors(host, &lane),
             None => !after.yielded.contains_key(&lane),
         };
+        if mirrored && previous != args.host {
+            self.announce_switch(&lane, args.host.as_deref(), previous.as_deref());
+        }
         Ok(json!({
             "lane": lane,
             "host": args.host,
             "previous": previous,
             "mirrored": mirrored,
+            "pending": pending,
         }))
     }
 
-    /// Refuses a choice of box `host`'s lane `lane` when the box is unknown
-    /// or not connected, has no such lane, or a running local lane would keep
-    /// the hostnames anyway.
+    /// Says once that `lane` now comes from box `to`, or from this machine,
+    /// instead of `from`: the one notice of a switch.
+    fn announce_switch(&self, lane: &str, to: Option<&str>, from: Option<&str>) {
+        let message = match to {
+            Some(to) => format!("{lane} now comes from {to}"),
+            None => format!("{lane} now comes from this machine"),
+        };
+        tracing::info!(%lane, ?to, ?from, "a lane switched");
+        self.bus.emit(
+            wire::WARNING_EVENT,
+            json!({
+                "host": to.or(from),
+                "code": "lane_switched",
+                "lane": lane,
+                "to": to,
+                "from": from,
+                "message": message,
+            }),
+        );
+    }
+
+    /// Refuses a choice of box `host`'s lane `lane` when the box is unknown,
+    /// has no such lane, or a running local lane would keep the hostnames
+    /// anyway. Returns false for a known box that is not connected, whose
+    /// choice applies once it connects, unchecked.
     async fn check_box_lane(
         &self,
         host: &str,
         lane: &str,
         local: &[RouteEntry],
-    ) -> Result<(), RpcError> {
+    ) -> Result<bool, RpcError> {
         let conn = lock(&self.remote.hosts).get(host).cloned();
         let Some(conn) = conn.filter(|conn| !conn.ended()) else {
             let known = self
@@ -349,25 +384,17 @@ impl Inner {
                 .unwrap_or_default()
                 .iter()
                 .any(|stored| stored.name == host);
-            return Err(if known {
-                use_error(
-                    "box_not_connected",
-                    json!({"host": host}),
-                    format!(
-                        "box {host} is not connected. Run devlanes remote connect {host} first"
-                    ),
-                    4,
-                )
-            } else {
-                use_error(
-                    "box_unknown",
-                    json!({"host": host}),
-                    format!(
-                        "this machine knows no box called {host}. Run devlanes remote ls to see the boxes"
-                    ),
-                    4,
-                )
-            });
+            if known {
+                return Ok(false);
+            }
+            return Err(use_error(
+                "box_unknown",
+                json!({"host": host}),
+                format!(
+                    "this machine knows no box called {host}. Run devlanes remote ls to see the boxes"
+                ),
+                4,
+            ));
         };
         let on_box = conn
             .registry
@@ -396,12 +423,12 @@ impl Inner {
                 "local_lane_running",
                 json!({"host": host, "lane": lane, "local_lane": running}),
                 format!(
-                    "{running} runs on this machine and keeps the hostnames. Stop it first with devlanes stop --lane {running}"
+                    "{running} runs on this machine. Stop it with devlanes stop {running}, then run devlanes remote use {host} {lane}."
                 ),
                 1,
             ));
         }
-        Ok(())
+        Ok(true)
     }
 
     /// Waits, at most [`APPLY_WAIT`], until every mirror whose link has not

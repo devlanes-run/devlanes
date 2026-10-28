@@ -35,6 +35,7 @@ mod assign;
 mod choice;
 mod feed;
 mod identity;
+mod listeners;
 mod mirror;
 mod pairing;
 mod report;
@@ -142,9 +143,8 @@ pub(crate) struct Remotes {
     /// Held while the assignment is computed and stored, so one computed
     /// from older inputs never replaces a newer one.
     assigning: Mutex<()>,
-    /// This machine's lanes in a start that has not spawned yet, with how
-    /// many starts each. They count as running, so they win at once.
-    starting: Mutex<BTreeMap<String, usize>>,
+    /// Every box port's listener and relay, whichever box they lead to.
+    listeners: listeners::Listeners,
 }
 
 /// How often box HTTPS ports that could not be opened are tried again: nothing
@@ -192,18 +192,74 @@ impl Remotes {
     /// `assignment` mirrors. A box that lost a lane may not have dropped its
     /// routes yet, and the winner's come in only once it built them, so a
     /// hostname is never routed to two boxes.
+    /// A box's routes kept ready for its skipped lanes count too: in a switch,
+    /// the lane's routes move to the new box in this one publish.
     pub(crate) fn routes(&self, assignment: &assign::Assignment) -> Vec<RouteEntry> {
         self.all()
             .iter()
             .flat_map(|conn| {
-                lock(&conn.view)
-                    .routes
+                let view = lock(&conn.view);
+                view.routes
                     .iter()
+                    .chain(&view.standby)
                     .filter(|route| assignment.mirrors(&conn.name, &route.lane))
                     .cloned()
                     .collect::<Vec<_>>()
             })
             .collect()
+    }
+
+    /// The live connection of `owner`'s box as a listener target.
+    fn target(&self, owner: &assign::PortOwner) -> Option<listeners::Owner> {
+        let conn = lock(&self.hosts)
+            .get(&owner.host)
+            .filter(|conn| !conn.ended())
+            .cloned()?;
+        Some(listeners::Owner {
+            conn,
+            lane: owner.lane.clone(),
+            unit: owner.unit.clone(),
+            conns: CancellationToken::new(),
+        })
+    }
+
+    /// Serves `listener` for box port `port`, leading where the current
+    /// assignment says. Under the assignment lock, so it never points the
+    /// port at a box an assignment computed meanwhile took it from.
+    fn listen(
+        &self,
+        port: u16,
+        address: std::net::IpAddr,
+        listener: tokio::net::TcpListener,
+        engine: std::sync::Weak<Inner>,
+    ) {
+        let _assigning = lock(&self.assigning);
+        let owner = lock(&self.assignment)
+            .1
+            .listeners
+            .get(&port)
+            .and_then(|owner| self.target(owner));
+        self.listeners
+            .listen(port, address, listener, owner, engine);
+    }
+
+    /// The local port of the relay for box port `port` of lane `lane`, used
+    /// by the box with connect serial `serial`, leading where the current
+    /// assignment says.
+    fn relay(
+        &self,
+        lane: &str,
+        port: u16,
+        serial: u64,
+        engine: std::sync::Weak<Inner>,
+    ) -> std::io::Result<u16> {
+        let _assigning = lock(&self.assigning);
+        let owner = lock(&self.assignment)
+            .1
+            .relays
+            .get(&(lane.to_owned(), port))
+            .and_then(|owner| self.target(owner));
+        self.listeners.relay(lane, port, serial, owner, engine)
     }
 
     /// Ports of every live box's non-hidden units, idle ones included, which new
@@ -1534,38 +1590,32 @@ impl Inner {
         }))
     }
 
-    /// Makes sure no box mirror holds one of `ports` before a local service of
-    /// `lane` binds them. A starting lane counts as running, so it takes its
-    /// hostnames back from every box lane it clashes with, deleting a choice
-    /// of one ([`Inner::reassign`]). A mirror gives up ports inside a local
-    /// block and those of lanes it no longer mirrors, so this wakes the
-    /// mirrors and waits up to [`RELEASE_WAIT`]; a port still held then, such
-    /// as a literal `PORT` the box also uses, fails with `port_mirrored`.
-    pub(crate) async fn release_for_local(
-        &self,
-        lane: &str,
-        ports: &BTreeSet<u16>,
-    ) -> Result<(), RpcError> {
-        let _starting = self.remote.starting(lane);
+    /// Makes sure no box listener holds one of `ports` before a local service
+    /// binds them. The lane counts as running from the start of its start, so
+    /// it took its hostnames back from every box lane it clashes with already
+    /// ([`Inner::reassign`]). A mirror gives up ports inside a local block, so
+    /// this wakes the mirrors and waits up to [`RELEASE_WAIT`], the only wait
+    /// for listeners there is. A port still held then, such as a literal
+    /// `PORT` the box also uses, fails with `port_mirrored`.
+    pub(crate) async fn release_for_local(&self, ports: &BTreeSet<u16>) -> Result<(), RpcError> {
         self.load_choices().await;
         self.reassign();
         let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+        let mut woken = false;
         loop {
-            let held = self.remote.all().into_iter().find_map(|conn| {
-                let found = lock(&conn.view)
-                    .bound
-                    .iter()
-                    .find(|(port, _)| ports.contains(*port))
-                    .map(|(port, unit)| (*port, unit.clone()));
-                found.map(|(port, unit)| (conn, port, unit))
-            });
-            let Some((conn, port, unit)) = held else {
+            let Some((port, owner)) = self.remote.listeners.holder(ports) else {
                 return Ok(());
             };
             if tokio::time::Instant::now() >= deadline {
-                return Err(port_mirrored(&conn.name, port, &unit));
+                let (host, unit) = owner.unwrap_or_default();
+                return Err(port_mirrored(&host, port, &unit));
             }
-            conn.wake.notify_one();
+            if !woken {
+                woken = true;
+                for conn in self.remote.all() {
+                    conn.wake.notify_one();
+                }
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -2343,7 +2393,11 @@ mod tests {
 
     /// A connection to box `name`, connected `serial`th, whose link state is
     /// whatever the test sends.
-    fn conn_named(name: &str, serial: u64, state: watch::Receiver<LinkState>) -> Arc<HostConn> {
+    pub(super) fn conn_named(
+        name: &str,
+        serial: u64,
+        state: watch::Receiver<LinkState>,
+    ) -> Arc<HostConn> {
         Arc::new(HostConn {
             name: name.into(),
             kind: "memory",
@@ -2473,60 +2527,6 @@ mod tests {
             code: "K7QM-3XWD".into(),
         });
         assert!(lock(&slot).is_some(), "a later connect's code stays");
-    }
-
-    /// The hand-over between two boxes: the box that won a lane waits for the
-    /// one that lost it to release the port both use, wakes it once, and
-    /// goes on as soon as the port is free. A port held for a lane its holder
-    /// still mirrors is a plain conflict, so nothing waits for it, and a port
-    /// never released ends the wait at [`RELEASE_WAIT`].
-    #[tokio::test(start_paused = true)]
-    async fn a_winner_waits_only_for_ports_the_loser_releases() {
-        use futures_util::FutureExt as _;
-        let (_state, receiver) = watch::channel(LinkState::Stopped);
-        let winner = conn_named("fork-b", 2, receiver.clone());
-        let loser = conn_named("fork-a", 1, receiver);
-        let others = || vec![winner.clone(), loser.clone()];
-        let mirroring = |host: &str| {
-            let mut assignment = assign::Assignment::default();
-            assignment
-                .mirrored
-                .insert((host.to_owned(), "acme@0".to_owned()));
-            assignment
-        };
-        lock(&loser.view).bound.insert(3000, "acme@0:web".into());
-
-        let start = tokio::time::Instant::now();
-        assert!(mirror::wait_for_release(2, others, &[3000], &mirroring("fork-a")).await);
-        assert_eq!(
-            start.elapsed(),
-            Duration::ZERO,
-            "fork-a still mirrors acme@0"
-        );
-        assert!(mirror::wait_for_release(2, others, &[3001], &mirroring("fork-b")).await);
-        assert_eq!(start.elapsed(), Duration::ZERO, "nobody holds 3001");
-
-        let releasing = loser.clone();
-        let release = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            lock(&releasing.view).bound.remove(&3000);
-        });
-        assert!(mirror::wait_for_release(2, others, &[3000], &mirroring("fork-b")).await);
-        let waited = start.elapsed();
-        assert!(
-            waited >= Duration::from_millis(100) && waited < Duration::from_millis(200),
-            "{waited:?}"
-        );
-        assert!(
-            loser.wake.notified().now_or_never().is_some(),
-            "the loser was woken"
-        );
-        release.await.expect("release");
-
-        lock(&loser.view).bound.insert(3000, "acme@0:web".into());
-        let start = tokio::time::Instant::now();
-        assert!(!mirror::wait_for_release(2, others, &[3000], &mirroring("fork-b")).await);
-        assert!(start.elapsed() >= RELEASE_WAIT, "{:?}", start.elapsed());
     }
 
     /// Ranges overlap when they share one port; invalid ranges never parse.

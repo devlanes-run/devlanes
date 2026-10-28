@@ -37,7 +37,7 @@ use crate::{
     activity::{ActiveBody, Activity},
     health::{Health, ListenerGuard, ListenerHealth},
     lane::{ClientReads, LaneActivity},
-    pool::{Connection, Pool},
+    pool::{Connection, Pool, PoolKey},
 };
 
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
@@ -620,6 +620,10 @@ impl Proxy {
         }
         *request.version_mut() = hyper::Version::HTTP_11;
         let target = route.target();
+        let pool_key = PoolKey {
+            target: target.clone(),
+            scope: route.pool_key.clone(),
+        };
         let unavailable =
             || error_response(&route_page(&route, ErrorCode::UpstreamUnreachable), format);
         let failed = || error_response(&route_page(&route, ErrorCode::UpstreamFailed), format);
@@ -627,7 +631,7 @@ impl Proxy {
         let pooled = if upgrading {
             None
         } else {
-            self.pool.take(target)
+            self.pool.take(&pool_key)
         };
         let (connection, sent) = match pooled {
             Some(mut connection) => {
@@ -679,8 +683,7 @@ impl Proxy {
         };
         let switched = response.status() == StatusCode::SWITCHING_PROTOCOLS;
         if !switched {
-            self.pool
-                .recycle(target.clone(), connection, shutdown.clone());
+            self.pool.recycle(pool_key, connection, shutdown.clone());
         }
         if switched {
             let Some(downstream) = downstream_upgrade else {

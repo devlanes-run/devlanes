@@ -1229,7 +1229,7 @@ impl LanePhase for ServicesPhase {
                     .chain([service.port])
                     .filter(|port| *port != 0)
                     .collect();
-                if let Err(error) = engine.release_for_local(&cx.reference, &ports).await {
+                if let Err(error) = engine.release_for_local(&ports).await {
                     cx.failures.push(UnitFailureData {
                         lane: cx.reference.clone(),
                         unit: service.unit.clone(),
@@ -2699,6 +2699,10 @@ impl Inner {
         // index this one plans on alone; ends however the start returns.
         lane.st().starting += 1;
         let starting = StartingMark { lane: lane.clone() };
+        // A starting lane counts as running for box lanes that clash with it,
+        // whatever it starts, so it takes its hostnames back now and a choice
+        // of a box for them is cleared.
+        self.reassign();
         // Units already running are left alone, so a frozen lane would stay frozen.
         self.wake_lane(project, lane, Some(Activity::Command))
             .instrument(tracing::debug_span!("wake"))

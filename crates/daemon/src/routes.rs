@@ -240,6 +240,7 @@ impl Inner {
                         .iter()
                         .find(|external| external.name == *unit)
                         .map(|external| external.address.ip()),
+                    upstream_box: None,
                 });
             }
         }

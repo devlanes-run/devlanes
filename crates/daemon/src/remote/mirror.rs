@@ -9,14 +9,15 @@
 //! holds on any loopback address, or on a wildcard address, is bound on none.
 //! Which box lane serves hostnames that several lanes claim is the
 //! [`assign`](super::assign) decision; a box lane it skips is skipped whole, and
-//! a port another box's mirror holds is reported with that box. A stopped local
+//! a port another box's lane owns is reported with that box. A stopped local
 //! lane that gave way to a chosen box lane keeps no port either.
 //!
-//! When the decision moves a lane from one box to another, the box that lost it
-//! unbinds its ports and closes the connections through them, and the box that
-//! won waits up to [`RELEASE_WAIT`] for those ports before it binds them, so a
-//! switch reports no port as in use. Routes need no wait: the route publisher
-//! only takes the routes of lanes the decision mirrors.
+//! The listeners are the daemon's, not this mirror's
+//! ([`Listeners`](super::listeners::Listeners)). When the decision moves a
+//! lane to another box, its listeners and relays lead to the new box from
+//! that moment, and the routes this mirror kept ready for its skipped lanes
+//! go live in the same publish. The old box's connections close once their
+//! answers are through.
 //!
 //! Listeners stay bound while the link reconnects; connections accepted meanwhile
 //! wait briefly for the new session and the proxy shows a reconnecting page.
@@ -25,8 +26,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    sync::{Arc, Weak},
+    net::{IpAddr, SocketAddr},
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 
@@ -44,11 +45,12 @@ use tokio::{
     task::JoinHandle,
     time::Instant,
 };
-use tokio_util::sync::{CancellationToken, DropGuard};
+use tokio_util::sync::CancellationToken;
 
 use super::{
-    HostConn, RELEASE_WAIT,
-    assign::{Assignment, Cause, Skip},
+    HostConn,
+    assign::{Assignment, Cause, PortOwner, Skip},
+    listeners::Target,
 };
 use crate::{
     engine::Inner,
@@ -62,10 +64,22 @@ const HOLD: Duration = Duration::from_secs(10);
 /// Shortest time between two `open_failed` warnings for the same port and reason.
 const OPEN_WARNING_EVERY: Duration = Duration::from_secs(60);
 
+/// How long a connection to a box that lost its lane stays open after the
+/// box last spoke, so the end of an answer gets through.
+const SWITCH_QUIET: Duration = Duration::from_millis(50);
+
+/// Longest a connection to a box that lost its lane stays open, answer under
+/// way or not.
+const SWITCH_LIMIT: Duration = Duration::from_secs(5);
+
 /// What a host mirrors right now, for routes and status output.
 #[derive(Debug, Clone, Default)]
 pub(super) struct View {
+    /// Routes of the lanes this machine mirrors from the box.
     pub routes: Vec<RouteEntry>,
+    /// Routes of the box's skipped lanes, ready for the moment a switch
+    /// gives one of them to this box. Never published while skipped.
+    pub standby: Vec<RouteEntry>,
     pub ports: Vec<Value>,
     /// Ports with at least one listener, and the box unit behind each
     /// (`project@lane:unit`), so a local spawn can tell whose port it hit.
@@ -231,9 +245,9 @@ impl Phase {
 }
 
 /// One accept loop; aborted when the listener is no longer wanted.
-struct Bound {
-    address: IpAddr,
-    task: JoinHandle<()>,
+pub(super) struct Bound {
+    pub address: IpAddr,
+    pub task: JoinHandle<()>,
 }
 
 impl Drop for Bound {
@@ -244,9 +258,9 @@ impl Drop for Bound {
 }
 
 /// Stops the accept loops of `bounds` and waits until their listeners are closed.
-/// Dropping a [`Bound`] only schedules that, and another box's mirror woken right
+/// Dropping a [`Bound`] only schedules that, and a local service started right
 /// after would then find the port still taken by this daemon.
-async fn unbind(bounds: Vec<Bound>) {
+pub(super) async fn unbind(bounds: Vec<Bound>) {
     for bound in &bounds {
         bound.task.abort();
     }
@@ -255,44 +269,31 @@ async fn unbind(bounds: Vec<Bound>) {
     }
 }
 
-/// A mirrored box port and the local addresses it holds.
+/// A box port this box wants mirrored and what keeps it from being bound
+/// here. The listeners themselves are the daemon's ([`Listeners`]).
+///
+/// [`Listeners`]: super::listeners::Listeners
 struct PortMirror {
     unit: String,
     lane: String,
     kind: UnitKind,
-    bound: Vec<Bound>,
-    /// Addresses whose bind failed, with what the port inspector found.
+    /// Addresses whose bind failed, with what the port inspector found, or
+    /// every address while another box's lane owns the number.
     conflicts: BTreeMap<IpAddr, Value>,
     /// Set while the port lies in a local lane's block: the message and the owner.
     local: Option<(String, String)>,
-    /// Cancels the connections accepted on this port once the port is no
-    /// longer mirrored. A pooled proxy connection would otherwise keep
-    /// reaching a box that lost the lane.
-    conns: CancellationToken,
-    _close: DropGuard,
 }
 
 impl PortMirror {
     /// A port of `unit` without listeners yet.
     fn new(unit: &UnitInfo) -> Self {
-        let conns = CancellationToken::new();
         Self {
             unit: unit.key.name.clone(),
             lane: lane_ref(&unit.key.lane),
             kind: unit.key.kind,
-            bound: Vec::new(),
             conflicts: BTreeMap::new(),
             local: None,
-            _close: conns.clone().drop_guard(),
-            conns,
         }
-    }
-
-    /// Whether `127.0.0.1:<port>` reaches the box, which the proxy dials first.
-    fn owns_v4(&self) -> bool {
-        self.bound
-            .iter()
-            .any(|bound| bound.address == IpAddr::V4(Ipv4Addr::LOCALHOST))
     }
 }
 
@@ -303,10 +304,8 @@ struct Mirror {
     conn: Arc<HostConn>,
     addresses: Vec<IpAddr>,
     ports: BTreeMap<u16, PortMirror>,
-    /// Ephemeral `127.0.0.1` listeners for routed box ports this machine could not
-    /// bind under their own number: box port -> listener, and the guard that
-    /// closes its connections when the relay goes.
-    relays: BTreeMap<u16, (u16, Bound, DropGuard)>,
+    /// The relays this box's routes use, by lane and box port.
+    relays: BTreeSet<(String, u16)>,
     /// Lanes the assignment skips, as last reported.
     skipped: BTreeMap<LaneKey, Skip>,
 }
@@ -322,7 +321,7 @@ pub(super) async fn run(engine: Weak<Inner>, conn: Arc<HostConn>) {
         conn: conn.clone(),
         addresses: inner.integ.remote.mirror_addresses(),
         ports: BTreeMap::new(),
-        relays: BTreeMap::new(),
+        relays: BTreeSet::new(),
         skipped: BTreeMap::new(),
     };
     let mut bus = inner.bus.subscribe();
@@ -376,30 +375,40 @@ pub(super) async fn run(engine: Weak<Inner>, conn: Arc<HostConn>) {
             break;
         }
     }
-    // Closed before `HostConn::close` returns, so a box woken by the disconnect
-    // can bind these numbers; relays close as `mirror` drops.
-    let bounds = std::mem::take(&mut mirror.ports)
-        .into_values()
-        .flat_map(|port| port.bound)
-        .collect();
-    unbind(bounds).await;
+    // Before `HostConn::close` returns: the disconnect removed this box, so
+    // the reassignment hands its lanes' listeners to other boxes, and what
+    // nobody takes is closed.
+    if let Some(inner) = engine.upgrade() {
+        inner.reassign();
+        mirror.release_all(&inner).await;
+    }
 }
 
 impl Mirror {
+    /// Gives up every port and relay of this box. Listeners another box's
+    /// lane owns now stay bound for it.
+    async fn release_all(&mut self, engine: &Arc<Inner>) {
+        let listeners = &engine.remote.listeners;
+        for port in std::mem::take(&mut self.ports).into_keys() {
+            listeners.release(port, self.conn.serial).await;
+        }
+        listeners.sweep().await;
+        self.relays.clear();
+        listeners.keep_relays(self.conn.serial, &self.relays);
+    }
+
     /// Unbinds everything and drops the host's routes, once the link gave up.
     /// Returns the assignment version it saw, which no longer has this box.
     async fn clear(&mut self, engine: &Arc<Inner>) -> u64 {
         let (version, _) = engine.reassign();
-        let bounds = std::mem::take(&mut self.ports)
-            .into_values()
-            .flat_map(|port| port.bound)
-            .collect();
-        unbind(bounds).await;
-        self.relays.clear();
+        self.release_all(engine).await;
         self.skipped.clear();
         let (had_routes, had_ports) = {
             let mut view = lock(&self.conn.view);
-            let had = (!view.routes.is_empty(), !view.bound.is_empty());
+            let had = (
+                !view.routes.is_empty() || !view.standby.is_empty(),
+                !view.bound.is_empty(),
+            );
             if had.0
                 || !view.ports.is_empty()
                 || !view.skipped.is_empty()
@@ -441,8 +450,10 @@ impl Mirror {
             }
         }
         for (lane, skip) in &skipped {
-            let known = self.skipped.get(lane);
-            if known.is_none_or(|known| known.cause != skip.cause || known.winner != skip.winner) {
+            // Said once, when the lane stops being mirrored. A lane that lost
+            // to a choice is a switch someone asked for, which `remote.use`
+            // announces itself.
+            if !self.skipped.contains_key(lane) && skip.cause != Cause::BoxChosen {
                 tracing::warn!(host = %self.conn.name, lane = %lane_ref(lane), hosts = ?skip.hosts, winner = ?skip.winner, cause = skip.cause.as_str(), "lane skipped: another lane serves its hostnames");
                 engine.bus.emit(
                     wire::WARNING_EVENT,
@@ -461,7 +472,8 @@ impl Mirror {
         }
         self.skipped = skipped;
         let mirrored: Vec<&UnitInfo> = visible
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|unit| !self.skipped.contains_key(&unit.key.lane))
             .collect();
 
@@ -473,35 +485,18 @@ impl Mirror {
             }
         }
         let local = local_blocks(engine, &assignment).await;
-        let mut released = Vec::new();
+        let listeners = &engine.remote.listeners;
         let stale: Vec<u16> = self
             .ports
             .keys()
             .copied()
             .filter(|port| !wanted.contains_key(port))
             .collect();
-        // Released before this mirror waits for other boxes below, and taken
-        // out of the view at once: a box waiting for these numbers in turn
-        // then sees them free instead of waiting for this reconcile to end.
-        let mut stale_bounds = Vec::new();
+        // A port this box's lane lost to another box's stays bound for that
+        // box; `release` only closes what nobody else owns.
         for port in &stale {
-            stale_bounds.extend(self.ports.remove(port).into_iter().flat_map(|m| m.bound));
-        }
-        unbind(stale_bounds).await;
-        if !stale.is_empty() {
-            let mut view = lock(&self.conn.view);
-            for port in &stale {
-                view.bound.remove(port);
-            }
-        }
-        let unbound: Vec<u16> = wanted
-            .keys()
-            .copied()
-            .filter(|port| self.ports.get(port).is_none_or(|m| m.bound.is_empty()))
-            .collect();
-        let others = || engine.remote.all();
-        if !wait_for_release(self.conn.serial, others, &unbound, &assignment).await {
-            tracing::debug!(host = %self.conn.name, "boxes still hold ports after a switch");
+            self.ports.remove(port);
+            listeners.release(*port, self.conn.serial).await;
         }
         // Every wanted port, bound or not: a program that started listening
         // on a wildcard address since the last reconcile takes its port back.
@@ -521,7 +516,7 @@ impl Mirror {
                 .map(|(_, owner)| owner);
             if let Some(owner) = owner {
                 // Local lanes win: dropping the listeners frees the port for them.
-                released.append(&mut mirror.bound);
+                listeners.release(*port, self.conn.serial).await;
                 mirror.conflicts.clear();
                 if mirror
                     .local
@@ -548,73 +543,66 @@ impl Mirror {
                 continue;
             }
             mirror.local = None;
+            let owner = assignment.listeners.get(port);
+            if let Some(other) = owner.filter(|owner| owner.host != self.conn.name) {
+                // A lane of another box wants the same number and ranks
+                // first. A switch never gets here: the lane's ports move with
+                // it, so only two different lanes compete for a number.
+                box_conflict(engine, &self.conn, &self.addresses, mirror, *port, other);
+                continue;
+            }
             let shadowed = shadowing.get(port).copied();
             if shadowed.is_some() {
                 // Every address is tried again below and fails as shadowed.
-                unbind(std::mem::take(&mut mirror.bound)).await;
+                listeners.remove(*port).await;
+            }
+            let bound = listeners.addresses(*port);
+            for address in &bound {
+                mirror.conflicts.remove(address);
             }
             let missing: Vec<IpAddr> = self
                 .addresses
                 .iter()
                 .copied()
-                .filter(|address| !mirror.bound.iter().any(|b| b.address == *address))
+                .filter(|address| !bound.contains(address))
                 .collect();
             let attempt = bind_port(&missing, *port, shadowed);
             if attempt.held() {
                 // Held on one loopback address, the port stays off the others
                 // too. Closed now, so the holder lookup below cannot find this
                 // daemon's own listener.
-                unbind(std::mem::take(&mut mirror.bound)).await;
+                listeners.remove(*port).await;
             }
             for address in &attempt.closed {
                 mirror.conflicts.remove(address);
             }
             for (address, listener) in attempt.listeners {
                 mirror.conflicts.remove(&address);
-                mirror.bound.push(Bound {
-                    address,
-                    task: tokio::spawn(accept_loop(
-                        listener,
-                        *port,
-                        self.conn.clone(),
-                        self.engine.clone(),
-                        mirror.conns.clone(),
-                    )),
-                });
+                engine
+                    .remote
+                    .listen(*port, address, listener, self.engine.clone());
             }
             // Looked up once per port, whichever addresses failed: a process
             // scan each.
-            let mut box_holder: Option<Option<(String, String)>> = None;
             let mut pid_holder: Option<Option<u32>> = None;
             let mut names: BTreeMap<u32, String> = BTreeMap::new();
             for (address, failure) in attempt.failures {
                 let in_use = failure.in_use();
-                // Another box's mirror runs in this daemon, so its pid
-                // would only name devlanes itself.
-                let other_box = match &failure {
-                    BindFailure::Bind(_) if in_use => box_holder
-                        .get_or_insert_with(|| other_box_holding(engine, &self.conn, *port))
-                        .clone(),
-                    _ => None,
-                };
                 let pid = match &failure {
                     BindFailure::Shadowed(pid) => Some(*pid),
-                    BindFailure::Bind(_) if in_use && other_box.is_none() => match pid_holder {
+                    BindFailure::Bind(_) if in_use => match pid_holder {
                         Some(pid) => pid,
                         None => *pid_holder.insert(engine.integ.ports.holder(*port).await),
                     },
                     BindFailure::Bind(_) => None,
                 };
-                // This daemon itself: usually another box's mirror that bound
-                // the port and has not listed it yet. Its reconcile wakes
-                // this mirror once it has, and the check above names it.
+                // This daemon itself: usually a listener that is still
+                // closing. The next reconcile tries again.
                 let own = pid == Some(std::process::id());
                 // What keeps the port when something does: the
                 // message's subject. A bind that failed for another
                 // reason has none.
-                let holder = if let Some((other, unit)) = &other_box {
-                    Some(format!("box {other} ({unit})"))
-                } else if own {
+                let holder = if own {
                     Some("this devlanes daemon".to_owned())
                 } else if in_use {
                     Some(match pid {
@@ -643,14 +631,13 @@ impl Mirror {
                         failure.describe()
                     ),
                 };
-                // Reported once per holder: again when another box, or
-                // something other than a box, holds it now. A port this
-                // daemon holds is only listed until a wake tells why.
-                let holder_box = other_box.as_ref().map(|(other, _)| other.as_str());
+                // Reported once per holder: again when something else holds
+                // it now. A port this daemon holds is only listed until a
+                // wake tells why.
                 let known = mirror.conflicts.get(&address);
                 let report = !own
                     && known.is_none_or(|known| {
-                        known["box"].as_str() != holder_box
+                        !known["box"].is_null()
                             || known["pid"].as_u64() == Some(u64::from(std::process::id()))
                     });
                 if report {
@@ -664,8 +651,8 @@ impl Mirror {
                             "port": port,
                             "address": address,
                             "pid": pid,
-                            "box": other_box.as_ref().map(|(other, _)| other),
-                            "held_by": other_box.as_ref().map(|(_, unit)| unit),
+                            "box": null,
+                            "held_by": null,
                             "unit": mirror.unit,
                             "lane": mirror.lane,
                         }),
@@ -676,48 +663,65 @@ impl Mirror {
                     json!({
                         "address": address,
                         "pid": pid,
-                        "box": other_box.as_ref().map(|(other, _)| other),
+                        "box": null,
                         "holder": holder,
                         "message": message,
                     }),
                 );
             }
         }
-        unbind(released).await;
+        listeners.sweep().await;
 
-        // Hostnames: the proxy dials 127.0.0.1 first, so a routed port this machine
-        // does not hold there gets a relay on an ephemeral port instead.
+        // Hostnames: the proxy dials 127.0.0.1 first, so a routed port this
+        // machine does not hold there for the lane gets a relay on an
+        // ephemeral port instead. Skipped lanes get their routes too, kept
+        // aside: when a switch gives this box the lane, the route publisher
+        // takes them at once, before this mirror reconciles again.
         let mut routes = Vec::new();
-        let mut relayed = BTreeSet::new();
+        let mut standby = Vec::new();
+        let mut relays = BTreeSet::new();
         let mut refused_hosts = Vec::new();
         let box_https_port = lock(&self.conn.info).https_port;
-        for unit in &mirrored {
+        for unit in &visible {
+            let is_mirrored = !self.skipped.contains_key(&unit.key.lane);
             let lane = registry
                 .lanes()
                 .find(|lane| lane.key == unit.key.lane)
                 .cloned();
+            let reference = lane_ref(&unit.key.lane);
             for host in &unit.hosts {
                 // The local CA signs whatever the routes name, so a box may only
                 // claim valid names this machine already routes to itself.
                 let Some(name) = accepted(&host.host, &suffixes) else {
-                    refused_hosts.push(json!({
-                        "host": host.host,
-                        "lane": lane_ref(&unit.key.lane),
-                        "unit": unit.key.name,
-                    }));
+                    if is_mirrored {
+                        refused_hosts.push(json!({
+                            "host": host.host,
+                            "lane": reference,
+                            "unit": unit.key.name,
+                        }));
+                    }
                     continue;
                 };
-                let owned = self.ports.get(&host.port).is_some_and(PortMirror::owns_v4);
-                let local_port = if owned {
+                let local_port = if listeners.serves_v4(host.port, &reference) {
                     host.port
                 } else {
-                    relayed.insert(host.port);
-                    match self.relay(host.port) {
-                        Some(port) => port,
-                        None => continue,
+                    let relay = engine.remote.relay(
+                        &reference,
+                        host.port,
+                        self.conn.serial,
+                        self.engine.clone(),
+                    );
+                    match relay {
+                        Ok(port) => {
+                            relays.insert((reference.clone(), host.port));
+                            port
+                        }
+                        Err(error) => {
+                            tracing::warn!(host = %self.conn.name, port = host.port, %error, "cannot bind a route relay");
+                            continue;
+                        }
                     }
                 };
-                let reference = lane_ref(&unit.key.lane);
                 let box_name = &self.conn.name;
                 // The proxy shows the hint on the page of the route's state.
                 let start_hint = match phase {
@@ -729,7 +733,7 @@ impl Mirror {
                     ),
                     _ => format!("Start it on {box_name}: devlanes start --lane {reference}"),
                 };
-                routes.push(RouteEntry {
+                let route = RouteEntry {
                     host: name,
                     port: local_port,
                     fallback: host.fallback,
@@ -737,7 +741,7 @@ impl Mirror {
                     status: route_status(&unit.state, phase),
                     start_hint,
                     project: unit.key.lane.project.clone(),
-                    lane: reference,
+                    lane: reference.clone(),
                     unit: unit.key.name.clone(),
                     certificate_names: lane
                         .as_ref()
@@ -749,7 +753,13 @@ impl Mirror {
                     box_https_port,
                     // The local end is the mirror's listener, on either loopback.
                     address: None,
-                });
+                    upstream_box: Some(self.conn.name.clone()),
+                };
+                if is_mirrored {
+                    routes.push(route);
+                } else {
+                    standby.push(route);
+                }
             }
         }
         if !refused_hosts.is_empty() && lock(&self.conn.view).refused_hosts != refused_hosts {
@@ -759,10 +769,13 @@ impl Mirror {
                 json!({"host": self.conn.name, "code": "hosts_skipped", "hosts": refused_hosts}),
             );
         }
-        self.relays.retain(|port, _| relayed.contains(port));
+        listeners.keep_relays(self.conn.serial, &relays);
+        self.relays = relays;
 
+        let bound = listeners.bound_by(self.conn.serial);
         let mut view = View {
             routes,
+            standby,
             ports: self
                 .ports
                 .iter()
@@ -771,9 +784,14 @@ impl Mirror {
                     if let Some((message, owner)) = &mirror.local {
                         conflicts.push(json!({"message": message, "local": owner}));
                     }
+                    let addresses = if bound.contains_key(port) {
+                        listeners.addresses(*port)
+                    } else {
+                        Vec::new()
+                    };
                     let state = port_state(
                         mirror.local.is_some(),
-                        !mirror.bound.is_empty(),
+                        !addresses.is_empty(),
                         &mirror.conflicts,
                     );
                     json!({
@@ -782,18 +800,13 @@ impl Mirror {
                         "unit": mirror.unit,
                         "kind": mirror.kind,
                         "state": state,
-                        "addresses": mirror.bound.iter().map(|b| b.address).collect::<Vec<_>>(),
+                        "addresses": addresses,
                         "conflicts": conflicts,
-                        "relay": self.relays.get(port).map(|(local, _, _)| local),
+                        "relay": listeners.relay_port(&mirror.lane, *port),
                     })
                 })
                 .collect(),
-            bound: self
-                .ports
-                .iter()
-                .filter(|(_, mirror)| !mirror.bound.is_empty())
-                .map(|(port, mirror)| (*port, format!("{}:{}", mirror.lane, mirror.unit)))
-                .collect(),
+            bound,
             skipped: self
                 .skipped
                 .iter()
@@ -803,20 +816,10 @@ impl Mirror {
             open_errors: BTreeMap::new(),
             warned: BTreeMap::new(),
         };
-        let (routes_changed, others_affected) = {
+        let routes_changed = {
             let mut current = lock(&self.conn.view);
-            // Other boxes care which names and ports this one holds, not their states.
-            let hosts = |routes: &[RouteEntry]| -> BTreeSet<String> {
-                routes.iter().map(|route| route.host.clone()).collect()
-            };
-            // Stale ports already left `current.bound` above.
-            let changed = (
-                current.routes != view.routes,
-                hosts(&current.routes) != hosts(&view.routes)
-                    || current.bound.keys().ne(view.bound.keys())
-                    || !stale.is_empty(),
-            );
-            if changed.0
+            let changed = current.routes != view.routes || current.standby != view.standby;
+            if changed
                 || current.ports != view.ports
                 || current.skipped != view.skipped
                 || current.refused_hosts != view.refused_hosts
@@ -826,44 +829,66 @@ impl Mirror {
             // Failed opens outlive a reconcile, but not the port they are about.
             view.open_errors = std::mem::take(&mut current.open_errors);
             view.warned = std::mem::take(&mut current.warned);
-            view.prune(Instant::now(), |port| self.relays.contains_key(&port));
+            let relayed: BTreeSet<u16> = self.relays.iter().map(|(_, port)| *port).collect();
+            view.prune(Instant::now(), |port| relayed.contains(&port));
             *current = view;
             changed
         };
         if routes_changed {
             engine.publish_routes();
         }
-        if others_affected {
-            engine.remote.wake_others(self.conn.serial);
-        }
         version
     }
+}
 
-    /// The local relay port for box port `port`, binding one on first use.
-    fn relay(&mut self, port: u16) -> Option<u16> {
-        if let Some((local, _, _)) = self.relays.get(&port) {
-            return Some(*local);
-        }
-        let address = IpAddr::V4(Ipv4Addr::LOCALHOST);
-        let listener = match bind(address, 0) {
-            Ok(listener) => listener,
-            Err(error) => {
-                tracing::warn!(host = %self.conn.name, port, %error, "cannot bind a route relay");
-                return None;
-            }
-        };
-        let local = listener.local_addr().ok()?.port();
-        let conns = CancellationToken::new();
-        let task = tokio::spawn(accept_loop(
-            listener,
-            port,
-            self.conn.clone(),
-            self.engine.clone(),
-            conns.clone(),
-        ));
-        self.relays
-            .insert(port, (local, Bound { address, task }, conns.drop_guard()));
-        Some(local)
+/// Records that another box's lane `other` owns box port `port`, which this
+/// box also wants for another lane, on every mirror address, and says so once
+/// per owner.
+fn box_conflict(
+    engine: &Inner,
+    conn: &HostConn,
+    addresses: &[IpAddr],
+    mirror: &mut PortMirror,
+    port: u16,
+    other: &PortOwner,
+) {
+    let held = format!("{}:{}", other.lane, other.unit);
+    let holder = format!("box {} ({held})", other.host);
+    let message = format!("port {port} is not mirrored because {holder} uses it here");
+    let known = addresses.iter().all(|address| {
+        mirror
+            .conflicts
+            .get(address)
+            .is_some_and(|c| c["box"] == other.host.as_str())
+    });
+    if !known {
+        tracing::warn!(host = %conn.name, %message, "cannot mirror port");
+        engine.bus.emit(
+            wire::WARNING_EVENT,
+            json!({
+                "host": conn.name,
+                "code": "port_in_use",
+                "message": message,
+                "port": port,
+                "pid": null,
+                "box": other.host,
+                "held_by": held,
+                "unit": mirror.unit,
+                "lane": mirror.lane,
+            }),
+        );
+    }
+    for address in addresses {
+        mirror.conflicts.insert(
+            *address,
+            json!({
+                "address": address,
+                "pid": null,
+                "box": other.host,
+                "holder": holder,
+                "message": message,
+            }),
+        );
     }
 }
 
@@ -884,64 +909,6 @@ fn port_state(local: bool, bound: bool, conflicts: &BTreeMap<IpAddr, Value>) -> 
     } else {
         "unbound"
     }
-}
-
-/// Waits, at most [`RELEASE_WAIT`], until no box among `others` but the one
-/// with serial `own` holds one of `ports` for a lane `assignment` no longer
-/// mirrors there; false when one still does then. Such a box lost the lane
-/// to `own` and is releasing its numbers, so binding them before would fail
-/// and report them in use for no reason.
-pub(super) async fn wait_for_release(
-    own: u64,
-    others: impl Fn() -> Vec<Arc<HostConn>>,
-    ports: &[u16],
-    assignment: &Assignment,
-) -> bool {
-    if ports.is_empty() {
-        return true;
-    }
-    let releasing = |other: &HostConn| {
-        lock(&other.view).bound.iter().any(|(port, unit)| {
-            let lane = unit.split_once(':').map_or(unit.as_str(), |(lane, _)| lane);
-            ports.contains(port) && !assignment.mirrors(&other.name, lane)
-        })
-    };
-    let deadline = Instant::now() + RELEASE_WAIT;
-    let mut woken = BTreeSet::new();
-    loop {
-        let waiting: Vec<Arc<HostConn>> = others()
-            .into_iter()
-            .filter(|other| other.serial != own && releasing(other))
-            .collect();
-        if waiting.is_empty() {
-            return true;
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        for other in &waiting {
-            // Once: the assignment change woke them already, and every wake
-            // costs a reconcile.
-            if woken.insert(other.serial) {
-                other.wake.notify_one();
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-}
-
-/// The box other than `conn` whose mirror holds `port` here, with the unit
-/// behind it (`project@lane:unit`).
-fn other_box_holding(engine: &Inner, conn: &HostConn, port: u16) -> Option<(String, String)> {
-    engine
-        .remote
-        .all()
-        .into_iter()
-        .filter(|other| other.serial != conn.serial)
-        .find_map(|other| {
-            let unit = lock(&other.view).bound.get(&port).cloned()?;
-            Some((other.name.clone(), unit))
-        })
 }
 
 /// `project@lane` for a box lane key.
@@ -1210,10 +1177,87 @@ fn wildcard_holders(
     holders
 }
 
+/// A local connection's stream that notes who spoke last and when: `true`
+/// when bytes from the box went out to the local client.
+struct Watched<'a> {
+    stream: &'a mut TcpStream,
+    last: &'a Mutex<Option<(Instant, bool)>>,
+}
+
+impl tokio::io::AsyncRead for Watched<'_> {
+    /// Reads from the local client and notes it spoke.
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let polled = std::pin::Pin::new(&mut *self.stream).poll_read(cx, buf);
+        if matches!(polled, std::task::Poll::Ready(Ok(()))) && buf.filled().len() > before {
+            *lock(self.last) = Some((Instant::now(), false));
+        }
+        polled
+    }
+}
+
+impl tokio::io::AsyncWrite for Watched<'_> {
+    /// Writes the box's bytes to the local client and notes the box spoke.
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        data: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let polled = std::pin::Pin::new(&mut *self.stream).poll_write(cx, data);
+        if matches!(polled, std::task::Poll::Ready(Ok(written)) if written > 0) {
+            *lock(self.last) = Some((Instant::now(), true));
+        }
+        polled
+    }
+
+    /// Flushes the local side.
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut *self.stream).poll_flush(cx)
+    }
+
+    /// Half-closes the local side.
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut *self.stream).poll_shutdown(cx)
+    }
+}
+
+/// Resolves once a connection to a box that lost its lane may close: the box
+/// spoke last and has been quiet for [`SWITCH_QUIET`], or [`SWITCH_LIMIT`]
+/// passed. A local client that spoke last may still wait for an answer.
+async fn drained(last: &Mutex<Option<(Instant, bool)>>) {
+    let deadline = Instant::now() + SWITCH_LIMIT;
+    loop {
+        let now = Instant::now();
+        let answered = match *lock(last) {
+            Some((at, true)) => Some(at + SWITCH_QUIET),
+            _ => None,
+        };
+        let wake = match answered {
+            Some(quiet) if quiet <= now => return,
+            Some(quiet) => quiet.min(deadline),
+            None => (now + SWITCH_QUIET).min(deadline),
+        };
+        if now >= deadline {
+            return;
+        }
+        tokio::time::sleep_until(wake).await;
+    }
+}
+
 /// Binds a mirror listener. `SO_REUSEADDR` only on Linux, where it merely skips
 /// `TIME_WAIT` on rebinds: on macOS it would let this listener shadow another
 /// process bound to the wildcard address instead of reporting the conflict.
-fn bind(address: IpAddr, port: u16) -> std::io::Result<TcpListener> {
+pub(super) fn bind(address: IpAddr, port: u16) -> std::io::Result<TcpListener> {
     let socket = match address {
         IpAddr::V4(_) => TcpSocket::new_v4()?,
         IpAddr::V6(_) => TcpSocket::new_v6()?,
@@ -1223,25 +1267,28 @@ fn bind(address: IpAddr, port: u16) -> std::io::Result<TcpListener> {
     socket.listen(1024)
 }
 
-/// Accepts local connections and splices each into a data stream to the box,
-/// until `conns` closes them.
-async fn accept_loop(
+/// Accepts local connections and splices each into a data stream to box port
+/// `port` of the box `target` leads to at that moment. With no box behind it,
+/// which happens only until the next reconcile unbinds it, a connection is
+/// closed at once.
+pub(super) async fn accept_loop(
     listener: TcpListener,
     port: u16,
-    conn: Arc<HostConn>,
+    target: Arc<Target>,
     engine: Weak<Inner>,
-    conns: CancellationToken,
 ) {
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                tokio::spawn(splice(
-                    stream,
-                    port,
-                    conn.clone(),
-                    engine.clone(),
-                    conns.clone(),
-                ));
+                if let Some(owner) = target.current() {
+                    tokio::spawn(splice(
+                        stream,
+                        port,
+                        owner.conn,
+                        engine.clone(),
+                        owner.conns,
+                    ));
+                }
             }
             Err(error) => {
                 // Out of descriptors and similar: back off instead of spinning.
@@ -1253,8 +1300,13 @@ async fn accept_loop(
 }
 
 /// One local connection to box port `port`. A connection that cannot reach the
-/// box's service is recorded on the port and reported with `open_failed`. One
-/// still open when `conns` is cancelled is reset.
+/// box's service is recorded on the port and reported with `open_failed`.
+///
+/// When `conns` is cancelled, because the box lost the lane or the port, the
+/// connection is reset once the box spoke last and then stayed quiet for
+/// [`SWITCH_QUIET`], or after [`SWITCH_LIMIT`]. An idle keep-alive or
+/// WebSocket connection closes at once, and an answer under way still gets
+/// through, so a switch fails no request that reached the old box.
 async fn splice(
     mut stream: TcpStream,
     port: u16,
@@ -1266,8 +1318,9 @@ async fn splice(
         Some(session) => session,
         None => match conn.session_within(HOLD).await {
             Some(session) => session,
-            // A disconnect in progress closes this listener anyway.
-            None if conn.cancel.is_cancelled() => return,
+            // A disconnect in progress closes this listener anyway, and a
+            // switch away from this box is no failure to report.
+            None if conn.cancel.is_cancelled() || conns.is_cancelled() => return,
             None if conn.needs_auth() => {
                 let message = format!("box {} is waiting for you to sign in again", conn.name);
                 open_failed(&engine, &conn, port, "needs_auth", message);
@@ -1293,19 +1346,35 @@ async fn splice(
             if lock(&conn.view).open_errors.remove(&port).is_some() {
                 conn.mark_changed();
             }
-            let spliced = tokio::select! {
-                spliced = devlanes_transport::splice(
-                    &mut stream,
+            let last = Mutex::new(None);
+            let spliced = {
+                let watched = Watched {
+                    stream: &mut stream,
+                    last: &last,
+                };
+                let spliced = devlanes_transport::splice(
+                    watched,
                     remote,
                     devlanes_transport::HALF_CLOSE_IDLE,
-                ) => Some(spliced),
-                () = conns.cancelled() => None,
+                );
+                tokio::pin!(spliced);
+                let first = tokio::select! {
+                    spliced = &mut spliced => Some(spliced),
+                    () = conns.cancelled() => None,
+                };
+                match first {
+                    Some(spliced) => Some(spliced),
+                    None => tokio::select! {
+                        spliced = &mut spliced => Some(spliced),
+                        () = drained(&last) => None,
+                    },
+                }
             };
             match spliced {
                 Some(Err(error)) => tracing::debug!(%error, port, "mirrored connection ended"),
                 Some(Ok(_)) => {}
-                // A reset leaves no TIME_WAIT on the port, which on macOS
-                // would keep the box that won the lane from binding it.
+                // A reset leaves no TIME_WAIT behind, and the client sees
+                // the connection end at once instead of after a timeout.
                 None => {
                     let _ = stream.set_zero_linger();
                 }
@@ -1401,6 +1470,8 @@ fn open_failed(
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
 
     /// A failure with `reason` and a message naming it.

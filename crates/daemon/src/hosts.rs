@@ -478,6 +478,7 @@ mod tests {
             remote: false,
             box_https_port: None,
             address: None,
+            upstream_box: None,
         }
     }
 

@@ -11,6 +11,12 @@
 //! The others are skipped whole. [`assign`] is pure, so the mirrors, the route
 //! publisher and `host.list` all read one decision, whichever box reconciles
 //! first.
+//!
+//! The same decision names the box behind each local port and each relay
+//! (see [`Listeners`](super::listeners::Listeners)). A port goes to the
+//! mirrored lane that wants it, and when lanes of two boxes want one number
+//! without sharing hostnames, a chosen lane gets it first, then the box that
+//! connected first.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -35,6 +41,27 @@ pub(super) struct BoxLanes {
     pub serial: u64,
     /// Hostnames this machine would route, by lane reference.
     pub lanes: BTreeMap<String, BTreeSet<String>>,
+    /// The ports of each lane's mirrorable units, by lane reference.
+    pub ports: BTreeMap<String, Vec<PortUse>>,
+}
+
+/// One port of a box unit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PortUse {
+    pub port: u16,
+    pub unit: String,
+    /// The unit serves, so the port is bound here.
+    pub serving: bool,
+    /// One of the lane's hostnames routes to it.
+    pub routed: bool,
+}
+
+/// The box lane behind a local port or relay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PortOwner {
+    pub host: String,
+    pub lane: String,
+    pub unit: String,
 }
 
 /// Why a lane is not mirrored: the kind of lane that serves its hostnames.
@@ -86,6 +113,13 @@ pub(crate) struct Assignment {
     /// Choices whose box lane loses to a running local lane, lane to box.
     /// Starting a local lane deletes them.
     pub cleared: BTreeMap<String, String>,
+    /// The box lane behind each local port: ports of serving units of
+    /// mirrored lanes.
+    pub listeners: BTreeMap<u16, PortOwner>,
+    /// The box lane behind each relay, by lane and box port: routed ports of
+    /// mirrored lanes. A relay belongs to the lane, so forks of one lane
+    /// share it and a switch leaves its port as it is.
+    pub relays: BTreeMap<(String, u16), PortOwner>,
 }
 
 impl Assignment {
@@ -226,7 +260,45 @@ pub(super) fn assign(
             }
         }
     }
+    assign_ports(&mut assignment, boxes, choices);
     assignment
+}
+
+/// Fills in the box lane behind each local port and relay, from the mirrored
+/// lanes. Chosen lanes come first, then connect order, box and lane.
+fn assign_ports(
+    assignment: &mut Assignment,
+    boxes: &[BoxLanes],
+    choices: &BTreeMap<String, String>,
+) {
+    let mut lanes: Vec<(bool, u64, &str, &str, &[PortUse])> = Vec::new();
+    for host in boxes {
+        for (lane, ports) in &host.ports {
+            if assignment.mirrors(&host.host, lane) {
+                let chosen = choices.get(lane).is_some_and(|chosen| *chosen == host.host);
+                lanes.push((!chosen, host.serial, &host.host, lane, ports));
+            }
+        }
+    }
+    lanes.sort_by(|a, b| (a.0, a.1, a.2, a.3).cmp(&(b.0, b.1, b.2, b.3)));
+    for (_, _, host, lane, ports) in lanes {
+        for used in ports {
+            let owner = || PortOwner {
+                host: host.to_owned(),
+                lane: lane.to_owned(),
+                unit: used.unit.clone(),
+            };
+            if used.serving {
+                assignment.listeners.entry(used.port).or_insert_with(owner);
+            }
+            if used.routed {
+                assignment
+                    .relays
+                    .entry((lane.to_owned(), used.port))
+                    .or_insert_with(owner);
+            }
+        }
+    }
 }
 
 /// Whether any hostname of `a` overlaps one of `b`.
@@ -278,7 +350,95 @@ mod tests {
                 .iter()
                 .map(|(lane, hosts)| ((*lane).to_owned(), names(hosts)))
                 .collect(),
+            ports: BTreeMap::new(),
         }
+    }
+
+    /// `host` with `ports` for its lanes, as `(lane, port, unit, serving, routed)`.
+    fn with_ports(mut host: BoxLanes, ports: &[(&str, u16, &str, bool, bool)]) -> BoxLanes {
+        for (lane, port, unit, serving, routed) in ports {
+            host.ports
+                .entry((*lane).to_owned())
+                .or_default()
+                .push(PortUse {
+                    port: *port,
+                    unit: (*unit).to_owned(),
+                    serving: *serving,
+                    routed: *routed,
+                });
+        }
+        host
+    }
+
+    /// The owner of each listener or relay as `(port, box)`.
+    fn owners<K: Clone>(map: &BTreeMap<K, PortOwner>) -> Vec<(K, String)> {
+        map.iter()
+            .map(|(key, owner)| (key.clone(), owner.host.clone()))
+            .collect()
+    }
+
+    /// A port goes to the mirrored lane of the forks, a skipped fork owns
+    /// nothing, and an idle unit gets a relay but no listener. Two boxes
+    /// whose lanes share only a port number give it to the chosen lane, and
+    /// without a choice to the box connected first.
+    #[test]
+    fn ports_follow_the_mirrored_lane() {
+        let forks = |choices: &[(&str, &str)]| {
+            assign(
+                &[],
+                &[
+                    with_ports(
+                        on_box("fork-a", 1, &[("acme@0", WEB)]),
+                        &[
+                            ("acme@0", 3000, "web", true, true),
+                            ("acme@0", 3001, "api", false, true),
+                        ],
+                    ),
+                    with_ports(
+                        on_box("fork-b", 2, &[("acme@0", WEB)]),
+                        &[("acme@0", 3000, "web", true, true)],
+                    ),
+                ],
+                &chose(choices),
+            )
+        };
+        let first = forks(&[]);
+        assert_eq!(owners(&first.listeners), [(3000, "fork-a".to_owned())]);
+        assert_eq!(
+            owners(&first.relays),
+            [
+                (("acme@0".to_owned(), 3000), "fork-a".to_owned()),
+                (("acme@0".to_owned(), 3001), "fork-a".to_owned()),
+            ]
+        );
+        let switched = forks(&[("acme@0", "fork-b")]);
+        assert_eq!(owners(&switched.listeners), [(3000, "fork-b".to_owned())]);
+        assert_eq!(
+            owners(&switched.relays),
+            [(("acme@0".to_owned(), 3000), "fork-b".to_owned())]
+        );
+
+        let apart = |choices: &[(&str, &str)]| {
+            assign(
+                &[],
+                &[
+                    with_ports(
+                        on_box("box-a", 1, &[("acme@0", WEB)]),
+                        &[("acme@0", 4000, "db", true, false)],
+                    ),
+                    with_ports(
+                        on_box("box-b", 2, &[("shop@0", &["web.shop.localhost"])]),
+                        &[("shop@0", 4000, "db", true, false)],
+                    ),
+                ],
+                &chose(choices),
+            )
+        };
+        assert_eq!(owners(&apart(&[]).listeners), [(4000, "box-a".to_owned())]);
+        assert_eq!(
+            owners(&apart(&[("shop@0", "box-b")]).listeners),
+            [(4000, "box-b".to_owned())]
+        );
     }
 
     /// Choices from `(lane, box)` pairs.

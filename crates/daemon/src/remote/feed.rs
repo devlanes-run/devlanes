@@ -507,6 +507,7 @@ mod tests {
             remote: false,
             box_https_port: None,
             address: None,
+            upstream_box: None,
         };
         let routes = [
             route("web.app-1.localhost", "web", 4100),

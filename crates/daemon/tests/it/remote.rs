@@ -558,6 +558,7 @@ impl RouteSink for ProxyRoutes {
                 route.remote = entry.remote;
                 route.certificate_names = entry.certificate_names;
                 route.listen_port = entry.box_https_port;
+                route.pool_key = entry.upstream_box;
                 route
             })
             .collect();
