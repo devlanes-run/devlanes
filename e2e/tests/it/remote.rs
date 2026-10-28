@@ -168,6 +168,120 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
     Ok(())
 }
 
+/// Two boxes run the same lane, as forks of one image do. The client mirrors
+/// the box connected first, lists the other's lane as skipped, and after
+/// `remote use` a request through its proxy reaches the other box's process.
+#[test]
+fn remote_use_switches_a_lane_between_two_boxes() -> Result<()> {
+    if devlanes_e2e::curl()
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .status()
+        .map_or(true, |s| !s.success())
+    {
+        eprintln!("skipped: curl is not installed");
+        return Ok(());
+    }
+    let mut forks = Vec::new();
+    for _ in 0..2 {
+        let boxed = Lab::new("two-services", BUDGET)?;
+        let config = boxed.home().join("config.yaml");
+        let mut text = std::fs::read_to_string(&config)?;
+        text.push_str("remote:\n  require_pairing: false\n");
+        std::fs::write(&config, text)?;
+        let started = boxed.json(boxed.repo(), &["start"])?;
+        assert_eq!(started["ready"], true, "{started}");
+        let lanes = boxed.lanes(boxed.repo())?;
+        let api = need(
+            lane(&lanes, "fixture-two@0")
+                .and_then(|lane| unit(lane, "api"))
+                .and_then(devlanes_e2e::pid),
+            "the box's api pid",
+        )?;
+        forks.push((boxed, api));
+    }
+
+    let client = Lab::without_config(BUDGET)?;
+    let config = client.home().join("config.yaml");
+    let mut text = std::fs::read_to_string(&config)?;
+    text.push_str("remote:\n  boxes:\n");
+    for (name, (boxed, _)) in ["fork-a", "fork-b"].iter().zip(&forks) {
+        text.push_str(&format!(
+            "    {name}:\n      command: {}\n",
+            box_command(boxed)?
+        ));
+    }
+    std::fs::write(&config, text)?;
+    client.json(
+        client.repo(),
+        &["remote", "connect", "fork-a", "--background"],
+    )?;
+    client.eventually("fork-a's routes", CONNECT, || {
+        Ok(host(&client, "fork-a")?
+            .filter(|host| host["routes"].as_array().is_some_and(|r| !r.is_empty())))
+    })?;
+    client.json(
+        client.repo(),
+        &["remote", "connect", "fork-b", "--background"],
+    )?;
+    let skipped = client.eventually("fork-b's lane to be skipped", CONNECT, || {
+        Ok(host(&client, "fork-b")?.and_then(|host| {
+            host["skipped_lanes"]
+                .as_array()?
+                .iter()
+                .find(|entry| entry["lane"] == "fixture-two@0")
+                .cloned()
+        }))
+    })?;
+    assert_eq!(skipped["winner"], "fork-a", "{skipped}");
+
+    let routes = client.json(client.repo(), &["url", "ls", "--json"])?;
+    let https = &routes["proxy"]["https"];
+    let Some(port) = https["port"].as_u64().filter(|_| https["bound"] == true) else {
+        eprintln!("skipped: the client proxy could not bind HTTPS: {https}");
+        return Ok(());
+    };
+    let ca = client.home().join("ca/ca.pem");
+    let host_name = "api.fixture-two.localhost";
+    let answering_pid = || -> Result<Option<i64>> {
+        let mut curl = devlanes_e2e::curl();
+        curl.args(["-sS", "--max-time", "10", "--cacert"])
+            .arg(&ca)
+            .arg("--resolve")
+            .arg(format!("{host_name}:{port}:127.0.0.1"))
+            .arg(format!("https://{host_name}:{port}/healthz"));
+        let output = client.run(curl, devlanes_e2e::COMMAND_TIMEOUT)?;
+        if output.code != Some(0) {
+            return Ok(None);
+        }
+        let reflected: Value = serde_json::from_str(&output.stdout).unwrap_or_default();
+        Ok(reflected["pid"].as_i64())
+    };
+    let (fork_a, fork_b) = (i64::from(forks[0].1), i64::from(forks[1].1));
+    client.eventually("fork-a's api through the proxy", CONNECT, || {
+        Ok(answering_pid()?.filter(|pid| *pid == fork_a))
+    })?;
+
+    let used = client.json(
+        client.repo(),
+        &["remote", "use", "fork-b", "fixture-two@0", "--json"],
+    )?;
+    assert_eq!(
+        used,
+        json!({"lane": "fixture-two@0", "host": "fork-b", "previous": "fork-a", "mirrored": true})
+    );
+    assert_eq!(
+        answering_pid()?,
+        Some(fork_b),
+        "fork-b's api answers once remote use returns"
+    );
+    let chosen = need(host(&client, "fork-b")?, "fork-b in remote ls")?;
+    assert_eq!(chosen["chosen_lanes"], json!(["fixture-two@0"]), "{chosen}");
+
+    client.json(client.repo(), &["remote", "disconnect"])?;
+    Ok(())
+}
+
 /// Ways to start the box's tunnel, by name: directly, and on Windows the way
 /// a Windows box's sshd runs the tunnel command (quoted as the SSH transport
 /// quotes it) with each default shell installed here: cmd.exe, Windows
