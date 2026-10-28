@@ -1,0 +1,21 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+acme@2 · feat/billing
+✓ services  2 of 2 ready
+  ✓  api  https://api.acme-2.localhost:8443
+  ✓  web  https://web.acme-2.localhost:8443
+! infra or ports changed, so the whole lane restarted
+--- plain (exit 0)
+acme@2 · feat/billing
+ok services  2 of 2 ready
+  ok  api  https://api.acme-2.localhost:8443
+  ok  web  https://web.acme-2.localhost:8443
+warn infra or ports changed, so the whole lane restarted
+--- agent (exit 0)
+acme@2 (feat/billing): 2/2 ready
+ready api http://127.0.0.1:20103 https://api.acme-2.localhost:8443
+ready web http://127.0.0.1:20103 https://web.acme-2.localhost:8443
+warn infra or ports changed, so the whole lane restarted

@@ -502,7 +502,7 @@ pub trait DaemonApi: Send + Sync {
     async fn subscribe(&self) -> Result<EventStream, ApiError>;
     /// Opens a terminal stream on `params.unit`.
     async fn attach(&self, lane: String, params: AttachParams) -> Result<AttachSession, ApiError>;
-    /// `Start`, `Stop` or `Restart` for a lane or some of its units.
+    /// `Start`, `Stop`, `Restart` or `Reload` for a lane or some of its units.
     async fn control(
         &self,
         method: Method,
@@ -1059,14 +1059,15 @@ impl DaemonApi for ClientApi {
         Ok(AttachSession::new(result, output_rx, input_tx))
     }
 
-    /// Calls `start`, `stop` or `restart` on a dedicated connection.
+    /// Calls `start`, `stop`, `restart` or `reload` on a dedicated connection.
     async fn control(
         &self,
         method: Method,
         lane: String,
         selection: Selection,
     ) -> Result<Value, ApiError> {
-        // Restart reuses the lane's stored env (plan decision 7); start supplies this shell's.
+        // Restart and reload reuse the lane's stored env (plan decision 7); start
+        // supplies this shell's.
         let with_env = method == Method::Start;
         self.oneshot(
             method,

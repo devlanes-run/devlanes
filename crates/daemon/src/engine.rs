@@ -124,6 +124,9 @@ pub(crate) struct Inner {
     pub integ: Integrations,
     pub bus: EventBus,
     pub projects: Mutex<BTreeMap<ProjectId, Arc<ProjectRt>>>,
+    /// Held while a project file is matched to a project by name, so two first
+    /// requests for one project cannot both register it.
+    pub registering: tokio::sync::Mutex<()>,
     pub shutdown: CancellationToken,
     pub started: Instant,
     pub background: AtomicBool,
@@ -176,6 +179,7 @@ impl Engine {
                 integ,
                 bus: EventBus::default(),
                 projects: Mutex::new(BTreeMap::new()),
+                registering: tokio::sync::Mutex::new(()),
                 shutdown,
                 started: Instant::now(),
                 background: AtomicBool::new(false),
@@ -224,6 +228,11 @@ impl Handler for Engine {
     /// Canonicalizes the cwd, then dispatches.
     async fn handle(&self, mut request: Request, session: Session) -> Result<Value, RpcError> {
         request.context.cwd = canonical(&request.context.cwd).await;
+        // A project's file is recorded relative to its repository, which only one
+        // spelling of the path (no `..`, symlink or `subst` drive) gives.
+        if let Some(file) = &request.context.file {
+            request.context.file = Some(canonical(file).await);
+        }
         self.inner.dispatch(request, session).await
     }
 
@@ -371,6 +380,7 @@ pub(crate) fn mutating(method: &Method) -> bool {
             | Method::Start
             | Method::Stop
             | Method::Restart
+            | Method::Reload
             | Method::Resume
             | Method::LaneNew
             | Method::LaneClean
@@ -490,9 +500,11 @@ impl Inner {
             Method::DaemonResetState => self.reset_state(&context).await,
             Method::Doctor => self.doctor().await,
             Method::ConfigCheck => self.config_check(&context).await,
+            Method::ConfigShow => self.config_show(&context).await,
             Method::Start => self.start_method(params, &context, &session).await,
             Method::Stop => self.stop_method(params, &context).await,
             Method::Restart => self.restart_method(params, &context, &session).await,
+            Method::Reload => self.reload_method(params, &context, &session).await,
             Method::Resume => self.resume_method(params, &context, &session).await,
             Method::Status => self
                 .remote_status(params, &context, &session)
@@ -593,13 +605,8 @@ impl Inner {
     ) -> Result<LanePair, RpcError> {
         let parsed: LaneRef = reference.parse().map_err(reference_error)?;
         let scope = match (&parsed.project, &context.project) {
-            (None, Some(name)) => self.project_by_name(name)?.map(|p| p.id),
-            (None, None) => self
-                .project_for_cwd(&context.cwd)
-                .await
-                .ok()
-                .flatten()
-                .map(|p| p.id),
+            (None, Some(name)) => Some(self.project_by_name(name)?.id),
+            (None, None) => self.project_for(context).await.ok().flatten().map(|p| p.id),
             _ => None,
         };
         let (candidates, map) = self.candidates();
@@ -621,7 +628,7 @@ impl Inner {
                 if let Some(pair) = self.unassigned_by_dir(&parsed, scope) {
                     return Ok(pair);
                 }
-                return Err(self.renamed_hint(reference_error(error), &parsed));
+                return Err(reference_error(error));
             }
         };
         map.get(&found.id).cloned().ok_or_else(|| {
@@ -654,56 +661,6 @@ impl Inner {
         found.next().is_none().then_some(first)
     }
 
-    /// A `not_found` for `<old>@<lane>` after `project:` was renamed gains
-    /// `renamed_to` and `suggestion` (the same lane under the new name).
-    fn renamed_hint(&self, mut error: RpcError, parsed: &LaneRef) -> RpcError {
-        let Some(old) = &parsed.project else {
-            return error;
-        };
-        if error.code != "not_found" {
-            return error;
-        }
-        let renamed = self
-            .all_projects()
-            .into_iter()
-            .find(|project| project.st().former_names.contains(old));
-        if let Some(project) = renamed {
-            let name = project.name();
-            error.data["renamed_to"] = json!(name);
-            error.data["suggestion"] = json!(format!("{name}@{}", parsed.selector));
-        }
-        error
-    }
-
-    /// Finds a project by its config name; several projects with one name are ambiguous.
-    fn project_by_name(&self, name: &str) -> Result<Option<Arc<ProjectRt>>, RpcError> {
-        let found: Vec<_> = self
-            .all_projects()
-            .into_iter()
-            .filter(|project| project.name() == name)
-            .collect();
-        match found.len() {
-            0 => {
-                let mut error = RpcError::new(
-                    "not_found",
-                    json!({"reference": name, "candidates": self.all_projects().iter().map(|p| p.name()).collect::<Vec<_>>()}),
-                    3,
-                );
-                let renamed = self
-                    .all_projects()
-                    .into_iter()
-                    .find(|project| project.st().former_names.iter().any(|n| n == name));
-                if let Some(project) = renamed {
-                    error.data["renamed_to"] = json!(project.name());
-                    error.data["suggestion"] = json!(project.name());
-                }
-                Err(error)
-            }
-            1 => Ok(found.into_iter().next()),
-            _ => Ok(None),
-        }
-    }
-
     /// The request's lane: `context.lane`, else the lane whose worktree holds the cwd.
     pub(crate) async fn target_lane(
         self: &Arc<Self>,
@@ -720,7 +677,7 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<LanePair, RpcError> {
-        if let Some(project) = self.project_for_cwd(&context.cwd).await? {
+        if let Some(project) = self.project_for(context).await? {
             if let Some(lane) = Self::lane_at(&project, &context.cwd) {
                 // Running devlanes in a worktree is what makes it a lane.
                 self.claim_lane(&project, &lane).await;
@@ -790,8 +747,12 @@ impl Inner {
 /// `no_config` (exit 3) for a cwd with no `devlanes.yaml` up to its repository
 /// root: `path` is the cwd, `searched_to` the last directory looked in.
 pub(crate) async fn no_config(cwd: &Path) -> RpcError {
-    let searched_to = match devlanes_git::search_config(cwd).await {
-        Ok(devlanes_git::ConfigSearch::Missing { searched_to }) => Some(searched_to),
+    let search = {
+        let cwd = cwd.to_path_buf();
+        tokio::task::spawn_blocking(move || devlanes_config::search_project_file(&cwd)).await
+    };
+    let searched_to = match search {
+        Ok(Ok(devlanes_config::ConfigSearch::Missing { searched_to })) => Some(searched_to),
         _ => None,
     };
     RpcError::new(

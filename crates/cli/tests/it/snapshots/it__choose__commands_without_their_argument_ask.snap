@@ -29,11 +29,6 @@ expression: asks
         false,
     ),
     (
-        "restart",
-        Unit,
-        true,
-    ),
-    (
         "logs",
         Unit,
         true,

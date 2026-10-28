@@ -29,8 +29,11 @@ Global options:
           - agent: Terse lines for AI agents: failures first, with next commands, size-capped
           - json:  The daemon's data as JSON, or NDJSON for streams
 
-      --project <PROJECT>
-          Use this project instead of the one containing the current directory
+  -p, --project <PROJECT>
+          Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
+
+      --file <FILE>
+          Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 
       --lane <LANE>
           Use this lane ([project@]lane) instead of the current worktree's

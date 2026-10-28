@@ -73,9 +73,13 @@ pub struct Cli {
     /// Output mode [default: agent when an AI agent runs devlanes, plain in CI or without a terminal, else human]
     #[arg(long, global = true, value_enum, value_name = "MODE", help_heading = GLOBAL)]
     pub output: Option<OutputMode>,
-    /// Use this project instead of the one containing the current directory
-    #[arg(long, global = true, value_name = "PROJECT", help_heading = GLOBAL)]
+    /// Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
+    #[arg(short = 'p', long, global = true, env = "DEVLANES_PROJECT", hide_env = true, value_name = "PROJECT", help_heading = GLOBAL)]
     pub project: Option<String>,
+    /// Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
+    // No `-f`: `logs -f` and the other `--follow` flags already take it.
+    #[arg(long, global = true, value_name = "FILE", help_heading = GLOBAL)]
+    pub file: Option<PathBuf>,
     /// Use this lane ([project@]lane) instead of the current worktree's
     #[arg(long, global = true, value_name = "LANE", help_heading = GLOBAL)]
     pub lane: Option<String>,
@@ -123,8 +127,23 @@ Stopped services are left out of what a plain devlanes start brings back. A\n\
 whole-lane stop also forgets the lane's profiles, so its next plain start uses\n\
 the default profile.")]
     Stop(StopArgs),
-    /// Stop and start units again with a fresh environment
+    /// Stop and start units again with a fresh environment, or the whole lane when none are named
+    #[command(
+        long_about = "Stop and start units again with a fresh environment, or the whole lane when none are named.\n\n\
+A whole-lane restart stops everything, keeps the lane's saved profiles and\n\
+services, and starts it again as a plain devlanes start does: infra, setup,\n\
+tasks, services and any port change in the project file."
+    )]
     Restart(RestartArgs),
+    /// Apply project file and .env changes to the running lane
+    #[command(
+        long_about = "Apply project file and .env changes to the running lane.\n\n\
+Stops the units the file removed, restarts the ones it changed and starts the\n\
+ones it added. Without units, a change to infra or ports restarts the whole\n\
+lane instead. With units, it applies only their changes. devlanes status shows\n\
+what changed."
+    )]
+    Reload(ReloadArgs),
     /// Show lanes and units with state, ports, URLs, CPU and memory
     Status(StatusArgs),
     /// Read unit logs; each line carries a cursor to continue from
@@ -316,13 +335,26 @@ pub struct WithArgs {
 
 #[derive(Debug, Args)]
 pub struct RestartArgs {
-    /// Units to restart ([lane:]unit, globs, +tag) [default: pick from a list]
+    /// Units to restart ([lane:]unit, globs, +tag) [default: the whole lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start every selected service immediately, bypassing the machine-wide start gate for this run
     #[arg(long)]
     pub all_at_once: bool,
     /// Print the restart as text instead of running it in the TUI
+    #[arg(long)]
+    pub no_ui: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ReloadArgs {
+    /// Apply only these units' changes ([lane:]unit) [default: every change in the lane]
+    #[arg(value_name = "UNIT")]
+    pub units: Vec<String>,
+    /// Start every selected service immediately, bypassing the machine-wide start gate for this run
+    #[arg(long)]
+    pub all_at_once: bool,
+    /// Print the reload as text instead of running it in the TUI
     #[arg(long)]
     pub no_ui: bool,
 }
@@ -443,6 +475,8 @@ pub enum DebugCommand {
         #[arg(id = "thaw_lane", value_name = "LANE")]
         lane: Option<String>,
     },
+    /// Print the lane's project config as YAML after merging its files and templates; expressions stay unevaluated
+    Config,
     /// Write a redacted archive to attach to a bug report and print its path
     #[command(
         long_about = "Write a redacted archive to attach to a bug report and print its path.\n\n\
@@ -589,20 +623,18 @@ pub enum RemoteCommand {
 pub enum LaneCommand {
     /// List lanes, including moved, unassigned and missing ones
     Ls,
-    /// Create a worktree and lane for a branch, or another lane for this folder
+    /// Add another lane for this folder
     #[command(
-        long_about = "Create a git worktree for a branch under lanes.worktree_dir and register its lane.\n\n\
-Without a branch, add another lane for the current folder: it has its own index, ports\n\
+        long_about = "Add another lane for the current folder. It has its own index, ports\n\
 and domain, and `--lane <name>` or `--lane <index>` addresses it. Commands run in the\n\
 folder keep using the folder's first lane.\n\n\
+For a lane on another branch, create a worktree with `git worktree add <path> <branch>`\n\
+and run `devlanes start` in it.\n\n\
 Without --start, a terminal asks whether to start the new lane right away."
     )]
     New {
-        /// Branch to check out in the new worktree [default: another lane for this folder]
-        #[arg(value_name = "BRANCH")]
-        branch: Option<String>,
         /// Name of the extra lane for this folder, used by `--lane` [default: <folder>-<n>]
-        #[arg(long, conflicts_with = "branch")]
+        #[arg(long)]
         name: Option<String>,
         /// Start the new lane right away
         #[arg(long)]
@@ -618,7 +650,7 @@ Without --start, a terminal asks whether to start the new lane right away."
         #[arg(id = "clean_lane", value_name = "LANE")]
         lane: Option<String>,
     },
-    /// Clean lanes whose worktrees are gone and drop unused port offsets (needs --yes)
+    /// Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
     Gc,
     /// Start the lanes that were running before a reboot or daemon restart
     #[command(
@@ -849,10 +881,21 @@ impl Cli {
                 "--env is supported only by start, restart, run TASK, and exec".into(),
             ));
         }
+        // The daemon resolves the file, so a relative one names a path below the cwd.
+        let file = self.file.as_ref().map(|file| cwd.join(file));
+        // The file names its project. `-p` is dropped rather than refused with clap's
+        // `conflicts_with`, which counts `DEVLANES_PROJECT` as given: inside a lane that
+        // env var names the lane's project and would point lookups at it instead.
+        let project = if file.is_some() {
+            None
+        } else {
+            self.project.clone()
+        };
         let mut context = Context {
             cwd,
+            file,
             actor: runtime.actor.clone(),
-            project: self.project.clone(),
+            project,
             lane: self.lane.clone(),
             yes: self.yes,
             env: None,
@@ -939,6 +982,13 @@ impl Cli {
                 }
                 (Method::Restart, params)
             }
+            Some(Command::Reload(args)) => {
+                let mut params = selection(&args.units, &[], &[], false, args.all_at_once)?;
+                if start_events {
+                    params["events"] = json!(true);
+                }
+                (Method::Reload, params)
+            }
             Some(Command::Status(args)) => {
                 if runtime.mode == OutputMode::Agent && args.watch && self.timeout.is_none() {
                     return Err(Error::Usage(
@@ -1015,6 +1065,7 @@ impl Cli {
                     }
                     (Method::DebugThaw, json!({}))
                 }
+                DebugCommand::Config => (Method::ConfigShow, json!({})),
                 DebugCommand::Bundle {
                     to,
                     log_lines,
@@ -1065,14 +1116,9 @@ impl Cli {
                     json!({"timeout_ms": timeout_ms, "all_at_once": all_at_once, "events": start_events}),
                 ),
                 LaneCommand::Ls => (Method::LaneList, json!({})),
-                LaneCommand::New {
-                    branch,
-                    name,
-                    start,
-                    ..
-                } => (
+                LaneCommand::New { name, start, .. } => (
                     Method::LaneNew,
-                    json!({"branch": branch, "name": name, "start": start, "events": *start && start_events}),
+                    json!({"name": name, "start": start, "events": *start && start_events}),
                 ),
                 LaneCommand::Clean { lane } => {
                     context.lane.clone_from(lane);
@@ -1180,6 +1226,8 @@ impl Cli {
             Some(Command::Tunnel { .. }) => return Ok(Action::Tunnel),
             Some(Command::Askpass { prompt }) => return Ok(Action::Askpass(prompt.clone())),
         };
+        // `reload` is absent: it applies the project file, and the lane keeps the env
+        // its last start stored, as when the TUI reloads.
         if matches!(
             method,
             Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
@@ -1242,7 +1290,7 @@ impl Cli {
     }
 
     /// Whether this start runs inside the TUI, like mprocs: `start`, `restart`,
-    /// `lane resume` and `lane new --start` on a terminal in human output,
+    /// `reload`, `lane resume` and `lane new --start` on a terminal in human output,
     /// outside CI, without `--no-ui`, `DEVLANES_NO_UI` or `-v`. `Some(true)` when
     /// `start --attach` asked for it, which also overrides `DEVLANES_NO_UI` and
     /// `tui.open_on_start: false`; the caller applies that config setting.
@@ -1250,6 +1298,7 @@ impl Cli {
         let (no_ui, forced) = match &self.command {
             Some(Command::Start(args)) => (args.no_ui, args.attach),
             Some(Command::Restart(args)) => (args.no_ui, false),
+            Some(Command::Reload(args)) => (args.no_ui, false),
             Some(Command::Lane {
                 command: LaneCommand::Resume { no_ui, .. },
             }) => (*no_ui, false),
@@ -1283,9 +1332,6 @@ impl Cli {
             Some(Command::Debug {
                 command: DebugCommand::Why { unit: None },
             }) => (vec!["debug", "why"], K::Unit, false),
-            Some(Command::Restart(args)) if args.units.is_empty() => {
-                (vec!["restart"], K::Unit, true)
-            }
             Some(Command::Logs(args)) if args.units.is_empty() && !args.mine && !args.all => {
                 (vec!["logs"], K::Unit, true)
             }
@@ -1329,6 +1375,7 @@ impl Cli {
                 Command::Start(_)
                     | Command::With(_)
                     | Command::Restart(_)
+                    | Command::Reload(_)
                     | Command::Wait { .. }
                     | Command::Debug {
                         command: DebugCommand::Events { .. }

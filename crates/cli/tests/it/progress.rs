@@ -71,8 +71,10 @@ fn starting_commands_follow_progress_and_others_do_not() {
     for (method, params) in [
         (Method::Start, json!({})),
         (Method::Restart, json!({"units": ["api"]})),
+        (Method::Restart, json!({"units": []})),
+        (Method::Reload, json!({})),
         (Method::Resume, json!({})),
-        (Method::LaneNew, json!({"branch": "feat", "start": true})),
+        (Method::LaneNew, json!({"name": "review", "start": true})),
         (Method::Wait, json!({"target": "acme@1:api"})),
     ] {
         let tracker = start_tracker(&request(method, params, None));
@@ -84,7 +86,7 @@ fn starting_commands_follow_progress_and_others_do_not() {
         );
     }
     for (method, params) in [
-        (Method::LaneNew, json!({"branch": "feat", "start": false})),
+        (Method::LaneNew, json!({"name": "review", "start": false})),
         (Method::Stop, json!({})),
         (Method::Status, json!({})),
         (Method::Logs, json!({})),
@@ -120,15 +122,16 @@ fn starts_ask_for_their_lane_events() {
     for args in [
         &["devlanes", "start"][..],
         &["devlanes", "restart", "api"][..],
+        &["devlanes", "reload"][..],
         &["devlanes", "lane", "resume"][..],
-        &["devlanes", "lane", "new", "feat", "--start"][..],
+        &["devlanes", "lane", "new", "--name", "review", "--start"][..],
     ] {
         assert!(events(args, &human), "{args:?}");
         assert!(events(args, &piped), "{args:?}");
         // Agent output prints no progress, so the events would be wasted.
         assert!(!events(args, &agent), "{args:?}");
     }
-    assert!(!events(&["devlanes", "lane", "new", "feat"], &human));
+    assert!(!events(&["devlanes", "lane", "new"], &human));
     // `wait` streams them only for the bar.
     assert!(events(&["devlanes", "wait", "api"], &human));
     assert!(!events(&["devlanes", "wait", "api"], &piped));
@@ -144,20 +147,20 @@ fn a_new_lane_offers_to_start_only_where_someone_can_answer() {
         )
     };
     let human = runtime(&["devlanes"], true, false);
-    assert!(offers(&["devlanes", "lane", "new", "feat"], &human));
-    assert!(offers(&["devlanes", "lane", "new"], &human));
-    // --start already starts; agents, pipes, CI and --quiet never get asked.
-    assert!(!offers(
-        &["devlanes", "lane", "new", "feat", "--start"],
+    assert!(offers(
+        &["devlanes", "lane", "new", "--name", "review"],
         &human
     ));
+    assert!(offers(&["devlanes", "lane", "new"], &human));
+    // --start already starts; agents, pipes, CI and --quiet never get asked.
+    assert!(!offers(&["devlanes", "lane", "new", "--start"], &human));
     for runtime in [
         runtime(&["devlanes", "--output", "agent"], true, false),
         runtime(&["devlanes"], false, false),
         runtime(&["devlanes"], true, true),
         runtime(&["devlanes", "--quiet"], true, false),
     ] {
-        assert!(!offers(&["devlanes", "lane", "new", "feat"], &runtime));
+        assert!(!offers(&["devlanes", "lane", "new"], &runtime));
     }
 }
 

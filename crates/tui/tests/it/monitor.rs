@@ -2,6 +2,7 @@
 //! the history asked for, actions on units and lanes, and the graphs on screen.
 
 use crossterm::event::KeyCode;
+use devlanes_proto::{Method, UnitDrift};
 use devlanes_tui::{
     DaemonMetrics, LaneMetrics, Metrics, SystemMetrics, UnitMetrics,
     app::{App, Effect, MonitorId, Msg, Selected, SortKey, View},
@@ -213,6 +214,38 @@ async fn s_x_r_act_on_the_unit_or_the_lane_and_enter_opens_it() -> TestResult {
     app.update(key(KeyCode::Enter));
     assert_eq!(app.view, View::Project);
     assert_eq!(app.selected, Some(Selected::unit("acme@0", "api")));
+    Ok(())
+}
+
+/// `r` on a lane row reloads a lane with changes and, as in the list, does not
+/// restart a lane that runs nothing.
+#[tokio::test]
+async fn r_on_a_lane_row_reloads_changes_and_skips_a_stopped_lane() -> TestResult {
+    let mut app = monitor(120, 40, metrics(80.0, 5.0)).await;
+    let mut drifted = mixed_lanes();
+    drifted[0].units[0].drift = Some(UnitDrift {
+        kind: "changed".into(),
+        fields: vec!["run".into()],
+    });
+    app.update(Msg::Status(Ok(drifted)));
+    let effects = app.update(key(KeyCode::Char('r')));
+    assert!(
+        matches!(effects.as_slice(), [Effect::Control { method: Method::Reload, lane, .. }]
+            if lane == "acme@0"),
+        "{effects:?}"
+    );
+    let mut stopped = mixed_lanes();
+    stopped[0].state = "idle".into();
+    for unit in &mut stopped[0].units {
+        unit.state = "stopped".into();
+    }
+    app.update(Msg::Status(Ok(stopped)));
+    assert!(app.update(key(KeyCode::Char('r'))).is_empty());
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|n| n.text.contains("nothing running in acme@0"))
+    );
     Ok(())
 }
 

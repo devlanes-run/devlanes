@@ -242,6 +242,107 @@ fn start_right_after_an_edit_uses_the_new_config() -> Result<()> {
     Ok(())
 }
 
+/// The text of each line a `logs ... --json` command prints in the repository.
+fn log_texts(lab: &Lab, args: &[&str]) -> Result<Vec<String>> {
+    let logs = lab.json(lab.repo(), args)?;
+    Ok(logs["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|line| line["text"].as_str().map(str::to_owned))
+        .collect())
+}
+
+/// An edit to a running lane shows as drift without touching anything; `reload`
+/// restarts the changed service and starts the added one.
+#[test]
+fn reload_applies_an_edit_to_the_running_lane() -> Result<()> {
+    let lab = Lab::with_config(EDIT_BEFORE, BUDGET)?;
+    let first = lab.json(lab.repo(), &["start"])?;
+    assert_eq!(first["ready"], true, "{first}");
+    let edited = format!(
+        "{}  extra:\n    run: [fixture-server, --log-line, extra-ready]\n    ready: {{ http: {{ path: /healthz }} }}\n",
+        EDIT_BEFORE.replace("api-v1", "api-v2")
+    );
+    lab.write("devlanes.yaml", &edited)?;
+    let lanes = lab.lanes(lab.repo())?;
+    let zero = need(lane(&lanes, "fixture-edit@0"), "lane 0")?;
+    assert_eq!(zero["config_changed"], true, "{zero}");
+    let drift = |name: &str| {
+        zero["units"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|unit| unit["name"] == name)
+            .map(|unit| unit["drift"].clone())
+    };
+    assert_eq!(
+        drift("api"),
+        Some(serde_json::json!({"kind": "changed", "fields": ["run"]})),
+        "{zero}"
+    );
+    assert_eq!(
+        drift("extra"),
+        Some(serde_json::json!({"kind": "added"})),
+        "{zero}"
+    );
+    assert!(
+        log_texts(&lab, &["logs", "api", "--tail", "20", "--json"])?.contains(&"api-v1".into()),
+        "the edit alone restarts nothing"
+    );
+
+    let reloaded = lab.json(lab.repo(), &["reload"])?;
+    assert_eq!(reloaded["ready"], true, "{reloaded}");
+    let texts = log_texts(&lab, &["logs", "api", "--tail", "20", "--json"])?;
+    assert!(
+        texts.contains(&"api-v2".into()),
+        "api runs the edit: {texts:?}"
+    );
+    let lanes = lab.lanes(lab.repo())?;
+    let zero = need(lane(&lanes, "fixture-edit@0"), "lane 0")?;
+    assert_eq!(zero["config_changed"], false, "{zero}");
+    assert_eq!(units_in(zero, "ready"), ["api", "extra"], "{zero}");
+    Ok(())
+}
+
+/// A second project file in the same folder is a second project: `--file` starts
+/// it next to the first, with its own lane and ports, and `-p` finds it afterwards.
+#[test]
+fn a_second_project_file_runs_beside_the_first() -> Result<()> {
+    let lab = Lab::with_config(EDIT_BEFORE, BUDGET)?;
+    lab.write(
+        "devlanes.prod.yaml",
+        "extends: devlanes.yaml\nproject: fixture-edit-prod\nservices:\n  api:\n    run: [fixture-server, --log-line, api-prod]\n",
+    )?;
+    let dev = lab.json(lab.repo(), &["start"])?;
+    assert_eq!(dev["ready"], true, "{dev}");
+    let prod = lab.json(lab.repo(), &["--file", "devlanes.prod.yaml", "start"])?;
+    assert_eq!(prod["ready"], true, "{prod}");
+    assert_eq!(prod["lane"], "fixture-edit-prod@0", "{prod}");
+    let status = lab.json(lab.repo(), &["-p", "fixture-edit-prod", "status", "--json"])?;
+    let items = status["items"].as_array().cloned().unwrap_or_default();
+    assert_eq!(items.len(), 1, "{status}");
+    let prod_port = need(port(need(unit(&items[0], "api"), "prod api")?), "prod port")?;
+    let lanes = lab.lanes(lab.repo())?;
+    let zero = need(lane(&lanes, "fixture-edit@0"), "dev lane")?;
+    let dev_port = need(port(need(unit(zero, "api"), "dev api")?), "dev port")?;
+    assert_ne!(prod_port, dev_port);
+    let texts = log_texts(
+        &lab,
+        &[
+            "-p",
+            "fixture-edit-prod",
+            "logs",
+            "api",
+            "--tail",
+            "20",
+            "--json",
+        ],
+    )?;
+    assert!(texts.contains(&"api-prod".into()), "{texts:?}");
+    Ok(())
+}
+
 /// A daemon whose spawning client stopped waiting (closed the readiness pipe,
 /// as the client does when a step stalls) keeps serving, and the client's
 /// next command reaches it. Step lines go into the closed pipe too.

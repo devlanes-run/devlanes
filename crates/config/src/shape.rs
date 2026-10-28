@@ -7,8 +7,9 @@
 
 use crate::{
     ComposeFiles, ExternalHost, ExternalHostRoute, ExternalHosts, HostConfig, HostRoute, Hosts,
-    InfraCommand, InfraCommandOptions, ProfileConfig, ProfileOptions, ReadyCheck, ReadyConfig, Run,
-    RunScript, Scalar, Started, TcpReady, Templated, TerminalConfig, TerminalSettings,
+    InfraCommand, InfraCommandOptions, ProfileConfig, ProfileOptions, ProjectExtends, ReadyCheck,
+    ReadyConfig, Run, RunScript, Scalar, Started, TcpReady, Templated, TerminalConfig,
+    TerminalSettings,
 };
 use serde::{
     Deserialize, Deserializer,
@@ -206,6 +207,11 @@ shape!(TerminalConfig, "a mapping with progress",
 shape!(ComposeFiles, "a Compose file name or a list of them",
     text!(ComposeFiles::File);
     sequence!(ComposeFiles::Files, Vec<String>);
+);
+
+shape!(ProjectExtends, "a project file name or a list of them",
+    text!(ProjectExtends::File);
+    sequence!(ProjectExtends::Files, Vec<String>);
 );
 
 shape!(InfraCommand, "a shell command string, an argument list, or a command mapping",

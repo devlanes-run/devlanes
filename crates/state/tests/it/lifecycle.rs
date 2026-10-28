@@ -301,16 +301,22 @@ async fn all_lifecycle_write_models_round_trip_and_replace() {
         .await
         .expect("empty insert");
     store
-        .record_setup(lane.id, "database".into(), Some("old".into()))
+        .record_setup(
+            lane.id,
+            "database".into(),
+            Some("old".into()),
+            Some("hash".into()),
+        )
         .await
         .expect("setup");
     store
-        .record_setup(lane.id, "database".into(), None)
+        .record_setup(lane.id, "database".into(), None, None)
         .await
         .expect("replace setup");
+    let replaced = &store.setup_records(lane.id).await.expect("setup")[0];
     assert_eq!(
-        store.setup_records(lane.id).await.expect("setup")[0].container_started_at,
-        None
+        (&replaced.container_started_at, &replaced.spec_hash),
+        (&None, &None)
     );
     assert_eq!(
         store.clear_setup(lane.id, None).await.expect("clear all"),
@@ -402,8 +408,10 @@ fn human() -> Actor {
 }
 
 #[tokio::test]
-/// Setup entries keep their container timestamp; `lane.create` succeeds once.
+/// Setup entries keep their container timestamp and spec hash; `lane.create`
+/// succeeds once, and its marker keeps the hash of the last successful run.
 async fn setup_and_task_history() {
+    use devlanes_state::{ProjectConfigPath, TaskCompletion};
     let dir = tempfile::tempdir().expect("tempdir");
     let store = Store::open(dir.path().join("state.db"))
         .await
@@ -414,20 +422,35 @@ async fn setup_and_task_history() {
     );
     let project = project(&store, "demo").await;
     store
-        .set_project_config_dir(project.id, "apps/web".into())
+        .set_project_config(project.id, "apps/web".into(), "devlanes.prod.yaml".into())
         .await
-        .expect("config dir");
+        .expect("config");
     assert_eq!(
-        store.project_config_dirs().await.expect("dirs"),
-        [(project.id, "apps/web".into())]
+        store.project_configs().await.expect("configs"),
+        [ProjectConfigPath {
+            project: project.id,
+            dir: "apps/web".into(),
+            file: "devlanes.prod.yaml".into(),
+        }]
     );
+    assert!(matches!(
+        store
+            .set_project_config(project.id, "apps/web".into(), String::new())
+            .await,
+        Err(Error::Invalid(_))
+    ));
     let lane = lane(&store, project.id, 1).await;
     store
-        .record_setup(lane.id, "vhost".into(), Some("2026-10-21T10:00:00Z".into()))
+        .record_setup(
+            lane.id,
+            "vhost".into(),
+            Some("2026-10-21T10:00:00Z".into()),
+            Some("vhost-1".into()),
+        )
         .await
         .expect("setup");
     store
-        .record_setup(lane.id, "database".into(), None)
+        .record_setup(lane.id, "database".into(), None, None)
         .await
         .expect("setup");
     let records = store.setup_records(lane.id).await.expect("records");
@@ -435,6 +458,18 @@ async fn setup_and_task_history() {
     assert_eq!(
         records[1].container_started_at.as_deref(),
         Some("2026-10-21T10:00:00Z")
+    );
+    assert_eq!(records[1].spec_hash.as_deref(), Some("vhost-1"));
+    assert_eq!(records[0].spec_hash, None);
+    store
+        .record_setup(lane.id, "vhost".into(), None, Some("vhost-2".into()))
+        .await
+        .expect("edited setup");
+    assert_eq!(
+        store.setup_records(lane.id).await.expect("records")[1]
+            .spec_hash
+            .as_deref(),
+        Some("vhost-2")
     );
     assert_eq!(
         store
@@ -444,53 +479,64 @@ async fn setup_and_task_history() {
         1
     );
 
-    assert!(
-        !store
-            .task_succeeded(lane.id, "seed".into())
+    let completion = async |store: &Store| {
+        store
+            .task_completion(lane.id, "seed".into())
             .await
             .expect("query")
-    );
-    let failed = store
-        .start_task_run(TaskRunInput {
-            lane_id: lane.id,
-            task: "seed".into(),
-            trigger: "lane.create".into(),
-            actor: human(),
-        })
-        .await
-        .expect("start");
+    };
+    let seed = async |store: &Store| {
+        store
+            .start_task_run(TaskRunInput {
+                lane_id: lane.id,
+                task: "seed".into(),
+                trigger: "lane.create".into(),
+                actor: human(),
+            })
+            .await
+            .expect("start")
+    };
+    assert_eq!(completion(&store).await, None);
+    let failed = seed(&store).await;
     store
-        .finish_task_run(failed.id, Some(1))
+        .finish_task_run(failed.id, Some(1), Some("seed-1".into()))
         .await
         .expect("finish");
-    assert!(
-        !store
-            .task_succeeded(lane.id, "seed".into())
-            .await
-            .expect("query")
-    );
-    let ok = store
-        .start_task_run(TaskRunInput {
-            lane_id: lane.id,
-            task: "seed".into(),
-            trigger: "lane.create".into(),
-            actor: human(),
-        })
-        .await
-        .expect("start");
-    store.finish_task_run(ok.id, Some(0)).await.expect("finish");
+    assert_eq!(completion(&store).await, None, "a failure leaves no marker");
+    let ok = seed(&store).await;
     store
-        .finish_task_run(ok.id, Some(9))
+        .finish_task_run(ok.id, Some(0), Some("seed-1".into()))
+        .await
+        .expect("finish");
+    store
+        .finish_task_run(ok.id, Some(9), Some("other".into()))
         .await
         .expect("idempotent");
-    assert!(
-        store
-            .task_succeeded(lane.id, "seed".into())
-            .await
-            .expect("query")
-    );
+    let first = completion(&store).await.expect("marker");
+    assert_eq!(first.spec_hash.as_deref(), Some("seed-1"));
     let runs = store.task_runs(lane.id, 10).await.expect("runs");
     assert_eq!(runs[0].exit_code, Some(0));
+    // An edited task that runs again replaces the marker's hash.
+    let edited = seed(&store).await;
+    store
+        .finish_task_run(edited.id, Some(0), Some("seed-2".into()))
+        .await
+        .expect("finish edited");
+    let second = completion(&store).await.expect("marker");
+    assert_eq!(second.spec_hash.as_deref(), Some("seed-2"));
+    assert!(second.succeeded_at >= first.succeeded_at);
+    let unhashed = seed(&store).await;
+    store
+        .finish_task_run(unhashed.id, Some(0), None)
+        .await
+        .expect("finish unhashed");
+    assert!(matches!(
+        completion(&store).await,
+        Some(TaskCompletion {
+            spec_hash: None,
+            ..
+        })
+    ));
 
     // A clean refused for an unfinished task changes nothing.
     let pending = store
@@ -510,12 +556,7 @@ async fn setup_and_task_history() {
         store.setup_records(lane.id).await.expect("records").len(),
         1
     );
-    assert!(
-        store
-            .task_succeeded(lane.id, "seed".into())
-            .await
-            .expect("query")
-    );
+    assert!(completion(&store).await.is_some());
     // A restarted daemon cannot finish a task it did not start.
     assert_eq!(store.abandon_task_runs().await.expect("abandon"), 1);
     let abandoned = store.task_runs(lane.id, 1).await.expect("runs");
@@ -531,12 +572,7 @@ async fn setup_and_task_history() {
             .expect("records")
             .is_empty()
     );
-    assert!(
-        !store
-            .task_succeeded(lane.id, "seed".into())
-            .await
-            .expect("query")
-    );
+    assert_eq!(completion(&store).await, None);
     assert!(store.task_runs(lane.id, 10).await.expect("runs").is_empty());
 }
 

@@ -16,14 +16,16 @@ use diesel::{dsl::exists, prelude::*};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Store {
-    /// Inserts by canonical identity without changing an existing project's ID.
+    /// Inserts by name, or updates the paths and primary branch of the project
+    /// with that name while keeping its ID. Refusing a name that another
+    /// repository already uses is the caller's job.
     pub async fn upsert_project(&self, input: ProjectInput) -> Result<Project, Error> {
         if !valid_project_name(&input.name) {
             return Err(Error::Invalid("invalid project name".into()));
         }
         self.call(move |c| {
             let row = NewProject {
-                identity: path_bytes(input.common_dir.as_deref().unwrap_or(&input.root_path)),
+                identity: input.name.as_bytes().to_vec(),
                 name: input.name,
                 common_dir: input.common_dir.as_deref().map(path_bytes),
                 root_path: path_bytes(&input.root_path),
@@ -52,7 +54,19 @@ impl Store {
         })
         .await
     }
-    /// Lists all projects, including duplicate display names.
+    /// Finds a project by its unique name.
+    pub async fn project_by_name(&self, name: String) -> Result<Option<Project>, Error> {
+        self.call(move |c| {
+            Ok(projects::table
+                .filter(projects::name.eq(name))
+                .select(ProjectRow::as_select())
+                .first(c)
+                .optional()?
+                .map(Project::from))
+        })
+        .await
+    }
+    /// Lists all projects in ID order.
     pub async fn projects(&self) -> Result<Vec<Project>, Error> {
         self.call(|c| {
             Ok(projects::table

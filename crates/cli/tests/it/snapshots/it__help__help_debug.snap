@@ -13,6 +13,7 @@ Commands:
   top     Show CPU and memory per lane and unit
   freeze  Freeze this lane's processes and own containers now, as if it had been idle for `lanes.freeze_after`
   thaw    Resume a throttled or frozen lane
+  config  Print the lane's project config as YAML after merging its files and templates; expressions stay unevaluated
   bundle  Write a redacted archive to attach to a bug report and print its path
   help    Print this message or the help of the given subcommand(s)
 
@@ -33,8 +34,11 @@ Global options:
           - agent: Terse lines for AI agents: failures first, with next commands, size-capped
           - json:  The daemon's data as JSON, or NDJSON for streams
 
-      --project <PROJECT>
-          Use this project instead of the one containing the current directory
+  -p, --project <PROJECT>
+          Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
+
+      --file <FILE>
+          Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 
       --lane <LANE>
           Use this lane ([project@]lane) instead of the current worktree's

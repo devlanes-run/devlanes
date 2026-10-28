@@ -429,6 +429,9 @@ impl Render for UnitSummary {
         if let Some(reason) = &self.reason {
             lines.push(format!("  {}", error_message(reason).0));
         }
+        if let Some(drift) = &self.drift {
+            lines.push(format!("  {}", render::unit_drift(drift)));
+        }
         if agent && self.state == "failed" {
             lines.push(format!(
                 "  more: {}",
@@ -451,7 +454,7 @@ impl Render for LaneSummary {
             line.push_str(&format!(" ({})", clean(branch)));
         }
         if self.config_changed {
-            line.push_str(" config changed");
+            line.push_str(&format!(" {}", render::lane_drift(self)));
         }
         let mut result = vec![line];
         let mut units: Vec<_> = self.units.iter().collect();
@@ -599,6 +602,11 @@ fn continuation(report: &Report<'_>) -> String {
     if let Some(hint) = &report.more {
         return format!("truncated; more: {}", hint.0);
     }
+    // The YAML is what was asked for; without a cursor, a bigger budget is the rest.
+    if report.method == Method::ConfigShow {
+        let hint = Hint::command(["debug", "config", "--budget", "1048576"]);
+        return format!("truncated; more: {}", hint.0);
+    }
     let command = if report.method == Method::Logs {
         "logs"
     } else {
@@ -635,7 +643,7 @@ fn continuation(report: &Report<'_>) -> String {
 
 /// The process status for a result of `method`.
 ///
-/// - start, restart, `lane new --start` and resume: 124 when the start timed out,
+/// - start, restart, reload, `lane new --start` and resume: 124 when the start timed out,
 ///   1 on any failure or when not ready, else 0;
 /// - wait: 0 only when ready;
 /// - stop, status, lane ls: 1 only for a failed unit or lane, never for a leftover
@@ -643,7 +651,7 @@ fn continuation(report: &Report<'_>) -> String {
 /// - run: the task's exit code.
 pub(crate) fn result_exit_code(method: Method, data: &Value) -> u8 {
     match method {
-        Method::Start | Method::Restart => start_exit_code(data),
+        Method::Start | Method::Restart | Method::Reload => start_exit_code(data),
         Method::LaneNew => data.get("start").map_or(exit::OK, start_exit_code),
         Method::Resume => data
             .get("items")
@@ -760,11 +768,14 @@ fn logs_shaped(data: &Value) -> bool {
 /// `--output agent` stopping their own units gets no note.
 fn ownership_note(report: &Report<'_>, runtime: &Runtime) -> String {
     if runtime.actor.kind != ActorKind::Agent
-        || !matches!(report.method, Method::Stop | Method::Restart)
+        || !matches!(
+            report.method,
+            Method::Stop | Method::Restart | Method::Reload
+        )
     {
         return String::new();
     }
-    // `stop` returns a page of units, `restart` a start result with `units`.
+    // `stop` returns a page of units, `restart` and `reload` a start result with `units`.
     let items = report
         .data
         .get("items")

@@ -1072,6 +1072,7 @@ dependencies = [
  "insta",
  "is-ai-agent",
  "serde",
+ "serde-saphyr",
  "serde_json",
  "strip-ansi-escapes",
  "tempfile",

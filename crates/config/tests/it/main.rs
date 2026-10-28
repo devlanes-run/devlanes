@@ -4,6 +4,7 @@ mod artifacts;
 mod diagnostics;
 mod external;
 mod merging;
+mod project_files;
 mod reference_docs;
 mod references;
 mod retention;
@@ -17,6 +18,7 @@ use serde_json::json;
 const FULL: &str = include_str!("../../../../docs/examples/devlanes.yaml");
 const MINIMAL: &str = include_str!("../../../../docs/examples/minimal.yaml");
 const LOCAL: &str = include_str!("../../../../docs/examples/devlanes.local.yaml");
+const PROD: &str = include_str!("../../../../docs/examples/devlanes.prod.yaml");
 const USER: &str = include_str!("../../../../docs/examples/user-config.yaml");
 
 /// Exercise the same runtime registration the composition root supplies.
@@ -422,6 +424,7 @@ fn yaml_language_server_schemas() {
         ("full", FULL),
         ("minimal", MINIMAL),
         ("local", LOCAL),
+        ("prod", PROD),
         ("user", USER),
     ] {
         let value: serde_json::Value = serde_saphyr::from_str(source).expect("YAML document");
@@ -445,6 +448,46 @@ fn yaml_language_server_schemas() {
     };
     assert_eq!(profile.remap_script("dev"), "start");
     assert_eq!(config.tasks["build"].when, Some(TaskWhen::Start));
+}
+
+/// The prod example loads from `docs/examples` over `devlanes.yaml` and its local
+/// overlay. Compose files are not checked: the examples ship none.
+#[test]
+fn prod_example_extends_the_reference() {
+    let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/examples");
+    let load = load_project_files::<OpaqueExtensions>(&examples.join("devlanes.prod.yaml"), None);
+    let (config, _) = load.result.expect("prod example");
+    assert_eq!(config.project, "acme-prod");
+    let Some(ProfileConfig::Object(profile)) = config.profiles.get("default") else {
+        panic!("the prod example turns the default profile into a mapping")
+    };
+    assert_eq!(profile.remap_script("dev"), "start");
+    assert_eq!(
+        profile.include.as_deref(),
+        Some(&["+essential".to_owned(), "user-web".to_owned()][..]),
+        "the include of devlanes.yaml and devlanes.local.yaml stays"
+    );
+    assert_eq!(config.tasks["build"].profiles, Some(vec!["default".into()]));
+    assert!(config.services.contains_key("catalog"));
+    let names: Vec<String> = load
+        .files
+        .iter()
+        .map(|file| {
+            file.file_name()
+                .expect("name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "devlanes.prod.yaml",
+            "devlanes.yaml",
+            "devlanes.local.yaml",
+            "devlanes.prod.local.yaml"
+        ]
+    );
 }
 
 /// The deferred public resolver fails validation; mobile trust targets only warn.

@@ -51,41 +51,65 @@ fn on_lane(cwd: &Path, lane: &str) -> Context {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// Renaming `project:` in the primary worktree renames the lane references in
-/// memory and in state.db and emits `lane.changed`; the old reference answers
-/// `not_found` naming the new one.
-async fn renaming_the_project_renames_its_lanes() {
+/// Renaming `project:` makes a new project with its own lane; the old project's
+/// lane stays, stopped, saying the file names another project, until `lane gc
+/// --yes` collects it and the old project with it.
+async fn renaming_the_project_makes_a_new_one_and_gc_collects_the_old() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", WEB);
         let h = harness(&tmp.path.join("home"), Setup::default()).await;
         assert_eq!(lane_at(&h, &main, &main).await.reference, "demo@0");
-        let mut bus = h.engine.subscribe();
         std::fs::write(
             main.join("devlanes.yaml"),
             WEB.replace("project: demo", "project: revb"),
         )
         .expect("rename");
-        // `wait` reloads an edited config before it looks the lane up.
-        let _ = h
-            .call(
-                Method::Wait,
-                json!({"target": "web", "timeout_ms": 10}),
-                cx(&main),
-            )
-            .await;
-        assert_eq!(lane_at(&h, &main, &main).await.reference, "revb@0");
-        let renamed = std::iter::from_fn(|| bus.try_recv().ok()).any(|event| {
-            event.event == events::LANE_CHANGED && event.data["lane"]["reference"] == "revb@0"
-        });
-        assert!(renamed, "lane.changed carries the new reference");
-        let old = h
-            .call(Method::Status, json!({}), on_lane(&main, "demo@0"))
+        // The next command from the worktree reads the edit and lands in the new project.
+        let all = |lanes: Vec<LaneSummary>| {
+            let mut references: Vec<String> =
+                lanes.into_iter().map(|lane| lane.reference).collect();
+            references.sort();
+            references
+        };
+        let mut seen = lanes(&h, &main).await;
+        assert_eq!(seen.len(), 1, "the cwd's project only");
+        assert_eq!(seen.remove(0).reference, "revb@0");
+        let status = h
+            .call(Method::Status, json!({"all": true}), cx(&main))
             .await
-            .expect_err("the old name is gone");
-        assert_eq!((old.code.as_str(), old.exit_code), ("not_found", 3));
-        assert_eq!(old.data["renamed_to"], "revb");
-        assert_eq!(old.data["suggestion"], "revb@0");
+            .expect("status");
+        let page: Page<LaneSummary> = serde_json::from_value(status).expect("page");
+        assert_eq!(all(page.items.clone()), ["demo@0", "revb@0"]);
+        let old = page
+            .items
+            .iter()
+            .find(|lane| lane.reference == "demo@0")
+            .expect("old lane");
+        assert_eq!(
+            old.reason.as_ref().map(|reason| reason.code.as_str()),
+            Some("config_names_other_project")
+        );
+        let start = h
+            .call(Method::Start, json!({}), on_lane(&main, "demo@0"))
+            .await
+            .expect_err("the old lane cannot start");
+        assert_eq!(start.code, "config_names_other_project");
+        let asked = h
+            .call(Method::LaneGc, json!({}), cx(&main))
+            .await
+            .expect_err("gc asks first");
+        assert_eq!(asked.code, "confirmation_required");
+        assert_eq!(asked.data["lanes"], json!(["demo@0"]));
+        let confirmed = Context {
+            yes: true,
+            ..cx(&main)
+        };
+        let gc = h
+            .call(Method::LaneGc, json!({}), confirmed)
+            .await
+            .expect("gc");
+        assert_eq!(gc["cleaned"], json!(["demo@0"]));
         h.close().await;
         let store = devlanes_state::Store::open(tmp.path.join("home/state.db"))
             .await
@@ -98,6 +122,198 @@ async fn renaming_the_project_renames_its_lanes() {
             .map(|project| project.name)
             .collect();
         assert_eq!(names, ["revb"]);
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Two project files in one directory are two projects with their own lanes and
+/// domains: `--file` registers the second, then `--project` finds it, and the cwd
+/// keeps meaning `devlanes.yaml`'s project.
+async fn a_second_project_file_is_a_second_project() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        std::fs::write(
+            main.join("devlanes.prod.yaml"),
+            "project: demo-prod\nextends: devlanes.yaml\n",
+        )
+        .expect("prod file");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        assert_eq!(lane_at(&h, &main, &main).await.reference, "demo@0");
+        let unknown = h
+            .call(
+                Method::Status,
+                json!({}),
+                Context {
+                    project: Some("demo-prod".into()),
+                    ..cx(&main)
+                },
+            )
+            .await
+            .expect_err("not registered yet");
+        assert_eq!(unknown.code, "not_found");
+        let with_file = Context {
+            file: Some(main.join("devlanes.prod.yaml")),
+            ..cx(&main)
+        };
+        let prod = h
+            .call(Method::Status, json!({}), with_file)
+            .await
+            .expect("status with --file");
+        let prod: Page<LaneSummary> = serde_json::from_value(prod).expect("page");
+        assert_eq!(prod.items.len(), 1);
+        assert_eq!(prod.items[0].reference, "demo-prod@0");
+        assert_eq!(prod.items[0].domain.as_deref(), Some("demo-prod.localhost"));
+        let by_name = h
+            .call(
+                Method::Status,
+                json!({}),
+                Context {
+                    project: Some("demo-prod".into()),
+                    ..cx(&main)
+                },
+            )
+            .await
+            .expect("status with --project");
+        let by_name: Page<LaneSummary> = serde_json::from_value(by_name).expect("page");
+        assert_eq!(by_name.items[0].reference, "demo-prod@0");
+        assert_eq!(lane_at(&h, &main, &main).await.reference, "demo@0");
+        // A second file naming a project that devlanes.yaml already names is refused.
+        std::fs::write(main.join("devlanes.copy.yaml"), WEB).expect("copy");
+        let duplicate = h
+            .call(
+                Method::Status,
+                json!({}),
+                Context {
+                    file: Some(main.join("devlanes.copy.yaml")),
+                    ..cx(&main)
+                },
+            )
+            .await
+            .expect_err("two files, one name");
+        assert_eq!(duplicate.code, "duplicate_project_name");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A `devlanes.yaml` in a subdirectory is its own project next to the root one: the
+/// nearest file above the cwd picks the project, in either order of first use.
+async fn a_subdirectory_project_is_its_own_project() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        let shop = main.join("apps/shop");
+        std::fs::create_dir_all(shop.join("src")).expect("dirs");
+        std::fs::write(
+            shop.join("devlanes.yaml"),
+            "project: shop\nservices:\n  api: { run: sleep, ready: started }\n",
+        )
+        .expect("shop file");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let in_shop = lanes(&h, &shop.join("src")).await;
+        assert_eq!(in_shop.len(), 1);
+        assert_eq!(in_shop[0].reference, "shop@0");
+        let at_root = lanes(&h, &main).await;
+        assert_eq!(at_root.len(), 1);
+        assert_eq!(at_root[0].reference, "demo@0");
+        assert_eq!(lanes(&h, &shop).await[0].reference, "shop@0");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A worktree whose file sets the project-wide `lanes.max` or a shared container
+/// differently from the primary's says so: the primary's `lanes.max` applies, and the
+/// shared container changes for every lane with each start.
+async fn project_wide_settings_follow_the_primary_worktree() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\nlanes: { max: 4 }\ninfra:\n  containers:\n    cache: { image: \"redis:7\", ports: { redis: 6379 } }\nservices:\n  web: { run: sleep, ready: started }\n";
+        let main = repo(&tmp.path, "r", config);
+        let wt = tmp.path.join("wt");
+        worktree(&main, &wt, "feat/x");
+        std::fs::write(
+            wt.join("devlanes.yaml"),
+            config
+                .replace("max: 4", "max: 9")
+                .replace("redis:7", "redis:8"),
+        )
+        .expect("diverge");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        lanes(&h, &main).await;
+        let lane = lane_at(&h, &wt, &wt).await;
+        let codes: Vec<&str> = lane.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert!(codes.contains(&"project_setting_ignored"), "{codes:?}");
+        assert!(codes.contains(&"infra_spec_conflict"), "{codes:?}");
+        let conflict = lane
+            .warnings
+            .iter()
+            .find(|w| w.code == "infra_spec_conflict")
+            .expect("conflict");
+        assert_eq!(conflict.data["settings"], json!(["infra.containers.cache"]));
+        assert!(lane_at(&h, &main, &main).await.warnings.is_empty());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A primary worktree whose file leaves `lanes.max` unset has no limit, whatever
+/// another worktree's file sets.
+async fn an_unset_primary_lanes_max_is_no_limit() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        let wt = tmp.path.join("wt");
+        worktree(&main, &wt, "feat/x");
+        std::fs::write(
+            wt.join("devlanes.yaml"),
+            WEB.replace("project: demo\n", "project: demo\nlanes: { max: 1 }\n"),
+        )
+        .expect("limit in the worktree");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        lanes(&h, &main).await;
+        h.call(Method::Start, json!({}), cx(&wt))
+            .await
+            .expect("a second lane");
+        let lane = lane_at(&h, &wt, &wt).await;
+        assert_eq!(lane.reference, "demo@1", "{lane:?}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Another repository that uses a project name already taken is refused while the
+/// first one is still on disk.
+async fn another_repository_cannot_take_a_project_name() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let first = repo(&tmp.path, "first", WEB);
+        let second = repo(&tmp.path, "second", WEB);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        assert_eq!(lane_at(&h, &first, &first).await.reference, "demo@0");
+        let taken = h
+            .call(Method::Status, json!({}), cx(&second))
+            .await
+            .expect_err("name taken");
+        assert_eq!(taken.code, "project_name_taken");
+        assert!(
+            taken.data["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("devlanes-run/devlanes/issues")),
+            "{taken:?}"
+        );
+        h.close().await;
     })
     .await
     .expect("timeout");
@@ -868,6 +1084,60 @@ impl RouteSink for Recorder {
     fn publish(&self, routes: Vec<RouteEntry>) {
         *self.0.lock().expect("recorder") = routes;
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A config that stops parsing while units run (a typo, conflict markers) keeps their
+/// routes on the last config that loaded; the lane shows the error and refuses starts.
+async fn an_invalid_config_keeps_running_routes() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        let recorder = Arc::new(Recorder::default());
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                routes: Some(recorder.clone()),
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let hosts = || -> Vec<String> {
+            let mut hosts: Vec<String> = recorder
+                .0
+                .lock()
+                .expect("recorder")
+                .iter()
+                .map(|route| route.host.clone())
+                .collect();
+            hosts.sort();
+            hosts
+        };
+        let before = hosts();
+        assert!(
+            before.contains(&"web.demo.localhost".to_owned()),
+            "{before:?}"
+        );
+        std::fs::write(main.join("devlanes.yaml"), "project: demo\n<<<<<<< HEAD\n")
+            .expect("break the file");
+        let restart = h
+            .call(Method::Restart, json!({"units": ["web"]}), cx(&main))
+            .await
+            .expect_err("an invalid config refuses a restart");
+        assert_eq!(restart.code, "config_error");
+        let lane = lane_at(&h, &main, &main).await;
+        assert_eq!(
+            lane.reason.as_ref().map(|reason| reason.code.as_str()),
+            Some("config_error")
+        );
+        assert_eq!(hosts(), before);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
 }
 
 #[tokio::test(flavor = "multi_thread")]

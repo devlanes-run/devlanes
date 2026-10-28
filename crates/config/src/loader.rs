@@ -1,21 +1,35 @@
 use crate::{
     CheckReport, ComposeFiles, ConfigError, Env, Extensions, InfraCommand, InfraCommandOptions,
     InfraConfig, LanesConfig, OpaqueExtensions, ProfileConfig, ProfileOptions, ProjectConfig,
-    TaskConfig, service::PartialService,
+    ProjectExtends, TaskConfig, service::PartialService,
 };
 use indexmap::IndexMap;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_saphyr::Spanned;
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 /// Hint for `on:`, which users borrow from CI syntax for task hooks and service lifecycles.
 pub(crate) const ON_HINT: &str = "unknown key `on`; lifecycle hooks are tasks with `when`";
 
 /// Original YAML documents kept in memory so later integration checks can point at a line.
+/// They are in merge order: extended files, then the entry file, each followed by its local
+/// overlay.
 #[derive(Clone, Default)]
 pub struct ConfigSources {
-    base: Option<(String, String)>,
-    local: Option<(String, String)>,
+    sources: Vec<Source>,
+    /// Index of the file the project was loaded from; errors no file explains point at it.
+    entry: usize,
+}
+
+/// One YAML document of a project and the name diagnostics give it.
+#[derive(Clone)]
+struct Source {
+    file: String,
+    text: String,
+    local: bool,
 }
 
 impl std::fmt::Debug for ConfigSources {
@@ -28,34 +42,24 @@ impl std::fmt::Debug for ConfigSources {
 impl ConfigSources {
     /// Attach an error whose message starts with a field path to that field's YAML position.
     pub fn locate(&self, error: ConfigError) -> ConfigError {
-        match &self.base {
-            Some((file, source)) => locate(
-                error,
-                file,
-                source,
-                self.local.as_ref().map(|(f, s)| (f.as_str(), s.as_str())),
-            ),
-            None => error,
+        if self.sources.is_empty() {
+            return error;
         }
+        locate_in(error, &self.sources, self.entry)
     }
 
     /// Source position of the deepest YAML node on a dotted field path such as
-    /// `services.api.hosts.0`, preferring the local file when it sets that field.
+    /// `services.api.hosts.0`, preferring the later file when two set that field.
     /// `None` when the config was not parsed from YAML or no part of the path matches.
     pub fn position(&self, path: &str) -> Option<crate::SourceLocation> {
-        let (file, source) = self.base.as_ref()?;
-        let error = locate(
-            ConfigError::plain(format!("{path}:")),
-            file,
-            source,
-            self.local.as_ref().map(|(f, s)| (f.as_str(), s.as_str())),
-        );
-        let local = self
-            .local
-            .as_ref()
-            .is_some_and(|(name, _)| *name == error.location.file);
-        let matched = local || source_position(source, path).is_some();
-        matched.then_some(error.location)
+        let (index, offset) = deepest(&self.sources, path)?;
+        let source = &self.sources[index];
+        Some(ConfigError::at(&source.file, &source.text, offset, "").location)
+    }
+
+    /// The files merged into the config, in merge order, as diagnostics name them.
+    pub fn files(&self) -> impl Iterator<Item = &str> {
+        self.sources.iter().map(|source| source.file.as_str())
     }
 }
 
@@ -64,6 +68,7 @@ impl ConfigSources {
 #[serde(deny_unknown_fields, bound = "E: Extensions")]
 struct PartialProject<E: Extensions> {
     project: Option<Spanned<String>>,
+    extends: Option<Spanned<ProjectExtends>>,
     #[serde(default)]
     tags: IndexMap<String, crate::TagConfig>,
     lanes: Option<Spanned<LanesConfig>>,
@@ -124,7 +129,6 @@ fn merge_lanes(base: &mut LanesConfig, overlay: LanesConfig) {
         primary,
         new_worktrees,
         removed_worktrees,
-        worktree_dir,
         block_size,
         max,
         hosts_file,
@@ -335,7 +339,8 @@ impl<E: Extensions> PartialProject<E> {
     /// Apply local settings before any template is expanded. Mappings merge per key at every
     /// level; lists and scalars replace.
     fn merge(&mut self, overlay: Self) {
-        replace!(self, overlay, project);
+        // Each file names its own bases; only the entry file's list describes the result.
+        replace!(self, overlay, project, extends);
         merge_spanned(&mut self.lanes, overlay.lanes, merge_lanes);
         merge_spanned(&mut self.infra, overlay.infra, merge_infra);
         merge_spanned(&mut self.global_env, overlay.global_env, |base, overlay| {
@@ -384,6 +389,7 @@ impl<E: Extensions> PartialProject<E> {
                 .project
                 .ok_or_else(|| ConfigError::plain("project: missing required project name"))?
                 .value,
+            extends: self.extends.map(|v| v.value),
             lanes: self.lanes.map(|v| v.value).unwrap_or_default(),
             infra: self.infra.map(|v| v.value).unwrap_or_default(),
             global_env: self.global_env.map(|v| v.value).unwrap_or_default(),
@@ -639,25 +645,40 @@ fn source_position(source: &str, path: &str) -> Option<(usize, usize)> {
     found
 }
 
-/// Attribute semantic failures to the most specific source, preferring local overrides.
-pub(crate) fn locate(
-    error: ConfigError,
-    file: &str,
-    source: &str,
-    local: Option<(&str, &str)>,
-) -> ConfigError {
+/// Attribute semantic failures to the most specific source: the deepest match of the
+/// message's field path, the later file when two match equally deep, else the entry file.
+fn locate_in(error: ConfigError, sources: &[Source], entry: usize) -> ConfigError {
     let path = error
         .message
         .split_once(':')
-        .map_or(error.message.as_str(), |(p, _)| p);
-    let base = source_position(source, path);
-    if let Some((name, text)) = local
-        && let Some((depth, offset)) = source_position(text, path)
-        && base.is_none_or(|(d, _)| depth >= d)
-    {
-        return ConfigError::at(name, text, offset, error.message);
+        .map_or(error.message.as_str(), |(path, _)| path);
+    let (index, offset) = deepest(sources, path).unwrap_or((entry, 0));
+    let source = &sources[index];
+    ConfigError::at(&source.file, &source.text, offset, error.message)
+}
+
+/// The source whose YAML reaches deepest along `path`, with the byte offset of that node.
+/// A later source wins a tie because it overrides the earlier one.
+fn deepest(sources: &[Source], path: &str) -> Option<(usize, usize)> {
+    let mut best: Option<(usize, usize, usize)> = None;
+    for (index, source) in sources.iter().enumerate() {
+        if let Some((depth, offset)) = source_position(&source.text, path)
+            && best.is_none_or(|(known, _, _)| depth >= known)
+        {
+            best = Some((depth, index, offset));
+        }
     }
-    ConfigError::at(file, source, base.map_or(0, |(_, o)| o), error.message)
+    best.map(|(_, index, offset)| (index, offset))
+}
+
+/// [`locate_in`] for a single document, such as the user config.
+pub(crate) fn locate(error: ConfigError, file: &str, source: &str) -> ConfigError {
+    let source = Source {
+        file: file.into(),
+        text: source.into(),
+        local: false,
+    };
+    locate_in(error, std::slice::from_ref(&source), 0)
 }
 
 /// Parse and validate an in-memory project plus an optional local overlay.
@@ -665,68 +686,128 @@ pub fn parse_project(source: &str, local: Option<&str>) -> Result<ProjectConfig,
     parse_project_with::<OpaqueExtensions>(source, local)
 }
 
-/// Parse a project with the binary's registered integration schemas.
+/// Parse a project with the binary's registered integration schemas. A file-level
+/// `extends` needs the files on disk, so it fails here; use [`load_project_with`].
 pub fn parse_project_with<E: Extensions>(
     source: &str,
     local: Option<&str>,
 ) -> Result<ProjectConfig<E>, ConfigError> {
-    parse_named(
-        "devlanes.yaml",
-        source,
-        local.map(|s| ("devlanes.local.yaml", s)),
-    )
-    .map(|(config, _)| config)
-}
-
-/// Apply named sources so all returned diagnostics identify their original file.
-fn parse_named<E: Extensions>(
-    file: &str,
-    source: &str,
-    local: Option<(&str, &str)>,
-) -> Result<(ProjectConfig<E>, CheckReport), ConfigError> {
-    let mut partial: PartialProject<E> = parse_yaml(file, source)?;
-    if partial.project.is_none() {
-        // A project name set only in the local file would differ between checkouts.
-        return Err(ConfigError::at(
-            file,
-            source,
-            0,
-            format!("project: {file} must set the project name"),
+    let entry = parse_document::<E>("devlanes.yaml", source, false)?;
+    if entry.partial.extends.is_some() {
+        return Err(locate(
+            ConfigError::plain("extends: needs the project files on disk; load the file instead"),
+            &entry.source.file,
+            &entry.source.text,
         ));
     }
-    let base_services: Vec<String> = partial.services.keys().cloned().collect();
-    let mut local_services = Vec::new();
-    if let Some((name, local)) = local {
-        let overlay: PartialProject<E> = parse_yaml(name, local)?;
-        // One machine renaming the project would give its lanes other domains,
-        // container names and `projects.<name>` references than everyone else's.
-        if overlay.project.is_some() {
-            return Err(locate(
-                ConfigError::plain(
-                    "project: set the project name in devlanes.yaml, not in devlanes.local.yaml",
-                ),
-                file,
-                source,
-                Some((name, local)),
-            ));
-        }
-        local_services.extend(
-            overlay
-                .services
-                .keys()
-                .filter(|service| !base_services.contains(service))
-                .cloned(),
-        );
-        partial.merge(overlay);
+    let mut documents = vec![entry];
+    if let Some(local) = local {
+        documents.push(parse_document("devlanes.local.yaml", local, true)?);
     }
-    let mut config = partial
-        .finish()
-        .map_err(|e| locate(e, file, source, local))?;
-    config.sources = ConfigSources {
-        base: Some((file.into(), source.into())),
-        local: local.map(|(f, s)| (f.into(), s.into())),
+    merge_documents(documents, 0).map(|(config, _)| config)
+}
+
+/// A parsed document waiting to be merged, with the source it came from.
+struct Document<E: Extensions> {
+    source: Source,
+    partial: PartialProject<E>,
+}
+
+/// Parse one document, keeping its text for later diagnostics.
+fn parse_document<E: Extensions>(
+    file: &str,
+    text: &str,
+    local: bool,
+) -> Result<Document<E>, ConfigError> {
+    Ok(Document {
+        partial: parse_yaml(file, text)?,
+        source: Source {
+            file: file.into(),
+            text: text.into(),
+            local,
+        },
+    })
+}
+
+/// The last component of a diagnostic file name, for messages that name another file.
+fn short_name(file: &str) -> &str {
+    file.rsplit(['/', '\\']).next().unwrap_or(file)
+}
+
+/// Merge documents in order into one validated project. `entry` is the document the
+/// project was loaded from: it names the project, local overlays must not, and the
+/// names in extended files are ignored.
+fn merge_documents<E: Extensions>(
+    documents: Vec<Document<E>>,
+    entry: usize,
+) -> Result<(ProjectConfig<E>, CheckReport), ConfigError> {
+    let sources: Vec<Source> = documents.iter().map(|doc| doc.source.clone()).collect();
+    let entry_source = &sources[entry];
+    if documents[entry].partial.project.is_none() {
+        // A project name set only in a local file would differ between checkouts.
+        return Err(ConfigError::at(
+            &entry_source.file,
+            &entry_source.text,
+            0,
+            format!("project: {} must set the project name", entry_source.file),
+        ));
+    }
+    let mut base_services: Vec<String> = Vec::new();
+    let mut local_services: Vec<String> = Vec::new();
+    let mut merged: Option<PartialProject<E>> = None;
+    let mut overlaid = entry;
+    for (index, document) in documents.into_iter().enumerate() {
+        let mut partial = document.partial;
+        let own = std::slice::from_ref(&sources[index]);
+        if document.source.local {
+            // One machine renaming the project would give its lanes other domains,
+            // container names and `projects.<name>` references than everyone else's.
+            if partial.project.is_some() {
+                return Err(locate_in(
+                    ConfigError::plain(format!(
+                        "project: set the project name in {}, not in {}",
+                        short_name(&entry_source.file),
+                        short_name(&document.source.file),
+                    )),
+                    own,
+                    0,
+                ));
+            }
+            if partial.extends.is_some() {
+                return Err(locate_in(
+                    ConfigError::plain(format!(
+                        "extends: set it in {}, not in {}",
+                        short_name(&sources[overlaid].file),
+                        short_name(&document.source.file),
+                    )),
+                    own,
+                    0,
+                ));
+            }
+            local_services.extend(partial.services.keys().cloned());
+        } else {
+            if index != entry {
+                partial.project = None;
+            }
+            base_services.extend(partial.services.keys().cloned());
+            overlaid = index;
+        }
+        match &mut merged {
+            Some(merged) => merged.merge(partial),
+            None => merged = Some(partial),
+        }
+    }
+    let Some(merged) = merged else {
+        return Err(ConfigError::plain("project: no project file to load"));
     };
-    for name in &local_services {
+    let mut config = merged
+        .finish()
+        .map_err(|error| locate_in(error, &sources, entry))?;
+    config.sources = ConfigSources { sources, entry };
+    for name in local_services
+        .iter()
+        .filter(|name| !base_services.contains(name))
+    {
         let service = &config.services[name];
         if service.run.is_none() && service.run_script.is_none() {
             let suggestion = base_services
@@ -742,11 +823,192 @@ fn parse_named<E: Extensions>(
             ))));
         }
     }
-    let report = crate::validate(&config).map_err(|e| locate(e, file, source, local))?;
+    let report = crate::validate(&config).map_err(|error| config.sources.locate(error))?;
     Ok((config, report))
 }
 
-/// Load a project file (or a directory containing it) and its sibling local override.
+/// What loading a project from disk read: the result, and every file it read or
+/// looked for.
+pub struct ProjectLoad<E: Extensions = OpaqueExtensions> {
+    /// The merged, validated config with its warnings, or the first error.
+    pub result: Result<(ProjectConfig<E>, CheckReport), ConfigError>,
+    /// Every file read or looked for, in merge order. Local overlays that do not exist
+    /// are listed too, so a caller watching these files notices one being created.
+    pub files: Vec<PathBuf>,
+}
+
+/// Where a lane's missing local overlays come from: a local file under `lane_dir` that
+/// does not exist is read from the same place under `primary_dir`, the primary
+/// worktree's config directory, as lanes share one developer's overrides.
+#[derive(Debug, Clone, Copy)]
+pub struct LocalFallback<'a> {
+    pub lane_dir: &'a Path,
+    pub primary_dir: &'a Path,
+}
+
+/// The local overlay of a project file: `devlanes.yaml` has `devlanes.local.yaml`,
+/// `devlanes.prod.yaml` has `devlanes.prod.local.yaml`.
+pub fn local_overlay_path(file: &Path) -> PathBuf {
+    let name = file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let local = match name.rsplit_once('.') {
+        Some((stem, extension)) => format!("{stem}.local.{extension}"),
+        None => format!("{name}.local.yaml"),
+    };
+    file.with_file_name(local)
+}
+
+/// Whether `file` is a local overlay, which only applies over the project file it
+/// belongs to and cannot be loaded as a project itself.
+pub fn is_local_overlay(file: &Path) -> bool {
+    file.file_name()
+        .map(|name| name.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|name| name.ends_with(".local.yaml") || name.ends_with(".local.yml"))
+}
+
+/// Load a project file, the files its `extends` names (recursively, first) and each
+/// one's local overlay, without checking that Compose files exist. Blocking: reads files.
+pub fn load_project_files<E: Extensions>(
+    entry: &Path,
+    fallback: Option<LocalFallback<'_>>,
+) -> ProjectLoad<E> {
+    let mut files = Vec::new();
+    let mut documents = Vec::new();
+    let result = if is_local_overlay(entry) {
+        Err(ConfigError::at(
+            &entry.display().to_string(),
+            "",
+            0,
+            "project: this is a local overlay; load the project file it belongs to",
+        ))
+    } else {
+        collect(
+            entry,
+            fallback,
+            &mut Vec::new(),
+            &mut Vec::new(),
+            &mut documents,
+            &mut files,
+            None,
+        )
+        .and_then(|index| merge_documents(documents, index))
+    };
+    ProjectLoad { result, files }
+}
+
+/// Parse `file`, the files it extends and each one's local overlay, appending them to
+/// `documents` in merge order, and return `file`'s index there. `stack` holds the files
+/// whose `extends` led here, to refuse cycles; `merged` the files already in
+/// `documents`, which a second path to them (two bases extending one file) skips, since
+/// merging it again would undo what came between; `referrer` is the document and field
+/// that named `file`, where a failure to read it is reported.
+fn collect<E: Extensions>(
+    file: &Path,
+    fallback: Option<LocalFallback<'_>>,
+    stack: &mut Vec<(PathBuf, String)>,
+    merged: &mut Vec<PathBuf>,
+    documents: &mut Vec<Document<E>>,
+    files: &mut Vec<PathBuf>,
+    referrer: Option<(&Source, &str)>,
+) -> Result<usize, ConfigError> {
+    files.push(file.to_owned());
+    let name = file.display().to_string();
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(error) => {
+            return Err(match referrer {
+                Some((source, field)) => locate_in(
+                    ConfigError::plain(format!("{field}: cannot read {name}: {error}")),
+                    std::slice::from_ref(source),
+                    0,
+                ),
+                None => ConfigError::io(file, error),
+            });
+        }
+    };
+    let document = parse_document::<E>(&name, &text, false)?;
+    let key = std::fs::canonicalize(file).unwrap_or_else(|_| file.to_owned());
+    if let Some(start) = stack.iter().position(|(known, _)| *known == key) {
+        let chain: Vec<&str> = stack[start..]
+            .iter()
+            .map(|(_, shown)| short_name(shown))
+            .chain([short_name(&name)])
+            .collect();
+        let message = format!("extends: files extend each other: {}", chain.join(" -> "));
+        return Err(match referrer {
+            Some((source, _)) => {
+                locate_in(ConfigError::plain(message), std::slice::from_ref(source), 0)
+            }
+            None => ConfigError::plain(message),
+        });
+    }
+    if merged.contains(&key) {
+        return Ok(0);
+    }
+    if let Some(extends) = &document.partial.extends {
+        stack.push((key.clone(), name.clone()));
+        let dir = file.parent().unwrap_or(Path::new("."));
+        let many = matches!(extends.value, ProjectExtends::Files(_));
+        for (position, base) in extends.value.files().iter().enumerate() {
+            let field = if many {
+                format!("extends.{position}")
+            } else {
+                "extends".to_owned()
+            };
+            collect(
+                &dir.join(base),
+                fallback,
+                stack,
+                merged,
+                documents,
+                files,
+                Some((&document.source, &field)),
+            )?;
+        }
+        stack.pop();
+    }
+    let index = documents.len();
+    documents.push(document);
+    merged.push(key);
+    if let Some(local) = read_local(file, fallback, files)? {
+        documents.push(local);
+    }
+    Ok(index)
+}
+
+/// The local overlay of `file`, or of the same file in the primary worktree when the lane
+/// has none. Recording each path tried in `files`.
+fn read_local<E: Extensions>(
+    file: &Path,
+    fallback: Option<LocalFallback<'_>>,
+    files: &mut Vec<PathBuf>,
+) -> Result<Option<Document<E>>, ConfigError> {
+    let mut candidates = vec![local_overlay_path(file)];
+    if let Some(fallback) = fallback
+        && let Ok(relative) = candidates[0].strip_prefix(fallback.lane_dir)
+    {
+        let primary = fallback.primary_dir.join(relative);
+        if primary != candidates[0] {
+            candidates.push(primary);
+        }
+    }
+    for path in candidates {
+        files.push(path.clone());
+        match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                return parse_document(&path.display().to_string(), &text, true).map(Some);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ConfigError::io(&path, error)),
+        }
+    }
+    Ok(None)
+}
+
+/// Load a project file (or a directory containing `devlanes.yaml`), what it extends and
+/// their local overlays.
 pub fn load_project(path: impl AsRef<Path>) -> Result<ProjectConfig, ConfigError> {
     load_project_with::<OpaqueExtensions>(path)
 }
@@ -758,9 +1020,9 @@ pub fn load_project_with<E: Extensions>(
     load_named(path.as_ref(), None).map(|(config, _)| config)
 }
 
-/// Like [`load_project_with`] for a lane's worktree: without a sibling
-/// `devlanes.local.yaml`, the one in `primary_dir` (the primary worktree's
-/// directory of `devlanes.yaml`) is merged instead, as lanes do.
+/// Like [`load_project_with`] for a lane's worktree: a local overlay the lane does not
+/// have is read from `primary_dir` (the primary worktree's directory of the project
+/// file) instead, as lanes do.
 pub fn load_lane_project_with<E: Extensions>(
     path: impl AsRef<Path>,
     primary_dir: &Path,
@@ -768,39 +1030,23 @@ pub fn load_lane_project_with<E: Extensions>(
     load_named(path.as_ref(), Some(primary_dir)).map(|(config, _)| config)
 }
 
-/// Read the base file and its sibling local file, or the one in `fallback`
-/// when there is no sibling, returning the validation report as well.
+/// Load a project file and check its Compose files, returning the validation report too.
 fn load_named<E: Extensions>(
     path: &Path,
-    fallback: Option<&Path>,
+    primary_dir: Option<&Path>,
 ) -> Result<(ProjectConfig<E>, CheckReport), ConfigError> {
     let file = if path.is_dir() {
         path.join("devlanes.yaml")
     } else {
         path.to_owned()
     };
-    let source = std::fs::read_to_string(&file).map_err(|e| ConfigError::io(&file, e))?;
-    let read_local = |path: &Path| match std::fs::read_to_string(path) {
-        Ok(value) => Ok(Some(value)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(ConfigError::io(path, error)),
-    };
-    let mut local_path = file.with_file_name("devlanes.local.yaml");
-    let mut local = read_local(&local_path)?;
-    if local.is_none()
-        && let Some(dir) = fallback
-    {
-        local_path = dir.join("devlanes.local.yaml");
-        local = read_local(&local_path)?;
-    }
-    let (config, report) = parse_named::<E>(
-        &file.display().to_string(),
-        &source,
-        local
-            .as_deref()
-            .map(|s| (local_path.to_str().unwrap_or("devlanes.local.yaml"), s)),
-    )?;
-    check_compose_files(&config, file.parent().unwrap_or(Path::new(".")))?;
+    let dir = file.parent().unwrap_or(Path::new("."));
+    let fallback = primary_dir.map(|primary_dir| LocalFallback {
+        lane_dir: dir,
+        primary_dir,
+    });
+    let (config, report) = load_project_files::<E>(&file, fallback).result?;
+    check_compose_files(&config, dir)?;
     Ok((config, report))
 }
 

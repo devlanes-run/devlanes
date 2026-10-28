@@ -24,6 +24,7 @@ mod profiles;
 // its own live tests in devlanes-runner-windows.
 #[cfg(unix)]
 mod pty;
+mod reload;
 mod remote;
 mod resolver;
 mod resume;

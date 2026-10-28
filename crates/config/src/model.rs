@@ -22,6 +22,14 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// Lowercase letters, digits, dots, underscores and dashes.
     #[schemars(extend("examples" = ["acme"]))]
     pub project: String,
+    /// Other project files this one builds on: one path or a list, relative to this file,
+    /// such as `devlanes.yaml` for a `devlanes.prod.yaml` that runs the same apps another
+    /// way. They are merged in order, each with its own `.local.yaml`, then this file and its
+    /// `.local.yaml` go last, so later files win. Mappings merge by key and lists and single
+    /// values replace, as with local overrides. An extended file may be partial and its
+    /// `project` is ignored; paths in it mean what they would in this file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extends: Option<ProjectExtends>,
     /// Optional color and description per tag. Services list their tags in their own `tags`,
     /// and tags group them: `+api` selects every service tagged `api` in profiles and in
     /// commands such as `devlanes start +api`. A unit's color comes from the first of its tags
@@ -37,12 +45,12 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// `hosts`, `sync`) and single values replace. Setting `run` or `run_script` drops the
     /// inherited other one, and one `ready` probe (`tcp`, `http`, `log`, `cmd`) drops the
     /// inherited probe. Templates may extend other templates, are never started themselves,
-    /// and are applied after `devlanes.local.yaml` is merged.
+    /// and are applied after every project file and local override is merged.
     #[serde(default)]
     #[schemars(extend("examples" = [{"fastify-api":{"platform":"node","tags":["api"],"ready":{"http":{"path":"/-/health"}}}}]))]
     pub templates: IndexMap<String, ServiceConfig<E>>,
-    /// Which worktrees get a lane, where new worktrees are created, how many ports each
-    /// lane reserves, and values computed per lane (`lane.<name>`).
+    /// Which worktrees get a lane, how many ports each lane reserves, and values computed
+    /// per lane (`lane.<name>`).
     #[serde(default)]
     pub lanes: LanesConfig,
     /// Containers the lanes depend on (databases, brokers, object stores), started and
@@ -83,8 +91,8 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
 #[serde(deny_unknown_fields)]
 #[schemars(extend("examples" = [{"primary":"main","hosts_file":"always","vars":{"db_name":"acme_${{ lane.name }}"}}]))]
 /// Each Git worktree of the project is a lane with its own ports, hostnames and data.
-/// These settings decide which worktrees get a lane, where new ones are created, how
-/// many ports each lane reserves, and the values each lane computes.
+/// These settings decide which worktrees get a lane, how many ports each lane reserves,
+/// and the values each lane computes.
 pub struct LanesConfig {
     /// Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the
     /// only worktree that gets a lane by itself. Defaults to the remote's default branch,
@@ -94,17 +102,12 @@ pub struct LanesConfig {
     pub primary: Option<String>,
     /// What devlanes does when a worktree gets its lane: only reserve it, also set it up,
     /// or also start it. Defaults to `register`. A worktree gets a lane the first time
-    /// devlanes runs in it or `devlanes lane new` creates it, not merely because it exists.
+    /// devlanes runs in it, not merely because it exists.
     pub new_worktrees: Option<NewWorktrees>,
     /// What happens to a running lane whose worktree folder is deleted. Defaults to `stop`.
     /// A lane whose folder is gone and that runs nothing is cleaned; its logs stay until
     /// log retention removes them.
     pub removed_worktrees: Option<RemovedWorktrees>,
-    /// Directory where `devlanes lane new` creates worktrees, relative to the project
-    /// directory of the primary worktree. Defaults to `../<project>-lanes`. Expressions
-    /// can only use `project.*` here.
-    #[schemars(extend("examples" = ["../${{ project.name }}-lanes"]))]
-    pub worktree_dir: Option<Templated<String>>,
     /// Number of ports reserved for each lane. By default devlanes counts the ports the
     /// config needs and adds half again, rounded up to ten. A fixed size smaller than what
     /// the config needs is an error.
@@ -160,8 +163,9 @@ pub enum RemovedWorktrees {
     /// Stop the lane's processes; once nothing runs, the lane is cleaned.
     #[schemars(extend("examples" = ["stop"]))]
     Stop,
-    /// Clean the lane right away: stop its processes, run `lane.clean` tasks and
-    /// `infra.teardown`, and free its index and ports.
+    /// Clean the lane right away: stop its processes, remove its own containers and free
+    /// its index and ports. `lane.clean` tasks and `infra.teardown` need the folder to
+    /// run in, so they are skipped; data they would drop from shared containers stays.
     #[schemars(extend("examples" = ["clean"]))]
     Clean,
 }
@@ -208,7 +212,7 @@ pub enum Run {
 /// binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can
 /// be left out to keep the inherited one.
 pub struct RunScript {
-    /// File that defines the script, relative to the worktree, such as
+    /// File that defines the script, relative to the project file's directory, such as
     /// `apps/api/package.json`. The script runs in this file's directory. Required unless
     /// an override or `extends` child keeps the inherited file.
     #[schemars(extend("examples" = ["apps/api/package.json","Makefile","justfile"]))]
@@ -266,8 +270,9 @@ pub struct TaskConfig {
     /// script fails before anything starts. Prefer it to `run` for scripts that live in a
     /// file. Use exactly one of `run`, `run_script` or `steps`.
     pub run_script: Option<RunScript>,
-    /// Working directory for `run`, relative to the lane's worktree; defaults to the worktree
-    /// root. Cannot be combined with `run_script`, which runs in the script file's directory.
+    /// Working directory for `run`, relative to the project file's directory in the lane's
+    /// worktree; defaults to that directory. Cannot be combined with `run_script`, which
+    /// runs in the script file's directory.
     #[schemars(extend("examples" = ["apps/api"]))]
     pub cwd: Option<Templated<String>>,
     /// Variables for this task only, above `global_env`.
@@ -619,11 +624,12 @@ pub struct HttpReady {
 /// loads from a stable location, such as an unpacked browser extension. Also streams to
 /// machines connected with `devlanes remote connect`.
 pub struct SyncConfig {
-    /// Folder to copy, relative to the lane's worktree.
+    /// Folder to copy, relative to the project file's directory in the lane's worktree.
     #[schemars(extend("examples" = ["apps/extension/.output/chrome-mv3"]))]
     pub from: Templated<String>,
     #[schemars(extend("examples" = ["~/devlanes/sync/acme/${{ lane.name }}/chrome-mv3"]))]
-    /// Local destination; `~/` is your home and other relative paths start at the worktree.
+    /// Local destination; `~/` is your home and other relative paths start at the project
+    /// file's directory.
     /// Defaults to `~/devlanes/sync/<project>/<lane>/<folder>`. Machines connected with
     /// `devlanes remote connect` ignore it and use their own path.
     pub to: Option<Templated<String>>,
@@ -644,6 +650,29 @@ pub enum ComposeFiles {
     /// Compose files merged in order, like repeated `-f` arguments.
     #[schemars(extend("examples" = [["docker-compose.yml","docker-compose.dev.yml"]]))]
     Files(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(untagged)]
+#[schemars(extend("examples" = ["devlanes.yaml",["devlanes.yaml","devlanes.shared.yaml"]]))]
+/// Project file, or files merged in order, that a project file builds on.
+pub enum ProjectExtends {
+    /// One project file, relative to the file that names it.
+    #[schemars(extend("examples" = ["devlanes.yaml"]))]
+    File(String),
+    /// Project files merged in order, later ones winning.
+    #[schemars(extend("examples" = [["devlanes.yaml","devlanes.shared.yaml"]]))]
+    Files(Vec<String>),
+}
+
+impl ProjectExtends {
+    /// The named files in merge order.
+    pub fn files(&self) -> &[String] {
+        match self {
+            Self::File(file) => std::slice::from_ref(file),
+            Self::Files(files) => files,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -944,7 +973,8 @@ pub struct InfraCommandOptions {
     /// Count a failed or timed-out command as done instead of failing the start, for
     /// commands whose "already exists" error is fine. Defaults to false.
     pub ignore_errors: Option<Templated<bool>>,
-    /// Working directory, relative to the lane's worktree; defaults to the worktree root.
+    /// Working directory, relative to the project file's directory in the lane's worktree;
+    /// defaults to that directory.
     #[schemars(extend("examples" = ["infra"]))]
     pub cwd: Option<Templated<String>>,
     #[serde(default)]

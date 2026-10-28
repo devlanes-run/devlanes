@@ -1,0 +1,18 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+acme@2 · feat/billing
+✓ services  1 of 1 ready
+  ✓  api  https://api.acme-2.localhost:8443
+! stopped worker, which the project file no longer has
+--- plain (exit 0)
+acme@2 · feat/billing
+ok services  1 of 1 ready
+  ok  api  https://api.acme-2.localhost:8443
+warn stopped worker, which the project file no longer has
+--- agent (exit 0)
+acme@2 (feat/billing): 1/1 ready
+ready api http://127.0.0.1:20103 https://api.acme-2.localhost:8443
+warn stopped worker, which the project file no longer has

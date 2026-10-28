@@ -40,50 +40,14 @@ pub struct Worktree {
     pub prunable: bool,
 }
 
-/// The common Git directory distinguishes independent clones with the same project name.
+/// The common Git directory tells repositories apart, so a second one cannot take a
+/// project name another repository uses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Repository {
     pub common_dir: PathBuf,
     pub root: PathBuf,
     pub primary_branch: String,
     pub worktrees: Vec<Worktree>,
-}
-
-/// Where a search for `devlanes.yaml` ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConfigSearch {
-    Found(PathBuf),
-    /// No config; `searched_to` is the last directory looked in (the repository
-    /// root inside Git, else the filesystem root).
-    Missing {
-        searched_to: PathBuf,
-    },
-}
-
-/// Searches `cwd` and its ancestors so monorepo configs can live below the Git
-/// root, stopping at the repository root (the first directory holding `.git`):
-/// a config above it belongs to some other project.
-pub async fn search_config(cwd: &Path) -> Result<ConfigSearch, Error> {
-    let mut searched_to = cwd.to_path_buf();
-    for parent in cwd.ancestors() {
-        searched_to = parent.to_path_buf();
-        let path = parent.join("devlanes.yaml");
-        if tokio::fs::try_exists(&path).await? {
-            return Ok(ConfigSearch::Found(path));
-        }
-        if tokio::fs::try_exists(parent.join(".git")).await? {
-            break;
-        }
-    }
-    Ok(ConfigSearch::Missing { searched_to })
-}
-
-/// [`search_config`] without the place the search ended.
-pub async fn find_config(cwd: &Path) -> Result<Option<PathBuf>, Error> {
-    Ok(match search_config(cwd).await? {
-        ConfigSearch::Found(path) => Some(path),
-        ConfigSearch::Missing { .. } => None,
-    })
 }
 
 /// Returns `None` for an ordinary non-Git directory; other failures remain errors.
@@ -283,40 +247,6 @@ pub fn parse_porcelain(bytes: &[u8]) -> Result<Vec<Worktree>, Error> {
     Ok(result)
 }
 
-/// Branch names are passed after an option boundary and never interpreted by a shell.
-pub async fn add(root: &Path, destination: &Path, branch: &str) -> Result<(), Error> {
-    git(root, &["check-ref-format", "--branch", branch]).await?;
-    let exists = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ])
-        .stdin(Stdio::null())
-        .status()
-        .await?
-        .success();
-    let mut command = Command::new("git");
-    command.arg("-C").arg(root).args(["worktree", "add"]);
-    if !exists {
-        command.args(["-b", branch]);
-    }
-    command.arg("--").arg(destination);
-    if exists {
-        command.arg(branch);
-    }
-    let output = command.stdin(Stdio::null()).output().await?;
-    if !output.status.success() {
-        return Err(Error::Git(
-            String::from_utf8_lossy(&output.stderr).trim().into(),
-        ));
-    }
-    Ok(())
-}
-
 /// Periodic reconciliation covers dropped notifications and newly created admin dirs.
 pub fn watch(
     repository: Repository,
@@ -438,31 +368,6 @@ fn native(path: &str) -> PathBuf {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    /// The search finds a config below the repository root but never one above it.
-    async fn config_search_stops_at_the_repository_root() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let dir = tempfile::tempdir()?;
-        let outer = dir.path();
-        std::fs::write(outer.join("devlanes.yaml"), "project: outer\n")?;
-        let repo = outer.join("repo");
-        let nested = repo.join("apps/web");
-        std::fs::create_dir_all(&nested)?;
-        std::fs::create_dir(repo.join(".git"))?;
-        assert_eq!(
-            search_config(&nested).await?,
-            ConfigSearch::Missing {
-                searched_to: repo.clone()
-            }
-        );
-        std::fs::write(repo.join("apps/devlanes.yaml"), "project: web\n")?;
-        assert_eq!(
-            find_config(&nested).await?,
-            Some(repo.join("apps/devlanes.yaml"))
-        );
-        Ok(())
-    }
-
     #[test]
     fn nul_paths_and_detached_heads_survive() -> Result<(), Error> {
         let trees = parse_porcelain(b"worktree /repo with\nnewline\0HEAD abc\0branch refs/heads/feat/checkout\0\0worktree /detached\0HEAD def\0detached\0\0")?;
@@ -487,6 +392,14 @@ mod tests {
         fn path(&self) -> &Path {
             &self.0
         }
+    }
+
+    /// Adds a linked worktree on a new branch. Only tests create worktrees;
+    /// devlanes itself never writes to a repository.
+    async fn add(root: &Path, destination: &Path, branch: &str) -> Result<(), Error> {
+        let destination = destination.to_str().ok_or(Error::Encoding)?;
+        git(root, &["worktree", "add", "-b", branch, "--", destination]).await?;
+        Ok(())
     }
 
     /// Creates a repository with one commit and a linked worktree under

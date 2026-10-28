@@ -17,6 +17,10 @@ pub struct LaneFacts {
     pub label: String,
     /// The lane's worktree directory.
     pub path: PathBuf,
+    /// The directory of the project file in this worktree, which relative `cwd`,
+    /// `run_script.file` and `sync` paths start from. The worktree itself unless the
+    /// project file sits below it (a subdirectory project).
+    pub project_dir: PathBuf,
     /// The lane's data folder outside the worktree (`lane.data_path`). It belongs to
     /// this lane alone, also when another lane runs from the same worktree.
     pub data_path: PathBuf,
@@ -36,16 +40,25 @@ impl LaneFacts {
     ) -> Self {
         let name = lane_name(index);
         let label = branch.as_deref().map_or_else(|| name.clone(), branch_label);
+        let path = path.into();
         Self {
             project: project.into(),
             primary_path: primary_path.into(),
             index,
             name,
             label,
-            path: path.into(),
+            project_dir: path.clone(),
+            path,
             data_path: data_path.into(),
             branch,
         }
+    }
+
+    /// Sets [`LaneFacts::project_dir`] to `relative`, the project file's directory
+    /// below the worktree.
+    pub fn with_project_dir(mut self, relative: &std::path::Path) -> Self {
+        self.project_dir = self.path.join(relative);
+        self
     }
 }
 

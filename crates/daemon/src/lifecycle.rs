@@ -88,6 +88,8 @@ pub(crate) struct SpawnRequest {
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
     pub keep_awake: bool,
+    /// A service run's [`crate::drift::Fingerprint`]; `None` for one-shot units.
+    pub fingerprint: Option<crate::drift::Fingerprint>,
 }
 
 /// Copies an environment with its provenance (the type is deliberately not `Clone`).
@@ -126,6 +128,7 @@ impl SpawnRequest {
             ready_check: Some(ready_word(&service.ready.check)),
             role: "service",
             keep_awake: service.keep_awake,
+            fingerprint: Some(crate::drift::Fingerprint::of(service)),
         }
     }
 
@@ -162,6 +165,7 @@ impl SpawnRequest {
             ready_check: None,
             role: kind.word(),
             keep_awake: false,
+            fingerprint: None,
         }
     }
 }
@@ -247,6 +251,84 @@ async fn write_files(
     })
     .await
     .map_err(|e| internal("io", e))?
+}
+
+/// Task keys that decide when or how a task is shown or waited for, not what it runs:
+/// editing them must not run a once-only task again.
+const TASK_SCHEDULING: &[&str] = &[
+    "when",
+    "after",
+    "profiles",
+    "confirm",
+    "interactive",
+    "timeout",
+    "pty",
+];
+
+/// Setup-entry keys that decide how a failure is treated, not what runs.
+const SETUP_HANDLING: &[&str] = &["timeout", "ignore_errors"];
+
+/// FNV-1a over the canonical JSON of a config declaration, such as one `infra.setup`
+/// entry or task as written, so an edited entry counts as not done. The declaration,
+/// not the evaluated command, keeps environment values from `.env` and shells out of
+/// state.db. Unset and empty values are dropped first, so a field a later release
+/// adds does not change every hash; FNV because std's hasher is not stable across
+/// releases.
+pub(crate) fn declaration_hash<T: serde::Serialize>(
+    declaration: Option<&T>,
+    ignored: &[&str],
+) -> Option<String> {
+    let mut value = serde_json::to_value(declaration?).ok()?;
+    if let Value::Object(map) = &mut value {
+        map.retain(|key, _| !ignored.contains(&key.as_str()));
+    }
+    let text = canonical_json(value).map_or_else(String::new, |value| value.to_string());
+    let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+    });
+    Some(format!("{hash:016x}"))
+}
+
+/// `value` without nulls and empty lists or mappings, at every level; `None` when
+/// nothing is left.
+fn canonical_json(value: Value) -> Option<Value> {
+    match value {
+        Value::Null => None,
+        Value::Object(map) => {
+            let map: serde_json::Map<String, Value> = map
+                .into_iter()
+                .filter_map(|(key, value)| canonical_json(value).map(|value| (key, value)))
+                .collect();
+            (!map.is_empty()).then_some(Value::Object(map))
+        }
+        Value::Array(items) => {
+            let items: Vec<Value> = items.into_iter().filter_map(canonical_json).collect();
+            (!items.is_empty()).then_some(Value::Array(items))
+        }
+        other => Some(other),
+    }
+}
+
+/// Whether a completion recorded with `recorded` still covers a declaration hashing to
+/// `current`. Records from before hashing match, so an upgrade reruns nothing.
+pub(crate) fn same_declaration(recorded: Option<&str>, current: Option<&str>) -> bool {
+    recorded.is_none() || recorded == current
+}
+
+/// The [`declaration_hash`] of task `name` in `config`.
+pub(crate) fn task_hash(config: &devlanes_config::ProjectConfig, name: &str) -> Option<String> {
+    declaration_hash(config.tasks.get(name), TASK_SCHEDULING)
+}
+
+/// The [`declaration_hash`] of `infra.setup.<name>` in `config`.
+pub(crate) fn setup_hash(config: &devlanes_config::ProjectConfig, name: &str) -> Option<String> {
+    declaration_hash(config.infra.setup.get(name), SETUP_HANDLING)
+}
+
+/// The lane's loaded config, read when a run begins so its completion records the
+/// declaration it ran, not one edited while it ran.
+fn loaded_config(lane: &LaneRt) -> Option<Arc<devlanes_config::ProjectConfig>> {
+    lane.st().config.loaded().cloned()
 }
 
 /// Maps a resolved readiness spec to the checker's form. `env` is the unit's launch
@@ -413,6 +495,8 @@ pub(crate) struct StartCx {
     pub config: Arc<devlanes_config::ProjectConfig>,
     /// Place in the start gate's line, taken when the request arrived.
     pub arrival: Option<devlanes_core::gate::Arrival>,
+    /// Saved profiles and services the config no longer has, reported as warnings.
+    pub dropped: Dropped,
 }
 
 /// One ordered step of the lane pipeline (plan 5.5).
@@ -752,11 +836,17 @@ impl LanePhase for SetupPhase {
                 .as_ref()
                 .and_then(|container| started.get(container).cloned());
             let done = records.iter().find(|r| &r.entry == name);
+            let hash = setup_hash(&cx.config, name);
             let current = match (done, &command.container) {
                 (None, _) => false,
-                (Some(_), None) => true,
+                (Some(record), None) => {
+                    same_declaration(record.spec_hash.as_deref(), hash.as_deref())
+                }
                 // A restarted backing container lost the entry's effect (tmpfs data).
-                (Some(record), Some(_)) => record.container_started_at == started_at,
+                (Some(record), Some(_)) => {
+                    same_declaration(record.spec_hash.as_deref(), hash.as_deref())
+                        && record.container_started_at == started_at
+                }
             };
             if !current {
                 pending.push((name.clone(), started_at));
@@ -825,9 +915,10 @@ impl LanePhase for SetupPhase {
                     .iter()
                     .find(|(n, _)| *n == name)
                     .and_then(|(_, at)| at.clone());
+                let hash = setup_hash(&cx.config, &name);
                 if let Err(error) = engine
                     .store
-                    .record_setup(lane_id, name.clone(), started_at)
+                    .record_setup(lane_id, name.clone(), started_at, hash)
                     .await
                 {
                     return PhaseResult::Error(store_error(error));
@@ -894,9 +985,15 @@ impl LanePhase for TasksPhase {
                 continue;
             }
             if hook == "lane.create" {
-                match engine.store.task_succeeded(lane_id, name.clone()).await {
-                    Ok(true) => continue,
-                    Ok(false) => {}
+                // Once per lane, and again after its declaration changed.
+                let hash = task_hash(&cx.config, name);
+                match engine.store.task_completion(lane_id, name.clone()).await {
+                    Ok(Some(done))
+                        if same_declaration(done.spec_hash.as_deref(), hash.as_deref()) =>
+                    {
+                        continue;
+                    }
+                    Ok(_) => {}
                     Err(error) => return PhaseResult::Error(store_error(error)),
                 }
             }
@@ -1213,43 +1310,95 @@ pub(crate) struct TaskOutcome {
     pub leftovers: Vec<Leftovers>,
 }
 
-/// The saved services of a lane that its config still declares, for a start
-/// without services or profiles; empty falls back to its profiles.
-fn restored_services(
-    saved: Option<&devlanes_state::Lane>,
-    known: impl Fn(&str) -> bool,
-) -> Vec<String> {
-    saved
-        .map(|record| {
-            record
-                .services
-                .iter()
-                .filter(|name| known(name))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
+/// Saved names a start brought back without, because the config no longer has them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Dropped {
+    pub profiles: Vec<String>,
+    pub services: Vec<String>,
 }
 
-/// The services a start selects. `saved` is the lane's record and
-/// `lane_profiles` the profiles in effect; `whole_lane` says the start brings
-/// the lane up. Pure, so a start can name its units before it waits for `op`.
+impl Dropped {
+    /// One `saved_profile_removed` / `saved_service_removed` warning per kind.
+    pub(crate) fn warnings(&self, lane: &str) -> Vec<devlanes_proto::LaneWarning> {
+        let mut warnings = Vec::new();
+        for (code, names, what) in [
+            ("saved_profile_removed", &self.profiles, "profile"),
+            ("saved_service_removed", &self.services, "service"),
+        ] {
+            if names.is_empty() {
+                continue;
+            }
+            let plural = if names.len() == 1 { "" } else { "s" };
+            warnings.push(devlanes_proto::LaneWarning {
+                code: code.into(),
+                data: json!({
+                    "lane": lane,
+                    "names": names,
+                    "message": format!(
+                        "{lane} ran {what}{plural} {} before, which the config no longer has; started without",
+                        names.join(", ")
+                    ),
+                }),
+            });
+        }
+        warnings
+    }
+}
+
+/// Splits saved service or unit names into the services the config still declares,
+/// deduplicated, and the names it dropped.
+fn split_saved(
+    config: &devlanes_config::ProjectConfig,
+    names: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut dropped = Vec::new();
+    for name in names {
+        match crate::drift::service_of(config, name) {
+            Some(service) if !kept.iter().any(|known| known == service) => {
+                kept.push(service.to_owned());
+            }
+            Some(_) => {}
+            None => dropped.push(name.clone()),
+        }
+    }
+    (kept, dropped)
+}
+
+/// The services a start selects, and the saved names it left out. `saved` is the
+/// lane's record and `lane_profiles` the profiles in effect; `whole_lane` says the
+/// start brings the lane up. Saved profiles and services the config no longer has
+/// are dropped instead of failing the start, which a profile typed on the command line
+/// still does. Pure, so a start can name its units before it waits for `op`.
 fn start_selection(
     config: &devlanes_config::ProjectConfig,
     saved: Option<&devlanes_state::Lane>,
     lane_profiles: &[String],
     options: &StartOptions,
     whole_lane: bool,
-) -> Result<devlanes_resolve::Selection, devlanes_resolve::ResolveError> {
+) -> Result<(devlanes_resolve::Selection, Dropped), devlanes_resolve::ResolveError> {
+    let mut dropped = Dropped::default();
     // The saved record, not the profiles in effect: a transient start changes
     // those but must not be what the next plain start picks up.
-    let requested = if options.profiles.is_empty() {
+    let mut requested = if options.profiles.is_empty() {
         saved.map_or_else(|| lane_profiles.to_vec(), |r| r.profiles.clone())
     } else {
         options.profiles.clone()
     };
+    if options.profiles.is_empty() || options.restoring {
+        let (known, gone): (Vec<String>, Vec<String>) = requested.into_iter().partition(|name| {
+            name == devlanes_proto::DEFAULT_PROFILE || config.profiles.contains_key(name)
+        });
+        requested = known;
+        dropped.profiles = gone;
+    }
     let restored = if options.selectors.is_empty() && options.profiles.is_empty() {
-        restored_services(saved, |name| config.services.contains_key(name))
+        let names = saved
+            .map(|record| record.services.clone())
+            .unwrap_or_default();
+        let (kept, gone) = split_saved(config, &names);
+        dropped.services = gone;
+        kept
     } else {
         Vec::new()
     };
@@ -1257,6 +1406,10 @@ fn start_selection(
     // profiles select and it lacks, such as a service added to the config.
     let selectors = if whole_lane && !restored.is_empty() {
         restored.clone()
+    } else if options.restoring {
+        let (kept, gone) = split_saved(config, &options.selectors);
+        dropped.services.extend(gone);
+        kept
     } else {
         options.selectors.clone()
     };
@@ -1272,7 +1425,7 @@ fn start_selection(
             .autostart_pending
             .retain(|name| !restored.contains(name));
     }
-    Ok(selection)
+    Ok((selection, dropped))
 }
 
 /// How a unit another start was spawning ended for a start that joined it.
@@ -1526,6 +1679,10 @@ pub(crate) struct StartOptions {
     /// Place in the start gate's line, taken when the request arrived; `None`
     /// takes one when the services phase begins.
     pub arrival: Option<devlanes_core::gate::Arrival>,
+    /// `selectors` and `profiles` are what the lane ran before (a replacing
+    /// daemon's resume plan), so names the config no longer has are left out with
+    /// a warning instead of failing the start.
+    pub restoring: bool,
 }
 
 type Spawned = (UnitHost, Arc<dyn ManagedUnit>);
@@ -1710,6 +1867,7 @@ impl Inner {
                 ready_check: request.ready_check,
                 role: request.role,
                 keep_awake: request.keep_awake,
+                fingerprint: request.fingerprint.map(Arc::new),
             },
         );
         if request.kind == Kind::Service {
@@ -2009,7 +2167,7 @@ impl Inner {
                 !st.any_running() && st.bringup.is_none(),
             )
         };
-        let Ok(selection) =
+        let Ok((selection, _)) =
             start_selection(&config, saved.as_ref(), &lane_profiles, options, whole_lane)
         else {
             return;
@@ -2220,6 +2378,7 @@ impl Inner {
                 .map(|r| r.id)
                 .ok_or_else(|| RpcError::new("unassigned", json!({"lane": reference}), 1))?;
             self.task_event(&reference, name, "started", None, None);
+            let hash = loaded_config(lane).and_then(|config| task_hash(&config, name));
             let run = self
                 .store
                 .start_task_run(TaskRunInput {
@@ -2332,14 +2491,16 @@ impl Inner {
                     Some(json!({"code": error.code, "data": error.data})),
                 ),
             };
-            self.close_task_run(run.id, &reference, name, code, state, reason)
+            self.close_task_run(run.id, &reference, name, code, state, reason, hash)
                 .await;
             guard.run = None;
             result
         })
     }
 
-    /// Finishes a task run row and emits its closing `task` event.
+    /// Finishes a task run row and emits its closing `task` event. `spec_hash` is the
+    /// task's [`declaration_hash`], kept with a success so an edit runs it again.
+    #[allow(clippy::too_many_arguments)]
     async fn close_task_run(
         &self,
         id: devlanes_state::TaskRunId,
@@ -2348,8 +2509,9 @@ impl Inner {
         code: Option<i32>,
         state: &str,
         reason: Option<Value>,
+        spec_hash: Option<String>,
     ) {
-        if let Err(error) = self.store.finish_task_run(id, code).await {
+        if let Err(error) = self.store.finish_task_run(id, code, spec_hash).await {
             tracing::warn!(%error, task, "task run not recorded as finished");
         }
         self.task_event(reference, task, state, code, reason);
@@ -2405,6 +2567,7 @@ impl Inner {
                 3,
             )
         })?;
+        let hash = loaded_config(lane).and_then(|config| setup_hash(&config, entry));
         let (outcome, host) = self
             .run_command(project, lane, phase, command, actor, cancel, session)
             .await?;
@@ -2429,7 +2592,7 @@ impl Inner {
                 };
                 let _ = self
                     .store
-                    .record_setup(lane_id, entry.to_owned(), started_at)
+                    .record_setup(lane_id, entry.to_owned(), started_at, hash)
                     .await;
             } else if phase == "teardown" && ok {
                 let _ = self
@@ -2528,8 +2691,12 @@ impl Inner {
             if let Some(reason) = &st.unassigned {
                 return Err(fail(reason.clone()));
             }
-            if let crate::model::ConfigState::Invalid(error) = &st.config {
-                return Err(fail(error.clone()));
+            match &st.config {
+                crate::model::ConfigState::Invalid(error) => return Err(fail(error.clone())),
+                crate::model::ConfigState::Elsewhere(other) => {
+                    return Err(fail(crate::model::elsewhere_error(other, Some(&initial))));
+                }
+                _ => {}
             }
             if st.record.is_none() {
                 return Err(fail(RpcError::new(
@@ -2546,7 +2713,6 @@ impl Inner {
                 )));
             }
         }
-        self.check_name_conflict(project).map_err(fail)?;
         {
             let mut st = lane.st();
             if let Some(env) = options.env.clone() {
@@ -2575,13 +2741,9 @@ impl Inner {
         }
         let reference = lane.st().reference(&project.name());
         let fail = |error: RpcError| with_ownership(error, &reference, &[]);
-        let config = lane
-            .st()
-            .config
-            .loaded()
-            .cloned()
-            .ok_or_else(|| fail(RpcError::new("no_config", json!({"lane": reference}), 1)))?;
-        let config_dir = lane.st().path.join(&project.config_dir);
+        let config = lane.st().config.require(&reference).map_err(fail)?;
+        let (relative, _) = project.config_path();
+        let config_dir = lane.st().path.join(relative);
         check_compose_files(&config, config_dir)
             .instrument(tracing::debug_span!("compose files"))
             .await
@@ -2590,7 +2752,7 @@ impl Inner {
             let st = lane.st();
             (st.record.clone(), st.profiles.clone())
         };
-        let selection = start_selection(
+        let (selection, dropped) = start_selection(
             &config,
             saved.as_ref(),
             &lane_profiles,
@@ -2622,6 +2784,12 @@ impl Inner {
                 st.started_at_ms = Some(now_ms());
                 st.usage.clear();
                 st.config_changed = false;
+                st.drift.clear();
+                st.drift_error = None;
+                st.drift_generation += 1;
+                st.infra_changed = false;
+                st.started_with =
+                    Some(crate::drift::StartedWith::new(&config, &selection.profiles));
                 st.skipped_tasks.clear();
             }
         }
@@ -2654,6 +2822,7 @@ impl Inner {
             ctl: slot.ctl.clone(),
             config: config.clone(),
             arrival: options.arrival,
+            dropped,
         };
         tracing::debug!(
             lane = %reference,
@@ -2860,7 +3029,8 @@ impl Inner {
                 .retain(|failure| !withdrawn.contains_key(&failure.unit));
         }
         let branch = cx.lane.st().branch.clone();
-        let mut warnings = self.ca_warnings(&cx.reference, &cx.lane.st());
+        let mut warnings = cx.dropped.warnings(&cx.reference);
+        warnings.extend(self.ca_warnings(&cx.reference, &cx.lane.st()));
         let path = cx.lane.st().path.clone();
         warnings.extend(self.windows_drive_warning(&cx.reference, &path).await);
         for warning in &warnings {
@@ -2869,6 +3039,8 @@ impl Inner {
                 json!({"lane": cx.reference, "code": warning.code, "data": warning.data}),
             );
         }
+        // What it spawned matches the file, unless the file changed during the start.
+        self.settle_drift(&cx.project, &cx.lane, &cx.config, &cx.started);
         StartResult {
             warnings,
             started: cx
@@ -2934,25 +3106,6 @@ impl Inner {
                 summary
             })
             .collect()
-    }
-
-    /// Decision 9: refuse while a running project with the same name has another identity.
-    fn check_name_conflict(&self, project: &ProjectRt) -> Result<(), RpcError> {
-        let name = project.name();
-        for other in self.all_projects() {
-            if other.id == project.id || other.name() != name {
-                continue;
-            }
-            if other.lanes().iter().any(|lane| lane.st().any_running()) {
-                let path = other.st().root.clone();
-                return Err(RpcError::new(
-                    "project_running_elsewhere",
-                    json!({"project": name, "path": path}),
-                    1,
-                ));
-            }
-        }
-        Ok(())
     }
 
     /// Stops units of a lane. Without selectors (and without `mine`) the whole lane
@@ -3446,13 +3599,11 @@ impl Inner {
                 .unwrap_or_default()
         };
         let units = crate::engine::match_units(selectors, &candidates, &reference)?;
-        let config = lane.st().config.loaded().cloned().ok_or_else(|| {
-            with_ownership(
-                RpcError::new("no_config", json!({"lane": reference}), 1),
-                &reference,
-                &[],
-            )
-        })?;
+        let config = lane
+            .st()
+            .config
+            .require(&reference)
+            .map_err(|error| with_ownership(error, &reference, &[]))?;
         let resolved = self
             .resolve_config(project, lane, config.clone(), None)
             .await
@@ -3548,6 +3699,7 @@ impl Inner {
             ctl,
             config,
             arrival: options.arrival,
+            dropped: Dropped::default(),
         };
         // A restart is a services phase alone; its events carry the plan as a start's do.
         let phase = ServicesPhase.name();
@@ -3758,6 +3910,7 @@ impl Inner {
                 all_at_once: false,
                 start_id: None,
                 arrival: None,
+                restoring: false,
             },
         )
         .await
@@ -4097,9 +4250,9 @@ impl Inner {
 }
 
 /// `config_error`, located like `config check`'s, when an `infra.compose` file is
-/// missing from `config_dir`: the daemon parses the config from text, so the
-/// loader's file check never ran, and Docker would only report it later and
-/// less clearly.
+/// missing from `config_dir`: the daemon's load leaves that check out, since a missing
+/// file must not unload a running lane's config, and Docker would only report it later
+/// and less clearly.
 async fn check_compose_files(
     config: &Arc<devlanes_config::ProjectConfig>,
     config_dir: std::path::PathBuf,
@@ -4109,16 +4262,8 @@ async fn check_compose_files(
     }
     let config = config.clone();
     tokio::task::spawn_blocking(move || {
-        devlanes_config::check_compose_files(&config, &config_dir).map_err(|error| {
-            let mut shaped = crate::model::config_error(&error);
-            let file = if error.location.file == "devlanes.local.yaml" {
-                "devlanes.local.yaml"
-            } else {
-                "devlanes.yaml"
-            };
-            shaped.data["file"] = json!(config_dir.join(file));
-            shaped
-        })
+        devlanes_config::check_compose_files(&config, &config_dir)
+            .map_err(|error| crate::model::config_error(&error))
     })
     .await
     .map_err(|error| internal("config_error", error))?
@@ -4181,6 +4326,7 @@ impl Drop for TaskRunGuard {
                     None,
                     "failed",
                     Some(json!({"code": "cancelled"})),
+                    None,
                 )
                 .await;
         });
@@ -4311,6 +4457,84 @@ mod tests {
     /// A start's control under a fresh shutdown token.
     fn ctl(start_id: u64) -> Arc<StartCtl> {
         Arc::new(StartCtl::new(&CancellationToken::new(), start_id))
+    }
+
+    #[test]
+    /// A resume plan names units; replicas map to their service, and units and
+    /// profiles the config dropped are left out and reported.
+    fn restoring_maps_replicas_and_drops_removed_names() {
+        let config = devlanes_config::parse_project(
+            "project: demo\nprofiles:\n  front: [web]\nservices:\n  web: { run: serve, replicas: 2 }\n  api: { run: serve }\n",
+            None,
+        )
+        .expect("config");
+        let options = StartOptions {
+            selectors: vec!["web.1".into(), "web.2".into(), "gone".into()],
+            profiles: vec!["front".into(), "old".into()],
+            transient: false,
+            env: None,
+            overrides: EnvMap::new(),
+            actor: Actor::default(),
+            timeout: Duration::from_secs(1),
+            session: None,
+            setup_only: false,
+            all_at_once: false,
+            start_id: None,
+            arrival: None,
+            restoring: true,
+        };
+        let (selection, dropped) =
+            start_selection(&config, None, &[], &options, true).expect("selection");
+        assert_eq!(selection.services, ["web"]);
+        assert_eq!(selection.profiles, ["front"]);
+        assert_eq!(
+            dropped,
+            Dropped {
+                profiles: vec!["old".into()],
+                services: vec!["gone".into()],
+            }
+        );
+        assert_eq!(dropped.warnings("demo@0").len(), 2);
+    }
+
+    #[test]
+    /// The declaration hash follows what a task runs, not when it runs or how long it
+    /// may take, and unset fields do not count.
+    fn declaration_hashes_follow_what_runs() {
+        let parse = |task: &str| {
+            devlanes_config::parse_project(
+                &format!("project: demo\ntasks:\n  install: {task}\n"),
+                None,
+            )
+            .expect("config")
+        };
+        let hash =
+            |config: &devlanes_config::ProjectConfig| task_hash(config, "install").expect("hash");
+        let one = parse("{ run: pnpm install, when: lane.create }");
+        assert_eq!(
+            hash(&one),
+            hash(&parse(
+                "{ run: pnpm install, when: lane.create, timeout: 10m, env: {} }"
+            ))
+        );
+        assert_ne!(
+            hash(&one),
+            hash(&parse(
+                "{ run: pnpm install --frozen-lockfile, when: lane.create }"
+            ))
+        );
+        assert_ne!(
+            hash(&one),
+            hash(&parse(
+                "{ run: pnpm install, when: lane.create, env: { CI: 1 } }"
+            ))
+        );
+        assert!(same_declaration(None, Some(&hash(&one))));
+        assert!(!same_declaration(Some("0"), Some(&hash(&one))));
+        assert_eq!(
+            canonical_json(json!({"a": null, "b": [], "c": {"d": {}}})),
+            None
+        );
     }
 
     #[tokio::test(start_paused = true)]

@@ -190,7 +190,7 @@ async fn lane_stop_and_clean_cover_orphans() -> TestResult {
         api.calls().last().map(String::as_str),
         Some("Stop acme@0 []")
     );
-    // Restart names running units, the orphan among them.
+    // Restart on the lane restarts all of it, the orphan included.
     let effect = app
         .update(key(KeyCode::Char('r')))
         .pop()
@@ -202,7 +202,7 @@ async fn lane_stop_and_clean_cover_orphans() -> TestResult {
         return Err(format!("unexpected {effect:?}").into());
     };
     assert_eq!(*method, Method::Restart);
-    assert_eq!(selection.units, ["acme@0:api", "acme@0:web"]);
+    assert!(selection.units.is_empty(), "{selection:?}");
     // Clean asks first, then sends the normal clean.
     app.update(shifted('C'));
     let effects = app.update(key(KeyCode::Enter));

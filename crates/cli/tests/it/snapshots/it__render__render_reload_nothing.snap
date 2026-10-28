@@ -1,0 +1,13 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+acme@2
+✓ nothing to reload: acme@2 matches its project file
+--- plain (exit 0)
+acme@2
+ok nothing to reload: acme@2 matches its project file
+--- agent (exit 0)
+acme@2: ready
+ok nothing to reload: acme@2 matches its project file

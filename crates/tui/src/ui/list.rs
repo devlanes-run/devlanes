@@ -404,6 +404,13 @@ fn unit_line(
             }
         }
     }
+    // The pane lists what changed; the row only says that it did.
+    if let Some(drift) = &unit.drift {
+        right.push(Span::styled(
+            clean(&drift.kind),
+            theme.tone(Tone::Attention),
+        ));
+    }
     // The name takes the family color; a unit that does not run, or a
     // hidden one, is dimmed. A throttled unit's glyph is quiet, yet it runs,
     // and an external port's, yet it may answer.

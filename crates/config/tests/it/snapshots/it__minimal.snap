@@ -10,7 +10,6 @@ expression: "parse_project(MINIMAL, None).expect(\"minimal reference\")"
     "primary": null,
     "new_worktrees": null,
     "removed_worktrees": null,
-    "worktree_dir": null,
     "block_size": null,
     "max": null,
     "hosts_file": null,

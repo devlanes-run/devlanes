@@ -18,10 +18,10 @@
 │   · web-storybook                            ││ lanes in acme                                                                                                                                        │
 │   ● web-landing                              ││ ▌ main @0                  1 failed · 1 starting · 34 up                                                                                             │
 │   ◉ wrk-email                                ││   feat/checkout @1         starting · 4 of 8 ready                                                                                                   │
-│   ◉ wrk-billing                              ││   fix/cache @2             not running · config changed                                                                                              │
+│   ◉ wrk-billing                              ││   fix/cache @2             not running                                                                                                               │
 │   ◉ wrk-index                                ││   spike/old-search @3      worktree missing                                                                                                          │
 │   ◉ wrk-thumbs                               ││                                                                                                                                                      │
-│   ✕ wrk-export               failed · exit 1 ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes lane new <branch> adds one.                                   │
+│   ✕ wrk-export               failed · exit 1 ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes start in a new git worktree adds one.                         │
 │   ◉ wrk-cron                                 ││                                                                                                                                                      │
 │   ◉ wrk-webhooks                             ││                  ┌ start acme@0 with profiles ────────────────────────────────────┐                                                                  │
 │   ◉ wrk-ledger                               ││                  │ ▌[x] web      default           +web, +api, proxy-edge         │                                                                  │
@@ -80,10 +80,10 @@
 17: 0 darkgray, 4-5 dim, 6-18 dim green, 47-48 darkgray, 50-62 bold, 199 darkgray
 18: 0 darkgray, 4-16 green, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 199 darkgray
 19: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 50-51 bold, 85-99 dim, 199 darkgray
-20: 0 darkgray, 4-5 green, 6-16 magenta, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
+20: 0 darkgray, 4-5 green, 6-16 magenta, 47-48 darkgray, 50-51 bold, 77-87 dim, 199 darkgray
 21: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
 22: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 199 darkgray
-23: 0 darkgray, 4-5 red, 6-15 magenta, 31-36 red, 37-39 dim, 40-45 red, 47-48 darkgray, 50-163 dim, 199 darkgray
+23: 0 darkgray, 4-5 red, 6-15 magenta, 31-36 red, 37-39 dim, 40-45 red, 47-48 darkgray, 50-173 dim, 199 darkgray
 24: 0 darkgray, 4-5 green, 6-13 magenta, 47-48 darkgray, 199 darkgray
 25: 0 darkgray, 4-5 green, 6-17 magenta, 47-48 darkgray, 67-132 bold, 199 darkgray
 26: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 67 bold, 69 bold reversed, 70-73 reversed, 74-82 bold reversed, 83-122 dim reversed, 132 bold, 199 darkgray

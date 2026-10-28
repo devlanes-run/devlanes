@@ -14,7 +14,6 @@ expression: "parse_project(base, Some(LOCAL)).expect(\"local with matching base\
     "primary": null,
     "new_worktrees": null,
     "removed_worktrees": null,
-    "worktree_dir": null,
     "block_size": null,
     "max": 3,
     "hosts_file": null,

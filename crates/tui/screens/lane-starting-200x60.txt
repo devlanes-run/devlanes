@@ -25,10 +25,10 @@
 │     ● redis                                  ││ lanes in acme                                                                                                                                        │
 │   ▾ external                               1 ││   main @0                  1 failed · 1 starting · 34 up                                                                                             │
 │     · pgadmin       pgadmin.acme-1.localhost ││ ▌ feat/checkout @1         starting · 4 of 8 ready                                                                                                   │
-│   ▸ setup                             1 done ││   fix/cache @2             not running · config changed                                                                                              │
+│   ▸ setup                             1 done ││   fix/cache @2             not running                                                                                                               │
 │                                              ││   spike/old-search @3      worktree missing                                                                                                          │
 │                                              ││                                                                                                                                                      │
-│                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes lane new <branch> adds one.                                   │
+│                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes start in a new git worktree adds one.                         │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -87,10 +87,10 @@
 24: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-62 bold, 199 darkgray
 25: 0 darkgray, 4-5 dim, 45 dim, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 199 darkgray
 26: 0 darkgray, 6-7 dim, 8-14 cyan, 22-45 dim, 47-48 darkgray, 50-51 bold, 85-99 dim, 199 darkgray
-27: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
+27: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 50-51 bold, 77-87 dim, 199 darkgray
 28: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
 29: 0 darkgray, 47-48 darkgray, 199 darkgray
-30: 0 darkgray, 47-48 darkgray, 50-163 dim, 199 darkgray
+30: 0 darkgray, 47-48 darkgray, 50-173 dim, 199 darkgray
 31: 0 darkgray, 47-48 darkgray, 199 darkgray
 32: 0 darkgray, 47-48 darkgray, 199 darkgray
 33: 0 darkgray, 47-48 darkgray, 199 darkgray

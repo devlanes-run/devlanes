@@ -9,8 +9,14 @@ hint: devlanes status acme@feat
 error: this removes lane acme@2 and its data; rerun with --yes
 error: task reset asks: Drop the database?; rerun with --yes
 error: task console is interactive; run it from a terminal
-error: acme is already running from /work/other-acme
-hint: devlanes stop --project acme
+error: project acme is already used by /work/other-acme; set another project: in this file
+error: the project file now names project acme-next
+hint: devlanes lane gc --yes
+error: acme@2's project file now names project acme-next
+hint: devlanes lane gc --yes
+error: devlanes.prod.yaml and devlanes.yaml both name project acme; change project: in one of them
+error: acme-prod not found; a project from a file other than devlanes.yaml is known once a command names it with --file
+hint: devlanes lane ls
 error: port 5173 is taken by shop@1:web
 hint: devlanes stop shop@1:web
 error: Docker isn't running or can't be reached
@@ -29,7 +35,7 @@ hint: devlanes daemon restart
 error: the start of acme@2 was cancelled by a stop, clean or reset of the lane
 hint: devlanes status acme@2
 error: no devlanes.yaml in /work/acme/src or its parents (searched up to /work/acme)
-hint: create devlanes.yaml in /work/acme; a minimal one: https://github.com/devlanes-run/devlanes/blob/main/docs/examples/minimal.yaml
+hint: create devlanes.yaml in /work/acme (a minimal one: https://github.com/devlanes-run/devlanes/blob/main/docs/examples/minimal.yaml), or name another project file with --file
 error: no profile e2r; did you mean e2e?
 hint: devlanes start --profile e2e
 error: no profile staging; profiles: dev, e2e

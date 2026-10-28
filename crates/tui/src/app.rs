@@ -852,7 +852,7 @@ pub enum Effect {
     /// Makes the attached stream the unit's interactive viewer (it types and
     /// owns the size), or an observer again, without reopening it.
     AttachRole(bool),
-    /// A start, stop or restart, answered with [`Msg::ActionDone`].
+    /// A start, stop, restart or reload, answered with [`Msg::ActionDone`].
     Control {
         /// Unique per effect, increasing; the answer carries it back so it
         /// only ends the local `queued` this action set.
@@ -1500,10 +1500,10 @@ impl App {
                     let target = lanes.first().cloned().map(Target::Lane);
                     self.report(&what, target, words::api(&error));
                 }
-                let verb = if label == "restart" {
-                    "restart"
-                } else {
-                    "start"
+                let verb = match label.as_str() {
+                    "restart" => "restart",
+                    "reload" => "reload",
+                    _ => "start",
                 };
                 for failure in &failures {
                     let target = Target::Unit {
@@ -5831,6 +5831,19 @@ impl App {
                 });
             }
             Some(MonitorRow::Group(group)) if !group.shared => {
+                // As on the lane's row in the list: `r` reloads a lane with changes,
+                // and does not start a stopped lane by restarting it.
+                let lane = self.lanes.iter().find(|lane| lane.reference == group.key);
+                let reloads = method == Method::Restart && lane.is_some_and(tree::reloads_on_r);
+                let (method, verb) = if reloads {
+                    (Method::Reload, method_verb(Method::Reload))
+                } else {
+                    (method, verb)
+                };
+                if method == Method::Restart && lane.is_some_and(|lane| !tree::lane_is_live(lane)) {
+                    self.set_notice(format!("nothing running in {}", group.key));
+                    return;
+                }
                 self.pending_begin(&group.key);
                 let target = Target::Lane(group.key.clone());
                 if method != Method::Start {
@@ -5922,6 +5935,12 @@ impl App {
         let Some(row) = self.selected_id().cloned() else {
             return;
         };
+        let method =
+            if method == Method::Restart && row == RowId::WholeLane && tree::reloads_on_r(lane) {
+                Method::Reload
+            } else {
+                method
+            };
         let verb = method_verb(method);
         // An external port has no process to start or stop.
         if let RowId::Unit(name) = &row
@@ -6037,19 +6056,10 @@ impl App {
                 );
                 return;
             }
-            // Restart names units explicitly (the CLI requires them); start and stop act on the lane.
-            RowId::WholeLane if method == Method::Restart => {
-                let units: Vec<String> = lane
-                    .units
-                    .iter()
-                    .filter(|u| tree::role(u) == tree::Role::Service && is_active(&u.state))
-                    .map(|u| unit_ref(&reference, &u.name))
-                    .collect();
-                if units.is_empty() {
-                    self.set_notice(format!("nothing running in {reference}"));
-                    return;
-                }
-                (units, reference.clone(), Target::Lane(reference.clone()))
+            // A whole-lane restart of a stopped lane would start it, which is `s`.
+            RowId::WholeLane if method == Method::Restart && !tree::lane_is_live(lane) => {
+                self.set_notice(format!("nothing running in {reference}"));
+                return;
             }
             RowId::WholeLane | RowId::Task(_) => (
                 Vec::new(),
@@ -7093,8 +7103,9 @@ pub fn sort_units(units: &mut [UnitSummary]) {
     units.sort_by_key(|unit| (unit.kind == "exec", unit.order.unwrap_or(u32::MAX)));
 }
 
-/// The notice for a finished action: `restarted acme@0:api`, or `acme@0:api
-/// already running` when a start started nothing because it all ran.
+/// The notice for a finished action: `restarted acme@0:api`, `acme@0:api
+/// already running` when a start started nothing because it all ran, or
+/// `acme@0 has nothing to reload`.
 fn done_notice(label: &str, value: &Value) -> String {
     let list = |key: &str| value.get(key).and_then(Value::as_array).map(Vec::len);
     let (verb, rest) = label.split_once(' ').unwrap_or((label, ""));
@@ -7102,10 +7113,18 @@ fn done_notice(label: &str, value: &Value) -> String {
         let what = rest.split(" with ").next().unwrap_or(rest);
         return format!("{what} already running");
     }
+    let nothing = value
+        .get("warnings")
+        .and_then(Value::as_array)
+        .is_some_and(|warnings| warnings.iter().any(|w| w["code"] == "nothing_to_reload"));
+    if verb == "reload" && nothing {
+        return format!("{rest} has nothing to reload");
+    }
     let done = match verb {
         "start" => "started",
         "stop" => "stopped",
         "restart" => "restarted",
+        "reload" => "reloaded",
         other => return format!("{other} {rest}: done"),
     };
     format!("{done} {rest}")
@@ -7117,6 +7136,7 @@ fn method_verb(method: Method) -> &'static str {
         Method::Start => "start",
         Method::Stop => "stop",
         Method::Restart => "restart",
+        Method::Reload => "reload",
         _ => "request",
     }
 }

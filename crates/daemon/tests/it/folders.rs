@@ -46,6 +46,32 @@ async fn start(h: &crate::Harness, context: Context, params: Value) -> StartResu
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A CLI from before `lane new <branch>` was removed still sends `branch`; the
+/// daemon refuses it instead of adding an extra lane for the folder.
+async fn lane_new_with_a_branch_is_refused() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let error = h
+            .call(Method::LaneNew, json!({"branch": "feat/x"}), cx(&main))
+            .await
+            .expect_err("branch refused");
+        assert_eq!((error.code.as_str(), error.exit_code), ("bad_request", 2));
+        let message = error.data["message"].as_str().unwrap_or_default();
+        assert!(message.contains("git worktree add"), "{message}");
+        let lanes = h
+            .call(Method::LaneList, json!({}), cx(&main))
+            .await
+            .expect("lane list");
+        assert_eq!(lanes["items"].as_array().map(Vec::len), Some(1), "{lanes}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `lane new --name` adds a second lane for the cwd's folder with its own index
 /// and domain; `--lane <name>` reaches it, the folder's commands keep using its
 /// first lane, names are unique, and the extra lane survives a daemon restart.

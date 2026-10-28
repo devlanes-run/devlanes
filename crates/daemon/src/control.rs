@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use devlanes_config::{ExpressionContext, OpaqueExtensions};
+use devlanes_config::OpaqueExtensions;
 use devlanes_core::{LaunchSpec, TerminalSize, ports::PortName};
 use devlanes_proto::{
     Context, ExecParams, Page, ResumePlan, RpcError, RunParams, Selection, UnitSummary, events,
@@ -46,7 +46,8 @@ struct ResumeParams {
 /// `lane.new` parameters.
 #[derive(Debug, Deserialize)]
 struct LaneNewParams {
-    /// Without one, another lane for the cwd's folder.
+    /// Sent by CLIs that still had `lane new <branch>`. It is refused so such
+    /// a CLI does not add an extra lane for the folder instead.
     #[serde(default)]
     branch: Option<String>,
     /// Name of that extra lane.
@@ -82,6 +83,17 @@ struct InfraEntry {
     entry: String,
     detach: bool,
     timeout_ms: Option<u64>,
+}
+
+/// A lane `lane gc` collects: its worktree is gone, or the worktree no longer holds the
+/// project's file (deleted, or now naming another project). Never collected on its own,
+/// since a branch switch back would find the lane gone.
+fn stale(st: &crate::model::LaneSt) -> bool {
+    !st.present
+        || matches!(
+            st.config,
+            crate::model::ConfigState::Missing | crate::model::ConfigState::Elsewhere(_)
+        )
 }
 
 /// Splits `infra.setup.<entry>` or `infra.teardown.<entry>` into the phase and
@@ -145,7 +157,7 @@ fn run_result(task: &str, lane: &str, unit: Option<&str>, outcome: &TaskOutcome)
 
 impl Inner {
     /// Wait limit of a request.
-    fn timeout(&self, timeout_ms: Option<u64>) -> Duration {
+    pub(crate) fn timeout(&self, timeout_ms: Option<u64>) -> Duration {
         timeout_ms.map_or(self.opts.start_timeout, Duration::from_millis)
     }
 
@@ -155,7 +167,7 @@ impl Inner {
         units: &[String],
         context: &Context,
     ) -> Result<(LanePair, Vec<String>), RpcError> {
-        if let Some(project) = self.project_for_cwd(&context.cwd).await? {
+        if let Some(project) = self.project_for(context).await? {
             let _ = self.relist(&project).await;
         }
         self.lane_for_units(units, context).await
@@ -195,6 +207,7 @@ impl Inner {
                 all_at_once: selection.all_at_once,
                 start_id: Some(start_id),
                 arrival,
+                restoring: false,
             },
         );
         let mut result = self.with_lane_events(session, stream, start).await?;
@@ -254,6 +267,8 @@ impl Inner {
             stopped = self
                 .stop_lane(&project, &lane, selectors, mine, selection.transient)
                 .await?;
+            // A stopped unit has no drift left to report.
+            self.prune_drift(&lane);
         }
         let mut result =
             serde_json::to_value(Page::complete(stopped)).map_err(|e| internal("encode", e))?;
@@ -263,7 +278,8 @@ impl Inner {
         Ok(result)
     }
 
-    /// `restart`: stops and starts named units with fresh plans.
+    /// `restart`: stops and starts named units with fresh plans; without units, the
+    /// whole lane, as a stop and a plain start that keep what the lane saved.
     pub(crate) async fn restart_method(
         self: &Arc<Self>,
         value: Value,
@@ -272,9 +288,6 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let arrival = self.arrive();
         let selection: Selection = params(value)?;
-        if selection.units.is_empty() {
-            return Err(RpcError::new("units_required", json!({}), 2));
-        }
         let ((project, lane), selectors) = self.lane_for_units(&selection.units, context).await?;
         self.fresh_config(&project, &lane).await;
         Self::refuse_external(&project, &lane, &selectors)?;
@@ -282,26 +295,28 @@ impl Inner {
         let stream = selection
             .events
             .then(|| LaneEvents::starts(vec![(project.clone(), lane.clone())], vec![start_id]));
-        let restart = self.restart_units(
-            &project,
-            &lane,
-            &selectors,
-            StartOptions {
-                selectors: selectors.clone(),
-                profiles: selection.profile_names(),
-                transient: false,
-                env: carries_env(context),
-                overrides: selection.env.clone(),
-                actor: context.actor.clone(),
-                timeout: self.timeout(selection.timeout_ms),
-                session: None,
-                setup_only: false,
-                all_at_once: selection.all_at_once,
-                start_id: Some(start_id),
-                arrival,
-            },
-        );
-        let result = self.with_lane_events(session, stream, restart).await?;
+        let options = StartOptions {
+            selectors: selectors.clone(),
+            profiles: selection.profile_names(),
+            transient: false,
+            env: carries_env(context),
+            overrides: selection.env.clone(),
+            actor: context.actor.clone(),
+            timeout: self.timeout(selection.timeout_ms),
+            session: None,
+            setup_only: false,
+            all_at_once: selection.all_at_once,
+            start_id: Some(start_id),
+            arrival,
+            restoring: false,
+        };
+        let result = if selectors.is_empty() {
+            let restart = self.restart_lane(&project, &lane, options);
+            self.with_lane_events(session, stream, restart).await?
+        } else {
+            let restart = self.restart_units(&project, &lane, &selectors, options);
+            self.with_lane_events(session, stream, restart).await?
+        };
         serde_json::to_value(result).map_err(|e| internal("encode", e))
     }
 
@@ -355,6 +370,7 @@ impl Inner {
                             all_at_once: args.all_at_once,
                             start_id: Some(start_id),
                             arrival,
+                            restoring: false,
                         },
                     )
                 },
@@ -421,6 +437,7 @@ impl Inner {
                             all_at_once: false,
                             start_id: None,
                             arrival,
+                            restoring: true,
                         },
                     )
                     .await;
@@ -441,7 +458,7 @@ impl Inner {
         futures_util::future::join_all(starts).await;
     }
 
-    /// `lane.new`: `git worktree add` under `lanes.worktree_dir`, then registration.
+    /// `lane.new`: another lane for the cwd's folder, started when asked.
     pub(crate) async fn lane_new(
         self: &Arc<Self>,
         value: Value,
@@ -450,33 +467,24 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let arrival = self.arrive();
         let args: LaneNewParams = required(value)?;
-        let Some(project) = self.project_for_cwd(&context.cwd).await? else {
+        if let Some(branch) = &args.branch {
+            return Err(RpcError::new(
+                "bad_request",
+                json!({"message": format!(
+                    "devlanes no longer creates worktrees; run `git worktree add <path> {branch}`, then `devlanes start` in it"
+                )}),
+                2,
+            ));
+        }
+        let Some(project) = self.project_for(context).await? else {
             return Err(crate::engine::no_config(&context.cwd).await);
         };
-        let (lane, extra) = match &args.branch {
-            Some(branch) => {
-                if args.name.is_some() {
-                    return Err(RpcError::new(
-                        "bad_request",
-                        json!({"message": "--name names another lane for this folder; leave out the branch"}),
-                        2,
-                    ));
-                }
-                (self.worktree_lane(&project, branch).await?, None)
-            }
-            None => {
-                let (lane, name) = self
-                    .extra_lane(&project, context, args.name.as_deref())
-                    .await?;
-                (lane, Some(name))
-            }
-        };
+        let (lane, extra) = self
+            .extra_lane(&project, context, args.name.as_deref())
+            .await?;
         let name = project.name();
         let summary = lane_summary(&name, &lane.st());
-        let mut result = json!({"lane": summary});
-        if let Some(extra) = extra {
-            result["name"] = json!(extra);
-        }
+        let mut result = json!({"lane": summary, "name": extra});
         if args.start {
             let env = carries_env(context).or_else(|| project.st().last_env.clone());
             let start_id = self.new_start_id();
@@ -499,6 +507,7 @@ impl Inner {
                     all_at_once: false,
                     start_id: Some(start_id),
                     arrival,
+                    restoring: false,
                 },
             );
             let start = self.with_lane_events(session, stream, start).await?;
@@ -507,7 +516,7 @@ impl Inner {
         Ok(result)
     }
 
-    /// Another lane for the cwd's folder (`lane new` without a branch): its own
+    /// Another lane for the cwd's folder (`lane new`): its own
     /// worktree row, `<base identity>#lane=<name>`, so it gets its own index,
     /// ports and domain while the folder's first lane stays the default.
     async fn extra_lane(
@@ -621,72 +630,6 @@ impl Inner {
         Ok((lane, name))
     }
 
-    /// `lane new <branch>`: `git worktree add` under `lanes.worktree_dir`, then
-    /// the new worktree's lane.
-    async fn worktree_lane(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        branch: &str,
-    ) -> Result<Arc<crate::model::LaneRt>, RpcError> {
-        let project = project.clone();
-        if !project.git {
-            return Err(RpcError::new(
-                "not_a_git_project",
-                json!({"project": project.name()}),
-                1,
-            ));
-        }
-        let primary = self.primary_path(&project);
-        let config = project
-            .lanes()
-            .iter()
-            .find_map(|lane| lane.st().config.loaded().cloned())
-            .ok_or_else(|| RpcError::new("no_config", json!({}), 1))?;
-        let name = project.name();
-        let context_ns = ExpressionContext {
-            project: json!({"name": name, "primary_path": primary.display().to_string()}),
-            ..ExpressionContext::default()
-        };
-        let dir = match &config.lanes.worktree_dir {
-            Some(value) => value.evaluate(&context_ns).map_err(|error| {
-                RpcError::new(
-                    "config_error",
-                    json!({"path": "lanes.worktree_dir", "message": error.message}),
-                    1,
-                )
-            })?,
-            None => format!("../{name}-lanes"),
-        };
-        let base = primary.join(&project.config_dir).join(dir);
-        let destination = base.join(devlanes_resolve::branch_label(branch));
-        let root = project.st().root.clone();
-        devlanes_git::add(&root, &destination, branch)
-            .await
-            .map_err(|error| {
-                RpcError::new("git_failed", json!({"message": error.to_string()}), 1)
-            })?;
-        let canonical = tokio::task::spawn_blocking({
-            let destination = destination.clone();
-            // dunce: Git lists `C:\...`, never the verbatim `\\?\C:\...` form.
-            move || dunce::canonicalize(&destination).unwrap_or(destination)
-        })
-        .await
-        .unwrap_or(destination);
-        let report = self.relist(&project).await?;
-        drop(report);
-        let lane = project
-            .lanes()
-            .into_iter()
-            .find(|lane| {
-                let st = lane.st();
-                devlanes_core::paths::same_path(&st.path, &canonical) && st.alias().is_none()
-            })
-            .ok_or_else(|| RpcError::new("not_found", json!({"reference": canonical}), 3))?;
-        // Made by devlanes, so it is a lane like one devlanes ran in.
-        self.claim_lane(&project, &lane).await;
-        Ok(lane)
-    }
-
     /// `lane.clean` (requires `yes`).
     pub(crate) async fn lane_clean_method(
         self: &Arc<Self>,
@@ -706,11 +649,12 @@ impl Inner {
         self.clean_lane(&project, &lane, Some(&context.actor)).await
     }
 
-    /// `lane.gc`: cleans lanes whose worktrees are gone and drops port offsets no
-    /// config uses any more. Needs `yes` only when there are lanes to clean; the
-    /// confirmation lists them under `lanes`.
+    /// `lane.gc`: cleans lanes whose worktrees are gone or whose worktree no longer
+    /// holds the project's file (deleted, or naming another project after a rename),
+    /// and drops port offsets no config uses any more. Needs `yes` only when there are
+    /// lanes to clean; the confirmation lists them under `lanes`.
     pub(crate) async fn lane_gc(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
-        if let Some(project) = self.project_for_cwd(&context.cwd).await? {
+        if let Some(project) = self.project_for(context).await? {
             let _ = self.relist_only(&project).await;
         }
         if !context.yes {
@@ -721,7 +665,7 @@ impl Inner {
                     let st = lane.st();
                     let running = st.any_running() || st.busy.is_some();
                     // A gone worktree that never was a lane is dropped unasked.
-                    (!st.present && !running && st.record.is_some())
+                    (stale(&st) && !running && st.record.is_some())
                         .then(|| st.reference(&project.name()))
                 })
                 .collect();
@@ -732,16 +676,17 @@ impl Inner {
         let mut cleaned = Vec::new();
         let mut kept_running = Vec::new();
         for (project, lane) in self.all_lanes() {
-            let (present, assigned, reference, running) = {
+            let (present, stale, assigned, reference, running) = {
                 let st = lane.st();
                 (
                     st.present,
+                    stale(&st),
                     st.record.is_some(),
                     st.reference(&project.name()),
                     st.any_running() || st.busy.is_some(),
                 )
             };
-            if present {
+            if !stale || present && !assigned {
                 continue;
             }
             // A presence flag can be wrong (a re-list from elsewhere, a racing
@@ -770,19 +715,30 @@ impl Inner {
                 .iter()
                 .filter_map(|lane| lane.st().config.loaded().cloned())
                 .collect();
-            let Some(config) = configs.first() else {
+            if configs.is_empty() {
+                continue;
+            }
+            // Offsets are per project, so a name any worktree's config needs stays;
+            // one config that cannot say what it needs keeps everything.
+            let needs: Result<Vec<_>, _> = configs
+                .iter()
+                .map(|config| devlanes_resolve::port_needs(config, &self.integ.contributors))
+                .collect();
+            let Ok(needs) = needs else {
                 continue;
             };
-            let Ok(needs) = devlanes_resolve::port_needs(config, &self.integ.contributors) else {
-                continue;
-            };
+            let mut live: BTreeSet<PortName> = BTreeSet::new();
+            let mut reserved: BTreeSet<u16> = BTreeSet::new();
+            for need in needs {
+                live.extend(need.names);
+                reserved.extend(need.reserved);
+            }
             let existing = self
                 .store
                 .allocation(devlanes_state::BlockOwner::Project(project.id))
                 .await
                 .ok()
                 .flatten();
-            let mut live: BTreeSet<PortName> = needs.names.clone();
             for lane in project.lanes() {
                 if let Some(allocation) = &lane.st().allocation {
                     // Infra names come from the provider; keep them while their lane exists.
@@ -806,7 +762,7 @@ impl Inner {
             }
             removed += self
                 .store
-                .gc_offsets(project.id, live, needs.reserved.clone())
+                .gc_offsets(project.id, live, reserved)
                 .await
                 .map_err(store_error)?;
         }
@@ -918,6 +874,7 @@ impl Inner {
             ready_check: Some("started"),
             role: "exec",
             keep_awake: false,
+            fingerprint: None,
         };
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.
@@ -1209,6 +1166,9 @@ impl Inner {
             crate::model::ConfigState::Missing => {
                 return Err(RpcError::new("no_config", json!({"lane": reference}), 1));
             }
+            crate::model::ConfigState::Elsewhere(other) => {
+                return Err(crate::model::elsewhere_error(other, Some(&reference)));
+            }
         };
         let items = devlanes_resolve::profile_summaries(config);
         Ok(json!({"lane": reference, "items": items}))
@@ -1217,6 +1177,7 @@ impl Inner {
     /// `task.list`: tasks plus the `run_script` files the config references.
     pub(crate) async fn task_list(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
         let (project, lane) = self.target_lane(context).await?;
+        let (config_dir, _) = project.config_path();
         let (config, path) = {
             let st = lane.st();
             let config = st
@@ -1224,7 +1185,7 @@ impl Inner {
                 .loaded()
                 .cloned()
                 .ok_or_else(|| RpcError::new("no_config", json!({"path": st.path}), 1))?;
-            (config, st.path.join(&project.config_dir))
+            (config, st.path.join(config_dir))
         };
         let lane_id = lane.st().record.as_ref().map(|record| record.id);
         let runs = match lane_id {
@@ -1448,15 +1409,28 @@ impl Inner {
         Ok(json!({"lane": lane.st().reference(&project.name()), "infra": status}))
     }
 
-    /// `config.check` on the cwd's config, with preset option validation.
+    /// `config.check` on the request's project file (`--file`, the `--project` or
+    /// `--lane` lane's, else the nearest `devlanes.yaml`), with preset option validation.
     pub(crate) async fn config_check(
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<Value, RpcError> {
-        let Some(file) = devlanes_git::find_config(&context.cwd)
-            .await
-            .map_err(|error| internal("io", error))?
-        else {
+        let file = match &context.file {
+            Some(file) => Some(file.clone()),
+            None if context.project.is_some() || context.lane.is_some() => {
+                let (project, lane) = self.target_lane(context).await?;
+                let (dir, name) = project.config_path();
+                Some(lane.st().path.join(dir).join(name))
+            }
+            None => {
+                let cwd = context.cwd.clone();
+                tokio::task::spawn_blocking(move || devlanes_config::find_project_file(&cwd))
+                    .await
+                    .map_err(|error| internal("io", error))?
+                    .map_err(|error| internal("io", error))?
+            }
+        };
+        let Some(file) = file else {
             return Err(crate::engine::no_config(&context.cwd).await);
         };
         // The lane's warnings below come from its loaded config; bring it up to date.

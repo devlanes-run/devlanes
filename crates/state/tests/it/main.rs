@@ -680,20 +680,58 @@ async fn relational_constraints_and_lossless_paths() {
 
 #[tokio::test]
 /// Registry updates retain identity and explicit deletion releases ownership.
+/// A project is keyed by name: the same name with other paths updates it, and
+/// a new name in the same repository is a second project.
 async fn registry_updates_deletes_and_allocation_release() {
     let store = Store::open(":memory:").await.expect("store");
     let p = project(&store, "acme").await;
     let updated = store
         .upsert_project(ProjectInput {
-            name: "renamed".into(),
-            common_dir: p.common_dir.clone(),
+            name: "acme".into(),
+            common_dir: Some("/test/moved/.git".into()),
             root_path: "/test/moved".into(),
             primary_branch: "trunk".into(),
         })
         .await
         .expect("update");
     assert_eq!(updated.id, p.id);
-    assert_eq!(updated.name, "renamed");
+    assert_eq!(
+        (
+            updated.common_dir.as_deref(),
+            updated.root_path.as_path(),
+            updated.primary_branch.as_str()
+        ),
+        (
+            Some(std::path::Path::new("/test/moved/.git")),
+            std::path::Path::new("/test/moved"),
+            "trunk"
+        )
+    );
+    let renamed = store
+        .upsert_project(ProjectInput {
+            name: "renamed".into(),
+            common_dir: updated.common_dir.clone(),
+            root_path: updated.root_path.clone(),
+            primary_branch: "trunk".into(),
+        })
+        .await
+        .expect("new name");
+    assert_ne!(renamed.id, p.id);
+    assert_eq!(
+        store
+            .project_by_name("acme".into())
+            .await
+            .expect("query")
+            .as_ref(),
+        Some(&updated)
+    );
+    assert_eq!(
+        store
+            .project_by_name("missing".into())
+            .await
+            .expect("query"),
+        None
+    );
     let first = lane(&store, p.id, 0).await;
     let moved = store
         .upsert_lane(LaneInput {
@@ -795,6 +833,196 @@ async fn every_diesel_migration_prefix_upgrades_and_down_scripts_work() {
             SCHEMA_VERSION as usize
         );
     }
+}
+
+/// A path as the store writes it into a BLOB column on Unix.
+#[cfg(unix)]
+fn native(path: &str) -> Vec<u8> {
+    path.as_bytes().to_vec()
+}
+
+/// A path as the store writes it into a BLOB column on Windows: UTF-16LE.
+#[cfg(windows)]
+fn native(path: &str) -> Vec<u8> {
+    path.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
+#[tokio::test]
+/// Migration 011 keeps a shared name on the most recently started project and
+/// renames the others to `<name>-old<id>`, with a random suffix when another
+/// project already has that name. Earlier setup rows have no spec hash
+/// and earlier config rows read as `devlanes.yaml`. Its down script keys
+/// projects by repository again, keeping the oldest project of each.
+async fn migration_makes_project_names_unique_and_down_keys_by_repository() {
+    use devlanes_core::LaneId;
+    use devlanes_state::ProjectConfigPath;
+    use diesel::migration::MigrationSource;
+    use schema::{lane_setup as s, lanes as l, projects as p, worktrees as w};
+    const MIGRATIONS: diesel_migrations::EmbeddedMigrations = embed_migrations!("migrations");
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("names.db");
+    let mut c = SqliteConnection::establish(path.to_str().expect("path")).expect("db");
+    c.batch_execute("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000")
+        .expect("connection settings");
+    c.applied_migrations().expect("ledger");
+    let migrations = <_ as MigrationSource<diesel::sqlite::Sqlite>>::migrations(&MIGRATIONS)
+        .expect("migrations");
+    c.run_migrations(&migrations[..10]).expect("v10");
+    let mut insert = |repo: &str, last_start: Option<i64>| -> i64 {
+        let git = native(&format!("{repo}/.git"));
+        diesel::insert_into(p::table)
+            .values((
+                p::name.eq("acme"),
+                p::identity.eq(git.clone()),
+                p::common_dir.eq(Some(git)),
+                p::root_path.eq(native(repo)),
+                p::primary_branch.eq("main"),
+                p::last_start.eq(last_start),
+                p::config_dir.eq(Some(native("apps/web"))),
+            ))
+            .returning(p::id)
+            .get_result(&mut c)
+            .expect("legacy project")
+    };
+    let older = insert("/test/a", Some(1));
+    let recent = insert("/test/b", Some(2));
+    // Never started, so it loses even with the highest ID.
+    let never = insert("/test/c", None);
+    // Already holds the name the older duplicate would get.
+    let taken = native("/test/d/.git");
+    let holder: i64 = diesel::insert_into(p::table)
+        .values((
+            p::name.eq(format!("acme-old{older}")),
+            p::identity.eq(taken.clone()),
+            p::common_dir.eq(Some(taken)),
+            p::root_path.eq(native("/test/d")),
+            p::primary_branch.eq("main"),
+        ))
+        .returning(p::id)
+        .get_result(&mut c)
+        .expect("project holding the old name");
+    let worktree: i64 = diesel::insert_into(w::table)
+        .values((
+            w::project_id.eq(older),
+            w::identity.eq("main"),
+            w::path.eq(native("/test/a")),
+            w::present.eq(1),
+            w::first_seen.eq(1_i64),
+            w::last_seen.eq(1_i64),
+        ))
+        .returning(w::id)
+        .get_result(&mut c)
+        .expect("legacy worktree");
+    let lane: i64 = diesel::insert_into(l::table)
+        .values((
+            l::project_id.eq(older),
+            l::worktree_id.eq(worktree),
+            l::lane_index.eq(0_i64),
+            l::name.eq("main"),
+            l::desired_state.eq("stopped"),
+            l::created_at.eq(1_i64),
+        ))
+        .returning(l::id)
+        .get_result(&mut c)
+        .expect("legacy lane");
+    diesel::insert_into(s::table)
+        .values((
+            s::lane_id.eq(lane),
+            s::entry.eq("database"),
+            s::done_at.eq(5_i64),
+        ))
+        .execute(&mut c)
+        .expect("legacy setup");
+
+    let store = Store::open(&path).await.expect("upgrade");
+    let names: Vec<(i64, String)> = store
+        .projects()
+        .await
+        .expect("projects")
+        .into_iter()
+        .map(|project| (project.id.0, project.name))
+        .collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    let (id, collided) = &names[0];
+    assert_eq!(*id, older);
+    assert!(
+        collided.starts_with(&format!("acme-old{older}-")),
+        "{collided}"
+    );
+    assert_eq!(
+        names[1..],
+        [
+            (recent, "acme".to_owned()),
+            (never, format!("acme-old{never}")),
+            (holder, format!("acme-old{older}")),
+        ]
+    );
+    let kept = store
+        .project_by_name("acme".into())
+        .await
+        .expect("query")
+        .expect("acme");
+    assert_eq!(kept.id.0, recent);
+    assert_eq!(kept.root_path, PathBuf::from("/test/b"));
+    let renamed = store
+        .project_by_name(collided.clone())
+        .await
+        .expect("query")
+        .expect("renamed");
+    assert_eq!(renamed.id.0, older);
+    assert_eq!(
+        store.project_configs().await.expect("configs"),
+        [older, recent, never].map(|id| ProjectConfigPath {
+            project: ProjectId(id),
+            dir: "apps/web".into(),
+            file: "devlanes.yaml".into(),
+        })
+    );
+    let setup = store.setup_records(LaneId(lane)).await.expect("setup");
+    assert_eq!(setup.len(), 1);
+    assert_eq!(
+        (setup[0].entry.as_str(), setup[0].spec_hash.as_deref()),
+        ("database", None)
+    );
+    let again = store
+        .upsert_project(ProjectInput {
+            name: "acme".into(),
+            common_dir: kept.common_dir.clone(),
+            root_path: kept.root_path.clone(),
+            primary_branch: "main".into(),
+        })
+        .await
+        .expect("same name");
+    assert_eq!(again.id, kept.id);
+    // A second project in the same repository, which the down script drops.
+    let prod = store
+        .upsert_project(ProjectInput {
+            name: "acme-prod".into(),
+            common_dir: kept.common_dir.clone(),
+            root_path: kept.root_path.clone(),
+            primary_branch: "main".into(),
+        })
+        .await
+        .expect("second project in one repository");
+    assert!(prod.id.0 > never);
+    store.close().await.expect("close");
+
+    c.revert_last_migration(MIGRATIONS).expect("down 011");
+    let rows: Vec<(i64, Vec<u8>)> = p::table
+        .order(p::id)
+        .select((p::id, p::identity))
+        .load(&mut c)
+        .expect("projects after down");
+    assert_eq!(
+        rows,
+        [
+            (older, native("/test/a/.git")),
+            (recent, native("/test/b/.git")),
+            (never, native("/test/c/.git")),
+            (holder, native("/test/d/.git")),
+        ]
+    );
+    c.run_pending_migrations(MIGRATIONS).expect("redo 011");
 }
 
 #[tokio::test]

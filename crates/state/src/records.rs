@@ -10,7 +10,8 @@ use std::{
     path::PathBuf,
 };
 
-/// Project identity is its canonical git common directory, or its non-git root.
+/// Project identity is its name; the paths and branch are updated on each upsert.
+/// One repository may hold several projects, and a renamed project is a new one.
 #[derive(Debug, Clone)]
 pub struct ProjectInput {
     pub name: String,
@@ -19,7 +20,7 @@ pub struct ProjectInput {
     pub primary_branch: String,
 }
 
-/// Persisted project metadata. Names may coincide until running-state validation.
+/// Persisted project metadata. The name is unique and is the project's identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     pub id: ProjectId,

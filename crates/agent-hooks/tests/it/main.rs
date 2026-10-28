@@ -125,6 +125,31 @@ fn falls_back_to_the_process_directory_without_cwd() {
 }
 
 #[test]
+/// The search for `devlanes.yaml` stops at the repository root: a repository
+/// nested below a project is not part of it, while the root itself still counts.
+fn the_project_search_stops_at_the_repository_root() {
+    let tmp = workspace();
+    let project = tmp.path().join("project");
+    let nested = project.join("vendor/lib");
+    std::fs::create_dir_all(nested.join(".git")).expect("nested repository");
+    std::fs::create_dir_all(nested.join("src")).expect("nested source");
+    std::fs::create_dir_all(project.join(".git")).expect("project repository");
+    let verdict = |cwd: &Path| {
+        decide(
+            &payload("Bash", cwd, "pnpm dev &", false),
+            Agent::ClaudeCode,
+            false,
+            cwd,
+            None,
+        )
+    };
+    assert_eq!(verdict(&nested.join("src")), Verdict::Allow);
+    assert_eq!(verdict(&nested), Verdict::Allow);
+    assert_eq!(verdict(&project.join("web")), Verdict::Block);
+    assert_eq!(verdict(&project), Verdict::Block);
+}
+
+#[test]
 fn ignores_tools_that_run_no_shell() {
     let tmp = workspace();
     let project = tmp.path().join("project");

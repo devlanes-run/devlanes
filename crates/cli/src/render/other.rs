@@ -2285,6 +2285,45 @@ pub(super) fn config_check(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
+/// `debug config`: `# lane` and `# from` comment lines, then the config as YAML, so
+/// the whole output still parses as a project file. Unset fields and empty mappings
+/// are left out of the YAML; `--json` keeps them.
+pub(super) fn config_show(data: &Value) -> Vec<String> {
+    let mut lines = vec![format!("# lane {}", text(data, "lane"))];
+    for file in list(data, "files") {
+        lines.push(format!("# from {}", clean(&display_value(file))));
+    }
+    let config = without_unset(&data["config"]);
+    match serde_saphyr::to_string(&config) {
+        Ok(yaml) => lines.extend(yaml.lines().map(str::to_owned)),
+        // serde_json values always serialize; keep a readable view if that ever changes.
+        Err(_) => lines.extend(tree(&config)),
+    }
+    lines
+}
+
+/// `value` without null fields and the mappings left empty once those are gone,
+/// which the daemon sends for every setting the files leave at its default. The
+/// daemon also sends unset maps as `{}`, so an empty mapping a file wrote (an empty
+/// profile) goes too.
+fn without_unset(value: &Value) -> Value {
+    match value {
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, value)| (key.clone(), without_unset(value)))
+                .filter(|(_, value)| match value {
+                    Value::Null => false,
+                    Value::Object(inner) => !inner.is_empty(),
+                    _ => true,
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.iter().map(without_unset).collect()),
+        _ => value.clone(),
+    }
+}
+
 /// `daemon status`.
 pub(super) fn daemon_status(data: &Value) -> Vec<String> {
     let mut line = format!(

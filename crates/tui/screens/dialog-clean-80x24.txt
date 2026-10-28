@@ -10,16 +10,16 @@
 │   · seed    │ It stops every unit in the lane, then:          │opped         │
 │   · lint    │   runs its lane.clean tasks and infra teardown  │opped         │
 │   · typechec│   removes the lane's own containers and volumes │              │
-│   · test-e2e│   frees its ports and setup records             │e started; r  │
+│   · test-e2e│   frees its ports and setup records             │              │
 │   · codegen │ Files in /work/acme-cache stay as they are.     │              │
-│   · clean-ca│                                                 │              │
-│             │ enter clean   esc cancel                        │              │
-│ ▾ infra     └─────────────────────────────────────────────────┘iled · 1 star…│
-│   ▾ shared              3 up ││   feat/checkout @1         starting · 4 of 8…│
-│     ● pgbouncer              ││ ▌ fix/cache @2             not running · con…│
-│     ● postgres               ││   spike/old-search @3      worktree missing  │
-│     ● redis                  ││                                              │
-│                              ││ … z shows the rest                           │
+│   · clean-ca│                                                 │iled · 1 star…│
+│             │ enter clean   esc cancel                        │ting · 4 of 8…│
+│ ▾ infra     └─────────────────────────────────────────────────┘running       │
+│   ▾ shared              3 up ││   spike/old-search @3      worktree missing  │
+│     ● pgbouncer              ││                                              │
+│     ● postgres               ││ 1-9 (the lane's place in the bar), [ and ] or│
+│     ● redis                  ││ a click on a chip switch lanes. devlanes     │
+│                              ││ start in a new git worktree adds one.        │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
  s start lane   S start all   p start with profiles       ? all keys   q quit
 
@@ -38,13 +38,13 @@
 11: 0 darkgray, 4-13 dim, 14 bold, 64 bold, 79 darkgray
 12: 0 darkgray, 4-13 dim, 14 bold, 64 bold, 79 darkgray
 13: 0 darkgray, 4-12 dim, 14 bold, 64 bold, 79 darkgray
-14: 0 darkgray, 4-13 dim, 14 bold, 64 bold, 79 darkgray
-15: 0 darkgray, 14 bold, 16-20 bold, 21-26 dim, 30-32 bold, 33-39 dim, 64 bold, 79 darkgray
-16: 0 darkgray, 2-3 dim, 14-64 bold, 65-68 red, 69-71 dim, 79 darkgray
-17: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-35 bold, 69-78 dim, 79 darkgray
-18: 0 darkgray, 6-7 green, 8-16 dim magenta, 31-32 darkgray, 34-35 bold, 61-78 dim, 79 darkgray
-19: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-35 bold, 61-76 yellow, 79 darkgray
-20: 0 darkgray, 6-7 green, 8-12 cyan, 31-32 darkgray, 79 darkgray
-21: 0 darkgray, 31-32 darkgray, 34-51 dim, 79 darkgray
+14: 0 darkgray, 4-13 dim, 14 bold, 64 bold, 65-68 red, 69-71 dim, 79 darkgray
+15: 0 darkgray, 14 bold, 16-20 bold, 21-26 dim, 30-32 bold, 33-39 dim, 64 bold, 69-78 dim, 79 darkgray
+16: 0 darkgray, 2-3 dim, 14-64 bold, 65-71 dim, 79 darkgray
+17: 0 darkgray, 4-5 dim, 26-29 dim, 31-32 darkgray, 34-35 bold, 61-76 yellow, 79 darkgray
+18: 0 darkgray, 6-7 green, 8-16 dim magenta, 31-32 darkgray, 79 darkgray
+19: 0 darkgray, 6-7 green, 8-15 cyan, 31-32 darkgray, 34-78 dim, 79 darkgray
+20: 0 darkgray, 6-7 green, 8-12 cyan, 31-32 darkgray, 34-73 dim, 79 darkgray
+21: 0 darkgray, 31-32 darkgray, 34-70 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-15 dim, 16 bold, 17-29 dim, 30 bold, 31-53 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

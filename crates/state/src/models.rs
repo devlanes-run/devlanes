@@ -143,6 +143,7 @@ pub(crate) struct SetupRow {
     pub entry: String,
     pub done_at: i64,
     pub container_started_at: Option<String>,
+    pub spec_hash: Option<String>,
 }
 #[derive(Queryable, Selectable)]
 #[diesel(table_name = task_runs, check_for_backend(diesel::sqlite::Sqlite))]

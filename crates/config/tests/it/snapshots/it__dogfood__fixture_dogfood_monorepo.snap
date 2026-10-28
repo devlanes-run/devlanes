@@ -55,7 +55,6 @@ expression: config
     "primary": "trunk",
     "new_worktrees": null,
     "removed_worktrees": null,
-    "worktree_dir": null,
     "block_size": null,
     "max": 20,
     "hosts_file": "always",

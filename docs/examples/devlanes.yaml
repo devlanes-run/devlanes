@@ -38,11 +38,9 @@ lanes:
   new_worktrees: register
   # Stop a deleted worktree's processes; its lane is cleaned once nothing runs. clean cleans at once.
   removed_worktrees: stop
-  # Where new worktrees are created, relative to the project.
-  worktree_dir: ../${{ project.name }}-lanes
   # Ports reserved per lane; by default what the services need plus half again.
   # block_size: 80
-  # Most worktrees that get a lane; the rest stay unassigned.
+  # Most worktrees that get a lane; the rest stay unassigned. Read from the primary worktree's file.
   # max: 6
   # Also write this project's hostnames to /etc/hosts, for programs that cannot resolve *.localhost.
   hosts_file: always

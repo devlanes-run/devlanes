@@ -195,6 +195,15 @@ pub fn lane_is_live(lane: &LaneSummary) -> bool {
         .any(|u| role(u) == Role::Service && is_active(&u.state))
 }
 
+/// Whether `r` on the lane applies the project file's changes (`reload`)
+/// instead of restarting the whole lane: only when the daemon reports what
+/// changed, the same test as the CLI's `config changed` line. A lane whose file
+/// does not load is `config_changed` without drift; a restart there refuses with
+/// the file's error, which is the useful answer.
+pub fn reloads_on_r(lane: &LaneSummary) -> bool {
+    lane.infra_changed || lane.units.iter().any(|unit| unit.drift.is_some())
+}
+
 /// Whether `text` matches the filter: a `+tag` matches tags, anything else a
 /// part of the name or display name, ignoring case.
 pub fn matches(filter: &str, name: &str, label: &str, tags: &[String]) -> bool {

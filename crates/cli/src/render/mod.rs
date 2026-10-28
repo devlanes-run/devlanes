@@ -16,7 +16,7 @@ pub(crate) use lanes::display_url;
 pub(crate) use other::doctor_failed;
 pub use other::{DoctorCheck, DoctorState, doctor_checks_of};
 pub use words::status_hint;
-pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording};
+pub(crate) use words::{EXAMPLE_CONFIG, error_message, has_wording, lane_drift, unit_drift};
 
 use crate::{OutputMode, Runtime};
 
@@ -177,7 +177,7 @@ pub(crate) enum Outcome {
 /// Lines for a final result of `method`.
 pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     match method {
-        Method::Start | Method::Restart => lanes::start_like(data, cx),
+        Method::Start | Method::Restart | Method::Reload => lanes::start_like(data, cx),
         Method::Resume => lanes::resume(data, cx),
         Method::Stop => lanes::stop(data, cx),
         Method::Status | Method::LaneList => lanes::status(data, cx),
@@ -201,6 +201,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::InfraUp | Method::InfraStatus | Method::InfraDown => other::infra(method, data),
         Method::Doctor => other::doctor(data, cx),
         Method::ConfigCheck => other::config_check(data, cx),
+        Method::ConfigShow => other::config_show(data),
         Method::DaemonStatus => other::daemon_status(data),
         Method::DaemonShutdown => other::daemon_shutdown(data),
         Method::DaemonResetState => other::reset_state(data),
@@ -217,7 +218,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
 pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> {
     let starting = matches!(
         method,
-        Method::Start | Method::Restart | Method::Resume | Method::LaneNew
+        Method::Start | Method::Restart | Method::Reload | Method::Resume | Method::LaneNew
     );
     match event.event.as_str() {
         events::PHASE if starting => other::phase_line(&event.data, cx).into_iter().collect(),
@@ -632,6 +633,35 @@ mod tests {
                 "  services: db, redis",
                 "lane: -"
             ]
+        );
+    }
+
+    /// `debug config` leaves out unset fields and the mappings that end up empty,
+    /// since the daemon sends every unset map as `{}`.
+    #[test]
+    fn config_show_leaves_out_unset_fields() {
+        let data = json!({
+            "lane": "acme@0", "files": [],
+            "config": {
+                "project": "acme",
+                "lanes": {"primary": null, "max": null},
+                "services": {"api": {"run": "serve", "env": {}, "cwd": null}},
+            },
+        });
+        let lines = other::config_show(&data);
+        assert!(
+            !lines.iter().any(|line| line.starts_with("lanes")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("env") || line.contains("cwd")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.trim() == "run: serve"),
+            "{lines:?}"
         );
     }
 }

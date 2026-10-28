@@ -45,6 +45,12 @@ pub mod features {
     /// `start_id`), `task`, `unit.changed` and `lane.changed` events on the
     /// request itself, all before its response. Older daemons ignore the flag.
     pub const START_EVENTS: &str = "start_events";
+    /// The daemon reads [`super::Context::file`]. An older one ignores it and would
+    /// act on the cwd's `devlanes.yaml` project instead, so clients refuse to send it.
+    pub const PROJECT_FILE: &str = "project_file";
+    /// The daemon answers [`super::Method::Reload`] and restarts the whole lane for a
+    /// `restart` without units, which an older one refuses as `units_required`.
+    pub const RELOAD: &str = "reload";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.
@@ -77,6 +83,10 @@ pub struct Context {
     pub actor: Actor,
     #[serde(default)]
     pub project: Option<String>,
+    /// Absolute path of a project file given with `--file`, which registers the project
+    /// it names; otherwise the nearest `devlanes.yaml` above the cwd is used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<PathBuf>,
     #[serde(default)]
     pub lane: Option<String>,
     #[serde(default)]
@@ -106,12 +116,21 @@ pub enum Method {
     Doctor,
     #[serde(rename = "config.check")]
     ConfigCheck,
+    /// The lane's project config after `extends`, local files and templates, with
+    /// expressions left as `${{ ... }}` text: `{project, lane, files, config}`,
+    /// where `files` lists the merged files in merge order.
+    #[serde(rename = "config.show")]
+    ConfigShow,
     #[serde(rename = "start")]
     Start,
     #[serde(rename = "stop")]
     Stop,
     #[serde(rename = "restart")]
     Restart,
+    /// Applies the lane's drift: stops removed units, restarts changed ones and
+    /// starts added ones (or restarts the whole lane when infra or ports changed).
+    #[serde(rename = "reload")]
+    Reload,
     #[serde(rename = "resume")]
     Resume,
     #[serde(rename = "status")]
@@ -727,6 +746,24 @@ pub struct UnitSummary {
     /// next request or connection thaws it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power: Option<String>,
+    /// How the project file changed this unit since it started; `devlanes reload`
+    /// applies it. Absent while the unit matches the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift: Option<UnitDrift>,
+}
+
+/// A unit's difference from the current project file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnitDrift {
+    /// `changed` (runs, but the file would start it differently), `removed` (runs,
+    /// but the file no longer has it) or `added` (the lane's profiles select it now,
+    /// and it is not running).
+    pub kind: String,
+    /// For `changed`: what differs, such as `run`, `cwd`, `ports`, `pty`, `ready`,
+    /// `stop`, `files` or `env API_URL`. Environment variables are named, never
+    /// their values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
 }
 
 /// Older daemons sized every attached unit, so a missing `pty` keeps doing that.
@@ -771,6 +808,7 @@ impl Default for UnitSummary {
             order: None,
             public_url: None,
             power: None,
+            drift: None,
         }
     }
 }
@@ -833,13 +871,19 @@ pub struct LaneSummary {
     pub project: String,
     pub index: Option<u32>,
     pub branch: Option<String>,
-    /// Name of an extra lane on another lane's folder (`lane new` without a
-    /// branch); `None` for a worktree's own lane, which goes by its branch.
+    /// Name of an extra lane on another lane's folder (`lane new`); `None`
+    /// for a worktree's own lane, which goes by its branch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub path: PathBuf,
     pub state: String,
+    /// The project file changed what this lane runs: some unit has a `drift`, or
+    /// `infra_changed`. `devlanes reload` applies it.
     pub config_changed: bool,
+    /// The file's infra settings differ from the ones the lane last started with;
+    /// a reload restarts the whole lane for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub infra_changed: bool,
     pub units: Vec<UnitSummary>,
     /// First entry of `profiles`, for clients that show one profile.
     #[serde(default)]

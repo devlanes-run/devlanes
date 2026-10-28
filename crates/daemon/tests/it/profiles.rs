@@ -439,6 +439,45 @@ async fn autostart_expression_decides_per_lane() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A saved profile the config no longer has is left out with a warning instead of
+/// failing a plain start; one typed on the command line still fails.
+async fn a_removed_saved_profile_is_dropped_with_a_warning() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\nprofiles:\n  front: [web]\nservices:\n  web: { run: serve }\n  api: { run: serve }\n";
+        let main = repo(&tmp.path, "r", config);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({"profiles": ["front"]}), cx(&main))
+            .await
+            .expect("start front");
+        std::fs::write(
+            main.join("devlanes.yaml"),
+            "project: demo\nservices:\n  web: { run: serve }\n  api: { run: serve }\n",
+        )
+        .expect("drop the profile");
+        let value = h
+            .call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("a plain start still works");
+        let result: StartResult = serde_json::from_value(value).expect("result");
+        let warning = result
+            .warnings
+            .iter()
+            .find(|warning| warning.code == "saved_profile_removed")
+            .expect("warning");
+        assert_eq!(warning.data["names"], json!(["front"]));
+        let typed = h
+            .call(Method::Start, json!({"profiles": ["front"]}), cx(&main))
+            .await
+            .expect_err("a typed profile");
+        assert_eq!(typed.code, "unknown_profile");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// Services (idle or running), tasks, exec units and containers carry a color.
 async fn units_and_containers_have_colors() {
     tokio::time::timeout(LIMIT, async {

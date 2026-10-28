@@ -77,6 +77,27 @@ async fn loaded(api: &FakeApi, width: u16, height: u16) -> (App, Vec<Effect>) {
     (app, effects)
 }
 
+/// [`mixed_lanes`] after the project file changed how acme@0 runs api.
+fn drifted_lanes() -> Vec<devlanes_proto::LaneSummary> {
+    let mut lanes = mixed_lanes();
+    lanes[0].config_changed = true;
+    lanes[0].units[0].drift = Some(devlanes_proto::UnitDrift {
+        kind: "changed".into(),
+        fields: vec!["run".into()],
+    });
+    lanes
+}
+
+/// The last row of the screen: the key hints.
+fn footer(app: &App) -> Result<String, Box<dyn std::error::Error>> {
+    let terminal = draw(app)?;
+    let buffer = terminal.backend().buffer();
+    let y = buffer.area.height - 1;
+    Ok((0..buffer.area.width)
+        .map(|x| buffer[(x, y)].symbol())
+        .collect())
+}
+
 /// A key press without modifiers.
 fn key(code: KeyCode) -> Msg {
     Msg::Key(KeyEvent::new(code, KeyModifiers::NONE))
@@ -223,9 +244,24 @@ async fn snapshot_failed_unit() -> TestResult {
     Ok(())
 }
 
+/// A running lane whose project file changed api and dropped worker: the pane
+/// lists both and says that `r` reloads them.
 #[tokio::test]
-async fn snapshot_idle_lane_details() -> TestResult {
-    let api = FakeApi::with_lanes(mixed_lanes());
+async fn snapshot_lane_details() -> TestResult {
+    let mut lanes = mixed_lanes();
+    let mut api = fake::unit("acme@2", "api", "ready");
+    api.drift = Some(devlanes_proto::UnitDrift {
+        kind: "changed".into(),
+        fields: vec!["run".into(), "env API_URL".into()],
+    });
+    let mut worker = fake::unit("acme@2", "worker", "ready");
+    worker.drift = Some(devlanes_proto::UnitDrift {
+        kind: "removed".into(),
+        fields: Vec::new(),
+    });
+    lanes[2].state = "running".into();
+    lanes[2].units = vec![api, worker];
+    let api = FakeApi::with_lanes(lanes);
     let (mut app, _) = loaded(&api, 100, 20).await;
     select(&mut app, Selected::lane("acme@2"));
     assert_screen!("lane_details", draw(&app)?.backend());
@@ -650,11 +686,51 @@ async fn start_stop_restart_dispatch_lane_and_unit_refs() -> TestResult {
         return Err(format!("unexpected {effects:?}").into());
     };
     assert_eq!(*method, Method::Restart);
-    assert_eq!(
-        selection.units,
-        ["acme@0:api", "acme@0:web"],
-        "only running services"
-    );
+    assert!(selection.units.is_empty(), "r restarts the whole lane");
+
+    // A file that changed but does not load has no drift: r stays a restart,
+    // which the daemon refuses with the file's error.
+    let mut broken = mixed_lanes();
+    broken[0].config_changed = true;
+    app.update(Msg::Status(Ok(broken)));
+    let effects = app.update(key(KeyCode::Char('r')));
+    let [Effect::Control { method, .. }] = effects.as_slice() else {
+        return Err(format!("unexpected {effects:?}").into());
+    };
+    assert_eq!(*method, Method::Restart, "no drift, no reload");
+
+    // Once the project file changed what the lane runs, r applies that instead.
+    app.update(Msg::Status(Ok(drifted_lanes())));
+    let effects = app.update(key(KeyCode::Char('r')));
+    let [
+        Effect::Control {
+            method,
+            selection,
+            label,
+            ..
+        },
+    ] = effects.as_slice()
+    else {
+        return Err(format!("unexpected {effects:?}").into());
+    };
+    assert_eq!(*method, Method::Reload);
+    assert!(selection.units.is_empty());
+    assert_eq!(label, "reload acme@0");
+
+    // On the changed unit's own row, r restarts only that unit.
+    select_unit(&mut app, "api").ok_or("api not reachable")?;
+    let effects = app.update(key(KeyCode::Char('r')));
+    let [
+        Effect::Control {
+            method, selection, ..
+        },
+    ] = effects.as_slice()
+    else {
+        return Err(format!("unexpected {effects:?}").into());
+    };
+    assert_eq!(*method, Method::Restart);
+    assert_eq!(selection.units, ["acme@0:api"]);
+    app.update(Msg::Status(Ok(mixed_lanes())));
 
     select_unit(&mut app, "worker").ok_or("worker not reachable")?;
     let effects = app.update(key(KeyCode::Char('x')));
@@ -680,6 +756,35 @@ async fn start_stop_restart_dispatch_lane_and_unit_refs() -> TestResult {
             lane: "acme@0".into(),
             unit: "worker".into()
         }
+    );
+    Ok(())
+}
+
+/// The lane's hint names what `r` does: a reload once the file changed what the
+/// lane runs, a restart otherwise, including a changed file that does not load.
+#[tokio::test]
+async fn the_r_hint_says_reload_or_restart() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 120, 40).await;
+    select(&mut app, Selected::lane("acme@0"));
+    assert!(
+        footer(&app)?.contains("r restart lane"),
+        "{}",
+        footer(&app)?
+    );
+    app.update(Msg::Status(Ok(drifted_lanes())));
+    assert!(
+        footer(&app)?.contains("r reload changes"),
+        "{}",
+        footer(&app)?
+    );
+    let mut broken = mixed_lanes();
+    broken[0].config_changed = true;
+    app.update(Msg::Status(Ok(broken)));
+    assert!(
+        footer(&app)?.contains("r restart lane"),
+        "{}",
+        footer(&app)?
     );
     Ok(())
 }

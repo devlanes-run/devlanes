@@ -54,11 +54,14 @@ impl Kind {
 /// Config of one lane's worktree.
 #[derive(Clone)]
 pub(crate) enum ConfigState {
-    /// The worktree has no `devlanes.yaml` at the project's relative path.
+    /// The worktree has no project file at the project's relative path.
     Missing,
     Loaded(Arc<ProjectConfig>),
     /// Parse or validation failure, already shaped as `config_error` data.
     Invalid(RpcError),
+    /// The worktree's project file names another project (a rename, or a branch of
+    /// another project checked out). The lane stays until `lane gc` collects it.
+    Elsewhere(String),
 }
 
 impl ConfigState {
@@ -67,6 +70,16 @@ impl ConfigState {
         match self {
             Self::Loaded(config) => Some(config),
             _ => None,
+        }
+    }
+
+    /// The loaded config, else the reason there is none, for a command that needs it.
+    pub(crate) fn require(&self, lane: &str) -> Result<Arc<ProjectConfig>, RpcError> {
+        match self {
+            Self::Loaded(config) => Ok(config.clone()),
+            Self::Invalid(error) => Err(error.clone()),
+            Self::Elsewhere(other) => Err(elsewhere_error(other, Some(lane))),
+            Self::Missing => Err(RpcError::new("no_config", json!({"lane": lane}), 1)),
         }
     }
 }
@@ -187,6 +200,9 @@ pub(crate) struct UnitRec {
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
     pub keep_awake: bool,
+    /// What a service run was spawned with, to tell when the config changed it.
+    /// Memory only, never state.db: it holds environment values.
+    pub fingerprint: Option<Arc<crate::drift::Fingerprint>>,
 }
 
 impl UnitRec {
@@ -358,10 +374,34 @@ pub(crate) struct LaneSt {
     pub closing: bool,
     /// The config files as of the last reload; `None` before the first one.
     pub config_stamp: Option<crate::registry::ConfigStamp>,
+    /// Every file the last config load read or looked for, which the stamp covers.
+    pub config_files: Vec<PathBuf>,
+    /// The last config that loaded. While units run and the file is invalid, missing or
+    /// names another project, the lane's layout and routes keep following it, so a
+    /// typo or a rebase conflict does not take running services off the proxy.
+    pub last_good: Option<Arc<ProjectConfig>>,
+    /// How the running units differ from what the current config would start, by
+    /// unit; see [`crate::drift`].
+    pub drift: BTreeMap<String, crate::drift::UnitDrift>,
+    /// The infra settings differ from the ones of the lane's last whole start.
+    pub infra_changed: bool,
+    /// The config and services of the lane's last whole start, which `added` and
+    /// `infra_changed` compare against.
+    pub started_with: Option<crate::drift::StartedWith>,
+    /// Settings this worktree's file sets differently from the primary worktree's,
+    /// where the primary's applies (`project_setting_ignored`) or the lanes share one
+    /// container (`infra_spec_conflict`).
+    pub divergent: Vec<devlanes_proto::LaneWarning>,
+    /// Why the last drift computation could not plan the running units, which a
+    /// `reload` reports instead of "nothing to reload".
+    pub drift_error: Option<RpcError>,
+    /// Bumped by every drift update, start and stop, so a computation that began
+    /// before one of them does not overwrite its result.
+    pub drift_generation: u64,
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
-    /// devlanes ran in this worktree (or `lane new` made it), so it gets a lane.
+    /// devlanes ran in this worktree (or `lane new` added it), so it gets a lane.
     /// Worktrees that merely exist get none, except the primary one.
     pub wanted: bool,
     /// A clean of this lane, whose worktree is gone, is under way or scheduled.
@@ -485,6 +525,14 @@ impl LaneSt {
             adhoc_cancel: None,
             closing: false,
             config_stamp: None,
+            config_files: Vec::new(),
+            last_good: None,
+            drift: BTreeMap::new(),
+            infra_changed: false,
+            started_with: None,
+            divergent: Vec::new(),
+            drift_error: None,
+            drift_generation: 0,
             shutdown_hooks: false,
             wanted: false,
             sweeping: false,
@@ -537,6 +585,7 @@ impl LaneSt {
             });
         }
         warnings.extend(self.host_conflicts.iter().cloned());
+        warnings.extend(self.divergent.iter().cloned());
         warnings
     }
 
@@ -576,7 +625,12 @@ impl LaneSt {
 
     /// Lifecycle word for `LaneSummary.state`.
     pub(crate) fn state_word(&self) -> &'static str {
-        if self.record.is_none() && matches!(self.config, ConfigState::Missing) {
+        if self.record.is_none()
+            && matches!(
+                self.config,
+                ConfigState::Missing | ConfigState::Elsewhere(_)
+            )
+        {
             return "no-config";
         }
         if self.record.is_none() {
@@ -974,17 +1028,17 @@ pub(crate) struct ProjectSt {
     /// Environment of the last request that carried one, for auto-started worktrees.
     pub last_env: Option<Arc<EnvMap>>,
     pub lanes: BTreeMap<WorktreeId, Arc<LaneRt>>,
-    /// Names `project:` had before a rename in this daemon's lifetime, so a
-    /// reference with an old name can point at the new one.
-    pub former_names: Vec<String>,
+    /// The project file's directory relative to each worktree root.
+    pub config_dir: PathBuf,
+    /// The project file's name in that directory, `devlanes.yaml` unless `--file`
+    /// registered another one.
+    pub config_file: String,
 }
 
-/// A project: worktrees sharing a git common directory (or one non-git root).
+/// A project: the worktrees of one repository (or one non-git root) whose project
+/// file names it. Its name is its identity.
 pub(crate) struct ProjectRt {
     pub id: ProjectId,
-    /// `devlanes.yaml`'s directory relative to each worktree root.
-    pub config_dir: PathBuf,
-    pub git: bool,
     /// Serializes re-listing and registration.
     pub sync: tokio::sync::Mutex<()>,
     pub st: Mutex<ProjectSt>,
@@ -1001,6 +1055,19 @@ impl ProjectRt {
     /// Display name from the config.
     pub(crate) fn name(&self) -> String {
         self.st().name.clone()
+    }
+
+    /// The project file's directory relative to each worktree root, and its name.
+    pub(crate) fn config_path(&self) -> (PathBuf, String) {
+        let st = self.st();
+        (st.config_dir.clone(), st.config_file.clone())
+    }
+
+    /// Records where the project file now is.
+    pub(crate) fn set_config_path(&self, dir: PathBuf, file: String) {
+        let mut st = self.st();
+        st.config_dir = dir;
+        st.config_file = file;
     }
 
     /// Lanes in worktree order.
@@ -1148,6 +1215,7 @@ pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummar
             .find(|url| url.starts_with("https://"))
             .cloned(),
         power: None,
+        drift: None,
     }
 }
 
@@ -1310,6 +1378,10 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         apply_phase_reason(lane, summary);
         apply_waiting(lane, summary);
         apply_order(lane, summary);
+        summary.drift = lane
+            .drift
+            .get(&summary.name)
+            .map(crate::drift::UnitDrift::wire);
         // Only supervised processes are throttled or frozen; orphans and finished
         // units keep their own state word.
         if summary.state == "ready" && lane.units.contains_key(&summary.name) {
@@ -1322,6 +1394,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         .or_else(|| lane.unassigned.clone())
         .or_else(|| match &lane.config {
             ConfigState::Invalid(error) => Some(error.clone()),
+            ConfigState::Elsewhere(other) => Some(elsewhere_error(other, Some(&reference))),
             _ => None,
         })
         .or_else(|| lane.last_error.clone());
@@ -1343,6 +1416,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         path: lane.path.clone(),
         state: lane.state_word().into(),
         config_changed: lane.config_changed,
+        infra_changed: lane.infra_changed,
         units,
         profile: profiles.first().cloned(),
         profiles,
@@ -1464,6 +1538,25 @@ fn state_badness(state: &str) -> u8 {
         "starting" | "created" | "restarting" | "paused" => 1,
         _ => 2,
     }
+}
+
+/// `config_names_other_project`: the lane's worktree now holds another project's file.
+pub(crate) fn elsewhere_error(other: &str, lane: Option<&str>) -> RpcError {
+    let mut error = RpcError::new(
+        "config_names_other_project",
+        json!({
+            "project": other,
+            "message": format!(
+                "the project file now names project `{other}`; the lane keeps its ports \
+                 and data until `devlanes lane gc --yes` collects it"
+            ),
+        }),
+        1,
+    );
+    if let Some(lane) = lane {
+        error.data["lane"] = json!(lane);
+    }
+    error
 }
 
 /// Shapes a config failure for clients, keeping its source location.

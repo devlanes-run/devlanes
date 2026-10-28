@@ -11,6 +11,7 @@
 //! # Ok::<(), devlanes_config::ConfigError>(())
 //! ```
 
+mod discover;
 mod edit;
 mod error;
 mod expression;
@@ -27,6 +28,7 @@ mod tags;
 mod user;
 mod validation;
 
+pub use discover::{ConfigSearch, DEFAULT_PROJECT_FILE, find_project_file, search_project_file};
 pub use edit::{edit_user_source, parse_user_value, remove_user_value, set_user_value};
 pub use error::{ConfigError, SourceLocation};
 pub use expression::{
@@ -36,8 +38,9 @@ pub use expression::{
 pub use extensions::{Extensions, OpaqueExtensions};
 pub use hostname::{check_host_header, normalize_host};
 pub use loader::{
-    ConfigSources, check, check_compose_files, load_lane_project_with, load_project,
-    load_project_with, parse_project, parse_project_with,
+    ConfigSources, LocalFallback, ProjectLoad, check, check_compose_files, is_local_overlay,
+    load_lane_project_with, load_project, load_project_files, load_project_with,
+    local_overlay_path, parse_project, parse_project_with,
 };
 pub use model::*;
 pub use scalar::{ByteSize, ConfigDuration, Percent, Scalar, Templated};

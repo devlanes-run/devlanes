@@ -571,6 +571,14 @@ fn scenes() -> Vec<Scene> {
             setup: |f| f.key(KeyCode::Char('#')),
         },
         Scene {
+            name: "lane-drift",
+            what: "a lane whose project file changed since it started: a marker on each changed unit, one line per unit in the pane, r reloads the changes",
+            setup: |f| {
+                f.key(KeyCode::Char('#'));
+                f.lane("shop@0");
+            },
+        },
+        Scene {
             name: "project-config-error",
             what: "a project whose devlanes.yaml does not load (Shift+2)",
             setup: |f| f.key(KeyCode::Char('@')),

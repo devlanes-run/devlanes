@@ -203,7 +203,60 @@ After that, a plain `devlanes start` brings back what the lane ran instead ([bri
 
 One `devlanes.yaml` at the repository root, one service per app, `run_script` pointing at each package's `package.json`. `cwd` is the script's directory automatically. Shared libraries that need building before the apps start are a `lane.start` task (`build-libs` in [lifecycle tasks](lifecycle.md#lifecycle-tasks)) or a watcher service tagged `watcher`.
 
-If an app has its own `devlanes.yaml` in a subdirectory, that directory is the project root for devlanes when you run it there; a repository can hold several independent projects that way, each with its own name, lanes and ports.
+An app can also have its own `devlanes.yaml` in a subdirectory, which makes it a separate project with its own name, lanes, ports and domains. A command uses the nearest `devlanes.yaml` above the current directory, up to the repository root, so `apps/billing/devlanes.yaml` applies anywhere under `apps/billing` and the root file everywhere else. Once devlanes has run in a project, `--project <name>` (or `-p`) picks it instead of the current directory's, as in `devlanes -p billing status`. In a subdirectory project, relative paths start at that subdirectory: `cwd`, the directory `run` starts in when `cwd` is not set, `run_script.file`, `sync` paths, the `cwd` of infra commands and `infra.compose`. `lane.path` is still the worktree root.
+
+```yaml
+# apps/billing/devlanes.yaml
+project: billing
+services:
+  api:
+    run_script:
+      file: package.json                 # apps/billing/package.json
+      name: dev
+    hosts: "${{ lane.domain }}"          # billing.localhost, billing-2.localhost
+```
+
+A worktree can hold a lane of each project whose file it has, so one worktree of this repository can run a lane of `acme` and a lane of `billing` side by side.
+
+## Several projects in one directory
+
+A second project file next to `devlanes.yaml` runs the same apps another way, such as a production build next to the dev servers. It extends `devlanes.yaml` and sets its own `project`:
+
+```yaml
+# devlanes.prod.yaml
+extends: devlanes.yaml
+project: acme-prod
+tasks:
+  build:
+    run: pnpm build
+    when: lane.start
+profiles:
+  default:
+    run_scripts:
+      dev: start                         # services whose run_script names dev run start
+    env:
+      NODE_ENV: production
+```
+
+devlanes only finds `devlanes.yaml` by itself. Name another file the first time with the global `--file` flag; after that `--project` finds it:
+
+```sh
+devlanes --file devlanes.prod.yaml start
+devlanes -p acme-prod status
+devlanes -p acme-prod logs api --tail 50
+```
+
+`--project` also reads `DEVLANES_PROJECT`, which devlanes sets in every process it starts, so a script run by an `acme-prod` task or service stays in `acme-prod`. The file may have any name except one ending in `.local.yaml`, and its local file is `devlanes.prod.local.yaml` ([extending another project file](ports-and-env.md#extending-another-project-file) has the merge order). [examples/devlanes.prod.yaml](../examples/devlanes.prod.yaml) is a commented version.
+
+The two projects are separate in devlanes: their own lanes, port blocks, saved services and hostnames (`acme.localhost` and `acme-prod.localhost`), so both run side by side in one worktree. A `lanes.vars.domain` in `devlanes.yaml` that spells out `acme` applies to both; set it again in the prod file, for example with `${{ project.name }}`. Anything outside devlanes that both reach is shared:
+
+- The shared Compose services are one Compose project for both: the same files under the same name, `infra.project_name` when set and otherwise the name Compose derives from the directory. `devlanes infra down` from one project stops the other's containers too. Per-lane Compose services and plain `infra.containers` are named after each devlanes project, so each project has its own.
+- Values built only from `lane.name` or `lane.index` are equal in both, so `db_name: acme_${{ lane.name }}` gives both projects the same database. Use `${{ project.name }}` in the value (`${{ project.name | replace('-', '_') }}_${{ lane.name }}`) when the data must stay apart.
+- Files written into the worktree, such as `.next`, `dist` or `.wrangler`, are the same folder for both. Point build output at `${{ lane.data_path }}` where the tool allows it, or run the two at different times.
+
+Two files of one repository that name the same project fail with `duplicate_project_name`. A project name belongs to one repository: a different repository that uses a name already taken fails with `project_name_taken`. If you need one name in several repositories, open an issue.
+
+Renaming `project:` makes a new project with new lanes, domains, ports and containers. The old project's lanes stay, with the reason `config_names_other_project`, until `devlanes lane gc --yes` cleans them once they run nothing ([renames and branch switches](lifecycle.md#renames-and-branch-switches)).
 
 ## Servers devlanes does not run
 

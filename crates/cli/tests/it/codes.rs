@@ -10,6 +10,7 @@ use std::{
 const INTERNAL: &[&str] = &[
     // `internal()` failures: the generic `code: message` line is enough.
     "config_check",
+    "config_show",
     "encode",
     "input_failed",
     "io",

@@ -73,7 +73,7 @@ The hook blocks a call (a `PreToolUse` answer with `permissionDecision: "deny"`)
 
 - a command is detached: it ends with a lone `&` outside quotes (`pnpm dev &`, `nohup ... &`, `... &>/dev/null &`, `... & disown`), runs under `setsid -f`, `tmux new -d` or `screen -dm`, or the call sets `run_in_background`;
 - that command looks like a dev server: a `dev`, `start`, `serve`, `watch`, `--watch`, `preview` or `up` argument, a `server.js`-style script, or a tool such as `vite`, `next`, `wrangler` or `uvicorn` without `build`, `test`, `lint` or `check`;
-- the directory it runs in, after any `cd` before it, or one of that directory's parents contains `devlanes.yaml`.
+- the directory it runs in, after any `cd` before it, or one of that directory's parents up to the repository root contains `devlanes.yaml`, the same search devlanes uses to find a project.
 
 A detached `devlanes` command, such as `devlanes logs api -f &`, passes. The block message tells the agent to use `devlanes start` or `devlanes exec --name NAME -- COMMAND`. To turn the hook off, set `DEVLANES_BLOCK_BACKGROUND=0` in the agent's environment, for example under `env` in `~/.claude/settings.json`.
 

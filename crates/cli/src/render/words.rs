@@ -2,7 +2,7 @@
 //! codes with data; every sentence and hint lives here.
 
 use devlanes_core::paths::names_a_path;
-use devlanes_proto::RpcError;
+use devlanes_proto::{LaneSummary, RpcError, UnitDrift};
 use serde_json::{Value, json};
 
 use super::{compact_fields, display_value, list, text};
@@ -247,6 +247,13 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 1..=12 => message.push_str(&format!("; options: {}", candidates(data))),
                 n => message.push_str(&format!("; {n} options")),
             }
+            // An unknown `--project`: its file may never have been named yet. The
+            // daemon's `hint` only marks that case; the wording stays here.
+            if data.get("hint").is_some_and(|hint| !hint.is_null()) {
+                message.push_str(
+                    "; a project from a file other than devlanes.yaml is known once a command names it with --file",
+                );
+            }
             (message, Some(Hint::command(["lane", "ls"])))
         }
         "ambiguous" => (
@@ -309,15 +316,44 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 (!command.is_empty()).then_some(Hint(command)),
             )
         }
-        "project_running_elsewhere" => (
+        "daemon_outdated" => (
             format!(
-                "{} is already running from {}",
-                field(data, "project"),
-                field(data, "path")
+                "the running daemon ({}) predates {}",
+                field(data, "version"),
+                field(data, "needs")
             ),
-            data.get("project")
-                .and_then(Value::as_str)
-                .map(|project| Hint::command(["stop", "--project", project])),
+            Some(Hint::command(["daemon", "restart"])),
+        ),
+        "project_name_taken" => (
+            format!(
+                "project {} is already used by {}; set another project: in this file",
+                field(data, "project"),
+                field(data, "other")
+            ),
+            None,
+        ),
+        "duplicate_project_name" => (
+            format!(
+                "{} and {} both name project {}; change project: in one of them",
+                field(data, "file"),
+                field(data, "other"),
+                field(data, "project")
+            ),
+            None,
+        ),
+        // The lane's worktree checked out a file that declares another project.
+        "config_names_other_project" => (
+            match text(data, "lane") {
+                lane if lane.is_empty() => format!(
+                    "the project file now names project {}",
+                    field(data, "project")
+                ),
+                lane => format!(
+                    "{lane}'s project file now names project {}",
+                    field(data, "project")
+                ),
+            },
+            Some(Hint::command(["lane", "gc", "--yes"])),
         ),
         "port_in_use" => (
             format!(
@@ -441,10 +477,6 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 },
             },
             logs_hint(data),
-        ),
-        "not_a_git_project" => (
-            format!("project {} is not a git repository", field(data, "project")),
-            None,
         ),
         "git_failed" => (format!("git failed: {}", text(data, "message")), None),
         "unsupported" | "unsupported_method" => (
@@ -758,7 +790,7 @@ fn no_config(data: &Value) -> (String, Option<Hint>) {
     (
         message,
         Some(Hint(format!(
-            "create devlanes.yaml in {place}; a minimal one: {EXAMPLE_CONFIG}"
+            "create devlanes.yaml in {place} (a minimal one: {EXAMPLE_CONFIG}), or name another project file with --file"
         ))),
     )
 }
@@ -1443,17 +1475,37 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             }
             line
         }
-        // The new block is allocated only when nothing in the lane runs.
+        // The new block is allocated only when nothing in the lane runs, which a
+        // reload arranges by restarting the whole lane.
         "ports_pending" => {
             let lane = text(data, "lane");
             if lane.is_empty() {
                 "config changed ports; they apply at the next full start of the lane".into()
             } else {
                 format!(
-                    "config changed ports; they apply at the next full start: {}, then {}",
-                    Hint::command(["stop", "--lane", lane.as_str()]).0,
-                    Hint::command(["start", "--lane", lane.as_str()]).0
+                    "config changed ports; {} restarts the lane with them",
+                    Hint::command(["reload", "--lane", lane.as_str()]).0
                 )
+            }
+        }
+        "reload_restarted_lane" => "infra or ports changed, so the whole lane restarted".into(),
+        "units_removed" => {
+            let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
+            format!(
+                "stopped {}, which the project file no longer has",
+                units.join(", ")
+            )
+        }
+        // A result rather than advice: the start summary prints it as an ok line.
+        "nothing_to_reload" => {
+            let units: Vec<String> = list(data, "units").iter().map(display_value).collect();
+            if units.is_empty() {
+                format!(
+                    "nothing to reload: {} matches its project file",
+                    field(data, "lane")
+                )
+            } else {
+                format!("nothing to reload for {}", units.join(", "))
             }
         }
         // `lane` keeps the hostname, `other` loses it.
@@ -1507,6 +1559,51 @@ pub(crate) fn lane_warning(code: &str, data: &Value) -> String {
             None => super::clean(other).replace('_', " "),
         },
     }
+}
+
+/// How the project file changed one unit: `run, env API_URL changed in the
+/// project file`, `removed from the project file` or `added to the project file`.
+pub(crate) fn unit_drift(drift: &UnitDrift) -> String {
+    match drift.kind.as_str() {
+        "changed" if drift.fields.is_empty() => "changed in the project file".into(),
+        "changed" => {
+            let fields: Vec<String> = drift.fields.iter().map(|f| super::clean(f)).collect();
+            format!("{} changed in the project file", fields.join(", "))
+        }
+        "removed" => "removed from the project file".into(),
+        "added" => "added to the project file".into(),
+        other => super::clean(other).replace('_', " "),
+    }
+}
+
+/// The lane's `config changed` note: what differs, counted, and the command that
+/// applies it. Without drift (the file does not load) only `config changed`,
+/// because a reload would refuse.
+pub(crate) fn lane_drift(lane: &LaneSummary) -> String {
+    let count = |kind: &str| {
+        lane.units
+            .iter()
+            .filter(|unit| unit.drift.as_ref().is_some_and(|d| d.kind == kind))
+            .count()
+    };
+    let mut parts: Vec<String> = ["changed", "removed", "added"]
+        .into_iter()
+        .filter_map(|kind| match count(kind) {
+            0 => None,
+            n => Some(format!("{n} {kind}")),
+        })
+        .collect();
+    if lane.infra_changed {
+        parts.push("infra changed".into());
+    }
+    if parts.is_empty() {
+        return "config changed".into();
+    }
+    format!(
+        "config changed: {}; {} applies it",
+        parts.join(", "),
+        Hint::command(["reload", "--lane", lane.reference.as_str()]).0
+    )
 }
 
 /// How a change to WSL's own files takes effect, for fixes that edit them.

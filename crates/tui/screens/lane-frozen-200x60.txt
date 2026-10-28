@@ -16,10 +16,10 @@
 │   ❄ web-admin                                ││ lanes in acme                                                                                                                                        │
 │   ❄ web-docs                                 ││ ▌ main @0                  frozen · 37 up                                                                                                            │
 │   · web-storybook                            ││   feat/checkout @1         throttled · 8 up                                                                                                          │
-│   ❄ web-landing                              ││   fix/cache @2             not running · config changed                                                                                              │
+│   ❄ web-landing                              ││   fix/cache @2             not running                                                                                                               │
 │   ❄ wrk-email                                ││   spike/old-search @3      worktree missing                                                                                                          │
 │   ❄ wrk-billing                              ││                                                                                                                                                      │
-│   ❄ wrk-index                                ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes lane new <branch> adds one.                                   │
+│   ❄ wrk-index                                ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip switch lanes. devlanes start in a new git worktree adds one.                         │
 │   ❄ wrk-thumbs                               ││                                                                                                                                                      │
 │   ❄ wrk-export                               ││                                                                                                                                                      │
 │   ❄ wrk-cron                                 ││                                                                                                                                                      │
@@ -78,10 +78,10 @@
 15: 0 darkgray, 4-5 blue, 6-14 green, 47-48 darkgray, 50-62 bold, 199 darkgray
 16: 0 darkgray, 4-5 blue, 6-13 green, 47-48 darkgray, 50-51 bold, 77-90 dim, 199 darkgray
 17: 0 darkgray, 4-5 dim, 6-18 dim green, 47-48 darkgray, 50-51 bold, 77-92 dim, 199 darkgray
-18: 0 darkgray, 4-5 blue, 6-16 green, 47-48 darkgray, 50-51 bold, 77-104 dim, 199 darkgray
+18: 0 darkgray, 4-5 blue, 6-16 green, 47-48 darkgray, 50-51 bold, 77-87 dim, 199 darkgray
 19: 0 darkgray, 4-5 blue, 6-14 magenta, 47-48 darkgray, 50-51 bold, 77-92 yellow, 199 darkgray
 20: 0 darkgray, 4-5 blue, 6-16 magenta, 47-48 darkgray, 199 darkgray
-21: 0 darkgray, 4-5 blue, 6-14 magenta, 47-48 darkgray, 50-163 dim, 199 darkgray
+21: 0 darkgray, 4-5 blue, 6-14 magenta, 47-48 darkgray, 50-173 dim, 199 darkgray
 22: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 199 darkgray
 23: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 199 darkgray
 24: 0 darkgray, 4-5 blue, 6-13 magenta, 47-48 darkgray, 199 darkgray

@@ -1426,7 +1426,6 @@ pub fn parse_user_lenient(file: &str, source: &str) -> (UserConfig, Vec<ConfigEr
             ConfigError::plain(format!("{path}: {message}; the default applies")),
             file,
             source,
-            None,
         ));
     }
     issues.push(ConfigError::plain(
@@ -1473,7 +1472,7 @@ fn parse_user_named(file: &str, source: &str) -> Result<UserConfig, ConfigError>
     let mut config: UserConfig = crate::loader::parse_yaml(file, source)?;
     config
         .validate()
-        .map_err(|e| crate::loader::locate(e, file, source, None))?;
+        .map_err(|e| crate::loader::locate(e, file, source))?;
     config.ignore_deferred_trust();
     config.ignore_legacy_terminal();
     Ok(config)

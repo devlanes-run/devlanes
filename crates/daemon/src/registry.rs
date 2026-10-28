@@ -240,76 +240,169 @@ pub(crate) fn check_config(
     devlanes_config::validate_with_registry(config, &names, &validator, &ports)
 }
 
+/// Loads the project file `file` from a lane's config directory, with the files it
+/// extends and their local overlays; an overlay the lane lacks is read from the primary
+/// worktree's config directory. Returns the state and every file read or looked for.
 pub(crate) async fn load_config(
     lane_dir: PathBuf,
     primary_dir: PathBuf,
+    file: String,
     checks: ConfigChecks,
-) -> ConfigState {
+) -> (ConfigState, Vec<PathBuf>) {
     tokio::task::spawn_blocking(move || {
-        let file = lane_dir.join("devlanes.yaml");
-        let source = match std::fs::read_to_string(&file) {
-            Ok(source) => source,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return ConfigState::Missing;
-            }
+        let entry = lane_dir.join(&file);
+        match entry.try_exists() {
+            Ok(true) => {}
+            Ok(false) => return (ConfigState::Missing, vec![entry]),
             Err(error) => {
-                return ConfigState::Invalid(RpcError::new(
+                let error = RpcError::new(
                     "config_error",
-                    json!({"message": error.to_string(), "file": file, "line": 0, "column": 0}),
+                    json!({"message": error.to_string(), "file": entry, "line": 0, "column": 0}),
                     1,
-                ));
+                );
+                return (ConfigState::Invalid(error), vec![entry]);
             }
+        }
+        let fallback = devlanes_config::LocalFallback {
+            lane_dir: &lane_dir,
+            primary_dir: &primary_dir,
         };
-        let mut local_file = lane_dir.join("devlanes.local.yaml");
-        let mut local = std::fs::read_to_string(&local_file).ok();
-        if local.is_none() {
-            local_file = primary_dir.join("devlanes.local.yaml");
-            local = std::fs::read_to_string(&local_file).ok();
-        }
-        let checked =
-            devlanes_config::parse_project_with::<OpaqueExtensions>(&source, local.as_deref())
-                .and_then(|config| check_config(&config, &checks).map(|_| config));
-        match checked {
+        let load = devlanes_config::load_project_files::<OpaqueExtensions>(&entry, Some(fallback));
+        let checked = load
+            .result
+            .and_then(|(config, _)| check_config(&config, &checks).map(|_| config));
+        let state = match checked {
             Ok(config) => ConfigState::Loaded(Arc::new(config)),
-            Err(error) => {
-                let mut shaped = config_error(&error);
-                // Parsing names sources generically; report the real paths.
-                let real = if error.location.file == "devlanes.local.yaml" {
-                    local_file
-                } else {
-                    file
-                };
-                shaped.data["file"] = json!(real);
-                ConfigState::Invalid(shaped)
-            }
-        }
+            Err(error) => ConfigState::Invalid(config_error(&error)),
+        };
+        (state, load.files)
     })
     .await
-    .unwrap_or_else(|error| ConfigState::Invalid(internal("config_error", error)))
+    .unwrap_or_else(|error| {
+        (
+            ConfigState::Invalid(internal("config_error", error)),
+            Vec::new(),
+        )
+    })
 }
 
-/// Modification time and size of each file a lane's config is read from
-/// (`devlanes.yaml`, then the lane's and the primary worktree's
-/// `devlanes.local.yaml`); a missing file is `None`.
-pub(crate) type ConfigStamp = Vec<Option<(std::time::SystemTime, u64)>>;
+/// Modification time and size of each file a lane's config came from (the project
+/// file, what it extends, the local overlays devlanes looked for) and of the `.env`
+/// files its expressions read; a missing file is `None`.
+pub(crate) type ConfigStamp = Vec<(PathBuf, Option<(std::time::SystemTime, u64)>)>;
 
-/// Reads the [`ConfigStamp`] off the executor.
-pub(crate) async fn config_stamp(lane_dir: PathBuf, primary_dir: PathBuf) -> ConfigStamp {
+/// Reads the [`ConfigStamp`] of `files` plus the lane's and the primary worktree's
+/// `.env`, off the executor.
+pub(crate) async fn config_stamp(
+    mut files: Vec<PathBuf>,
+    lane_dir: PathBuf,
+    primary_dir: PathBuf,
+) -> ConfigStamp {
     tokio::task::spawn_blocking(move || {
-        [
-            lane_dir.join("devlanes.yaml"),
-            lane_dir.join("devlanes.local.yaml"),
-            primary_dir.join("devlanes.local.yaml"),
-        ]
-        .iter()
-        .map(|file| {
-            let meta = std::fs::metadata(file).ok()?;
-            Some((meta.modified().ok()?, meta.len()))
-        })
-        .collect()
+        files.push(lane_dir.join(".env"));
+        files.push(primary_dir.join(".env"));
+        files
+            .into_iter()
+            .map(|file| {
+                let stamp = std::fs::metadata(&file)
+                    .ok()
+                    .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+                (file, stamp)
+            })
+            .collect()
     })
     .await
     .unwrap_or_default()
+}
+
+/// Settings a lane's file sets differently from the primary worktree's file: the
+/// project-wide `lanes.primary` and `lanes.max`, where the primary's applies, and the
+/// shared infra (Compose files, the shared project name, shared containers), which
+/// every lane starts and the last one to start wins.
+fn divergence(
+    primary: &ProjectConfig,
+    own: &ProjectConfig,
+    lane: &str,
+) -> Vec<devlanes_proto::LaneWarning> {
+    let mut ignored = Vec::new();
+    if own.lanes.primary != primary.lanes.primary {
+        ignored.push("lanes.primary");
+    }
+    if as_json(&own.lanes.max) != as_json(&primary.lanes.max) {
+        ignored.push("lanes.max");
+    }
+    let mut warnings = Vec::new();
+    if !ignored.is_empty() {
+        warnings.push(devlanes_proto::LaneWarning {
+            code: "project_setting_ignored".into(),
+            data: json!({
+                "lane": lane,
+                "settings": ignored,
+                "message": format!(
+                    "{} differs from the primary worktree's project file, whose value applies",
+                    ignored.join(" and ")
+                ),
+            }),
+        });
+    }
+    let shared = |config: &ProjectConfig| -> BTreeMap<String, Value> {
+        let mut shared = BTreeMap::new();
+        shared.insert("infra.compose".to_owned(), as_json(&config.infra.compose));
+        shared.insert(
+            "infra.project_name".to_owned(),
+            as_json(&config.infra.project_name),
+        );
+        for (name, container) in &config.infra.containers {
+            if !matches!(container.per_lane, Some(Templated::Literal(true))) {
+                shared.insert(format!("infra.containers.{name}"), as_json(container));
+            }
+        }
+        shared
+    };
+    let (theirs, ours) = (shared(primary), shared(own));
+    let conflicts: Vec<&String> = ours
+        .iter()
+        .filter(|(key, value)| theirs.get(*key).is_some_and(|theirs| theirs != *value))
+        .map(|(key, _)| key)
+        .collect();
+    if !conflicts.is_empty() {
+        let names: Vec<&str> = conflicts.iter().map(|key| key.as_str()).collect();
+        warnings.push(devlanes_proto::LaneWarning {
+            code: "infra_spec_conflict".into(),
+            data: json!({
+                "lane": lane,
+                "settings": names,
+                "message": format!(
+                    "{} differs from the primary worktree's project file; every lane shares it, so each start of a lane with another version changes it for all",
+                    names.join(", ")
+                ),
+            }),
+        });
+    }
+    warnings
+}
+
+/// A config value as JSON for comparison, `null` when it cannot be serialized.
+fn as_json<T: serde::Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
+/// `project_name_taken`: another repository, still on disk, uses the name.
+fn name_taken(name: &str, other: &Path) -> RpcError {
+    RpcError::new(
+        "project_name_taken",
+        json!({
+            "project": name,
+            "other": other,
+            "message": format!(
+                "project `{name}` is already used by {}; give this one another `project:`. \
+                 If you need one name in several repositories, ask for it at \
+                 https://github.com/devlanes-run/devlanes/issues",
+                other.display()
+            ),
+        }),
+        1,
+    )
 }
 
 /// Evaluates a literal-or-expression without lane context (block size, max).
@@ -320,8 +413,46 @@ fn literal<T: Clone + serde::de::DeserializeOwned>(value: &Option<Templated<T>>)
 }
 
 impl Inner {
-    /// Finds a registered project by a present worktree containing `cwd`, else
-    /// loads the project whose `devlanes.yaml` is the nearest ancestor of `cwd`.
+    /// The request's project: the one `--file` names (registering it), else the one
+    /// `--project` names, else the cwd's ([`Self::project_for_cwd`]).
+    pub(crate) async fn project_for(
+        self: &Arc<Self>,
+        context: &devlanes_proto::Context,
+    ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
+        if let Some(file) = &context.file {
+            return self.load_project(file).await.map(Some);
+        }
+        if let Some(name) = &context.project {
+            return self.project_by_name(name).map(Some);
+        }
+        self.project_for_cwd(&context.cwd).await
+    }
+
+    /// The registered project named `name`; `not_found` says how a project file other
+    /// than `devlanes.yaml` gets registered.
+    pub(crate) fn project_by_name(&self, name: &str) -> Result<Arc<ProjectRt>, RpcError> {
+        self.all_projects()
+            .into_iter()
+            .find(|project| project.name() == name)
+            .ok_or_else(|| {
+                let mut names: Vec<String> = self.all_projects().iter().map(|p| p.name()).collect();
+                names.sort();
+                RpcError::new(
+                    "not_found",
+                    json!({
+                        "reference": name,
+                        "candidates": names,
+                        "hint": "a project in a file other than devlanes.yaml is registered \
+                                 the first time a command names its file with --file",
+                    }),
+                    3,
+                )
+            })
+    }
+
+    /// The project of the nearest `devlanes.yaml` above `cwd` (registered on first
+    /// use). Without one, the project of the deepest lane holding `cwd`: a project file
+    /// below the worktree root seen from above it, or a worktree whose file is gone.
     pub(crate) async fn project_for_cwd(
         self: &Arc<Self>,
         cwd: &Path,
@@ -329,42 +460,109 @@ impl Inner {
         if cwd.as_os_str().is_empty() {
             return Ok(None);
         }
+        let search = {
+            let cwd = cwd.to_path_buf();
+            tokio::task::spawn_blocking(move || devlanes_config::search_project_file(&cwd))
+                .await
+                .map_err(|error| internal("io", error))?
+                .map_err(|error| internal("io", error))?
+        };
+        let file = match search {
+            devlanes_config::ConfigSearch::Found(file) => file,
+            devlanes_config::ConfigSearch::Missing { .. } => {
+                return Ok(self.project_holding(cwd));
+            }
+        };
+        // A lane read from this file answers without parsing it again, once its stamp
+        // shows no edit; an invalid file still finds its lane, so `status`, `stop` and
+        // `logs` keep working. One that now names another project does not.
+        let dir = file.parent().unwrap_or(Path::new(""));
         for (project, lane) in self.all_lanes() {
-            let st = lane.st();
-            if st.present && path_starts_with(cwd, &st.path) {
+            let (config_dir, config_file) = project.config_path();
+            let matches = {
+                let st = lane.st();
+                st.present
+                    && config_file == devlanes_config::DEFAULT_PROJECT_FILE
+                    && !matches!(st.config, ConfigState::Elsewhere(_))
+                    && same_path(&st.path.join(&config_dir), dir)
+            };
+            if !matches {
+                continue;
+            }
+            self.fresh_config(&project, &lane).await;
+            if !matches!(lane.st().config, ConfigState::Elsewhere(_)) {
                 return Ok(Some(project));
             }
         }
-        let Some(config) = devlanes_git::find_config(cwd)
-            .await
-            .map_err(|error| internal("io", error))?
-        else {
-            return Ok(None);
-        };
-        self.load_project(&config).await.map(Some)
+        self.load_project(&file).await.map(Some)
     }
 
-    /// Discovers and registers the project of a config file (decision 9 identity).
+    /// The project of the deepest present lane whose worktree holds `cwd`, preferring a
+    /// project loaded from `devlanes.yaml`.
+    fn project_holding(&self, cwd: &Path) -> Option<Arc<ProjectRt>> {
+        let mut best: Option<(usize, bool, Arc<ProjectRt>)> = None;
+        for (project, lane) in self.all_lanes() {
+            let default = project.config_path().1 == devlanes_config::DEFAULT_PROJECT_FILE;
+            let st = lane.st();
+            // Any config state: a worktree whose file was deleted still has its lane.
+            if !st.present || !path_starts_with(cwd, &st.path) {
+                continue;
+            }
+            let depth = st.path.components().count();
+            if best
+                .as_ref()
+                .is_none_or(|(d, def, _)| (depth, default) > (*d, *def))
+            {
+                best = Some((depth, default, project.clone()));
+            }
+        }
+        best.map(|(_, _, project)| project)
+    }
+
+    /// Registers the project a project file names, or returns it when known. Projects
+    /// are identified by name: another repository that uses the name is refused, and so
+    /// is a second file in this repository naming the same project while the first
+    /// still does.
     pub(crate) async fn load_project(
         self: &Arc<Self>,
         config_file: &Path,
     ) -> Result<Arc<ProjectRt>, RpcError> {
+        if devlanes_config::is_local_overlay(config_file) {
+            return Err(RpcError::new(
+                "bad_request",
+                json!({"message": format!(
+                    "{} is a local overlay; name the project file it belongs to",
+                    config_file.display()
+                )}),
+                2,
+            ));
+        }
         let config_dir = config_file
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default();
-        let config =
-            match load_config(config_dir.clone(), config_dir.clone(), self.config_checks()).await {
-                ConfigState::Loaded(config) => config,
-                ConfigState::Invalid(error) => return Err(error),
-                ConfigState::Missing => {
-                    return Err(RpcError::new(
-                        "not_found",
-                        json!({"reference": config_file}),
-                        3,
-                    ));
-                }
-            };
+        let file_name = config_file
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| devlanes_config::DEFAULT_PROJECT_FILE.to_owned());
+        let (state, _) = load_config(
+            config_dir.clone(),
+            config_dir.clone(),
+            file_name.clone(),
+            self.config_checks(),
+        )
+        .await;
+        let config = match state {
+            ConfigState::Loaded(config) => config,
+            ConfigState::Invalid(error) => return Err(error),
+            ConfigState::Missing | ConfigState::Elsewhere(_) => {
+                return Err(RpcError::new(
+                    "not_found",
+                    json!({"reference": config_file}),
+                    3,
+                ));
+            }
+        };
         let repository = devlanes_git::discover(&config_dir, config.lanes.primary.as_deref())
             .await
             .map_err(|error| internal("git_failed", error))?;
@@ -400,18 +598,39 @@ impl Inner {
             ),
         };
         let identity = common_dir.clone().unwrap_or_else(|| root.clone());
-        let existing = self.all_projects().into_iter().find(|project| {
-            let st = project.st();
-            same_path(st.common_dir.as_ref().unwrap_or(&st.root), &identity)
-        });
-        if let Some(project) = existing {
+        let name = config.project.clone();
+        // Serializes registration so two first requests cannot both create the project.
+        let _registering = self.registering.lock().await;
+        if let Some(project) = self.all_projects().into_iter().find(|p| p.name() == name) {
+            let (known_root, known_identity) = {
+                let st = project.st();
+                (
+                    st.root.clone(),
+                    st.common_dir.clone().unwrap_or_else(|| st.root.clone()),
+                )
+            };
+            if !same_path(&known_identity, &identity) {
+                let gone = !tokio::fs::try_exists(&known_root).await.unwrap_or(true);
+                if !gone {
+                    return Err(name_taken(&name, &known_root));
+                }
+                // The repository moved: the name follows it.
+                self.adopt_repository(&project, &root, common_dir.clone(), &primary_branch)
+                    .await?;
+            }
+            let (known_dir, known_file) = project.config_path();
+            if known_dir != relative || known_file != file_name {
+                self.move_config(&project, config_file, &root, &relative, &file_name)
+                    .await?;
+            }
+            drop(_registering);
             self.sync_worktrees(&project, trees).await?;
             return Ok(project);
         }
         let record = self
             .store
             .upsert_project(ProjectInput {
-                name: config.project.clone(),
+                name: name.clone(),
                 common_dir: common_dir.clone(),
                 root_path: root.clone(),
                 primary_branch: primary_branch.clone(),
@@ -419,22 +638,129 @@ impl Inner {
             .await
             .map_err(store_error)?;
         self.store
-            .set_project_config_dir(record.id, relative.clone())
+            .set_project_config(record.id, relative.clone(), file_name.clone())
             .await
             .map_err(store_error)?;
         let project = self
             .register_project(
                 record.id,
-                config.project.clone(),
+                name,
                 root,
                 common_dir,
                 primary_branch,
-                relative,
+                (relative, file_name),
             )
             .await?;
+        drop(_registering);
         self.sync_worktrees(&project, trees).await?;
         self.watch_project(&project, repository).await;
         Ok(project)
+    }
+
+    /// Points a project at the repository it now lives in, after the one it was
+    /// registered from is gone.
+    async fn adopt_repository(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        root: &Path,
+        common_dir: Option<PathBuf>,
+        primary_branch: &str,
+    ) -> Result<(), RpcError> {
+        self.store
+            .upsert_project(ProjectInput {
+                name: project.name(),
+                common_dir: common_dir.clone(),
+                root_path: root.to_owned(),
+                primary_branch: primary_branch.to_owned(),
+            })
+            .await
+            .map_err(store_error)?;
+        let mut st = project.st();
+        st.root = root.to_owned();
+        st.common_dir = common_dir;
+        st.primary_branch = primary_branch.to_owned();
+        Ok(())
+    }
+
+    /// Records that a project's file is now `file_name` in `relative`, unless the file
+    /// it was registered from still names the project, which makes two files claim one
+    /// name.
+    async fn move_config(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        config_file: &Path,
+        worktree: &Path,
+        relative: &Path,
+        file_name: &str,
+    ) -> Result<(), RpcError> {
+        let (known_dir, known_file) = project.config_path();
+        let names_it = |dir: PathBuf| {
+            let (checks, file, name) = (self.config_checks(), known_file.clone(), project.name());
+            async move {
+                let (state, _) = load_config(dir.clone(), dir, file, checks).await;
+                state.loaded().is_some_and(|config| config.project == name)
+            }
+        };
+        // The old file would sit in the same worktree as the new one.
+        let old = worktree.join(&known_dir).join(&known_file);
+        if !same_path(&old, config_file) && names_it(worktree.join(&known_dir)).await {
+            return Err(RpcError::new(
+                "duplicate_project_name",
+                json!({
+                    "project": project.name(),
+                    "file": config_file,
+                    "other": old,
+                    "message": format!(
+                        "{} and {} both name project `{}`; give one of them another `project:`",
+                        config_file.display(),
+                        old.display(),
+                        project.name()
+                    ),
+                }),
+                1,
+            ));
+        }
+        // A branch that moved the file does not move it for the other worktrees while
+        // the primary one still has it where it was: its lane there reads as missing.
+        let primary = self.primary_path(project);
+        if !same_path(&primary, worktree) && names_it(primary.join(&known_dir)).await {
+            tracing::info!(
+                project = %project.name(),
+                file = %config_file.display(),
+                "the primary worktree keeps the project file where it was"
+            );
+            return Ok(());
+        }
+        self.store
+            .set_project_config(project.id, relative.to_owned(), file_name.to_owned())
+            .await
+            .map_err(store_error)?;
+        project.set_config_path(relative.to_owned(), file_name.to_owned());
+        let lanes = project.lanes();
+        for lane in &lanes {
+            if lane.st().present {
+                self.reload_config(project, lane).await;
+            }
+        }
+        self.refresh_views(project).await;
+        self.drift_after_reload(project, &lanes).await;
+        Ok(())
+    }
+
+    /// Recomputes the drift of the running ones among `lanes` after their configs
+    /// were reloaded and views refreshed outside [`Self::fresh_config`].
+    pub(crate) async fn drift_after_reload(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lanes: &[Arc<LaneRt>],
+    ) {
+        for lane in lanes {
+            let running = lane.st().any_running();
+            if running {
+                self.update_drift(project, lane).await;
+                self.emit_lane(project, lane);
+            }
+        }
     }
 
     /// Creates the in-memory project and loads its persisted worktrees and lanes.
@@ -445,7 +771,7 @@ impl Inner {
         root: PathBuf,
         common_dir: Option<PathBuf>,
         primary_branch: String,
-        config_dir: PathBuf,
+        (config_dir, config_file): (PathBuf, String),
     ) -> Result<Arc<ProjectRt>, RpcError> {
         if let Some(project) = self.project(id) {
             return Ok(project);
@@ -476,8 +802,6 @@ impl Inner {
         }
         let project = Arc::new(ProjectRt {
             id,
-            config_dir,
-            git: common_dir.is_some(),
             sync: tokio::sync::Mutex::new(()),
             st: std::sync::Mutex::new(ProjectSt {
                 name,
@@ -486,7 +810,8 @@ impl Inner {
                 primary_branch,
                 last_env: None,
                 lanes: map,
-                former_names: Vec::new(),
+                config_dir,
+                config_file,
             }),
             watching: std::sync::atomic::AtomicBool::new(false),
             watch: self.shutdown.child_token(),
@@ -523,6 +848,18 @@ impl Inner {
             .iter()
             .find(|lane| lane.st().identity == "main")
             .map_or(root, |lane| lane.st().path.clone())
+    }
+
+    /// The loaded config of the primary worktree's lane, whose project-wide settings
+    /// (`lanes.primary`, `lanes.max`) apply to every lane.
+    pub(crate) fn primary_config(&self, project: &ProjectRt) -> Option<Arc<ProjectConfig>> {
+        let primary = self.primary_path(project);
+        project.lanes().into_iter().find_map(|lane| {
+            let st = lane.st();
+            (st.alias().is_none() && same_path(&st.path, &primary))
+                .then(|| st.config.loaded().cloned())
+                .flatten()
+        })
     }
 
     /// Re-lists worktrees from git and applies the diff, then cleans idle lanes
@@ -583,6 +920,7 @@ impl Inner {
         let mut report = SyncReport::default();
         let mut seen = BTreeSet::new();
         let mut changed: Vec<Arc<LaneRt>> = Vec::new();
+        let mut reloaded: Vec<Arc<LaneRt>> = Vec::new();
         for tree in trees.into_iter().filter(|t| !t.identity.is_empty()) {
             let record = self
                 .store
@@ -627,9 +965,15 @@ impl Inner {
                 (was_present, moved, rebranched)
             };
             if tree.present
-                && (!was_present || moved || matches!(lane.st().config, ConfigState::Missing))
+                && (!was_present
+                    || moved
+                    || matches!(
+                        lane.st().config,
+                        ConfigState::Missing | ConfigState::Elsewhere(_)
+                    ))
             {
                 self.reload_config(project, &lane).await;
+                reloaded.push(lane.clone());
             }
             if tree.present && !was_present {
                 report.added.push(lane.clone());
@@ -687,6 +1031,7 @@ impl Inner {
                 .map_err(store_error)?;
             if present {
                 self.reload_config(project, alias).await;
+                reloaded.push(alias.clone());
             } else if was_present {
                 report.removed.push(alias.clone());
             }
@@ -714,6 +1059,8 @@ impl Inner {
         changed.extend(assigned);
         self.update_moves(project);
         self.refresh_views(project).await;
+        // The reload stamped these files, so the poller will not get to their drift.
+        self.drift_after_reload(project, &reloaded).await;
         for lane in changed {
             self.emit_lane(project, &lane);
         }
@@ -740,6 +1087,12 @@ impl Inner {
         project: &Arc<ProjectRt>,
     ) -> Result<Vec<Arc<LaneRt>>, RpcError> {
         let primary = project.st().primary_branch.clone();
+        // `lanes.max` is project-wide: the primary worktree's file sets it, and one that
+        // leaves it unset means no limit. A lane's own file counts only while the
+        // primary's does not load.
+        let primary_max = self
+            .primary_config(project)
+            .map(|config| literal(&config.lanes.max));
         let mut lanes = project.lanes();
         lanes.sort_by_key(|lane| lane.st().path.clone());
         let mut assigned = Vec::new();
@@ -766,7 +1119,7 @@ impl Inner {
                 .iter()
                 .filter_map(|l| l.st().index())
                 .collect();
-            if let Some(max) = literal(&config.lanes.max)
+            if let Some(max) = primary_max.unwrap_or_else(|| literal(&config.lanes.max))
                 && used.len() >= usize::try_from(max).unwrap_or(usize::MAX)
             {
                 lane.st().unassigned = Some(RpcError::new(
@@ -1216,6 +1569,7 @@ impl Inner {
     pub(crate) fn facts(&self, project: &ProjectRt, lane: &LaneRt) -> Result<LaneFacts, RpcError> {
         let primary = self.primary_path(project);
         let name = project.name();
+        let (config_dir, _) = project.config_path();
         let st = lane.st();
         let record = st
             .record
@@ -1229,7 +1583,8 @@ impl Inner {
             st.path.clone(),
             data_path,
             st.branch.clone(),
-        ))
+        )
+        .with_project_dir(&config_dir))
     }
 
     /// `<data root>/<project>`, holding the data folders of the project's lanes.
@@ -1316,37 +1671,70 @@ impl Inner {
 
     /// `(lane config dir, primary config dir)`.
     pub(crate) fn config_dirs(&self, project: &ProjectRt, lane: &LaneRt) -> (PathBuf, PathBuf) {
-        let primary = self.primary_path(project).join(&project.config_dir);
-        (lane.st().path.join(&project.config_dir), primary)
+        let (config_dir, _) = project.config_path();
+        let primary = self.primary_path(project).join(&config_dir);
+        (lane.st().path.join(&config_dir), primary)
+    }
+
+    /// The files a lane's config came from at its last load, or its project file
+    /// before the first one.
+    fn lane_config_files(&self, project: &ProjectRt, lane: &LaneRt) -> Vec<PathBuf> {
+        let files = lane.st().config_files.clone();
+        if !files.is_empty() {
+            return files;
+        }
+        let (config_dir, config_file) = project.config_path();
+        vec![lane.st().path.join(config_dir).join(config_file)]
     }
 
     /// Reloads one lane's config. A change while units run, or while a start or
     /// another operation holds the lane, sets `config_changed`; running units are
-    /// never touched (plan 5.8).
+    /// never touched (plan 5.8). A file that names another project leaves the lane
+    /// with [`ConfigState::Elsewhere`].
     pub(crate) async fn reload_config(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
     ) {
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
+        let known = self.lane_config_files(project, lane);
         // Taken before reading, so an edit during the load shows as a new stamp.
-        let stamp = config_stamp(lane_dir.clone(), primary_dir.clone()).await;
-        let config = self
-            .with_resolver_domain(load_config(lane_dir, primary_dir, self.config_checks()).await);
+        let stamp = config_stamp(known.clone(), lane_dir.clone(), primary_dir.clone()).await;
+        let (_, config_file) = project.config_path();
+        let (config, files) = load_config(
+            lane_dir.clone(),
+            primary_dir.clone(),
+            config_file,
+            self.config_checks(),
+        )
+        .await;
+        let config = match config {
+            ConfigState::Loaded(config) if config.project != project.name() => {
+                ConfigState::Elsewhere(config.project.clone())
+            }
+            other => self.with_resolver_domain(other),
+        };
+        // A load that read other files (an `extends` added or removed) stamps those.
+        let stamp = if files == known {
+            stamp
+        } else {
+            config_stamp(files.clone(), lane_dir, primary_dir).await
+        };
         tracing::debug!(
             path = %lane.st().path.display(),
             state = match &config {
                 ConfigState::Loaded(_) => "loaded",
                 ConfigState::Missing => "missing",
                 ConfigState::Invalid(_) => "invalid",
+                ConfigState::Elsewhere(_) => "another project",
             },
             "config read"
         );
         let in_flight = lane.op.try_write().is_err();
-        let renamed = config.loaded().map(|config| config.project.clone());
         {
             let mut st = lane.st();
             st.config_stamp = Some(stamp);
+            st.config_files = files;
             let before = match &st.config {
                 ConfigState::Loaded(config) => serde_json::to_value(config.as_ref()).ok(),
                 _ => None,
@@ -1356,74 +1744,33 @@ impl Inner {
                 _ => None,
             };
             let differs = before != after || before.is_none();
-            if differs && (st.any_running() || in_flight || !st.starts.is_empty()) {
+            // A start in flight spawns with the config it began with; the drift
+            // computed once it ends says what this edit changed.
+            if differs && (in_flight || !st.starts.is_empty()) {
                 st.config_changed = true;
+            }
+            if let ConfigState::Loaded(loaded) = &config {
+                st.last_good = Some(loaded.clone());
             }
             st.config = config;
         }
-        if let Some(name) = renamed {
-            self.follow_project_rename(project, lane, name).await;
-        }
     }
 
-    /// Renames the project when the primary worktree's config changed `project:`.
-    /// Lane references are `<project>@<index>` from the in-memory name, so the
-    /// record and the name change together; every lane emits `lane.changed`.
-    /// Other worktrees' configs (a branch that renames) do not rename it.
-    async fn follow_project_rename(
-        self: &Arc<Self>,
-        project: &Arc<ProjectRt>,
-        lane: &Arc<LaneRt>,
-        name: String,
-    ) {
-        let old = project.name();
-        if name == old {
-            return;
-        }
-        // Read before `primary_path`, which locks every lane, this one included.
-        let path = lane.st().path.clone();
-        if !same_path(&path, &self.primary_path(project)) {
-            return;
-        }
-        let input = {
-            let st = project.st();
-            ProjectInput {
-                name: name.clone(),
-                common_dir: st.common_dir.clone(),
-                root_path: st.root.clone(),
-                primary_branch: st.primary_branch.clone(),
-            }
-        };
-        if let Err(error) = self.store.upsert_project(input).await {
-            tracing::warn!(%error, project = %old, new = %name, "project rename not recorded");
-            return;
-        }
-        {
-            let mut st = project.st();
-            st.former_names.retain(|former| *former != name);
-            st.former_names.push(old.clone());
-            st.name = name.clone();
-        }
-        tracing::info!(project = %old, new = %name, "project renamed");
-        for each in project.lanes() {
-            self.emit_lane(project, &each);
-        }
-    }
-
-    /// Reloads the lane's config right away when its files changed since the last
-    /// load, so `start`, `restart`, `run`, `wait` and `config check` sent right
-    /// after an edit see it instead of waiting for the poller.
+    /// Reloads the lane's config right away when one of its files changed since the
+    /// last load, so `start`, `restart`, `run`, `wait` and `config check` sent right
+    /// after an edit see it instead of waiting for the poller, which calls this too.
     pub(crate) async fn fresh_config(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
     ) {
-        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
         let present = lane.st().present;
         if !present {
             return;
         }
-        let current = config_stamp(lane_dir, primary_dir).await;
+        let (lane_dir, primary_dir) = self.config_dirs(project, lane);
+        let files = self.lane_config_files(project, lane);
+        let current = config_stamp(files, lane_dir, primary_dir).await;
         if lane.st().config_stamp.as_ref() == Some(&current) {
             return;
         }
@@ -1434,6 +1781,12 @@ impl Inner {
             tracing::warn!(code = %error.code, "lane assignment failed");
         }
         self.refresh_views(project).await;
+        // After the refresh, so new ports have offsets and the layout lists new
+        // services. A `.env` edit leaves the config as it was, so plans decide.
+        let running = lane.st().any_running();
+        if running {
+            self.update_drift(project, lane).await;
+        }
         self.emit_lane(project, lane);
     }
 
@@ -1456,6 +1809,18 @@ impl Inner {
     /// The refresh, with the lane whose `op` the caller holds, if any.
     async fn refresh_with(self: &Arc<Self>, project: &Arc<ProjectRt>, held: Option<&Arc<LaneRt>>) {
         use tracing::Instrument as _;
+        let name = project.name();
+        let primary_config = self.primary_config(project);
+        for lane in project.lanes() {
+            let mut st = lane.st();
+            let divergent = match (&primary_config, st.config.loaded()) {
+                (Some(primary), Some(own)) if !Arc::ptr_eq(primary, own) => {
+                    divergence(primary, own, &st.reference(&name))
+                }
+                _ => Vec::new(),
+            };
+            st.divergent = divergent;
+        }
         self.refresh_lanes(project, held)
             .instrument(tracing::debug_span!("refresh views"))
             .await;
@@ -1528,7 +1893,10 @@ impl Inner {
                 Err(error) => {
                     let mut st = lane.st();
                     st.view = None;
-                    if !matches!(st.config, ConfigState::Missing | ConfigState::Invalid(_)) {
+                    if !matches!(
+                        st.config,
+                        ConfigState::Missing | ConfigState::Invalid(_) | ConfigState::Elsewhere(_)
+                    ) {
                         st.last_error = Some(error);
                     }
                 }
@@ -1570,11 +1938,17 @@ impl Inner {
     ) -> Result<LaneView, RpcError> {
         let (config, allocation, env, infra_ns) = {
             let st = lane.st();
-            let config = match &st.config {
-                ConfigState::Loaded(config) => config.clone(),
-                ConfigState::Invalid(error) => return Err(error.clone()),
-                ConfigState::Missing => {
+            // Running units keep the layout they started with while the file is broken.
+            let kept = st.last_good.clone().filter(|_| st.any_running());
+            let config = match (&st.config, kept) {
+                (ConfigState::Loaded(config), _) => config.clone(),
+                (_, Some(config)) => config,
+                (ConfigState::Invalid(error), None) => return Err(error.clone()),
+                (ConfigState::Missing, None) => {
                     return Err(RpcError::new("no_config", json!({"path": st.path}), 1));
+                }
+                (ConfigState::Elsewhere(other), None) => {
+                    return Err(crate::model::elsewhere_error(other, None));
                 }
             };
             let allocation = st
@@ -1769,48 +2143,18 @@ impl Inner {
     /// Polls each lane's config files and reloads on change. Polling stays correct
     /// across editors that replace files and needs no per-lane OS watch handles.
     async fn watch_configs(self: Arc<Self>, project: Arc<ProjectRt>) {
-        let mut stamps: BTreeMap<WorktreeId, Vec<Option<std::time::SystemTime>>> = BTreeMap::new();
         let mut tick = tokio::time::interval(Duration::from_millis(500));
         loop {
             tokio::select! {
                 () = project.watch.cancelled() => return,
                 _ = tick.tick() => {}
             }
+            // Every file of the last load counts, the primary worktree's local overlay
+            // and `.env` included. A start in flight keeps the lane's block and layout:
+            // the new config is recorded now (`config_changed`), its ports and views
+            // once the start ended (`lane_access`).
             for lane in project.lanes() {
-                let (present, dir) = {
-                    let st = lane.st();
-                    (st.present, st.path.join(&project.config_dir))
-                };
-                if !present {
-                    continue;
-                }
-                let current = tokio::task::spawn_blocking(move || {
-                    ["devlanes.yaml", "devlanes.local.yaml"]
-                        .iter()
-                        .map(|file| {
-                            std::fs::metadata(dir.join(file))
-                                .and_then(|m| m.modified())
-                                .ok()
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .await
-                .unwrap_or_default();
-                let previous = stamps.insert(lane.worktree, current.clone());
-                if previous.is_none_or(|previous| previous == current) {
-                    continue;
-                }
-                // A start in flight keeps the lane's block and layout: the new
-                // config is recorded now (`config_changed`), its ports and views
-                // once the start ended (`lane_access`).
-                self.reload_config(&project, &lane).await;
-                if lane.st().record.is_none()
-                    && let Err(error) = self.assign_pending(&project).await
-                {
-                    tracing::warn!(code = %error.code, "lane assignment failed");
-                }
-                self.refresh_views(&project).await;
-                self.emit_lane(&project, &lane);
+                self.fresh_config(&project, &lane).await;
             }
         }
     }
