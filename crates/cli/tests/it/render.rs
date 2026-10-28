@@ -1885,12 +1885,12 @@ fn doctor_shows_the_windows_localhost_probe() {
     assert_eq!(ok[0].state, DoctorState::Ok);
     assert_eq!(
         ok[0].text,
-        "Windows resolves *.localhost to loopback; no hosts file entries needed"
+        "*.localhost resolves to loopback; no hosts file entries needed"
     );
     let never = hosts("never", Value::Null);
     assert_eq!(
         never[0].text,
-        "hosts file fallback never; Windows needs no hosts file entries"
+        "hosts file fallback never; devlanes writes no hosts file entries on Windows"
     );
     let failed = hosts("always", json!("fails"));
     assert_eq!(failed[0].state, DoctorState::Warn);

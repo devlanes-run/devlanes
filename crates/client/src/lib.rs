@@ -664,8 +664,8 @@ const DAEMON_ENV: &[&str] = &[
     "http_proxy",
     "https_proxy",
     "no_proxy",
-    // CI markers, so the daemon's update check still skips in CI; keep in step
-    // with `ci_detected` in devlanes-daemon.
+    // CI markers, so the daemon skips its update check and gives the checkout
+    // lane 0 in CI; keep in step with `ci_detected` in devlanes-daemon.
     "CI",
     "GITHUB_ACTIONS",
     "GITLAB_CI",

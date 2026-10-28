@@ -222,6 +222,62 @@ pub(crate) struct Orphan {
     pub members: Vec<devlanes_core::ProcessIdentity>,
 }
 
+/// Longest gap a reading stands for, so a unit that went unread for a while
+/// does not let its next reading count for the whole gap. Kept above the
+/// sampler's slowest interval (5 s, in `sampler.rs`).
+const USAGE_GAP_MS: u64 = 10_000;
+
+/// The sampler's readings of one unit over a lane start: peaks plus running
+/// sums for the means, so nothing grows with the number of samples.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct UnitUsage {
+    peak_memory: u64,
+    peak_cpu: f64,
+    /// Readings weighted by the milliseconds each stands for.
+    memory_weighted: u128,
+    cpu_weighted: f64,
+    weight_ms: u64,
+    last_ms: Option<u64>,
+}
+
+impl UnitUsage {
+    /// Adds one reading taken at `at_ms`. It stands for the time since the
+    /// unit's previous reading (at most [`USAGE_GAP_MS`]; 1 ms for the first),
+    /// because the sampler reads faster while a client watches and the means
+    /// should not lean towards those stretches.
+    pub(crate) fn add(&mut self, cpu_percent: f64, memory_bytes: u64, at_ms: u64) {
+        let weight = self
+            .last_ms
+            .map_or(1, |last| at_ms.saturating_sub(last).clamp(1, USAGE_GAP_MS));
+        self.last_ms = Some(at_ms);
+        self.peak_memory = self.peak_memory.max(memory_bytes);
+        self.peak_cpu = self.peak_cpu.max(cpu_percent);
+        self.memory_weighted += u128::from(memory_bytes) * u128::from(weight);
+        self.cpu_weighted += cpu_percent * weight as f64;
+        self.weight_ms += weight;
+    }
+
+    /// Peak `(memory, cpu)`; `None` before the first reading.
+    pub(crate) fn peak(&self) -> (Option<u64>, Option<f64>) {
+        if self.last_ms.is_none() {
+            return (None, None);
+        }
+        (Some(self.peak_memory), Some(self.peak_cpu))
+    }
+
+    /// Time-weighted mean `(memory, cpu)`; `None` before the first reading.
+    pub(crate) fn average(&self) -> (Option<u64>, Option<f64>) {
+        if self.weight_ms == 0 {
+            return (None, None);
+        }
+        let memory = self.memory_weighted / u128::from(self.weight_ms);
+        (
+            Some(u64::try_from(memory).unwrap_or(u64::MAX)),
+            Some(self.cpu_weighted / self.weight_ms as f64),
+        )
+    }
+}
+
 /// Mutable state of one worktree lane.
 pub(crate) struct LaneSt {
     pub identity: String,
@@ -248,8 +304,8 @@ pub(crate) struct LaneSt {
     pub setup_env: EnvMap,
     pub last_error: Option<RpcError>,
     pub skipped_tasks: Vec<String>,
-    /// Per-unit peaks for the current lane start: `(memory, cpu)`.
-    pub peaks: BTreeMap<String, (Option<u64>, Option<f64>)>,
+    /// Per-unit CPU and memory over the current lane start.
+    pub usage: BTreeMap<String, UnitUsage>,
     /// Set by the moves check: the index this lane takes at its next start.
     pub moves_to: Option<u32>,
     /// Why a selected unit did not start: a lane phase before services failed.
@@ -412,7 +468,7 @@ impl LaneSt {
             setup_env: EnvMap::new(),
             last_error: None,
             skipped_tasks: Vec::new(),
-            peaks: BTreeMap::new(),
+            usage: BTreeMap::new(),
             moves_to: None,
             phase_reasons: BTreeMap::new(),
             orphans: BTreeMap::new(),
@@ -1422,4 +1478,37 @@ pub(crate) fn config_error(error: &devlanes_config::ConfigError) -> RpcError {
         }),
         1,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each reading counts for the time since the previous one, so a fast
+    /// stretch of sampling does not outweigh a slow one; long gaps are capped.
+    #[test]
+    fn usage_means_weigh_readings_by_time() {
+        let mut usage = UnitUsage::default();
+        assert_eq!(usage.average(), (None, None));
+        usage.add(50.0, 300, 0);
+        assert_eq!(usage.average(), (Some(300), Some(50.0)));
+        // Five seconds at 10%, then five one-second readings at 30%.
+        usage.add(10.0, 200, 5_000);
+        for at in [6_000, 7_000, 8_000, 9_000, 10_000] {
+            usage.add(30.0, 400, at);
+        }
+        let (memory, cpu) = usage.average();
+        let cpu = cpu.expect("cpu");
+        assert!((cpu - 20.0).abs() < 0.01, "{cpu}");
+        assert_eq!(memory, Some(300));
+        assert_eq!(usage.peak(), (Some(400), Some(50.0)));
+        // A minute without readings counts as USAGE_GAP_MS.
+        let mut gap = UnitUsage::default();
+        gap.add(0.0, 0, 0);
+        gap.add(0.0, 0, 1_000);
+        gap.add(100.0, 0, 61_000);
+        let cpu = gap.average().1.expect("cpu");
+        let expected = 100.0 * USAGE_GAP_MS as f64 / (1 + 1_000 + USAGE_GAP_MS) as f64;
+        assert!((cpu - expected).abs() < 0.01, "{cpu}");
+    }
 }

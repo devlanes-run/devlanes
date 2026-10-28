@@ -278,6 +278,35 @@ fn daemon_outlives_a_client_that_stopped_waiting() -> Result<()> {
     Ok(())
 }
 
+/// On GitHub Actions a plain `start` wraps each phase in a log group: every
+/// `::endgroup::` closes a `::group::` opened before it, and none stays open.
+#[test]
+fn github_actions_start_prints_balanced_groups() -> Result<()> {
+    let lab = Lab::new("two-services", BUDGET)?;
+    let mut command = lab.command(lab.repo(), &["start", "--no-ui"])?;
+    // CI detection picks plain output only without an explicit mode.
+    command
+        .env_remove("DEVLANES_OUTPUT")
+        .env("GITHUB_ACTIONS", "true");
+    let output = lab.run(command, Duration::from_secs(90))?;
+    output.expect_code(0)?;
+    let mut open = false;
+    let mut groups = 0;
+    for line in output.stdout.lines() {
+        if line.starts_with("::group::") {
+            assert!(!open, "a group opened inside another: {output}");
+            open = true;
+            groups += 1;
+        } else if line == "::endgroup::" {
+            assert!(open, "::endgroup:: without a ::group::: {output}");
+            open = false;
+        }
+    }
+    assert!(!open, "a group was left open: {output}");
+    assert!(groups > 0, "no phase groups: {output}");
+    Ok(())
+}
+
 /// A running daemon must report its PID.
 fn need_pid(pid: Option<i32>) -> Result<i32> {
     pid.ok_or_else(|| devlanes_e2e::Error::Unexpected("no daemon is running".into()))

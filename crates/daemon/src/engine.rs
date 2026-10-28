@@ -68,6 +68,10 @@ pub struct EngineOptions {
     /// `daemon restart`). Kept in memory only and dropped once used: it
     /// carries the restarting client's environment.
     pub resume: Option<devlanes_proto::ResumePlan>,
+    /// The daemon runs under CI: a checkout takes lane 0 while it is free,
+    /// whatever its branch, because CI checks out pull requests detached.
+    /// Off in [`EngineOptions::new`] so tests behave the same in and out of CI.
+    pub ci: bool,
 }
 
 impl std::fmt::Debug for EngineOptions {
@@ -86,6 +90,7 @@ impl std::fmt::Debug for EngineOptions {
             .field("idle_exit", &self.idle_exit)
             .field("idle", &self.idle)
             .field("resume", &self.resume.as_ref().map(|plan| plan.lanes.len()))
+            .field("ci", &self.ci)
             .finish()
     }
 }
@@ -107,6 +112,7 @@ impl EngineOptions {
             idle_exit: None,
             idle: Arc::default(),
             resume: None,
+            ci: false,
         }
     }
 }

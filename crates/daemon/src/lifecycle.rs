@@ -2620,7 +2620,7 @@ impl Inner {
             st.last_error = None;
             if whole_lane {
                 st.started_at_ms = Some(now_ms());
-                st.peaks.clear();
+                st.usage.clear();
                 st.config_changed = false;
                 st.skipped_tasks.clear();
             }
@@ -3689,7 +3689,7 @@ impl Inner {
             st.started_at_ms = None;
             st.infra_ns = None;
             st.infra_containers.clear();
-            st.peaks.clear();
+            st.usage.clear();
             st.moves_to = None;
             st.present
         };

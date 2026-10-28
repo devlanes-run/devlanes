@@ -195,6 +195,7 @@ pub async fn engine(
     options.idle_exit = (spawned && user.daemon.exit_when_idle).then_some(IDLE_EXIT_GRACE);
     options.resume = resume;
     options.idle = idle;
+    options.ci = devlanes_daemon::update::ci_detected(|name| std::env::var(name).ok());
     options.user = user;
     let engine: Arc<dyn Handler> = Arc::new(Engine::new(options, store, integ, shutdown));
     Ok(engine)
@@ -203,8 +204,8 @@ pub async fn engine(
 /// Bound on the startup `*.localhost` probe; past it the resolver counts as failing.
 const HOSTS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Windows answers every `*.localhost` name itself, so nothing writes the hosts
-/// file; `doctor` shows the startup probe that confirms it.
+/// devlanes never writes the hosts file on Windows; `doctor` shows whether the
+/// startup probe resolved `*.localhost` (Windows 11 does, Windows Server does not).
 #[cfg(windows)]
 async fn native_hosts(
     policy: devlanes_resolver_hosts::HostsFilePolicy,

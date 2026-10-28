@@ -11,8 +11,9 @@
 //! generates a `.reg` file and runs `<System32>\reg.exe import` on it after
 //! the UAC prompt, then reads the rule back.
 //!
-//! Windows already answers every `*.localhost` name itself, so only the
-//! configured TLD needs a rule. Group Policy NRPT rules, when present, make
+//! Only the configured TLD gets a rule. There is no rule for `localhost`:
+//! Windows 11 answers every `*.localhost` name itself, and Windows Server
+//! needs hosts file entries. Group Policy NRPT rules, when present, make
 //! Windows ignore the local ones; [`Status::group_policy`] reports that.
 #![cfg(windows)]
 #![forbid(unsafe_code)]

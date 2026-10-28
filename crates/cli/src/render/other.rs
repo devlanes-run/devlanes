@@ -1748,20 +1748,21 @@ fn tls_and_hosts_checks(data: &Value, running: bool) -> Vec<Check> {
 }
 
 /// The hosts status Windows reports (`state: native`, with `mode` and the
-/// startup `probe`): Windows answers `*.localhost` itself and devlanes never
-/// writes its hosts file, so the probe is the whole story.
+/// startup `probe`): devlanes never writes the hosts file there, so the probe
+/// is the whole story. Windows 11 answers `*.localhost` itself; Windows Server
+/// does not.
 fn native_hosts_check(hosts: &Value) -> Check {
     match hosts.get("probe").and_then(Value::as_str) {
         Some("loopback") => Check::new(
             "hosts",
             Outcome::Ok,
-            "Windows resolves *.localhost to loopback; no hosts file entries needed",
+            "*.localhost resolves to loopback; no hosts file entries needed",
         ),
         None => Check::new(
             "hosts",
             Outcome::Ok,
             format!(
-                "hosts file fallback {}; Windows needs no hosts file entries",
+                "hosts file fallback {}; devlanes writes no hosts file entries on Windows",
                 text(hosts, "mode")
             ),
         ),
@@ -1777,7 +1778,7 @@ fn native_hosts_check(hosts: &Value) -> Check {
                 }
             ),
         )
-        .fix("set hostnames.resolver: resolver and hostnames.tld, then devlanes certs trust --resolver"),
+        .fix("add the lane hostnames to %SystemRoot%\\System32\\drivers\\etc\\hosts from an elevated shell, or set hostnames.resolver: resolver and hostnames.tld, then devlanes certs trust --resolver"),
     }
 }
 

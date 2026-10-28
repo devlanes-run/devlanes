@@ -217,16 +217,18 @@ devlanes wait api --timeout 2m
 devlanes with --profile e2e --logs-dir devlanes-logs -- pnpm test:e2e
 ```
 
-`with` starts the lane, waits for ready, runs the command with the lane's environment (`DEVLANES_PUBLIC_URL_API`, `DEVLANES_PUBLIC_URL_WEB`, …), writes each unit's log to `--logs-dir`, stops what it started and exits with the command's code. In GitHub Actions:
+`with` starts the lane, waits for ready, runs the command with the lane's environment (`DEVLANES_PUBLIC_URL_API`, `DEVLANES_PUBLIC_URL_WEB`, …), writes each unit's log to `--logs-dir`, stops what it started and exits with the command's code. The command also gets `NODE_EXTRA_CA_CERTS` and `DENO_CERT` set to the devlanes CA and `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` set to a bundle of the system roots plus the CA, unless your shell already sets them, so test code can call the lane's `https://` URLs.
+
+In CI the checkout takes lane 0 when it is free, on any branch, detached pull request checkouts included. Outside GitHub Actions, run `devlanes certs trust --yes` first. On Linux, also add `chrome` to `tls.trust` so Playwright's Chromium trusts the CA, and expect the proxy on 8443 unless the runner may bind 443.
+
+In GitHub Actions, the [devlanes action](https://github.com/devlanes-run/action) installs devlanes, trusts the CA on Linux runners and uploads the unit logs when a step of the job fails:
 
 ```yaml
-- run: devlanes certs trust --yes
-- run: devlanes with --profile e2e --logs-dir devlanes-logs -- pnpm test:e2e
-- if: failure()
-  uses: actions/upload-artifact@v4
+- uses: devlanes-run/action@v0
   with:
-    name: devlanes-logs
-    path: devlanes-logs
+    command: with
+    profile: e2e
+    run: pnpm test:e2e
 ```
 
-A CI checkout is lane 0 with no worktrees. On Linux runners, add `chrome` to `tls.trust` so Playwright's browsers trust the CA, and expect the proxy on 8443 unless the runner may bind 443.
+Its README covers the other commands, inputs and platforms.

@@ -68,8 +68,10 @@ impl UpdateCheckOptions {
     }
 }
 
-/// The CI markers the CLI's output-mode detection uses.
-pub(crate) fn ci_detected(lookup: impl Fn(&str) -> Option<String>) -> bool {
+/// The CI markers the CLI's output-mode detection uses. Under CI the daemon
+/// skips release checks, and the binary sets [`crate::EngineOptions::ci`] so a
+/// checkout takes lane 0 on any branch.
+pub fn ci_detected(lookup: impl Fn(&str) -> Option<String>) -> bool {
     [
         "CI",
         "GITHUB_ACTIONS",

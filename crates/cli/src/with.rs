@@ -4,6 +4,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use devlanes_core::contrib::{CA_BUNDLE_ENV, CA_CERT_ENV};
 use devlanes_proto::{Event, LogLine, LogQuery, Method, Request, RpcError, Selection};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -49,12 +50,17 @@ pub struct WithStart {
     pub result: Value,
 }
 
-/// Peaks must come from run history, never from the latest instantaneous sample.
+/// One unit's usage over the lane start, as the daemon's `metrics {peaks: true}`
+/// sends it. Peaks and means come from the sampler's history, never from the
+/// latest instantaneous sample.
+pub type ResourcePeak = devlanes_proto::UnitPeak;
+
+/// The `metrics {peaks: true}` reply: the lane's reference and its units.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ResourcePeak {
-    pub unit: String,
-    pub peak_memory_bytes: Option<u64>,
-    pub peak_cpu_percent: Option<f64>,
+#[serde(default)]
+pub struct LaneUsage {
+    pub lane: String,
+    pub peaks: Vec<ResourcePeak>,
 }
 
 /// Logs grouped by unit include empty files for units without output.
@@ -96,8 +102,9 @@ pub trait WithDriver: Send {
     async fn env(&mut self, lane: &str) -> Result<BTreeMap<String, String>, RpcError>;
     /// Returns every page of run logs, not a presentation-budgeted tail.
     async fn logs(&mut self, lane: &str, query: LaneLogQuery) -> Result<Vec<UnitLogs>, RpcError>;
-    /// Returns per-unit peaks for the current lane start; absent samples remain None.
-    async fn metrics(&mut self, lane: &str) -> Result<Vec<ResourcePeak>, RpcError>;
+    /// Returns the lane's reference and each unit's usage over the current lane
+    /// start; absent samples remain None.
+    async fn metrics(&mut self, lane: &str) -> Result<LaneUsage, RpcError>;
     /// Stops only this selection in the specified canonical lane; returns the stop result.
     async fn stop(&mut self, lane: &str, selection: Selection) -> Result<Value, RpcError>;
     /// Called only when ownership reports an auto-spawned daemon.
@@ -163,6 +170,7 @@ pub async fn run_with<D: WithDriver + ?Sized>(
                 Ok(lane_env) => {
                     let mut env = plan.start.context.env.clone().unwrap_or_default();
                     env.extend(lane_env);
+                    add_runtime_ca_env(&mut env);
                     match driver
                         .spawn_command(&plan.command, &env, &plan.start.context.cwd)
                         .await
@@ -230,22 +238,8 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         }
     }
     for failure in &mut failures {
-        if failure.log_tail.is_empty()
-            && let Some(unit) = logs.iter().find(|logs| {
-                logs.unit == failure.unit
-                    || logs.unit == format!("{}:{}", failure.lane, failure.unit)
-            })
-        {
-            failure.log_tail = unit
-                .lines
-                .iter()
-                .rev()
-                .take(20)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .map(|line| line.text.clone())
-                .collect();
+        if failure.log_tail.is_empty() {
+            failure.log_tail = last_lines(&logs, &failure.lane, &failure.unit);
         }
     }
     // The start result with every failure and its tail: one annotation each in
@@ -286,7 +280,7 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         Vec::new()
     } else {
         match driver.metrics(&ownership.lane).await {
-            Ok(peaks) => peaks,
+            Ok(usage) => usage.peaks,
             Err(error) => {
                 result.cleanup_errors.push(error.code.clone());
                 emit(reporter.error(&error, None));
@@ -313,28 +307,48 @@ pub async fn run_with<D: WithDriver + ?Sized>(
             });
         }
     }
-    let summary = resource_summary(&peaks);
+    let mut tails = BTreeMap::new();
+    for peak in &mut peaks {
+        let failure = failures.iter().find(|failure| {
+            failure.unit == peak.unit || format!("{}:{}", failure.lane, failure.unit) == peak.unit
+        });
+        // An older daemon sends no state; the start's failures still know it.
+        if peak.state.is_none()
+            && let Some(failure) = failure
+        {
+            peak.state = Some("failed".into());
+            peak.exit_code = failure.exit_code;
+        }
+        let tail = failure
+            .map(|failure| failure.log_tail.clone())
+            .filter(|tail| !tail.is_empty())
+            .unwrap_or_else(|| last_lines(&logs, &ownership.lane, &peak.unit));
+        if peak.state.as_deref() == Some("failed") && !tail.is_empty() {
+            tails.insert(peak.unit.clone(), tail);
+        }
+    }
+    let title = format!(
+        "devlanes with · {} · exit {}",
+        ownership.lane, result.exit_code
+    );
+    let summary = resource_summary(&title, &peaks, &tails, now_ms());
     let stdout = if runtime.mode == crate::OutputMode::Json {
         format!(
             "{}\n",
-            json!({"event":"with.summary", "exit_code":result.exit_code,"items":peaks})
+            json!({"event": "with.summary", "lane": ownership.lane,
+                   "exit_code": result.exit_code, "items": peaks})
         )
     } else if runtime.quiet || !shows_peaks(runtime) {
         String::new()
     } else {
-        summary.clone()
+        summary.text.clone()
     };
     emit(Rendered {
         stdout,
         ..Rendered::default()
     });
-    if !summary.is_empty()
-        && let Err(error) = runtime
-            .append_ci_summary(&format!(
-                "## devlanes with\n\nExit code: {}\n\n{}",
-                result.exit_code, summary
-            ))
-            .await
+    if !summary.markdown.is_empty()
+        && let Err(error) = runtime.append_ci_summary(&summary.markdown).await
     {
         record_io(&mut result, emit, error);
     }
@@ -362,6 +376,30 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         }
     }
     result
+}
+
+/// Variables runtimes read for their roots, with the devlanes CA variable each
+/// points at: the certificate where a runtime adds roots, the bundle where it
+/// replaces them.
+const RUNTIME_CA_ENV: [(&str, &str); 4] = [
+    ("NODE_EXTRA_CA_CERTS", CA_CERT_ENV),
+    ("DENO_CERT", CA_CERT_ENV),
+    ("SSL_CERT_FILE", CA_BUNDLE_ENV),
+    ("REQUESTS_CA_BUNDLE", CA_BUNDLE_ENV),
+];
+
+/// Points the runtime CA variables of `with`'s command at the devlanes CA, so
+/// test code calling `https://*.localhost` trusts the proxy. A value the shell
+/// already set is kept: it may name a CA the tests need as well.
+fn add_runtime_ca_env(env: &mut BTreeMap<String, String>) {
+    for (name, source) in RUNTIME_CA_ENV {
+        if env.contains_key(name) {
+            continue;
+        }
+        if let Some(path) = env.get(source).cloned() {
+            env.insert(name.to_owned(), path);
+        }
+    }
 }
 
 /// Services of a start result still `starting` or `queued` when it ended without
@@ -433,8 +471,10 @@ fn with_failures(mut result: Value, failures: &[UnitFailure]) -> Value {
     result
 }
 
-/// Implements stop --logs-dir after the caller resolves the request's canonical lane.
-/// Artifact failures never prevent the explicit stop; this never shuts down the daemon.
+/// Implements stop --logs-dir in `lane`, or in the lane of the driver's cwd when
+/// `lane` is empty (no `--lane`). Artifact failures never prevent the explicit
+/// stop; this never shuts down the daemon. The summary follows the stop, so it
+/// shows the state each unit ended in.
 pub async fn stop_with_logs<D: WithDriver + ?Sized>(
     lane: &str,
     selection: Selection,
@@ -445,6 +485,7 @@ pub async fn stop_with_logs<D: WithDriver + ?Sized>(
 ) -> WithOutcome {
     let reporter = runtime.reporter();
     let mut outcome = WithOutcome::default();
+    let mut logs = Vec::new();
     match driver
         .logs(
             lane,
@@ -458,66 +499,151 @@ pub async fn stop_with_logs<D: WithDriver + ?Sized>(
         )
         .await
     {
-        Ok(logs) => match write_log_artifacts(logs_dir, &logs).await {
-            Ok(files) => outcome.log_files = files,
-            Err(error) => record_io(&mut outcome, emit, error),
-        },
+        Ok(found) => {
+            match write_log_artifacts(logs_dir, &found).await {
+                Ok(files) => outcome.log_files = files,
+                Err(error) => record_io(&mut outcome, emit, error),
+            }
+            logs = found;
+        }
         Err(error) => {
             outcome.cleanup_errors.push(error.code.clone());
             emit(reporter.error(&error, None));
         }
     }
-    let peaks = match driver.metrics(lane).await {
-        Ok(peaks) => peaks,
+    let usage = match driver.metrics(lane).await {
+        Ok(usage) => usage,
         Err(error) => {
             outcome.cleanup_errors.push(error.code.clone());
             emit(reporter.error(&error, None));
-            selection
-                .units
-                .iter()
-                .map(|unit| ResourcePeak {
-                    unit: unit.clone(),
-                    ..ResourcePeak::default()
-                })
-                .collect()
+            LaneUsage {
+                lane: lane.to_owned(),
+                peaks: selection
+                    .units
+                    .iter()
+                    .map(|unit| ResourcePeak {
+                        unit: unit.clone(),
+                        ..ResourcePeak::default()
+                    })
+                    .collect(),
+            }
         }
     };
-    let summary = resource_summary(&peaks);
-    emit(Rendered {
-        stdout: if runtime.mode == crate::OutputMode::Json {
-            format!("{}\n", json!({"event":"stop.summary", "items":peaks}))
-        } else if runtime.quiet || !shows_peaks(runtime) {
-            String::new()
-        } else {
-            summary.clone()
-        },
-        ..Rendered::default()
-    });
-    if !summary.is_empty()
-        && let Err(error) = runtime
-            .append_ci_summary(&format!("## devlanes stop\n\n{summary}"))
-            .await
-    {
-        record_io(&mut outcome, emit, error);
-    }
-    match driver.stop(lane, selection).await {
-        // The stopped units, as plain `devlanes stop` prints them, in every mode.
+    let mut peaks = usage.peaks;
+    let stopped = match driver.stop(lane, selection).await {
         Ok(data) => {
-            if let Ok(rendered) = reporter.result(&Report::new(Method::Stop, &data)) {
-                outcome.exit_code = rendered.exit_code;
-                emit(rendered);
-            }
+            ended_runs(&data, &mut peaks);
+            reporter.result(&Report::new(Method::Stop, &data)).ok()
         }
         Err(error) => {
             outcome.exit_code = error.exit_code;
             outcome.cleanup_errors.push(error.code.clone());
             emit(reporter.error(&error, None));
+            None
         }
+    };
+    let reference = if usage.lane.is_empty() {
+        lane
+    } else {
+        &usage.lane
+    };
+    let tails: BTreeMap<String, Vec<String>> = peaks
+        .iter()
+        .filter(|peak| peak.state.as_deref() == Some("failed"))
+        .map(|peak| (peak.unit.clone(), last_lines(&logs, reference, &peak.unit)))
+        .filter(|(_, tail)| !tail.is_empty())
+        .collect();
+    let title = if reference.is_empty() {
+        "devlanes stop".to_owned()
+    } else {
+        format!("devlanes stop · {reference}")
+    };
+    let summary = resource_summary(&title, &peaks, &tails, now_ms());
+    emit(Rendered {
+        stdout: if runtime.mode == crate::OutputMode::Json {
+            format!(
+                "{}\n",
+                json!({"event": "stop.summary", "lane": reference, "items": peaks})
+            )
+        } else if runtime.quiet || !shows_peaks(runtime) {
+            String::new()
+        } else {
+            summary.text.clone()
+        },
+        ..Rendered::default()
+    });
+    if !summary.markdown.is_empty()
+        && let Err(error) = runtime.append_ci_summary(&summary.markdown).await
+    {
+        record_io(&mut outcome, emit, error);
+    }
+    // The stopped units, as plain `devlanes stop` prints them, in every mode.
+    if let Some(rendered) = stopped {
+        outcome.exit_code = rendered.exit_code;
+        emit(rendered);
     }
     if outcome.exit_code == 0 && !outcome.cleanup_errors.is_empty() {
         outcome.exit_code = 1;
     }
     outcome
+}
+
+/// Takes each unit's state, exit code and end time from a stop result
+/// (`items[].units[]`), which knows how the runs ended.
+fn ended_runs(stop: &Value, peaks: &mut [ResourcePeak]) {
+    let units = stop
+        .get("items")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|lane| lane.get("units").and_then(Value::as_array))
+        .flatten();
+    for unit in units {
+        let Some(name) = unit.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(peak) = peaks.iter_mut().find(|peak| peak.unit == name) else {
+            continue;
+        };
+        if let Some(state) = unit.get("state").and_then(Value::as_str) {
+            peak.state = Some(state.to_owned());
+        }
+        if let Some(code) = unit
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .and_then(|code| i32::try_from(code).ok())
+        {
+            peak.exit_code = Some(code);
+        }
+        if let Some(finished) = unit.get("finished_at_ms").and_then(Value::as_u64) {
+            peak.finished_at_ms = Some(finished);
+        }
+    }
+}
+
+/// The last 20 log lines of `unit` (a name, or `lane:name`) in `logs`.
+fn last_lines(logs: &[UnitLogs], lane: &str, unit: &str) -> Vec<String> {
+    let Some(found) = logs.iter().find(|logs| {
+        logs.unit == unit
+            || format!("{lane}:{}", logs.unit) == unit
+            || logs.unit == format!("{lane}:{unit}")
+    }) else {
+        return Vec::new();
+    };
+    let skip = found.lines.len().saturating_sub(20);
+    found.lines[skip..]
+        .iter()
+        .map(|line| line.text.clone())
+        .collect()
+}
+
+/// Milliseconds since the Unix epoch, for the run time of units still running.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 /// Reports filesystem failures without skipping subsequent cleanup or changing command status.
@@ -601,30 +727,225 @@ fn shows_peaks(runtime: &Runtime) -> bool {
     runtime.ci.is_some() || !runtime.stdout_tty
 }
 
-/// Markdown is readable as plain text and can be appended directly to CI step
-/// summaries. Empty when nothing was measured, so no header without rows.
-pub fn resource_summary(peaks: &[ResourcePeak]) -> String {
+/// The summary of a `with` or `stop --logs-dir` run, in two forms.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ResourceSummary {
+    /// For `$GITHUB_STEP_SUMMARY`: a heading, the table, then a collapsed block
+    /// with the last log lines of each failed unit.
+    pub markdown: String,
+    /// For stdout (CI logs, pipes): the title and the table as aligned text.
+    pub text: String,
+}
+
+/// Column headings of the Markdown table; the first two are text, the rest numbers.
+const SUMMARY_COLUMNS: [&str; 7] = [
+    "Unit",
+    "State",
+    "Run time",
+    "Avg CPU",
+    "Peak CPU",
+    "Avg memory",
+    "Peak memory",
+];
+
+/// The same columns in the plain-text table, in the CLI's uppercase style.
+const TEXT_COLUMNS: [&str; 7] = [
+    "UNIT", "STATE", "RUN TIME", "AVG CPU", "PEAK CPU", "AVG MEM", "PEAK MEM",
+];
+
+/// Shown for a value the daemon did not measure (an older daemon has no means).
+const MISSING: &str = "–";
+
+/// Characters kept of one log line in a failed unit's block.
+const TAIL_LINE_CHARS: usize = 500;
+
+/// Bytes all failed units' blocks may take together. GitHub drops a step
+/// summary over 1 MiB whole, and other steps write to it too.
+const TAILS_MAX_BYTES: usize = 64 * 1024;
+
+/// One row per unit under `title` (`devlanes with · acme@0 · exit 0`), with
+/// `tails` holding the last log lines of failed units. `now_ms` ends the run
+/// time of units still running. Empty when there are no units, so no heading
+/// without rows. Tail lines are cut at [`TAIL_LINE_CHARS`] and the blocks stop
+/// at [`TAILS_MAX_BYTES`], with one line saying how many units were left out.
+pub fn resource_summary(
+    title: &str,
+    peaks: &[ResourcePeak],
+    tails: &BTreeMap<String, Vec<String>>,
+    now_ms: u64,
+) -> ResourceSummary {
     if peaks.is_empty() {
-        return String::new();
+        return ResourceSummary::default();
     }
-    let mut result = String::from("| Unit | Peak memory | Peak CPU |\n| --- | ---: | ---: |\n");
+    let rows: Vec<[String; 7]> = peaks
+        .iter()
+        .map(|peak| {
+            [
+                one_line(&peak.unit),
+                unit_state(peak),
+                peak.started_at_ms
+                    .map(|started| {
+                        ran(peak
+                            .finished_at_ms
+                            .unwrap_or(now_ms)
+                            .saturating_sub(started))
+                    })
+                    .unwrap_or_else(|| MISSING.into()),
+                percent(peak.avg_cpu_percent),
+                percent(peak.peak_cpu_percent),
+                mebibytes(peak.avg_memory_bytes),
+                mebibytes(peak.peak_memory_bytes),
+            ]
+        })
+        .collect();
+    let mut markdown = format!(
+        "## {}\n\n| {} |\n| --- | --- |{}\n",
+        markdown_text(title),
+        SUMMARY_COLUMNS.join(" | "),
+        " ---: |".repeat(SUMMARY_COLUMNS.len() - 2)
+    );
+    for row in &rows {
+        let cells: Vec<String> = row.iter().map(|cell| markdown_text(cell)).collect();
+        markdown.push_str(&format!("| {} |\n", cells.join(" | ")));
+    }
+    let mut tails_bytes = 0;
+    let mut left_out = 0;
     for peak in peaks {
-        let name = strip_ansi_escapes::strip_str(&peak.unit)
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-            .replace('|', "&#124;")
-            .replace(['\r', '\n'], " ");
-        let memory = peak
-            .peak_memory_bytes
-            .map(|v| format!("{:.1} MiB", v as f64 / 1_048_576.0))
-            .unwrap_or_else(|| "–".into());
-        let cpu = peak
-            .peak_cpu_percent
-            .filter(|v| v.is_finite())
-            .map(|v| format!("{v:.1}%"))
-            .unwrap_or_else(|| "–".into());
-        result.push_str(&format!("| {name} | {memory} | {cpu} |\n"));
+        let Some(tail) = tails.get(&peak.unit).filter(|tail| !tail.is_empty()) else {
+            continue;
+        };
+        let lines: Vec<String> = tail
+            .iter()
+            .rev()
+            .take(20)
+            .rev()
+            .map(|line| {
+                html_text(&shortened(
+                    &strip_ansi_escapes::strip_str(line).replace('\r', ""),
+                ))
+            })
+            .collect();
+        let block = format!(
+            "\n<details>\n<summary>{} {}: last log lines</summary>\n\n<pre>\n{}\n</pre>\n\n</details>\n",
+            html_text(&one_line(&peak.unit)),
+            html_text(&unit_state(peak)),
+            lines.join("\n")
+        );
+        if left_out > 0 || tails_bytes + block.len() > TAILS_MAX_BYTES {
+            left_out += 1;
+            continue;
+        }
+        tails_bytes += block.len();
+        markdown.push_str(&block);
     }
-    result
+    if left_out > 0 {
+        let units = if left_out == 1 { "unit" } else { "units" };
+        markdown.push_str(&format!(
+            "\nThe last log lines of {left_out} more failed {units} are left out to keep the step summary small.\n"
+        ));
+    }
+    let header = TEXT_COLUMNS.map(str::to_owned);
+    let mut widths = header.clone().map(|cell| cell.chars().count());
+    for row in &rows {
+        for (width, cell) in widths.iter_mut().zip(row) {
+            *width = (*width).max(cell.chars().count());
+        }
+    }
+    let mut text = format!("{}\n", one_line(title));
+    for row in std::iter::once(&header).chain(&rows) {
+        let cells: Vec<String> = row
+            .iter()
+            .zip(widths)
+            .enumerate()
+            .map(|(column, (cell, width))| {
+                let pad = " ".repeat(width - cell.chars().count());
+                if column < 2 {
+                    format!("{cell}{pad}")
+                } else {
+                    format!("{pad}{cell}")
+                }
+            })
+            .collect();
+        text.push_str(cells.join("  ").trim_end());
+        text.push('\n');
+    }
+    ResourceSummary { markdown, text }
+}
+
+/// `ready`, `stopped`, `failed (exit 1)`; `–` when the daemon sent no state.
+fn unit_state(peak: &ResourcePeak) -> String {
+    match (peak.state.as_deref(), peak.exit_code) {
+        (Some("failed"), Some(code)) => format!("failed (exit {code})"),
+        (Some(state), _) => one_line(state),
+        (None, _) => MISSING.into(),
+    }
+}
+
+/// A run time such as `<1s`, `42s`, `3m 05s` or `1h 02m`.
+fn ran(ms: u64) -> String {
+    let seconds = ms / 1000;
+    match seconds {
+        0 => "<1s".into(),
+        1..60 => format!("{seconds}s"),
+        60..3600 => format!("{}m {:02}s", seconds / 60, seconds % 60),
+        _ => format!("{}h {:02}m", seconds / 3600, seconds % 3600 / 60),
+    }
+}
+
+/// `12.5%`, or `–`.
+fn percent(value: Option<f64>) -> String {
+    value
+        .filter(|value| value.is_finite())
+        .map_or_else(|| MISSING.into(), |value| format!("{value:.1}%"))
+}
+
+/// `1.0 MiB`, `2.3 GiB`, or `–`.
+fn mebibytes(value: Option<u64>) -> String {
+    let Some(bytes) = value else {
+        return MISSING.into();
+    };
+    let mib = bytes as f64 / 1_048_576.0;
+    if mib >= 1024.0 {
+        format!("{:.1} GiB", mib / 1024.0)
+    } else {
+        format!("{mib:.1} MiB")
+    }
+}
+
+/// `line` cut to [`TAIL_LINE_CHARS`] characters, with `…` when cut.
+fn shortened(line: &str) -> String {
+    match line.char_indices().nth(TAIL_LINE_CHARS) {
+        Some((end, _)) => format!("{}…", &line[..end]),
+        None => line.to_owned(),
+    }
+}
+
+/// `value` without ANSI escapes and line breaks, for one table cell or line.
+fn one_line(value: &str) -> String {
+    strip_ansi_escapes::strip_str(value).replace(['\r', '\n'], " ")
+}
+
+/// `value` as HTML text: log lines and names cannot open tags or entities.
+fn html_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// `value` as Markdown text for a heading or table cell: HTML escaped, pipes
+/// cannot end the cell, and emphasis, code and link characters stay literal.
+fn markdown_text(value: &str) -> String {
+    let mut escaped = String::new();
+    for c in html_text(&one_line(value)).chars() {
+        match c {
+            '|' => escaped.push_str("&#124;"),
+            '\\' | '`' | '*' | '_' | '[' | ']' => {
+                escaped.push('\\');
+                escaped.push(c);
+            }
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }

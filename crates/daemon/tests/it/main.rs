@@ -188,6 +188,8 @@ pub struct Setup {
     pub contributors: Vec<Arc<dyn devlanes_core::contrib::Contributor>>,
     /// `EngineOptions::resume`, started by `Handler::on_ready`.
     pub resume: Option<devlanes_proto::ResumePlan>,
+    /// `EngineOptions::ci`.
+    pub ci: bool,
 }
 
 /// Opens an engine over `home` (reusing its state.db when present).
@@ -227,6 +229,7 @@ pub async fn harness(home: &Path, setup: Setup) -> Harness {
     options.start_timeout = Duration::from_secs(10);
     options.idle_exit = setup.idle_exit;
     options.resume = setup.resume;
+    options.ci = setup.ci;
     if let Some(logs) = setup.logs {
         options.logs = logs;
     }

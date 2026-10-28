@@ -1,6 +1,6 @@
 //! Resource sampling (plan 13.5). Ticks every second while a client watches
 //! (subscribers or recent `metrics` calls), and every five seconds otherwise while
-//! units run, so CI summaries still get per-start peaks. Monitoring only.
+//! units run, so CI summaries still get per-start peaks and means. Monitoring only.
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use crate::{
     engine::{Inner, params},
-    model::{LaneRt, lock},
+    model::{LaneRt, UnitUsage, lock, unit_summary},
     units::now_ms,
 };
 
@@ -503,10 +503,13 @@ impl Inner {
                         pid: target.pid,
                     },
                 );
-                let mut st = target.lane.st();
-                let peak = st.peaks.entry(target.name.clone()).or_insert((None, None));
-                peak.0 = Some(peak.0.unwrap_or(0).max(sample.footprint_bytes));
-                peak.1 = Some(peak.1.unwrap_or(0.0).max(sample.cpu_percent));
+                target
+                    .lane
+                    .st()
+                    .usage
+                    .entry(target.name.clone())
+                    .or_default()
+                    .add(sample.cpu_percent, sample.footprint_bytes, now);
             }
             let rollups = state.history.drain_rollups(now);
             state.prune(now, &sampled);
@@ -633,7 +636,8 @@ impl Inner {
     }
 
     /// `metrics`: per-unit samples and history, lane totals, the machine and the
-    /// daemon's own process, or `peaks: true` for the current lane start. The
+    /// daemon's own process, or `peaks: true` for each unit's peaks, means and
+    /// latest run over the current lane start. The
     /// reply shape is documented on [`devlanes_proto::Method::Metrics`].
     pub(crate) async fn metrics_method(
         self: &Arc<Self>,
@@ -655,9 +659,10 @@ impl Inner {
         if args.peaks {
             let (project, lane) = self.target_lane(context).await?;
             let st = lane.st();
+            let reference = st.reference(&project.name());
             let mut names: Vec<String> = st.units.keys().cloned().collect();
             names.extend(
-                st.peaks
+                st.usage
                     .keys()
                     .filter(|k| !st.units.contains_key(*k))
                     .cloned(),
@@ -665,15 +670,27 @@ impl Inner {
             let peaks: Vec<UnitPeak> = names
                 .into_iter()
                 .map(|unit| {
-                    let peak = st.peaks.get(&unit).copied().unwrap_or((None, None));
+                    let usage = st.usage.get(&unit).copied().unwrap_or_default();
+                    let (peak_memory_bytes, peak_cpu_percent) = usage.peak();
+                    let (avg_memory_bytes, avg_cpu_percent) = usage.average();
+                    let run = st
+                        .units
+                        .get(&unit)
+                        .map(|rec| unit_summary(&reference, &unit, rec));
                     UnitPeak {
+                        peak_memory_bytes,
+                        peak_cpu_percent,
+                        avg_memory_bytes,
+                        avg_cpu_percent,
+                        state: run.as_ref().map(|run| run.state.clone()),
+                        exit_code: run.as_ref().and_then(|run| run.exit_code),
+                        started_at_ms: run.as_ref().and_then(|run| run.started_at_ms),
+                        finished_at_ms: run.as_ref().and_then(|run| run.finished_at_ms),
                         unit,
-                        peak_memory_bytes: peak.0,
-                        peak_cpu_percent: peak.1,
                     }
                 })
                 .collect();
-            return Ok(json!({"lane": st.reference(&project.name()), "peaks": peaks}));
+            return Ok(json!({"lane": reference, "peaks": peaks}));
         }
         let range_ms = args
             .range_ms
@@ -724,7 +741,7 @@ impl Inner {
                     .filter(|subject| alive && state.sampled.contains(subject))
                     .and_then(|_| state.latest.get(&(reference.clone(), name.clone())))
                     .copied();
-                let peak = st.peaks.get(name).copied().unwrap_or((None, None));
+                let peak = st.usage.get(name).map(UnitUsage::peak).unwrap_or_default();
                 let mut row = json!({
                     "lane": reference,
                     "unit": name,

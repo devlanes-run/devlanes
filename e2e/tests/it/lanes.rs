@@ -1,7 +1,7 @@
 //! Two worktrees of `fixtures/two-services`: concurrency, references, idempotence,
 //! stopping one lane and cleaning one lane.
 
-use std::{collections::BTreeSet, path::PathBuf, time::Duration};
+use std::{collections::BTreeSet, fs, path::PathBuf, time::Duration};
 
 use devlanes_e2e::{Lab, Result, http_get, lane, listening, pid, port, unit};
 use serde_json::Value;
@@ -214,6 +214,50 @@ fn lane_clean_frees_the_lane_ports() -> Result<()> {
         );
     }
     let zero = need(lane(&after, "fixture-two@0"), "lane 0")?;
+    assert_eq!(units_in(zero, "ready"), ["api", "web"], "{zero}");
+    Ok(())
+}
+
+/// `stop --logs-dir` without `--lane` stops the lane of its worktree, as plain `stop`
+/// does, and writes that lane's unit logs; the other lane keeps running.
+#[test]
+fn stop_with_logs_dir_uses_the_worktree_lane() -> Result<()> {
+    let (lab, feature) = two_lanes()?;
+    let logs = lab.home().join("stop-logs");
+    lab.devlanes(&feature, &["stop", "--logs-dir", &logs.to_string_lossy()])?
+        .expect_code(0)?;
+    let mut names = Vec::new();
+    for entry in fs::read_dir(&logs)? {
+        let entry = entry?;
+        let text = fs::read_to_string(entry.path())?;
+        assert!(
+            text.contains("-ready"),
+            "{}: {text}",
+            entry.path().display()
+        );
+        names.push(entry.file_name().to_string_lossy().into_owned());
+    }
+    names.sort();
+    assert_eq!(names, ["unit-api.log", "unit-web.log"]);
+    let after = lab.lanes(lab.repo())?;
+    let zero = need(lane(&after, "fixture-two@0"), "lane 0")?;
+    let one = need(lane(&after, "fixture-two@1"), "lane 1")?;
+    assert_eq!(units_in(zero, "ready"), ["api", "web"], "{zero}");
+    assert!(units_in(one, "ready").is_empty(), "{one}");
+    Ok(())
+}
+
+/// Under CI a detached checkout, as a pull request job has, gets lane 0 from the
+/// daemon its first command spawns.
+#[test]
+fn ci_gives_a_detached_checkout_lane_zero() -> Result<()> {
+    let lab = Lab::new("two-services", BUDGET)?;
+    lab.git(&["checkout", "-q", "--detach"])?;
+    let mut command = lab.command(lab.repo(), &["start"])?;
+    command.env("CI", "true");
+    lab.run(command, Duration::from_secs(90))?.expect_code(0)?;
+    let lanes = lab.lanes(lab.repo())?;
+    let zero = need(lane(&lanes, "fixture-two@0"), "lane 0")?;
     assert_eq!(units_in(zero, "ready"), ["api", "web"], "{zero}");
     Ok(())
 }

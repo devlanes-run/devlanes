@@ -31,7 +31,7 @@ fn trust_resolver(tld: &str, home: &std::path::Path) -> Result<(), NrptError> {
 
 The key is `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\devlanes-<tld>` with the values `Add-DnsClientNrptRule` writes: `Version` 2, `Name` `.<tld>`, `GenericDNSServers` `127.53.0.1`, `ConfigOptions` 8, an empty `IPSECCARestriction`, plus `DisplayName` and `Comment`. The DNS client picks up a change at once, without PowerShell, a cache flush or a service restart. NRPT rules have no port, so the server listens on port 53 on Windows; `127.53.0.1` keeps clear of other local DNS servers on `127.0.0.1:53`.
 
-Windows answers every `*.localhost` name itself, so there is no rule for `localhost`.
+There is no rule for `localhost`: Windows 11 answers every `*.localhost` name itself, and Windows Server needs hosts file entries.
 
 Install writes the rule fresh (its key is deleted first) and removes devlanes rules for other TLDs; removal deletes every `devlanes-*` rule. Install refuses when another rule covers the TLD or a name under it, and when Group Policy rules exist under `HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\DnsPolicyConfig`, because Windows then ignores local rules.
 

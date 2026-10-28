@@ -88,7 +88,8 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
 pub struct LanesConfig {
     /// Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the
     /// only worktree that gets a lane by itself. Defaults to the remote's default branch,
-    /// else `main` or `master`.
+    /// else `main` or `master`. In CI (a variable such as `CI` or `GITHUB_ACTIONS` is set)
+    /// the checkout takes lane 0 on any branch when lane 0 is free.
     #[schemars(extend("examples" = ["main"]))]
     pub primary: Option<String>,
     /// What devlanes does when a worktree gets its lane: only reserve it, also set it up,

@@ -12,7 +12,7 @@
 //! the same validation and constants.
 
 pub mod block;
-// The helper edits `/etc/hosts` through sudo; Windows needs no hosts file entries.
+// The helper edits `/etc/hosts` through sudo; devlanes writes no hosts file on Windows.
 #[cfg(unix)]
 pub mod cli;
 #[cfg(unix)]
