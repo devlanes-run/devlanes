@@ -421,10 +421,14 @@ fn forks(f: &mut Fake, boxes: fn() -> serde_json::Value) {
     f.show_boxes(boxes());
 }
 
-/// The scene `lanes-unit` in another color tier and glyph set.
-fn themed(f: &mut Fake, tier: Tier, glyphs: Glyphs) {
+/// The scene `lanes-unit`, or what `then` shows, in another color tier and
+/// glyph set.
+fn themed(f: &mut Fake, tier: Tier, glyphs: Glyphs, then: Option<fn(&mut Fake)>) {
     f.app.theme = Theme { tier, glyphs };
-    f.unit("acme@0", "api-gateway");
+    match then {
+        Some(then) => then(f),
+        None => f.unit("acme@0", "api-gateway"),
+    }
 }
 
 /// Selects acme@0's api-search, the busiest unit, on the open monitor and
@@ -640,7 +644,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "lane-box-local-running",
-            what: "a box lane while this machine runs shop@0: grey, the pane says to stop the local lane first, and the footer has no m",
+            what: "a box lane while this machine runs shop@0: grey, and m offers to stop the local lane and switch",
             setup: |f| {
                 f.show_boxes(data::forks_local_running());
                 f.unit("shop@0 @fork-b", "storefront");
@@ -1013,22 +1017,37 @@ fn scenes() -> Vec<Scene> {
         Scene {
             name: "theme-dark",
             what: "true color on a dark background",
-            setup: |f| themed(f, Tier::Dark, Glyphs::Unicode),
+            setup: |f| themed(f, Tier::Dark, Glyphs::Unicode, None),
         },
         Scene {
             name: "theme-light",
             what: "true color on a light background",
-            setup: |f| themed(f, Tier::Light, Glyphs::Unicode),
+            setup: |f| themed(f, Tier::Light, Glyphs::Unicode, None),
         },
         Scene {
             name: "theme-no-color",
             what: "NO_COLOR: shapes, words, bold and reverse video",
-            setup: |f| themed(f, Tier::Plain, Glyphs::Unicode),
+            setup: |f| themed(f, Tier::Plain, Glyphs::Unicode, None),
         },
         Scene {
             name: "glyphs-ascii",
             what: "ASCII glyphs (ui.glyphs: ascii, or a locale without UTF-8)",
-            setup: |f| themed(f, Tier::Ansi, Glyphs::Ascii),
+            setup: |f| themed(f, Tier::Ansi, Glyphs::Ascii, None),
+        },
+        Scene {
+            name: "lanes-boxes-ascii",
+            what: "the scene lanes-boxes with ASCII glyphs and NO_COLOR: grey lanes are in parentheses, so they read without color",
+            setup: |f| {
+                themed(
+                    f,
+                    Tier::Plain,
+                    Glyphs::Ascii,
+                    Some(|f| {
+                        forks(f, data::forks);
+                        f.lane("shop@0 @fork-a");
+                    }),
+                );
+            },
         },
         Scene {
             name: "monitor",

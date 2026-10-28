@@ -285,7 +285,7 @@ impl Theme {
     }
 
     /// What goes before and after the name of a lane this machine does not
-    /// mirror: a hollow dot after it, or brackets around it with ascii
+    /// mirror: a hollow dot after it, or parentheses around it with ascii
     /// glyphs, where `o` already means running.
     pub fn unmirrored(&self) -> (&'static str, &'static str) {
         if self.glyphs == Glyphs::Ascii {

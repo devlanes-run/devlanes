@@ -162,7 +162,7 @@ async fn a_long_box_name_is_cut_in_the_chip_and_whole_in_the_title() -> TestResu
 }
 
 /// Grey chips are dim with a hollow dot; with ascii glyphs and no color the
-/// brackets say it alone.
+/// parentheses say it alone.
 #[tokio::test]
 async fn grey_chips_are_dim_and_marked_without_color() -> TestResult {
     let mut app = with_forks(120, 30).await;

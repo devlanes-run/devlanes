@@ -204,7 +204,7 @@ fork-b's grey shop@0: which lane is in use, and m to use this one
 
 ## lane-box-local-running
 
-a box lane while this machine runs shop@0: grey, the pane says to stop the local lane first, and the footer has no m
+a box lane while this machine runs shop@0: grey, and m offers to stop the local lane and switch
 
 - 200x60: [txt](lane-box-local-running-200x60.txt) · [png](lane-box-local-running-200x60.png) · [ansi](lane-box-local-running-200x60.ansi)
 - 120x40: [txt](lane-box-local-running-120x40.txt) · [png](lane-box-local-running-120x40.png) · [ansi](lane-box-local-running-120x40.ansi)
@@ -529,6 +529,14 @@ ASCII glyphs (ui.glyphs: ascii, or a locale without UTF-8)
 - 200x60: [txt](glyphs-ascii-200x60.txt) · [png](glyphs-ascii-200x60.png) · [ansi](glyphs-ascii-200x60.ansi)
 - 120x40: [txt](glyphs-ascii-120x40.txt) · [png](glyphs-ascii-120x40.png) · [ansi](glyphs-ascii-120x40.ansi)
 - 80x24: [txt](glyphs-ascii-80x24.txt) · [png](glyphs-ascii-80x24.png) · [ansi](glyphs-ascii-80x24.ansi)
+
+## lanes-boxes-ascii
+
+the scene lanes-boxes with ASCII glyphs and NO_COLOR: grey lanes are in parentheses, so they read without color
+
+- 200x60: [txt](lanes-boxes-ascii-200x60.txt) · [png](lanes-boxes-ascii-200x60.png) · [ansi](lanes-boxes-ascii-200x60.ansi)
+- 120x40: [txt](lanes-boxes-ascii-120x40.txt) · [png](lanes-boxes-ascii-120x40.png) · [ansi](lanes-boxes-ascii-120x40.ansi)
+- 80x24: [txt](lanes-boxes-ascii-80x24.txt) · [png](lanes-boxes-ascii-80x24.png) · [ansi](lanes-boxes-ascii-80x24.ansi)
 
 ## monitor
 
