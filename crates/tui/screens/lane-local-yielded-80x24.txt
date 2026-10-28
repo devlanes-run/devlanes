@@ -16,9 +16,9 @@
 │                              ││           · admin            stopped         │
 │                              ││                                              │
 │                              ││ lanes in shop                                │
-│                              ││ ▌ main @0                  not mirrored · no…│
+│                              ││ ▌ main @0                  not mirrored      │
 │                              ││   @0 on fork-a             running · 2 up    │
-│                              ││   @0 on fork-b             not mirrored · ru…│
+│                              ││   @0 on fork-b             not mirrored      │
 │                              ││ … z shows the rest                           │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
  m use this one   s start lane   S start all              ? all keys   q quit
@@ -42,9 +42,9 @@
 15: 0 darkgray, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
 16: 0 darkgray, 31-32 darkgray, 79 darkgray
 17: 0 darkgray, 31-32 darkgray, 34-46 bold, 79 darkgray
-18: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-78 dim, 79 darkgray
+18: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-72 dim, 79 darkgray
 19: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-74 dim, 79 darkgray
-20: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-78 dim, 79 darkgray
+20: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-72 dim, 79 darkgray
 21: 0 darkgray, 31-32 darkgray, 34-51 dim, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-17 dim, 18 bold, 19-32 dim, 33 bold, 34-46 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

@@ -1284,7 +1284,12 @@ fn hints(app: &App) -> Vec<Hint> {
         }
         View::Boxes => {
             let mut hints = Vec::new();
-            if let Some(host) = app.boxes.selected_host() {
+            if let Some((host, skipped)) = app.boxes.selected_skipped() {
+                let reference = crate::boxes::lane_reference(&skipped.lane, &host.host);
+                if app.grey(&reference).is_some_and(|grey| grey.switchable()) {
+                    hints.push(("m", "use this one", ch('m')));
+                }
+            } else if let Some(host) = app.boxes.selected_host() {
                 // A reconnecting box waits for its next try, so Enter only
                 // shows how it goes.
                 let enter = match host.state.as_str() {
@@ -1310,7 +1315,8 @@ fn hints(app: &App) -> Vec<Hint> {
             if clients.and_then(|list| list.allow_connections) == Some(false) {
                 hints.push(("o", "options", ch('o')));
             }
-            if app.boxes.hosts.len() + app.boxes.clients.count() > 1 {
+            let skipped: usize = app.boxes.hosts.iter().map(|h| h.skipped_lanes.len()).sum();
+            if app.boxes.hosts.len() + skipped + app.boxes.clients.count() > 1 {
                 hints.push(("j k", "select", ch('j')));
             }
             hints.push(("esc", "back", KeyCode::Esc));

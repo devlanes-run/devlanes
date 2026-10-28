@@ -596,11 +596,63 @@ async fn the_boxes_view_names_what_serves_a_skipped_lane_and_the_chosen_ones() -
         .join(" ");
     for expected in [
         "chosen acme@1",
-        "acme@1: fork-a's acme@1 is in use. Press m on this box's lane to use it.",
-        "acme@0: the same lane runs on this machine. Press m on this box's lane to stop it and use this one.",
+        "acme@1: fork-a's acme@1 is in use. m uses this one.",
+        "acme@0: the same lane runs on this machine. m stops it and uses this one.",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
+    Ok(())
+}
+
+/// `j` moves through each box's skipped lanes, and `m` on one does what
+/// `m` does on that lane in its tab.
+#[tokio::test]
+async fn m_on_a_skipped_lane_row_of_the_boxes_view_uses_it() -> TestResult {
+    let mut app = with_forks(120, 40).await;
+    app.update(crate::shifted('B'));
+    app.update(Msg::Boxes(Ok(forks())));
+    // On fork-b itself, m has no lane to use.
+    let effects = app.update(key(KeyCode::Char('m')));
+    assert!(uses(&effects).is_empty() && app.dialog.is_none());
+    assert_eq!(notice(&app), "select a skipped lane of a box to use it");
+    // fork-b's acme@0, which this machine runs.
+    app.update(key(KeyCode::Char('j')));
+    assert!(
+        footer(&app)?.starts_with(" m use this one   "),
+        "{}",
+        footer(&app)?
+    );
+    app.update(key(KeyCode::Char('m')));
+    let dialog = pane_and_dialog(&app)?;
+    assert!(
+        dialog.contains("acme@0 runs on this machine. Stop it and use fork-b's?"),
+        "{dialog}"
+    );
+    app.update(key(KeyCode::Char('n')));
+    // fork-b's acme@1, chosen for fork-a; Enter does the same as m.
+    app.update(key(KeyCode::Char('j')));
+    let terminal = draw(&app)?;
+    let buffer = terminal.backend().buffer();
+    let selected: Vec<String> = (0..buffer.area.height)
+        .filter(|y| buffer[(4, *y)].modifier.contains(Modifier::REVERSED))
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    assert!(
+        matches!(selected.as_slice(), [row] if row.contains("acme@1: fork-a's acme@1 is in use.")),
+        "{selected:?}"
+    );
+    let effects = app.update(key(KeyCode::Enter));
+    assert_eq!(uses(&effects), [("acme@1".into(), Some("fork-b".into()))]);
+    // Then fork-a and its own skipped lane, past which come the clients.
+    app.update(key(KeyCode::Char('j')));
+    assert!(app.boxes.lane.is_none());
+    assert_eq!(app.boxes.host, 1);
+    app.update(key(KeyCode::Char('j')));
+    assert_eq!(app.boxes.lane, Some(0));
     Ok(())
 }
 

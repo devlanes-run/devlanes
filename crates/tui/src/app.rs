@@ -1062,6 +1062,9 @@ pub struct BoxesView {
     pub part: BoxPart,
     /// Index of the selected box in `hosts`.
     pub host: usize,
+    /// The selected row of that box's `skipped_lanes`, `None` while the box
+    /// itself is selected.
+    pub lane: Option<usize>,
     /// Each box's block in the last frame, with its index, for clicks.
     pub host_blocks: RefCell<Vec<(Rect, usize)>>,
     /// The boxes' and the clients' boxes in the last frame, borders included.
@@ -1088,6 +1091,12 @@ impl BoxesView {
         }
         self.hosts
             .get(self.host.min(self.hosts.len().saturating_sub(1)))
+    }
+
+    /// The selected skipped lane row and its box, while one is selected.
+    pub fn selected_skipped(&self) -> Option<(&crate::boxes::BoxHost, &crate::boxes::SkippedLane)> {
+        let host = self.selected_host()?;
+        Some((host, host.skipped_lanes.get(self.lane?)?))
     }
 
     /// The selected client, while the selection is on the clients.
@@ -3951,7 +3960,9 @@ impl App {
             KeyCode::PageUp => self.move_box_selection(-self.box_page()),
             KeyCode::Char('g') | KeyCode::Home => self.move_box_selection(isize::MIN),
             KeyCode::Char('G') | KeyCode::End => self.move_box_selection(isize::MAX),
+            KeyCode::Enter if self.boxes.selected_skipped().is_some() => self.box_use_lane(effects),
             KeyCode::Enter => self.box_enter(effects),
+            KeyCode::Char('m') if plain => self.box_use_lane(effects),
             KeyCode::Char('n') if plain => {
                 let mut dialog = Box::<crate::connect::ConnectDialog>::default();
                 dialog.form.live = self
@@ -3978,6 +3989,17 @@ impl App {
         }
     }
 
+    /// `m` or Enter on a skipped lane row of the boxes view: the same as `m`
+    /// on that lane in its tab.
+    fn box_use_lane(&mut self, effects: &mut Vec<Effect>) {
+        let Some((host, skipped)) = self.boxes.selected_skipped() else {
+            self.set_notice("select a skipped lane of a box to use it".into());
+            return;
+        };
+        let reference = crate::boxes::lane_reference(&skipped.lane, &host.host);
+        self.use_lane(&reference, effects);
+    }
+
     /// How many rows PageUp and PageDown move: the boxes or the clients the
     /// last frame showed of the list the selection is in.
     fn box_page(&self) -> isize {
@@ -3988,31 +4010,56 @@ impl App {
         isize::try_from(shown.max(1)).unwrap_or(1)
     }
 
-    /// Moves the boxes view's selection by `delta` rows over the boxes, then
-    /// the clients; `isize::MIN` and `MAX` go to the first and last row.
+    /// Moves the boxes view's selection by `delta` rows over each box and its
+    /// skipped lanes, then the clients; `isize::MIN` and `MAX` go to the first
+    /// and last row.
     fn move_box_selection(&mut self, delta: isize) {
-        let hosts = self.boxes.hosts.len();
+        // `(part, box or client, skipped lane)`, one per row the selection visits.
+        let mut rows: Vec<(BoxPart, usize, Option<usize>)> = Vec::new();
+        for (index, host) in self.boxes.hosts.iter().enumerate() {
+            rows.push((BoxPart::Hosts, index, None));
+            rows.extend(
+                (0..host.skipped_lanes.len()).map(|lane| (BoxPart::Hosts, index, Some(lane))),
+            );
+        }
         let clients = self.boxes.clients.count();
-        let total = hosts + clients;
-        if total == 0 {
+        rows.extend((0..clients).map(|client| (BoxPart::Clients, client, None)));
+        if rows.is_empty() {
             return;
         }
-        let at = match self.boxes.part {
-            BoxPart::Hosts if hosts > 0 => self.boxes.host.min(hosts - 1),
-            BoxPart::Hosts => 0,
-            BoxPart::Clients => hosts + self.boxes.clients.selected.min(clients.saturating_sub(1)),
+        let current = match self.boxes.part {
+            BoxPart::Hosts => (BoxPart::Hosts, self.boxes.host, self.boxes.lane),
+            BoxPart::Clients => (
+                BoxPart::Clients,
+                self.boxes.clients.selected.min(clients.saturating_sub(1)),
+                None,
+            ),
         };
+        // A skipped lane that went away leaves the selection on its box.
+        let at = rows
+            .iter()
+            .position(|row| *row == current)
+            .or_else(|| {
+                rows.iter()
+                    .position(|row| *row == (current.0, current.1, None))
+            })
+            .unwrap_or(0);
         let to = match delta {
             isize::MIN => 0,
-            isize::MAX => total - 1,
-            delta => at.saturating_add_signed(delta).min(total - 1),
+            isize::MAX => rows.len() - 1,
+            delta => at.saturating_add_signed(delta).min(rows.len() - 1),
         };
-        if to < hosts {
-            self.boxes.part = BoxPart::Hosts;
-            self.boxes.host = to;
-        } else {
-            self.boxes.part = BoxPart::Clients;
-            self.boxes.clients.selected = to - hosts;
+        match rows[to] {
+            (BoxPart::Hosts, host, lane) => {
+                self.boxes.part = BoxPart::Hosts;
+                self.boxes.host = host;
+                self.boxes.lane = lane;
+            }
+            (BoxPart::Clients, client, _) => {
+                self.boxes.part = BoxPart::Clients;
+                self.boxes.clients.selected = client;
+                self.boxes.lane = None;
+            }
         }
     }
 
@@ -4281,11 +4328,25 @@ impl App {
                     .hosts
                     .get(self.boxes.host)
                     .map(|host| host.host.clone());
+                let skipped = self
+                    .boxes
+                    .selected_skipped()
+                    .map(|(_, skipped)| skipped.lane.clone());
                 self.boxes.hosts = crate::boxes::parse(&value);
                 self.boxes.host = selected
                     .and_then(|name| self.boxes.hosts.iter().position(|h| h.host == name))
                     .unwrap_or(self.boxes.host)
                     .min(self.boxes.hosts.len().saturating_sub(1));
+                // A skipped lane row follows its lane; once it is mirrored the
+                // selection goes back to its box.
+                self.boxes.lane = skipped.and_then(|lane| {
+                    self.boxes
+                        .hosts
+                        .get(self.boxes.host)?
+                        .skipped_lanes
+                        .iter()
+                        .position(|s| s.lane == lane)
+                });
                 self.settle_box_part();
                 self.boxes.lanes = self
                     .boxes
@@ -6801,6 +6862,7 @@ impl App {
                 if let Some(index) = host {
                     self.boxes.part = BoxPart::Hosts;
                     self.boxes.host = index;
+                    self.boxes.lane = None;
                     return;
                 }
                 let (rows, first) = self.boxes.clients_rows.get();
@@ -6809,6 +6871,7 @@ impl App {
                     if index < self.boxes.clients.count() {
                         self.boxes.part = BoxPart::Clients;
                         self.boxes.clients.selected = index;
+                        self.boxes.lane = None;
                     }
                 }
             }

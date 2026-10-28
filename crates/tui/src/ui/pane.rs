@@ -1511,10 +1511,12 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
         let mut summary = lane_summary(app, lane);
         if app.grey(&lane.reference).is_some() {
             let mut grey = vec![Span::styled("not mirrored", theme.quiet())];
-            if !summary.is_empty() {
+            // The lane's state comes second and goes first where it would be cut.
+            let room = width.saturating_sub(super::spans_width(&spans));
+            if !summary.is_empty() && 15 + super::spans_width(&summary) <= room {
                 grey.push(Span::styled(" · ", theme.quiet()));
+                grey.extend(summary);
             }
-            grey.extend(summary);
             summary = grey;
         }
         if lane.index.is_none() {

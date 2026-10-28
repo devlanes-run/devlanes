@@ -4,8 +4,8 @@
 │   link      connected since 2026-10-14 15:32                                 │
 │   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999          │
 │   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed           │
-│   skipped   acme@0: the same lane runs on this machine. Press m on this      │
-│             box's lane to stop it and use this one.                          │
+│   skipped   acme@0: the same lane runs on this machine. m stops it and uses  │
+│             this one.                                                        │
 │             ext.example.com (acme@4:ext-build): not under .localhost         │
 │   syncs     acme@4:ext-build  up to date, following changes                  │
 │   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same     │
@@ -30,8 +30,8 @@
 3: 0 bold, 4-13 dim, 79 bold
 4: 0 bold, 4-13 dim, 79 bold
 5: 0 bold, 4-13 dim, 79 bold
-6: 0 bold, 4-13 dim, 14-72 yellow, 79 bold
-7: 0 bold, 4-13 dim, 14-52 yellow, 79 bold
+6: 0 bold, 4-13 dim, 14-76 yellow, 79 bold
+7: 0 bold, 4-13 dim, 14-22 yellow, 79 bold
 8: 0 bold, 4-13 dim, 14-69 yellow, 79 bold
 9: 0 bold, 4-13 dim, 14-60 green, 79 bold
 10: 0 bold, 4-73 yellow, 79 bold

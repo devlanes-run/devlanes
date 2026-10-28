@@ -218,8 +218,8 @@ pub(super) fn grey_note(grey: &Grey) -> Option<String> {
 }
 
 /// A skipped lane's row in the boxes view after `acme@0: `: what serves its
-/// hostnames and how to use this box's lane instead. `None` from daemons
-/// without `remote.use`.
+/// hostnames and what `m` on the row does. `None` from daemons without
+/// `remote.use`.
 fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
     let cause = skipped.cause.as_deref()?;
     let winner = skipped.served_by();
@@ -232,15 +232,15 @@ fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
     };
     match (cause, winner) {
         ("local_running", _) => Some(format!(
-            "{local} runs on this machine. Press m on this box's lane to stop it and use this one."
+            "{local} runs on this machine. m stops it and uses this one."
         )),
         (_, Some(winner)) if skipped.can_use => Some(format!(
-            "{}'s {} is in use. Press m on this box's lane to use it.",
+            "{}'s {} is in use. m uses this one.",
             clean(winner),
             clean(&serving)
         )),
         (_, None) if skipped.can_use => Some(format!(
-            "{local} on this machine is in use. Press m on this box's lane to use it."
+            "{local} on this machine is in use. m uses this one."
         )),
         _ => None,
     }
@@ -803,12 +803,17 @@ fn render_hosts(app: &App, frame: &mut Frame, area: Rect) {
             lines.push(Line::from(""));
         }
         let start = lines.len();
-        let mut block = host_lines(app, host, width);
+        let (mut block, skipped_rows) = host_lines(app, host, width);
+        // The box's first line, or the first line of its selected skipped lane.
+        let row = match app.boxes.lane {
+            None => Some(0),
+            Some(lane) => skipped_rows.get(lane).copied(),
+        };
         if focused
             && index == selected
-            && let Some(first) = block.first_mut()
+            && let Some(line) = row.and_then(|row| block.get_mut(row))
         {
-            *first = highlight(theme, std::mem::take(first), width);
+            *line = highlight(theme, std::mem::take(line), width);
         }
         lines.extend(block);
         blocks.push((start, lines.len(), index));
@@ -1224,8 +1229,9 @@ fn when(app: &App, ms: u64) -> String {
         .to_string()
 }
 
-/// One box: its name and link state, then the facts that apply.
-fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
+/// One box: its name and link state, then the facts that apply. Also the
+/// line each skipped lane starts on, which the selection can be on.
+fn host_lines(app: &App, host: &BoxHost, width: usize) -> (Vec<Line<'static>>, Vec<usize>) {
     let theme = &app.theme;
     let plain = Style::new();
     let quiet = theme.quiet();
@@ -1375,7 +1381,9 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
         let chosen: Vec<String> = host.chosen_lanes.iter().map(|lane| clean(lane)).collect();
         lines.extend(fact("chosen", &chosen.join(", "), plain));
     }
+    let mut skipped_rows = Vec::new();
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
+        skipped_rows.push(lines.len());
         let label = if index == 0 { "skipped" } else { "" };
         let lane = clean(&skipped.lane);
         let text = match skipped_words(skipped) {
@@ -1433,5 +1441,5 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
             theme.tone(Tone::Attention),
         ));
     }
-    lines
+    (lines, skipped_rows)
 }

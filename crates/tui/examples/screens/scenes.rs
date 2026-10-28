@@ -687,7 +687,8 @@ fn scenes() -> Vec<Scene> {
                 f.clients = data::clients();
                 f.connect_boxes();
                 f.shifted('B');
-                for _ in 0..3 {
+                // hetzner, its skipped lane, devbox and gpu come first.
+                for _ in 0..4 {
                     f.key(KeyCode::Char('j'));
                 }
             },
@@ -1099,7 +1100,8 @@ fn scenes() -> Vec<Scene> {
                 f.clients = data::clients();
                 f.connect_boxes();
                 f.shifted('B');
-                for _ in 0..3 {
+                // hetzner, its skipped lane, devbox and gpu come first.
+                for _ in 0..4 {
                     f.key(KeyCode::Char('j'));
                 }
                 f.key(KeyCode::Char('x'));
