@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 
 use crate::{engine::Inner, integrations::InfraSpec, lifecycle::StartCx};
 
-/// How often the containers are looked at while infra comes up. Each look runs
-/// `docker compose ps`, so it is no faster than a person can read the line.
+/// How often the containers are looked at while infra comes up, and how long the
+/// work runs before the first look. Each look runs `docker compose ps`, so it is no
+/// faster than a person can read the line.
 const INFRA_POLL: Duration = Duration::from_secs(1);
 
 impl Inner {
@@ -49,6 +50,10 @@ impl Inner {
     /// Runs `work`, meanwhile emitting the infra containers of `spec` each time
     /// what the provider reports changes. `last` is what was emitted before, so
     /// several calls in one phase stay one sequence of changes.
+    ///
+    /// The first look waits [`INFRA_POLL`]: work that ends sooner, such as an `up`
+    /// with every container already current or a `containers ready` without
+    /// checks, runs no `ps` at all.
     pub(crate) async fn with_container_progress<T>(
         &self,
         cx: &StartCx,
@@ -57,7 +62,8 @@ impl Inner {
         work: impl Future<Output = T>,
     ) -> T {
         tokio::pin!(work);
-        let mut tick = tokio::time::interval(INFRA_POLL);
+        let mut tick =
+            tokio::time::interval_at(tokio::time::Instant::now() + INFRA_POLL, INFRA_POLL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             // The work decides when the phase ends; a look in flight is dropped.

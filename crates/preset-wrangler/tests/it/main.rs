@@ -7,7 +7,7 @@ use devlanes_preset_next as next;
 use devlanes_preset_tauri as tauri;
 use devlanes_preset_vite as vite;
 use devlanes_preset_wrangler::{
-    self as wrangler, INSPECTOR_PORT, REGISTRY_ENV, WranglerError, WranglerPreset,
+    self as wrangler, INSPECTOR_PORT, REGISTRY_ENVS, WranglerError, WranglerPreset,
 };
 use devlanes_run_script_npm::{PackageManager, ScriptRequest, plan};
 use std::collections::{BTreeMap, BTreeSet};
@@ -125,13 +125,16 @@ async fn adapter_renders_flags_and_env() {
     let draft = fake.apply().await.expect("apply");
     insta::assert_snapshot!(draft.args.join(" "), @"--port 20010 --inspector-port 20011 --var DEBUG:true --var PUBLIC_BASE_URL:https://api.acme-1.localhost --var RETRIES:3 --env-file .dev.vars");
     let registry = Path::new(DATA).join("wrangler-registry");
-    assert_eq!(
-        draft.env.get(REGISTRY_ENV).map(String::as_str),
-        Some(registry.display().to_string().as_str())
-    );
+    for name in REGISTRY_ENVS {
+        assert_eq!(
+            draft.env.get(name).map(String::as_str),
+            Some(registry.display().to_string().as_str()),
+            "{name}"
+        );
+    }
     #[cfg(unix)]
     assert_eq!(
-        draft.env.get(REGISTRY_ENV).map(String::as_str),
+        draft.env.get("WRANGLER_REGISTRY_PATH").map(String::as_str),
         Some("/data/acme/7/wrangler-registry")
     );
 }
@@ -175,9 +178,14 @@ async fn adapter_scope_and_options() {
 
     let mut opt_out = Fake::new(shell());
     opt_out.options = Some(serde_json::json!({ "isolate_registry": false }));
-    opt_out.preset_env = BTreeMap::from([(REGISTRY_ENV.to_owned(), "/set/by/platform".to_owned())]);
+    opt_out.preset_env = REGISTRY_ENVS
+        .iter()
+        .map(|name| ((*name).to_owned(), "/set/by/platform".to_owned()))
+        .collect();
     let draft = opt_out.apply().await.expect("apply");
-    assert!(!draft.env.contains_key(REGISTRY_ENV));
+    for name in REGISTRY_ENVS {
+        assert!(!draft.env.contains_key(name), "{name}");
+    }
 
     // The script runner adds any separator its package manager needs.
     let script = Fake::new(DraftCommand::Script {

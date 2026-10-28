@@ -25,7 +25,24 @@ pub const INSPECTOR_PORT: &str = "inspector";
 /// `packages/workers-utils/src/environment-variables/misc-variables.ts` of
 /// cloudflare/workers-sdk. Without it, same-named workers in two lanes resolve
 /// each other's service bindings through the shared global registry.
-pub const REGISTRY_ENV: &str = "WRANGLER_REGISTRY_PATH";
+pub const WRANGLER_REGISTRY_ENV: &str = "WRANGLER_REGISTRY_PATH";
+
+/// Miniflare 5's registry override (`resolveDevRegistryPath` in
+/// `packages/miniflare/src/shared/dev-registry.ts`). It takes precedence over the folder
+/// `wrangler dev` passes, so a value exported in the shell would bypass the lane.
+pub const CLOUDFLARE_REGISTRY_ENV: &str = "CLOUDFLARE_DEV_REGISTRY_PATH";
+
+/// Miniflare 4's registry override, read by Cloudflare Vite plugin releases up to 1.49.0.
+pub const MINIFLARE_REGISTRY_ENV: &str = "MINIFLARE_REGISTRY_PATH";
+
+/// Registry variables the preset sets to the lane folder, or removes with
+/// `isolate_registry: false`. Matches `devlanes-platform-node`, which sets the same
+/// variables on every unit.
+pub const REGISTRY_ENVS: [&str; 3] = [
+    WRANGLER_REGISTRY_ENV,
+    CLOUDFLARE_REGISTRY_ENV,
+    MINIFLARE_REGISTRY_ENV,
+];
 
 /// Registry directory in the lane data folder, shared by the lane's workers. Not in the
 /// worktree: lanes that run from one folder would share it there.
@@ -62,10 +79,11 @@ pub struct WranglerOptions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [["--env-file",".dev.vars"]]))]
     pub args: Option<Vec<String>>,
-    /// Points `WRANGLER_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder
+    /// Points `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and
+    /// `MINIFLARE_REGISTRY_PATH` at `wrangler-registry` in the lane's data folder
     /// (`${{ lane.data_path }}`), so service bindings resolve to workers of the same lane
     /// instead of same-named workers in another lane, also when two lanes run from one
-    /// folder. Set `false` to drop the variable for this service, which then uses
+    /// folder. Set `false` to drop these variables for this service, which then uses
     /// Wrangler's shared default registry. Default: `true`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(extend("examples" = [true,false]))]
@@ -212,8 +230,8 @@ fn reserved_flags(tokens: &[&str]) -> Vec<String> {
     flags
 }
 
-/// Renders `--port`, `--inspector-port`, `--var` and user args, plus the
-/// per-lane registry variable.
+/// Renders `--port`, `--inspector-port`, `--var` and user args, plus every
+/// [`REGISTRY_ENVS`] variable pointing at the lane's registry.
 pub fn contribution(input: &WranglerInput<'_>) -> Result<Contribution, WranglerError> {
     if let Some(body) = input.script_body {
         check_script(body)?;
@@ -240,11 +258,14 @@ pub fn contribution(input: &WranglerInput<'_>) -> Result<Contribution, WranglerE
     args.extend(input.options.args.iter().flatten().cloned());
     let mut env = BTreeMap::new();
     if input.options.isolate_registry != Some(false) {
-        let registry = input.lane_data.join(REGISTRY_DIR);
-        env.insert(
-            REGISTRY_ENV.to_owned(),
-            registry.to_string_lossy().into_owned(),
-        );
+        let registry = input
+            .lane_data
+            .join(REGISTRY_DIR)
+            .to_string_lossy()
+            .into_owned();
+        for name in REGISTRY_ENVS {
+            env.insert(name.to_owned(), registry.clone());
+        }
     }
     Ok(Contribution { args, env })
 }
@@ -308,8 +329,9 @@ impl Contributor for WranglerPreset {
         }
     }
 
-    /// Appends ports, vars and args. With `run_script`, the script body from
-    /// the context is checked for hardcoded port flags first.
+    /// Appends ports, vars and args and sets or, with `isolate_registry: false`, removes
+    /// the registry variables. With `run_script`, the script body from the context is
+    /// checked for hardcoded port flags first.
     async fn apply(&self, draft: &mut LaunchDraft, cx: &ContribCx<'_>) -> Result<(), Error> {
         if cx.preset != Some(NAME) {
             return Ok(());
@@ -331,7 +353,9 @@ impl Contributor for WranglerPreset {
         if options.isolate_registry == Some(false) {
             // The cloudflare platform contributor (priority 60) may already
             // have set the lane registry; opting out must undo that too.
-            draft.env.remove(REGISTRY_ENV);
+            for name in REGISTRY_ENVS {
+                draft.env.remove(name);
+            }
         }
         draft.env.extend(contribution.env);
         Ok(())
@@ -370,15 +394,33 @@ mod tests {
         })
         .expect("valid input");
         insta::assert_snapshot!(result.args.join(" "), @"--port 20010 --inspector-port 20011 --var A:1 --var PUBLIC_BASE_URL:https://api.acme-1.localhost --env-file .dev.vars.stripe");
-        let registry = Path::new("/data/acme/7").join(REGISTRY_DIR);
-        assert_eq!(
-            result.env.get(REGISTRY_ENV).map(String::as_str),
-            Some(registry.display().to_string().as_str())
-        );
+        let registry = Path::new("/data/acme/7")
+            .join(REGISTRY_DIR)
+            .display()
+            .to_string();
+        let expected: BTreeMap<String, String> = REGISTRY_ENVS
+            .iter()
+            .map(|name| ((*name).to_owned(), registry.clone()))
+            .collect();
+        assert_eq!(result.env, expected);
         #[cfg(unix)]
         assert_eq!(
-            result.env.get(REGISTRY_ENV).map(String::as_str),
+            result.env.get(WRANGLER_REGISTRY_ENV).map(String::as_str),
             Some("/data/acme/7/wrangler-registry")
+        );
+    }
+
+    /// The variable names match the ones workers-sdk reads; a typo would silently
+    /// leave a registry shared between lanes.
+    #[test]
+    fn registry_variable_names() {
+        assert_eq!(
+            REGISTRY_ENVS,
+            [
+                "WRANGLER_REGISTRY_PATH",
+                "CLOUDFLARE_DEV_REGISTRY_PATH",
+                "MINIFLARE_REGISTRY_PATH"
+            ]
         );
     }
 

@@ -36,6 +36,9 @@ use crate::{
 /// How long a lane's worktree folder must stay gone before an idle lane is cleaned.
 pub(crate) const MISSING_GRACE: Duration = Duration::from_secs(5);
 
+/// How often a deferred refresh tries for a lane's `op` again.
+const DEFERRED_REFRESH_POLL: Duration = Duration::from_millis(50);
+
 /// A lane with a record whose folder is gone and that runs nothing.
 fn sweepable(st: &LaneSt) -> bool {
     !st.present && st.record.is_some() && !st.any_running() && st.busy.is_none()
@@ -860,7 +863,11 @@ impl Inner {
             let st = lane.st();
             // A lane that runs something keeps its index, domain and ports.
             match st.moves_to {
-                Some(target) if st.record.is_some() && !st.any_running() => target,
+                // The calling start counts in `starting`; another one may have
+                // planned on the current index.
+                Some(target) if st.record.is_some() && !st.any_running() && st.starting <= 1 => {
+                    target
+                }
                 _ => return Ok(()),
             }
         };
@@ -870,7 +877,7 @@ impl Inner {
         {
             // A start, stop or clean in flight holds the holder's `op`; holding it
             // here keeps one from beginning while the holder is renumbered.
-            let Ok(_holder_op) = holder.op.try_lock() else {
+            let Ok(_holder_op) = holder.op.try_write() else {
                 return Ok(());
             };
             if holder.st().any_running() || holder.st().busy.is_some() {
@@ -937,11 +944,11 @@ impl Inner {
         project: &Arc<ProjectRt>,
         lane: &'a Arc<LaneRt>,
         held: bool,
-    ) -> (LaneAccess, Option<tokio::sync::MutexGuard<'a, ()>>) {
+    ) -> (LaneAccess, Option<tokio::sync::RwLockWriteGuard<'a, ()>>) {
         let guard = if held {
             None
         } else {
-            match lane.op.try_lock() {
+            match lane.op.try_write() {
                 Ok(guard) => Some(guard),
                 Err(_) => {
                     self.defer_refresh(project, lane);
@@ -950,7 +957,11 @@ impl Inner {
             }
         };
         let st = lane.st();
-        let access = if st.any_running() || st.spawning > 0 {
+        // Another start holding the lane planned on the current block, even
+        // while its units still wait for a start slot. A `held` caller that is
+        // a start counts itself in `starting`.
+        let others = st.starting.saturating_sub(usize::from(held));
+        let access = if st.any_running() || st.spawning > 0 || others > 0 {
             LaneAccess::Running
         } else {
             LaneAccess::Free
@@ -967,12 +978,20 @@ impl Inner {
         }
         let (engine, project, lane) = (self.clone(), project.clone(), lane.clone());
         tokio::spawn(async move {
-            let _op = tokio::select! {
-                () = engine.shutdown.cancelled() => return,
-                // The project was dropped (`daemon reset-state`) or the lane removed.
-                () = project.watch.cancelled() => return,
-                () = lane.watch.cancelled() => return,
-                op = lane.op.lock() => op,
+            let _op = loop {
+                // Tried, never queued for: a writer in `op`'s queue would hold up
+                // every start that adds units until the start holding it ends,
+                // and that one may wait minutes for a start slot.
+                if let Ok(op) = lane.op.try_write() {
+                    break op;
+                }
+                tokio::select! {
+                    () = engine.shutdown.cancelled() => return,
+                    // The project was dropped (`daemon reset-state`) or the lane removed.
+                    () = project.watch.cancelled() => return,
+                    () = lane.watch.cancelled() => return,
+                    () = tokio::time::sleep(DEFERRED_REFRESH_POLL) => {}
+                }
             };
             // A start on this lane may have refreshed it meanwhile.
             if !lane.st().refresh_pending {
@@ -1316,7 +1335,7 @@ impl Inner {
             },
             "config read"
         );
-        let in_flight = lane.op.try_lock().is_err();
+        let in_flight = lane.op.try_write().is_err();
         let renamed = config.loaded().map(|config| config.project.clone());
         {
             let mut st = lane.st();
@@ -1330,7 +1349,7 @@ impl Inner {
                 _ => None,
             };
             let differs = before != after || before.is_none();
-            if differs && (st.any_running() || in_flight || st.start.is_some()) {
+            if differs && (st.any_running() || in_flight || !st.starts.is_empty()) {
                 st.config_changed = true;
             }
             st.config = config;
@@ -1976,11 +1995,14 @@ impl Inner {
 pub(crate) fn new_lane(worktree: WorktreeId, st: LaneSt) -> Arc<LaneRt> {
     Arc::new(LaneRt {
         worktree,
-        op: tokio::sync::Mutex::new(()),
+        op: tokio::sync::RwLock::new(()),
         st: std::sync::Mutex::new(st),
         publish: std::sync::Mutex::new(()),
         watch: tokio_util::sync::CancellationToken::new(),
         power: tokio::sync::Mutex::new(()),
+        desired: tokio::sync::Mutex::new(()),
+        decide: tokio::sync::Mutex::new(()),
+        setup: tokio::sync::Mutex::new(()),
     })
 }
 
@@ -2058,7 +2080,9 @@ fn infra_routes(
         infra,
         env,
         dotenv,
-    );
+    )
+    // Prepared once: every host template below is evaluated against it.
+    .prepare();
     let as_port = |value: Option<&Value>| {
         value
             .and_then(Value::as_u64)

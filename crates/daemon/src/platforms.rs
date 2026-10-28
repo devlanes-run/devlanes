@@ -9,6 +9,10 @@ use devlanes_config::ProjectConfig;
 use devlanes_core::contrib::Contributor;
 use serde_json::{Value, json};
 
+/// `platform: none` turns detection off for a service. Detection only runs without an
+/// explicit value, and no contributor provides this name, so no platform env applies.
+pub(crate) const NONE: &str = "none";
+
 /// Platform names the registered contributors provide, sorted and unique.
 pub(crate) fn known(contributors: &[Arc<dyn Contributor>]) -> Vec<String> {
     let mut names: Vec<String> = contributors
@@ -21,9 +25,10 @@ pub(crate) fn known(contributors: &[Arc<dyn Contributor>]) -> Vec<String> {
     names
 }
 
-/// One `unknown_platform` warning per service whose explicit `platform:` is not in
-/// `known`: `{code, path, message, data: {service, platform, known}}`. Nothing is
-/// reported without any platform contributor, since then every name would be unknown.
+/// One `unknown_platform` warning per service whose explicit `platform:` is neither in
+/// `known` nor [`NONE`]: `{code, path, message, data: {service, platform, known}}`.
+/// Nothing is reported without any platform contributor, since then every name would
+/// be unknown.
 pub(crate) fn unknown(config: &ProjectConfig, known: &[String]) -> Vec<Value> {
     if known.is_empty() {
         return Vec::new();
@@ -33,7 +38,7 @@ pub(crate) fn unknown(config: &ProjectConfig, known: &[String]) -> Vec<Value> {
         .iter()
         .filter_map(|(name, service)| {
             let platform = service.platform.as_ref()?;
-            if known.iter().any(|known| known == platform) {
+            if platform == NONE || known.iter().any(|known| known == platform) {
                 return None;
             }
             Some(json!({
@@ -73,5 +78,14 @@ mod tests {
             unknown(&config, &[]).is_empty(),
             "no contributors, no warnings"
         );
+    }
+
+    /// `platform: none` opts out of detection on purpose, so it gets no warning.
+    #[test]
+    fn platform_none_is_not_reported() {
+        let config =
+            config("project: acme\nservices:\n  web:\n    run: serve\n    platform: none\n");
+        let known = vec!["node".to_owned()];
+        assert!(unknown(&config, &known).is_empty());
     }
 }

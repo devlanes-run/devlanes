@@ -1,8 +1,12 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    borrow::Cow,
+    cell::OnceCell,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use devlanes_config::{
-    ExpressionContext, Extensions, HostConfig, HostHeader, ProjectConfig, Scalar, ServiceConfig,
-    Templated,
+    EvaluationContext, ExpressionContext, Extensions, HostConfig, HostHeader, PreparedContext,
+    ProjectConfig, Scalar, ServiceConfig, Templated,
 };
 use devlanes_core::{color::unit_color, ports::PortName};
 use indexmap::IndexMap;
@@ -46,6 +50,41 @@ impl Namespaces {
     /// Context without `self`, for lane-level values such as `global_env`.
     pub(crate) fn lane_context(&self, env: &Value) -> ExpressionContext {
         self.context(env, json!({}), json!({}))
+    }
+}
+
+/// A unit's context, built and prepared when its first expression needs it. Layout
+/// evaluates hosts and flags that are usually literal, and preparing converts every
+/// namespace, the client env included.
+struct LazyContext<'n> {
+    ns: &'n Namespaces,
+    env: &'n Value,
+    this: Value,
+    replica: Value,
+    prepared: OnceCell<PreparedContext>,
+}
+
+impl<'n> LazyContext<'n> {
+    /// The context of the unit whose `self` is `this`, not prepared yet.
+    fn new(ns: &'n Namespaces, env: &'n Value, this: Value, replica: Value) -> Self {
+        Self {
+            ns,
+            env,
+            this,
+            replica,
+            prepared: OnceCell::new(),
+        }
+    }
+}
+
+impl EvaluationContext for LazyContext<'_> {
+    /// The prepared context, built on the first call.
+    fn prepared(&self) -> Cow<'_, PreparedContext> {
+        Cow::Borrowed(self.prepared.get_or_init(|| {
+            self.ns
+                .context(self.env, self.this.clone(), self.replica.clone())
+                .prepare()
+        }))
     }
 }
 
@@ -261,7 +300,7 @@ pub(crate) fn build<E: Extensions>(
     for (name, entry) in &pending {
         let hosts = entry.service.hosts.as_deref().unwrap_or_default();
         for layout in services.values().filter(|s| s.name == *name) {
-            let context = ns.context(env, layout.self_value(), replica_value(layout));
+            let context = LazyContext::new(&ns, env, layout.self_value(), replica_value(layout));
             for host in hosts {
                 let route = route_spec(name, layout, host, &context)?;
                 if routes.iter().any(|r| r.host == route.host) {
@@ -404,7 +443,7 @@ fn service_layout<E: Extensions>(
     let mut this = partial;
     this["port"] = port.into();
     this["url"] = url.clone().into();
-    let context = ns.context(env, this, replica_ns);
+    let context = LazyContext::new(ns, env, this, replica_ns);
     let mut hosts = Vec::new();
     for host in entry.service.hosts.iter().flatten() {
         let template = match host {
@@ -471,7 +510,7 @@ fn route_spec(
     name: &str,
     layout: &ServiceLayout,
     host: &HostConfig,
-    context: &ExpressionContext,
+    context: &LazyContext<'_>,
 ) -> Result<RouteSpec, ResolveError> {
     let path = format!("services.{name}.hosts");
     let evaluate = |t: &Templated<String>| {

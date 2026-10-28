@@ -319,7 +319,7 @@ fn idle_units(st: &LaneSt, reference: &str) -> Result<Vec<Named>, RpcError> {
             json!({"lane": reference, "units": units}),
         ));
     }
-    if st.start.is_some() || st.busy.is_some() || st.spawning > 0 || st.closing || st.sweeping {
+    if !st.starts.is_empty() || st.busy.is_some() || st.spawning > 0 || st.closing || st.sweeping {
         return Err(refusal("lane_busy", lane));
     }
     let mut units = Vec::new();
@@ -587,7 +587,7 @@ impl Inner {
         let board = &self.opts.idle;
         // Holding `op` keeps starts, stops and cleans out while processes change
         // level; one that holds it now means the lane is busy.
-        let Ok(_op) = lane.op.try_lock() else {
+        let Ok(_op) = lane.op.try_write() else {
             return Err(refusal("lane_busy", json!({"lane": reference})));
         };
         let _power = lane.power.lock().await;

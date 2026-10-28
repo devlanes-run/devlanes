@@ -10,8 +10,12 @@ use tokio::sync::{OnceCell, OwnedMutexGuard};
 
 use crate::{
     Error, NameConflict,
+    cache::{ConfigCache, ConfigKey, Slot},
     cli::{ComposeCli, ComposeProject, ExistingContainer, UnhealthyCause, UpOptions},
-    model::{ComposeModel, ContainerStatus, Health, service_containers, service_health},
+    model::{
+        ComposeModel, ContainerStatus, Health, service_containers, service_current, service_health,
+        stale_services,
+    },
     overrides::{render_override, write_override},
     ports::{Endpoints, LanePorts, PortBlock, PortRequest, endpoints_from_ps, port_requests},
     version::ComposeVersion,
@@ -119,13 +123,14 @@ impl ProjectLocks {
     }
 }
 
-/// The Compose adapter. Clones share the version cache and the per-project locks, so
-/// create one per daemon.
+/// The Compose adapter. Clones share the version cache, the `config` cache and the
+/// per-project locks, so create one per daemon.
 #[derive(Debug, Clone, Default)]
 pub struct Compose {
     cli: ComposeCli,
     locks: Arc<ProjectLocks>,
     version: Arc<OnceCell<ComposeVersion>>,
+    cache: Arc<ConfigCache>,
 }
 
 impl Compose {
@@ -135,6 +140,7 @@ impl Compose {
             cli,
             locks: Arc::default(),
             version: Arc::default(),
+            cache: Arc::default(),
         }
     }
 
@@ -157,30 +163,34 @@ impl Compose {
     }
 
     /// Resolves the shared project and its model. The returned project always has a name:
-    /// `infra.project_name`, else the name Compose derived.
+    /// `infra.project_name`, else the name Compose derived. The model comes from the
+    /// `config` cache while the files and variables it was read from are unchanged.
     pub async fn shared_project(
         &self,
         infra: &SharedInfra,
     ) -> Result<(ComposeProject, ComposeModel), Error> {
-        if let Some(name) = &infra.project_name {
-            validate_project_name(name)?;
-        }
-        let mut project = ComposeProject {
-            name: infra.project_name.clone(),
-            working_dir: infra.primary_dir.clone(),
-            files: infra.files.clone(),
-            env_file: existing_env_file(&infra.primary_dir, infra.env_file.as_ref()).await?,
-            profiles: infra.profiles.clone(),
-            env: infra.env.clone(),
-        };
-        let model = self.cli.config(&project, &[]).await?;
+        let mut project = shared_compose_project(infra).await?;
+        let model = self.config(&project).await?;
         project.name = Some(model.name.clone());
         Ok((project, model))
     }
 
+    /// The shared project's name without running Compose when it is known:
+    /// `infra.project_name`, else the name from the last `config` of these files,
+    /// even if they changed since. Only a project never resolved runs `config`.
+    pub async fn shared_name(&self, infra: &SharedInfra) -> Result<String, Error> {
+        if let Some(name) = &infra.project_name {
+            validate_project_name(name)?;
+            return Ok(name.clone());
+        }
+        let project = shared_compose_project(infra).await?;
+        Ok(self.polled_model(&project).await?.name)
+    }
+
     /// Starts the shared services (all resolved services except `exclude` and `per_lane`)
     /// with `up --wait`, after checking that no foreign container holds one of their
-    /// `container_name`s.
+    /// `container_name`s. Services that already run healthy with the current config
+    /// are left out of `up`, and when that is all of them `up` does not run.
     pub async fn shared_up(
         &self,
         infra: &SharedInfra,
@@ -190,19 +200,38 @@ impl Compose {
         let name = model.name.clone();
         let _guard = self.locks.lock(&name).await;
         let services = model.shared_services(&infra.exclude, &infra.per_lane)?;
+        let before = self.cli.ps(&name).await?;
         let wanted = fixed_names(&model, &services);
-        let names: Vec<String> = wanted.iter().map(|(_, name)| name.clone()).collect();
-        let existing = self.cli.inspect_containers(&names).await?;
+        // A name held by a container of this very project is adopted without asking
+        // the engine; only the other names can belong to someone else.
+        let mut existing: Vec<ExistingContainer> = before
+            .iter()
+            .filter(|status| wanted.iter().any(|(_, fixed)| *fixed == status.name))
+            .map(|status| ExistingContainer {
+                id: status.id.clone(),
+                name: status.name.clone(),
+                labels: BTreeMap::from([(COMPOSE_PROJECT_LABEL.to_owned(), name.clone())]),
+            })
+            .collect();
+        let unknown: Vec<String> = wanted
+            .iter()
+            .map(|(_, fixed)| fixed.clone())
+            .filter(|fixed| !existing.iter().any(|found| found.name == *fixed))
+            .collect();
+        existing.extend(self.cli.inspect_containers(&unknown).await?);
         let (adopted, conflicts) = classify_conflicts(&name, &wanted, &existing);
         if !conflicts.is_empty() {
             return Err(Error::ContainerNameConflict(conflicts));
         }
-        if !services.is_empty() {
-            self.cli
-                .up(&project, &[], &services, false, options)
-                .await?;
-        }
-        let statuses = self.cli.ps(&name).await?;
+        let stale = self
+            .stale_services(&project, &[], &model, &services, &before)
+            .await;
+        let statuses = if stale.is_empty() {
+            before
+        } else {
+            self.cli.up(&project, &[], &stale, false, options).await?;
+            self.cli.ps(&name).await?
+        };
         let mut endpoints = endpoints_from_ps(&model, &statuses);
         endpoints.retain(|service, _| services.contains(service));
         Ok(SharedReport {
@@ -232,6 +261,20 @@ impl Compose {
         })
     }
 
+    /// Health of the shared services for start progress: one `ps`, with the model
+    /// from the last `config` of these files even if they changed since, so a poll
+    /// runs `config` only for a project never resolved.
+    pub async fn shared_health(
+        &self,
+        infra: &SharedInfra,
+    ) -> Result<BTreeMap<String, Health>, Error> {
+        let project = shared_compose_project(infra).await?;
+        let model = self.polled_model(&project).await?;
+        let services = model.shared_services(&infra.exclude, &infra.per_lane)?;
+        let statuses = self.cli.ps(&model.name).await?;
+        Ok(service_health(&services, &statuses))
+    }
+
     /// Stops the shared project's containers and keeps their data. The caller decides when
     /// no lane needs them any more.
     pub async fn shared_stop(&self, project: &str, timeout: Duration) -> Result<(), Error> {
@@ -248,6 +291,9 @@ impl Compose {
 
     /// Writes the lane override and starts the lane's services with `up --wait --no-deps`
     /// (shared dependencies are reached through their published ports, not started again).
+    /// When no container is paused or unhealthy, services that already run healthy with
+    /// the current config and override are left out of `up`, and when that is all of
+    /// them `up` does not run.
     pub async fn lane_up(
         &self,
         lane: &LaneInfra,
@@ -266,6 +312,8 @@ impl Compose {
         let override_path = write_override(&lane.state_dir, &rendered.yaml).await?;
         // Services kept running through an unpause, which Docker still calls unhealthy.
         let mut resumed_up = BTreeSet::new();
+        // The `ps` from before `up`, when `up` did not run and it is still current.
+        let mut unchanged = None;
         if !services.is_empty() {
             let extra = std::slice::from_ref(&override_path);
             let before = self.cli.ps(&name).await?;
@@ -276,40 +324,24 @@ impl Compose {
                 || before
                     .iter()
                     .any(|status| status.state == "running" && status.health == "unhealthy");
-            let resumed = if suspect {
-                self.resumed_services(&name, &services, options.wait_timeout)
-                    .await?
+            if !suspect {
+                let stale = self
+                    .stale_services(&project, extra, &model, &services, &before)
+                    .await;
+                if stale.is_empty() {
+                    unchanged = Some(before);
+                } else {
+                    self.cli.up(&project, extra, &stale, true, options).await?;
+                }
             } else {
-                BTreeMap::new()
-            };
-            let waited: Vec<String> = services
-                .iter()
-                .filter(|service| !resumed.contains_key(*service))
-                .cloned()
-                .collect();
-            self.cli.up(&project, extra, &waited, true, options).await?;
-            if !resumed.is_empty() {
-                // `up --wait` would fail on the `unhealthy` that Docker reports until
-                // the next check, so these come up without it.
-                let names: Vec<String> = resumed.keys().cloned().collect();
-                self.cli
-                    .up_no_wait(&project, extra, &names, true, options)
+                self.resume_and_up(&project, extra, &services, options, &mut resumed_up)
                     .await?;
-                // `up` replaces a container whose config changed, and a new one has to
-                // pass its checks like any other.
-                let after = self.cli.ps(&name).await?;
-                let (kept, replaced): (Vec<_>, Vec<_>) = resumed
-                    .into_iter()
-                    .partition(|(service, ids)| container_ids(&after, service) == *ids);
-                let replaced: Vec<String> =
-                    replaced.into_iter().map(|(service, _)| service).collect();
-                self.cli
-                    .up(&project, extra, &replaced, true, options)
-                    .await?;
-                resumed_up.extend(kept.into_iter().map(|(service, _)| service));
             }
         }
-        let statuses = self.cli.ps(&name).await?;
+        let statuses = match unchanged {
+            Some(statuses) => statuses,
+            None => self.cli.ps(&name).await?,
+        };
         let mut health = service_health(&services, &statuses);
         for service in &resumed_up {
             if let Some(entry) = health.get_mut(service)
@@ -329,6 +361,124 @@ impl Compose {
         })
     }
 
+    /// `up` for a lane right after an unpause or with an unhealthy container: services
+    /// that count as up after the unpause (see [`Self::resumed_services`]) come up
+    /// without `--wait` and are added to `resumed_up`; the rest get `up --wait`.
+    async fn resume_and_up(
+        &self,
+        project: &ComposeProject,
+        extra: &[PathBuf],
+        services: &[String],
+        options: UpOptions,
+        resumed_up: &mut BTreeSet<String>,
+    ) -> Result<(), Error> {
+        let name = project.name.clone().unwrap_or_default();
+        let resumed = self
+            .resumed_services(&name, services, options.wait_timeout)
+            .await?;
+        let waited: Vec<String> = services
+            .iter()
+            .filter(|service| !resumed.contains_key(*service))
+            .cloned()
+            .collect();
+        self.cli.up(project, extra, &waited, true, options).await?;
+        if resumed.is_empty() {
+            return Ok(());
+        }
+        // `up --wait` would fail on the `unhealthy` that Docker reports until
+        // the next check, so these come up without it.
+        let names: Vec<String> = resumed.keys().cloned().collect();
+        self.cli
+            .up_no_wait(project, extra, &names, true, options)
+            .await?;
+        // `up` replaces a container whose config changed, and a new one has to
+        // pass its checks like any other.
+        let after = self.cli.ps(&name).await?;
+        let (kept, replaced): (Vec<_>, Vec<_>) = resumed
+            .into_iter()
+            .partition(|(service, ids)| container_ids(&after, service) == *ids);
+        let replaced: Vec<String> = replaced.into_iter().map(|(service, _)| service).collect();
+        self.cli
+            .up(project, extra, &replaced, true, options)
+            .await?;
+        resumed_up.extend(kept.into_iter().map(|(service, _)| service));
+        Ok(())
+    }
+
+    /// The `services` of `project` (run with `extra`) that `up` has to act on, from
+    /// `statuses`, a `ps` of the project. When none runs healthy it is all of them and
+    /// `config --hash` is not needed; otherwise the hashes, cached like the model,
+    /// decide. A hash lookup that fails selects every service, as before the check.
+    async fn stale_services(
+        &self,
+        project: &ComposeProject,
+        extra: &[PathBuf],
+        model: &ComposeModel,
+        services: &[String],
+        statuses: &[ContainerStatus],
+    ) -> Vec<String> {
+        let name = project.name.as_deref().unwrap_or_default();
+        let running = services
+            .iter()
+            .filter(|service| service_current(model, service, statuses, None))
+            .count();
+        if running == 0 {
+            tracing::debug!(project = name, up = services.len(), "compose up selection");
+            return services.to_vec();
+        }
+        let hashes = match self.config_hashes(project, extra).await {
+            Ok(hashes) => hashes,
+            Err(error) => {
+                tracing::debug!(project = name, %error, "compose config hashes unavailable");
+                return services.to_vec();
+            }
+        };
+        let stale = stale_services(model, services, statuses, &hashes);
+        tracing::debug!(
+            project = name,
+            up = stale.len(),
+            current = services.len() - stale.len(),
+            skip = stale.is_empty(),
+            "compose up selection"
+        );
+        stale
+    }
+
+    /// `config --format json` of `project` from the cache, or from Compose when the
+    /// files or variables changed since the last read.
+    async fn config(&self, project: &ComposeProject) -> Result<ComposeModel, Error> {
+        let key = ConfigKey::read(project, &[]).await?;
+        self.cache
+            .models
+            .get_or_load(key, "config", || self.cli.config(project, &[]))
+            .await
+    }
+
+    /// `config --hash '*'` of `project` run with `extra`, cached like [`Self::config`].
+    async fn config_hashes(
+        &self,
+        project: &ComposeProject,
+        extra: &[PathBuf],
+    ) -> Result<BTreeMap<String, String>, Error> {
+        let key = ConfigKey::read(project, extra).await?;
+        self.cache
+            .hashes
+            .get_or_load(key, "config --hash", || {
+                self.cli.config_hashes(project, extra)
+            })
+            .await
+    }
+
+    /// The model from the last `config` of `project`'s files, even when they changed
+    /// since; [`Self::config`] only when there is none. For polls and name lookups,
+    /// which run often and can live with a model one edit old.
+    async fn polled_model(&self, project: &ComposeProject) -> Result<ComposeModel, Error> {
+        match self.cache.models.last(&Slot::of(project, &[])) {
+            Some(model) => Ok(model),
+            None => self.config(project).await,
+        }
+    }
+
     /// Reports health and published ports of the lane's services.
     pub async fn lane_status(&self, lane: &LaneInfra) -> Result<LaneReport, Error> {
         let services = lane.services();
@@ -346,6 +496,13 @@ impl Compose {
             override_path: None,
             endpoints,
         })
+    }
+
+    /// Health of the lane's services for start progress: one `ps` by project name,
+    /// no `config`.
+    pub async fn lane_health(&self, lane: &LaneInfra) -> Result<BTreeMap<String, Health>, Error> {
+        let statuses = self.cli.ps(&lane.project_name()?).await?;
+        Ok(service_health(&lane.services(), &statuses))
     }
 
     /// Stops the lane project's containers and keeps their data.
@@ -496,7 +653,8 @@ impl Compose {
     }
 
     /// Resolves the lane project from the lane's worktree without the override, so port
-    /// requests reflect the files the developer wrote.
+    /// requests reflect the files the developer wrote. Cached like
+    /// [`Self::shared_project`].
     async fn lane_model(&self, lane: &LaneInfra) -> Result<(ComposeProject, ComposeModel), Error> {
         let project = ComposeProject {
             name: Some(lane.project_name()?),
@@ -506,10 +664,25 @@ impl Compose {
             profiles: lane.profiles.clone(),
             env: lane.env.clone(),
         };
-        let model = self.cli.config(&project, &[]).await?;
+        let model = self.config(&project).await?;
         model.require_services(&lane.services())?;
         Ok((project, model))
     }
+}
+
+/// The shared project as Compose runs it, before its name is resolved.
+async fn shared_compose_project(infra: &SharedInfra) -> Result<ComposeProject, Error> {
+    if let Some(name) = &infra.project_name {
+        validate_project_name(name)?;
+    }
+    Ok(ComposeProject {
+        name: infra.project_name.clone(),
+        working_dir: infra.primary_dir.clone(),
+        files: infra.files.clone(),
+        env_file: existing_env_file(&infra.primary_dir, infra.env_file.as_ref()).await?,
+        profiles: infra.profiles.clone(),
+        env: infra.env.clone(),
+    })
 }
 
 /// `<project>-lane<N>`, with characters Compose rejects (such as `.`) replaced by `-`.

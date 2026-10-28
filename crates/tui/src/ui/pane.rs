@@ -1196,19 +1196,23 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
         let room = 8;
         for unit in down.iter().take(room) {
             let look = unit_look(theme, unit, app.spin);
-            let mut text = look.word.clone();
-            if !look.detail.is_empty() && !look.detail.starts_with(':') {
-                text.push_str(&format!(", {}", look.detail));
+            let mut spans = vec![
+                Span::raw(" ".repeat(LABEL)),
+                Span::styled(format!("{} ", look.glyph), theme.tone(look.tone)),
+                Span::raw(format!("{:<16} ", clip(&clean(unit.label()), 16))),
+            ];
+            let mut state = look.word.clone();
+            let detail = format!(", {}", look.detail);
+            // The detail shows whole or not at all, as on the list's rows: a
+            // cut `next in…` says less than the bare state word.
+            if !look.detail.is_empty()
+                && !look.detail.starts_with(':')
+                && super::spans_width(&spans) + text::width(&state) + text::width(&detail) <= width
+            {
+                state.push_str(&detail);
             }
-            lines.push(fit(
-                vec![
-                    Span::raw(" ".repeat(LABEL)),
-                    Span::styled(format!("{} ", look.glyph), theme.tone(look.tone)),
-                    Span::raw(format!("{:<16} ", clip(&clean(unit.label()), 16))),
-                    Span::styled(text, theme.tone(look.word_tone)),
-                ],
-                width,
-            ));
+            spans.push(Span::styled(state, theme.tone(look.word_tone)));
+            lines.push(fit(spans, width));
         }
         if down.len() > room {
             lines.push(Line::styled(
@@ -1395,13 +1399,20 @@ fn phase_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>
         }
         let queued = names("queued");
         if !queued.is_empty() {
-            let why = lane
+            // The gate's window, else what the first queued unit waits for, as its row says.
+            let first = lane
                 .units
                 .iter()
-                .filter_map(|u| u.reason.as_ref())
-                .find(|r| r.code == "queued")
+                .find(|u| u.reason.as_ref().is_some_and(|r| r.code == "queued"));
+            let why = first
+                .and_then(|u| u.reason.as_ref())
                 .and_then(|r| r.data.get("window").and_then(serde_json::Value::as_u64))
                 .map(|window| format!(": {window} services start at a time"))
+                .or_else(|| {
+                    first
+                        .and_then(super::queued_detail)
+                        .map(|d| format!(": {d}"))
+                })
                 .unwrap_or_default();
             lines.extend(field(
                 theme,

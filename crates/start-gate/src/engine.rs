@@ -24,6 +24,15 @@ use crate::controller::Controller;
 /// Reading interval of gates whose policy does not set one.
 const DEFAULT_SAMPLE_EVERY: Duration = Duration::from_secs(1);
 
+/// A memory reading up to this many sampling intervals old still decides a
+/// grant. The driver re-reads every interval while busy, so a scheduled
+/// reading gets up to one interval plus the read's own latency old; with a
+/// limit of one interval, a start arriving while the next read was in flight
+/// waited for it. Reservations of the starts in flight already cover several
+/// grants on one reading; this limit bounds what the reading misses, the
+/// footprint growth reported since.
+const MEMORY_GRACE_SAMPLES: u32 = 2;
+
 /// Largest default memory reserve: 2 GiB.
 const DEFAULT_RESERVE_CAP: u64 = 2 << 30;
 
@@ -185,7 +194,8 @@ struct Granted {
 enum MemoryCheck {
     Fits,
     Blocked,
-    /// No reading of this busy period, or an old one: wait for the driver.
+    /// No reading of this busy period, or one older than
+    /// [`MEMORY_GRACE_SAMPLES`] intervals: wait for the driver.
     Stale,
 }
 
@@ -328,14 +338,23 @@ impl Engine {
     /// reserve and the in-flight reservations. Gates without a pressure source and
     /// starts with nothing in flight always fit: the check delays, it never
     /// refuses, so the wait ends at the latest when the starts in flight finish
-    /// or reach `slot_timeout`.
+    /// or reach `slot_timeout`. A reading up to [`MEMORY_GRACE_SAMPLES`]
+    /// sampling intervals old counts; older or missing, the head waits for the
+    /// driver's next read.
     fn memory_check(&self, state: &State, need: u64, now: Duration) -> MemoryCheck {
+        // An idle gate holds nothing (a busy period only ends with no slot
+        // held), so the first start of a period never waits for a reading.
+        // The second one does: with nothing read yet, a whole batch could
+        // otherwise go out unchecked.
         if self.pressure.is_none() || state.held.is_empty() {
             return MemoryCheck::Fits;
         }
-        let every = state.policy.sample_every();
+        let grace = state
+            .policy
+            .sample_every()
+            .saturating_mul(MEMORY_GRACE_SAMPLES);
         match state.memory_read_at {
-            Some(at) if now.saturating_sub(at) <= every => {}
+            Some(at) if now.saturating_sub(at) <= grace => {}
             _ => return MemoryCheck::Stale,
         }
         // A read that failed or a platform without the number: nothing to check.

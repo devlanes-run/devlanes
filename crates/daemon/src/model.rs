@@ -257,10 +257,24 @@ pub(crate) struct LaneSt {
     pub phase_reasons: BTreeMap<String, RpcError>,
     /// Units left running by a previous daemon, by unit name.
     pub orphans: BTreeMap<String, Orphan>,
-    /// The start (or restart) running on this lane, while it runs. Stops reach it
-    /// here instead of waiting for `op`, which it holds. Each start installs its
-    /// own, so nothing done to one reaches a start that begins later.
-    pub start: Option<Arc<StartCtl>>,
+    /// The starts (and restarts) running on this lane, while they run. Several
+    /// can run at once: one that brings the lane up and any number that add
+    /// units to it. Stops reach them here instead of waiting for `op`. Each
+    /// start installs its own, so nothing done to one reaches a start that
+    /// begins later.
+    pub starts: Vec<Arc<StartCtl>>,
+    /// Units a start was asked for and has not handed to the start gate or
+    /// spawned yet, so the lane shows them `queued` from the moment the request
+    /// arrives instead of when its turn comes.
+    pub waiting: BTreeMap<String, Waiting>,
+    /// The start bringing the lane up (infra, setup, lane tasks), from the
+    /// moment it decided to until its services phase ended. Starts that arrive
+    /// meanwhile add their units to the lane it brings up instead of bringing
+    /// it up again.
+    pub bringup: Option<Bringup>,
+    /// Starts between their decision to run and the end of their phases. The
+    /// lane reads `starting` until the last of them is done.
+    pub starting: usize,
     /// Spawns in flight ([`SpawnGuard`]). A stop waits until none is left before
     /// it picks its targets, so no unit appears after it looked.
     pub spawning: usize,
@@ -300,6 +314,24 @@ pub(crate) struct LaneSt {
     pub missing_since: Option<std::time::Instant>,
     /// Set while the idle loop has the lane's processes throttled or frozen.
     pub power: Option<LanePowerSt>,
+}
+
+/// A unit a start asked for and has not queued in the start gate or spawned.
+#[derive(Debug, Clone)]
+pub(crate) struct Waiting {
+    /// The start that asked for it; a later start of the same unit takes over.
+    pub start_id: u64,
+    /// The requester, so `status --mine` finds the unit while it waits.
+    pub actor: Actor,
+}
+
+/// The start bringing a lane up, while it does.
+#[derive(Debug, Clone)]
+pub(crate) struct Bringup {
+    pub start_id: u64,
+    /// What it runs now, in words a person reads in `status` and the TUI: `containers`,
+    /// `setup`, a task name. `None` before its first phase and once it reached services.
+    pub step: Option<String>,
 }
 
 /// A throttled or frozen lane, for its summary.
@@ -384,7 +416,10 @@ impl LaneSt {
             moves_to: None,
             phase_reasons: BTreeMap::new(),
             orphans: BTreeMap::new(),
-            start: None,
+            starts: Vec::new(),
+            waiting: BTreeMap::new(),
+            bringup: None,
+            starting: 0,
             spawning: 0,
             spawned: Arc::new(Notify::new()),
             ports_pending: false,
@@ -536,10 +571,13 @@ pub(crate) fn dir_name(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
-/// One worktree's lane plus the lock that serializes start/stop/clean on it.
+/// One worktree's lane plus the lock that orders lifecycle operations on it.
 pub(crate) struct LaneRt {
     pub worktree: WorktreeId,
-    pub op: tokio::sync::Mutex<()>,
+    /// Starts that add units to a lane hold it shared, so they never wait for
+    /// each other. Bringing the lane up (until its services phase), whole-lane
+    /// stops, clean, reset, `infra up` and block moves hold it exclusively.
+    pub op: tokio::sync::RwLock<()>,
     pub st: Mutex<LaneSt>,
     /// Held while a `lane.changed` summary is built and emitted, so summaries
     /// reach the bus in the order they were taken.
@@ -549,6 +587,16 @@ pub(crate) struct LaneRt {
     /// Serializes freezing, throttling and thawing of the lane. Taken after `op`
     /// when both are needed, never before.
     pub power: tokio::sync::Mutex<()>,
+    /// Serializes read-modify-write updates of the lane's saved services, which
+    /// starts sharing `op` would otherwise interleave.
+    pub desired: tokio::sync::Mutex<()>,
+    /// Held by a start while it decides whether it brings the lane up, through
+    /// its wait for `op`. A second start waits here instead of in `op`'s queue,
+    /// where an exclusive request would hold up every shared one behind it.
+    pub decide: tokio::sync::Mutex<()>,
+    /// Held while a start checks and runs setup entries, so two starts never
+    /// run the same entry at once.
+    pub setup: tokio::sync::Mutex<()>,
 }
 
 impl LaneRt {
@@ -557,24 +605,28 @@ impl LaneRt {
         lock(&self.st)
     }
 
-    /// Interrupts the start running on this lane, if any. Called before waiting
-    /// for `op`, which that start holds.
+    /// Interrupts every start running on this lane. Called before waiting for
+    /// `op`, which those starts hold.
     pub(crate) fn cancel_start(&self) {
-        if let Some(start) = &self.st().start {
+        for start in &self.st().starts {
             start.cancel.cancel();
         }
     }
 
-    /// The start running on this lane, if any.
-    pub(crate) fn running_start(&self) -> Option<Arc<StartCtl>> {
-        self.st().start.clone()
+    /// The starts running on this lane, oldest first.
+    pub(crate) fn running_starts(&self) -> Vec<Arc<StartCtl>> {
+        self.st().starts.clone()
     }
 
     /// Installs a start's control for as long as the returned slot lives. Called
-    /// right after the start took `op`.
-    pub(crate) fn begin_start(self: &Arc<Self>, shutdown: &CancellationToken) -> StartSlot {
-        let ctl = Arc::new(StartCtl::new(shutdown));
-        self.st().start = Some(ctl.clone());
+    /// before the start waits for `op`, so stops reach a start that waits too.
+    pub(crate) fn begin_start(
+        self: &Arc<Self>,
+        shutdown: &CancellationToken,
+        start_id: u64,
+    ) -> StartSlot {
+        let ctl = Arc::new(StartCtl::new(shutdown, start_id));
+        self.st().starts.push(ctl.clone());
         StartSlot {
             lane: self.clone(),
             ctl,
@@ -679,9 +731,19 @@ impl Drop for SpawnGuard {
 /// What a `stop` or `restart` of single units can do to the start (or restart)
 /// running on their lane without waiting for its `op`.
 pub(crate) struct StartCtl {
+    /// The `start_id` of the start's events and result.
+    start_id: u64,
     /// Ends the start as `start_cancelled`: a whole-lane stop, clean, reset or
     /// shutdown fires it, and so does a stop of the task the start runs.
     pub cancel: CancellationToken,
+    /// Services units the start is about to spawn. A later start of the same
+    /// unit waits for this one instead of queueing it a second time.
+    spawning: Mutex<BTreeSet<String>>,
+    /// How long each unit waited for a start slot, for the start's log line.
+    gate_waits: Mutex<Vec<(String, u64)>>,
+    /// How each planned spawn ended: `None` spawned, `Some` failed with the
+    /// error. Starts that joined a unit report what this one got.
+    outcomes: Mutex<BTreeMap<String, Option<RpcError>>>,
     /// Fires once the start spawns no more services: its services phase is over
     /// or the start ended.
     pub services_done: CancellationToken,
@@ -698,14 +760,57 @@ pub(crate) struct StartCtl {
 
 impl StartCtl {
     /// A control whose token fires with `parent`.
-    pub(crate) fn new(parent: &CancellationToken) -> Self {
+    pub(crate) fn new(parent: &CancellationToken, start_id: u64) -> Self {
         Self {
+            start_id,
             cancel: parent.child_token(),
+            spawning: Mutex::new(BTreeSet::new()),
+            gate_waits: Mutex::new(Vec::new()),
+            outcomes: Mutex::new(BTreeMap::new()),
             services_done: CancellationToken::new(),
             withdrawn: Mutex::new(BTreeMap::new()),
             tasks: Mutex::new(BTreeMap::new()),
             planned: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// The `start_id` of this start.
+    pub(crate) fn start_id(&self) -> u64 {
+        self.start_id
+    }
+
+    /// Records how long `unit` waited for its start slot.
+    pub(crate) fn record_gate_wait(&self, unit: &str, waited_ms: u64) {
+        lock(&self.gate_waits).push((unit.to_owned(), waited_ms));
+    }
+
+    /// Every recorded start-slot wait, in the order the slots came.
+    pub(crate) fn gate_waits(&self) -> Vec<(String, u64)> {
+        lock(&self.gate_waits).clone()
+    }
+
+    /// Records how the spawn of `unit` ended: `None` when it spawned.
+    pub(crate) fn record_outcome(&self, unit: &str, error: Option<RpcError>) {
+        lock(&self.outcomes).insert(unit.to_owned(), error);
+    }
+
+    /// How the spawn of `unit` ended, once it did: `Some(None)` spawned,
+    /// `Some(Some(error))` failed, `None` never tried (withdrawn or cancelled).
+    pub(crate) fn outcome(&self, unit: &str) -> Option<Option<RpcError>> {
+        lock(&self.outcomes).get(unit).cloned()
+    }
+
+    /// Records the service units the start is about to spawn.
+    pub(crate) fn plan_spawns(&self, units: impl IntoIterator<Item = String>) {
+        lock(&self.spawning).extend(units);
+    }
+
+    /// Whether the start still means to spawn `unit`: planned, not withdrawn
+    /// and its services phase not over.
+    pub(crate) fn will_spawn(&self, unit: &str) -> bool {
+        !self.services_done.is_cancelled()
+            && self.withdrawn_by(unit).is_none()
+            && lock(&self.spawning).contains(unit)
     }
 
     /// Records task units the start may run.
@@ -785,18 +890,14 @@ pub(crate) struct StartSlot {
 }
 
 impl Drop for StartSlot {
-    /// Uninstalls the control, unless a later start replaced it, and releases
-    /// restarts waiting for the services phase.
+    /// Uninstalls the control and releases restarts waiting for the services
+    /// phase.
     fn drop(&mut self) {
         self.ctl.services_done.cancel();
-        let mut st = self.lane.st();
-        if st
-            .start
-            .as_ref()
-            .is_some_and(|current| Arc::ptr_eq(current, &self.ctl))
-        {
-            st.start = None;
-        }
+        self.lane
+            .st()
+            .starts
+            .retain(|current| !Arc::ptr_eq(current, &self.ctl));
     }
 }
 
@@ -1081,6 +1182,33 @@ pub(crate) fn external_summary(
     }
 }
 
+/// Shows a unit a start asked for, and has not queued in the start gate or
+/// spawned yet, as `queued` with what it waits for (`waiting_for`): the step
+/// the lane's bring-up runs, or `lane` while the start waits for its turn.
+/// The gate's own `queued` data replaces this once the unit is in its line.
+fn apply_waiting(lane: &LaneSt, summary: &mut UnitSummary) {
+    let Some(waiting) = lane.waiting.get(&summary.name) else {
+        return;
+    };
+    // A live process (an earlier run still stopping, or one that just spawned)
+    // keeps its own state.
+    if lane
+        .units
+        .get(&summary.name)
+        .is_some_and(|rec| rec.host.is_alive())
+    {
+        return;
+    }
+    let step = lane
+        .bringup
+        .as_ref()
+        .and_then(|bringup| bringup.step.clone())
+        .unwrap_or_else(|| "lane".to_owned());
+    summary.state = "queued".into();
+    summary.reason = Some(RpcError::new("queued", json!({"waiting_for": step}), 0));
+    summary.actor = waiting.actor.clone();
+}
+
 /// Builds a lane summary; units list configured services (idle or live),
 /// one-shot units, then `infra.external` entries.
 pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
@@ -1116,6 +1244,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
     let power = lane.power.as_ref().map(|power| power.level.word());
     for summary in &mut units {
         apply_phase_reason(lane, summary);
+        apply_waiting(lane, summary);
         apply_order(lane, summary);
         // Only supervised processes are throttled or frozen; orphans and finished
         // units keep their own state word.

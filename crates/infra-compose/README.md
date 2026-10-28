@@ -58,7 +58,7 @@ In the daemon, host ports come from the persisted offsets (`PortRequest::key()` 
 
 ## API
 
-- `Compose`: `shared_up`, `shared_status`, `shared_stop`, `lane_port_requests`, `lane_up`, `lane_status`, `lane_stop`, `lane_down` (lane clean, removes named volumes).
+- `Compose`: `shared_up`, `shared_status`, `shared_health` / `lane_health` (one `ps` for progress polls), `shared_stop`, `lane_port_requests`, `lane_up`, `lane_status`, `lane_stop`, `lane_down` (lane clean, removes named volumes).
 - `Compose::lane_pause` / `lane_unpause`: pause or unpause a frozen lane's `<project>-lane<N>` containers and return how many changed; the shared project is never touched.
 - `SharedReport` / `LaneReport`: `endpoints` (first published port and host ports keyed by container port) and `health` per service.
 - `ComposeModel`: the parsed output of `docker compose config --format json`.
@@ -91,6 +91,8 @@ Lane projects start with `--no-deps`, so a lane never starts its own copy of a s
 A shared service whose `container_name` already exists is adopted when the container belongs to the same Compose project. Otherwise `shared_up` fails and names the command that frees the name.
 
 Docker marks an unpaused container with a healthcheck `unhealthy` until its next check runs, and `up --wait` fails on that. `lane_up` unpauses the lane's paused containers first. A service whose containers were healthy before the pause, with a failing streak below the healthcheck's retries, comes up without `--wait`, unless Compose replaces its container. One paused before its first passing check is waited for until its next check, up to the wait timeout.
+
+`Compose` keeps the parsed `config` output per invocation and reuses it until a compose file, a `.env` file or a file the compose files name changes size or modification time, or an interpolation variable changes. The named files come from parsing the compose files: `include` (with the included files and their `env_file` or default `.env`), `extends.file`, and each service's `env_file` and `label_file`, followed four levels deep. A project is read again on every call when a compose file does not parse, a named path uses `$` interpolation, starts with `~` or is remote, or the nesting goes deeper. `shared_up` and `lane_up` run `ps` first and leave out of `up` every service whose containers already run healthy with the config hash `docker compose config --hash` prints now; when that is every service, `up` does not run. A tag pulled again since the container was created does not count as a change. Remove those containers with `docker compose -p <project> rm -sf <service>`, which needs only the project name, and the next `shared_up` or `lane_up` creates them from the pulled image.
 
 Operations on one Compose project run one at a time, except `lane_unpause`, so a thaw never waits behind a long `up`. `ps`, `stop` and `down` need only the project name, so they still work after a worktree is removed.
 

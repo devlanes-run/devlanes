@@ -248,25 +248,17 @@ impl StartRun {
         let Some(phase) = &self.phase else {
             return format!("{line}…");
         };
-        // The same words as the CLI's progress lines.
-        let what = if let Some(detail) = &self.detail {
-            match phase.as_str() {
-                "setup" => format!("setup {}", text::clean(detail)),
-                _ => text::clean(detail),
+        let what = match (&self.detail, &self.task) {
+            (None, Some(task)) => format!("task {}", text::clean(task)),
+            (None, None) if phase == "services" && !self.units.is_empty() => {
+                let ready = self
+                    .units
+                    .iter()
+                    .filter(|unit| unit_ready(lanes, self.lanes.first(), unit))
+                    .count();
+                format!("{ready} of {} services ready", self.units.len())
             }
-        } else if let Some(task) = &self.task {
-            format!("task {}", text::clean(task))
-        } else if phase == "infra" {
-            "containers".into()
-        } else if phase == "services" && !self.units.is_empty() {
-            let ready = self
-                .units
-                .iter()
-                .filter(|unit| unit_ready(lanes, self.lanes.first(), unit))
-                .count();
-            format!("{ready} of {} services ready", self.units.len())
-        } else {
-            text::clean(phase)
+            (detail, _) => phase_words(phase, detail.as_deref()),
         };
         format!("{line}: {what}")
     }
@@ -328,6 +320,20 @@ impl StartRun {
             line: text::clean(&parts.join("; ")),
         });
         (failures, errors.into_iter().next().map(ApiError::Rpc))
+    }
+}
+
+/// A running start phase in the words of the CLI's progress lines, for the
+/// header of a start this TUI follows and of any other lane's start: what
+/// the phase runs when its `progress` events said (`setup database (2 of
+/// 3)`, `migrate-db`, `waiting for postgres (1 of 2 healthy)`), else
+/// `containers` for `infra` and the phase's own name for the rest.
+pub(crate) fn phase_words(phase: &str, detail: Option<&str>) -> String {
+    match (phase, detail) {
+        ("setup", Some(detail)) => format!("setup {}", text::clean(detail)),
+        (_, Some(detail)) => text::clean(detail),
+        ("infra", None) => "containers".into(),
+        (phase, None) => text::clean(phase),
     }
 }
 

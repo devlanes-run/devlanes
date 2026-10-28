@@ -1691,7 +1691,8 @@ impl ContainerInfra {
         }));
     }
 
-    /// Setup env for `infra.setup` entries.
+    /// Setup env for `infra.setup` entries. The shared project comes from the
+    /// `config` cache, which `up` and `namespace` filled just before.
     async fn setup_env(&self, spec: &InfraSpec) -> BTreeMap<String, String> {
         if spec.compose_files.is_empty() {
             return BTreeMap::new();
@@ -1789,7 +1790,9 @@ impl InfraProvider for ContainerInfra {
         Ok(needs)
     }
 
-    /// Shared compose up, per-lane compose up, then plain containers.
+    /// Shared compose up, per-lane compose up, then plain containers. Compose runs
+    /// `up` only for services that do not already run healthy with their current
+    /// config, and every `config` comes from the cache while its inputs are unchanged.
     async fn up(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         let mut namespace = serde_json::Map::new();
         let mut report = serde_json::Map::new();
@@ -1875,19 +1878,31 @@ impl InfraProvider for ContainerInfra {
         })
     }
 
-    /// Endpoints of what already runs, without starting anything.
+    /// Endpoints of what already runs, without starting anything. The shared and
+    /// lane projects are listed concurrently; their models come from the `config`
+    /// cache.
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
         let mut namespace = serde_json::Map::new();
         let mut targets = Vec::new();
-        if !spec.compose_files.is_empty()
-            && let Ok(shared) = self.compose.shared_status(&Self::shared(spec)).await
-        {
+        let (shared, lane) = tokio::join!(
+            async {
+                if spec.compose_files.is_empty() {
+                    return None;
+                }
+                self.compose.shared_status(&Self::shared(spec)).await.ok()
+            },
+            async {
+                if !Self::has_lane_services(spec) {
+                    return None;
+                }
+                self.compose.lane_status(&Self::lane(spec)).await.ok()
+            },
+        );
+        if let Some(shared) = shared {
             Self::compose_namespace(&mut namespace, &shared.endpoints);
             Self::compose_targets(&mut targets, &shared.containers, &shared.health, true);
         }
-        if Self::has_lane_services(spec)
-            && let Ok(lane) = self.compose.lane_status(&Self::lane(spec)).await
-        {
+        if let Some(lane) = lane {
             Self::compose_namespace(&mut namespace, &lane.endpoints);
             Self::compose_targets(&mut targets, &lane.containers, &lane.health, false);
         }
@@ -2070,10 +2085,12 @@ impl InfraProvider for ContainerInfra {
         Ok(stream.boxed())
     }
 
-    /// `StartedAt` of plain containers and shared/per-lane compose services. The
-    /// shared project is resolved and each compose project listed once per call,
-    /// since every `config` and `ps` is a Compose process. A failed lookup leaves
-    /// out only the containers it covers, as if they did not run.
+    /// `StartedAt` of plain containers and shared/per-lane compose services, all
+    /// through the Engine API: one container list per compose project, by Compose's
+    /// project label, then one inspect per container. The shared project's name
+    /// comes from `infra.project_name` or the cached `config`, so no Compose process
+    /// runs once a start resolved the project. A failed lookup leaves out only the
+    /// containers it covers, as if they did not run.
     async fn containers_started_at(
         &self,
         spec: &InfraSpec,
@@ -2085,8 +2102,7 @@ impl InfraProvider for ContainerInfra {
         // The outer `None` means not looked up yet; an inner `None` a failed lookup,
         // which is not retried within the call.
         let mut shared_name: Option<Option<String>> = None;
-        let mut listed: BTreeMap<String, Option<Vec<devlanes_infra_compose::ContainerStatus>>> =
-            BTreeMap::new();
+        let mut listed: BTreeMap<String, Option<BTreeMap<String, String>>> = BTreeMap::new();
         let mut names = Vec::new();
         for container in containers {
             if let Some(declared) = spec.containers.iter().find(|c| &c.name == container) {
@@ -2105,12 +2121,8 @@ impl InfraProvider for ContainerInfra {
                 devlanes_infra_compose::lane_project_name(&spec.project, spec.lane).ok()
             } else {
                 if shared_name.is_none() {
-                    let resolved = self.compose.shared_project(&Self::shared(spec)).await;
-                    shared_name = Some(
-                        resolved
-                            .ok()
-                            .map(|(project, _)| project.name.unwrap_or_default()),
-                    );
+                    let resolved = self.compose.shared_name(&Self::shared(spec)).await;
+                    shared_name = Some(resolved.ok());
                 }
                 shared_name.clone().flatten()
             };
@@ -2118,15 +2130,18 @@ impl InfraProvider for ContainerInfra {
                 continue;
             };
             if !listed.contains_key(&project) {
-                let statuses = self.compose.cli().ps(&project).await.ok();
-                listed.insert(project.clone(), statuses);
+                let ids = compose_container_ids(docker, &project).await;
+                if let Err(error) = &ids {
+                    tracing::debug!(project, %error, "compose containers unavailable");
+                }
+                listed.insert(project.clone(), ids.ok());
             }
             let found = listed
                 .get(&project)
                 .and_then(Option::as_ref)
-                .and_then(|statuses| statuses.iter().find(|s| &s.service == container));
-            if let Some(status) = found {
-                names.push((container, status.id.clone()));
+                .and_then(|ids| ids.get(container));
+            if let Some(id) = found {
+                names.push((container, id.clone()));
             }
         }
         let inspected =
@@ -2185,19 +2200,28 @@ impl InfraProvider for ContainerInfra {
         Some(self.events.subscribe())
     }
 
-    /// Shared and per-lane compose services from `docker compose ps`, then plain
-    /// containers from the engine's list. A source that cannot answer adds nothing.
+    /// Shared and per-lane compose services from one `docker compose ps` per
+    /// project, run concurrently and without `config` (the model is the cached
+    /// one), then plain containers from the engine's list. A source that cannot
+    /// answer adds nothing.
     async fn progress(&self, spec: &InfraSpec) -> Vec<devlanes_proto::PhaseContainer> {
         let mut progress = Vec::new();
-        if !spec.compose_files.is_empty()
-            && let Ok(shared) = self.compose.shared_status(&Self::shared(spec)).await
-        {
-            progress.extend(shared.health.iter().map(compose_progress));
-        }
-        if Self::has_lane_services(spec)
-            && let Ok(lane) = self.compose.lane_status(&Self::lane(spec)).await
-        {
-            progress.extend(lane.health.iter().map(compose_progress));
+        let (shared, lane) = tokio::join!(
+            async {
+                if spec.compose_files.is_empty() {
+                    return None;
+                }
+                self.compose.shared_health(&Self::shared(spec)).await.ok()
+            },
+            async {
+                if !Self::has_lane_services(spec) {
+                    return None;
+                }
+                self.compose.lane_health(&Self::lane(spec)).await.ok()
+            },
+        );
+        for health in [shared, lane].into_iter().flatten() {
+            progress.extend(health.iter().map(compose_progress));
         }
         if !spec.containers.is_empty()
             && let Some(docker) = &self.docker
@@ -2218,6 +2242,44 @@ impl InfraProvider for ContainerInfra {
         }
         progress
     }
+}
+
+/// Container id per service of compose project `project`, from one Engine API list
+/// filtered by Compose's project label. Stopped containers count, as `ps --all`
+/// would show them, and `run` one-offs do not, as in `ps`; a running container wins
+/// over a stopped one of the same service.
+async fn compose_container_ids(
+    docker: &devlanes_infra_docker::DockerInfra,
+    project: &str,
+) -> Result<BTreeMap<String, String>, bollard::errors::Error> {
+    use bollard::models::ContainerSummaryStateEnum;
+    let filters = std::collections::HashMap::from([(
+        "label".to_owned(),
+        vec![
+            format!("com.docker.compose.project={project}"),
+            "com.docker.compose.oneoff=False".to_owned(),
+        ],
+    )]);
+    let options = bollard::query_parameters::ListContainersOptionsBuilder::new()
+        .all(true)
+        .filters(&filters)
+        .build();
+    let mut ids = BTreeMap::new();
+    for summary in docker.client().list_containers(Some(options)).await? {
+        let (Some(id), Some(service)) = (
+            summary.id,
+            summary
+                .labels
+                .and_then(|mut labels| labels.remove("com.docker.compose.service")),
+        ) else {
+            continue;
+        };
+        let running = summary.state == Some(ContainerSummaryStateEnum::RUNNING);
+        if running || !ids.contains_key(&service) {
+            ids.insert(service, id);
+        }
+    }
+    Ok(ids)
 }
 
 /// A compose service's health as `ContainerSummary.state`.

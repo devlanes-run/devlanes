@@ -30,7 +30,8 @@ mod validation;
 pub use edit::{edit_user_source, parse_user_value, remove_user_value, set_user_value};
 pub use error::{ConfigError, SourceLocation};
 pub use expression::{
-    ExpressionContext, evaluate, evaluate_env, evaluate_typed, references, resolve_lane_vars,
+    EvaluationContext, ExpressionContext, PreparedContext, evaluate, evaluate_env, evaluate_typed,
+    references, resolve_lane_vars,
 };
 pub use extensions::{Extensions, OpaqueExtensions};
 pub use hostname::{check_host_header, normalize_host};

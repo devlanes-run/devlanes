@@ -1,6 +1,7 @@
 //! Lane resolution tests: env layering, ports, selection, namespaces and
 //! snapshots of the example configs.
 
+mod bench;
 mod script_notes;
 mod support;
 
@@ -1329,4 +1330,97 @@ async fn snapshot_reference() {
         ]
     );
     insta::assert_json_snapshot!(lane_view(&lane));
+}
+
+#[tokio::test]
+/// `global_env` entries that read nothing unit-specific are evaluated once per lane,
+/// the others per unit; each unit gets what evaluating every entry for it would give.
+async fn global_env_shared_and_per_unit() {
+    let config = parse(
+        r#"
+project: demo
+global_env:
+  SHARED: "http://127.0.0.1:${{ services.api.port }}"
+  LANE: "${{ lane.name }}-${{ lane.index }}"
+  HOME_DIR: "${{ env.HOME }}/cache"
+  LITERAL: plain
+  NAMED: "${{ self.name }}"
+  REPLICA: "${{ replica.index | default(0) }}"
+services:
+  api: { run: server }
+  web: { run: server, replicas: 2 }
+tasks:
+  migrate: { run: migrate }
+"#,
+    );
+    let lane = plain_config(&config).await;
+    assert!(lane.errors.is_empty(), "{:?}", lane.errors);
+    let api = format!("http://127.0.0.1:{}", lane.services["api"].port);
+    let lane_value = format!("{}-1", lane.facts.name);
+    let units = [
+        ("api", &lane.services["api"].launch, "api", "1"),
+        ("web.1", &lane.services["web.1"].launch, "web", "1"),
+        ("web.2", &lane.services["web.2"].launch, "web", "2"),
+        (
+            "migrate",
+            lane.tasks["migrate"].launch.as_ref().expect("launch"),
+            "migrate",
+            "0",
+        ),
+    ];
+    for (unit, launch, name, replica) in units {
+        let env = &launch.env.values;
+        assert_eq!(env["SHARED"], api, "{unit}");
+        assert_eq!(env["LANE"], lane_value, "{unit}");
+        assert_eq!(env["HOME_DIR"], "/home/dev/cache", "{unit}");
+        assert_eq!(env["LITERAL"], "plain", "{unit}");
+        assert_eq!(env["NAMED"], name, "{unit}");
+        assert_eq!(env["REPLICA"], replica, "{unit}");
+    }
+}
+
+#[tokio::test]
+/// A `global_env` entry evaluated once per lane still fails every unit under its
+/// own path, and the first failing entry in declaration order is the one reported.
+async fn shared_global_env_errors_name_the_entry() {
+    let config = parse(
+        r#"
+project: demo
+global_env:
+  NAMED: "${{ self.name + 1 }}"
+  BAD: "${{ env.MISSING }}"
+services:
+  api: { run: server }
+tasks:
+  migrate: { run: migrate }
+"#,
+    );
+    let lane = plain_config(&config).await;
+    for key in ["services.api", "tasks.migrate"] {
+        let error = lane.errors[key].to_string();
+        assert!(error.starts_with("global_env.NAMED: "), "{key}: {error}");
+    }
+    let config = parse(
+        r#"
+project: demo
+global_env:
+  BAD: "${{ env.MISSING }}"
+  NAMED: "${{ self.name + 1 }}"
+services:
+  api: { run: server }
+"#,
+    );
+    let lane = plain_config(&config).await;
+    let error = lane.errors["services.api"].to_string();
+    assert!(error.starts_with("global_env.BAD: "), "{error}");
+}
+
+/// Resolves an already parsed `config` for lane 1 with the default client env.
+async fn plain_config(config: &devlanes_config::ProjectConfig) -> devlanes_resolve::ResolvedLane {
+    let facts = facts(&config.project, 1, Some("main"));
+    let (block, offsets) = allocation(config, 21_000, &[]);
+    let client = client_env();
+    let mut input = ResolveInput::new(config, &facts, block, &offsets);
+    input.client_env = &client;
+    resolve_lane(input).await.expect("resolves")
 }

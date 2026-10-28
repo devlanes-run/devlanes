@@ -279,25 +279,35 @@ impl Inner {
         }
         for (unit, mut task) in tasks {
             match tokio::time::timeout_at(cx.deadline, &mut task).await {
-                Ok(Ok(Paced::Spawned)) => cx.started.push(unit),
-                Ok(Ok(Paced::Failed(error))) => cx.failures.push(UnitFailureData {
-                    lane: cx.reference.clone(),
-                    unit,
-                    // The same line the unit's log got, as its tail.
-                    log_tail: (error.code == "spawn_failed")
-                        .then(|| crate::spawn_error::log_line(&error))
-                        .into_iter()
-                        .collect(),
-                    reason: Some(error),
-                    ..UnitFailureData::default()
-                }),
+                Ok(Ok(Paced::Spawned)) => {
+                    cx.ctl.record_outcome(&unit, None);
+                    cx.started.push(unit);
+                }
+                Ok(Ok(Paced::Failed(error))) => {
+                    cx.ctl.record_outcome(&unit, Some(error.clone()));
+                    cx.failures.push(UnitFailureData {
+                        lane: cx.reference.clone(),
+                        // The same line the unit's log got, as its tail.
+                        log_tail: (error.code == "spawn_failed")
+                            .then(|| crate::spawn_error::log_line(&error))
+                            .into_iter()
+                            .collect(),
+                        unit,
+                        reason: Some(error),
+                        ..UnitFailureData::default()
+                    });
+                }
                 Ok(Ok(Paced::Cancelled)) => {}
-                Ok(Err(error)) => cx.failures.push(UnitFailureData {
-                    lane: cx.reference.clone(),
-                    unit,
-                    reason: Some(internal("spawn_task", error)),
-                    ..UnitFailureData::default()
-                }),
+                Ok(Err(error)) => {
+                    let error = internal("spawn_task", error);
+                    cx.ctl.record_outcome(&unit, Some(error.clone()));
+                    cx.failures.push(UnitFailureData {
+                        lane: cx.reference.clone(),
+                        unit,
+                        reason: Some(error),
+                        ..UnitFailureData::default()
+                    });
+                }
                 Err(_) => {
                     cx.timed_out = true;
                     cx.started.push(unit);
@@ -333,11 +343,11 @@ impl Inner {
                     slot = ticket => Some(slot),
                     () = token.cancelled() => None,
                 };
-                tracing::debug!(
-                    granted = slot.is_some(),
-                    waited_ms = waited.elapsed().as_millis() as u64,
-                    "start gate answered"
-                );
+                let waited_ms = waited.elapsed().as_millis() as u64;
+                tracing::debug!(granted = slot.is_some(), waited_ms, "start gate answered");
+                if slot.is_some() {
+                    start.record_gate_wait(&name, waited_ms);
+                }
                 slot
             }
             None => None,
@@ -477,6 +487,11 @@ impl Inner {
                             peak = peak.max(reading.footprint_bytes);
                         }
                         slot.report_memory(reading.footprint_bytes);
+                        // Only `ready: started` units: releasing units with a ready
+                        // check on CPU settle let more starts in while the machine
+                        // was saturated, and on a 30-service lane the window shrank
+                        // until the last services waited out 20 s slot timeouts one
+                        // after another.
                         if settling {
                             slot.report_cpu(reading.cpu_percent);
                         }

@@ -336,6 +336,133 @@ async fn docker_lane_pause_unpause() {
     drop(cleanup);
 }
 
+/// `(service, id)` of every container in compose project `project`.
+async fn ids(compose: &Compose, project: &str) -> BTreeMap<String, String> {
+    compose
+        .cli()
+        .ps(project)
+        .await
+        .expect("ps")
+        .into_iter()
+        .map(|status| (status.service, status.id))
+        .collect()
+}
+
+/// `config --hash` matches the label `up` puts on the containers, for the shared
+/// project and for a lane run with its override, which is what lets `up` be skipped;
+/// a changed variable recreates only the service that uses it.
+#[tokio::test]
+#[ignore = "needs docker"]
+async fn docker_up_skips_current_services() {
+    let prefix = unique_prefix();
+    let lane1 = lane_project_name(&prefix, 1).expect("valid name");
+    let cleanup = Cleanup {
+        projects: vec![prefix.clone(), lane1.clone()],
+        containers: Vec::new(),
+    };
+    bounded(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = r#"services:
+  a:
+    image: redis:7-alpine
+    environment:
+      MARK: ${MARK:-one}
+  b:
+    image: redis:7-alpine
+  lane:
+    image: redis:7-alpine
+    ports: ["6379"]
+"#;
+        std::fs::write(dir.path().join("compose.yaml"), file).expect("write compose file");
+        let compose = Compose::new(ComposeCli::new());
+        let mut shared = SharedInfra {
+            project_name: Some(prefix.clone()),
+            primary_dir: dir.path().to_owned(),
+            files: vec!["compose.yaml".into()],
+            env_file: None,
+            profiles: Vec::new(),
+            exclude: BTreeSet::new(),
+            per_lane: set(&["lane"]),
+            env: BTreeMap::new(),
+        };
+        compose
+            .shared_up(&shared, UpOptions::default())
+            .await
+            .expect("shared up");
+        let (project, _) = compose.shared_project(&shared).await.expect("project");
+        let hashes = compose
+            .cli()
+            .config_hashes(&project, &[])
+            .await
+            .expect("hashes");
+        for status in compose.cli().ps(&prefix).await.expect("ps") {
+            assert_eq!(status.config_hash.as_ref(), hashes.get(&status.service));
+        }
+        let first = ids(&compose, &prefix).await;
+        compose
+            .shared_up(&shared, UpOptions::default())
+            .await
+            .expect("shared up again");
+        assert_eq!(ids(&compose, &prefix).await, first);
+
+        shared.env.insert("MARK".into(), "two".into());
+        compose
+            .shared_up(&shared, UpOptions::default())
+            .await
+            .expect("shared up with a new value");
+        let second = ids(&compose, &prefix).await;
+        assert_ne!(second["a"], first["a"], "a uses the variable");
+        assert_eq!(second["b"], first["b"], "b does not");
+
+        let infra = LaneInfra {
+            project: prefix.clone(),
+            lane: 1,
+            lane_dir: dir.path().to_owned(),
+            files: vec!["compose.yaml".into()],
+            env_file: None,
+            profiles: Vec::new(),
+            exclude: BTreeSet::new(),
+            per_lane: set(&["lane"]),
+            env: BTreeMap::new(),
+            state_dir: dir.path().join("state"),
+        };
+        let host = free_port();
+        let ports = LanePorts::from([("lane".to_owned(), BTreeMap::from([(6379, host)]))]);
+        let block = PortBlock::new(host, 1).expect("block");
+        let report = compose
+            .lane_up(&infra, &ports, block, UpOptions::default())
+            .await
+            .expect("lane up");
+        let lane_project = devlanes_infra_compose::ComposeProject {
+            name: Some(lane1.clone()),
+            working_dir: dir.path().to_owned(),
+            files: vec!["compose.yaml".into()],
+            env_file: None,
+            profiles: Vec::new(),
+            env: BTreeMap::new(),
+        };
+        let extra = report.override_path.clone().expect("override");
+        let hashes = compose
+            .cli()
+            .config_hashes(&lane_project, &[extra])
+            .await
+            .expect("lane hashes");
+        let statuses = compose.cli().ps(&lane1).await.expect("ps lane");
+        assert_eq!(statuses.len(), 1);
+        assert_eq!(statuses[0].config_hash.as_ref(), hashes.get("lane"));
+        let first = ids(&compose, &lane1).await;
+        let again = compose
+            .lane_up(&infra, &ports, block, UpOptions::default())
+            .await
+            .expect("lane up again");
+        assert_eq!(again.endpoints["lane"].port, Some(host));
+        assert_eq!(again.health["lane"], Health::Running);
+        assert_eq!(ids(&compose, &lane1).await, first);
+    })
+    .await;
+    drop(cleanup);
+}
+
 /// `(service, health)` of every container in compose project `project`.
 async fn health_of(compose: &Compose, project: &str) -> Vec<(String, String)> {
     compose

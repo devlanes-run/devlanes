@@ -696,10 +696,12 @@ impl Executor {
                 target,
             } => {
                 tokio::spawn(async move {
+                    let units = selection.units.clone();
                     let result = api.control(method, lane, selection).await;
                     let msg = Msg::ActionDone {
                         label,
                         target,
+                        units,
                         result,
                     };
                     deliver(&sender, msg).await;

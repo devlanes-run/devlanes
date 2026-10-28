@@ -5,12 +5,15 @@
 //! that moves their ports into the lane block, drops fixed `container_name`s and adds
 //! `dev.devlanes.*` labels. Lifecycle goes through the `docker compose` CLI so Compose's
 //! own merge, interpolation and profile rules apply; the resolved model comes from
-//! `docker compose config --format json`.
+//! `docker compose config --format json`, cached per invocation until a compose file,
+//! `.env` file or interpolation variable changes. `up` leaves out services that already
+//! run healthy with the config hash Compose would give them now.
 //!
 //! This crate does not depend on `devlanes-core`; the daemon adapts [`Compose`] to the
 //! core `Infra` trait. Running `infra.setup` entries is the daemon's job;
 //! [`setup_env`] provides their Compose variables.
 
+mod cache;
 mod cli;
 mod env;
 mod error;
@@ -28,8 +31,8 @@ pub use infra::{
     lane_project_name, validate_project_name,
 };
 pub use model::{
-    ComposeModel, ContainerStatus, Health, PortModel, Publisher, ServiceModel, ServiceVolume,
-    VolumeModel, parse_ps, service_containers, service_health,
+    ComposeModel, ContainerStatus, DeployModel, Health, PortModel, Publisher, ServiceModel,
+    ServiceVolume, VolumeModel, parse_ps, service_containers, service_health,
 };
 pub use overrides::{
     LaneOverride, OVERRIDE_FILE, labels, lane_labels, render_override, write_override,

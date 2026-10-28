@@ -67,10 +67,12 @@ async fn apply(app: &mut App, api: &FakeApi, effect: Effect) -> Result<(), Strin
     else {
         return Err(format!("not a control effect: {effect:?}"));
     };
+    let units = selection.units.clone();
     let result = api.control(method, lane, selection).await;
     app.update(Msg::ActionDone {
         label,
         target,
+        units,
         result,
     });
     Ok(())

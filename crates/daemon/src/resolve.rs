@@ -334,7 +334,9 @@ impl Inner {
             Some(view) => (view.domain.clone(), view.port, view.vars.clone()),
             None => (String::new(), allocation.block.start, Default::default()),
         };
-        let context = lane_context(&facts, &domain, port, &vars, &infra_ns, &client, &dotenv);
+        let raw = lane_context(&facts, &domain, port, &vars, &infra_ns, &client, &dotenv);
+        // Prepared once: every infra value below is evaluated against it.
+        let context = raw.prepare();
         let infra = &config.infra;
         let evaluate = |path: &str, value: &devlanes_config::Templated<String>| {
             value.evaluate(&context).map_err(|error| {
@@ -418,13 +420,8 @@ impl Inner {
             let ready = match &container.ready {
                 Some(ready) => {
                     let cwd = if per_lane { &lane_dir } else { &primary_dir };
-                    devlanes_resolve::container_ready(
-                        ready,
-                        cwd,
-                        &context,
-                        &format!("{path}.ready"),
-                    )
-                    .map_err(|error| resolve_error(&error))?
+                    devlanes_resolve::container_ready(ready, cwd, &raw, &format!("{path}.ready"))
+                        .map_err(|error| resolve_error(&error))?
                 }
                 None => None,
             };

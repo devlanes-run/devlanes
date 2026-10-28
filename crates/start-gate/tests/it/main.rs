@@ -415,6 +415,26 @@ async fn stale_memory_reading_holds_until_the_driver_reads() {
 }
 
 #[tokio::test]
+async fn slightly_old_memory_reading_grants_without_waiting() {
+    bounded(async {
+        let (gate, clock) = memory_gate(4, 60, |_| Some(10_000));
+        let _a = gate.acquire(needing("acme@1", "a", 0, 100)).await;
+        settle().await;
+        assert_eq!(gate.snapshot().available_memory, Some(10_000));
+        // The driver does not run again: the reading is 1.5 s old, past one
+        // sampling interval but within the grace.
+        clock.advance(Duration::from_millis(1500));
+        let mut lone = vec![gate.enqueue(needing("acme@1", "b", 1, 100))];
+        assert_eq!(
+            take_granted(&mut lone).len(),
+            1,
+            "granted on enqueue, without a new read"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn failed_memory_reads_do_not_block() {
     bounded(async {
         let clock = ManualClock::new();

@@ -25,6 +25,7 @@ mod monitor;
 mod navigation;
 mod orphans;
 mod progress;
+mod queued;
 mod release;
 mod screens;
 mod start;

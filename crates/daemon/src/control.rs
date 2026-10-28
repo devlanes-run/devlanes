@@ -1395,7 +1395,7 @@ impl Inner {
         context: &Context,
     ) -> Result<Value, RpcError> {
         let ((project, lane), spec) = self.infra_for(context).await?;
-        let _op = lane.op.lock().await;
+        let _op = lane.op.write().await;
         // Compose and Docker refuse to start paused containers.
         self.wake_lane(&project, &lane, Some(crate::idle::Activity::Command))
             .await;

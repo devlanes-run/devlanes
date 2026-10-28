@@ -6,8 +6,9 @@ use std::{
 };
 
 use devlanes_config::{
-    Env, ExpressionContext, Extensions, InfraCommand, ProfileConfig, ProfileOptions, ReadyConfig,
-    Run, ServiceConfig, StopConfig, SyncConfig, TaskAfter, TaskConfig, TcpReady, Templated,
+    Env, ExpressionContext, Extensions, InfraCommand, PreparedContext, ProfileConfig,
+    ProfileOptions, ReadyConfig, Run, ServiceConfig, StopConfig, SyncConfig, TaskAfter, TaskConfig,
+    TcpReady, Templated,
 };
 use devlanes_core::{
     StopPolicy, StopSignal,
@@ -79,7 +80,7 @@ async fn plan_lane<E: Extensions>(
         let _span = tracing::debug_span!("layout").entered();
         layout::build(&input, &base_env)?
     };
-    let lane_context = ns.lane_context(&base_env);
+    let lane_context = ns.lane_context(&base_env).prepare();
     let mut profile_envs = Vec::new();
     let mut every_profile_skips_infra = !profiles.is_empty();
     let mut any_configured = false;
@@ -117,11 +118,16 @@ async fn plan_lane<E: Extensions>(
         ),
     ]);
     devlanes.extend(input.ca_env.iter().map(|(k, v)| (k.clone(), v.clone())));
+    let global = {
+        let _span = tracing::debug_span!("evaluate global_env").entered();
+        shared_globals(&config.global_env, &lane_context)
+    };
 
     let mut planner = Planner {
         input: &input,
         ns: &ns,
         env: base_env,
+        global,
         remap: remap.as_ref(),
         profile_envs,
         contributors,
@@ -227,6 +233,8 @@ struct Planner<'p, 'a, E: Extensions> {
     ns: &'p Namespaces,
     /// `env` namespace shared by every unit.
     env: Value,
+    /// `global_env` in declaration order, from [`shared_globals`].
+    global: Vec<Option<Result<String, ResolveError>>>,
     /// Merged profile options; only `run_scripts` is read.
     remap: Option<&'p ProfileOptions>,
     /// Each profile's `env` with its config path, in the order given.
@@ -256,9 +264,30 @@ struct LaunchInput<'s> {
 }
 
 impl<E: Extensions> Planner<'_, '_, E> {
-    /// Context for one unit.
-    fn context(&self, this: Value, replica: Value) -> ExpressionContext {
-        self.ns.context(&self.env, this, replica)
+    /// Context for one unit, prepared once for all of the unit's expressions.
+    fn context(&self, this: Value, replica: Value) -> PreparedContext {
+        self.ns.context(&self.env, this, replica).prepare()
+    }
+
+    /// The unit's `global_env` values: the lane's shared ones and, for entries that read
+    /// `self` or `replica`, values evaluated with `context`. The first failing entry in
+    /// declaration order is the error, as when every entry was evaluated per unit.
+    fn global_env(
+        &self,
+        context: &PreparedContext,
+    ) -> Result<BTreeMap<String, String>, ResolveError> {
+        let mut result = BTreeMap::new();
+        for ((key, value), shared) in self.input.config.global_env.iter().zip(&self.global) {
+            let value = match shared {
+                Some(shared) => shared.clone()?,
+                None => value
+                    .evaluate(context)
+                    .map_err(|e| ResolveError::expression(format!("global_env.{key}"), e))?
+                    .to_string(),
+            };
+            result.insert(key.clone(), value);
+        }
+        Ok(result)
     }
 
     /// Plans one service replica.
@@ -491,14 +520,14 @@ impl<E: Extensions> Planner<'_, '_, E> {
     async fn launch(
         &self,
         spec: LaunchInput<'_>,
-        context: &ExpressionContext,
+        context: &PreparedContext,
     ) -> Result<Launch, ResolveError> {
         let input = self.input;
         let facts = input.facts;
         let lane_path = facts.path.as_path();
         let path = spec.path;
         let evaluating = tracing::trace_span!("evaluate env").entered();
-        let global = env_map(&input.config.global_env, context, "global_env")?;
+        let global = self.global_env(context)?;
         let own = env_map(spec.env, context, &format!("{path}.env"))?;
         // Later profiles win over earlier ones within the profile layer.
         let mut profile = BTreeMap::new();
@@ -737,7 +766,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
     fn sync(
         &self,
         entries: &[SyncConfig],
-        context: &ExpressionContext,
+        context: &PreparedContext,
         path: &str,
     ) -> Result<Vec<SyncSpec>, ResolveError> {
         let facts = self.input.facts;
@@ -829,7 +858,7 @@ pub async fn detect_platform(
 /// value through. `devlanes_config::evaluate_env` would treat that as a cycle.
 fn env_map(
     values: &Env,
-    context: &ExpressionContext,
+    context: &PreparedContext,
     path: &str,
 ) -> Result<BTreeMap<String, String>, ResolveError> {
     let mut result = BTreeMap::new();
@@ -842,10 +871,41 @@ fn env_map(
     Ok(result)
 }
 
+/// `global_env` evaluated once for the lane, in declaration order. Units differ only in
+/// `self` and `replica`, so an entry that reads neither has one value (or one error) for
+/// every unit. `None` marks an entry each unit evaluates itself: one that reads them, or
+/// one whose references cannot be read, so the unit reports the error as before.
+fn shared_globals(
+    values: &Env,
+    lane: &PreparedContext,
+) -> Vec<Option<Result<String, ResolveError>>> {
+    values
+        .iter()
+        .map(|(key, value)| {
+            let per_unit = match value {
+                Templated::Literal(_) => false,
+                Templated::Expression(text) => {
+                    devlanes_config::references(text).map_or(true, |references| {
+                        references
+                            .iter()
+                            .any(|r| matches!(r.split('.').next(), Some("self" | "replica")))
+                    })
+                }
+            };
+            (!per_unit).then(|| {
+                value
+                    .evaluate(lane)
+                    .map(|value| value.to_string())
+                    .map_err(|e| ResolveError::expression(format!("global_env.{key}"), e))
+            })
+        })
+        .collect()
+}
+
 /// Evaluates an optional boolean with a default.
 fn flag(
     value: &Option<Templated<bool>>,
-    context: &ExpressionContext,
+    context: &PreparedContext,
     path: &str,
     default: bool,
 ) -> Result<bool, ResolveError> {
@@ -858,7 +918,7 @@ fn flag(
 /// Evaluates an optional duration.
 fn duration(
     value: Option<&Templated<devlanes_config::ConfigDuration>>,
-    context: &ExpressionContext,
+    context: &PreparedContext,
     path: &str,
 ) -> Result<Option<Duration>, ResolveError> {
     value
@@ -871,7 +931,7 @@ fn duration(
 }
 
 /// Renders a `run` value as one shell command line.
-fn shell_line(run: &Run, context: &ExpressionContext, path: &str) -> Result<String, ResolveError> {
+fn shell_line(run: &Run, context: &PreparedContext, path: &str) -> Result<String, ResolveError> {
     match run {
         Run::Shell(text) => text
             .evaluate(context)
@@ -903,6 +963,7 @@ pub fn container_ready(
     let ReadyConfig::Check(check) = config else {
         return Ok(None);
     };
+    let context = &context.prepare();
     let mut timeout = duration(check.timeout.as_ref(), context, path)?;
     let port_name = |name: &str| (name != "default").then(|| name.to_owned());
     let spec = if let Some(tcp) = &check.tcp {
@@ -960,7 +1021,7 @@ pub fn container_ready(
 /// since a template can produce what a literal would have been refused for.
 fn http_host(
     http: &devlanes_config::HttpReady,
-    context: &ExpressionContext,
+    context: &PreparedContext,
     path: &str,
 ) -> Result<Option<String>, ResolveError> {
     let Some(value) = &http.host else {
@@ -980,7 +1041,7 @@ fn ready(
     config: &ReadyConfig,
     layout: &ServiceLayout,
     cwd: &Path,
-    context: &ExpressionContext,
+    context: &PreparedContext,
     path: &str,
 ) -> Result<Ready, ResolveError> {
     let path = format!("{path}.ready");
@@ -1065,7 +1126,7 @@ fn with_windows_stop_note(mut launch: Launch, signal: StopSignal) -> Launch {
 /// Converts `stop` into a policy; defaults are SIGTERM and ten seconds.
 fn stop_policy(
     stop: Option<&StopConfig>,
-    context: &ExpressionContext,
+    context: &PreparedContext,
     path: &str,
 ) -> Result<StopPolicy, ResolveError> {
     let mut policy = StopPolicy::default();

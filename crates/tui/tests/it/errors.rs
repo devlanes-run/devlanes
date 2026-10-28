@@ -116,6 +116,7 @@ fn fail_start(app: &mut App) {
             lane: "acme@1".into(),
             unit: "portal".into(),
         },
+        units: vec!["acme@1:portal".into()],
         result: Err(ApiError::Rpc(compose_error())),
     });
 }
@@ -289,6 +290,7 @@ async fn a_start_whose_unit_cannot_spawn_reports_it() -> TestResult {
     app.update(Msg::ActionDone {
         label: "start acme@1:portal".into(),
         target: portal.clone(),
+        units: vec!["acme@1:portal".into()],
         result: Ok(spawn_failures(&["portal"])?),
     });
     let notice = app.notice.clone().ok_or("no notice")?;
@@ -307,6 +309,7 @@ async fn a_start_whose_unit_cannot_spawn_reports_it() -> TestResult {
     app.update(Msg::ActionDone {
         label: "start acme@1".into(),
         target: Target::Lane("acme@1".into()),
+        units: Vec::new(),
         result: Ok(spawn_failures(&["portal", "web"])?),
     });
     let notice = app.notice.clone().ok_or("no notice")?;
@@ -682,6 +685,7 @@ async fn random_long_text_never_breaks_borders() -> TestResult {
         app.update(Msg::ActionDone {
             label: rng.text(6),
             target: Target::Lane(reference.clone()),
+            units: Vec::new(),
             result: Err(ApiError::Rpc(RpcError::new(
                 rng.text(2),
                 json!({"message": rng.text(40), "stderr": rng.text(20)}),
