@@ -154,8 +154,9 @@ DEVLANES_PUBLIC_URL_<SERVICE> for every service, plus NODE_EXTRA_CA_CERTS,\n\
 DENO_CERT, SSL_CERT_FILE and REQUESTS_CA_BUNDLE for the devlanes CA unless the\n\
 shell sets them. Afterwards devlanes writes --logs-dir, prints each unit's\n\
 state, run time and average and peak CPU and memory when output is not a\n\
-terminal (CI logs, pipes; also the GitHub step summary), stops what it started\n\
-(and the daemon, if it started it) and exits with the command's exit code.",
+terminal (CI logs, pipes) and adds the same table to the GitHub step summary,\n\
+stops what it started (and the daemon, if it started it) and exits with the\n\
+command's exit code.",
         after_help = WITH_AFTER
     )]
     With(WithArgs),

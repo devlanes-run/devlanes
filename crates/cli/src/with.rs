@@ -238,22 +238,8 @@ pub async fn run_with<D: WithDriver + ?Sized>(
         }
     }
     for failure in &mut failures {
-        if failure.log_tail.is_empty()
-            && let Some(unit) = logs.iter().find(|logs| {
-                logs.unit == failure.unit
-                    || logs.unit == format!("{}:{}", failure.lane, failure.unit)
-            })
-        {
-            failure.log_tail = unit
-                .lines
-                .iter()
-                .rev()
-                .take(20)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .map(|line| line.text.clone())
-                .collect();
+        if failure.log_tail.is_empty() {
+            failure.log_tail = last_lines(&logs, &failure.lane, &failure.unit);
         }
     }
     // The start result with every failure and its tail: one annotation each in
@@ -751,24 +737,37 @@ pub struct ResourceSummary {
     pub text: String,
 }
 
-/// Column headings of the summary table; the first two are text, the rest numbers.
+/// Column headings of the Markdown table; the first two are text, the rest numbers.
 const SUMMARY_COLUMNS: [&str; 7] = [
     "Unit",
     "State",
-    "Ran",
+    "Run time",
     "Avg CPU",
     "Peak CPU",
     "Avg memory",
     "Peak memory",
 ];
 
+/// The same columns in the plain-text table, in the CLI's uppercase style.
+const TEXT_COLUMNS: [&str; 7] = [
+    "UNIT", "STATE", "RUN TIME", "AVG CPU", "PEAK CPU", "AVG MEM", "PEAK MEM",
+];
+
 /// Shown for a value the daemon did not measure (an older daemon has no means).
 const MISSING: &str = "–";
+
+/// Characters kept of one log line in a failed unit's block.
+const TAIL_LINE_CHARS: usize = 500;
+
+/// Bytes all failed units' blocks may take together. GitHub drops a step
+/// summary over 1 MiB whole, and other steps write to it too.
+const TAILS_MAX_BYTES: usize = 64 * 1024;
 
 /// One row per unit under `title` (`devlanes with · acme@0 · exit 0`), with
 /// `tails` holding the last log lines of failed units. `now_ms` ends the run
 /// time of units still running. Empty when there are no units, so no heading
-/// without rows.
+/// without rows. Tail lines are cut at [`TAIL_LINE_CHARS`] and the blocks stop
+/// at [`TAILS_MAX_BYTES`], with one line saying how many units were left out.
 pub fn resource_summary(
     title: &str,
     peaks: &[ResourcePeak],
@@ -809,6 +808,8 @@ pub fn resource_summary(
         let cells: Vec<String> = row.iter().map(|cell| markdown_text(cell)).collect();
         markdown.push_str(&format!("| {} |\n", cells.join(" | ")));
     }
+    let mut tails_bytes = 0;
+    let mut left_out = 0;
     for peak in peaks {
         let Some(tail) = tails.get(&peak.unit).filter(|tail| !tail.is_empty()) else {
             continue;
@@ -818,16 +819,32 @@ pub fn resource_summary(
             .rev()
             .take(20)
             .rev()
-            .map(|line| html_text(&strip_ansi_escapes::strip_str(line).replace('\r', "")))
+            .map(|line| {
+                html_text(&shortened(
+                    &strip_ansi_escapes::strip_str(line).replace('\r', ""),
+                ))
+            })
             .collect();
-        markdown.push_str(&format!(
+        let block = format!(
             "\n<details>\n<summary>{} {}: last log lines</summary>\n\n<pre>\n{}\n</pre>\n\n</details>\n",
             html_text(&one_line(&peak.unit)),
             html_text(&unit_state(peak)),
             lines.join("\n")
+        );
+        if left_out > 0 || tails_bytes + block.len() > TAILS_MAX_BYTES {
+            left_out += 1;
+            continue;
+        }
+        tails_bytes += block.len();
+        markdown.push_str(&block);
+    }
+    if left_out > 0 {
+        let units = if left_out == 1 { "unit" } else { "units" };
+        markdown.push_str(&format!(
+            "\nThe last log lines of {left_out} more failed {units} are left out to keep the step summary small.\n"
         ));
     }
-    let header = SUMMARY_COLUMNS.map(str::to_lowercase);
+    let header = TEXT_COLUMNS.map(str::to_owned);
     let mut widths = header.clone().map(|cell| cell.chars().count());
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row) {
@@ -892,6 +909,14 @@ fn mebibytes(value: Option<u64>) -> String {
         format!("{:.1} GiB", mib / 1024.0)
     } else {
         format!("{mib:.1} MiB")
+    }
+}
+
+/// `line` cut to [`TAIL_LINE_CHARS`] characters, with `…` when cut.
+fn shortened(line: &str) -> String {
+    match line.char_indices().nth(TAIL_LINE_CHARS) {
+        Some((end, _)) => format!("{}…", &line[..end]),
+        None => line.to_owned(),
     }
 }
 

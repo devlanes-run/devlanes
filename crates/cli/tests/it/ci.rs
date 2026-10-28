@@ -213,7 +213,7 @@ async fn github_escaping_and_append_only_summary() {
     Earlier step
     ## devlanes with · acme@0 · exit 1
 
-    | Unit | State | Ran | Avg CPU | Peak CPU | Avg memory | Peak memory |
+    | Unit | State | Run time | Avg CPU | Peak CPU | Avg memory | Peak memory |
     | --- | --- | ---: | ---: | ---: | ---: | ---: |
     | api | ready | 1h 02m | 40.2% | 125.5% | 1.0 MiB | 2.0 MiB |
     | worker | failed (exit 1) | 3s | 1.0% | 3.0% | 1.0 GiB | 3.0 GiB |
@@ -231,16 +231,51 @@ async fn github_escaping_and_append_only_summary() {
     "#);
     insta::assert_snapshot!(summary.text, @r"
     devlanes with · acme@0 · exit 1
-    unit      state               ran  avg cpu  peak cpu  avg memory  peak memory
-    api       ready            1h 02m    40.2%    125.5%     1.0 MiB      2.0 MiB
-    worker    failed (exit 1)      3s     1.0%      3.0%     1.0 GiB      3.0 GiB
-    db_*|<b>  –                     –        –      0.5%           –      1.0 MiB
+    UNIT      STATE            RUN TIME  AVG CPU  PEAK CPU  AVG MEM  PEAK MEM
+    api       ready              1h 02m    40.2%    125.5%  1.0 MiB   2.0 MiB
+    worker    failed (exit 1)        3s     1.0%      3.0%  1.0 GiB   3.0 GiB
+    db_*|<b>  –                       –        –      0.5%        –   1.0 MiB
     ");
     // Nothing measured: no table, not a heading without rows.
     assert_eq!(
         resource_summary("devlanes stop", &[], &BTreeMap::new(), 0),
         ResourceSummary::default()
     );
+}
+
+/// A noisy failure cannot push the step summary past GitHub's size limit: each
+/// tail line is cut, and blocks past the total cap are left out with one line.
+#[test]
+fn summary_tails_are_capped() {
+    let peaks: Vec<ResourcePeak> = (0..40)
+        .map(|index| ResourcePeak {
+            unit: format!("unit{index}"),
+            state: Some("failed".into()),
+            exit_code: Some(1),
+            ..ResourcePeak::default()
+        })
+        .collect();
+    // Escaping makes each `<` five bytes.
+    let line = "<".repeat(16 * 1024);
+    let tails: BTreeMap<String, Vec<String>> = peaks
+        .iter()
+        .map(|peak| (peak.unit.clone(), vec![line.clone(); 20]))
+        .collect();
+    let summary = resource_summary("devlanes stop · acme@0", &peaks, &tails, 0);
+    assert!(
+        summary.markdown.len() < 80 * 1024,
+        "{} bytes",
+        summary.markdown.len()
+    );
+    assert_eq!(summary.markdown.matches("<details>").count(), 1);
+    assert!(
+        summary
+            .markdown
+            .contains(&format!("\n{}…\n", "&lt;".repeat(500)))
+    );
+    assert!(summary.markdown.ends_with(
+        "\nThe last log lines of 39 more failed units are left out to keep the step summary small.\n"
+    ));
 }
 
 #[test]
@@ -754,8 +789,8 @@ async fn with_success_and_command_failure_preserve_exit_codes_and_summary() {
     }
     insta::assert_json_snapshot!(snapshots, @r#"
     {
-      "0": "exit=0\n::group::services\n::endgroup::\ndevlanes with · acme@0 · exit 0\nunit  state  ran  avg cpu  peak cpu  avg memory  peak memory\napi   ready    –     5.0%     20.0%     0.5 MiB      1.0 MiB\n",
-      "3": "exit=3\n::group::services\n::endgroup::\ndevlanes with · acme@0 · exit 3\nunit  state  ran  avg cpu  peak cpu  avg memory  peak memory\napi   ready    –     5.0%     20.0%     0.5 MiB      1.0 MiB\n"
+      "0": "exit=0\n::group::services\n::endgroup::\ndevlanes with · acme@0 · exit 0\nUNIT  STATE  RUN TIME  AVG CPU  PEAK CPU  AVG MEM  PEAK MEM\napi   ready         –     5.0%     20.0%  0.5 MiB   1.0 MiB\n",
+      "3": "exit=3\n::group::services\n::endgroup::\ndevlanes with · acme@0 · exit 3\nUNIT  STATE  RUN TIME  AVG CPU  PEAK CPU  AVG MEM  PEAK MEM\napi   ready         –     5.0%     20.0%  0.5 MiB   1.0 MiB\n"
     }
     "#);
 }
@@ -830,8 +865,8 @@ async fn with_start_failure_writes_logs_and_stops_without_running_command() {
     failed acme@0:api exit=1
       | missing config
     devlanes with · acme@0 · exit 1
-    unit  state            ran  avg cpu  peak cpu  avg memory  peak memory
-    api   failed (exit 1)   3s     5.0%     20.0%     0.5 MiB      1.0 MiB
+    UNIT  STATE            RUN TIME  AVG CPU  PEAK CPU  AVG MEM  PEAK MEM
+    api   failed (exit 1)        3s     5.0%     20.0%  0.5 MiB   1.0 MiB
     "#);
     // The failed unit's last lines, as its annotation has them, folded away.
     let markdown = tokio::fs::read_to_string(runtime.summary_path.expect("path"))
@@ -840,7 +875,7 @@ async fn with_start_failure_writes_logs_and_stops_without_running_command() {
     insta::assert_snapshot!(markdown, @r#"
     ## devlanes with · acme@0 · exit 1
 
-    | Unit | State | Ran | Avg CPU | Peak CPU | Avg memory | Peak memory |
+    | Unit | State | Run time | Avg CPU | Peak CPU | Avg memory | Peak memory |
     | --- | --- | ---: | ---: | ---: | ---: | ---: |
     | api | failed (exit 1) | 3s | 5.0% | 20.0% | 0.5 MiB | 1.0 MiB |
 
@@ -939,8 +974,8 @@ async fn with_timed_out_start_reports_every_unready_unit() {
     ::error title=api exited 1::missing config
     ::error title=worker failed::waiting for queue
     devlanes with · acme@0 · exit 1
-    unit  state            ran  avg cpu  peak cpu  avg memory  peak memory
-    api   failed (exit 1)   3s     5.0%     20.0%     0.5 MiB      1.0 MiB
+    UNIT  STATE            RUN TIME  AVG CPU  PEAK CPU  AVG MEM  PEAK MEM
+    api   failed (exit 1)        3s     5.0%     20.0%  0.5 MiB   1.0 MiB
     ");
 }
 
@@ -1064,9 +1099,9 @@ async fn stop_artifacts_and_summary_do_not_stop_daemon() {
     assert!(
         output.contains(
             "devlanes stop · acme@0\n\
-             unit  state    ran  avg cpu  peak cpu  avg memory  peak memory\n\
-             api   stopped    –     5.0%     20.0%     0.5 MiB      1.0 MiB\n\
-             db    ready      –        –      3.0%           –      2.0 MiB\n"
+             UNIT  STATE    RUN TIME  AVG CPU  PEAK CPU  AVG MEM  PEAK MEM\n\
+             api   stopped         –     5.0%     20.0%  0.5 MiB   1.0 MiB\n\
+             db    ready           –        –      3.0%        –   2.0 MiB\n"
         ),
         "{output}"
     );
