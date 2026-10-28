@@ -142,7 +142,9 @@ Units get the CA through `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BU
 
 ## Hostnames
 
-Windows' DNS client answers every `*.localhost` name with loopback, so Node, Python, browsers and other programs that use the system resolver reach lane hostnames with no setup. devlanes never writes the hosts file on Windows: `devlanes certs trust --hosts`, `hostnames.hosts_file: always` and `hostnames.resolver: hosts_file` have nothing to install, and `--hosts` says so. `devlanes doctor` shows the lookup the daemon tried when it started.
+On Windows 11 the DNS client answers every `*.localhost` name with loopback, so Node, Python, browsers and other programs that use the system resolver reach lane hostnames with no setup. devlanes never writes the hosts file on Windows: `devlanes certs trust --hosts`, `hostnames.hosts_file: always` and `hostnames.resolver: hosts_file` have nothing to install, and `--hosts` says so. `devlanes doctor` shows the lookup the daemon tried when it started.
+
+Windows Server, including Windows Server 2025 on GitHub's `windows-latest` runner, does not resolve these names: the daemon warns at start that its test lookup failed, and programs that use the system resolver get "not found" (Node's `ENOTFOUND`). Chrome, Edge and Firefox still resolve them themselves. For other programs, add each hostname to `C:\Windows\System32\drivers\etc\hosts` from an elevated shell, such as `127.0.0.1 api.acme.localhost`; wildcard names cannot go there. The [devlanes action](https://github.com/devlanes-run/action) adds these entries itself on Windows runners.
 
 The resolver strategy works as on macOS and Linux:
 

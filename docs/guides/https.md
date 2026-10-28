@@ -4,7 +4,7 @@ Every service with `hosts` is reachable at `https://<host>` through the daemon's
 
 ## The flow
 
-1. The browser resolves `api.acme-2.localhost`. Chrome, Firefox and the macOS 26, systemd-resolved and Windows resolvers answer `*.localhost` with loopback by themselves; nothing is configured.
+1. The browser resolves `api.acme-2.localhost`. Chrome, Firefox and the resolvers of macOS 26, systemd-resolved and Windows 11 answer `*.localhost` with loopback by themselves; nothing is configured. Older macOS versions and Windows Server do not ([programs that cannot resolve *.localhost](#programs-that-cannot-resolve-localhost)).
 2. It connects to port 443 (or 8443 when 443 could not be bound) and sends the hostname in the TLS handshake. The proxy looks the name up in its route table. An unknown name is refused at the handshake, so only registered hostnames ever get a certificate.
 3. The proxy signs a leaf certificate for that name with the devlanes CA, valid 30 days, cached for 24 hours, and completes the handshake with HTTP/2 or HTTP/1.1.
 4. The request goes to `127.0.0.1:<service port>` over HTTP/1.1 with `Host` preserved, `X-Forwarded-Proto: https`, `X-Forwarded-Host`, `X-Forwarded-For`, `X-Forwarded-Port` and `Forwarded`. WebSocket upgrades are bridged with no idle timeout.
@@ -25,7 +25,7 @@ What it does per OS, by the stores in `tls.trust` (default `[system]`):
 | OS | `system` | `chrome` | `firefox` |
 | --- | --- | --- | --- |
 | macOS | login keychain, trusted as root for your user (GUI password dialog, no sudo); Safari, Chrome, Edge and `/usr/bin/curl` read it; Firefox 120+ too | same store as `system` | `certutil` into every Firefox profile; needs `brew install nss` |
-| Linux | anchor directory of your distro (`/usr/local/share/ca-certificates`, `/etc/pki/ca-trust/source/anchors`, …) then `update-ca-certificates` or `update-ca-trust`, through sudo | `~/.pki/nssdb` with `certutil`; Chrome, Chromium and Playwright's browsers read it | every profile under `~/.mozilla/firefox` (snap and flatpak paths too); needs `libnss3-tools` or `nss-tools` |
+| Linux | anchor directory of your distro (`/usr/local/share/ca-certificates`, `/etc/pki/ca-trust/source/anchors`, …) then `update-ca-certificates` or `update-ca-trust`, through sudo | `~/.pki/nssdb` with `certutil`; Chrome, Chromium and Playwright's Chromium read it, Playwright's Firefox does not | every profile under `~/.mozilla/firefox` (snap and flatpak paths too); needs `libnss3-tools` or `nss-tools` |
 | Windows | your user root store `Cert:\CurrentUser\Root`, no administrator rights; Windows asks you to confirm each change in a security warning; Chrome, Edge and `curl.exe` read it; Firefox 120+ too | same store as `system` | same store as `system` |
 
 On Linux the system store does not reach browsers, so set `tls.trust: [system, chrome, firefox]` in `~/.devlanes/config.yaml` there. Inside WSL, where the browser usually runs on Windows, add `windows` for the Windows user root store ([WSL](wsl.md#trusting-the-ca-in-windows)). `devlanes certs untrust` removes the CA from the same stores; `--keep-ca` with `--hosts` or `--resolver` removes only those extras.
@@ -77,13 +77,13 @@ Tenant-style subdomains (`*.pages-2.localhost`) are fine as long as the lane ind
 
 ## Programs that cannot resolve *.localhost
 
-workerd (Wrangler), musl binaries, pure-Go programs built without cgo, Safari before macOS 26 and anything inside a container send `*.localhost` to DNS. Programs on the host have two answers; containers have neither and should use `host.docker.internal:<port>` (see the table above):
+workerd (Wrangler), musl binaries, pure-Go programs built without cgo, programs that use the system resolver on macOS before 26 (Safari included) and anything inside a container send `*.localhost` to DNS. Programs on the host have two answers; containers have neither and should use `host.docker.internal:<port>` (see the table above):
 
 ```sh
 devlanes certs trust --hosts
 ```
 
-installs a small root-owned helper (`/usr/local/libexec/devlanes-hosts`) with a sudoers rule for it alone, and the daemon then keeps a `# devlanes begin` / `# devlanes end` block in `/etc/hosts` with the exact hostnames of projects that want it. Wildcards cannot be written there; programs on the host reach wildcard hostnames only with the resolver strategy below, and only under its TLD. The user setting `hostnames.hosts_file` is `auto` by default, which writes names only when a startup probe shows the system resolver fails `*.localhost`; `lanes.hosts_file: always` in a project forces it for that project (Wrangler repos want this), `never` in the user config wins over every project. `crates/hosts-helper/README.md` describes what the helper accepts and refuses. Windows resolves every `*.localhost` name itself, so there devlanes never writes the hosts file and `--hosts` has nothing to install.
+installs a small root-owned helper (`/usr/local/libexec/devlanes-hosts`) with a sudoers rule for it alone, and the daemon then keeps a `# devlanes begin` / `# devlanes end` block in `/etc/hosts` with the exact hostnames of projects that want it. Wildcards cannot be written there; programs on the host reach wildcard hostnames only with the resolver strategy below, and only under its TLD. The user setting `hostnames.hosts_file` is `auto` by default, which writes names only when a startup probe shows the system resolver fails `*.localhost`; `lanes.hosts_file: always` in a project forces it for that project (Wrangler repos want this), `never` in the user config wins over every project. `crates/hosts-helper/README.md` describes what the helper accepts and refuses. devlanes never writes the hosts file on Windows and `--hosts` has nothing to install there. Windows 11 resolves every `*.localhost` name itself; Windows Server does not, so there add the names to the hosts file by hand ([Windows](windows.md#hostnames)).
 
 ```yaml
 # ~/.devlanes/config.yaml

@@ -109,7 +109,7 @@ dl certs untrust --hosts             # removes both
 dl certs untrust --hosts --keep-ca   # removes only the helper
 ```
 
-`crates/hosts-helper/README.md` explains what that installs and why. On Windows there is no helper: `*.localhost` resolves natively, `certs trust` shows a Windows security warning instead of a password prompt, `curl.exe` needs `--ssl-revoke-best-effort`, and `certs trust --resolver` writes an NRPT rule after a UAC prompt ([Windows](docs/guides/windows.md)).
+`crates/hosts-helper/README.md` explains what that installs and why. On Windows there is no helper: `*.localhost` resolves natively on Windows 11 (not on Windows Server), `certs trust` shows a Windows security warning instead of a password prompt, `curl.exe` needs `--ssl-revoke-best-effort`, and `certs trust --resolver` writes an NRPT rule after a UAC prompt ([Windows](docs/guides/windows.md)).
 
 ## Docker and compose
 

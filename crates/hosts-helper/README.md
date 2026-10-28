@@ -376,8 +376,9 @@ DEVLANES_HOSTS_HELPER=$PWD/target/release/devlanes-hosts \
 Bump `PROTOCOL` in `src/lib.rs` whenever arguments, input or output change in a
 way an older daemon or helper would misread.
 
-The helper is Unix only. Windows answers every `*.localhost` name itself, so
-devlanes writes no hosts file there and `certs trust --hosts` only says so.
+The helper is Unix only. Windows 11 answers every `*.localhost` name itself, so
+devlanes writes no hosts file on Windows and `certs trust --hosts` only says so.
+Windows Server does not; the hosts file entries are added by hand there.
 On Windows the library keeps the name rules and constants, and the binary
 prints that it is not supported and exits 2.
 
