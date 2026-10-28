@@ -10,7 +10,7 @@
 //! Which box lane serves hostnames that several lanes claim is the
 //! [`assign`](super::assign) decision; a box lane it skips is skipped whole, and
 //! a port another box's lane owns is reported with that box. A stopped local
-//! lane that gave way to a chosen box lane keeps no port either.
+//! lane a chosen box lane is in use instead of keeps no port either.
 //!
 //! The listeners are the daemon's, not this mirror's
 //! ([`Listeners`](super::listeners::Listeners)). When the decision moves a
@@ -65,8 +65,11 @@ const HOLD: Duration = Duration::from_secs(10);
 const OPEN_WARNING_EVERY: Duration = Duration::from_secs(60);
 
 /// How long a connection to a box that lost its lane stays open after the
-/// box last spoke, so the end of an answer gets through.
-const SWITCH_QUIET: Duration = Duration::from_millis(50);
+/// box last spoke, so the end of an answer gets through. Streamed SSR pages
+/// and slow chunked answers pause between chunks, often for a few tens of
+/// milliseconds and sometimes longer, and closing in such a pause would cut
+/// the answer. An idle connection still closes at once.
+const SWITCH_QUIET: Duration = Duration::from_millis(300);
 
 /// Longest a connection to a box that lost its lane stays open, answer under
 /// way or not.
@@ -95,6 +98,10 @@ pub(super) struct View {
     pub open_errors: BTreeMap<u16, OpenFailure>,
     /// When the last `open_failed` warning per port and reason went out.
     pub warned: BTreeMap<(u16, &'static str), Instant>,
+    /// The lanes this mirror built routes for, live or kept aside. Only
+    /// they count in the assignment, so the box never wins a lane whose
+    /// hostnames would then lead nowhere.
+    pub built: BTreeSet<String>,
 }
 
 /// A connection to a mirrored port that did not reach the box's service.
@@ -308,6 +315,9 @@ struct Mirror {
     relays: BTreeSet<(String, u16)>,
     /// Lanes the assignment skips, as last reported.
     skipped: BTreeMap<LaneKey, Skip>,
+    /// Lane references mirrored because a choice names this box, as of the
+    /// last reconcile.
+    chosen: BTreeSet<String>,
 }
 
 /// Keeps the host's listeners and routes in step with its registry, the link
@@ -323,6 +333,7 @@ pub(super) async fn run(engine: Weak<Inner>, conn: Arc<HostConn>) {
         ports: BTreeMap::new(),
         relays: BTreeSet::new(),
         skipped: BTreeMap::new(),
+        chosen: BTreeSet::new(),
     };
     let mut bus = inner.bus.subscribe();
     drop(inner);
@@ -403,6 +414,7 @@ impl Mirror {
         let (version, _) = engine.reassign();
         self.release_all(engine).await;
         self.skipped.clear();
+        self.chosen.clear();
         let (had_routes, had_ports) = {
             let mut view = lock(&self.conn.view);
             let had = (
@@ -451,9 +463,10 @@ impl Mirror {
         }
         for (lane, skip) in &skipped {
             // Said once, when the lane stops being mirrored. A lane that lost
-            // to a choice is a switch someone asked for, which `remote.use`
-            // announces itself.
-            if !self.skipped.contains_key(lane) && skip.cause != Cause::BoxChosen {
+            // to a choice, or that a choice no longer holds, follows a change
+            // `lane_switched` or `choice_cleared` already announced.
+            let switched = skip.cause == Cause::BoxChosen || self.chosen.contains(&lane_ref(lane));
+            if !self.skipped.contains_key(lane) && !switched {
                 tracing::warn!(host = %self.conn.name, lane = %lane_ref(lane), hosts = ?skip.hosts, winner = ?skip.winner, cause = skip.cause.as_str(), "lane skipped: another lane serves its hostnames");
                 engine.bus.emit(
                     wire::WARNING_EVENT,
@@ -471,10 +484,18 @@ impl Mirror {
             }
         }
         self.skipped = skipped;
+        self.chosen = assignment
+            .chosen
+            .iter()
+            .filter(|(host, _)| *host == self.conn.name)
+            .map(|(_, lane)| lane.clone())
+            .collect();
+        // A lane the assignment has not seen yet is neither: it binds nothing
+        // until it counts.
         let mirrored: Vec<&UnitInfo> = visible
             .iter()
             .copied()
-            .filter(|unit| !self.skipped.contains_key(&unit.key.lane))
+            .filter(|unit| assignment.mirrors(&self.conn.name, &lane_ref(&unit.key.lane)))
             .collect();
 
         // Idle units are not bound, so their numbers stay free until they start.
@@ -674,21 +695,22 @@ impl Mirror {
 
         // Hostnames: the proxy dials 127.0.0.1 first, so a routed port this
         // machine does not hold there for the lane gets a relay on an
-        // ephemeral port instead. Skipped lanes get their routes too, kept
-        // aside: when a switch gives this box the lane, the route publisher
-        // takes them at once, before this mirror reconciles again.
+        // ephemeral port instead. Skipped lanes and lanes the assignment has
+        // not seen yet get their routes too, kept aside: when the assignment
+        // gives this box the lane, the route publisher takes them at once,
+        // before this mirror reconciles again.
         let mut routes = Vec::new();
         let mut standby = Vec::new();
         let mut relays = BTreeSet::new();
         let mut refused_hosts = Vec::new();
         let box_https_port = lock(&self.conn.info).https_port;
         for unit in &visible {
-            let is_mirrored = !self.skipped.contains_key(&unit.key.lane);
+            let reference = lane_ref(&unit.key.lane);
+            let is_mirrored = assignment.mirrors(&self.conn.name, &reference);
             let lane = registry
                 .lanes()
                 .find(|lane| lane.key == unit.key.lane)
                 .cloned();
-            let reference = lane_ref(&unit.key.lane);
             for host in &unit.hosts {
                 // The local CA signs whatever the routes name, so a box may only
                 // claim valid names this machine already routes to itself.
@@ -815,10 +837,18 @@ impl Mirror {
             refused_hosts,
             open_errors: BTreeMap::new(),
             warned: BTreeMap::new(),
+            built: visible
+                .iter()
+                .map(|unit| lane_ref(&unit.key.lane))
+                .collect(),
         };
         let routes_changed = {
             let mut current = lock(&self.conn.view);
-            let changed = current.routes != view.routes || current.standby != view.standby;
+            // New lanes count in the assignment from this publish on, which
+            // reassigns with them.
+            let changed = current.routes != view.routes
+                || current.standby != view.standby
+                || current.built != view.built;
             if changed
                 || current.ports != view.ports
                 || current.skipped != view.skipped
@@ -937,7 +967,7 @@ fn route_status(state: &str, phase: Phase) -> RouteStatus {
 
 /// This machine's port blocks, each with a description of its owner for
 /// conflict messages. Box ports inside them are never mirrored. The blocks of
-/// stopped lanes that gave way to a chosen box lane are left out: the chosen
+/// stopped lanes a chosen box lane is in use instead of are left out: the chosen
 /// lane gets its ports too, until the local lane starts again.
 async fn local_blocks(engine: &Arc<Inner>, assignment: &Assignment) -> Vec<(PortBlock, String)> {
     let records = match engine.store.port_blocks().await {
@@ -1280,14 +1310,10 @@ pub(super) async fn accept_loop(
     loop {
         match listener.accept().await {
             Ok((stream, _)) => {
-                if let Some(owner) = target.current() {
-                    tokio::spawn(splice(
-                        stream,
-                        port,
-                        owner.conn,
-                        engine.clone(),
-                        owner.conns,
-                    ));
+                if let Some(owner) = target.current()
+                    && let Some(conn) = owner.conn.upgrade()
+                {
+                    tokio::spawn(splice(stream, port, conn, engine.clone(), owner.conns));
                 }
             }
             Err(error) => {

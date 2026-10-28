@@ -1604,6 +1604,32 @@ impl Drop for BringupMark {
     }
 }
 
+/// One start's or `infra up`'s share of the lane's `claiming` count.
+pub(crate) struct ClaimMark {
+    lane: Arc<LaneRt>,
+}
+
+impl Drop for ClaimMark {
+    /// Ends this share; the lane's units and containers count from then on.
+    fn drop(&mut self) {
+        let mut st = self.lane.st();
+        st.claiming = st.claiming.saturating_sub(1);
+    }
+}
+
+impl Inner {
+    /// Counts `lane` as running for box lanes it clashes with until the mark
+    /// drops, and waits until the mirrors gave those lanes up, so their ports
+    /// are free before infra or a service binds them.
+    pub(crate) async fn claim_ports(&self, lane: &Arc<LaneRt>) -> ClaimMark {
+        lane.st().claiming += 1;
+        let mark = ClaimMark { lane: lane.clone() };
+        let (version, _) = self.reassign();
+        self.await_applied(version).await;
+        mark
+    }
+}
+
 /// One start's share of the lane's `starting` state.
 struct StartingMark {
     lane: Arc<LaneRt>,
@@ -2699,10 +2725,6 @@ impl Inner {
         // index this one plans on alone; ends however the start returns.
         lane.st().starting += 1;
         let starting = StartingMark { lane: lane.clone() };
-        // A starting lane counts as running for box lanes that clash with it,
-        // whatever it starts, so it takes its hostnames back now and a choice
-        // of a box for them is cleared.
-        self.reassign();
         // Units already running are left alone, so a frozen lane would stay frozen.
         self.wake_lane(project, lane, Some(Activity::Command))
             .instrument(tracing::debug_span!("wake"))
@@ -2785,6 +2807,14 @@ impl Inner {
         .map_err(|error| fail(crate::resolve::resolve_error(&error)))?;
         // Kept only once valid, so a typo does not stick to the lane.
         lane.st().profiles = selection.profiles.clone();
+        // From here the lane counts as running for box lanes that clash with
+        // it, whatever it starts, so it takes their hostnames and ports and a
+        // choice of a box for them is cleared. Not before: a start its checks
+        // refuse takes nothing from a box.
+        let _claim = self
+            .claim_ports(lane)
+            .instrument(tracing::debug_span!("claim ports"))
+            .await;
         let infra_enabled = !matches!(
             selection
                 .profile_options

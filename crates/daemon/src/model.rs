@@ -347,6 +347,10 @@ pub(crate) struct LaneSt {
     /// Starts between their decision to run and the end of their phases. The
     /// lane reads `starting` until the last of them is done.
     pub starting: usize,
+    /// Starts and `infra up`s that passed their checks and have not returned.
+    /// The lane counts as running for box lanes that clash with it while
+    /// one is, so a start that fails its checks takes nothing from a box.
+    pub claiming: usize,
     /// Spawns in flight ([`SpawnGuard`]). A stop waits until none is left before
     /// it picks its targets, so no unit appears after it looked.
     pub spawning: usize,
@@ -516,6 +520,7 @@ impl LaneSt {
             waiting: BTreeMap::new(),
             bringup: None,
             starting: 0,
+            claiming: 0,
             spawning: 0,
             spawned: Arc::new(Notify::new()),
             ports_pending: false,

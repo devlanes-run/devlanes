@@ -67,7 +67,7 @@ impl Inner {
         self.with_remote_routes(local, &assignment)
     }
 
-    /// Drops the routes of local lanes that gave way to a chosen box lane and
+    /// Drops the routes of local lanes a chosen box lane is in use instead of, and
     /// appends the mirrored routes of the box lanes `assignment` mirrors whose
     /// hostnames no local route claims, in connect order.
     fn with_remote_routes(

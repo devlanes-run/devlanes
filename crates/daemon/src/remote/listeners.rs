@@ -27,6 +27,8 @@ use crate::{engine::Inner, model::lock};
 /// the assignment's `listeners` and `relays`. When the assignment moves a
 /// lane to another box, [`Listeners::apply`] repoints every listener and
 /// relay of the lane in one step and closes the connections to the old box.
+/// One box serves a lane reference at a time, which the assignment
+/// guarantees, so a relay keyed by lane and port has one owner.
 /// Nothing is unbound, so no other program can take the port meanwhile and
 /// no two boxes ever race to bind it. Routes name the same local port before
 /// and after, so the route table only changes which box it names. When the
@@ -40,8 +42,8 @@ use crate::{engine::Inner, model::lock};
 /// when the port is no longer wanted and no other box lane owns it
 /// ([`Listeners::release`]), when the port is held elsewhere on this machine,
 /// or when a local lane takes the port back. A listener whose port has no
-/// owner left is unbound by the next reconcile ([`Listeners::sweep`]). A
-/// relay stays while any box's routes use it.
+/// owner left is retired like a relay and unbound by the next reconcile
+/// ([`Listeners::sweep`]). A relay stays while any box's routes use it.
 ///
 /// Targets are only set under the remote assignment lock, from the current
 /// assignment. A mirror that reconciles with an older assignment can bind or
@@ -75,16 +77,37 @@ pub(super) struct Target(Mutex<Option<Owner>>);
 /// accepted for it.
 #[derive(Clone)]
 pub(super) struct Owner {
-    pub conn: Arc<HostConn>,
+    /// Weak, so a retired listener keeps no disconnected box alive.
+    pub conn: Weak<HostConn>,
+    /// The box's connect serial and name.
+    pub serial: u64,
+    pub host: String,
     pub lane: String,
     pub unit: String,
     pub conns: CancellationToken,
 }
 
 impl Owner {
+    /// A target for `lane`'s `unit` on `conn`.
+    pub(super) fn new(conn: &Arc<HostConn>, lane: String, unit: String) -> Self {
+        Self {
+            conn: Arc::downgrade(conn),
+            serial: conn.serial,
+            host: conn.name.clone(),
+            lane,
+            unit,
+            conns: CancellationToken::new(),
+        }
+    }
+
     /// Whether `self` and `other` are the same box lane.
     fn same(&self, other: &Owner) -> bool {
-        self.conn.serial == other.conn.serial && self.lane == other.lane
+        self.serial == other.serial && self.lane == other.lane
+    }
+
+    /// Whether the assignment no longer names it ([`Target::retire`]).
+    fn retired(&self) -> bool {
+        self.conns.is_cancelled()
     }
 }
 
@@ -99,7 +122,7 @@ impl Target {
     fn point(&self, owner: Option<Owner>) {
         let mut current = lock(&self.0);
         match (current.as_mut(), owner) {
-            (Some(now), Some(next)) if now.same(&next) && !now.conns.is_cancelled() => {
+            (Some(now), Some(next)) if now.same(&next) && !now.retired() => {
                 now.unit = next.unit;
             }
             (_, next) => {
@@ -112,18 +135,22 @@ impl Target {
     }
 
     /// Closes the connections to the current box lane, but keeps leading new
-    /// ones there, each closed once answered. For a relay whose lane went to a
-    /// box that routes it through another relay: a request the proxy sends
-    /// before it has the new routes still gets an answer, from the old box.
+    /// ones there, each closed once answered, until the listener goes. For a
+    /// lane that went to a box using other port numbers: a request sent
+    /// before the proxy or a client has the new numbers still gets an
+    /// answer, from the old box.
     fn retire(&self) {
         if let Some(now) = lock(&self.0).as_ref() {
             now.conns.cancel();
         }
     }
 
-    /// The connect serial of the box it leads to.
+    /// The connect serial of the box it leads to, unless retired.
     fn serial(&self) -> Option<u64> {
-        lock(&self.0).as_ref().map(|owner| owner.conn.serial)
+        lock(&self.0)
+            .as_ref()
+            .filter(|owner| !owner.retired())
+            .map(|owner| owner.serial)
     }
 }
 
@@ -134,15 +161,18 @@ impl Listeners {
     /// Points every listener and relay at its owner in `assignment`. Called
     /// with the assignment lock held, right after the assignment changed.
     pub(super) fn apply(&self, assignment: &Assignment, resolve: Resolve<'_>) {
+        // Only lanes that moved to a box with other port numbers, or that no
+        // box serves now, find no owner; forks of one lane share the numbers
+        // and are repointed. A retired port goes with the next sweep.
         for (port, slot) in lock(&self.ports).iter() {
-            slot.target
-                .point(assignment.listeners.get(port).and_then(resolve));
+            match assignment.listeners.get(port).and_then(resolve) {
+                Some(owner) => slot.target.point(Some(owner)),
+                None => slot.target.retire(),
+            }
         }
         for (key, slot) in lock(&self.relays).iter() {
             match assignment.relays.get(key).and_then(resolve) {
                 Some(owner) => slot.target.point(Some(owner)),
-                // Only lanes that moved to a box with other port numbers get
-                // here; forks of one lane share the relay and are repointed.
                 None => slot.target.retire(),
             }
         }
@@ -193,7 +223,7 @@ impl Listeners {
                 && slot
                     .target
                     .current()
-                    .is_some_and(|owner| owner.lane == lane)
+                    .is_some_and(|owner| owner.lane == lane && !owner.retired())
         })
     }
 
@@ -246,7 +276,7 @@ impl Listeners {
             .filter(|(_, slot)| !slot.bound.is_empty())
             .filter_map(|(port, slot)| {
                 let owner = slot.target.current()?;
-                (owner.conn.serial == serial)
+                (owner.serial == serial && !owner.retired())
                     .then(|| (*port, format!("{}:{}", owner.lane, owner.unit)))
             })
             .collect()
@@ -258,12 +288,10 @@ impl Listeners {
             .iter()
             .find(|(port, slot)| ports.contains(*port) && !slot.bound.is_empty())
             .map(|(port, slot)| {
-                let owner = slot.target.current().map(|owner| {
-                    (
-                        owner.conn.name.clone(),
-                        format!("{}:{}", owner.lane, owner.unit),
-                    )
-                });
+                let owner = slot
+                    .target
+                    .current()
+                    .map(|owner| (owner.host, format!("{}:{}", owner.lane, owner.unit)));
                 (*port, owner)
             })
     }
@@ -341,17 +369,12 @@ mod tests {
 
     /// An owner of `lane` on `conn`.
     fn owner(conn: &Arc<HostConn>, lane: &str) -> Owner {
-        Owner {
-            conn: conn.clone(),
-            lane: lane.into(),
-            unit: "web".into(),
-            conns: CancellationToken::new(),
-        }
+        Owner::new(conn, lane.into(), "web".into())
     }
 
     /// Repointing a listener keeps it bound and closes only the old owner's
     /// connections. The same owner again keeps them, and a port without an
-    /// owner is swept.
+    /// owner is retired, then swept.
     #[tokio::test]
     async fn a_switch_repoints_without_unbinding() {
         let (_state, receiver) =
@@ -413,7 +436,35 @@ mod tests {
         listeners.release(port, 1).await;
         assert_eq!(listeners.addresses(port).len(), 1);
 
+        // Without an owner it is retired: fork-b's connections close, the
+        // port stays bound until the next sweep, and it keeps fork-b alive
+        // no longer than its connection.
+        let kept = listeners
+            .ports
+            .lock()
+            .ok()
+            .and_then(|ports| ports.get(&port).and_then(|slot| slot.target.current()))
+            .expect("fork-b owns it");
         listeners.apply(&Assignment::default(), &resolve);
+        assert!(kept.conns.is_cancelled());
+        assert_eq!(
+            listeners.addresses(port).len(),
+            1,
+            "a retired port stays bound"
+        );
+        assert!(listeners.bound_by(2).is_empty());
+        assert!(!listeners.serves_v4(port, "acme@0"));
+        drop(fork_b);
+        let retired = listeners
+            .ports
+            .lock()
+            .ok()
+            .and_then(|ports| ports.get(&port).and_then(|slot| slot.target.current()))
+            .expect("still retired");
+        assert!(
+            retired.conn.upgrade().is_none(),
+            "keeps no disconnected box"
+        );
         listeners.sweep().await;
         assert!(listeners.addresses(port).is_empty(), "nobody owns it");
     }

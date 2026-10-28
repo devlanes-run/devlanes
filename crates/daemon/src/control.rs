@@ -1302,6 +1302,8 @@ impl Inner {
             st.orphans.clear();
         }
         lock(&self.projects).clear();
+        // The store lost them too, and the routes below must not follow them.
+        self.forget_all_choices();
         self.publish_routes();
         self.bus
             .emit(events::RESYNC, json!({"reason": "reset_state"}));
@@ -1371,6 +1373,9 @@ impl Inner {
         // Compose and Docker refuse to start paused containers.
         self.wake_lane(&project, &lane, Some(crate::idle::Activity::Command))
             .await;
+        // The containers bind the lane's ports, so box lanes it clashes with
+        // give them up first. Its containers keep it counted once up.
+        let claim = self.claim_ports(&lane).await;
         let up = self.integ.infra.up(&spec).await.map_err(RpcError::from)?;
         {
             let mut st = lane.st();
@@ -1378,6 +1383,7 @@ impl Inner {
             st.infra_containers = up.containers.clone();
             st.setup_env = up.setup_env.clone();
         }
+        drop(claim);
         self.refresh_views_held(&project, &lane).await;
         Ok(
             json!({"lane": lane.st().reference(&project.name()), "infra": up.report, "endpoints": up.namespace}),
@@ -1402,7 +1408,16 @@ impl Inner {
                 json!({"lanes_running": running, "flag": "--yes"}),
             ));
         }
-        self.integ.infra.down(&spec).await.map_err(RpcError::from)
+        let down = self.integ.infra.down(&spec).await.map_err(RpcError::from)?;
+        // The lanes no longer hold the shared containers' ports, which box
+        // lanes they clash with may take back.
+        for lane in project.lanes() {
+            lane.st()
+                .infra_containers
+                .retain(|container| !container.shared);
+        }
+        self.reassign();
+        Ok(down)
     }
 
     /// `infra.status` for the request's lane.

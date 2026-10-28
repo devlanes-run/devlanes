@@ -3,9 +3,10 @@
 //! reuses.
 //!
 //! Both forks of a test project use the same port numbers, as forks of one
-//! image do. Box and client share this machine, so only `alpha` runs real
-//! servers on those numbers. `beta` lists them on units that bind nothing,
-//! and its tunnel dials its own servers on other ports instead ([`MapDialer`]).
+//! image do. Box and client share this machine, so at most `alpha` runs real
+//! servers on those numbers. A fork that doesn't lists them on units that
+//! bind nothing, and its tunnel dials its own servers on other ports instead
+//! ([`MapDialer`]).
 
 use std::{
     collections::BTreeMap,
@@ -30,8 +31,9 @@ use tokio::{
 use super::{BOX, BoxSide, ClientSide, SOON, box_port, http_get, ipv6_loopback};
 use crate::{LIMIT, Temp, cx, eventually, repo, temp};
 
-// Port ranges: 13500-14999, below the DNS server's 15353 and the other remote
-// tests, which no other test in this binary uses. Each test takes its own part.
+// Port ranges: 13000-14999, below the DNS server's 15353 and the other remote
+// tests, and 26000-26999, which no other test in this binary uses. Each test
+// takes its own part.
 
 /// The hostnames the fork project routes.
 const FORK_HOSTS: [&str; 2] = ["web.forkapp.localhost", "docs.forkapp.localhost"];
@@ -83,30 +85,44 @@ impl Dialer for MapDialer {
 /// Two forks of `forkapp` with the box port ranges in `ranges`, `alpha`
 /// serving `web` and `docs` itself and `beta` through its hidden servers.
 async fn forks(tmp: &Temp, ranges: [&str; 2], web: u16, docs: u16) -> (BoxSide, BoxSide) {
-    let alpha_repo = repo(
-        &tmp.path,
-        "forkalpha",
-        &fork_project("alpha", web, docs, true),
-    );
-    let beta_repo = repo(
-        &tmp.path,
-        "forkbeta",
-        &fork_project("beta", web, docs, false),
-    );
-    let alpha = BoxSide::start(tmp, "alpha", ranges[0]).await;
-    let dialer = Arc::new(MapDialer::default());
-    let beta = BoxSide::start_with(tmp, "beta", ranges[1], Some(dialer.clone())).await;
-    for (side, repo) in [(&alpha, &alpha_repo), (&beta, &beta_repo)] {
+    let configs = [
+        fork_project("alpha", web, docs, true),
+        fork_project("beta", web, docs, false),
+    ];
+    let mapped: [&[(u16, &str)]; 2] = [&[], &[(web, "real-web"), (docs, "real-docs")]];
+    start_forks(tmp, ranges, configs, mapped).await
+}
+
+/// Boxes `alpha` and `beta` with the box port ranges in `ranges`, each
+/// running its project of `configs`. A box with entries in `mapped`, as
+/// `(port, hidden unit)`, dials each port at that unit's port instead.
+async fn start_forks(
+    tmp: &Temp,
+    ranges: [&str; 2],
+    configs: [String; 2],
+    mapped: [&[(u16, &str)]; 2],
+) -> (BoxSide, BoxSide) {
+    let mut sides = Vec::new();
+    for (index, name) in ["alpha", "beta"].into_iter().enumerate() {
+        let project = repo(&tmp.path, &format!("fork{name}"), &configs[index]);
+        let dialer = Arc::new(MapDialer::default());
+        let side = if mapped[index].is_empty() {
+            BoxSide::start(tmp, name, ranges[index]).await
+        } else {
+            BoxSide::start_with(tmp, name, ranges[index], Some(dialer.clone())).await
+        };
         side.h
-            .call(Method::Start, json!({}), cx(repo))
+            .call(Method::Start, json!({}), cx(&project))
             .await
             .expect("box start");
+        for (port, unit) in mapped[index] {
+            let real = box_port(&side.h, 0, unit).await;
+            dialer.0.lock().expect("map").insert(*port, real);
+        }
+        sides.push(side);
     }
-    let real = [
-        (web, box_port(&beta.h, 0, "real-web").await),
-        (docs, box_port(&beta.h, 0, "real-docs").await),
-    ];
-    dialer.0.lock().expect("map").extend(real);
+    let beta = sides.pop().expect("beta");
+    let alpha = sides.pop().expect("alpha");
     (alpha, beta)
 }
 
@@ -211,20 +227,73 @@ async fn status_and_body(proxy: u16, host: &str) -> (u16, String) {
     (status, body)
 }
 
-/// Sends GETs of `host` through the proxy one after another until `stop`,
-/// collecting each answer.
+/// Sends GETs of `host` through the proxy one after another, collecting each
+/// answer, until [`NEW_ANSWERS`] of them are `until`, or for 10 seconds at
+/// most. `first` is notified once the first answer is in.
 fn request_loop(
     proxy: u16,
     host: &'static str,
-    stop: tokio_util::sync::CancellationToken,
+    until: &'static str,
+    first: Arc<tokio::sync::Notify>,
 ) -> JoinHandle<Vec<(u16, String)>> {
     tokio::spawn(async move {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
         let mut seen = Vec::new();
-        while !stop.is_cancelled() {
-            seen.push(status_and_body(proxy, host).await);
+        let mut new = 0;
+        while new < NEW_ANSWERS && tokio::time::Instant::now() < deadline {
+            let answer = status_and_body(proxy, host).await;
+            if answer.1 == until {
+                new += 1;
+            }
+            seen.push(answer);
+            if seen.len() == 1 {
+                first.notify_one();
+            }
         }
         seen
     })
+}
+
+/// How many answers from the new box a request loop waits for.
+const NEW_ANSWERS: usize = 5;
+
+/// Checks the answers of a [`request_loop`] across a switch from `from` to
+/// `to`: all 200, from `from` until `to` answered, then from `to` only, and
+/// [`NEW_ANSWERS`] of them from `to`.
+fn switched_without_a_gap(seen: &[(u16, String)], from: &str, to: &str) {
+    let first_new = seen
+        .iter()
+        .position(|(_, body)| body == to)
+        .unwrap_or_else(|| panic!("{to} answered: {seen:?}"));
+    for (index, (status, body)) in seen.iter().enumerate() {
+        assert_eq!(*status, 200, "request {index}: {seen:?}");
+        let expected = if index < first_new { from } else { to };
+        assert_eq!(body, expected, "request {index}: {seen:?}");
+    }
+    assert_eq!(
+        seen.iter().filter(|(_, body)| body == to).count(),
+        NEW_ANSWERS,
+        "{seen:?}"
+    );
+}
+
+/// Asserts that once a table of `tables` routes every one of `hosts`, every
+/// later table does too.
+fn hosts_never_drop(tables: &[Vec<(String, u16)>], hosts: &[&str]) {
+    let routes_all = |table: &Vec<(String, u16)>| {
+        hosts
+            .iter()
+            .all(|host| table.iter().any(|(routed, _)| routed == host))
+    };
+    let Some(first) = tables.iter().position(routes_all) else {
+        return;
+    };
+    for (index, table) in tables.iter().enumerate().skip(first) {
+        assert!(
+            routes_all(table),
+            "table {index} drops a hostname: {tables:?}"
+        );
+    }
 }
 
 /// One GET on a kept-alive connection `stream`, which must answer `body`.
@@ -359,21 +428,27 @@ async fn remote_use_switches_a_lane_between_boxes() {
             "{before:?}"
         );
 
-        let stop = tokio_util::sync::CancellationToken::new();
-        let looping = request_loop(client.proxy_port, FORK_HOSTS[0], stop.clone());
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        let first = Arc::new(tokio::sync::Notify::new());
+        let looping = request_loop(
+            client.proxy_port,
+            FORK_HOSTS[0],
+            "web-from-beta",
+            first.clone(),
+        );
+        first.notified().await;
         client.published.lock().expect("published").clear();
         let reply = use_lane(&client, "forkapp@0", Some("beta")).await;
         assert_eq!(
             reply,
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
-                      "mirrored": true, "pending": false})
+                      "mirrored": true, "pending": false, "replaced": []})
             )
         );
         // The pooled connection to alpha is not reused for the next request.
         assert!(answers(&client, FORK_HOSTS[1], "docs-from-beta").await);
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        let seen = looping.await.expect("request loop");
+        switched_without_a_gap(&seen, "web-from-alpha", "web-from-beta");
         // Every table published during the switch routes both hostnames, to
         // the same local port: only the box behind it changed.
         let tables = client.published.lock().expect("published").clone();
@@ -398,21 +473,6 @@ async fn remote_use_switches_a_lane_between_boxes() {
                 .all(|table| table.iter().collect::<Vec<_>>() == first_ports),
             "the route targets never change: {tables:?}"
         );
-        stop.cancel();
-        let seen = looping.await.expect("request loop");
-        let first_beta = seen
-            .iter()
-            .position(|(_, body)| body == "web-from-beta")
-            .unwrap_or_else(|| panic!("beta answered: {seen:?}"));
-        for (index, (status, body)) in seen.iter().enumerate() {
-            assert_eq!(*status, 200, "request {index}: {seen:?}");
-            let expected = if index < first_beta {
-                "web-from-alpha"
-            } else {
-                "web-from-beta"
-            };
-            assert_eq!(body, expected, "request {index}: {seen:?}");
-        }
         assert!(
             binds(&client, "beta", WEB).await,
             "{}",
@@ -498,10 +558,11 @@ async fn remote_use_switches_a_lane_between_boxes() {
             reply,
             Ok(
                 json!({"lane": "forkapp@0", "host": "beta", "previous": "alpha",
-                      "mirrored": false, "pending": true})
+                      "mirrored": false, "pending": true, "replaced": []})
             )
         );
         assert!(answers(&client, FORK_HOSTS[0], "web-from-alpha").await);
+        client.published.lock().expect("published").clear();
         client.connect("beta").await;
         let taken = eventually(SOON, || async {
             answers(&client, FORK_HOSTS[0], "web-from-beta")
@@ -513,6 +574,16 @@ async fn remote_use_switches_a_lane_between_boxes() {
             taken.is_some(),
             "the chosen box takes the lane once it connects"
         );
+        // Beta only wins once its routes are built, so alpha's stay until
+        // then and the hostnames never lead nowhere.
+        let tables = client.published.lock().expect("published").clone();
+        assert!(
+            tables
+                .first()
+                .is_some_and(|table| table.len() == FORK_HOSTS.len()),
+            "{tables:?}"
+        );
+        hosts_never_drop(&tables, &FORK_HOSTS);
 
         // A disconnect deletes the choice: alpha serves again.
         super::boxes::disconnect(&client, "beta").await;
@@ -530,6 +601,200 @@ async fn remote_use_switches_a_lane_between_boxes() {
             skip.map(|skip| skip["cause"].clone()),
             Some(json!("box_earlier"))
         );
+
+        session.close();
+        let _ = events.await;
+        client.stop().await;
+        alpha.stop().await;
+        beta.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// With this machine mirroring on `127.0.0.1` too, both forks' routes name
+/// the lane's port itself. A switch keeps every route as it is, requests in
+/// a loop see no gap, and a raw connection to the port reaches the new box.
+/// Neither fork binds the numbers here: both answer through their hidden
+/// servers.
+async fn a_switch_keeps_routes_that_name_the_port() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping a_switch_keeps_routes_that_name_the_port: no IPv6 loopback");
+        return;
+    }
+    const WEB: u16 = 26_490;
+    const DOCS: u16 = 26_491;
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let mapped: &[(u16, &str)] = &[(WEB, "real-web"), (DOCS, "real-docs")];
+        let configs = [
+            fork_project("alpha", WEB, DOCS, false),
+            fork_project("beta", WEB, DOCS, false),
+        ];
+        let (alpha, beta) = start_forks(
+            &tmp,
+            ["26000-26199", "26200-26399"],
+            configs,
+            [mapped, mapped],
+        )
+        .await;
+        let controls = Arc::new(super::Controls::default());
+        controls
+            .both_loopbacks
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let boxes = [("alpha", &alpha), ("beta", &beta)];
+        let client =
+            ClientSide::start_full(&tmp, "client", "26400-26489", &boxes, None, controls).await;
+        let (session, mut frames, events) = subscribe(&client, 9_205);
+        client.connect("alpha").await;
+        let routed = eventually(SOON, || async {
+            answers(&client, FORK_HOSTS[0], "web-from-alpha")
+                .await
+                .then_some(())
+        })
+        .await;
+        assert!(routed.is_some(), "alpha's lane is mirrored");
+        client.connect("beta").await;
+        let skip = eventually(SOON, || skipped(&client, "beta", "forkapp@0")).await;
+        assert!(skip.is_some(), "beta's lane is skipped");
+        let direct = [
+            (FORK_HOSTS[0].to_owned(), WEB),
+            (FORK_HOSTS[1].to_owned(), DOCS),
+        ];
+        let named = |table: &Vec<(String, u16)>| direct.iter().all(|route| table.contains(route));
+        let ported = eventually(SOON, || async {
+            let tables = client.published.lock().expect("published").clone();
+            tables.last().filter(|table| named(table)).map(|_| ())
+        })
+        .await;
+        assert!(
+            ported.is_some(),
+            "the routes name the ports: {:?}",
+            client.published.lock().expect("published").last()
+        );
+        let _ = warnings(&mut frames).await;
+
+        let first = Arc::new(tokio::sync::Notify::new());
+        let looping = request_loop(
+            client.proxy_port,
+            FORK_HOSTS[0],
+            "web-from-beta",
+            first.clone(),
+        );
+        first.notified().await;
+        client.published.lock().expect("published").clear();
+        let reply = use_lane(&client, "forkapp@0", Some("beta")).await;
+        assert_eq!(
+            reply.map(|reply| reply["mirrored"].clone()),
+            Ok(json!(true))
+        );
+        let seen = looping.await.expect("request loop");
+        switched_without_a_gap(&seen, "web-from-alpha", "web-from-beta");
+        let tables = client.published.lock().expect("published").clone();
+        assert!(tables.iter().all(named), "{tables:?}");
+        let mut raw = BufReader::new(
+            TcpStream::connect(("127.0.0.1", WEB))
+                .await
+                .expect("connect to the port"),
+        );
+        keep_alive_get(&mut raw, "web-from-beta").await;
+        let seen = warnings(&mut frames).await;
+        for code in ["port_in_use", "lane_skipped", "open_failed"] {
+            assert!(
+                !seen.iter().any(|w| w["code"] == code),
+                "no {code} for a switch: {seen:?}"
+            );
+        }
+
+        session.close();
+        let _ = events.await;
+        client.stop().await;
+        alpha.stop().await;
+        beta.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// The same lane on two boxes clashes without any hostname: `dbapp@0` only
+/// has a port. The box connected first serves it, the other one's lane is
+/// skipped instead of competing for the port, and `remote use` moves the
+/// port without a `port_in_use` or a `lane_skipped`.
+async fn a_lane_without_hostnames_switches_by_its_port() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping a_lane_without_hostnames_switches_by_its_port: no IPv6 loopback");
+        return;
+    }
+    const DB: u16 = 26_790;
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let configs = [
+            format!(
+                "project: dbapp\nservices:\n  db:\n    run: \"http-keep db-from-alpha\"\n    env:\n      PORT: \"{DB}\"\n"
+            ),
+            format!(
+                "project: dbapp\nservices:\n  db:\n    run: sleep\n    env:\n      PORT: \"{DB}\"\n  real-db:\n    run: \"http-keep db-from-beta\"\n    hidden: true\n"
+            ),
+        ];
+        let (alpha, beta) = start_forks(
+            &tmp,
+            ["26500-26599", "26600-26699"],
+            configs,
+            [&[], &[(DB, "real-db")]],
+        )
+        .await;
+        let boxes = [("alpha", &alpha), ("beta", &beta)];
+        let client = ClientSide::start_with(&tmp, "client", "26700-26789", &boxes, None).await;
+        let (session, mut frames, events) = subscribe(&client, 9_206);
+        client.connect("alpha").await;
+        let bound = eventually(SOON, || async {
+            binds(&client, "alpha", DB).await.then_some(())
+        })
+        .await;
+        assert!(bound.is_some(), "{}", client.host_named("alpha").await);
+        client.connect("beta").await;
+        let skip = eventually(SOON, || skipped(&client, "beta", "dbapp@0")).await;
+        assert_eq!(
+            skip.map(|skip| skip["cause"].clone()),
+            Some(json!("box_earlier"))
+        );
+        let connected = warnings(&mut frames).await;
+        assert!(
+            !connected.iter().any(|w| w["code"] == "port_in_use"),
+            "{connected:?}"
+        );
+        let mut raw = BufReader::new(
+            TcpStream::connect((Ipv6Addr::LOCALHOST, DB))
+                .await
+                .expect("connect to the port"),
+        );
+        keep_alive_get(&mut raw, "db-from-alpha").await;
+
+        let reply = use_lane(&client, "dbapp@0", Some("beta")).await;
+        assert_eq!(
+            reply.map(|reply| reply["mirrored"].clone()),
+            Ok(json!(true))
+        );
+        assert!(binds(&client, "beta", DB).await, "{}", client.host_named("beta").await);
+        assert!(
+            closes(&mut raw, Duration::from_secs(6)).await,
+            "the connection to alpha closes"
+        );
+        let mut raw = BufReader::new(
+            TcpStream::connect((Ipv6Addr::LOCALHOST, DB))
+                .await
+                .expect("connect again"),
+        );
+        keep_alive_get(&mut raw, "db-from-beta").await;
+        let seen = warnings(&mut frames).await;
+        for code in ["port_in_use", "lane_skipped"] {
+            assert!(
+                !seen.iter().any(|w| w["code"] == code),
+                "no {code} for a switch: {seen:?}"
+            );
+        }
 
         session.close();
         let _ = events.await;
@@ -583,12 +848,17 @@ async fn a_choice_and_this_machines_own_lane() {
             "{skip}"
         );
         assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
+        let connected = warnings(&mut frames).await;
+        assert!(
+            connected.iter().any(|w| w["code"] == "lane_skipped"),
+            "the first skip is said: {connected:?}"
+        );
 
         let reply = use_lane(&client, "boxapp@0", Some("box")).await;
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": "box", "previous": null,
-                      "mirrored": true, "pending": false}))
+                      "mirrored": true, "pending": false, "replaced": []}))
         );
         assert!(answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         let list = client
@@ -606,7 +876,7 @@ async fn a_choice_and_this_machines_own_lane() {
         assert_eq!(
             reply,
             Ok(json!({"lane": "boxapp@0", "host": null, "previous": "box",
-                      "mirrored": true, "pending": false}))
+                      "mirrored": true, "pending": false, "replaced": []}))
         );
         assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         assert_eq!(client.host().await["chosen_lanes"], json!([]));
@@ -656,7 +926,128 @@ async fn a_choice_and_this_machines_own_lane() {
         assert!(
             seen.iter().any(|w| w["code"] == "choice_cleared"
                 && w["host"] == "box"
-                && w["lane"] == "boxapp@0"),
+                && w["lane"] == "boxapp@0"
+                && w["message"]
+                    == "boxapp@0 started on this machine, so box's boxapp@0 is no longer mirrored or chosen."),
+            "{seen:?}"
+        );
+        // `--local` and the cleared choice were said by their own notices.
+        assert!(
+            !seen.iter().any(|w| w["code"] == "lane_skipped"),
+            "{seen:?}"
+        );
+
+        // A box that is not connected is refused the same while the lane
+        // runs here, and once it is stopped the choice waits for the box.
+        super::boxes::disconnect(&client, "box").await;
+        assert_eq!(
+            use_lane(&client, "boxapp@0", Some("box")).await,
+            Err("local_lane_running".to_owned())
+        );
+        client
+            .h
+            .call(Method::Stop, json!({}), cx(&local_repo))
+            .await
+            .expect("local stop");
+        let reply = use_lane(&client, "boxapp@0", Some("box")).await;
+        assert_eq!(
+            reply.map(|reply| reply["pending"].clone()),
+            Ok(json!(true))
+        );
+        assert_eq!(client.host().await["chosen_lanes"], json!(["boxapp@0"]));
+        // Starting the lane deletes that choice too, connected or not.
+        client
+            .h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
+            .await
+            .expect("local start again");
+        assert_eq!(client.host().await["chosen_lanes"], json!([]));
+        let seen = warnings(&mut frames).await;
+        assert!(
+            seen.iter()
+                .any(|w| w["code"] == "choice_cleared" && w["host"] == "box"),
+            "{seen:?}"
+        );
+        let stored = eventually(SOON, || async {
+            let home = client.h.home.join("state.db");
+            let store = Store::open(home).await.ok()?;
+            let choices = store.remote_lane_choices().await.ok()?;
+            store.close().await.ok()?;
+            choices.is_empty().then_some(())
+        })
+        .await;
+        assert!(stored.is_some(), "the store loses the cleared choice");
+
+        session.close();
+        let _ = events.await;
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `remote use --local` takes this machine's lane's hostnames back from a
+/// chosen lane of another project, deletes that choice and names it in
+/// `replaced`. Nothing says the box lane is skipped again: `lane_switched`
+/// did.
+async fn local_takes_its_hostnames_back_from_another_projects_choice() {
+    if !ipv6_loopback().await {
+        eprintln!(
+            "skipping local_takes_its_hostnames_back_from_another_projects_choice: no IPv6 loopback"
+        );
+        return;
+    }
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let box_repo = repo(&tmp.path, "boxrepo", BOX);
+        let side = BoxSide::start(&tmp, "box", "13000-13199").await;
+        side.h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&box_repo))
+            .await
+            .expect("box start");
+        let shop = repo(
+            &tmp.path,
+            "shoprepo",
+            "project: shop\nservices:\n  web:\n    run: \"http hello-from-shop\"\n    hosts: [\"web.boxapp.localhost\"]\n",
+        );
+        let client = ClientSide::start(&tmp, "client", "13200-13399", &side).await;
+        client
+            .h
+            .call(Method::LaneList, json!({}), cx(&shop))
+            .await
+            .expect("local lane list");
+        let (session, mut frames, events) = subscribe(&client, 9_204);
+        client.connect("box").await;
+        let skip = eventually(SOON, || skipped(&client, "box", "boxapp@0")).await;
+        assert_eq!(
+            skip.map(|skip| (skip["cause"].clone(), skip["winner_lane"].clone())),
+            Some((json!("local_stopped"), json!("shop@0")))
+        );
+        let _ = warnings(&mut frames).await;
+
+        assert!(use_lane(&client, "boxapp@0", Some("box")).await.is_ok());
+        assert!(answers(&client, "web.boxapp.localhost", "hello-from-box").await);
+        let reply = use_lane(&client, "shop@0", None).await;
+        assert_eq!(
+            reply,
+            Ok(json!({"lane": "shop@0", "host": null, "previous": "box",
+                      "mirrored": true, "pending": false,
+                      "replaced": [{"lane": "boxapp@0", "host": "box"}]}))
+        );
+        assert_eq!(client.host().await["chosen_lanes"], json!([]));
+        assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
+        let skip = skipped(&client, "box", "boxapp@0").await.expect("skipped");
+        assert_eq!(skip["cause"], "local_stopped", "{skip}");
+        let seen = warnings(&mut frames).await;
+        assert!(
+            !seen.iter().any(|w| w["code"] == "lane_skipped"),
+            "{seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|w| w["code"] == "lane_switched" && w["lane"] == "shop@0"),
             "{seen:?}"
         );
 
@@ -709,6 +1100,9 @@ async fn a_choice_survives_a_restart() {
             client.host_named("beta").await["chosen_lanes"],
             json!(["forkapp@0"])
         );
+        // Whichever box the restore opens first, the hostnames, once routed,
+        // never lead nowhere while the chosen one takes over.
+        hosts_never_drop(&client.published.lock().expect("published"), &FORK_HOSTS);
         let skip = eventually(SOON, || skipped(&client, "alpha", "forkapp@0")).await;
         assert_eq!(
             skip.map(|skip| skip["cause"].clone()),

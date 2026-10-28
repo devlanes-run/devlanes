@@ -1,7 +1,9 @@
 //! Which lane serves a hostname that several lanes claim: this machine's lanes
 //! and the lanes of every connected box. Lanes clash when their hostnames
-//! overlap, wildcards included ([`overlap`]). Of a set of clashing lanes one
-//! is mirrored, by this order:
+//! overlap, wildcards included ([`overlap`]). The same lane reference on two
+//! boxes always clashes, also without hostnames, because the relays and the
+//! routes that name a box port directly belong to the reference. Of a set of
+//! clashing lanes one is mirrored, by this order:
 //!
 //! 1. a running local lane;
 //! 2. the box lane chosen with `remote use`;
@@ -110,9 +112,14 @@ pub(crate) struct Assignment {
     /// This machine's stopped lanes that gave their hostnames to a chosen box
     /// lane, with that box.
     pub yielded: BTreeMap<String, String>,
-    /// Choices whose box lane loses to a running local lane, lane to box.
+    /// Choices whose box lane loses to a running local lane, and choices for
+    /// the reference of a running local lane, connected or not, lane to box.
     /// Starting a local lane deletes them.
     pub cleared: BTreeMap<String, String>,
+    /// Box lanes that are mirrored because a choice names them, as
+    /// `(box, lane)`. A mirror says nothing when one of them stops being
+    /// mirrored, since the choice's change already said so.
+    pub chosen: BTreeSet<(String, String)>,
     /// The box lane behind each local port: ports of serving units of
     /// mirrored lanes.
     pub listeners: BTreeMap<u16, PortOwner>,
@@ -200,14 +207,19 @@ pub(super) fn assign(
             .filter(|winner| match (&winner.owner, &candidate.owner) {
                 (Owner::Local, Owner::Local) => false,
                 (Owner::Box(a), Owner::Box(b)) if a == b => false,
+                (Owner::Box(_), Owner::Box(_)) => {
+                    winner.lane == candidate.lane || clash(winner.hosts, candidate.hosts)
+                }
                 _ => clash(winner.hosts, candidate.hosts),
             })
             .collect();
         let Some(first) = clashing.first() else {
             if let Owner::Box(host) = candidate.owner {
-                assignment
-                    .mirrored
-                    .insert((host.to_owned(), candidate.lane.to_owned()));
+                let key = (host.to_owned(), candidate.lane.to_owned());
+                if candidate.rank.0 == Cause::BoxChosen {
+                    assignment.chosen.insert(key.clone());
+                }
+                assignment.mirrored.insert(key);
             }
             winners.push(candidate);
             continue;
@@ -260,8 +272,46 @@ pub(super) fn assign(
             }
         }
     }
+    // Also for a box that is not connected: its lane would lose once it is.
+    for lane in local.iter().filter(|lane| lane.running) {
+        if let Some(host) = choices.get(&lane.lane) {
+            assignment.cleared.insert(lane.lane.clone(), host.clone());
+        }
+    }
     assign_ports(&mut assignment, boxes, choices);
     assignment
+}
+
+/// The choices, as `(lane, box)`, that a new choice of lane `lane` with
+/// hostnames `hosts` replaces: those of connected box lanes whose hostnames
+/// overlap. `owner` is the chosen box, whose own lanes never clash with
+/// `lane`, or `None` for this machine's lane, which also replaces any choice
+/// of its own reference.
+pub(super) fn clashing_choices(
+    lane: &str,
+    hosts: &BTreeSet<String>,
+    owner: Option<&str>,
+    boxes: &[BoxLanes],
+    choices: &BTreeMap<String, String>,
+) -> Vec<(String, String)> {
+    choices
+        .iter()
+        .filter(|(chosen, host)| {
+            if owner == Some(host.as_str()) {
+                return false;
+            }
+            if chosen.as_str() == lane {
+                // A box choice of `lane` overwrites it anyway.
+                return owner.is_none();
+            }
+            boxes
+                .iter()
+                .find(|other| other.host == **host)
+                .and_then(|other| other.lanes.get(*chosen))
+                .is_some_and(|theirs| clash(theirs, hosts))
+        })
+        .map(|(chosen, host)| (chosen.clone(), host.clone()))
+        .collect()
 }
 
 /// Fills in the box lane behind each local port and relay, from the mirrored
@@ -450,6 +500,66 @@ mod tests {
     }
 
     const WEB: &[&str] = &["web.acme.localhost"];
+    const NONE: &[&str] = &[];
+
+    /// Forks whose `acme@0` has no hostnames still share its port: it goes
+    /// to the box connected first, and to the other one once chosen, which
+    /// is then listed as mirrored by its choice.
+    #[test]
+    fn a_lane_without_hostnames_moves_its_ports_with_a_choice() {
+        let forks = |choices: &[(&str, &str)]| {
+            let fork = |name: &str, serial| {
+                with_ports(
+                    on_box(name, serial, &[("acme@0", NONE)]),
+                    &[("acme@0", 4000, "db", true, false)],
+                )
+            };
+            assign(
+                &[],
+                &[fork("fork-a", 1), fork("fork-b", 2)],
+                &chose(choices),
+            )
+        };
+        let first = forks(&[]);
+        assert_eq!(owners(&first.listeners), [(4000, "fork-a".to_owned())]);
+        assert!(first.chosen.is_empty());
+        let switched = forks(&[("acme@0", "fork-b")]);
+        assert_eq!(owners(&switched.listeners), [(4000, "fork-b".to_owned())]);
+        assert!(switched.skip("fork-a", "acme@0").is_some());
+        assert_eq!(
+            switched.chosen.iter().cloned().collect::<Vec<_>>(),
+            pairs(&[("fork-b", "acme@0")])
+        );
+    }
+
+    /// A box choice replaces the choices of other lanes whose hostnames
+    /// overlap, on other boxes. This machine's lane also replaces any choice
+    /// of its own reference, connected or not.
+    #[test]
+    fn a_new_choice_replaces_the_ones_it_clashes_with() {
+        let boxes = [
+            on_box("fork-a", 1, &[("shop@0", &["*.acme.localhost"])]),
+            on_box(
+                "fork-b",
+                2,
+                &[("acme@0", WEB), ("acme@1", &["x.example.localhost"])],
+            ),
+        ];
+        let choices = chose(&[
+            ("shop@0", "fork-a"),
+            ("acme@1", "fork-b"),
+            ("acme@0", "fork-c"),
+        ]);
+        let hosts = names(WEB);
+        assert_eq!(
+            clashing_choices("acme@0", &hosts, Some("fork-b"), &boxes, &choices),
+            pairs(&[("shop@0", "fork-a")])
+        );
+        assert_eq!(
+            clashing_choices("acme@0", &hosts, None, &boxes, &choices),
+            pairs(&[("acme@0", "fork-c"), ("shop@0", "fork-a")])
+        );
+    }
 
     /// What one case expects: the mirrored box lanes, and per skipped box
     /// lane its cause and winner. Yielded and cleared lanes are checked
@@ -594,6 +704,42 @@ mod tests {
                 cleared: &[],
             },
             Case {
+                name: "the same lane on two boxes clashes without shared hostnames",
+                local: vec![],
+                boxes: vec![
+                    on_box("fork-a", 1, &[("acme@0", &["a.acme.localhost"])]),
+                    on_box("fork-b", 2, &[("acme@0", &["b.acme.localhost"])]),
+                ],
+                choices: chose(&[]),
+                mirrored: &[("fork-a", "acme@0")],
+                skipped: &[("fork-b", "acme@0", Cause::BoxEarlier, Some("fork-a"))],
+                yielded: &[],
+                cleared: &[],
+            },
+            Case {
+                name: "the same lane on two boxes clashes without any hostname",
+                local: vec![],
+                boxes: vec![
+                    on_box("fork-a", 1, &[("acme@0", NONE)]),
+                    on_box("fork-b", 2, &[("acme@0", NONE)]),
+                ],
+                choices: chose(&[("acme@0", "fork-b")]),
+                mirrored: &[("fork-b", "acme@0")],
+                skipped: &[("fork-a", "acme@0", Cause::BoxChosen, Some("fork-b"))],
+                yielded: &[],
+                cleared: &[],
+            },
+            Case {
+                name: "a running local lane clears the choice of a box that is not connected",
+                local: vec![local("acme@0", true, WEB)],
+                boxes: vec![on_box("fork-a", 1, &[("acme@0", WEB)])],
+                choices: chose(&[("acme@0", "fork-b")]),
+                mirrored: &[],
+                skipped: &[("fork-a", "acme@0", Cause::LocalRunning, None)],
+                yielded: &[],
+                cleared: &[("acme@0", "fork-b")],
+            },
+            Case {
                 name: "lanes of one box never clash with each other",
                 local: vec![],
                 boxes: vec![on_box("fork-a", 1, &[("acme@0", WEB), ("acme@1", WEB)])],
@@ -688,7 +834,7 @@ mod tests {
         assert!(got.skip("fork-b", "acme@0").is_none());
     }
 
-    /// A stopped local lane that gave way frees all its names, so an
+    /// A stopped local lane a box lane is in use instead of frees all its names, so an
     /// unchosen box lane that only clashes with it is mirrored.
     #[test]
     fn a_yielded_local_lane_holds_no_names() {

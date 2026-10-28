@@ -246,21 +246,26 @@ pub enum Method {
     /// Client side, for `devlanes remote use` and the TUI: chooses which lane
     /// serves hostnames that several lanes clash on ([`remote::UseParams`]).
     /// A box lane is chosen by `{lane, host}`, and `host: null` gives the
-    /// hostnames back to this machine's lane. The choice is kept across
+    /// hostnames back to this machine's lane. `host` is required, and a
+    /// request without it is a `bad_request`. The choice is kept across
     /// reconnects and restarts until another one replaces it, the box is
-    /// disconnected, or a local lane it clashes with starts.
+    /// disconnected, or a local lane it clashes with starts. The latest
+    /// choice wins: choices of other lanes it clashes with are deleted.
     ///
     /// Replies once the routes and listeners lead to the chosen lane:
-    /// `{lane, host, previous, mirrored, pending}`, where `previous` is the
-    /// box that served the hostnames before (null for this machine) and
-    /// `mirrored` whether the chosen lane serves them now. A box known here
+    /// `{lane, host, previous, mirrored, pending, replaced}`, where
+    /// `previous` is the box that served the hostnames before (null for this
+    /// machine), `mirrored` whether the chosen lane serves them now and
+    /// `replaced` the deleted choices as `[{lane, host}]`. For `host: null`
+    /// these are the choices that took the lane's hostnames. A box known here
     /// but not connected keeps the choice until it connects: the reply then
     /// has `mirrored: false` and `pending: true`. A switch emits one
     /// `remote.warning` notice with code `lane_switched`. Errors, each with a
     /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
     /// such lane), `local_lane_running` (a running local lane, named by
-    /// `local_lane`, keeps the hostnames) and `local_lane_unknown`
-    /// (`host: null` for a lane this machine does not have).
+    /// `local_lane`, keeps the hostnames or has the same reference) and
+    /// `local_lane_unknown` (`host: null` for a lane this machine does not
+    /// have). Calls run one at a time, and never during `remote disconnect`.
     #[serde(rename = "remote.use")]
     RemoteUse,
     /// Box side, for `devlanes tunnel`: the registry a connected client mirrors,
@@ -1312,8 +1317,19 @@ pub mod remote {
         /// Lane reference, `project@index`.
         pub lane: String,
         /// The box whose lane serves the hostnames, or `None` for this
-        /// machine's lane. Sent as `null`, never left out.
+        /// machine's lane. Required: sent as `null` for this machine, and a
+        /// request without it is refused, so a client that forgets it never
+        /// gives a box's hostnames back by accident.
+        #[serde(deserialize_with = "nullable")]
         pub host: Option<String>,
+    }
+
+    /// Reads a field that must be present but may be `null`. Serde lets an
+    /// `Option` field be left out unless it has a `deserialize_with`.
+    fn nullable<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<String>, D::Error> {
+        Option::deserialize(deserializer)
     }
 
     /// `{host, state, ...}` whenever a connection changes state.
@@ -1322,8 +1338,8 @@ pub mod remote {
     /// busy port. `lane_skipped` carries `lane`, `hosts`, `box`, `local_lanes`
     /// and `cause` (as `host.list`'s `skipped_lanes`), and goes out when a
     /// lane stops being mirrored for another reason than a choice.
-    /// `choice_cleared` carries `lane` and `host` (the box whose choice a
-    /// starting local lane deleted). `lane_switched` is a notice, not a
+    /// `choice_cleared` carries `lane`, `host` (the box whose choice a
+    /// starting local lane deleted, connected or not) and `local_lane`. `lane_switched` is a notice, not a
     /// problem: `lane`, `to` and `from` (boxes, null for this machine) and
     /// `message`, after `remote.use` moved a lane.
     pub const WARNING_EVENT: &str = "remote.warning";
@@ -1682,6 +1698,25 @@ pub mod events {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `remote.use` needs `host`, and `null` means this machine's lane.
+    #[test]
+    fn remote_use_needs_a_host() -> Result<(), serde_json::Error> {
+        let local: remote::UseParams =
+            serde_json::from_value(serde_json::json!({"lane": "acme@0", "host": null}))?;
+        assert_eq!(local.host, None);
+        let chosen: remote::UseParams =
+            serde_json::from_value(serde_json::json!({"lane": "acme@0", "host": "fork-b"}))?;
+        assert_eq!(chosen.host.as_deref(), Some("fork-b"));
+        let missing =
+            serde_json::from_value::<remote::UseParams>(serde_json::json!({"lane": "acme@0"}));
+        assert!(missing.is_err());
+        assert_eq!(
+            serde_json::to_value(&local)?,
+            serde_json::json!({"lane": "acme@0", "host": null})
+        );
+        Ok(())
+    }
 
     #[test]
     fn shutdown_method_stays_frozen() -> Result<(), serde_json::Error> {

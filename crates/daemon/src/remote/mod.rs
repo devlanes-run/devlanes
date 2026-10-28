@@ -103,8 +103,9 @@ pub(crate) struct Remotes {
     hosts: Mutex<BTreeMap<String, Arc<HostConn>>>,
     /// Serializes connects so a replaced connection is gone before its successor
     /// binds the same ports, and orders `disconnect` against the restore so a
-    /// box disconnected meanwhile is not opened again.
-    connecting: tokio::sync::Mutex<()>,
+    /// box disconnected meanwhile is not opened again. `remote.use` holds it
+    /// while it writes a choice ([`Inner::use_method`]).
+    connecting: Arc<tokio::sync::Mutex<()>>,
     /// Box side: tunnels currently serving a client, for `status`, each with
     /// the serial of the [`ClientGuard`] that listed it.
     clients: Mutex<BTreeMap<ClientKey, (u64, RemoteClient)>>,
@@ -134,7 +135,7 @@ pub(crate) struct Remotes {
     restore_errors: Mutex<BTreeMap<String, String>>,
     /// Which box serves a lane several lanes clash on, lane reference to box,
     /// as `remote_lane_choices` holds it.
-    choices: Mutex<BTreeMap<String, String>>,
+    choices: Arc<Mutex<BTreeMap<String, String>>>,
     /// Set once `choices` was read from the store.
     choices_loaded: tokio::sync::OnceCell<()>,
     /// The latest [`assign::Assignment`] and its version, which goes up with
@@ -215,12 +216,11 @@ impl Remotes {
             .get(&owner.host)
             .filter(|conn| !conn.ended())
             .cloned()?;
-        Some(listeners::Owner {
-            conn,
-            lane: owner.lane.clone(),
-            unit: owner.unit.clone(),
-            conns: CancellationToken::new(),
-        })
+        Some(listeners::Owner::new(
+            &conn,
+            owner.lane.clone(),
+            owner.unit.clone(),
+        ))
     }
 
     /// Serves `listener` for box port `port`, leading where the current
@@ -1925,8 +1925,9 @@ fn retry_box_ports(engine: std::sync::Weak<Inner>) -> futures_util::future::BoxF
 
 /// The `ports_range_overlap` finding for `conn` among the `live` boxes, as
 /// message and event fields: its box's `ports.range` overlaps another box's.
-/// Lanes allocated on both can then get the same ports, and only one box's
-/// can be mirrored.
+/// Forks of one image always share theirs, and a lane both run is mirrored
+/// from one box at a time anyway. Different lanes allocated on both can get
+/// the same ports, and only one box's can be mirrored.
 fn range_overlap(conn: &HostConn, live: &[Arc<HostConn>]) -> Option<(String, Value)> {
     let range = lock(&conn.info).ports_range.clone()?;
     let theirs = parse_range(&range)?;
@@ -1946,7 +1947,8 @@ fn range_overlap(conn: &HostConn, live: &[Arc<HostConn>]) -> Option<(String, Val
         return None;
     }
     let message = format!(
-        "the box's ports.range {range} overlaps {}, so their lanes can get the same ports. Give one box a different ports.range",
+        "box {}'s ports.range {range} overlaps {}. Lanes both boxes run go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
+        conn.name,
         overlaps.join(" and ")
     );
     Some((message, json!({"range": range, "overlaps": overlaps})))
