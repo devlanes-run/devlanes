@@ -63,7 +63,8 @@ fn checks(url: &str, min_age: Duration) -> UpdateCheckOptions {
         first_delay: Duration::ZERO,
         interval: Duration::from_secs(3600),
         min_age,
-        timeout: Duration::from_secs(5),
+        // Includes starting `curl`; see `CHECK_PATIENCE`.
+        timeout: Duration::from_secs(30),
     }
 }
 
@@ -96,9 +97,18 @@ async fn daemon_status(engine: &Engine) -> Value {
         .expect("daemon.status")
 }
 
-/// Polls `daemon.status` until `done` holds, for up to ten seconds.
+/// How long a test waits for the background check. Starting `curl` has taken
+/// over 10 s on a Windows CI runner busy with the rest of the suite; the bound
+/// only ends a test that is broken.
+const CHECK_PATIENCE: Duration = Duration::from_secs(40);
+
+/// Every test's own limit, above [`CHECK_PATIENCE`].
+const LIMIT: Duration = Duration::from_secs(60);
+
+/// Polls `daemon.status` until `done` holds, for up to [`CHECK_PATIENCE`].
 async fn status_until(engine: &Engine, done: impl Fn(&Value) -> bool) -> Value {
-    for _ in 0..200 {
+    let deadline = tokio::time::Instant::now() + CHECK_PATIENCE;
+    while tokio::time::Instant::now() < deadline {
         let status = daemon_status(engine).await;
         if done(&status) {
             return status;
@@ -110,7 +120,7 @@ async fn status_until(engine: &Engine, done: impl Fn(&Value) -> bool) -> Value {
 
 #[tokio::test]
 async fn newer_release_is_reported_and_cached() {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         let (url, hits) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
         let engine = engine(dir.path(), checks(&url, Duration::ZERO), true).await;
@@ -132,7 +142,7 @@ async fn newer_release_is_reported_and_cached() {
 
 #[tokio::test]
 async fn fresh_release_waits_and_older_release_is_not_reported() {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         let (url, _) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
         let young = engine(
@@ -161,7 +171,7 @@ async fn fresh_release_waits_and_older_release_is_not_reported() {
 
 #[tokio::test]
 async fn failures_keep_the_cached_release() {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path()).expect("home");
         // Checked an hour ago: the daemon waits out the rest of the interval
@@ -186,10 +196,8 @@ async fn failures_keep_the_cached_release() {
         let engine = engine(dir.path(), options, true).await;
         let status = status_until(&engine, |s| s.get("update").is_some()).await;
         assert_eq!(status["update"]["latest"], "98.0.0", "{status}");
-        for _ in 0..100 {
-            if hits.load(Ordering::SeqCst) >= 1 {
-                break;
-            }
+        let deadline = tokio::time::Instant::now() + CHECK_PATIENCE;
+        while hits.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(hits.load(Ordering::SeqCst) >= 1, "the check never ran");
@@ -208,7 +216,7 @@ async fn failures_keep_the_cached_release() {
 async fn daemon_status_through_the_server_reports_the_release() {
     use devlanes_proto::{Hello, Outcome};
 
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(LIMIT, async {
         let tmp = crate::temp();
         let (url, _) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
         let engine = engine(&tmp.path.join("home"), checks(&url, Duration::ZERO), true).await;
@@ -266,7 +274,7 @@ async fn daemon_status_through_the_server_reports_the_release() {
 
 #[tokio::test]
 async fn disabled_checks_make_no_request() {
-    tokio::time::timeout(Duration::from_secs(30), async {
+    tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         let (url, hits) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
         let by_config = engine(
