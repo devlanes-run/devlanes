@@ -905,7 +905,7 @@ impl PrivateCopies {
 }
 
 /// Refuses, since [`Platform::current`] has no Windows install to stage files for.
-/// Windows answers `*.localhost` itself, so `certs trust --hosts` installs
+/// devlanes writes no hosts file on Windows, so `certs trust --hosts` installs
 /// nothing there and never reaches this.
 #[cfg(windows)]
 fn write_new(path: &Path, _bytes: &[u8], _mode: u32) -> Result<(), InstallError> {
@@ -928,7 +928,7 @@ fn write_new(path: &Path, bytes: &[u8], mode: u32) -> Result<(), InstallError> {
 }
 
 // Tests marked `cfg(unix)` stage real files or check Unix paths; the installer
-// is Unix only, since Windows needs no hosts helper.
+// is Unix only, since devlanes writes no hosts file on Windows.
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]

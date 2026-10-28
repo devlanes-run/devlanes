@@ -204,8 +204,8 @@ pub async fn engine(
 /// Bound on the startup `*.localhost` probe; past it the resolver counts as failing.
 const HOSTS_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Windows answers every `*.localhost` name itself, so nothing writes the hosts
-/// file; `doctor` shows the startup probe that confirms it.
+/// devlanes never writes the hosts file on Windows; `doctor` shows whether the
+/// startup probe resolved `*.localhost` (Windows 11 does, Windows Server does not).
 #[cfg(windows)]
 async fn native_hosts(
     policy: devlanes_resolver_hosts::HostsFilePolicy,

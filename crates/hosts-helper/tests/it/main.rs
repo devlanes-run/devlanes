@@ -2,7 +2,7 @@
 //!
 //! `--hosts-file` exists only in debug builds, so these tests are compiled out of
 //! release test runs.
-// The helper is Unix only; Windows needs no hosts file entries.
+// The helper is Unix only; devlanes writes no hosts file on Windows.
 #![cfg(all(debug_assertions, unix))]
 
 use std::fs;

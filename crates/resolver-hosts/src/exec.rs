@@ -211,8 +211,7 @@ pub struct SystemFs;
 
 impl FsProbe for SystemFs {
     /// Refuses, since owner and mode checks of the helper's paths are Unix concepts.
-    /// Windows answers `*.localhost` itself and devlanes writes no hosts file
-    /// there, so nothing calls this on Windows.
+    /// devlanes writes no hosts file on Windows, so nothing calls this there.
     #[cfg(windows)]
     fn lstat(&self, _path: &Path) -> io::Result<Option<FileInfo>> {
         Err(io::Error::new(

@@ -4,8 +4,8 @@
 //! The commands and their checks live in `devlanes_resolver_hosts::install`; this
 //! module picks the helper binary, decides whether sudo may prompt, and reports.
 //!
-//! Windows answers every `*.localhost` name itself, so there both commands only
-//! say so and change nothing.
+//! devlanes never writes the hosts file on Windows, so there both commands only
+//! report whether this machine resolves `*.localhost` and change nothing.
 
 #[cfg(unix)]
 use std::{
@@ -40,10 +40,10 @@ const BLOCK_BEGIN: &str = "# devlanes begin";
 #[cfg(windows)]
 const PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Probes `*.localhost` and says there is nothing to install: Windows answers
-/// those names itself, and names under a `resolver` TLD need the NRPT rule
-/// from `certs trust --resolver`. A failing probe is a warning, since the
-/// hosts file is no remedy devlanes offers on Windows.
+/// Probes `*.localhost` and installs nothing: Windows 11 answers those names
+/// itself, Windows Server does not, and names under a `resolver` TLD need the
+/// NRPT rule from `certs trust --resolver`. A failing probe is a warning that
+/// names the remedies, since devlanes writes no hosts file on Windows.
 #[cfg(windows)]
 pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
     let resolution = devlanes_resolver_hosts::probe_localhost(PROBE_TIMEOUT).await;
@@ -78,7 +78,7 @@ fn native_report(
     let mut stderr = String::new();
     match resolution {
         LocalhostResolution::Loopback => stdout.push_str(
-            "nothing to install: Windows resolves every *.localhost name to loopback, so devlanes writes no hosts file entries\n",
+            "nothing to install: a test lookup of a *.localhost name answered with loopback, so devlanes writes no hosts file entries\n",
         ),
         other => {
             let word = match other {
@@ -86,7 +86,7 @@ fn native_report(
                 _ => "failed",
             };
             stderr.push_str(&format!(
-                "warning: a test lookup of a *.localhost name {word}, and devlanes does not write the hosts file on Windows; set hostnames.resolver: resolver and hostnames.tld, then run devlanes certs trust --resolver\n"
+                "warning: a test lookup of a *.localhost name {word}, and devlanes does not write the hosts file on Windows; add the lane hostnames to %SystemRoot%\\System32\\drivers\\etc\\hosts from an elevated shell, or set hostnames.resolver: resolver and hostnames.tld, then run devlanes certs trust --resolver\n"
             ));
         }
     }
@@ -305,8 +305,9 @@ mod windows_tests {
 
     use super::*;
 
-    /// A working probe means nothing to install; a failing one warns; a
-    /// resolver TLD points at the NRPT rule.
+    /// A working probe means nothing to install; a failing one warns and names
+    /// the hosts file and the resolver strategy; a resolver TLD points at the
+    /// NRPT rule.
     #[test]
     fn windows_reports_instead_of_installing() {
         let (stdout, stderr) = native_report(LocalhostResolution::Loopback, None);
@@ -318,6 +319,7 @@ mod windows_tests {
             stderr.contains("devlanes certs trust --resolver"),
             "{stderr}"
         );
+        assert!(stderr.contains(r"drivers\etc\hosts"), "{stderr}");
         assert_eq!(
             stdout,
             "names under .test resolve through the NRPT rule from devlanes certs trust --resolver\n"
@@ -325,7 +327,7 @@ mod windows_tests {
     }
 }
 
-// The helper and sudo are Unix only; Windows needs no hosts file entries.
+// The helper and sudo are Unix only; devlanes writes no hosts file on Windows.
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;

@@ -166,9 +166,9 @@ pub fn helper_check(result: &Result<HelperVersion, HostsError>, expected: &str) 
     }
 }
 
-/// The hosts status on Windows, which resolves every `*.localhost` name by
-/// itself, so devlanes never writes the hosts file there whatever
-/// `hosts_file` says. Names under a `resolver` TLD go through the NRPT rule,
+/// The hosts status on Windows, where devlanes never writes the hosts file
+/// whatever `hosts_file` says; the startup probe shows whether this machine
+/// resolves `*.localhost` (Windows 11 does, Windows Server does not). Names under a `resolver` TLD go through the NRPT rule,
 /// which `doctor`'s DNS check reports.
 #[cfg(windows)]
 #[derive(Debug, Clone)]
