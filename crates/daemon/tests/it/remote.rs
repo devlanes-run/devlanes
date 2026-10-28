@@ -43,7 +43,8 @@ use devlanes_daemon::{
 use devlanes_ipc::Frame;
 use devlanes_pki::CertificateAuthority;
 use devlanes_proto::{
-    Context, Control, LaneSummary, Method, Page, Request, RpcError, remote::RemoteClient,
+    Context, Control, LaneSummary, Method, Page, Request, RpcError,
+    remote::{PROMPT_EVENT, RemoteClient},
 };
 use devlanes_state::Store;
 use devlanes_transport::{
@@ -661,16 +662,35 @@ impl ClientSide {
     /// `connect <name> --background` with a fresh pairing code from the box,
     /// which must succeed. A box that does not ask for the code, because this
     /// client holds a token or it pairs nobody, leaves the code unused.
+    ///
+    /// The code answers every question, so a sign-in prompt here is a failure.
+    /// It fails the test at once: unanswered, the daemon would wait for the
+    /// answer longer than the test's own limit, and the test would end in a
+    /// timeout that names nothing.
     async fn connect(&self, name: &str) {
-        let connected = self
+        let params = self.connect_params(name).await;
+        let (session, mut frames) = self.h.session();
+        let call = self
             .h
-            .call(
-                Method::Connect,
-                self.connect_params(name).await,
-                Context::default(),
-            )
-            .await
-            .expect("connect");
+            .call_on(Method::Connect, params, Context::default(), &session);
+        tokio::pin!(call);
+        let mut reading = true;
+        let connected = loop {
+            tokio::select! {
+                result = &mut call => break result.expect("connect"),
+                frame = frames.recv(), if reading => match frame {
+                    // A notice needs no answer, so it cannot hold the connect up.
+                    Some(Frame::Control(Control::Event(event)))
+                        if event.event == PROMPT_EVENT && event.data["kind"] != "notify" =>
+                    {
+                        panic!("connect {name} asked a prompt: {}", event.data);
+                    }
+                    Some(_) => {}
+                    // The session closed; only the answer is left to wait for.
+                    None => reading = false,
+                },
+            }
+        };
         assert_eq!(connected["state"], "connected", "{connected}");
     }
 
