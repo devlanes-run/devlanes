@@ -45,6 +45,12 @@ pub mod features {
     /// `start_id`), `task`, `unit.changed` and `lane.changed` events on the
     /// request itself, all before its response. Older daemons ignore the flag.
     pub const START_EVENTS: &str = "start_events";
+    /// The daemon reads [`super::Context::file`]. An older one ignores it and would
+    /// act on the cwd's `devlanes.yaml` project instead, so clients refuse to send it.
+    pub const PROJECT_FILE: &str = "project_file";
+    /// The daemon answers [`super::Method::Reload`] and restarts the whole lane for a
+    /// `restart` without units, which an older one refuses as `units_required`.
+    pub const RELOAD: &str = "reload";
 }
 
 /// Attribution is supplied by clients and never inferred by the daemon.

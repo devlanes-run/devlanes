@@ -114,6 +114,28 @@ fn extends_lists_merge_left_to_right_relative_to_the_naming_file() {
     ));
 }
 
+/// Two bases that extend one shared file merge it once, so the first base's change to
+/// it survives the second base.
+#[test]
+fn a_shared_base_merges_once() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write(
+        dir.path(),
+        &[
+            ("shared.yaml", "services:\n  api: { run: shared }\n"),
+            ("a.yaml", "extends: shared.yaml\nservices:\n  api: { run: from-a }\n"),
+            ("b.yaml", "extends: shared.yaml\nservices:\n  web: { run: web }\n"),
+            ("devlanes.yaml", "project: acme\nextends: [a.yaml, b.yaml]\n"),
+        ],
+    );
+    let config = load_project(dir.path()).expect("loaded");
+    assert!(matches!(
+        &config.services["api"].run,
+        Some(Run::Shell(Templated::Literal(run))) if run == "from-a"
+    ));
+    assert!(config.services.contains_key("web"));
+}
+
 /// The entry file must name the project; a name in an extended file is ignored.
 #[test]
 fn extended_files_do_not_name_the_project() {

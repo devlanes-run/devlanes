@@ -253,16 +253,60 @@ async fn write_files(
     .map_err(|e| internal("io", e))?
 }
 
-/// FNV-1a over the JSON of a config declaration, such as one `infra.setup` entry or
-/// task as written, so an edited entry counts as not done. The declaration, not the
-/// evaluated command, keeps environment values out of state.db; FNV because std's
-/// hasher is not stable across releases.
-pub(crate) fn declaration_hash<T: serde::Serialize>(declaration: Option<&T>) -> Option<String> {
-    let text = serde_json::to_string(declaration?).ok()?;
+/// Task keys that decide when or how a task is shown or waited for, not what it runs:
+/// editing them must not run a once-only task again.
+const TASK_SCHEDULING: &[&str] = &[
+    "when",
+    "after",
+    "profiles",
+    "confirm",
+    "interactive",
+    "timeout",
+    "pty",
+];
+
+/// Setup-entry keys that decide how a failure is treated, not what runs.
+const SETUP_HANDLING: &[&str] = &["timeout", "ignore_errors"];
+
+/// FNV-1a over the canonical JSON of a config declaration, such as one `infra.setup`
+/// entry or task as written, so an edited entry counts as not done. The declaration,
+/// not the evaluated command, keeps environment values from `.env` and shells out of
+/// state.db. Unset and empty values are dropped first, so a field a later release
+/// adds does not change every hash; FNV because std's hasher is not stable across
+/// releases.
+pub(crate) fn declaration_hash<T: serde::Serialize>(
+    declaration: Option<&T>,
+    ignored: &[&str],
+) -> Option<String> {
+    let mut value = serde_json::to_value(declaration?).ok()?;
+    if let Value::Object(map) = &mut value {
+        map.retain(|key, _| !ignored.contains(&key.as_str()));
+    }
+    let text = canonical_json(value).map_or_else(String::new, |value| value.to_string());
     let hash = text.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     });
     Some(format!("{hash:016x}"))
+}
+
+/// `value` without nulls and empty lists or mappings, at every level; `None` when
+/// nothing is left.
+fn canonical_json(value: Value) -> Option<Value> {
+    match value {
+        Value::Null => None,
+        Value::Object(map) => {
+            let map: serde_json::Map<String, Value> = map
+                .into_iter()
+                .filter_map(|(key, value)| canonical_json(value).map(|value| (key, value)))
+                .collect();
+            (!map.is_empty()).then_some(Value::Object(map))
+        }
+        Value::Array(items) => {
+            let items: Vec<Value> = items.into_iter().filter_map(canonical_json).collect();
+            (!items.is_empty()).then_some(Value::Array(items))
+        }
+        other => Some(other),
+    }
 }
 
 /// Whether a completion recorded with `recorded` still covers a declaration hashing to
@@ -271,16 +315,20 @@ pub(crate) fn same_declaration(recorded: Option<&str>, current: Option<&str>) ->
     recorded.is_none() || recorded == current
 }
 
-/// The [`declaration_hash`] of task `name` in the lane's loaded config.
-fn task_hash(lane: &LaneRt, name: &str) -> Option<String> {
-    let config = lane.st().config.loaded().cloned()?;
-    declaration_hash(config.tasks.get(name))
+/// The [`declaration_hash`] of task `name` in `config`.
+pub(crate) fn task_hash(config: &devlanes_config::ProjectConfig, name: &str) -> Option<String> {
+    declaration_hash(config.tasks.get(name), TASK_SCHEDULING)
 }
 
-/// The [`declaration_hash`] of `infra.setup.<name>` in the lane's loaded config.
-fn setup_hash(lane: &LaneRt, name: &str) -> Option<String> {
-    let config = lane.st().config.loaded().cloned()?;
-    declaration_hash(config.infra.setup.get(name))
+/// The [`declaration_hash`] of `infra.setup.<name>` in `config`.
+pub(crate) fn setup_hash(config: &devlanes_config::ProjectConfig, name: &str) -> Option<String> {
+    declaration_hash(config.infra.setup.get(name), SETUP_HANDLING)
+}
+
+/// The lane's loaded config, read when a run begins so its completion records the
+/// declaration it ran, not one edited while it ran.
+fn loaded_config(lane: &LaneRt) -> Option<Arc<devlanes_config::ProjectConfig>> {
+    lane.st().config.loaded().cloned()
 }
 
 /// Maps a resolved readiness spec to the checker's form. `env` is the unit's launch
@@ -788,7 +836,7 @@ impl LanePhase for SetupPhase {
                 .as_ref()
                 .and_then(|container| started.get(container).cloned());
             let done = records.iter().find(|r| &r.entry == name);
-            let hash = declaration_hash(cx.config.infra.setup.get(name));
+            let hash = setup_hash(&cx.config, name);
             let current = match (done, &command.container) {
                 (None, _) => false,
                 (Some(record), None) => {
@@ -867,7 +915,7 @@ impl LanePhase for SetupPhase {
                     .iter()
                     .find(|(n, _)| *n == name)
                     .and_then(|(_, at)| at.clone());
-                let hash = declaration_hash(cx.config.infra.setup.get(&name));
+                let hash = setup_hash(&cx.config, &name);
                 if let Err(error) = engine
                     .store
                     .record_setup(lane_id, name.clone(), started_at, hash)
@@ -938,7 +986,7 @@ impl LanePhase for TasksPhase {
             }
             if hook == "lane.create" {
                 // Once per lane, and again after its declaration changed.
-                let hash = declaration_hash(cx.config.tasks.get(name));
+                let hash = task_hash(&cx.config, name);
                 match engine.store.task_completion(lane_id, name.clone()).await {
                     Ok(Some(done))
                         if same_declaration(done.spec_hash.as_deref(), hash.as_deref()) =>
@@ -2330,6 +2378,7 @@ impl Inner {
                 .map(|r| r.id)
                 .ok_or_else(|| RpcError::new("unassigned", json!({"lane": reference}), 1))?;
             self.task_event(&reference, name, "started", None, None);
+            let hash = loaded_config(lane).and_then(|config| task_hash(&config, name));
             let run = self
                 .store
                 .start_task_run(TaskRunInput {
@@ -2442,7 +2491,6 @@ impl Inner {
                     Some(json!({"code": error.code, "data": error.data})),
                 ),
             };
-            let hash = task_hash(lane, name);
             self.close_task_run(run.id, &reference, name, code, state, reason, hash)
                 .await;
             guard.run = None;
@@ -2519,6 +2567,7 @@ impl Inner {
                 3,
             )
         })?;
+        let hash = loaded_config(lane).and_then(|config| setup_hash(&config, entry));
         let (outcome, host) = self
             .run_command(project, lane, phase, command, actor, cancel, session)
             .await?;
@@ -2543,12 +2592,7 @@ impl Inner {
                 };
                 let _ = self
                     .store
-                    .record_setup(
-                        lane_id,
-                        entry.to_owned(),
-                        started_at,
-                        setup_hash(lane, entry),
-                    )
+                    .record_setup(lane_id, entry.to_owned(), started_at, hash)
                     .await;
             } else if phase == "teardown" && ok {
                 let _ = self
@@ -2650,7 +2694,7 @@ impl Inner {
             match &st.config {
                 crate::model::ConfigState::Invalid(error) => return Err(fail(error.clone())),
                 crate::model::ConfigState::Elsewhere(other) => {
-                    return Err(fail(crate::model::elsewhere_error(other)));
+                    return Err(fail(crate::model::elsewhere_error(other, Some(&initial))));
                 }
                 _ => {}
             }
@@ -2741,6 +2785,8 @@ impl Inner {
                 st.usage.clear();
                 st.config_changed = false;
                 st.drift.clear();
+                st.drift_error = None;
+                st.drift_generation += 1;
                 st.infra_changed = false;
                 st.started_with =
                     Some(crate::drift::StartedWith::new(&config, &selection.profiles));
@@ -4452,25 +4498,43 @@ mod tests {
     }
 
     #[test]
-    /// The declaration hash follows the entry's content and is stable for the same text.
-    fn declaration_hashes_follow_the_entry() {
-        let one = devlanes_config::parse_project(
-            "project: demo\ntasks:\n  install: { run: pnpm install, when: lane.create }\n",
-            None,
-        )
-        .expect("config");
-        let two = devlanes_config::parse_project(
-            "project: demo\ntasks:\n  install: { run: pnpm install --frozen-lockfile, when: lane.create }\n",
-            None,
-        )
-        .expect("config");
-        let hash = |config: &devlanes_config::ProjectConfig| {
-            declaration_hash(config.tasks.get("install")).expect("hash")
+    /// The declaration hash follows what a task runs, not when it runs or how long it
+    /// may take, and unset fields do not count.
+    fn declaration_hashes_follow_what_runs() {
+        let parse = |task: &str| {
+            devlanes_config::parse_project(
+                &format!("project: demo\ntasks:\n  install: {task}\n"),
+                None,
+            )
+            .expect("config")
         };
-        assert_eq!(hash(&one), hash(&one.clone()));
-        assert_ne!(hash(&one), hash(&two));
-        assert!(same_declaration(None, Some(&hash(&two))));
-        assert!(!same_declaration(Some(&hash(&one)), Some(&hash(&two))));
+        let hash =
+            |config: &devlanes_config::ProjectConfig| task_hash(config, "install").expect("hash");
+        let one = parse("{ run: pnpm install, when: lane.create }");
+        assert_eq!(
+            hash(&one),
+            hash(&parse(
+                "{ run: pnpm install, when: lane.create, timeout: 10m, env: {} }"
+            ))
+        );
+        assert_ne!(
+            hash(&one),
+            hash(&parse(
+                "{ run: pnpm install --frozen-lockfile, when: lane.create }"
+            ))
+        );
+        assert_ne!(
+            hash(&one),
+            hash(&parse(
+                "{ run: pnpm install, when: lane.create, env: { CI: 1 } }"
+            ))
+        );
+        assert!(same_declaration(None, Some(&hash(&one))));
+        assert!(!same_declaration(Some("0"), Some(&hash(&one))));
+        assert_eq!(
+            canonical_json(json!({"a": null, "b": [], "c": {"d": {}}})),
+            None
+        );
     }
 
     #[tokio::test(start_paused = true)]

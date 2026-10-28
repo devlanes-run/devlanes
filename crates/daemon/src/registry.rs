@@ -694,48 +694,73 @@ impl Inner {
         file_name: &str,
     ) -> Result<(), RpcError> {
         let (known_dir, known_file) = project.config_path();
-        {
-            // The old file would sit in the same worktree as the new one.
-            let old_dir = worktree.join(&known_dir);
-            let (state, _) = load_config(
-                old_dir.clone(),
-                old_dir.clone(),
-                known_file.clone(),
-                self.config_checks(),
-            )
-            .await;
-            if state
-                .loaded()
-                .is_some_and(|config| config.project == project.name())
-            {
-                return Err(RpcError::new(
-                    "duplicate_project_name",
-                    json!({
-                        "project": project.name(),
-                        "file": config_file,
-                        "other": old_dir.join(&known_file),
-                        "message": format!(
-                            "{} and {} both name project `{}`; give one of them another `project:`",
-                            config_file.display(),
-                            old_dir.join(&known_file).display(),
-                            project.name()
-                        ),
-                    }),
-                    1,
-                ));
+        let names_it = |dir: PathBuf| {
+            let (checks, file, name) = (self.config_checks(), known_file.clone(), project.name());
+            async move {
+                let (state, _) = load_config(dir.clone(), dir, file, checks).await;
+                state.loaded().is_some_and(|config| config.project == name)
             }
+        };
+        // The old file would sit in the same worktree as the new one.
+        let old = worktree.join(&known_dir).join(&known_file);
+        if !same_path(&old, config_file) && names_it(worktree.join(&known_dir)).await {
+            return Err(RpcError::new(
+                "duplicate_project_name",
+                json!({
+                    "project": project.name(),
+                    "file": config_file,
+                    "other": old,
+                    "message": format!(
+                        "{} and {} both name project `{}`; give one of them another `project:`",
+                        config_file.display(),
+                        old.display(),
+                        project.name()
+                    ),
+                }),
+                1,
+            ));
+        }
+        // A branch that moved the file does not move it for the other worktrees while
+        // the primary one still has it where it was: its lane there reads as missing.
+        let primary = self.primary_path(project);
+        if !same_path(&primary, worktree) && names_it(primary.join(&known_dir)).await {
+            tracing::info!(
+                project = %project.name(),
+                file = %config_file.display(),
+                "the primary worktree keeps the project file where it was"
+            );
+            return Ok(());
         }
         self.store
             .set_project_config(project.id, relative.to_owned(), file_name.to_owned())
             .await
             .map_err(store_error)?;
         project.set_config_path(relative.to_owned(), file_name.to_owned());
-        for lane in project.lanes() {
+        let lanes = project.lanes();
+        for lane in &lanes {
             if lane.st().present {
-                self.reload_config(project, &lane).await;
+                self.reload_config(project, lane).await;
             }
         }
+        self.refresh_views(project).await;
+        self.drift_after_reload(project, &lanes).await;
         Ok(())
+    }
+
+    /// Recomputes the drift of the running ones among `lanes` after their configs
+    /// were reloaded and views refreshed outside [`Self::fresh_config`].
+    pub(crate) async fn drift_after_reload(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lanes: &[Arc<LaneRt>],
+    ) {
+        for lane in lanes {
+            let running = lane.st().any_running();
+            if running {
+                self.update_drift(project, lane).await;
+                self.emit_lane(project, lane);
+            }
+        }
     }
 
     /// Creates the in-memory project and loads its persisted worktrees and lanes.
@@ -895,6 +920,7 @@ impl Inner {
         let mut report = SyncReport::default();
         let mut seen = BTreeSet::new();
         let mut changed: Vec<Arc<LaneRt>> = Vec::new();
+        let mut reloaded: Vec<Arc<LaneRt>> = Vec::new();
         for tree in trees.into_iter().filter(|t| !t.identity.is_empty()) {
             let record = self
                 .store
@@ -947,6 +973,7 @@ impl Inner {
                     ))
             {
                 self.reload_config(project, &lane).await;
+                reloaded.push(lane.clone());
             }
             if tree.present && !was_present {
                 report.added.push(lane.clone());
@@ -1004,6 +1031,7 @@ impl Inner {
                 .map_err(store_error)?;
             if present {
                 self.reload_config(project, alias).await;
+                reloaded.push(alias.clone());
             } else if was_present {
                 report.removed.push(alias.clone());
             }
@@ -1031,6 +1059,8 @@ impl Inner {
         changed.extend(assigned);
         self.update_moves(project);
         self.refresh_views(project).await;
+        // The reload stamped these files, so the poller will not get to their drift.
+        self.drift_after_reload(project, &reloaded).await;
         for lane in changed {
             self.emit_lane(project, &lane);
         }
@@ -1916,7 +1946,7 @@ impl Inner {
                     return Err(RpcError::new("no_config", json!({"path": st.path}), 1));
                 }
                 (ConfigState::Elsewhere(other), None) => {
-                    return Err(crate::model::elsewhere_error(other));
+                    return Err(crate::model::elsewhere_error(other, None));
                 }
             };
             let allocation = st

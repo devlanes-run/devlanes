@@ -8,6 +8,7 @@ use std::{
     sync::Arc,
 };
 
+use devlanes_core::env::EnvLayer;
 use devlanes_proto::{Context, LaneWarning, RpcError, Selection, StartResult, UnitDrift as Wire};
 use devlanes_resolve::ResolvedService;
 use serde_json::{Value, json};
@@ -46,7 +47,22 @@ impl Fingerprint {
             args: service.launch.args.clone(),
             cwd: service.launch.cwd.clone(),
             pty: service.pty,
-            env: service.launch.env.values.clone(),
+            // Variables whose top layer is the client's shell or `--env` come from the
+            // request that started the unit, not from the file, and a later command
+            // from another shell replaces them for the lane.
+            env: service
+                .launch
+                .env
+                .values
+                .iter()
+                .filter(|(key, _)| {
+                    !matches!(
+                        service.launch.env.sources.get(*key),
+                        Some(EnvLayer::Client | EnvLayer::Override)
+                    )
+                })
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
             files: service
                 .launch
                 .files
@@ -180,19 +196,25 @@ impl Inner {
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
     ) {
-        let (config, running, started, profiles, in_flight) = {
-            let st = lane.st();
+        let (config, running, orphans, started, profiles, in_flight, generation) = {
+            let mut st = lane.st();
+            // Taken now: a later update, start or stop bumps it, and this one's
+            // result, planned from an older state, is then dropped.
+            st.drift_generation += 1;
             (
                 st.config.loaded().cloned(),
                 running_services(&st),
+                st.orphans.keys().cloned().collect::<BTreeSet<String>>(),
                 st.started_with.clone(),
                 st.profiles.clone(),
                 !st.starts.is_empty(),
+                st.drift_generation,
             )
         };
         if running.is_empty() {
             let mut st = lane.st();
             st.drift.clear();
+            st.drift_error = None;
             st.infra_changed = false;
             // A start in flight spawns from the config it began with; its end decides.
             if !in_flight {
@@ -204,6 +226,7 @@ impl Inner {
             // A file that does not load still changed what the running units came from.
             let mut st = lane.st();
             st.drift.clear();
+            st.drift_error = None;
             st.config_changed = true;
             return;
         };
@@ -229,7 +252,10 @@ impl Inner {
                     .await,
             )
         };
-        let plan_failed = matches!(planned, Some(Err(_)));
+        let plan_error = match &planned {
+            Some(Err(error)) => Some(error.clone()),
+            _ => None,
+        };
         if let Some(Ok(resolved)) = &planned {
             for (unit, fingerprint) in &running {
                 if drift.contains_key(unit) {
@@ -253,7 +279,6 @@ impl Inner {
         let selected = devlanes_resolve::select_profiles(&config, &profiles, &[])
             .map(|selection| selection.services)
             .unwrap_or_default();
-        let before: &[String] = started.as_ref().map_or(&[], |s| &s.services);
         let laid_out: Vec<(String, String)> = lane
             .st()
             .view
@@ -265,19 +290,29 @@ impl Inner {
                     .collect()
             })
             .unwrap_or_default();
-        for (service, unit) in laid_out {
-            let alive = running.iter().any(|(running, _)| *running == unit);
-            if selected.contains(&service) && !before.contains(&service) && !alive {
-                drift.insert(unit, UnitDrift::Added);
+        // Without a whole start to compare with (a lane brought back next to a previous
+        // daemon's processes), nothing counts as added.
+        if let Some(started) = &started {
+            for (service, unit) in laid_out {
+                // A previous daemon's process runs the unit too, unsupervised.
+                let alive =
+                    running.iter().any(|(running, _)| *running == unit) || orphans.contains(&unit);
+                if selected.contains(&service) && !started.services.contains(&service) && !alive {
+                    drift.insert(unit, UnitDrift::Added);
+                }
             }
         }
         let infra_changed = started.is_some_and(|started| {
             serde_json::to_value(&config.infra).unwrap_or(Value::Null) != started.infra
         });
         let mut st = lane.st();
+        if st.drift_generation != generation {
+            return;
+        }
         // A plan that fails also means the file no longer matches what runs.
-        st.config_changed = !drift.is_empty() || infra_changed || plan_failed;
+        st.config_changed = !drift.is_empty() || infra_changed || plan_error.is_some();
         st.drift = drift;
+        st.drift_error = plan_error;
         st.infra_changed = infra_changed;
     }
 
@@ -302,6 +337,7 @@ impl Inner {
             return;
         }
         let mut st = lane.st();
+        st.drift_generation += 1;
         st.drift.retain(|unit, _| !spawned.contains(unit));
         st.config_changed = !st.drift.is_empty() || st.infra_changed;
     }
@@ -310,6 +346,7 @@ impl Inner {
     /// is about units that do not run.
     pub(crate) fn prune_drift(&self, lane: &LaneRt) {
         let mut st = lane.st();
+        st.drift_generation += 1;
         let alive: BTreeSet<String> = running_services(&st)
             .into_iter()
             .map(|(unit, _)| unit)
@@ -352,6 +389,47 @@ impl Inner {
         self.update_drift(&project, &lane).await;
         let (drift, whole) = {
             let st = lane.st();
+            if !st.any_running() {
+                return Err(RpcError::new(
+                    "not_running",
+                    json!({
+                        "lane": reference,
+                        "message": format!("nothing runs in {reference}; devlanes start starts it"),
+                    }),
+                    1,
+                ));
+            }
+            // Names the lane does not have are a typo, not "nothing to reload".
+            let known = |selector: &str| {
+                st.units.contains_key(selector)
+                    || st.orphans.contains_key(selector)
+                    || st.view.as_ref().is_some_and(|view| {
+                        view.services
+                            .iter()
+                            .any(|service| service.unit == selector || service.name == selector)
+                    })
+            };
+            if let Some(unknown) = selectors.iter().find(|selector| !known(selector)) {
+                let mut candidates: Vec<String> = st.units.keys().cloned().collect();
+                candidates.extend(
+                    st.view
+                        .iter()
+                        .flat_map(|view| view.services.iter().map(|s| s.unit.clone())),
+                );
+                candidates.sort();
+                candidates.dedup();
+                return Err(RpcError::new(
+                    "not_found",
+                    json!({"reference": unknown, "candidates": candidates}),
+                    3,
+                ));
+            }
+            // A plan that failed has no per-unit answer; its error is the answer.
+            if st.drift.is_empty()
+                && let Some(error) = &st.drift_error
+            {
+                return Err(error.clone());
+            }
             let picked = |unit: &str| {
                 selectors.is_empty()
                     || selectors.iter().any(|selector| {
@@ -394,13 +472,17 @@ impl Inner {
         if whole {
             let restart = self.restart_lane(&project, &lane, options(start_id));
             let mut result = self.with_lane_events(session, stream, restart).await?;
-            result.warnings.push(LaneWarning {
-                code: "reload_restarted_lane".into(),
-                data: json!({
-                    "lane": reference,
-                    "message": "infra or ports changed, so the whole lane restarted",
-                }),
-            });
+            // A start from another client between the stop and this start makes it
+            // add units only; say what happened.
+            if result.whole_lane {
+                result.warnings.push(LaneWarning {
+                    code: "reload_restarted_lane".into(),
+                    data: json!({
+                        "lane": reference,
+                        "message": "infra or ports changed, so the whole lane restarted",
+                    }),
+                });
+            }
             return serde_json::to_value(result).map_err(|e| internal("encode", e));
         }
         let removed: Vec<String> = drift
@@ -445,7 +527,8 @@ impl Inner {
                 code: "nothing_to_reload".into(),
                 data: json!({
                     "lane": reference,
-                    "message": format!("{reference} already runs what its project file says"),
+                    "units": selectors,
+                    "message": format!("nothing to reload: {reference} matches its project file"),
                 }),
             });
         }
@@ -456,13 +539,30 @@ impl Inner {
 
     /// Restarts the whole lane: stops everything, keeping what the lane saved, then
     /// starts it as a plain `start` would, so infra, setup, tasks and a waiting port
-    /// block move all happen.
+    /// block move all happen. What would make the start refuse (a file that does not
+    /// load, an unassigned lane, no environment) refuses before anything stops.
+    /// Another client's start in the gap between the stop and the start makes this one
+    /// add units only, which its result's `whole_lane` says.
     pub(crate) async fn restart_lane(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
         lane: &Arc<LaneRt>,
         options: StartOptions,
     ) -> Result<StartResult, RpcError> {
+        let reference = lane.st().reference(&project.name());
+        {
+            let st = lane.st();
+            st.config.require(&reference)?;
+            if let Some(reason) = &st.unassigned {
+                return Err(reason.clone());
+            }
+            if st.record.is_none() {
+                return Err(RpcError::new("unassigned", json!({"lane": reference}), 1));
+            }
+            if options.env.is_none() && st.env.is_none() {
+                return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
+            }
+        }
         // Transient: the stop leaves the saved profiles and services for the start.
         self.stop_lane(project, lane, None, None, true).await?;
         self.start_lane(project, lane, options).await

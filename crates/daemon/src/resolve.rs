@@ -174,7 +174,7 @@ impl Inner {
                 (None, ConfigState::Loaded(config)) => config.clone(),
                 (None, ConfigState::Invalid(error)) => return Err(error.clone()),
                 (None, ConfigState::Elsewhere(other)) => {
-                    return Err(crate::model::elsewhere_error(other));
+                    return Err(crate::model::elsewhere_error(other, Some(&reference)));
                 }
                 (None, ConfigState::Missing) => {
                     return Err(RpcError::new("no_config", json!({"lane": reference}), 1));

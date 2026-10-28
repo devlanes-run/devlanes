@@ -1167,7 +1167,7 @@ impl Inner {
                 return Err(RpcError::new("no_config", json!({"lane": reference}), 1));
             }
             crate::model::ConfigState::Elsewhere(other) => {
-                return Err(crate::model::elsewhere_error(other));
+                return Err(crate::model::elsewhere_error(other, Some(&reference)));
             }
         };
         let items = devlanes_resolve::profile_summaries(config);

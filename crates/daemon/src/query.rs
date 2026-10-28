@@ -754,7 +754,7 @@ impl Inner {
             ConfigState::Elsewhere(other) => push(
                 &mut reasons,
                 "config_names_other_project",
-                crate::model::elsewhere_error(other).data,
+                crate::model::elsewhere_error(other, Some(&reference)).data,
             ),
             ConfigState::Loaded(_) => {}
         }

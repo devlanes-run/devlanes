@@ -228,6 +228,11 @@ impl Handler for Engine {
     /// Canonicalizes the cwd, then dispatches.
     async fn handle(&self, mut request: Request, session: Session) -> Result<Value, RpcError> {
         request.context.cwd = canonical(&request.context.cwd).await;
+        // A project's file is recorded relative to its repository, which only one
+        // spelling of the path (no `..`, symlink or `subst` drive) gives.
+        if let Some(file) = &request.context.file {
+            request.context.file = Some(canonical(file).await);
+        }
         self.inner.dispatch(request, session).await
     }
 

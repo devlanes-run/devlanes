@@ -16,7 +16,7 @@ use devlanes_ipc::{
     local::{self, ConnectError, LocalStream, ProbeError},
 };
 pub use devlanes_proto::{Context, Hello, Method, RpcError};
-use devlanes_proto::{Control, Outcome, PROTOCOL_VERSION, Request};
+use devlanes_proto::{Control, Outcome, PROTOCOL_VERSION, Request, features};
 pub use paths::{Paths, user_home};
 use serde_json::Value;
 #[cfg(unix)]
@@ -503,6 +503,7 @@ impl Client {
         params: Value,
         context: Context,
     ) -> Result<u64> {
+        self.check_features(method, &params, &context)?;
         let id = self.next_id;
         self.next_id = id.checked_add(1).ok_or(Error::RequestIdsExhausted)?;
         let mut context = context;
@@ -523,6 +524,40 @@ impl Client {
             .await?;
         self.sent.push((id, method, Instant::now()));
         Ok(id)
+    }
+
+    /// Refuses a request an older daemon would misread: `--file`, which it ignores and
+    /// so acts on the cwd's project, and `reload` or a `restart` without units, which
+    /// it does not know. `daemon_outdated` says to restart the daemon.
+    fn check_features(&self, method: Method, params: &Value, context: &Context) -> Result<()> {
+        let has = |feature: &str| self.peer.features.iter().any(|known| known == feature);
+        let missing = if context.file.is_some() && !has(features::PROJECT_FILE) {
+            Some("--file")
+        } else if method == Method::Reload && !has(features::RELOAD) {
+            Some("reload")
+        } else if method == Method::Restart
+            && params["units"].as_array().is_none_or(Vec::is_empty)
+            && !has(features::RELOAD)
+        {
+            Some("restart without units")
+        } else {
+            None
+        };
+        match missing {
+            Some(what) => Err(Error::Rpc(RpcError::new(
+                "daemon_outdated",
+                serde_json::json!({
+                    "needs": what,
+                    "version": self.peer.version,
+                    "message": format!(
+                        "the running daemon ({}) predates {what}; restart it with `devlanes daemon restart`",
+                        self.peer.version
+                    ),
+                }),
+                1,
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// Logs the answer to one of this connection's requests with its duration.

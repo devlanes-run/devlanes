@@ -142,6 +142,78 @@ async fn an_env_file_edit_is_drift_by_name() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A start from another shell replaces the lane's client environment; its variables
+/// are not the file's, so an edit that changes nothing else shows no drift.
+async fn another_shells_environment_is_not_drift() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BEFORE);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let mut env = crate::client_env();
+        env.insert("OTHER_SHELL".into(), "yes".into());
+        let other = devlanes_proto::Context {
+            env: Some(env),
+            ..cx(&main)
+        };
+        h.call(Method::Start, json!({}), other)
+            .await
+            .expect("start from another shell");
+        std::fs::write(main.join("devlanes.yaml"), format!("{BEFORE}# a comment\n"))
+            .expect("edit");
+        let edited = lane(&h, &main).await;
+        assert!(drift(&edited).is_empty(), "{:?}", drift(&edited));
+        assert!(!edited.config_changed);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A whole-lane restart with a file that does not load refuses before stopping
+/// anything; `reload` of a unit the lane does not have is `not_found`, and of a
+/// stopped lane `not_running`.
+async fn restart_and_reload_refuse_before_touching_the_lane() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", BEFORE);
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let typo = h
+            .call(Method::Reload, json!({"units": ["wbe"]}), cx(&main))
+            .await
+            .expect_err("typo");
+        assert_eq!(typo.code, "not_found");
+        std::fs::write(main.join("devlanes.yaml"), "project: demo\n<<<<<<< HEAD\n")
+            .expect("break");
+        let refused = h
+            .call(Method::Restart, json!({}), cx(&main))
+            .await
+            .expect_err("broken file");
+        assert_eq!(refused.code, "config_error");
+        let still = lane(&h, &main).await;
+        assert_eq!(still.state, "running", "{still:?}");
+        std::fs::write(main.join("devlanes.yaml"), BEFORE).expect("fix");
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        let stopped = h
+            .call(Method::Reload, json!({}), cx(&main))
+            .await
+            .expect_err("nothing runs");
+        assert_eq!(stopped.code, "not_running");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// `restart` without units restarts the whole lane and keeps what it ran.
 async fn restart_without_units_restarts_the_whole_lane() {
     tokio::time::timeout(LIMIT, async {

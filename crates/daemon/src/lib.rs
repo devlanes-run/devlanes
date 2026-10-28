@@ -1003,9 +1003,14 @@ async fn serve_client(
         return Err(devlanes_ipc::Error::InvalidFrame);
     };
     let mut hello = Hello::current(handler.managed_processes());
-    hello
-        .features
-        .push(devlanes_proto::features::START_EVENTS.into());
+    hello.features.extend(
+        [
+            devlanes_proto::features::START_EVENTS,
+            devlanes_proto::features::PROJECT_FILE,
+            devlanes_proto::features::RELOAD,
+        ]
+        .map(String::from),
+    );
     connection
         .send(Frame::Control(Control::Hello(hello.clone())))
         .await?;

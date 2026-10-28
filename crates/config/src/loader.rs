@@ -888,6 +888,7 @@ pub fn load_project_files<E: Extensions>(
             entry,
             fallback,
             &mut Vec::new(),
+            &mut Vec::new(),
             &mut documents,
             &mut files,
             None,
@@ -899,12 +900,15 @@ pub fn load_project_files<E: Extensions>(
 
 /// Parse `file`, the files it extends and each one's local overlay, appending them to
 /// `documents` in merge order, and return `file`'s index there. `stack` holds the files
-/// whose `extends` led here, to refuse cycles; `referrer` is the document and field that
-/// named `file`, where a failure to read it is reported.
+/// whose `extends` led here, to refuse cycles; `merged` the files already in
+/// `documents`, which a second path to them (two bases extending one file) skips, since
+/// merging it again would undo what came between; `referrer` is the document and field
+/// that named `file`, where a failure to read it is reported.
 fn collect<E: Extensions>(
     file: &Path,
     fallback: Option<LocalFallback<'_>>,
     stack: &mut Vec<(PathBuf, String)>,
+    merged: &mut Vec<PathBuf>,
     documents: &mut Vec<Document<E>>,
     files: &mut Vec<PathBuf>,
     referrer: Option<(&Source, &str)>,
@@ -940,8 +944,11 @@ fn collect<E: Extensions>(
             None => ConfigError::plain(message),
         });
     }
+    if merged.contains(&key) {
+        return Ok(0);
+    }
     if let Some(extends) = &document.partial.extends {
-        stack.push((key, name.clone()));
+        stack.push((key.clone(), name.clone()));
         let dir = file.parent().unwrap_or(Path::new("."));
         let many = matches!(extends.value, ProjectExtends::Files(_));
         for (position, base) in extends.value.files().iter().enumerate() {
@@ -954,6 +961,7 @@ fn collect<E: Extensions>(
                 &dir.join(base),
                 fallback,
                 stack,
+                merged,
                 documents,
                 files,
                 Some((&document.source, &field)),
@@ -963,6 +971,7 @@ fn collect<E: Extensions>(
     }
     let index = documents.len();
     documents.push(document);
+    merged.push(key);
     if let Some(local) = read_local(file, fallback, files)? {
         documents.push(local);
     }

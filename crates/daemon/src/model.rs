@@ -78,7 +78,7 @@ impl ConfigState {
         match self {
             Self::Loaded(config) => Ok(config.clone()),
             Self::Invalid(error) => Err(error.clone()),
-            Self::Elsewhere(other) => Err(elsewhere_error(other)),
+            Self::Elsewhere(other) => Err(elsewhere_error(other, Some(lane))),
             Self::Missing => Err(RpcError::new("no_config", json!({"lane": lane}), 1)),
         }
     }
@@ -392,6 +392,12 @@ pub(crate) struct LaneSt {
     /// where the primary's applies (`project_setting_ignored`) or the lanes share one
     /// container (`infra_spec_conflict`).
     pub divergent: Vec<devlanes_proto::LaneWarning>,
+    /// Why the last drift computation could not plan the running units, which a
+    /// `reload` reports instead of "nothing to reload".
+    pub drift_error: Option<RpcError>,
+    /// Bumped by every drift update, start and stop, so a computation that began
+    /// before one of them does not overwrite its result.
+    pub drift_generation: u64,
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
@@ -525,6 +531,8 @@ impl LaneSt {
             infra_changed: false,
             started_with: None,
             divergent: Vec::new(),
+            drift_error: None,
+            drift_generation: 0,
             shutdown_hooks: false,
             wanted: false,
             sweeping: false,
@@ -1386,7 +1394,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         .or_else(|| lane.unassigned.clone())
         .or_else(|| match &lane.config {
             ConfigState::Invalid(error) => Some(error.clone()),
-            ConfigState::Elsewhere(other) => Some(elsewhere_error(other)),
+            ConfigState::Elsewhere(other) => Some(elsewhere_error(other, Some(&reference))),
             _ => None,
         })
         .or_else(|| lane.last_error.clone());
@@ -1533,18 +1541,22 @@ fn state_badness(state: &str) -> u8 {
 }
 
 /// `config_names_other_project`: the lane's worktree now holds another project's file.
-pub(crate) fn elsewhere_error(other: &str) -> RpcError {
-    RpcError::new(
+pub(crate) fn elsewhere_error(other: &str, lane: Option<&str>) -> RpcError {
+    let mut error = RpcError::new(
         "config_names_other_project",
         json!({
             "project": other,
             "message": format!(
-                "the project file here now names project `{other}`; this lane keeps its \
-                 ports and data until `devlanes lane gc --yes` collects it"
+                "the project file now names project `{other}`; the lane keeps its ports \
+                 and data until `devlanes lane gc --yes` collects it"
             ),
         }),
         1,
-    )
+    );
+    if let Some(lane) = lane {
+        error.data["lane"] = json!(lane);
+    }
+    error
 }
 
 /// Shapes a config failure for clients, keeping its source location.
