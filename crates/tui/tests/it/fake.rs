@@ -28,6 +28,8 @@ pub struct FakeApi {
     pub screen: Vec<u8>,
     /// When set, start/stop/restart fail with this daemon error.
     pub control_error: Option<RpcError>,
+    /// A whole-lane stop leaves the lane idle in what `status` answers next.
+    pub stops: bool,
     /// When set, `lane.clean` fails with this daemon error.
     pub clean_error: Option<RpcError>,
     /// The daemon log the TUI tails.
@@ -149,10 +151,21 @@ impl DaemonApi for FakeApi {
                 selection.units, selection.profiles
             ));
         }
-        match &self.control_error {
-            Some(error) => Err(ApiError::Rpc(error.clone())),
-            None => Ok(json!({})),
+        if let Some(error) = &self.control_error {
+            return Err(ApiError::Rpc(error.clone()));
         }
+        if self.stops
+            && method == Method::Stop
+            && selection.units.is_empty()
+            && let Ok(mut lanes) = self.lanes.lock()
+            && let Some(stopped) = lanes.iter_mut().find(|l| l.reference == lane)
+        {
+            stopped.state = "idle".into();
+            for unit in &mut stopped.units {
+                unit.state = "stopped".into();
+            }
+        }
+        Ok(json!({}))
     }
 
     async fn run_task(

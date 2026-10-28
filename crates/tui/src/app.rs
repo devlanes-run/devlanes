@@ -39,6 +39,9 @@ pub const MIN_HEIGHT: u16 = 8;
 const STARTING_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 /// Notices stay this many one-second ticks; errors stay longer.
 const NOTICE_TICKS: u8 = 6;
+/// Seconds a stop and switch waits for the stopped lane to show stopped
+/// after the daemon answered the stop.
+const SWITCH_TICKS: u8 = 30;
 const ERROR_TICKS: u8 = 12;
 /// Errors kept for the error list (`e`).
 const MAX_ERRORS: usize = 50;
@@ -1121,6 +1124,14 @@ pub struct Grey {
     pub reason: String,
 }
 
+impl Grey {
+    /// Whether `m` does something: switches to it, or for a box lane this
+    /// machine's running lane keeps out, stops that lane first.
+    pub fn switchable(&self) -> bool {
+        self.can_use || (self.cause.as_deref() == Some("local_running") && self.host.is_some())
+    }
+}
+
 /// All TUI state.
 pub struct App {
     pub lanes: Vec<LaneSummary>,
@@ -1257,6 +1268,25 @@ pub struct App {
     optimistic: HashMap<(String, String), Optimistic>,
     /// The id of the last [`Effect::Control`].
     last_action: u64,
+    /// A stop and switch `m` asked for, until it sends `remote.use` or fails.
+    switch: Option<Switch>,
+}
+
+/// `m` on a box lane that this machine's running lane keeps out: stop that
+/// lane, then use the box's.
+#[derive(Debug, Clone)]
+struct Switch {
+    /// The stop's [`Effect::Control`] id.
+    action: u64,
+    /// This machine's lane being stopped.
+    local: String,
+    /// The box lane to use, by its reference on `host`.
+    lane: String,
+    host: String,
+    /// The stop answered, so the switch waits for the lane to show stopped.
+    stopped: bool,
+    /// Seconds left for that before the switch gives up.
+    ticks: u8,
 }
 
 /// A unit this TUI shows `queued` before the daemon reports it.
@@ -1347,6 +1377,7 @@ impl App {
             watched_units: HashMap::new(),
             optimistic: HashMap::new(),
             last_action: 0,
+            switch: None,
         }
     }
 
@@ -1905,7 +1936,19 @@ impl App {
                             });
                         }
                     }
-                    Err(error) => self.api_error(&label, Some(target), error, &mut effects),
+                    Err(error) => {
+                        // A switch that waited on this stop ends with it.
+                        if self.switch.as_ref().is_some_and(|s| s.action == action) {
+                            self.switch = None;
+                        }
+                        self.api_error(&label, Some(target), error, &mut effects);
+                    }
+                }
+                if let Some(switch) = self.switch.as_mut().filter(|s| s.action == action) {
+                    switch.stopped = true;
+                    // Status says when the lane is down; events may lag the answer.
+                    effects.push(Effect::Refresh);
+                    self.continue_switch(&mut effects);
                 }
             }
             Msg::RunDone { lane, task, result } => self.run_done(lane, task, result, &mut effects),
@@ -2690,6 +2733,7 @@ impl App {
     /// consistent with the lanes.
     fn after_change(&mut self, effects: &mut Vec<Effect>) {
         self.watch(effects);
+        self.continue_switch(effects);
         let lane_known = self
             .selected
             .as_ref()
@@ -4400,15 +4444,13 @@ impl App {
         });
     }
 
-    /// `m`: makes the shown grey lane the one this machine mirrors, a box's
-    /// lane or this machine's own. A lane in use already, or one that a
-    /// running local lane keeps out, only says so.
-    fn use_lane(&mut self, effects: &mut Vec<Effect>) {
-        let Some(reference) = self.selected.as_ref().map(|s| s.lane.clone()) else {
-            return;
-        };
-        let Some(grey) = self.grey(&reference) else {
-            let notice = match self.box_lane(&reference) {
+    /// `m`: makes grey lane `reference` the one this machine mirrors, a box's
+    /// lane or this machine's own. When this machine's running lane keeps a
+    /// box lane out, it asks to stop that lane first. A lane in use already
+    /// only says so.
+    fn use_lane(&mut self, reference: &str, effects: &mut Vec<Effect>) {
+        let Some(grey) = self.grey(reference) else {
+            let notice = match self.box_lane(reference) {
                 Some((host, lane)) => format!("{lane} from {} is already in use", host.host),
                 None if self.boxes.lanes.iter().any(|lane| lane.lane == reference) => {
                     format!("{reference} on this machine is already in use")
@@ -4419,15 +4461,14 @@ impl App {
             return;
         };
         if !grey.can_use {
-            let notice = if grey.cause.as_deref() == Some("local_running") {
-                format!(
-                    "{} runs on this machine. Stop it there to use this one",
-                    grey.serving
-                )
-            } else {
-                "the daemon is too old to switch lanes. Upgrade it and restart it".to_owned()
-            };
-            self.set_notice(notice);
+            match (grey.cause.as_deref(), grey.host) {
+                (Some("local_running"), Some(host)) => {
+                    self.switch_prompt(grey.serving, grey.lane, host);
+                }
+                _ => self.set_notice(
+                    "the daemon is too old to switch lanes. Upgrade it and restart it".to_owned(),
+                ),
+            }
             return;
         }
         let from = grey.host.as_deref().unwrap_or("this machine");
@@ -4435,6 +4476,65 @@ impl App {
         effects.push(Effect::UseLane {
             lane: grey.lane,
             host: grey.host,
+        });
+    }
+
+    /// Asks before stopping this machine's running lane `local`, which keeps
+    /// box `host`'s lane `lane` out. Confirmed, it stops `local` the way `x`
+    /// does, and [`App::continue_switch`] sends `remote.use` once it stopped.
+    fn switch_prompt(&mut self, local: String, lane: String, host: String) {
+        let action = self.next_action();
+        let stop = Effect::Control {
+            action,
+            method: Method::Stop,
+            lane: local.clone(),
+            selection: Selection::default(),
+            label: format!("stop {local}"),
+            target: Target::Lane(local.clone()),
+        };
+        self.dialog = Some(Dialog::Confirm {
+            prompt: format!("{local} runs on this machine. Stop it and use {host}'s?"),
+            detail: vec![
+                format!("It stops every unit of {local} here."),
+                format!("Then {host}'s {lane} serves its hostnames and ports."),
+            ],
+            action: "stop and switch",
+            strict: true,
+            effect: Box::new(stop),
+        });
+        // Only a confirmed dialog sends the stop, so an unanswered one leaves
+        // a switch whose action never comes back.
+        self.switch = Some(Switch {
+            action,
+            local,
+            lane,
+            host,
+            stopped: false,
+            ticks: SWITCH_TICKS,
+        });
+    }
+
+    /// Sends `remote.use` for the switch in progress once its local lane
+    /// stopped and this machine shows it stopped. The daemon refuses the
+    /// switch while it still counts the lane as running.
+    fn continue_switch(&mut self, effects: &mut Vec<Effect>) {
+        let Some(switch) = self.switch.as_ref().filter(|s| s.stopped) else {
+            return;
+        };
+        let live = self
+            .lanes
+            .iter()
+            .any(|lane| lane.reference == switch.local && tree::lane_is_live(lane));
+        if live {
+            return;
+        }
+        let Some(switch) = self.switch.take() else {
+            return;
+        };
+        self.set_notice(format!("switching {} to {}…", switch.lane, switch.host));
+        effects.push(Effect::UseLane {
+            lane: switch.lane,
+            host: Some(switch.host),
         });
     }
 
@@ -4776,6 +4876,18 @@ impl App {
     fn begin(&mut self, effect: &Effect, effects: &mut Vec<Effect>) {
         match effect {
             Effect::Run { lane, .. } => self.pending_begin(lane),
+            // Only a stop and switch asks before a stop.
+            Effect::Control { lane, action, .. } => {
+                self.pending_begin(lane);
+                self.clear_optimistic(lane, &[], None);
+                if let Some(switch) = self.switch.as_ref().filter(|s| s.action == *action) {
+                    let notice = format!(
+                        "stopping {} to use {}'s {}…",
+                        switch.local, switch.host, switch.lane
+                    );
+                    self.set_notice(notice);
+                }
+            }
             Effect::CleanLane { lane } => {
                 self.pending_begin(lane);
                 self.cleaning.insert(lane.clone());
@@ -5390,7 +5502,11 @@ impl App {
                 }
             }
             KeyCode::Char('o') => self.open_url(effects),
-            KeyCode::Char('m') => self.use_lane(effects),
+            KeyCode::Char('m') => {
+                if let Some(reference) = self.selected.as_ref().map(|s| s.lane.clone()) {
+                    self.use_lane(&reference, effects);
+                }
+            }
             KeyCode::Char('e') => self.open_errors(),
             KeyCode::Char('c') => self.enter_copy(),
             KeyCode::PageUp => {
@@ -6995,6 +7111,22 @@ impl App {
     /// Ages the notice, polls metrics on the monitor and follows the daemon
     /// tab's facts and log and the boxes view's `host.list` while visible.
     fn tick(&mut self, effects: &mut Vec<Effect>) {
+        if let Some(switch) = self.switch.as_mut().filter(|s| s.stopped) {
+            switch.ticks = switch.ticks.saturating_sub(1);
+            if switch.ticks == 0
+                && let Some(switch) = self.switch.take()
+            {
+                let message = format!(
+                    "{} is still running. Stop it, then press m again",
+                    switch.local
+                );
+                self.report(
+                    &format!("use {} from {}", switch.lane, switch.host),
+                    None,
+                    Worded::local(&message),
+                );
+            }
+        }
         if self.notice_ticks > 0 {
             self.notice_ticks -= 1;
             if self.notice_ticks == 0 {

@@ -204,7 +204,7 @@ pub(super) fn grey_note(grey: &Grey) -> Option<String> {
     let serving = clean(&grey.serving);
     match (grey.cause.as_deref()?, &grey.winner) {
         ("local_running", _) => Some(format!(
-            "Not mirrored. {serving} runs on this machine. Stop it there to use this one."
+            "Not mirrored. {serving} runs on this machine. Press m to stop it and use this one."
         )),
         (_, Some(winner)) if grey.can_use => Some(format!(
             "Not mirrored. {}'s {serving} is in use. Press m to use this one.",
@@ -234,7 +234,7 @@ fn skipped_words(app: &App, skipped: &crate::boxes::SkippedLane) -> Option<Strin
     };
     match (cause, winner) {
         ("local_running", _) => Some(format!(
-            "{local} runs on this machine. Stop it there to use this one."
+            "{local} runs on this machine. Press m on this box's lane to stop it and use this one."
         )),
         (_, Some(winner)) if skipped.can_use => Some(format!(
             "{}'s {} is in use. Press m on this box's lane to use it.",

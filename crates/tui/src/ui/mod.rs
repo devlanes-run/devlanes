@@ -1348,9 +1348,11 @@ fn hints(app: &App) -> Vec<Hint> {
         return Vec::new();
     };
     let mut hints = lane_hints(app, lane);
-    // Only where `m` can switch; a grey lane a running local lane keeps out
-    // says why in its pane.
-    if app.grey(&lane.reference).is_some_and(|grey| grey.can_use) {
+    // Only where `m` can switch, if need be after stopping this machine's lane.
+    if app
+        .grey(&lane.reference)
+        .is_some_and(|grey| grey.switchable())
+    {
         hints.insert(0, ("m", "use this one", ch('m')));
     }
     hints
