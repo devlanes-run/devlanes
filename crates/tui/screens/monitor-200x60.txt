@@ -17,45 +17,45 @@
 │    └-2m 32s                                                                  now                                     ││    └-1m 4s                       now                                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────┘
 ┌ units 42 of 42 · by lane ──────────────────────────────────────────────────────────────────────────────────────── <- name -> ┐┌ api-search · acme@0 ─────────────────────────────────────────────────┐
-│  name ▲                kind state    cpu            mem             peak uptime cpu -1m 28s                                  ││service · ready · pid 51005 · up 2h 14m                               │
-│▾ acme (shared)              shared    5.6%           640M                       ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││                                                                      │
-│  ● postgres            ctr  healthy   4.9% ■■■■■■■■  602M ■■■■■■■■  606M      - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││cpu   now 104%  avg 88%  min 39%  max 364%                            │
-│  ● redis               ctr  healthy   0.7% ■■■■■■■■   38M ■■■■■■■■   38M      - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││400%┤                                                                 │
-│▾ acme@0  main                         372%           8.3G                       ⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣶⣶⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣠⣤⣠⣄⣠⣄⣤⣀⣄⣀⣀⣀ ││    │                                   ⡆                             │
-│  ● api-auth            svc  ready     3.3% ■■■■■■■■   98M ■■■■■■■■   99M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                                  ⣠⣿⡀                            │
-│  ● api-billing         svc  ready     8.1% ■■■■■■■■  173M ■■■■■■■■  174M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                                 ⢸⣿⣿⣧⡆                           │
-│  ● api-catalog         svc  ready      36% ■■■■■■■■  260M ■■■■■■■■  261M 2h 14m ⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣄⣤⣄⣤⣠⣄⣠⣄⣠⣀⣤⣀⣄⣀⣀⣠⣀⣀ ││    │                               ⢀⣴⣿⣿⣿⣿⣿⡀                          │
-│  ● api-inventory       svc  ready      15% ■■■■■■■■  321M ■■■■■■■■  323M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                               ⣸⣿⣿⣿⣿⣿⣿⣧⣆                         │
-│  ● api-notify          svc  ready      15% ■■■■■■■■  358M ■■■■■■■■  360M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                             ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣴                        │
-│  ● api-orders          svc  ready     9.7% ■■■■■■■■  211M ■■■■■■■■  211M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││200%┤                            ⢀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣇                       │
-│  ● api-reports         svc  ready     0.3% ■■■■■■■■  394M ■■■■■■■■  397M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                            ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣴                      │
-│▌ ● api-search          svc  ready     104% ■■■■■■■■  417M ■■■■■■■■  418M 2h 14m ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣿⣷⣿⣾ ││    │                          ⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣇                     │
-│  ● api-users           svc  ready     5.9% ■■■■■■■■  136M ■■■■■■■■  136M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                ⢀ ⢀ ⢀ ⢀ ⣄ ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⡀⣄ ⣄ ⡀ ⡀⢀ ⢀   ⡀     │
-│  ● cache-warm          svc  ready     7.0% ■■■■■■■■  410M ■■■■■■■■  410M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣄ ⣄ ⣄⢰⣄⢰⣄⢰⣄⣷⣄⣷⣄⣷⣼⣷⣼⣷⣼⣷⣼⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣿⣷⣿⣦⣿⣾⣷⣼⣧⣸⣦⣷⣄⣷⡄⣦⣸│
-│  ● docs-search         svc  ready     1.4% ■■■■■■■■  296M ■■■■■■■■  299M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣷⣿⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ● Gateway API         svc  ready     0.5% ■■■■■■■■   61M ■■■■■■■■   61M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ● minio               ctr  up        2.3% ■■■■■■■■   96M ■■■■■■■■   97M      - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││  0%┤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ⠙ ml-embed            svc  starting  5.3% ■■■■■■■■  372M ■■■■■■■■  372M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    └-2m 10s                                                       now│
-│  ● ml-ranker           svc  ready     2.3% ■■■■■■■■  335M ■■■■■■■■  336M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││                                                                      │
-│  ● proxy-edge          svc  ready     0.3% ■■■■■■■■  259M ■■■■■■■■  262M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││mem   now 417.1M  avg 399.7M  min 383.1M  max 418.1M                  │
-│  ● stub-auth0          svc  ready      14% ■■■■■■■■  223M ■■■■■■■■  225M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││512M┤                                                                 │
-│  ● stub-s3             svc  ready      12% ■■■■■■■■   75M ■■■■■■■■   75M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                                                                 │
-│  ● stub-segment        svc  ready      14% ■■■■■■■■  186M ■■■■■■■■  187M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │   ⢀ ⢀ ⢀ ⣀ ⣀⡀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀│
-│  ● stub-sendgrid       svc  ready      14% ■■■■■■■■  149M ■■■■■■■■  150M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ● stub-stripe         svc  ready     9.6% ■■■■■■■■  444M ■■■■■■■■  445M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ◆ stub-twilio         svc  orphaned   13% ■■■■■■■■  112M ■■■■■■■■  113M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ● web-admin           svc  ready     2.9% ■■■■■■■■   67M ■■■■■■■■   67M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ● web-app             svc  ready     1.7% ■■■■■■■■  431M ■■■■■■■■  433M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││256M┤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ● web-docs            svc  ready     4.3% ■■■■■■■■  104M ■■■■■■■■  105M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ● web-landing         svc  ready     6.0% ■■■■■■■■  142M ■■■■■■■■  142M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ◉ wrk-billing         svc  running    11% ■■■■■■■■  217M ■■■■■■■■  218M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ◉ wrk-cron            svc  running   0.6% ■■■■■■■■  332M ■■■■■■■■  332M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ◉ wrk-email           svc  running   8.2% ■■■■■■■■  179M ■■■■■■■■  180M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ◉ wrk-index           svc  running   9.5% ■■■■■■■■  519M ■■■■■■■■  519M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ◉ wrk-ledger          svc  running   6.8% ■■■■■■■■  407M ■■■■■■■■  408M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││   0┤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
-│  ◉ wrk-thumbs          svc  running    23% ■■■■■■■■  294M ■■■■■■■■  294M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    └-2m 10s                                                       now│
+│  name ▲                kind   state    cpu            mem              peak   uptime cpu -1m 18s                             ││service · ready · pid 51005 · up 2h 14m                               │
+│▾ acme (shared)                shared    5.6%           640M                          ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││                                                                      │
+│  ● postgres            ctr    healthy   4.9% ■■■■■■■■  602M ■■■■■■■■   606M        - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││cpu   now 104%  avg 88%  min 39%  max 364%                            │
+│  ● redis               ctr    healthy   0.7% ■■■■■■■■   38M ■■■■■■■■    38M        - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││400%┤                                                                 │
+│▾ acme@0  main                           372%           8.3G                          ⣤⣤⣤⣤⣤⣤⣤⣤⣶⣶⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣠⣤⣠⣄⣠⣄⣤⣀⣄⣀⣀⣀ ││    │                                   ⡆                             │
+│  ● api-auth            svc    ready     3.3% ■■■■■■■■   98M ■■■■■■■■    99M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                                  ⣠⣿⡀                            │
+│  ● api-billing         svc    ready     8.1% ■■■■■■■■  173M ■■■■■■■■   174M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                                 ⢸⣿⣿⣧⡆                           │
+│  ● api-catalog         svc    ready      36% ■■■■■■■■  260M ■■■■■■■■   261M   2h 14m ⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣄⣤⣄⣤⣠⣄⣠⣄⣠⣀⣤⣀⣄⣀⣀⣠⣀⣀ ││    │                               ⢀⣴⣿⣿⣿⣿⣿⡀                          │
+│  ● api-inventory       svc    ready      15% ■■■■■■■■  321M ■■■■■■■■   323M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                               ⣸⣿⣿⣿⣿⣿⣿⣧⣆                         │
+│  ● api-notify          svc    ready      15% ■■■■■■■■  358M ■■■■■■■■   360M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                             ⢠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣴                        │
+│  ● api-orders          svc    ready     9.7% ■■■■■■■■  211M ■■■■■■■■   211M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││200%┤                            ⢀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣇                       │
+│  ● api-reports         svc    ready     0.3% ■■■■■■■■  394M ■■■■■■■■   397M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                            ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣴                      │
+│▌ ● api-search          svc    ready     104% ■■■■■■■■  417M ■■■■■■■■   418M   2h 14m ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣿⣷⣿⣾ ││    │                          ⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣇                     │
+│  ● api-users           svc    ready     5.9% ■■■■■■■■  136M ■■■■■■■■   136M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                ⢀ ⢀ ⢀ ⢀ ⣄ ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣾⡀⣄ ⣄ ⡀ ⡀⢀ ⢀   ⡀     │
+│  ● cache-warm          svc    ready     7.0% ■■■■■■■■  410M ■■■■■■■■   410M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣄ ⣄ ⣄⢰⣄⢰⣄⢰⣄⣷⣄⣷⣄⣷⣼⣷⣼⣷⣼⣷⣼⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣿⣷⣿⣦⣿⣾⣷⣼⣧⣸⣦⣷⣄⣷⡄⣦⣸│
+│  ● docs-search         svc    ready     1.4% ■■■■■■■■  296M ■■■■■■■■   299M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣷⣿⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ● Gateway API         svc    ready     0.5% ■■■■■■■■   61M ■■■■■■■■    61M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ● minio               ctr    up        2.3% ■■■■■■■■   96M ■■■■■■■■    97M        - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││  0%┤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ⠙ ml-embed            svc    starting  5.3% ■■■■■■■■  372M ■■■■■■■■   372M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    └-2m 10s                                                       now│
+│  ● ml-ranker           svc    ready     2.3% ■■■■■■■■  335M ■■■■■■■■   336M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││                                                                      │
+│  ● proxy-edge          svc    ready     0.3% ■■■■■■■■  259M ■■■■■■■■   262M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││mem   now 417.1M  avg 399.7M  min 383.1M  max 418.1M                  │
+│  ● stub-auth0          svc    ready      14% ■■■■■■■■  223M ■■■■■■■■   225M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││512M┤                                                                 │
+│  ● stub-s3             svc    ready      12% ■■■■■■■■   75M ■■■■■■■■    75M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │                                                                 │
+│  ● stub-segment        svc    ready      14% ■■■■■■■■  186M ■■■■■■■■   187M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │   ⢀ ⢀ ⢀ ⣀ ⣀⡀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀│
+│  ● stub-sendgrid       svc    ready      14% ■■■■■■■■  149M ■■■■■■■■   150M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ● stub-stripe         svc    ready     9.6% ■■■■■■■■  444M ■■■■■■■■   445M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ◆ stub-twilio         svc    orphaned   13% ■■■■■■■■  112M ■■■■■■■■   113M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ● web-admin           svc    ready     2.9% ■■■■■■■■   67M ■■■■■■■■    67M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ● web-app             svc    ready     1.7% ■■■■■■■■  431M ■■■■■■■■   433M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││256M┤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ● web-docs            svc    ready     4.3% ■■■■■■■■  104M ■■■■■■■■   105M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ● web-landing         svc    ready     6.0% ■■■■■■■■  142M ■■■■■■■■   142M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ◉ wrk-billing         svc    running    11% ■■■■■■■■  217M ■■■■■■■■   218M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ◉ wrk-cron            svc    running   0.6% ■■■■■■■■  332M ■■■■■■■■   332M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ◉ wrk-email           svc    running   8.2% ■■■■■■■■  179M ■■■■■■■■   180M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ◉ wrk-index           svc    running   9.5% ■■■■■■■■  519M ■■■■■■■■   519M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    │⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ◉ wrk-ledger          svc    running   6.8% ■■■■■■■■  407M ■■■■■■■■   408M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││   0┤⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿│
+│  ◉ wrk-thumbs          svc    running    23% ■■■■■■■■  294M ■■■■■■■■   294M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││    └-2m 10s                                                       now│
 │╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌││                                                                      │
-│● devlanes daemon       dmn  running   1.1% ■■■■■■■■   47M ■■■■■■■■   47M 3h 00m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││since start   cpu peak 144%   mem peak 453.2M                         │
+│● devlanes daemon       dmn    running   1.1% ■■■■■■■■   47M ■■■■■■■■    47M   3h 00m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ ││since start   cpu peak 144%   mem peak 453.2M                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
  j k move   enter open unit   ←→ sort   i reverse   / filter   e flat   m memory graph   s x r start stop restart   esc back                                                      ? all keys   q quit
 
@@ -80,43 +80,43 @@
 17: 0-199 darkgray
 18: 0 darkgray, 7-26 dim, 27-114 darkgray, 115-118 dim, 119-122 bold, 123-126 dim, 127-128 darkgray, 129-139 bold, 140-149 dim, 150-199 darkgray
 19: 0 darkgray, 1-126 dim, 127-128 darkgray, 199 darkgray
-20: 0 darkgray, 1-2 dim, 3-24 bold, 30-38 dim, 39-68 bold, 82-125 green, 127-128 darkgray, 199 darkgray
-21: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-67 green, 69-74 dim, 82-125 green, 127-128 darkgray, 199 darkgray
-22: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 199 darkgray
-23: 0 darkgray, 1-2 dim, 3-24 bold, 39-68 bold, 82-89 green, 90-102 yellow, 103-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 169 red, 199 darkgray
-24: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 168-170 red, 199 darkgray
-25: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 167-171 red, 199 darkgray
-26: 0 darkgray, 3-4 green, 25-38 dim, 45-47 green, 48-52 darkgray, 60-62 green, 63-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 165-172 red, 199 darkgray
-27: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-63 green, 64-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 165-173 red, 199 darkgray
-28: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-64 green, 65-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 163-174 red, 199 darkgray
-29: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-62 green, 63-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 162-175 red, 199 darkgray
-30: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-64 green, 65-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 162-176 red, 199 darkgray
-31: 0 darkgray, 1-2 bold on darkgray, 3-4 bold green on darkgray, 5-24 bold on darkgray, 25-38 bold dim on darkgray, 39-44 bold red on darkgray, 45-48 bold green on darkgray, 49-50 bold yellow on darkgray, 51-52 bold lightred on darkgray, 53-59 bold on darkgray, 60-65 bold green on darkgray, 66-67 bold darkgray on darkgray, 68 bold on darkgray, 69-74 bold dim on darkgray, 75-81 bold on darkgray, 82-118 bold red on darkgray, 119 bold lightred on darkgray, 120 bold red on darkgray, 121 bold lightred on darkgray, 122 bold red on darkgray, 123 bold lightred on darkgray, 124-125 bold red on darkgray, 126 bold on darkgray, 127-128 darkgray, 129-132 dim, 133 darkgray, 160-177 red, 199 darkgray
-32: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 150 red, 152 red, 154 red, 156 red, 158 red, 160-180 red, 182 red, 184 red, 186-187 red, 189 red, 193 red, 199 darkgray
-33: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-64 green, 65-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134 lightred, 136 lightred, 138-198 lightred, 199 darkgray
-34: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-63 green, 64-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 yellow, 199 darkgray
-35: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-36: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-37: 0 darkgray, 25-38 dim, 45-52 darkgray, 60-64 green, 65-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 133-198 dim, 199 darkgray
-38: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-63 green, 64-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 199 darkgray
-39: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-62 green, 63-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 199 darkgray
-40: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-62 green, 63-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 199 darkgray
-41: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 199 darkgray
-42: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 137 green, 139 green, 141 green, 143 green, 145-198 green, 199 darkgray
-43: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-44: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-65 green, 66-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-45: 0 darkgray, 3-4 yellow, 25-29 dim, 30-38 yellow, 45 green, 46-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-46: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-47: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-65 green, 66-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-48: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-49: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-50: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-62 green, 63-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-51: 0 darkgray, 3-4 green, 25-38 dim, 45-52 darkgray, 60-63 green, 64-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-52: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-53: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-66 green, 67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-54: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-64 green, 65-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
-55: 0 darkgray, 3-4 green, 25-38 dim, 45-46 green, 47-52 darkgray, 60-63 green, 64-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 133-198 dim, 199 darkgray
+20: 0 darkgray, 1-2 dim, 3-24 bold, 32-40 dim, 41-70 bold, 87-125 green, 127-128 darkgray, 199 darkgray
+21: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-69 green, 71-77 dim, 87-125 green, 127-128 darkgray, 199 darkgray
+22: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 199 darkgray
+23: 0 darkgray, 1-2 dim, 3-24 bold, 41-70 bold, 87-89 green, 90-102 yellow, 103-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 169 red, 199 darkgray
+24: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 168-170 red, 199 darkgray
+25: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 167-171 red, 199 darkgray
+26: 0 darkgray, 3-4 green, 25-40 dim, 47-49 green, 50-54 darkgray, 62-64 green, 65-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 165-172 red, 199 darkgray
+27: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-65 green, 66-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 165-173 red, 199 darkgray
+28: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-66 green, 67-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 163-174 red, 199 darkgray
+29: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-64 green, 65-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 162-175 red, 199 darkgray
+30: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-66 green, 67-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 162-176 red, 199 darkgray
+31: 0 darkgray, 1-2 bold on darkgray, 3-4 bold green on darkgray, 5-24 bold on darkgray, 25-40 bold dim on darkgray, 41-46 bold red on darkgray, 47-50 bold green on darkgray, 51-52 bold yellow on darkgray, 53-54 bold lightred on darkgray, 55-61 bold on darkgray, 62-67 bold green on darkgray, 68-69 bold darkgray on darkgray, 70 bold on darkgray, 71-77 bold dim on darkgray, 78-86 bold on darkgray, 87-118 bold red on darkgray, 119 bold lightred on darkgray, 120 bold red on darkgray, 121 bold lightred on darkgray, 122 bold red on darkgray, 123 bold lightred on darkgray, 124-125 bold red on darkgray, 126 bold on darkgray, 127-128 darkgray, 129-132 dim, 133 darkgray, 160-177 red, 199 darkgray
+32: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 150 red, 152 red, 154 red, 156 red, 158 red, 160-180 red, 182 red, 184 red, 186-187 red, 189 red, 193 red, 199 darkgray
+33: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-66 green, 67-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134 lightred, 136 lightred, 138-198 lightred, 199 darkgray
+34: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-65 green, 66-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 yellow, 199 darkgray
+35: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+36: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+37: 0 darkgray, 25-40 dim, 47-54 darkgray, 62-66 green, 67-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 133-198 dim, 199 darkgray
+38: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-65 green, 66-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 199 darkgray
+39: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-64 green, 65-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 199 darkgray
+40: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-64 green, 65-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 199 darkgray
+41: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 199 darkgray
+42: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 137 green, 139 green, 141 green, 143 green, 145-198 green, 199 darkgray
+43: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+44: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-67 green, 68-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+45: 0 darkgray, 3-4 yellow, 25-31 dim, 32-40 yellow, 47 green, 48-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+46: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+47: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-67 green, 68-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+48: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+49: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+50: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-64 green, 65-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+51: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-65 green, 66-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+52: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+53: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-68 green, 69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+54: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-66 green, 67-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-132 dim, 133 darkgray, 134-198 green, 199 darkgray
+55: 0 darkgray, 3-4 green, 25-40 dim, 47-48 green, 49-54 darkgray, 62-65 green, 66-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 133-198 dim, 199 darkgray
 56: 0-128 darkgray, 199 darkgray
-57: 0 darkgray, 1-2 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-125 green, 127-128 darkgray, 129-173 dim, 199 darkgray
+57: 0 darkgray, 1-2 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-125 green, 127-128 darkgray, 129-173 dim, 199 darkgray
 58: 0-199 darkgray
 59: 1-3 bold, 4-11 dim, 12-16 bold, 17-29 dim, 30-31 bold, 32-39 dim, 40 bold, 41-51 dim, 52 bold, 53-62 dim, 63 bold, 64-71 dim, 72 bold, 73-88 dim, 89-93 bold, 94-115 dim, 116-118 bold, 119-126 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

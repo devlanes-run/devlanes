@@ -1062,10 +1062,12 @@ impl Layout {
             Column::Cpu => 6 + self.bar,
             Column::Mem => 6 + self.bar,
             Column::Lane => self.lane,
-            Column::Uptime => 6,
+            // Wide enough for the header with its sort arrow (`uptime ▼`,
+            // `peak ▼`, `kind ▲`), which also fits `10h 05m` and `1012M`.
+            Column::Uptime => 8,
             Column::Spark => self.spark,
-            Column::Peak => 5,
-            Column::Kind => 4,
+            Column::Peak => 6,
+            Column::Kind => 6,
             Column::State => 8,
         }
     }
@@ -2055,6 +2057,30 @@ mod tests {
         let wide = Layout::fit(160, true, 16, 10);
         assert_eq!(wide.columns.len(), 9);
         assert_eq!(wide.bar, 8);
+    }
+
+    #[test]
+    fn short_columns_fit_their_sorted_header_and_longest_value() {
+        let layout = Layout::fit(200, true, 16, 10);
+        for (column, label) in [
+            (Column::Lane, "lane"),
+            (Column::Kind, "kind"),
+            (Column::State, "state"),
+            (Column::Peak, "peak"),
+            (Column::Uptime, "uptime"),
+        ] {
+            let header = format!("{label} ▼");
+            assert!(
+                text::width(&header) <= layout.width_of(column),
+                "{header} is cut"
+            );
+        }
+        let hour = 3_600_000;
+        for running in [12 * hour + 300_000, 12 * 24 * hour + 23 * hour] {
+            let text = uptime(Some(0), running);
+            assert!(text.len() <= layout.width_of(Column::Uptime), "{text}");
+        }
+        assert!(format_bytes(1012 << 20).len() <= layout.width_of(Column::Peak));
     }
 
     #[test]

@@ -11,22 +11,22 @@
 │    └-1m 26s                                 now                              ││                                      │
 └──────────────────────────────────────────────────────────────────────────────┘└──────────────────────────────────────┘
 ┌ units 13 of 46 · by lane ──────────────────────────────────────────────────────────────────────────────── <- name -> ┐
-│  name ▲                kind state    cpu            mem             peak uptime cpu -1m 12s                          │
-│▸ acme@0  main · 33                    372%           8.3G                       ⣤⣤⣤⣤⣤⣶⣶⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣠⣤⣠⣄⣠⣄⣤⣀⣄⣀⣀⣀ │
-│▾ acme@1  feat/checkout                 56%          1001M                       ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
-│  ● api-gateway         svc  ready     9.2% ■■■■■■■■  448M ■■■■■■■■  448M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
-│  ⠋ api-orders          svc  starting   12% ■■■■■■■■   82M ■■■■■■■■   82M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
-│  ⠋ api-users           svc  starting   15% ■■■■■■■■  119M ■■■■■■■■  120M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
-│  ⠋ migrate             task running   0.5% ■■■■■■■■  195M ■■■■■■■■  195M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
-│  ● stub-stripe         svc  ready      19% ■■■■■■■■  157M ■■■■■■■■  158M 2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
-│▾ acme@2  fix/cache                       -              -                       ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀                     │
-│  · api-gateway         svc  idle                  -              -  211M      - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀                     │
-│  · web-app             svc  idle                  -              -  332M      - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀                     │
-│▾ acme@1 (removed)                        -              -                                                            │
-│  · api-orders          svc  stopped               -              -  190M      -                                      │
-│▌ · web-app             svc  stopped               -              -  281M      -                                      │
+│  name ▲                kind   state    cpu            mem              peak   uptime cpu -1m 2s                      │
+│▸ acme@0  main · 33                      372%           8.3G                          ⣶⣶⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣤⣠⣤⣠⣄⣠⣄⣤⣀⣄⣀⣀⣀ │
+│▾ acme@1  feat/checkout                   56%          1001M                          ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
+│  ● api-gateway         svc    ready     9.2% ■■■■■■■■  448M ■■■■■■■■   448M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
+│  ⠋ api-orders          svc    starting   12% ■■■■■■■■   82M ■■■■■■■■    82M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
+│  ⠋ api-users           svc    starting   15% ■■■■■■■■  119M ■■■■■■■■   120M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
+│  ⠋ migrate             task   running   0.5% ■■■■■■■■  195M ■■■■■■■■   195M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
+│  ● stub-stripe         svc    ready      19% ■■■■■■■■  157M ■■■■■■■■   158M   2h 14m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
+│▾ acme@2  fix/cache                         -              -                          ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀                     │
+│  · api-gateway         svc    idle                  -              -   211M        - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀                     │
+│  · web-app             svc    idle                  -              -   332M        - ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀                     │
+│▾ acme@1 (removed)                          -              -                                                          │
+│  · api-orders          svc    stopped               -              -   190M        -                                 │
+│▌ · web-app             svc    stopped               -              -   281M        -                                 │
 │╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌│
-│● devlanes daemon       dmn  running   1.1% ■■■■■■■■   47M ■■■■■■■■   47M 3h 00m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
+│● devlanes daemon       dmn    running   1.1% ■■■■■■■■   47M ■■■■■■■■    47M   3h 00m ⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀⣀ │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ web-app · acme@1 (removed) · cpu ────────────────────────┐┌ mem ──────────────────────────────────────────── stopped ┐
 │now -  avg 21%  min 9.6%  max 31%                         ││now -  avg 270.7M  min 257.7M  max 281.0M                 │
@@ -54,21 +54,21 @@
 11: 0-119 darkgray
 12: 0 darkgray, 7-26 dim, 27-106 darkgray, 107-110 dim, 111-114 bold, 115-118 dim, 119 darkgray
 13: 0 darkgray, 1-118 dim, 119 darkgray
-14: 0 darkgray, 1-2 dim, 3-24 bold, 39-68 bold, 82-94 yellow, 95-117 green, 119 darkgray
-15: 0 darkgray, 1-2 dim, 3-24 bold, 39-68 bold, 82-117 green, 119 darkgray
-16: 0 darkgray, 3-4 green, 25-38 dim, 45 green, 46-52 darkgray, 60-65 green, 66-67 darkgray, 69-74 dim, 82-117 green, 119 darkgray
-17: 0 darkgray, 25-38 dim, 45 green, 46-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-117 green, 119 darkgray
-18: 0 darkgray, 25-38 dim, 45 green, 46-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-117 green, 119 darkgray
-19: 0 darkgray, 25-38 dim, 45-52 darkgray, 60-62 green, 63-67 darkgray, 69-74 dim, 82-117 green, 119 darkgray
-20: 0 darkgray, 3-4 green, 25-38 dim, 45-46 green, 47-52 darkgray, 60-61 green, 62-67 darkgray, 69-74 dim, 82-117 green, 119 darkgray
-21: 0 darkgray, 1-2 dim, 3-24 bold, 39-68 bold, 82-97 green, 119 darkgray
-22: 0 darkgray, 3-74 dim, 82-97 green, 119 darkgray
-23: 0 darkgray, 3-74 dim, 82-97 green, 119 darkgray
-24: 0 darkgray, 1-2 dim, 3-24 bold, 39-68 bold, 119 darkgray
-25: 0 darkgray, 3-74 dim, 119 darkgray
-26: 0 darkgray, 1-2 bold on darkgray, 3-74 bold dim on darkgray, 75-118 bold on darkgray, 119 darkgray
+14: 0 darkgray, 1-2 dim, 3-24 bold, 41-70 bold, 87-94 yellow, 95-117 green, 119 darkgray
+15: 0 darkgray, 1-2 dim, 3-24 bold, 41-70 bold, 87-117 green, 119 darkgray
+16: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-67 green, 68-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
+17: 0 darkgray, 25-40 dim, 47 green, 48-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
+18: 0 darkgray, 25-40 dim, 47 green, 48-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
+19: 0 darkgray, 25-40 dim, 47-54 darkgray, 62-64 green, 65-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
+20: 0 darkgray, 3-4 green, 25-40 dim, 47-48 green, 49-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
+21: 0 darkgray, 1-2 dim, 3-24 bold, 41-70 bold, 87-97 green, 119 darkgray
+22: 0 darkgray, 3-77 dim, 87-97 green, 119 darkgray
+23: 0 darkgray, 3-77 dim, 87-97 green, 119 darkgray
+24: 0 darkgray, 1-2 dim, 3-24 bold, 41-70 bold, 119 darkgray
+25: 0 darkgray, 3-77 dim, 119 darkgray
+26: 0 darkgray, 1-2 bold on darkgray, 3-77 bold dim on darkgray, 78-118 bold on darkgray, 119 darkgray
 27: 0-119 darkgray
-28: 0 darkgray, 1-2 green, 25-38 dim, 45-52 darkgray, 60 green, 61-67 darkgray, 69-74 dim, 82-117 green, 119 darkgray
+28: 0 darkgray, 1-2 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
 29: 0-119 darkgray
 30: 0 darkgray, 1-8 bold, 9-34 dim, 35-60 darkgray, 66-109 darkgray, 110-118 dim, 119 darkgray
 31: 0 darkgray, 59-60 darkgray, 119 darkgray
