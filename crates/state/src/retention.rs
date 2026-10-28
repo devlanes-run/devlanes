@@ -219,13 +219,15 @@ fn prune_age(
         .execute(c)?,
     );
     // Wanted boxes stay until `remote disconnect`: a restarted daemon connects them.
+    let expired = remote_hosts::table
+        .filter(remote_hosts::wanted.eq(0))
+        .filter(remote_hosts::last_connected.lt(cutoff(now_ms, policy.remote_hosts)))
+        .select(remote_hosts::name)
+        .load::<String>(c)?;
+    delete_choices_of(c, &expired)?;
     let remote_hosts = count(
-        diesel::delete(
-            remote_hosts::table
-                .filter(remote_hosts::wanted.eq(0))
-                .filter(remote_hosts::last_connected.lt(cutoff(now_ms, policy.remote_hosts))),
-        )
-        .execute(c)?,
+        diesel::delete(remote_hosts::table.filter(remote_hosts::name.eq_any(&expired)))
+            .execute(c)?,
     );
     Ok(PruneReport {
         unit_runs,
@@ -236,6 +238,14 @@ fn prune_age(
         remote_hosts,
         ..PruneReport::default()
     })
+}
+
+/// Deletes the lane choices of the boxes in `hosts`, whose rows retention is
+/// about to delete: a box connected again under that name starts without them.
+fn delete_choices_of(c: &mut SqliteConnection, hosts: &[String]) -> Result<(), Error> {
+    diesel::delete(remote_lane_choices::table.filter(remote_lane_choices::host.eq_any(hosts)))
+        .execute(c)?;
+    Ok(())
 }
 
 /// Converts an affected-row count.
@@ -331,11 +341,12 @@ fn budget_batch(c: &mut SqliteConnection, page_budget: u64, limit: usize) -> Res
             .collect()
     };
     let (units, tasks, summaries, segments) = (ids(0), ids(1), ids(2), ids(3));
-    let remotes: Vec<&str> = candidates
+    let remotes: Vec<String> = candidates
         .iter()
         .filter(|candidate| candidate.1 == 4)
-        .map(|candidate| candidate.3.as_str())
+        .map(|candidate| candidate.3.clone())
         .collect();
+    delete_choices_of(c, &remotes)?;
     Ok(Batch::Deleted(PruneReport {
         unit_runs: count(
             diesel::delete(unit_runs::table.filter(unit_runs::id.eq_any(units))).execute(c)?,

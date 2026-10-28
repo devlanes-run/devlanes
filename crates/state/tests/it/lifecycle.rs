@@ -176,6 +176,64 @@ async fn pairings_and_tokens_round_trip() {
 }
 
 #[tokio::test]
+/// A lane keeps one choice, replaced by the next. Deleting by lane can be
+/// limited to the box it names, deleting by box leaves other boxes' choices,
+/// and a reset removes them all.
+async fn lane_choices_replace_and_delete_by_lane_or_box() {
+    use devlanes_state::RemoteLaneChoice;
+    let store = Store::open(":memory:").await.expect("store");
+    let choice = |lane: &str, host: &str, at: i64| RemoteLaneChoice {
+        lane: lane.into(),
+        host: host.into(),
+        chosen_at: at,
+    };
+    let set = |c: RemoteLaneChoice| store.set_remote_lane_choice(c);
+    set(choice("acme@0", "fork-a", 1)).await.expect("choose");
+    set(choice("acme@0", "fork-b", 2)).await.expect("replace");
+    set(choice("acme@1", "fork-a", 3))
+        .await
+        .expect("second lane");
+    set(choice("shop@0", "fork-b", 4))
+        .await
+        .expect("third lane");
+    assert!(set(choice("", "fork-a", 5)).await.is_err(), "empty lane");
+    assert_eq!(
+        store.remote_lane_choices().await.expect("list"),
+        [
+            choice("acme@0", "fork-b", 2),
+            choice("acme@1", "fork-a", 3),
+            choice("shop@0", "fork-b", 4),
+        ]
+    );
+    assert!(
+        !store
+            .delete_remote_lane_choice("acme@0".into(), Some("fork-a".into()))
+            .await
+            .expect("delete another box's"),
+        "acme@0 names fork-b"
+    );
+    assert!(
+        store
+            .delete_remote_lane_choice("acme@0".into(), None)
+            .await
+            .expect("delete by lane")
+    );
+    assert_eq!(
+        store
+            .delete_remote_lane_choices_of("fork-b".into())
+            .await
+            .expect("delete by box"),
+        1
+    );
+    assert_eq!(
+        store.remote_lane_choices().await.expect("list"),
+        [choice("acme@1", "fork-a", 3)]
+    );
+    store.reset().await.expect("reset");
+    assert!(store.remote_lane_choices().await.expect("list").is_empty());
+}
+
+#[tokio::test]
 /// Replacement writes clear nullable fields and history records preserve every value.
 async fn all_lifecycle_write_models_round_trip_and_replace() {
     use devlanes_state::{LogSegmentInput, RunSummaryRow};

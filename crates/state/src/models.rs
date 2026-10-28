@@ -246,6 +246,13 @@ pub(crate) struct TokenRow {
     pub token: String,
     pub paired_at: i64,
 }
+#[derive(Queryable, Selectable, Insertable, AsChangeset)]
+#[diesel(table_name = remote_lane_choices, primary_key(lane), check_for_backend(diesel::sqlite::Sqlite))]
+pub(crate) struct LaneChoiceRow {
+    pub lane: String,
+    pub host: String,
+    pub chosen_at: i64,
+}
 
 impl From<ProjectRow> for Project {
     /// Restores paths without losing non-UTF-8 bytes.

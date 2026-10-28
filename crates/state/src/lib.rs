@@ -1,6 +1,7 @@
 //! Daemon-only SQLite store. All SQLite work runs on one dedicated OS thread.
 
 mod allocation;
+mod choices;
 mod lifecycle;
 mod models;
 mod pairings;
@@ -10,6 +11,7 @@ mod records;
 mod retention;
 mod schema;
 
+pub use choices::RemoteLaneChoice;
 pub use lifecycle::{
     LogSegmentInput, ProjectConfigPath, RemoteHost, RollupRow, RunSummaryRow,
     STARTUP_PEAKS_PER_SERIES, SetupRecord, StartupPeak, TaskCompletion, TaskRun, TaskRunId,
@@ -34,7 +36,7 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 /// Highest supported forward-only migration. Newer databases require an upgrade.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 /// Store failures. Diesel, connection, migration and filesystem failures keep the

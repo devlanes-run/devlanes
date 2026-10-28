@@ -1007,6 +1007,11 @@ async fn migration_makes_project_names_unique_and_down_keys_by_repository() {
     assert!(prod.id.0 > never);
     store.close().await.expect("close");
 
+    // Later migrations go first; 011 is the one under test.
+    while c.applied_migrations().expect("ledger").len() > 11 {
+        c.revert_last_migration(MIGRATIONS)
+            .expect("down a later migration");
+    }
     c.revert_last_migration(MIGRATIONS).expect("down 011");
     let rows: Vec<(i64, Vec<u8>)> = p::table
         .order(p::id)

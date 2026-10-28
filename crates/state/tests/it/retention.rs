@@ -193,11 +193,31 @@ async fn age_retention_preserves_live_rows_and_once_markers() {
             })
             .await
             .expect("remote");
+        store
+            .set_remote_lane_choice(RemoteLaneChoice {
+                lane: format!("acme@{name}"),
+                host: name.into(),
+                chosen_at: DAY,
+            })
+            .await
+            .expect("choice");
     }
     let report = store
         .prune_at(RetentionPolicy::default(), NOW)
         .await
         .expect("prune");
+    let chosen: Vec<String> = store
+        .remote_lane_choices()
+        .await
+        .expect("choices")
+        .into_iter()
+        .map(|choice| choice.host)
+        .collect();
+    assert_eq!(
+        chosen,
+        ["boundary", "unknown", "wanted"],
+        "an expired box's choices go with it"
+    );
     assert_eq!(
         (
             report.unit_runs,
@@ -392,6 +412,14 @@ async fn size_budget_reclaims_pages_and_keeps_history_until_metrics_are_gone() {
             })
             .await
             .expect("host");
+        store
+            .set_remote_lane_choice(RemoteLaneChoice {
+                lane: format!("acme@{name}"),
+                host: name.into(),
+                chosen_at: 4,
+            })
+            .await
+            .expect("choice");
     }
     let allocation = store
         .allocate(request(BlockOwner::Lane(lane.id), 1))
@@ -496,6 +524,14 @@ async fn size_budget_reclaims_pages_and_keeps_history_until_metrics_are_gone() {
         ["wanted"],
         "the size budget keeps a wanted box"
     );
+    let chosen: Vec<String> = store
+        .remote_lane_choices()
+        .await
+        .expect("choices")
+        .into_iter()
+        .map(|choice| choice.host)
+        .collect();
+    assert_eq!(chosen, ["wanted"], "a pruned box's choices go with it");
 }
 
 #[tokio::test(flavor = "multi_thread")]
