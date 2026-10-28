@@ -51,6 +51,28 @@ async fn started_worker() -> Result<(App, Vec<Effect>), Box<dyn std::error::Erro
     Ok((app, effects))
 }
 
+/// The id of the only control effect in `effects`.
+fn action(effects: &[Effect]) -> Result<u64, String> {
+    match effects {
+        [Effect::Control { action, .. }] => Ok(*action),
+        _ => Err(format!("not one control effect: {effects:?}")),
+    }
+}
+
+/// The answer to control effect `action` on `acme@0:worker`.
+fn worker_done(action: u64, label: &str, result: Result<Value, ApiError>) -> Msg {
+    Msg::ActionDone {
+        action,
+        label: label.into(),
+        target: Target::Unit {
+            lane: "acme@0".into(),
+            unit: "worker".into(),
+        },
+        units: vec!["acme@0:worker".into()],
+        result,
+    }
+}
+
 #[tokio::test]
 async fn s_shows_the_unit_queued_before_the_daemon_says_anything() -> TestResult {
     let (app, effects) = started_worker().await?;
@@ -170,21 +192,20 @@ async fn s_on_a_queued_unit_sends_nothing() -> TestResult {
 
 #[tokio::test]
 async fn a_refused_start_puts_back_the_last_state_and_reports_it() -> TestResult {
-    let (mut app, _) = started_worker().await?;
+    let (mut app, effects) = started_worker().await?;
     let target = Target::Unit {
         lane: "acme@0".into(),
         unit: "worker".into(),
     };
-    app.update(Msg::ActionDone {
-        label: "start acme@0:worker".into(),
-        target: target.clone(),
-        units: vec!["acme@0:worker".into()],
-        result: Err(ApiError::Rpc(RpcError::new(
+    app.update(worker_done(
+        action(&effects)?,
+        "start acme@0:worker",
+        Err(ApiError::Rpc(RpcError::new(
             "no_config",
             json!({"lane": "acme@0"}),
             3,
         ))),
-    });
+    ));
     assert_eq!(state(&app, "worker").as_deref(), Some("failed"));
     assert!(app.target_error(&target).is_some());
     // A status reply that still says `failed` no longer turns it `queued`.
@@ -197,16 +218,12 @@ async fn a_refused_start_puts_back_the_last_state_and_reports_it() -> TestResult
 
 #[tokio::test]
 async fn an_answered_start_asks_for_status_when_no_event_came() -> TestResult {
-    let (mut app, _) = started_worker().await?;
-    let effects = app.update(Msg::ActionDone {
-        label: "start acme@0:worker".into(),
-        target: Target::Unit {
-            lane: "acme@0".into(),
-            unit: "worker".into(),
-        },
-        units: vec!["acme@0:worker".into()],
-        result: Ok(json!({})),
-    });
+    let (mut app, effects) = started_worker().await?;
+    let effects = app.update(worker_done(
+        action(&effects)?,
+        "start acme@0:worker",
+        Ok(json!({})),
+    ));
     assert!(
         effects.iter().any(|e| matches!(e, Effect::Refresh)),
         "{effects:?}"
@@ -229,7 +246,7 @@ async fn other_actions_leave_a_pending_start_queued() -> TestResult {
     let api = FakeApi::with_lanes(lanes_with_shell());
     let (mut app, _) = loaded(&api, 100, 24).await;
     select(&mut app, Selected::unit("acme@0", "worker"));
-    app.update(key(KeyCode::Char('s')));
+    let start = action(&app.update(key(KeyCode::Char('s'))))?;
     // `x` on a group without the worker stops only what that group runs.
     select(
         &mut app,
@@ -244,14 +261,20 @@ async fn other_actions_leave_a_pending_start_queued() -> TestResult {
             if selection.units == ["acme@0:shell"]),
         "{effects:?}"
     );
+    let stop = action(&effects)?;
     assert_eq!(state(&app, "worker").as_deref(), Some("queued"));
     // Neither its answer nor that of another lane-wide start ends the worker's `queued`.
-    for (label, units) in [
-        ("stop acme@0:shell", vec!["acme@0:shell".to_owned()]),
-        ("start 2 units in acme@0", vec!["acme@0:web".to_owned()]),
-        ("start acme@0", Vec::new()),
+    for (label, id, units) in [
+        ("stop acme@0:shell", stop, vec!["acme@0:shell".to_owned()]),
+        (
+            "start 2 units in acme@0",
+            stop + 1,
+            vec!["acme@0:web".to_owned()],
+        ),
+        ("start acme@0", stop + 2, Vec::new()),
     ] {
         app.update(Msg::ActionDone {
+            action: id,
             label: label.into(),
             target: Target::Lane("acme@0".into()),
             units,
@@ -260,15 +283,7 @@ async fn other_actions_leave_a_pending_start_queued() -> TestResult {
         assert_eq!(state(&app, "worker").as_deref(), Some("queued"), "{label}");
     }
     // The worker's own answer does.
-    app.update(Msg::ActionDone {
-        label: "start acme@0:worker".into(),
-        target: Target::Unit {
-            lane: "acme@0".into(),
-            unit: "worker".into(),
-        },
-        units: vec!["acme@0:worker".into()],
-        result: Ok(json!({})),
-    });
+    app.update(worker_done(start, "start acme@0:worker", Ok(json!({}))));
     assert_eq!(state(&app, "worker").as_deref(), Some("failed"));
     Ok(())
 }
@@ -365,6 +380,29 @@ async fn stop_and_restart_still_reach_a_unit_started_from_here() -> TestResult {
         "{effects:?}"
     );
     assert_eq!(state(&app, "worker").as_deref(), Some("ready"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_late_answer_to_an_earlier_start_leaves_the_next_start_queued() -> TestResult {
+    let (mut app, effects) = started_worker().await?;
+    let first = action(&effects)?;
+    // `x` before the daemon answers puts back `failed`; `s` starts it again.
+    let stop = action(&app.update(key(KeyCode::Char('x'))))?;
+    assert_eq!(state(&app, "worker").as_deref(), Some("failed"));
+    let second = action(&app.update(key(KeyCode::Char('s'))))?;
+    assert!(first < stop && stop < second, "{first} {stop} {second}");
+    assert_eq!(state(&app, "worker").as_deref(), Some("queued"));
+    // The runtime runs each control call in its own task, so the first start
+    // and the stop can answer while the second start is still in flight.
+    for (id, label) in [(first, "start acme@0:worker"), (stop, "stop acme@0:worker")] {
+        app.update(worker_done(id, label, Ok(json!({}))));
+        assert_eq!(state(&app, "worker").as_deref(), Some("queued"), "{label}");
+    }
+    assert!(app.update(key(KeyCode::Char('s'))).is_empty());
+    // The second start's own answer ends it.
+    app.update(worker_done(second, "start acme@0:worker", Ok(json!({}))));
+    assert_eq!(state(&app, "worker").as_deref(), Some("failed"));
     Ok(())
 }
 

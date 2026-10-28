@@ -279,12 +279,9 @@ impl Inner {
         }
         for (unit, mut task) in tasks {
             match tokio::time::timeout_at(cx.deadline, &mut task).await {
-                Ok(Ok(Paced::Spawned)) => {
-                    cx.ctl.record_outcome(&unit, None);
-                    cx.started.push(unit);
-                }
+                // `start_one` recorded the outcome for joined starts already.
+                Ok(Ok(Paced::Spawned)) => cx.started.push(unit),
                 Ok(Ok(Paced::Failed(error))) => {
-                    cx.ctl.record_outcome(&unit, Some(error.clone()));
                     cx.failures.push(UnitFailureData {
                         lane: cx.reference.clone(),
                         // The same line the unit's log got, as its tail.
@@ -377,7 +374,12 @@ impl Inner {
         } else {
             BTreeMap::new()
         };
-        match self.spawn_unit(&project, &lane, request).await {
+        let spawned = self.spawn_unit(&project, &lane, request).await;
+        // Here rather than in the start's own wait, so a start that joined this
+        // unit learns of it at once, also when it spawns after this start's
+        // deadline.
+        start.record_outcome(&name, spawned.as_ref().err().cloned());
+        match spawned {
             Ok((host, managed)) => {
                 let started = matches!(ready.check, ReadySpec::Started);
                 let checked = host.clone();

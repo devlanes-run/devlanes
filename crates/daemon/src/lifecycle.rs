@@ -1183,27 +1183,18 @@ impl LanePhase for ServicesPhase {
         // Each spawn waits for a start slot; see `pacing`.
         engine.spawn_services(cx, &to_spawn, &resolved).await;
         for (unit, other) in joined {
-            tokio::select! {
-                () = other.services_done.cancelled() => {}
-                () = cx.cancel.cancelled() => break,
-                () = tokio::time::sleep_until(cx.deadline) => {
-                    cx.timed_out = true;
-                    break;
-                }
-            }
-            // What the other start got for the unit is this start's answer too.
-            match other.outcome(&unit) {
-                // Waited for like a running unit, so its exit still counts.
-                Some(None) => cx.already_running.push(unit),
-                Some(Some(error)) => cx.failures.push(UnitFailureData {
+            match joined_outcome(&cx.ctl, cx.deadline, &unit, &other).await {
+                // What the other start got for the unit is this start's answer too;
+                // waited for like a running unit, so its exit still counts.
+                Joined::Spawned => cx.already_running.push(unit),
+                Joined::Failed(error) => cx.failures.push(UnitFailureData {
                     lane: cx.reference.clone(),
                     unit,
                     reason: Some(error),
                     ..UnitFailureData::default()
                 }),
-                // Still queued at the other start's deadline, or taken out of it.
-                None if other.withdrawn_by(&unit).is_none() => cx.timed_out = true,
-                None => {}
+                Joined::TimedOut => cx.timed_out = true,
+                Joined::Gone => {}
             }
         }
         PhaseResult::Done
@@ -1282,6 +1273,49 @@ fn start_selection(
             .retain(|name| !restored.contains(name));
     }
     Ok(selection)
+}
+
+/// How a unit another start was spawning ended for a start that joined it.
+enum Joined {
+    Spawned,
+    Failed(RpcError),
+    /// This start's deadline passed first.
+    TimedOut,
+    /// Taken out by a stop, or the other start ended without trying it.
+    Gone,
+}
+
+/// Waits until `other` settled `unit`: its spawn finished, a stop withdrew it,
+/// or the other start ended. Only this unit counts, not the other start's
+/// remaining services.
+async fn joined_outcome(
+    ours: &StartCtl,
+    deadline: Instant,
+    unit: &str,
+    other: &StartCtl,
+) -> Joined {
+    loop {
+        let changed = other.changed.notified();
+        tokio::pin!(changed);
+        // Registered before the checks, so an outcome recorded in between wakes it.
+        changed.as_mut().enable();
+        match other.outcome(unit) {
+            Some(None) => return Joined::Spawned,
+            Some(Some(error)) => return Joined::Failed(error),
+            None => {}
+        }
+        if other.withdrawn_by(unit).is_some() || ours.withdrawn_by(unit).is_some() {
+            return Joined::Gone;
+        }
+        tokio::select! {
+            () = changed => {}
+            // Ended without trying it (cancelled); a spawn still queued past the
+            // other start's deadline records its outcome later, so keep waiting.
+            () = other.cancel.cancelled() => return Joined::Gone,
+            () = ours.cancel.cancelled() => return Joined::Gone,
+            () = tokio::time::sleep_until(deadline) => return Joined::TimedOut,
+        }
+    }
 }
 
 /// The words a waiting unit shows for the bring-up's current phase; `None`
@@ -4273,6 +4307,57 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
 
     use super::*;
+
+    /// A start's control under a fresh shutdown token.
+    fn ctl(start_id: u64) -> Arc<StartCtl> {
+        Arc::new(StartCtl::new(&CancellationToken::new(), start_id))
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// A start that joined `b` goes on once `b` spawned, while the start that
+    /// owns it still waits for its other services.
+    async fn a_joined_unit_settles_without_the_owners_other_services() {
+        let (ours, owner) = (ctl(2), ctl(1));
+        owner.plan_spawns(["b".to_owned(), "c".to_owned()]);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let joined = tokio::spawn({
+            let (ours, owner) = (ours.clone(), owner.clone());
+            async move { joined_outcome(&ours, deadline, "b", &owner).await }
+        });
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        owner.record_outcome("b", None);
+        let joined = tokio::time::timeout(Duration::from_secs(1), joined)
+            .await
+            .expect("settled by b alone")
+            .expect("join");
+        assert!(matches!(joined, Joined::Spawned));
+        assert!(!owner.services_done.is_cancelled(), "c still waits");
+    }
+
+    #[tokio::test(start_paused = true)]
+    /// A failed spawn, a withdrawal and the joiner's deadline each end the wait.
+    async fn a_joined_unit_reports_failure_withdrawal_and_timeout() {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let (ours, owner) = (ctl(2), ctl(1));
+        owner.record_outcome("b", Some(RpcError::new("spawn_failed", json!({}), 1)));
+        assert!(matches!(
+            joined_outcome(&ours, deadline, "b", &owner).await,
+            Joined::Failed(error) if error.code == "spawn_failed"
+        ));
+
+        let (ours, owner) = (ctl(2), ctl(1));
+        owner.withdraw(&["b".to_owned()], "stop");
+        assert!(matches!(
+            joined_outcome(&ours, deadline, "b", &owner).await,
+            Joined::Gone
+        ));
+
+        let (ours, owner) = (ctl(2), ctl(1));
+        assert!(matches!(
+            joined_outcome(&ours, deadline, "b", &owner).await,
+            Joined::TimedOut
+        ));
+    }
 
     #[tokio::test(start_paused = true)]
     /// A failing write is retried up to three times; a closed store is not retried.

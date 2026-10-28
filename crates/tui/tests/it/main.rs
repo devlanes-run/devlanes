@@ -665,6 +665,7 @@ async fn start_stop_restart_dispatch_lane_and_unit_refs() -> TestResult {
             selection,
             label,
             target,
+            ..
         },
     ] = effects.as_slice()
     else {

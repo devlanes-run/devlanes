@@ -702,9 +702,11 @@ pub enum Msg {
         generation: u64,
         error: ApiError,
     },
-    /// [`Effect::Control`] is done. `units` are the references its selection
-    /// named, so only their local `queued` ends with this answer.
+    /// [`Effect::Control`] is done. `action` is that effect's id and `units`
+    /// the references its selection named: only the local `queued` this
+    /// action set on those units ends with this answer.
     ActionDone {
+        action: u64,
         label: String,
         target: Target,
         units: Vec<String>,
@@ -850,7 +852,11 @@ pub enum Effect {
     /// Makes the attached stream the unit's interactive viewer (it types and
     /// owns the size), or an observer again, without reopening it.
     AttachRole(bool),
+    /// A start, stop or restart, answered with [`Msg::ActionDone`].
     Control {
+        /// Unique per effect, increasing; the answer carries it back so it
+        /// only ends the local `queued` this action set.
+        action: u64,
         method: Method,
         lane: String,
         selection: Selection,
@@ -1206,9 +1212,23 @@ pub struct App {
     /// Each service's state when last seen, by `(lane, unit)`.
     watched_units: HashMap<(String, String), String>,
     /// Units this TUI shows `queued` because it just sent their start, by
-    /// `(lane, unit)`, with the state and reason the daemon last reported.
-    /// The daemon may take seconds to answer; the row changes at once.
-    optimistic: HashMap<(String, String), (String, Option<RpcError>)>,
+    /// `(lane, unit)`. The daemon may take seconds to answer; the row
+    /// changes at once.
+    optimistic: HashMap<(String, String), Optimistic>,
+    /// The id of the last [`Effect::Control`].
+    last_action: u64,
+}
+
+/// A unit this TUI shows `queued` before the daemon reports it.
+struct Optimistic {
+    /// The [`Effect::Control`] whose start set it. Answers arrive in any
+    /// order, so the answer of an earlier start of the same unit must not
+    /// end it.
+    action: u64,
+    /// The state the daemon last reported.
+    state: String,
+    /// The reason the daemon last reported.
+    reason: Option<RpcError>,
 }
 
 /// Ticks (seconds) a failed start stays red in the tab's progress bar.
@@ -1286,6 +1306,7 @@ impl App {
             watched: HashMap::new(),
             watched_units: HashMap::new(),
             optimistic: HashMap::new(),
+            last_action: 0,
         }
     }
 
@@ -1797,6 +1818,7 @@ impl App {
                 }
             }
             Msg::ActionDone {
+                action,
                 label,
                 target,
                 units,
@@ -1806,8 +1828,10 @@ impl App {
                 self.pending_end(&lane);
                 // The answer came; a unit this request still shows `queued` goes
                 // back to what the daemon said, and status catches up. Units
-                // another start in flight marked stay `queued` until its answer.
-                let guessed = !units.is_empty() && self.clear_optimistic(&lane, &units);
+                // another start in flight marked stay `queued` until its answer,
+                // even when an earlier start of the same unit answers late.
+                let guessed =
+                    !units.is_empty() && self.clear_optimistic(&lane, &units, Some(action));
                 match result {
                     Ok(value) => {
                         if guessed {
@@ -4981,10 +5005,16 @@ impl App {
         *self.pending.entry(lane.to_owned()).or_insert(0) += 1;
     }
 
+    /// A new id for an [`Effect::Control`], larger than every earlier one.
+    fn next_action(&mut self) -> u64 {
+        self.last_action += 1;
+        self.last_action
+    }
+
     /// Shows `units` (references such as `acme@1:api`) of `lane` as `queued`
-    /// the moment their start is sent, the way the daemon shows them once it
-    /// has the request.
-    fn mark_queued(&mut self, lane: &str, units: &[String]) {
+    /// the moment start `action` is sent, the way the daemon shows them once
+    /// it has the request.
+    fn mark_queued(&mut self, lane: &str, units: &[String], action: u64) {
         let Some(summary) = self.lanes.iter_mut().find(|l| l.reference == lane) else {
             return;
         };
@@ -4993,10 +5023,11 @@ impl App {
             .iter_mut()
             .filter(|u| units.contains(&unit_ref(lane, &u.name)) && !is_active(&u.state))
         {
-            let before = (
-                std::mem::replace(&mut unit.state, "queued".into()),
-                unit.reason.take(),
-            );
+            let before = Optimistic {
+                action,
+                state: std::mem::replace(&mut unit.state, "queued".into()),
+                reason: unit.reason.take(),
+            };
             self.optimistic
                 .insert((lane.to_owned(), unit.name.clone()), before);
         }
@@ -5019,10 +5050,10 @@ impl App {
             else {
                 return false;
             };
-            if unit.state != before.0 {
+            if unit.state != before.state {
                 return false;
             }
-            before.1 = unit.reason.take();
+            before.reason = unit.reason.take();
             unit.state = "queued".into();
             true
         });
@@ -5031,23 +5062,27 @@ impl App {
     /// Puts back the daemon's last state on units of `lane` shown `queued`
     /// only by this TUI: those `units` names (references such as
     /// `acme@1:api`), or every one when `units` is empty, as a selection
-    /// without units acts on the whole lane. Returns whether there was any.
-    fn clear_optimistic(&mut self, lane: &str, units: &[String]) -> bool {
+    /// without units acts on the whole lane. An answer passes its `action` and
+    /// ends only what that start set; a stop or restart being sent passes
+    /// `None` and ends it whichever start set it. Returns whether there was any.
+    fn clear_optimistic(&mut self, lane: &str, units: &[String], action: Option<u64>) -> bool {
         let cleared: Vec<_> = self
             .optimistic
-            .extract_if(|(reference, name), _| {
-                reference == lane && (units.is_empty() || units.contains(&unit_ref(lane, name)))
+            .extract_if(|(reference, name), before| {
+                reference == lane
+                    && action.is_none_or(|action| action == before.action)
+                    && (units.is_empty() || units.contains(&unit_ref(lane, name)))
             })
             .collect();
-        for ((reference, name), (state, reason)) in &cleared {
+        for ((reference, name), before) in &cleared {
             if let Some(unit) = self
                 .lanes
                 .iter_mut()
                 .find(|l| l.reference == *reference)
                 .and_then(|l| l.units.iter_mut().find(|u| u.name == *name))
             {
-                unit.state.clone_from(state);
-                unit.reason.clone_from(reason);
+                unit.state.clone_from(&before.state);
+                unit.reason.clone_from(&before.reason);
             }
         }
         !cleared.is_empty()
@@ -5551,6 +5586,7 @@ impl App {
                 };
                 self.pending_begin(&lane);
                 effects.push(Effect::Control {
+                    action: self.next_action(),
                     method: Method::Start,
                     target: Target::Lane(lane.clone()),
                     lane,
@@ -5776,12 +5812,14 @@ impl App {
                     lane: entry.lane.clone(),
                     unit: entry.unit.clone(),
                 };
+                let action = self.next_action();
                 if method == Method::Start {
-                    self.mark_queued(&entry.lane, std::slice::from_ref(&reference));
+                    self.mark_queued(&entry.lane, std::slice::from_ref(&reference), action);
                 } else {
-                    self.clear_optimistic(&entry.lane, std::slice::from_ref(&reference));
+                    self.clear_optimistic(&entry.lane, std::slice::from_ref(&reference), None);
                 }
                 effects.push(Effect::Control {
+                    action,
                     method,
                     lane: entry.lane.clone(),
                     selection: devlanes_proto::Selection {
@@ -5796,9 +5834,10 @@ impl App {
                 self.pending_begin(&group.key);
                 let target = Target::Lane(group.key.clone());
                 if method != Method::Start {
-                    self.clear_optimistic(&group.key, &[]);
+                    self.clear_optimistic(&group.key, &[], None);
                 }
                 effects.push(Effect::Control {
+                    action: self.next_action(),
                     method,
                     lane: group.key.clone(),
                     selection: devlanes_proto::Selection::default(),
@@ -5834,8 +5873,10 @@ impl App {
             return;
         }
         self.pending_begin(&reference);
-        self.mark_queued(&reference, &units);
+        let action = self.next_action();
+        self.mark_queued(&reference, &units, action);
         effects.push(Effect::Control {
+            action,
             method: Method::Start,
             lane: reference.clone(),
             selection: Selection {
@@ -6026,16 +6067,18 @@ impl App {
             Vec::new()
         };
         self.pending_begin(&reference);
+        let action = self.next_action();
         if method == Method::Start {
             if matches!(row, RowId::Unit(_) | RowId::Section(_) | RowId::Group(..)) {
-                self.mark_queued(&reference, &units);
+                self.mark_queued(&reference, &units, action);
             }
         } else {
             // A stop or restart decides what its units are next; the daemon
             // reports them. Units it does not name keep their local `queued`.
-            self.clear_optimistic(&reference, &units);
+            self.clear_optimistic(&reference, &units, None);
         }
         effects.push(Effect::Control {
+            action,
             method,
             lane: reference,
             selection: Selection {

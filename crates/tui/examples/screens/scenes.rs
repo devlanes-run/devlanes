@@ -1113,6 +1113,7 @@ fn scenes() -> Vec<Scene> {
             setup: |f| {
                 f.unit("acme@0", "wrk-export");
                 f.send(Msg::ActionDone {
+                    action: 0,
                     label: "start acme@0:wrk-export".into(),
                     target: Target::Unit {
                         lane: "acme@0".into(),
@@ -1133,6 +1134,7 @@ fn scenes() -> Vec<Scene> {
             setup: |f| {
                 f.unit("acme@0", "wrk-export");
                 f.send(Msg::ActionDone {
+                    action: 0,
                     label: "start acme@0:wrk-export".into(),
                     target: Target::Unit {
                         lane: "acme@0".into(),

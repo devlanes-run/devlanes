@@ -111,6 +111,7 @@ async fn portal_app(width: u16, height: u16) -> Result<App, Box<dyn std::error::
 /// The failed start the owner reported, pressed as `s` on the unit.
 fn fail_start(app: &mut App) {
     app.update(Msg::ActionDone {
+        action: 0,
         label: "start acme@1:portal".into(),
         target: Target::Unit {
             lane: "acme@1".into(),
@@ -288,6 +289,7 @@ async fn a_start_whose_unit_cannot_spawn_reports_it() -> TestResult {
     };
     // The daemon answers without an error, but lists the unit under `failures`.
     app.update(Msg::ActionDone {
+        action: 0,
         label: "start acme@1:portal".into(),
         target: portal.clone(),
         units: vec!["acme@1:portal".into()],
@@ -307,6 +309,7 @@ async fn a_start_whose_unit_cannot_spawn_reports_it() -> TestResult {
 
     // Many at once: the header counts them instead of naming the last one.
     app.update(Msg::ActionDone {
+        action: 0,
         label: "start acme@1".into(),
         target: Target::Lane("acme@1".into()),
         units: Vec::new(),
@@ -683,6 +686,7 @@ async fn random_long_text_never_breaks_borders() -> TestResult {
 
         // The lane row with its details pane and a failed lane start.
         app.update(Msg::ActionDone {
+            action: 0,
             label: rng.text(6),
             target: Target::Lane(reference.clone()),
             units: Vec::new(),

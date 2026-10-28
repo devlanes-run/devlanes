@@ -58,6 +58,7 @@ async fn orphan_selected(api: &FakeApi) -> (App, Vec<Effect>) {
 /// Sends a control effect to the fake daemon and feeds the answer back.
 async fn apply(app: &mut App, api: &FakeApi, effect: Effect) -> Result<(), String> {
     let Effect::Control {
+        action,
         method,
         lane,
         selection,
@@ -70,6 +71,7 @@ async fn apply(app: &mut App, api: &FakeApi, effect: Effect) -> Result<(), Strin
     let units = selection.units.clone();
     let result = api.control(method, lane, selection).await;
     app.update(Msg::ActionDone {
+        action,
         label,
         target,
         units,
@@ -230,6 +232,7 @@ async fn starting_an_orphan_shows_the_daemons_refusal() -> TestResult {
     // `s` on an orphan sends nothing; a start from elsewhere (an older
     // client, a group) comes back refused.
     let effect = Effect::Control {
+        action: 0,
         method: Method::Start,
         lane: "acme@0".into(),
         selection: devlanes_proto::Selection {

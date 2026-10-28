@@ -744,6 +744,9 @@ pub(crate) struct StartCtl {
     /// How each planned spawn ended: `None` spawned, `Some` failed with the
     /// error. Starts that joined a unit report what this one got.
     outcomes: Mutex<BTreeMap<String, Option<RpcError>>>,
+    /// Woken when a spawn's outcome is recorded or a unit is withdrawn, so a
+    /// start that joined one unit goes on as soon as that unit is settled.
+    pub changed: Notify,
     /// Fires once the start spawns no more services: its services phase is over
     /// or the start ended.
     pub services_done: CancellationToken,
@@ -767,6 +770,7 @@ impl StartCtl {
             spawning: Mutex::new(BTreeSet::new()),
             gate_waits: Mutex::new(Vec::new()),
             outcomes: Mutex::new(BTreeMap::new()),
+            changed: Notify::new(),
             services_done: CancellationToken::new(),
             withdrawn: Mutex::new(BTreeMap::new()),
             tasks: Mutex::new(BTreeMap::new()),
@@ -792,6 +796,7 @@ impl StartCtl {
     /// Records how the spawn of `unit` ended: `None` when it spawned.
     pub(crate) fn record_outcome(&self, unit: &str, error: Option<RpcError>) {
         lock(&self.outcomes).insert(unit.to_owned(), error);
+        self.changed.notify_waiters();
     }
 
     /// How the spawn of `unit` ended, once it did: `Some(None)` spawned,
@@ -828,10 +833,13 @@ impl StartCtl {
 
     /// Takes `units` out of the start on behalf of `by`.
     pub(crate) fn withdraw(&self, units: &[String], by: &'static str) {
-        let mut withdrawn = lock(&self.withdrawn);
-        for unit in units {
-            withdrawn.entry(unit.clone()).or_insert(by);
+        {
+            let mut withdrawn = lock(&self.withdrawn);
+            for unit in units {
+                withdrawn.entry(unit.clone()).or_insert(by);
+            }
         }
+        self.changed.notify_waiters();
     }
 
     /// Who took `unit` out of the start, if anybody did.
