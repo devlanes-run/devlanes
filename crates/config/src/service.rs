@@ -239,8 +239,8 @@ service_fields! {
     /// can swap the script name. Exactly one of `run` and `run_script` is required after
     /// templates are applied.
     run_script: RunScript,
-    /// Directory `run` starts in, relative to the lane's worktree; defaults to the worktree
-    /// root. Platform detection also looks here. Cannot be combined with `run_script`, which
+    /// Directory `run` starts in, relative to the project file's directory in the lane's
+    /// worktree; defaults to that directory. Platform detection also looks here. Cannot be combined with `run_script`, which
     /// runs in the script file's directory; `devlanes config check` refuses the pair,
     /// including a `cwd` inherited through `extends`.
     #[schemars(extend("examples" = ["apps/api"]))]

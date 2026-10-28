@@ -525,6 +525,8 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let input = self.input;
         let facts = input.facts;
         let lane_path = facts.path.as_path();
+        // Relative paths in the config start where the project file is.
+        let project_dir = facts.project_dir.as_path();
         let path = spec.path;
         let evaluating = tracing::trace_span!("evaluate env").entered();
         let global = self.global_env(context)?;
@@ -536,12 +538,12 @@ impl<E: Extensions> Planner<'_, '_, E> {
         }
         drop(evaluating);
         let cwd = match spec.cwd {
-            Some(value) => lane_path.join(
+            Some(value) => project_dir.join(
                 value
                     .evaluate(context)
                     .map_err(|e| ResolveError::expression(format!("{path}.cwd"), e))?,
             ),
-            None => lane_path.to_path_buf(),
+            None => project_dir.to_path_buf(),
         };
         let run_path = format!("{path}.run");
         let command = match (spec.run, spec.script) {
@@ -557,7 +559,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
                     .map_err(|e| ResolveError::expression(&run_path, e))?,
             ),
             (None, Some((source, name))) => DraftCommand::Script {
-                source: lane_path.join(source),
+                source: project_dir.join(source),
                 name,
             },
             (None, None) => return Err(ResolveError::invalid(path, "needs run or run_script")),
@@ -786,7 +788,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
                 t.evaluate(context)
                     .map_err(|e| ResolveError::expression(&path, e))
             };
-            let from = facts.path.join(evaluate(&entry.from)?);
+            let from = facts.project_dir.join(evaluate(&entry.from)?);
             let to = match &entry.to {
                 Some(to) => {
                     let to = evaluate(to)?;
@@ -795,7 +797,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
                     } else if let Some(rest) = to.strip_prefix("~/") {
                         home()?.join(rest)
                     } else {
-                        facts.path.join(to)
+                        facts.project_dir.join(to)
                     }
                 }
                 None => {

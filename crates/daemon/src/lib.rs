@@ -11,6 +11,7 @@ mod config_show;
 mod control;
 pub mod diagnostics;
 mod dns;
+mod drift;
 mod engine;
 mod external;
 mod files;

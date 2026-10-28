@@ -163,8 +163,9 @@ pub enum RemovedWorktrees {
     /// Stop the lane's processes; once nothing runs, the lane is cleaned.
     #[schemars(extend("examples" = ["stop"]))]
     Stop,
-    /// Clean the lane right away: stop its processes, run `lane.clean` tasks and
-    /// `infra.teardown`, and free its index and ports.
+    /// Clean the lane right away: stop its processes, remove its own containers and free
+    /// its index and ports. `lane.clean` tasks and `infra.teardown` need the folder to
+    /// run in, so they are skipped; data they would drop from shared containers stays.
     #[schemars(extend("examples" = ["clean"]))]
     Clean,
 }
@@ -211,7 +212,7 @@ pub enum Run {
 /// binary). In `devlanes.local.yaml` or a service that `extends` a template, either key can
 /// be left out to keep the inherited one.
 pub struct RunScript {
-    /// File that defines the script, relative to the worktree, such as
+    /// File that defines the script, relative to the project file's directory, such as
     /// `apps/api/package.json`. The script runs in this file's directory. Required unless
     /// an override or `extends` child keeps the inherited file.
     #[schemars(extend("examples" = ["apps/api/package.json","Makefile","justfile"]))]
@@ -269,8 +270,9 @@ pub struct TaskConfig {
     /// script fails before anything starts. Prefer it to `run` for scripts that live in a
     /// file. Use exactly one of `run`, `run_script` or `steps`.
     pub run_script: Option<RunScript>,
-    /// Working directory for `run`, relative to the lane's worktree; defaults to the worktree
-    /// root. Cannot be combined with `run_script`, which runs in the script file's directory.
+    /// Working directory for `run`, relative to the project file's directory in the lane's
+    /// worktree; defaults to that directory. Cannot be combined with `run_script`, which
+    /// runs in the script file's directory.
     #[schemars(extend("examples" = ["apps/api"]))]
     pub cwd: Option<Templated<String>>,
     /// Variables for this task only, above `global_env`.
@@ -622,11 +624,12 @@ pub struct HttpReady {
 /// loads from a stable location, such as an unpacked browser extension. Also streams to
 /// machines connected with `devlanes remote connect`.
 pub struct SyncConfig {
-    /// Folder to copy, relative to the lane's worktree.
+    /// Folder to copy, relative to the project file's directory in the lane's worktree.
     #[schemars(extend("examples" = ["apps/extension/.output/chrome-mv3"]))]
     pub from: Templated<String>,
     #[schemars(extend("examples" = ["~/devlanes/sync/acme/${{ lane.name }}/chrome-mv3"]))]
-    /// Local destination; `~/` is your home and other relative paths start at the worktree.
+    /// Local destination; `~/` is your home and other relative paths start at the project
+    /// file's directory.
     /// Defaults to `~/devlanes/sync/<project>/<lane>/<folder>`. Machines connected with
     /// `devlanes remote connect` ignore it and use their own path.
     pub to: Option<Templated<String>>,
@@ -970,7 +973,8 @@ pub struct InfraCommandOptions {
     /// Count a failed or timed-out command as done instead of failing the start, for
     /// commands whose "already exists" error is fine. Defaults to false.
     pub ignore_errors: Option<Templated<bool>>,
-    /// Working directory, relative to the lane's worktree; defaults to the worktree root.
+    /// Working directory, relative to the project file's directory in the lane's worktree;
+    /// defaults to that directory.
     #[schemars(extend("examples" = ["infra"]))]
     pub cwd: Option<Templated<String>>,
     #[serde(default)]

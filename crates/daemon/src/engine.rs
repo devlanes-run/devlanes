@@ -375,6 +375,7 @@ pub(crate) fn mutating(method: &Method) -> bool {
             | Method::Start
             | Method::Stop
             | Method::Restart
+            | Method::Reload
             | Method::Resume
             | Method::LaneNew
             | Method::LaneClean
@@ -498,6 +499,7 @@ impl Inner {
             Method::Start => self.start_method(params, &context, &session).await,
             Method::Stop => self.stop_method(params, &context).await,
             Method::Restart => self.restart_method(params, &context, &session).await,
+            Method::Reload => self.reload_method(params, &context, &session).await,
             Method::Resume => self.resume_method(params, &context, &session).await,
             Method::Status => self
                 .remote_status(params, &context, &session)

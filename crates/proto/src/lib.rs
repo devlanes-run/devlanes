@@ -121,6 +121,10 @@ pub enum Method {
     Stop,
     #[serde(rename = "restart")]
     Restart,
+    /// Applies the lane's drift: stops removed units, restarts changed ones and
+    /// starts added ones (or restarts the whole lane when infra or ports changed).
+    #[serde(rename = "reload")]
+    Reload,
     #[serde(rename = "resume")]
     Resume,
     #[serde(rename = "status")]
@@ -736,6 +740,24 @@ pub struct UnitSummary {
     /// next request or connection thaws it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub power: Option<String>,
+    /// How the project file changed this unit since it started; `devlanes reload`
+    /// applies it. Absent while the unit matches the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drift: Option<UnitDrift>,
+}
+
+/// A unit's difference from the current project file.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UnitDrift {
+    /// `changed` (runs, but the file would start it differently), `removed` (runs,
+    /// but the file no longer has it) or `added` (the lane's profiles select it now,
+    /// and it is not running).
+    pub kind: String,
+    /// For `changed`: what differs, such as `run`, `cwd`, `ports`, `pty`, `ready`,
+    /// `stop`, `files` or `env API_URL`. Environment variables are named, never
+    /// their values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<String>,
 }
 
 /// Older daemons sized every attached unit, so a missing `pty` keeps doing that.
@@ -780,6 +802,7 @@ impl Default for UnitSummary {
             order: None,
             public_url: None,
             power: None,
+            drift: None,
         }
     }
 }
@@ -848,7 +871,13 @@ pub struct LaneSummary {
     pub name: Option<String>,
     pub path: PathBuf,
     pub state: String,
+    /// The project file changed what this lane runs: some unit has a `drift`, or
+    /// `infra_changed`. `devlanes reload` applies it.
     pub config_changed: bool,
+    /// The file's infra settings differ from the ones the lane last started with;
+    /// a reload restarts the whole lane for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub infra_changed: bool,
     pub units: Vec<UnitSummary>,
     /// First entry of `profiles`, for clients that show one profile.
     #[serde(default)]

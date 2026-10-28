@@ -229,6 +229,43 @@ async fn a_subdirectory_project_is_its_own_project() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A worktree whose file sets the project-wide `lanes.max` or a shared container
+/// differently from the primary's says so: the primary's `lanes.max` applies, and the
+/// shared container changes for every lane with each start.
+async fn project_wide_settings_follow_the_primary_worktree() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let config = "project: demo\nlanes: { max: 4 }\ninfra:\n  containers:\n    cache: { image: \"redis:7\", ports: { redis: 6379 } }\nservices:\n  web: { run: sleep, ready: started }\n";
+        let main = repo(&tmp.path, "r", config);
+        let wt = tmp.path.join("wt");
+        worktree(&main, &wt, "feat/x");
+        std::fs::write(
+            wt.join("devlanes.yaml"),
+            config
+                .replace("max: 4", "max: 9")
+                .replace("redis:7", "redis:8"),
+        )
+        .expect("diverge");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        lanes(&h, &main).await;
+        let lane = lane_at(&h, &wt, &wt).await;
+        let codes: Vec<&str> = lane.warnings.iter().map(|w| w.code.as_str()).collect();
+        assert!(codes.contains(&"project_setting_ignored"), "{codes:?}");
+        assert!(codes.contains(&"infra_spec_conflict"), "{codes:?}");
+        let conflict = lane
+            .warnings
+            .iter()
+            .find(|w| w.code == "infra_spec_conflict")
+            .expect("conflict");
+        assert_eq!(conflict.data["settings"], json!(["infra.containers.cache"]));
+        assert!(lane_at(&h, &main, &main).await.warnings.is_empty());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// Another repository that uses a project name already taken is refused while the
 /// first one is still on disk.
 async fn another_repository_cannot_take_a_project_name() {

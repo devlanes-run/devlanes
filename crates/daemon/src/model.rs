@@ -200,6 +200,9 @@ pub(crate) struct UnitRec {
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
     pub keep_awake: bool,
+    /// What a service run was spawned with, to tell when the config changed it.
+    /// Memory only, never state.db: it holds environment values.
+    pub fingerprint: Option<Arc<crate::drift::Fingerprint>>,
 }
 
 impl UnitRec {
@@ -377,6 +380,18 @@ pub(crate) struct LaneSt {
     /// names another project, the lane's layout and routes keep following it, so a
     /// typo or a rebase conflict does not take running services off the proxy.
     pub last_good: Option<Arc<ProjectConfig>>,
+    /// How the running units differ from what the current config would start, by
+    /// unit; see [`crate::drift`].
+    pub drift: BTreeMap<String, crate::drift::UnitDrift>,
+    /// The infra settings differ from the ones of the lane's last whole start.
+    pub infra_changed: bool,
+    /// The config and services of the lane's last whole start, which `added` and
+    /// `infra_changed` compare against.
+    pub started_with: Option<crate::drift::StartedWith>,
+    /// Settings this worktree's file sets differently from the primary worktree's,
+    /// where the primary's applies (`project_setting_ignored`) or the lanes share one
+    /// container (`infra_spec_conflict`).
+    pub divergent: Vec<devlanes_proto::LaneWarning>,
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
@@ -506,6 +521,10 @@ impl LaneSt {
             config_stamp: None,
             config_files: Vec::new(),
             last_good: None,
+            drift: BTreeMap::new(),
+            infra_changed: false,
+            started_with: None,
+            divergent: Vec::new(),
             shutdown_hooks: false,
             wanted: false,
             sweeping: false,
@@ -558,6 +577,7 @@ impl LaneSt {
             });
         }
         warnings.extend(self.host_conflicts.iter().cloned());
+        warnings.extend(self.divergent.iter().cloned());
         warnings
     }
 
@@ -1187,6 +1207,7 @@ pub(crate) fn unit_summary(lane: &str, name: &str, unit: &UnitRec) -> UnitSummar
             .find(|url| url.starts_with("https://"))
             .cloned(),
         power: None,
+        drift: None,
     }
 }
 
@@ -1349,6 +1370,10 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         apply_phase_reason(lane, summary);
         apply_waiting(lane, summary);
         apply_order(lane, summary);
+        summary.drift = lane
+            .drift
+            .get(&summary.name)
+            .map(crate::drift::UnitDrift::wire);
         // Only supervised processes are throttled or frozen; orphans and finished
         // units keep their own state word.
         if summary.state == "ready" && lane.units.contains_key(&summary.name) {
@@ -1383,6 +1408,7 @@ pub(crate) fn lane_summary(project: &str, lane: &LaneSt) -> LaneSummary {
         path: lane.path.clone(),
         state: lane.state_word().into(),
         config_changed: lane.config_changed,
+        infra_changed: lane.infra_changed,
         units,
         profile: profiles.first().cloned(),
         profiles,

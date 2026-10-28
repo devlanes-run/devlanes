@@ -42,6 +42,26 @@ async fn plain(yaml: &str, index: u32) -> devlanes_resolve::ResolvedLane {
 }
 
 #[tokio::test]
+/// A project file below the worktree root is where relative `cwd`, the default
+/// working directory and `sync` paths start.
+async fn subdirectory_projects_resolve_paths_from_their_file() {
+    let config = parse(
+        "project: shop\nservices:\n  api: { run: node server.mjs }\n  web: { run: serve, cwd: web, sync: [{ from: dist, to: out }] }\n",
+    );
+    let facts = facts("shop", 0, Some("main")).with_project_dir(std::path::Path::new("apps/shop"));
+    let (block, offsets) = allocation(&config, 20_000, &[]);
+    let client = client_env();
+    let mut input = ResolveInput::new(&config, &facts, block, &offsets);
+    input.client_env = &client;
+    let lane = resolve_lane(input).await.expect("resolves");
+    let root = std::path::Path::new("/work/shop/apps/shop");
+    assert_eq!(lane.services["api"].launch.cwd, root);
+    assert_eq!(lane.services["web"].launch.cwd, root.join("web"));
+    assert_eq!(lane.services["web"].sync[0].from, root.join("dist"));
+    assert_eq!(lane.services["web"].sync[0].to, root.join("out"));
+}
+
+#[tokio::test]
 /// Each variable's top layer wins, following decision 7 from client env to `--env`.
 async fn env_precedence_table() {
     let config = parse(

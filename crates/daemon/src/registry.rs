@@ -315,6 +315,78 @@ pub(crate) async fn config_stamp(
     .unwrap_or_default()
 }
 
+/// Settings a lane's file sets differently from the primary worktree's file: the
+/// project-wide `lanes.primary` and `lanes.max`, where the primary's applies, and the
+/// shared infra (Compose files, the shared project name, shared containers), which
+/// every lane starts and the last one to start wins.
+fn divergence(
+    primary: &ProjectConfig,
+    own: &ProjectConfig,
+    lane: &str,
+) -> Vec<devlanes_proto::LaneWarning> {
+    let mut ignored = Vec::new();
+    if own.lanes.primary != primary.lanes.primary {
+        ignored.push("lanes.primary");
+    }
+    if as_json(&own.lanes.max) != as_json(&primary.lanes.max) {
+        ignored.push("lanes.max");
+    }
+    let mut warnings = Vec::new();
+    if !ignored.is_empty() {
+        warnings.push(devlanes_proto::LaneWarning {
+            code: "project_setting_ignored".into(),
+            data: json!({
+                "lane": lane,
+                "settings": ignored,
+                "message": format!(
+                    "{} differs from the primary worktree's project file, whose value applies",
+                    ignored.join(" and ")
+                ),
+            }),
+        });
+    }
+    let shared = |config: &ProjectConfig| -> BTreeMap<String, Value> {
+        let mut shared = BTreeMap::new();
+        shared.insert("infra.compose".to_owned(), as_json(&config.infra.compose));
+        shared.insert(
+            "infra.project_name".to_owned(),
+            as_json(&config.infra.project_name),
+        );
+        for (name, container) in &config.infra.containers {
+            if !matches!(container.per_lane, Some(Templated::Literal(true))) {
+                shared.insert(format!("infra.containers.{name}"), as_json(container));
+            }
+        }
+        shared
+    };
+    let (theirs, ours) = (shared(primary), shared(own));
+    let conflicts: Vec<&String> = ours
+        .iter()
+        .filter(|(key, value)| theirs.get(*key).is_some_and(|theirs| theirs != *value))
+        .map(|(key, _)| key)
+        .collect();
+    if !conflicts.is_empty() {
+        let names: Vec<&str> = conflicts.iter().map(|key| key.as_str()).collect();
+        warnings.push(devlanes_proto::LaneWarning {
+            code: "infra_spec_conflict".into(),
+            data: json!({
+                "lane": lane,
+                "settings": names,
+                "message": format!(
+                    "{} differs from the primary worktree's project file; every lane shares it, so each start of a lane with another version changes it for all",
+                    names.join(", ")
+                ),
+            }),
+        });
+    }
+    warnings
+}
+
+/// A config value as JSON for comparison, `null` when it cannot be serialized.
+fn as_json<T: serde::Serialize>(value: &T) -> Value {
+    serde_json::to_value(value).unwrap_or(Value::Null)
+}
+
 /// `project_name_taken`: another repository, still on disk, uses the name.
 fn name_taken(name: &str, other: &Path) -> RpcError {
     RpcError::new(
@@ -753,6 +825,18 @@ impl Inner {
             .map_or(root, |lane| lane.st().path.clone())
     }
 
+    /// The loaded config of the primary worktree's lane, whose project-wide settings
+    /// (`lanes.primary`, `lanes.max`) apply to every lane.
+    pub(crate) fn primary_config(&self, project: &ProjectRt) -> Option<Arc<ProjectConfig>> {
+        let primary = self.primary_path(project);
+        project.lanes().into_iter().find_map(|lane| {
+            let st = lane.st();
+            (st.alias().is_none() && same_path(&st.path, &primary))
+                .then(|| st.config.loaded().cloned())
+                .flatten()
+        })
+    }
+
     /// Re-lists worktrees from git and applies the diff, then cleans idle lanes
     /// whose folder is gone, in the background.
     pub(crate) async fn relist(
@@ -973,6 +1057,10 @@ impl Inner {
         project: &Arc<ProjectRt>,
     ) -> Result<Vec<Arc<LaneRt>>, RpcError> {
         let primary = project.st().primary_branch.clone();
+        // `lanes.max` is project-wide: the primary worktree's file sets it.
+        let primary_max = self
+            .primary_config(project)
+            .and_then(|config| literal(&config.lanes.max));
         let mut lanes = project.lanes();
         lanes.sort_by_key(|lane| lane.st().path.clone());
         let mut assigned = Vec::new();
@@ -999,7 +1087,7 @@ impl Inner {
                 .iter()
                 .filter_map(|l| l.st().index())
                 .collect();
-            if let Some(max) = literal(&config.lanes.max)
+            if let Some(max) = primary_max.or_else(|| literal(&config.lanes.max))
                 && used.len() >= usize::try_from(max).unwrap_or(usize::MAX)
             {
                 lane.st().unassigned = Some(RpcError::new(
@@ -1449,6 +1537,7 @@ impl Inner {
     pub(crate) fn facts(&self, project: &ProjectRt, lane: &LaneRt) -> Result<LaneFacts, RpcError> {
         let primary = self.primary_path(project);
         let name = project.name();
+        let (config_dir, _) = project.config_path();
         let st = lane.st();
         let record = st
             .record
@@ -1462,7 +1551,8 @@ impl Inner {
             st.path.clone(),
             data_path,
             st.branch.clone(),
-        ))
+        )
+        .with_project_dir(&config_dir))
     }
 
     /// `<data root>/<project>`, holding the data folders of the project's lanes.
@@ -1622,7 +1712,9 @@ impl Inner {
                 _ => None,
             };
             let differs = before != after || before.is_none();
-            if differs && (st.any_running() || in_flight || !st.starts.is_empty()) {
+            // A start in flight spawns with the config it began with; the drift
+            // computed once it ends says what this edit changed.
+            if differs && (in_flight || !st.starts.is_empty()) {
                 st.config_changed = true;
             }
             if let ConfigState::Loaded(loaded) = &config {
@@ -1657,6 +1749,12 @@ impl Inner {
             tracing::warn!(code = %error.code, "lane assignment failed");
         }
         self.refresh_views(project).await;
+        // After the refresh, so new ports have offsets and the layout lists new
+        // services. A `.env` edit leaves the config as it was, so plans decide.
+        let running = lane.st().any_running();
+        if running {
+            self.update_drift(project, lane).await;
+        }
         self.emit_lane(project, lane);
     }
 
@@ -1679,6 +1777,18 @@ impl Inner {
     /// The refresh, with the lane whose `op` the caller holds, if any.
     async fn refresh_with(self: &Arc<Self>, project: &Arc<ProjectRt>, held: Option<&Arc<LaneRt>>) {
         use tracing::Instrument as _;
+        let name = project.name();
+        let primary_config = self.primary_config(project);
+        for lane in project.lanes() {
+            let mut st = lane.st();
+            let divergent = match (&primary_config, st.config.loaded()) {
+                (Some(primary), Some(own)) if !Arc::ptr_eq(primary, own) => {
+                    divergence(primary, own, &st.reference(&name))
+                }
+                _ => Vec::new(),
+            };
+            st.divergent = divergent;
+        }
         self.refresh_lanes(project, held)
             .instrument(tracing::debug_span!("refresh views"))
             .await;

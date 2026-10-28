@@ -88,6 +88,8 @@ pub(crate) struct SpawnRequest {
     pub role: &'static str,
     /// `services.<name>.keep_awake`: the lane never goes idle while this runs.
     pub keep_awake: bool,
+    /// A service run's [`crate::drift::Fingerprint`]; `None` for one-shot units.
+    pub fingerprint: Option<crate::drift::Fingerprint>,
 }
 
 /// Copies an environment with its provenance (the type is deliberately not `Clone`).
@@ -126,6 +128,7 @@ impl SpawnRequest {
             ready_check: Some(ready_word(&service.ready.check)),
             role: "service",
             keep_awake: service.keep_awake,
+            fingerprint: Some(crate::drift::Fingerprint::of(service)),
         }
     }
 
@@ -162,6 +165,7 @@ impl SpawnRequest {
             ready_check: None,
             role: kind.word(),
             keep_awake: false,
+            fingerprint: None,
         }
     }
 }
@@ -1293,16 +1297,6 @@ impl Dropped {
     }
 }
 
-/// The service a saved unit name belongs to: itself, or `api` for replica `api.2`.
-fn saved_service<'a>(config: &devlanes_config::ProjectConfig, unit: &'a str) -> Option<&'a str> {
-    if config.services.contains_key(unit) {
-        return Some(unit);
-    }
-    let (base, replica) = unit.rsplit_once('.')?;
-    (replica.bytes().all(|b| b.is_ascii_digit()) && config.services.contains_key(base))
-        .then_some(base)
-}
-
 /// Splits saved service or unit names into the services the config still declares,
 /// deduplicated, and the names it dropped.
 fn split_saved(
@@ -1312,7 +1306,7 @@ fn split_saved(
     let mut kept: Vec<String> = Vec::new();
     let mut dropped = Vec::new();
     for name in names {
-        match saved_service(config, name) {
+        match crate::drift::service_of(config, name) {
             Some(service) if !kept.iter().any(|known| known == service) => {
                 kept.push(service.to_owned());
             }
@@ -1825,6 +1819,7 @@ impl Inner {
                 ready_check: request.ready_check,
                 role: request.role,
                 keep_awake: request.keep_awake,
+                fingerprint: request.fingerprint.map(Arc::new),
             },
         );
         if request.kind == Kind::Service {
@@ -2745,6 +2740,10 @@ impl Inner {
                 st.started_at_ms = Some(now_ms());
                 st.usage.clear();
                 st.config_changed = false;
+                st.drift.clear();
+                st.infra_changed = false;
+                st.started_with =
+                    Some(crate::drift::StartedWith::new(&config, &selection.profiles));
                 st.skipped_tasks.clear();
             }
         }
@@ -2994,6 +2993,8 @@ impl Inner {
                 json!({"lane": cx.reference, "code": warning.code, "data": warning.data}),
             );
         }
+        // What it spawned matches the file, unless the file changed during the start.
+        self.settle_drift(&cx.project, &cx.lane, &cx.config, &cx.started);
         StartResult {
             warnings,
             started: cx

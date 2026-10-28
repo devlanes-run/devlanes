@@ -157,7 +157,7 @@ fn run_result(task: &str, lane: &str, unit: Option<&str>, outcome: &TaskOutcome)
 
 impl Inner {
     /// Wait limit of a request.
-    fn timeout(&self, timeout_ms: Option<u64>) -> Duration {
+    pub(crate) fn timeout(&self, timeout_ms: Option<u64>) -> Duration {
         timeout_ms.map_or(self.opts.start_timeout, Duration::from_millis)
     }
 
@@ -267,6 +267,8 @@ impl Inner {
             stopped = self
                 .stop_lane(&project, &lane, selectors, mine, selection.transient)
                 .await?;
+            // A stopped unit has no drift left to report.
+            self.prune_drift(&lane);
         }
         let mut result =
             serde_json::to_value(Page::complete(stopped)).map_err(|e| internal("encode", e))?;
@@ -276,7 +278,8 @@ impl Inner {
         Ok(result)
     }
 
-    /// `restart`: stops and starts named units with fresh plans.
+    /// `restart`: stops and starts named units with fresh plans; without units, the
+    /// whole lane, as a stop and a plain start that keep what the lane saved.
     pub(crate) async fn restart_method(
         self: &Arc<Self>,
         value: Value,
@@ -285,9 +288,6 @@ impl Inner {
     ) -> Result<Value, RpcError> {
         let arrival = self.arrive();
         let selection: Selection = params(value)?;
-        if selection.units.is_empty() {
-            return Err(RpcError::new("units_required", json!({}), 2));
-        }
         let ((project, lane), selectors) = self.lane_for_units(&selection.units, context).await?;
         self.fresh_config(&project, &lane).await;
         Self::refuse_external(&project, &lane, &selectors)?;
@@ -295,27 +295,28 @@ impl Inner {
         let stream = selection
             .events
             .then(|| LaneEvents::starts(vec![(project.clone(), lane.clone())], vec![start_id]));
-        let restart = self.restart_units(
-            &project,
-            &lane,
-            &selectors,
-            StartOptions {
-                selectors: selectors.clone(),
-                profiles: selection.profile_names(),
-                transient: false,
-                env: carries_env(context),
-                overrides: selection.env.clone(),
-                actor: context.actor.clone(),
-                timeout: self.timeout(selection.timeout_ms),
-                session: None,
-                setup_only: false,
-                all_at_once: selection.all_at_once,
-                start_id: Some(start_id),
-                arrival,
-                restoring: false,
-            },
-        );
-        let result = self.with_lane_events(session, stream, restart).await?;
+        let options = StartOptions {
+            selectors: selectors.clone(),
+            profiles: selection.profile_names(),
+            transient: false,
+            env: carries_env(context),
+            overrides: selection.env.clone(),
+            actor: context.actor.clone(),
+            timeout: self.timeout(selection.timeout_ms),
+            session: None,
+            setup_only: false,
+            all_at_once: selection.all_at_once,
+            start_id: Some(start_id),
+            arrival,
+            restoring: false,
+        };
+        let result = if selectors.is_empty() {
+            let restart = self.restart_lane(&project, &lane, options);
+            self.with_lane_events(session, stream, restart).await?
+        } else {
+            let restart = self.restart_units(&project, &lane, &selectors, options);
+            self.with_lane_events(session, stream, restart).await?
+        };
         serde_json::to_value(result).map_err(|e| internal("encode", e))
     }
 
@@ -873,6 +874,7 @@ impl Inner {
             ready_check: Some("started"),
             role: "exec",
             keep_awake: false,
+            fingerprint: None,
         };
         // Held until the unit is recorded, so a clean or reset that begins meanwhile
         // waits and then stops it, or refuses it once the lane is released.
