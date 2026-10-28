@@ -1,11 +1,11 @@
 ---
 cargo/devlanes: minor
 cargo/devlanes-daemon: minor
-cargo/devlanes-cli: minor
-cargo/devlanes-tui: minor
-cargo/devlanes-proto: minor
+cargo/devlanes-cli: patch
+cargo/devlanes-tui: patch
+cargo/devlanes-proto: patch
 cargo/devlanes-state: minor
-cargo/devlanes-proxy: minor
+cargo/devlanes-proxy: patch
 ---
 
 Added `devlanes remote use` and the TUI's `m` key to choose which box serves a lane that several boxes run.
