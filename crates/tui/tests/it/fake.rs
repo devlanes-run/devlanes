@@ -345,6 +345,14 @@ impl DaemonApi for FakeApi {
         Ok(json!({"disconnected": [host]}))
     }
 
+    /// Records `remote.use <lane> <host>`, with `null` for this machine, and
+    /// answers as if the switch happened.
+    async fn use_lane(&self, lane: String, host: Option<String>) -> Result<Value, ApiError> {
+        let shown = host.as_deref().unwrap_or("null");
+        self.record(format!("remote.use {lane} {shown}"));
+        Ok(json!({"lane": lane, "host": host, "previous": null, "mirrored": true}))
+    }
+
     async fn pair(&self) -> Result<Value, ApiError> {
         self.record("remote.pair".into());
         match self.pairing.lock().ok().and_then(|p| p.clone()) {

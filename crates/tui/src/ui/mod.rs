@@ -1347,6 +1347,18 @@ fn hints(app: &App) -> Vec<Hint> {
     let Some(lane) = app.selected_lane() else {
         return Vec::new();
     };
+    let mut hints = lane_hints(app, lane);
+    // Only where `m` can switch; a grey lane a running local lane keeps out
+    // says why in its pane.
+    if app.grey(&lane.reference).is_some_and(|grey| grey.can_use) {
+        hints.insert(0, ("m", "use this one", ch('m')));
+    }
+    hints
+}
+
+/// The hints for the selected row of `lane` in the list.
+fn lane_hints(app: &App, lane: &LaneSummary) -> Vec<Hint> {
+    let ch = KeyCode::Char;
     let filter = ("/", "filter", ch('/'));
     let switch = ("[ ]", "switch lane", ch(']'));
     // A box lane is read-only: what helps here, and the footer's note says

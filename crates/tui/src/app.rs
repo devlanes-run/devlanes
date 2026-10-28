@@ -793,6 +793,12 @@ pub enum Msg {
     },
     /// [`Effect::Pair`] is done.
     Paired(Result<Value, ApiError>),
+    /// [`Effect::UseLane`] is done.
+    LaneUsed {
+        lane: String,
+        host: Option<String>,
+        result: Result<Value, ApiError>,
+    },
     /// A spinner frame passed; sent only while something spins.
     Spin,
     /// config.yaml as read for the options page.
@@ -914,6 +920,12 @@ pub enum Effect {
     },
     /// `remote.pair`, answered with [`Msg::Paired`].
     Pair,
+    /// `remote.use` for lane `lane` (`acme@0`) of box `host`, or of this
+    /// machine when `host` is `None`, answered with [`Msg::LaneUsed`].
+    UseLane {
+        lane: String,
+        host: Option<String>,
+    },
     /// Reads a page of a unit's log older than what its pane keeps,
     /// answered with [`Msg::Logs`].
     FetchLogs {
@@ -2134,6 +2146,9 @@ impl App {
                     dialog.answered(result);
                 }
             }
+            Msg::LaneUsed { lane, host, result } => {
+                self.lane_used(&lane, host.as_deref(), result, &mut effects);
+            }
             Msg::Spin => self.spin = self.spin.wrapping_add(1),
             Msg::DaemonRestarted(result) => self.daemon_answered("restart", result, &mut effects),
             Msg::DaemonStarted(result) => self.daemon_answered("start", result, &mut effects),
@@ -2549,6 +2564,18 @@ impl App {
         }
         match event.event.as_str() {
             events::RESYNC => effects.push(Effect::Refresh),
+            // A local lane that starts takes its hostnames back from the box
+            // chosen for it, which deletes that choice.
+            devlanes_proto::remote::WARNING_EVENT
+                if event.data.get("code").and_then(Value::as_str) == Some("choice_cleared") =>
+            {
+                let field = |key: &str| event.data.get(key).and_then(Value::as_str);
+                if let (Some(lane), Some(host)) = (field("lane"), field("host")) {
+                    self.set_notice(format!(
+                        "{lane} started here, so {host}'s {lane} is no longer mirrored"
+                    ));
+                }
+            }
             events::DAEMON_STOPPING => {
                 // Every subscriber hears it, whoever asked; this TUI's own
                 // stop reports the same steps again, which changes nothing.
@@ -4323,6 +4350,68 @@ impl App {
         });
     }
 
+    /// `m`: makes the shown grey lane the one this machine mirrors, a box's
+    /// lane or this machine's own. A lane in use already, or one that a
+    /// running local lane keeps out, only says so.
+    fn use_lane(&mut self, effects: &mut Vec<Effect>) {
+        let Some(reference) = self.selected.as_ref().map(|s| s.lane.clone()) else {
+            return;
+        };
+        let Some(grey) = self.grey(&reference) else {
+            let notice = match self.box_lane(&reference) {
+                Some((host, lane)) => format!("{lane} from {} is already in use", host.host),
+                None if self.boxes.lanes.iter().any(|lane| lane.lane == reference) => {
+                    format!("{reference} on this machine is already in use")
+                }
+                None => format!("no box runs {reference}, so there is nothing to switch to"),
+            };
+            self.set_notice(notice);
+            return;
+        };
+        if !grey.can_use {
+            let notice = if grey.cause.as_deref() == Some("local_running") {
+                format!(
+                    "{} runs on this machine. Stop it there to use this one",
+                    grey.lane
+                )
+            } else {
+                "the daemon is too old to switch lanes. Upgrade it and restart it".to_owned()
+            };
+            self.set_notice(notice);
+            return;
+        }
+        let from = grey.host.as_deref().unwrap_or("this machine");
+        self.set_notice(format!("switching {} to {from}…", grey.lane));
+        effects.push(Effect::UseLane {
+            lane: grey.lane,
+            host: grey.host,
+        });
+    }
+
+    /// Takes the answer to `remote.use` for `lane` of `host` (`None` for this
+    /// machine): what serves the lane now, or why it did not switch.
+    fn lane_used(
+        &mut self,
+        lane: &str,
+        host: Option<&str>,
+        result: Result<Value, ApiError>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let from = host.unwrap_or("this machine");
+        match result {
+            Ok(reply) => {
+                let mirrored = reply.get("mirrored").and_then(Value::as_bool) != Some(false);
+                self.set_notice(if mirrored {
+                    format!("{lane} now comes from {from}")
+                } else {
+                    format!("{lane} from {from} is chosen but not mirrored yet")
+                });
+            }
+            Err(error) => self.api_error(&format!("use {lane} from {from}"), None, error, effects),
+        }
+        self.fetch_boxes(effects);
+    }
+
     /// Whether the shown lane is a box's, so actions on it belong to the box.
     pub fn on_box(&self) -> bool {
         self.selected
@@ -5251,6 +5340,7 @@ impl App {
                 }
             }
             KeyCode::Char('o') => self.open_url(effects),
+            KeyCode::Char('m') => self.use_lane(effects),
             KeyCode::Char('e') => self.open_errors(),
             KeyCode::Char('c') => self.enter_copy(),
             KeyCode::PageUp => {

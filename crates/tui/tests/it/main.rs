@@ -14,6 +14,7 @@ macro_rules! assert_screen {
 }
 
 mod boxes;
+mod choice;
 mod clients;
 mod connect;
 mod containers;
