@@ -1331,13 +1331,14 @@ mod tests {
                 .await
                 .expect("read-only query");
             let lines: Vec<_> = page.items.into_iter().map(|line| line.text).collect();
-            if lines == ["hello", "prompt> "] {
+            // The space after the prompt shows nothing, so the log leaves it out.
+            if lines == ["hello", "prompt>"] {
                 break;
             }
             assert!(Instant::now() < deadline, "{lines:?}");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        assert_eq!(host.tail(10).await, ["hello", "prompt> "]);
+        assert_eq!(host.tail(10).await, ["hello", "prompt>"]);
         // A real unit's output closes with its exit; a sender kept here would
         // make the stop wait out the pump drain.
         drop(output);

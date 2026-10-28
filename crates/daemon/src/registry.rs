@@ -1669,6 +1669,33 @@ impl Inner {
         }
     }
 
+    /// Deletes the logs of lane `index` (`lane clean`), then the project's log
+    /// folder once no lane's is left in it, so the next lane given the index
+    /// starts without them. A missing folder is not an error.
+    pub(crate) async fn remove_lane_logs(&self, project: &str, index: u32) {
+        let path = crate::lifecycle::lane_log_dir(&self.opts.logs, project, index);
+        let Some(parent) = path.parent().map(std::path::Path::to_path_buf) else {
+            return;
+        };
+        let result = tokio::task::spawn_blocking(move || {
+            match crate::files::remove_dir_all(&path) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
+                _ => {}
+            }
+            // Fails while other lanes' logs remain, which is the point.
+            let _ = std::fs::remove_dir(&parent);
+            Ok(())
+        })
+        .await;
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(project, index, %error, "cannot delete the lane's logs");
+            }
+            Err(error) => tracing::warn!(%error, "lane log folder task failed"),
+        }
+    }
+
     /// `(lane config dir, primary config dir)`.
     pub(crate) fn config_dirs(&self, project: &ProjectRt, lane: &LaneRt) -> (PathBuf, PathBuf) {
         let (config_dir, _) = project.config_path();

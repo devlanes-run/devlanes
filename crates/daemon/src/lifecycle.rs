@@ -188,9 +188,17 @@ pub(crate) fn unit_log_dir(
     index: u32,
     unit: &str,
 ) -> std::path::PathBuf {
+    lane_log_dir(logs, project, index).join(unit_folder(unit))
+}
+
+/// `<logs>/<project>/<lane index>`, the logs of every unit of one lane.
+pub(crate) fn lane_log_dir(
+    logs: &std::path::Path,
+    project: &str,
+    index: u32,
+) -> std::path::PathBuf {
     logs.join(devlanes_core::paths::name_on_disk(project).as_ref())
         .join(index.to_string())
-        .join(unit_folder(unit))
 }
 
 /// The folder name of a unit's logs: `/` becomes `_`, as it always has on Unix.
@@ -3829,6 +3837,10 @@ impl Inner {
                 .map_err(store_error)?;
             // Last, so a clean that fails earlier keeps the data its teardown may need.
             self.remove_lane_data(&project.name(), record.id).await;
+            // Every unit stopped and closed its log above.
+            if let Some(index) = index {
+                self.remove_lane_logs(&project.name(), index).await;
+            }
         }
         let present = {
             let mut st = lane.st();
