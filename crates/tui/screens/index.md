@@ -186,6 +186,14 @@ two forks of one box run shop@0, chosen for fork-a: the lanes row goes by number
 - 120x40: [txt](lanes-boxes-120x40.txt) · [png](lanes-boxes-120x40.png) · [ansi](lanes-boxes-120x40.ansi)
 - 80x24: [txt](lanes-boxes-80x24.txt) · [png](lanes-boxes-80x24.png) · [ansi](lanes-boxes-80x24.ansi)
 
+## lanes-boxes-long
+
+three forks with long names that share their start (clickmax-fork-a, -b, -c): the chips drop the shared start, so narrow screens still tell them apart
+
+- 200x60: [txt](lanes-boxes-long-200x60.txt) · [png](lanes-boxes-long-200x60.png) · [ansi](lanes-boxes-long-200x60.ansi)
+- 120x40: [txt](lanes-boxes-long-120x40.txt) · [png](lanes-boxes-long-120x40.png) · [ansi](lanes-boxes-long-120x40.ansi)
+- 80x24: [txt](lanes-boxes-long-80x24.txt) · [png](lanes-boxes-long-80x24.png) · [ansi](lanes-boxes-long-80x24.ansi)
+
 ## lane-box-grey
 
 fork-b's grey shop@0: which lane is in use, and m to use this one

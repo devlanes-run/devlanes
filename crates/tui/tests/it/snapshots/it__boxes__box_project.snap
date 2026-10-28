@@ -3,7 +3,7 @@ source: crates/tui/tests/it/boxes.rs
 expression: draw(&app)?.backend()
 ---
 " devlanes  1 acme   2 shop                            ✕ 1 failed  Monitor  Daemon  Boxes · 2 issues "
-" lanes  1 @0  2 @1  3 @1 hetzner  4 @2                                      1-9 or [ ] switch lanes "
+" lanes  1 @0 main  2 @1 feat/login  3 @1 hetzner  4 @2 fix/cache            1-9 or [ ] switch lanes "
 "┌ @1 hetzner · 3/3 up ─────────────────┐┌ acme@1  running · 3 up ────────────────────── on hetzner ┐"
 "│ ▾ services                         2 ││ box       hetzner · ssh · devlanes 0.0.1                 │"
 "│   ● web                              ││ domain    acme-1.localhost                               │"

@@ -653,6 +653,44 @@ pub fn forks() -> Value {
     })
 }
 
+/// [`forks`] with a third fork and the long names VMs made from one image
+/// get: `clickmax-fork-a`, `-b` and `-c`. fork-a keeps the chosen lane.
+pub fn long_forks() -> Value {
+    let mut list = forks();
+    let rename = |value: &mut Value, from: &str, to: &str| {
+        if value.as_str() == Some(from) {
+            *value = json!(to);
+        }
+    };
+    let Some(items) = list["items"].as_array_mut() else {
+        return list;
+    };
+    let mut third = items[1].clone();
+    third["host"] = json!("fork-c");
+    items.push(third);
+    for item in items.iter_mut() {
+        for (from, to) in [
+            ("fork-a", "clickmax-fork-a"),
+            ("fork-b", "clickmax-fork-b"),
+            ("fork-c", "clickmax-fork-c"),
+        ] {
+            rename(&mut item["host"], from, to);
+            for skipped in item["skipped_lanes"].as_array_mut().into_iter().flatten() {
+                rename(&mut skipped["box"], from, to);
+                rename(&mut skipped["winner"], from, to);
+            }
+        }
+    }
+    for yielded in list["yielded_local_lanes"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        rename(&mut yielded["winner"], "fork-a", "clickmax-fork-a");
+    }
+    list
+}
+
 /// [`forks`] while this machine runs `shop@0`: its lane keeps the
 /// hostnames, both forks' lanes are skipped, and `m` cannot switch.
 pub fn forks_local_running() -> Value {

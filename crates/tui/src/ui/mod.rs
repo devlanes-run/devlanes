@@ -935,7 +935,7 @@ fn shown_chip_width(app: &App) -> usize {
         .iter()
         .position(|lane| current == Some(lane.reference.as_str()))
         .unwrap_or(0);
-    spans_width(&lane_chip(app, lanes[active], &lanes, active)) + 4
+    spans_width(&lane_chip(app, lanes[active], &lanes, active, false)) + 4
 }
 
 /// The project's lane chips from column `used` of `area`, up to column
@@ -952,14 +952,25 @@ fn lane_chips(
     let theme = &app.theme;
     let lanes = app.project_lanes();
     let current = app.selected.as_ref().map(|s| s.lane.as_str());
-    let chips: Vec<Vec<Span<'static>>> = lanes
-        .iter()
-        .enumerate()
-        .map(|(index, lane)| lane_chip(app, lane, &lanes, index))
-        .collect();
+    let build = |named: bool| -> Vec<Vec<Span<'static>>> {
+        lanes
+            .iter()
+            .enumerate()
+            .map(|(index, lane)| lane_chip(app, lane, &lanes, index, named))
+            .collect()
+    };
     // Each chip pads itself with a space on both sides, so the highlight is
     // a block; that padding is also the gap between chips.
-    let widths: Vec<usize> = chips.iter().map(|chip| spans_width(chip) + 2).collect();
+    let width_of = |chips: &[Vec<Span<'static>>]| -> Vec<usize> {
+        chips.iter().map(|chip| spans_width(chip) + 2).collect()
+    };
+    // Beside box lanes, this machine's lanes keep their branch while every
+    // chip fits with it.
+    let mut chips = build(true);
+    if width_of(&chips).iter().sum::<usize>() > budget.saturating_sub(used + 2) {
+        chips = build(false);
+    }
+    let widths = width_of(&chips);
     let active = lanes
         .iter()
         .position(|lane| current == Some(lane.reference.as_str()))
@@ -1055,19 +1066,67 @@ fn needs_glyph(theme: &Theme) -> bool {
     theme.tier == Tier::Plain
 }
 
+/// The cells a box's name gets in a chip: a tenth of the screen, between 6
+/// and 16.
+pub(crate) fn box_room(screen: u16) -> usize {
+    (usize::from(screen) / 10).clamp(6, 16)
+}
+
+/// Box `name` in at most `room` cells: whole when it fits. Otherwise the
+/// start that every name in `names` shares gives way, `…fork-a`, keeping as
+/// many of its words as fit. The end is cut only when the part that tells
+/// the boxes apart does not fit either.
+pub(crate) fn short_box(name: &str, names: &[&str], room: usize) -> String {
+    let name = clean(name);
+    if text::width(&name) <= room {
+        return name;
+    }
+    let chars: Vec<char> = name.chars().collect();
+    let shared = names
+        .iter()
+        .filter(|other| clean(other) != name)
+        .map(|other| {
+            chars
+                .iter()
+                .zip(clean(other).chars())
+                .take_while(|(a, b)| **a == *b)
+                .count()
+        })
+        .min()
+        .unwrap_or(0);
+    if shared == 0 {
+        return clip(&name, room);
+    }
+    let tail = |from: usize| chars[from..].iter().collect::<String>();
+    // The longest tail from a word start inside the shared part that fits.
+    let start = (0..=shared)
+        .filter(|at| *at == shared || (*at > 0 && matches!(chars[at - 1], '-' | '_' | '.')))
+        // The `…` before the tail takes one cell.
+        .find(|at| text::width(&tail(*at)) < room);
+    match start {
+        Some(at) => format!("…{}", tail(at)),
+        None => format!("…{}", clip(&tail(shared), room.saturating_sub(1))),
+    }
+}
+
 /// What a lane is called in the chips of a tab that has box lanes: its number,
-/// which this machine's lane and the boxes' share, then the box, `@0` and
-/// `@0 fork-a`. The box's name is cut short on narrow screens; the list's
-/// title has all of it.
-pub(crate) fn numbered_label(lane: &LaneSummary, host: Option<&str>, screen: u16) -> String {
+/// which this machine's lane and the boxes' share, then the box or, with
+/// `named`, this machine's branch. `@0 main` and `@0 fork-a`. `host` is the
+/// box's name as [`short_box`] cut it.
+pub(crate) fn numbered_label(lane: &LaneSummary, host: Option<&str>, named: bool) -> String {
     let number = lane
         .index
         .map(|index| format!("@{index}"))
         .unwrap_or_default();
     match host {
-        Some(host) => {
-            let room = (usize::from(screen) / 10).clamp(6, 16);
-            format!("{number} {}", clip(&clean(host), room))
+        Some(host) => format!("{number} {host}"),
+        None if named => {
+            let branch = lane
+                .name
+                .as_deref()
+                .or(lane.branch.as_deref())
+                .unwrap_or("detached");
+            format!("{number} {}", clip(&clean(branch), 24))
         }
         None => number,
     }
@@ -1075,21 +1134,29 @@ pub(crate) fn numbered_label(lane: &LaneSummary, host: Option<&str>, screen: u16
 
 /// One chip: its key (1-9, then 0), the name colored by state, `@N` when the
 /// name is shared, the ready count while starting. A lane this machine does
-/// not mirror is dim, with a hollow dot, or in brackets with ascii glyphs.
+/// not mirror is dim, with a hollow dot, or in parentheses with ascii glyphs.
+/// `named` keeps this machine's branch beside box lanes.
 fn lane_chip(
     app: &App,
     lane: &LaneSummary,
     lanes: &[&LaneSummary],
     index: usize,
+    named: bool,
 ) -> Vec<Span<'static>> {
     let theme = &app.theme;
+    let hosts: Vec<&str> = lanes
+        .iter()
+        .filter_map(|l| app.lane_box(&l.reference).map(|b| b.host.as_str()))
+        .collect();
     // Box lanes have no branch here and share numbers with this machine's
-    // lanes, so a tab with any of them names every lane by number.
-    let (label, number) = if lanes.iter().any(|l| app.lane_box(&l.reference).is_some()) {
-        let host = app.lane_box(&lane.reference).map(|l| l.host.as_str());
-        (numbered_label(lane, host, app.size.0), None)
-    } else {
+    // lanes, so a tab with any of them leads every chip with the number.
+    let (label, number) = if hosts.is_empty() {
         lane_label(lane, lanes)
+    } else {
+        let host = app
+            .lane_box(&lane.reference)
+            .map(|l| short_box(&l.host, &hosts, box_room(app.size.0)));
+        (numbered_label(lane, host.as_deref(), named), None)
     };
     let (glyph, tone) = lane_glyph(theme, lane, app.spin);
     let mut spans = Vec::new();
@@ -1683,17 +1750,41 @@ mod tests {
         );
     }
 
-    /// Beside box lanes every chip goes by number; a box's name is cut to a
-    /// tenth of the screen, between 6 and 16 cells.
+    /// Beside box lanes every chip leads with its number: this machine's
+    /// branch when there is room, the box's name otherwise.
     #[test]
     fn box_lanes_go_by_number_and_box() {
         let zero = lane(0, "main", None);
-        assert_eq!(numbered_label(&zero, None, 80), "@0");
-        assert_eq!(numbered_label(&zero, Some("fork-a"), 80), "@0 fork-a");
-        let long = Some("clickmax-fork-3f2a");
-        assert_eq!(numbered_label(&zero, long, 80), "@0 clickma…");
-        assert_eq!(numbered_label(&zero, long, 120), "@0 clickmax-fo…");
-        assert_eq!(numbered_label(&zero, long, 200), "@0 clickmax-fork-3…");
+        assert_eq!(numbered_label(&zero, None, false), "@0");
+        assert_eq!(numbered_label(&zero, None, true), "@0 main");
+        let review = lane(1, "main", Some("review"));
+        assert_eq!(numbered_label(&review, None, true), "@1 review");
+        assert_eq!(numbered_label(&zero, Some("fork-a"), true), "@0 fork-a");
+        assert_eq!((box_room(80), box_room(120), box_room(200)), (8, 12, 16));
+    }
+
+    /// Forks that share a long start keep what tells them apart.
+    #[test]
+    fn box_names_drop_the_start_they_share() {
+        let forks = ["clickmax-fork-a", "clickmax-fork-b", "clickmax-fork-c"];
+        assert_eq!(short_box("clickmax-fork-a", &forks, 8), "…fork-a");
+        assert_eq!(short_box("clickmax-fork-b", &forks, 16), "clickmax-fork-b");
+        assert_eq!(short_box("clickmax-fork-c", &forks, 12), "…fork-c");
+        let vms = ["fan-fix-login-1a2b", "fan-fix-login-3c4d"];
+        assert_eq!(short_box("fan-fix-login-1a2b", &vms, 8), "…1a2b");
+        assert_eq!(short_box("fan-fix-login-3c4d", &vms, 12), "…login-3c4d");
+        // Nothing shared: the end is cut, as for one box alone.
+        assert_eq!(
+            short_box("clickmax-fork-3f2a", &["clickmax-fork-3f2a"], 8),
+            "clickma…"
+        );
+        assert_eq!(
+            short_box("clickmax-fork-a", &["clickmax-fork-a", "gpu"], 8),
+            "clickma…"
+        );
+        // A distinct part longer than the room is cut at its end.
+        let long = ["box-aaaaaaaaaaaa", "box-bbbbbbbbbbbb"];
+        assert_eq!(short_box("box-aaaaaaaaaaaa", &long, 8), "…aaaaaa…");
     }
 
     /// An idle unit keeps `state: ready`; its glyph comes from `power`, its

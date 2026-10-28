@@ -623,6 +623,14 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "lanes-boxes-long",
+            what: "three forks with long names that share their start (clickmax-fork-a, -b, -c): the chips drop the shared start, so narrow screens still tell them apart",
+            setup: |f| {
+                forks(f, data::long_forks);
+                f.lane("shop@0 @clickmax-fork-b");
+            },
+        },
+        Scene {
             name: "lane-box-grey",
             what: "fork-b's grey shop@0: which lane is in use, and m to use this one",
             setup: |f| {
