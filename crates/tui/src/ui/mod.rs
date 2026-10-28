@@ -1055,6 +1055,24 @@ fn needs_glyph(theme: &Theme) -> bool {
     theme.tier == Tier::Plain
 }
 
+/// What a lane is called in the chips of a tab that has box lanes: its number,
+/// which this machine's lane and the boxes' share, then the box, `@0` and
+/// `@0 fork-a`. The box's name is cut short on narrow screens; the list's
+/// title has all of it.
+pub(crate) fn numbered_label(lane: &LaneSummary, host: Option<&str>, screen: u16) -> String {
+    let number = lane
+        .index
+        .map(|index| format!("@{index}"))
+        .unwrap_or_default();
+    match host {
+        Some(host) => {
+            let room = (usize::from(screen) / 10).clamp(6, 16);
+            format!("{number} {}", clip(&clean(host), room))
+        }
+        None => number,
+    }
+}
+
 /// One chip: its key (1-9, then 0), the name colored by state, `@N` when the
 /// name is shared, the ready count while starting.
 fn lane_chip(
@@ -1064,7 +1082,14 @@ fn lane_chip(
     index: usize,
 ) -> Vec<Span<'static>> {
     let theme = &app.theme;
-    let (label, number) = lane_label(lane, lanes);
+    // Box lanes have no branch here and share numbers with this machine's
+    // lanes, so a tab with any of them names every lane by number.
+    let (label, number) = if lanes.iter().any(|l| app.lane_box(&l.reference).is_some()) {
+        let host = app.lane_box(&lane.reference).map(|l| l.host.as_str());
+        (numbered_label(lane, host, app.size.0), None)
+    } else {
+        lane_label(lane, lanes)
+    };
     let (glyph, tone) = lane_glyph(theme, lane, app.spin);
     let mut spans = Vec::new();
     if index < 10 {
@@ -1628,6 +1653,19 @@ mod tests {
             lane_label(&main, &[&main, &feat, &review]),
             ("main".into(), None)
         );
+    }
+
+    /// Beside box lanes every chip goes by number; a box's name is cut to a
+    /// tenth of the screen, between 6 and 16 cells.
+    #[test]
+    fn box_lanes_go_by_number_and_box() {
+        let zero = lane(0, "main", None);
+        assert_eq!(numbered_label(&zero, None, 80), "@0");
+        assert_eq!(numbered_label(&zero, Some("fork-a"), 80), "@0 fork-a");
+        let long = Some("clickmax-fork-3f2a");
+        assert_eq!(numbered_label(&zero, long, 80), "@0 clickma…");
+        assert_eq!(numbered_label(&zero, long, 120), "@0 clickmax-fo…");
+        assert_eq!(numbered_label(&zero, long, 200), "@0 clickmax-fork-3…");
     }
 
     /// An idle unit keeps `state: ready`; its glyph comes from `power`, its
