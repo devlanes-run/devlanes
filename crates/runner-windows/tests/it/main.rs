@@ -407,6 +407,47 @@ async fn pty_resizes_reach_the_console() {
     .await;
 }
 
+/// A program that leaves a color active makes the console host reset it
+/// before each repaint; every resize's repaint is still marked, so the next
+/// resize goes out too.
+#[tokio::test]
+async fn pty_repaints_after_colors_are_marked() {
+    bounded(async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cyan = script(
+            dir.path(),
+            "cyan.cmd",
+            &[
+                "@echo off",
+                "for /f %%a in ('echo prompt $E^| cmd') do set \"ESC=%%a\"",
+                "echo %ESC%[36mcyan",
+                "ping -n 15 127.0.0.1 >NUL",
+            ],
+        );
+        let unit = runner()
+            .spawn_unit(LaunchSpec {
+                size: TerminalSize {
+                    columns: 100,
+                    rows: 30,
+                },
+                ..pty_spec(&cyan.to_string_lossy(), &[], dir.path(), env(&[]))
+            })
+            .await
+            .expect("spawn");
+        let _cleanup = Cleanup(unit.clone());
+        let mut output = unit.output();
+        read_until(&mut output, "cyan").await;
+        for size in [(140, 20), (100, 30)] {
+            let (columns, rows) = size;
+            unit.resize(TerminalSize { columns, rows })
+                .await
+                .expect("resize");
+            read_until(&mut output, &format!("\x1b[8;{rows};{columns}t")).await;
+        }
+    })
+    .await;
+}
+
 /// SIGINT is the Ctrl-C key in a pseudo console; the fixture shuts down on
 /// it without escalation.
 #[tokio::test]
