@@ -38,7 +38,7 @@ use tokio::{
     time::Instant,
 };
 
-use super::HostConn;
+use super::{HostConn, assign::overlap};
 use crate::{
     engine::Inner,
     integrations::{RouteEntry, RouteStatus},
@@ -982,26 +982,9 @@ fn accepted(host: &str, suffixes: &[String]) -> Option<String> {
 }
 
 /// Whether `name` has at least one label in front of `parent`.
-fn below(name: &str, parent: &str) -> bool {
+pub(super) fn below(name: &str, parent: &str) -> bool {
     name.strip_suffix(parent)
         .is_some_and(|prefix| prefix.len() > 1 && prefix.ends_with('.'))
-}
-
-/// Whether some name matches both route patterns, each an exact name or a
-/// `*.` wildcard covering any depth below its parent (but not the parent),
-/// as the proxy matches them. Case and a trailing dot are ignored.
-fn overlap(a: &str, b: &str) -> bool {
-    let a = a.trim_end_matches('.').to_ascii_lowercase();
-    let b = b.trim_end_matches('.').to_ascii_lowercase();
-    match (a.strip_prefix("*."), b.strip_prefix("*.")) {
-        (None, None) => a == b,
-        (Some(parent), None) => below(&b, parent),
-        (None, Some(parent)) => below(&a, parent),
-        // Two wildcards share every name below the deeper parent.
-        (Some(first), Some(second)) => {
-            first == second || below(first, second) || below(second, first)
-        }
-    }
 }
 
 /// The process name for `pid`, for port conflict messages.
@@ -1520,33 +1503,6 @@ mod tests {
             "*.localhost",
         ] {
             assert_eq!(accepted(name, &suffixes), None, "{name}");
-        }
-    }
-
-    /// Patterns overlap when one name matches both: equal names, a name below
-    /// a wildcard's parent (not the parent itself), and wildcards one of which
-    /// covers the other, in either order.
-    #[test]
-    fn route_patterns_overlap_like_the_proxy_matches_them() {
-        for (a, b) in [
-            ("web.acme.localhost", "WEB.acme.localhost."),
-            ("*.acme.localhost", "web.acme.localhost"),
-            ("*.acme.localhost", "a.b.acme.localhost"),
-            ("*.acme.localhost", "*.acme.localhost"),
-            ("*.acme.localhost", "*.pages.acme.localhost"),
-        ] {
-            assert!(overlap(a, b), "{a} and {b}");
-            assert!(overlap(b, a), "{b} and {a}");
-        }
-        for (a, b) in [
-            ("web.acme.localhost", "api.acme.localhost"),
-            ("*.acme.localhost", "acme.localhost"),
-            ("*.acme.localhost", "web.acme-2.localhost"),
-            ("*.acme.localhost", "*.acme-2.localhost"),
-            ("*.a.localhost", "*.ba.localhost"),
-        ] {
-            assert!(!overlap(a, b), "{a} and {b}");
-            assert!(!overlap(b, a), "{b} and {a}");
         }
     }
 

@@ -26,6 +26,11 @@
 //! the sync entries a tunnel may stream. `remote.pair`, `remote.pairing.*`,
 //! `remote.clients` and `remote.revoke` manage pairings.
 
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the mirrors read it from the next change on")
+)]
+mod assign;
 mod feed;
 mod identity;
 mod mirror;
