@@ -361,6 +361,17 @@ async fn a_local_start_that_clears_a_choice_says_so() {
         "acme@1 started here, so fork-a's acme@1 is no longer mirrored"
     );
     assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
+    // Another project's lane that clashes on a hostname.
+    app.update(Msg::Event(Event {
+        seq: 10,
+        event: WARNING_EVENT.into(),
+        data: json!({"code": "choice_cleared", "lane": "acme@1", "host": "fork-a",
+                     "local_lane": "shop@0"}),
+    }));
+    assert_eq!(
+        notice(&app),
+        "shop@0 started here, so fork-a's acme@1 is no longer mirrored"
+    );
 }
 
 #[tokio::test]

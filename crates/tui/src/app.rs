@@ -2574,8 +2574,10 @@ impl App {
             {
                 let field = |key: &str| event.data.get(key).and_then(Value::as_str);
                 if let (Some(lane), Some(host)) = (field("lane"), field("host")) {
+                    // Another project's lane may be the one that clashes.
+                    let local = field("local_lane").unwrap_or(lane);
                     self.set_notice(format!(
-                        "{lane} started here, so {host}'s {lane} is no longer mirrored"
+                        "{local} started here, so {host}'s {lane} is no longer mirrored"
                     ));
                 }
             }
