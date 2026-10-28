@@ -113,12 +113,22 @@ pub struct SkippedLane {
     /// The box whose lane serves the hostnames; `None` when this machine's
     /// lane does.
     pub winner: Option<String>,
+    /// The reference of the lane in use, on `winner` or here. It differs from
+    /// `lane` when another project's lane clashes on a hostname.
+    pub winner_lane: Option<String>,
     /// `remote.use` can make it the one in use: false while this machine's
     /// lane runs, and from daemons without `remote.use`.
     pub can_use: bool,
 }
 
 impl SkippedLane {
+    /// The lane in use instead: `winner_lane`, else this lane's own
+    /// reference, which the clashing lane shares unless another project's
+    /// lane clashes.
+    pub fn serving(&self) -> &str {
+        self.winner_lane.as_deref().unwrap_or(&self.lane)
+    }
+
     /// The box that serves its hostnames instead, `None` for this machine:
     /// `winner`, or `box` from daemons that send no `cause`.
     pub fn served_by(&self) -> Option<&str> {
@@ -575,7 +585,8 @@ mod tests {
             "items": [{"host": "fork-b", "state": "connected", "chosen_lanes": ["acme@1"],
                 "skipped_lanes": [
                     {"lane": "acme@0", "hosts": [], "box": "fork-a", "reason": "r",
-                     "cause": "box_chosen", "winner": "fork-a", "can_use": true},
+                     "cause": "box_chosen", "winner": "fork-a", "winner_lane": "shop@0",
+                     "can_use": true},
                     {"lane": "acme@2", "hosts": [], "box": null, "reason": "r",
                      "cause": "local_running", "winner": null, "can_use": false},
                     {"lane": "acme@3", "hosts": [], "box": "old", "reason": "r"},
@@ -584,8 +595,15 @@ mod tests {
         });
         let host = &parse(&listed)[0];
         assert!(host.chosen("acme@1") && !host.chosen("acme@0"));
-        let chosen = host.skipped("acme@0").map(|s| (s.served_by(), s.can_use));
-        assert_eq!(chosen, Some((Some("fork-a"), true)));
+        let chosen = host
+            .skipped("acme@0")
+            .map(|s| (s.served_by(), s.serving(), s.can_use));
+        assert_eq!(chosen, Some((Some("fork-a"), "shop@0", true)));
+        // Without `winner_lane`, the lane's own reference.
+        assert_eq!(
+            host.skipped("acme@2").map(SkippedLane::serving),
+            Some("acme@2")
+        );
         let running = host.skipped("acme@2").map(|s| (s.served_by(), s.can_use));
         assert_eq!(running, Some((None, false)));
         let older = host.skipped("acme@3").map(|s| (s.served_by(), s.can_use));

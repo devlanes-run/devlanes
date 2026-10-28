@@ -1113,6 +1113,8 @@ pub struct Grey {
     pub winner: Option<String>,
     /// The reference of the lane that serves them, on `winner` or here. It
     /// is `lane` unless another project's lane clashes on a hostname.
+    /// `yielded_local_lanes` names no lane, so for this machine's lane it
+    /// comes from the winner's routes.
     pub serving: String,
     /// `m` can make it the one in use: false while this machine's lane runs,
     /// and on daemons without `remote.use`.
@@ -2862,12 +2864,9 @@ impl App {
     pub fn grey(&self, reference: &str) -> Option<Grey> {
         if let Some((host, lane)) = self.box_lane(reference) {
             let skipped = host.skipped(&lane)?;
-            let winner = skipped.served_by();
             return Some(Grey {
-                serving: self
-                    .serving_lane(winner, &skipped.hosts)
-                    .unwrap_or_else(|| lane.clone()),
-                winner: winner.map(str::to_owned),
+                serving: skipped.serving().to_owned(),
+                winner: skipped.served_by().map(str::to_owned),
                 lane,
                 host: Some(host.host.clone()),
                 can_use: skipped.can_use,
@@ -2901,25 +2900,9 @@ impl App {
         })
     }
 
-    /// The lane that serves one of `hosts` instead of a skipped box lane:
-    /// box `winner`'s lane routed for one of them, or with no winner this
-    /// machine's lane that serves one.
-    pub fn serving_lane(&self, winner: Option<&str>, hosts: &[String]) -> Option<String> {
-        let Some(winner) = winner else {
-            return self.local_lane_serving(hosts);
-        };
-        self.boxes
-            .hosts
-            .iter()
-            .find(|host| host.host == winner)?
-            .routes
-            .iter()
-            .find(|route| hosts.iter().any(|h| h.eq_ignore_ascii_case(&route.host)))
-            .map(|route| route.lane.clone())
-    }
-
     /// This machine's lane that serves one of `hosts`: a unit URL naming it,
-    /// or the lane's domain it falls under.
+    /// or the lane's domain it falls under. Only for daemons without
+    /// `remote.use`, which name no lane in use.
     pub fn local_lane_serving(&self, hosts: &[String]) -> Option<String> {
         self.lanes
             .iter()
@@ -4559,6 +4542,15 @@ impl App {
                 } else {
                     format!("{lane} now comes from {from}")
                 });
+            }
+            // A local lane started meanwhile: offer the same stop and switch
+            // as `m` on a lane it keeps out, for the lane the daemon names.
+            Err(ApiError::Rpc(ref error))
+                if error.code == "local_lane_running"
+                    && let Some(host) = host
+                    && let Some(local) = error.data.get("local_lane").and_then(Value::as_str) =>
+            {
+                self.switch_prompt(local.to_owned(), lane.to_owned(), host.to_owned());
             }
             Err(error) => self.api_error(&format!("use {lane} from {from}"), None, error, effects),
         }

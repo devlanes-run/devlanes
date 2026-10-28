@@ -26,7 +26,7 @@ fn forks() -> Value {
         |index: u32| json!({"key": {"project": "acme", "lane": index.to_string()}, "index": index});
     let skipped = |lane: &str, cause: &str, winner: Value| {
         json!({"lane": lane, "hosts": [format!("web.{lane}.localhost")], "box": winner,
-               "reason": "clashes", "cause": cause, "winner": winner,
+               "reason": "clashes", "cause": cause, "winner": winner, "winner_lane": lane,
                "can_use": cause != "local_running"})
     };
     let fork = |host: &str, chosen: Value, skipped: Value| {
@@ -414,24 +414,24 @@ async fn n_keeps_this_machines_lane_running() -> TestResult {
 }
 
 /// Another project's lane may clash on a hostname: the pane names the lane
-/// that serves it, found by that hostname.
+/// in use by the daemon's `winner_lane`.
 #[tokio::test]
 async fn the_pane_names_the_lane_in_use_when_another_project_clashes() -> TestResult {
     let lane = json!({"key": {"project": "billing", "lane": "0"}, "index": 0});
-    let fork = |host: &str, skipped: Value, routes: Value| {
+    let fork = |host: &str, skipped: Value| {
         json!({"host": host, "state": "connected", "transport": "ssh",
-               "skipped_lanes": skipped, "routes": routes,
-               "registry": {"lanes": [lane], "units": []}})
+               "skipped_lanes": skipped, "registry": {"lanes": [lane], "units": []}})
     };
     let listing = json!({"items": [
-        fork("fork-a", json!([]), json!([{"host": "pay.billing.localhost", "lane": "shop@3",
-                                          "unit": "pay", "url": null, "state": "ready"}])),
+        fork("fork-a", json!([])),
         fork("fork-b", json!([{"lane": "billing@0", "hosts": ["pay.billing.localhost"],
-                               "box": "fork-a", "reason": "r", "cause": "box_earlier",
-                               "winner": "fork-a", "can_use": true}]), json!([])),
+                               "box": "fork-a", "reason": "fork-a's shop@3 is in use",
+                               "cause": "box_earlier", "winner": "fork-a",
+                               "winner_lane": "shop@3", "can_use": true}])),
         fork("fork-c", json!([{"lane": "billing@0", "hosts": ["api.acme.localhost"],
-                               "box": null, "reason": "r", "cause": "local_running",
-                               "winner": null, "can_use": false}]), json!([])),
+                               "box": null, "reason": "acme@0 runs on this machine",
+                               "cause": "local_running", "winner": null,
+                               "winner_lane": "acme@0", "can_use": false}])),
     ]});
     let api = FakeApi::with_lanes(mixed_lanes());
     let (mut app, _) = loaded(&api, 120, 30).await;
@@ -497,6 +497,34 @@ async fn a_refused_switch_shows_the_daemons_words() -> TestResult {
         shown.text,
         "use acme@1 from fork-b failed: box fork-b has no lane acme@1. Run devlanes remote ls to see its lanes"
     );
+    Ok(())
+}
+
+/// A local lane that started before `remote.use` arrived: the switch asks
+/// to stop the lane the daemon names in `local_lane`.
+#[tokio::test]
+async fn a_switch_refused_for_a_running_lane_offers_to_stop_it() -> TestResult {
+    let mut app = with_forks(120, 30).await;
+    let error = RpcError::new(
+        "local_lane_running",
+        json!({"host": "fork-b", "lane": "acme@1", "local_lane": "shop@0",
+               "message": "shop@0 runs on this machine and keeps the hostnames. Stop it first with devlanes stop --lane shop@0"}),
+        1,
+    );
+    app.update(Msg::LaneUsed {
+        lane: "acme@1".into(),
+        host: Some("fork-b".into()),
+        result: Err(ApiError::Rpc(error)),
+    });
+    let dialog = pane_and_dialog(&app)?;
+    assert!(
+        dialog.contains("shop@0 runs on this machine. Stop it and use fork-b's?"),
+        "{dialog}"
+    );
+    assert!(dialog.contains("Then fork-b's acme@1 serves"), "{dialog}");
+    let effects = app.update(key(KeyCode::Char('y')));
+    let stopped: Vec<String> = stops(&effects).into_iter().map(|(_, lane)| lane).collect();
+    assert_eq!(stopped, ["shop@0"]);
     Ok(())
 }
 

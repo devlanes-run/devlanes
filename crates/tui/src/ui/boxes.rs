@@ -220,12 +220,10 @@ pub(super) fn grey_note(grey: &Grey) -> Option<String> {
 /// A skipped lane's row in the boxes view after `acme@0: `: what serves its
 /// hostnames and how to use this box's lane instead. `None` from daemons
 /// without `remote.use`.
-fn skipped_words(app: &App, skipped: &crate::boxes::SkippedLane) -> Option<String> {
+fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
     let cause = skipped.cause.as_deref()?;
     let winner = skipped.served_by();
-    let serving = app
-        .serving_lane(winner, &skipped.hosts)
-        .unwrap_or_else(|| skipped.lane.clone());
+    let serving = skipped.serving().to_owned();
     // `acme@0: acme@0 runs on this machine` would name the lane twice.
     let local = if serving == skipped.lane {
         "the same lane".to_owned()
@@ -1380,7 +1378,7 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
         let label = if index == 0 { "skipped" } else { "" };
         let lane = clean(&skipped.lane);
-        let text = match skipped_words(app, skipped) {
+        let text = match skipped_words(skipped) {
             Some(words) => format!("{lane}: {words}"),
             None => {
                 let reason = skip_reason(app, skipped);

@@ -515,7 +515,7 @@ pub fn boxes() -> Value {
             ],
             "skipped_lanes": [{"lane": "acme@0", "hosts": ["gateway.acme.localhost"], "box": null,
                                "reason": "acme@0 runs on this machine", "cause": "local_running",
-                               "winner": null, "can_use": false}],
+                               "winner": null, "winner_lane": "acme@0", "can_use": false}],
             "skipped_hosts": [{"host": "ext.example.com", "lane": "acme@4", "unit": "ext-build"}],
             "syncs": [{"lane": "acme@4", "unit": "ext-build", "index": 0,
                        "from": "/home/acme/acme/ext/dist",
@@ -643,8 +643,8 @@ pub fn forks() -> Value {
     let mut other = fork("fork-b");
     other["skipped_lanes"] = json!([{
         "lane": "shop@0", "hosts": ["storefront.shop.localhost", "checkout.shop.localhost"],
-        "box": "fork-a", "reason": "this machine uses fork-a's shop@0",
-        "cause": "box_chosen", "winner": "fork-a", "can_use": true,
+        "box": "fork-a", "reason": "fork-a's shop@0 is in use",
+        "cause": "box_chosen", "winner": "fork-a", "winner_lane": "shop@0", "can_use": true,
     }]);
     json!({
         "items": [chosen, other],
@@ -664,7 +664,7 @@ pub fn forks_local_running() -> Value {
         item["skipped_lanes"] = json!([{
             "lane": "shop@0", "hosts": ["storefront.shop.localhost", "checkout.shop.localhost"],
             "box": null, "reason": "shop@0 runs on this machine",
-            "cause": "local_running", "winner": null, "can_use": false,
+            "cause": "local_running", "winner": null, "winner_lane": "shop@0", "can_use": false,
         }]);
     }
     list["yielded_local_lanes"] = json!([]);
