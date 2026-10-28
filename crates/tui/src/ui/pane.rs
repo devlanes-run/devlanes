@@ -1493,6 +1493,14 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
             Span::raw(format!("{:<24} ", clip(&name, 24))),
         ];
         let mut summary = lane_summary(app, lane);
+        if app.grey(&lane.reference).is_some() {
+            let mut grey = vec![Span::styled("not mirrored", theme.quiet())];
+            if !summary.is_empty() {
+                grey.push(Span::styled(" · ", theme.quiet()));
+            }
+            grey.extend(summary);
+            summary = grey;
+        }
         if lane.index.is_none() {
             summary = vec![Span::styled(
                 "devlanes start in its folder gives it one",

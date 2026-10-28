@@ -1074,7 +1074,8 @@ pub(crate) fn numbered_label(lane: &LaneSummary, host: Option<&str>, screen: u16
 }
 
 /// One chip: its key (1-9, then 0), the name colored by state, `@N` when the
-/// name is shared, the ready count while starting.
+/// name is shared, the ready count while starting. A lane this machine does
+/// not mirror is dim, with a hollow dot, or in brackets with ascii glyphs.
 fn lane_chip(
     app: &App,
     lane: &LaneSummary,
@@ -1098,12 +1099,19 @@ fn lane_chip(
             theme.quiet(),
         ));
     }
-    spans.push(Span::styled(label, state_style(theme, tone)));
-    if let Some(number) = number {
-        spans.push(Span::styled(number, theme.quiet()));
-    }
-    if needs_glyph(theme) {
-        spans.push(Span::raw(format!(" {glyph}")));
+    if app.grey(&lane.reference).is_some() {
+        // The marker says it without color; the selection's reverse video
+        // takes the dimming away.
+        let (open, close) = theme.unmirrored();
+        spans.push(Span::styled(format!("{open}{label}{close}"), theme.quiet()));
+    } else {
+        spans.push(Span::styled(label, state_style(theme, tone)));
+        if let Some(number) = number {
+            spans.push(Span::styled(number, theme.quiet()));
+        }
+        if needs_glyph(theme) {
+            spans.push(Span::raw(format!(" {glyph}")));
+        }
     }
     if lane.state == "starting" {
         let counts = tree::counts(lane);

@@ -1084,6 +1084,28 @@ impl BoxesView {
     }
 }
 
+/// A lane this machine does not mirror, drawn grey: a box lane the daemon
+/// skipped, or one of this machine's stopped lanes whose hostnames a chosen
+/// box lane took.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grey {
+    /// The lane's reference where it runs, on the box or here: `acme@0`.
+    pub lane: String,
+    /// The box it runs on; `None` for this machine's lane.
+    pub host: Option<String>,
+    /// The box whose lane serves the hostnames; `None` when this machine's
+    /// lane does.
+    pub winner: Option<String>,
+    /// `m` can make it the one in use: false while this machine's lane runs,
+    /// and on daemons without `remote.use`.
+    pub can_use: bool,
+    /// `local_running`, `local_stopped`, `box_chosen` or `box_earlier`;
+    /// `None` from daemons without `remote.use`.
+    pub cause: Option<String>,
+    /// The daemon's words, for daemons that send no `cause`.
+    pub reason: String,
+}
+
 /// All TUI state.
 pub struct App {
     pub lanes: Vec<LaneSummary>,
@@ -2757,6 +2779,31 @@ impl App {
             .iter()
             .find(|host| host.host == lane.host)?;
         Some((host, lane.lane.clone()))
+    }
+
+    /// Why lane `reference` is not mirrored here; `None` while it is, or
+    /// while no box lane clashes with it.
+    pub fn grey(&self, reference: &str) -> Option<Grey> {
+        if let Some((host, lane)) = self.box_lane(reference) {
+            let skipped = host.skipped(&lane)?;
+            return Some(Grey {
+                winner: skipped.served_by().map(str::to_owned),
+                lane,
+                host: Some(host.host.clone()),
+                can_use: skipped.can_use,
+                cause: skipped.cause.clone(),
+                reason: skipped.reason.clone(),
+            });
+        }
+        let yielded = self.boxes.yielded.iter().find(|y| y.lane == reference)?;
+        Some(Grey {
+            lane: yielded.lane.clone(),
+            host: None,
+            winner: Some(yielded.winner.clone()),
+            can_use: true,
+            cause: Some("box_chosen".into()),
+            reason: String::new(),
+        })
     }
 
     /// The box lane `reference` runs on, `None` for this machine's lanes.

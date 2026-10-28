@@ -1,6 +1,6 @@
  devlanes  1 acme   2 billing   3 shop          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
- lanes  1 @0  2 @0 hetzner  3 @1 4/8  4 @2  5 @3  6 @4 hetzner                                  1-9 or [ ] switch lanes
-┌ @0 hetzner · 2/2 up ─────────────────────────┐┌ api-gateway  ready ────────────────────────────────────── on hetzner ┐
+ lanes  1 @0  2 @0 hetzner ○  3 @1 4/8  4 @2  5 @3  6 @4 hetzner                                1-9 or [ ] switch lanes
+┌ @0 hetzner · 2/2 up · not mirrored ──────────┐┌ api-gateway  ready ────────────────────────────────────── on hetzner ┐
 │ ▾ services                                 2 ││ ! Not mirrored here because acme@0 on this machine serves its        │
 │   ● api-gateway                              ││   hostnames.                                                         │
 │   ● web-app                                  ││   Its ports and hostnames are mirrored once that changes.            │
@@ -41,8 +41,8 @@
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold, 104-107 dim, 108-118 yellow
-1: 0-6 dim, 8-9 dim, 10-11 red, 13-26 bold reversed, 28-29 dim, 30-35 yellow, 38-41 dim, 44-45 dim, 46-47 yellow, 50-51 dim, 52-61 green, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
-2: 0 darkgray, 2-11 bold, 12-20 dim, 22-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 69-106 darkgray, 108-117 dim, 119 darkgray
+1: 0-6 dim, 8-9 dim, 10-11 red, 13-28 bold reversed, 30-31 dim, 32-37 yellow, 40-43 dim, 46-47 dim, 48-49 yellow, 52-53 dim, 54-63 green, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
+2: 0 darkgray, 2-11 bold, 12-35 dim, 37-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 69-106 darkgray, 108-117 dim, 119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray
 4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 119 darkgray
 5: 0 darkgray, 4-12 green, 47-48 darkgray, 119 darkgray

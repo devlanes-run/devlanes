@@ -104,6 +104,9 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
     if let Some(word) = word {
         name.push(Span::styled(format!(" · {word}"), theme.tone(Tone::Busy)));
     }
+    if app.grey(&lane.reference).is_some() {
+        name.push(Span::styled(" · not mirrored", theme.quiet()));
+    }
     name.push(Span::raw(" "));
     if app.selected_id() == Some(&RowId::WholeLane) {
         name = name
