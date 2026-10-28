@@ -73,6 +73,10 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         Some(index) if app.project_lanes().len() > 1 => {
             let counts = tree::counts(lane);
             name.push(Span::styled(format!("@{index}"), bold));
+            // The chip may cut the box's name; the title has room for all of it.
+            if let Some((host, _)) = &on_box {
+                name.push(Span::styled(format!(" {}", clean(&host.host)), bold));
+            }
             name.extend(power);
             name.push(Span::styled(
                 format!(" · {}/{} up", counts.up, counts.total),

@@ -2,7 +2,7 @@
 source: crates/tui/tests/it/boxes.rs
 expression: draw(&app)?.backend()
 ---
-" devlanes  1 acme   2 shop   3 acme @hetzner          ✕ 1 failed  Monitor  Daemon  Boxes · 2 issues "
+" devlanes  1 acme   2 shop                            ✕ 1 failed  Monitor  Daemon  Boxes · 2 issues "
 "┌ boxes ───────────────────────────────────────────────────────────────────────── 1 of 2 connected ┐"
 "│ ● hetzner                                                                        connected · ssh │"
 "│   link      connected since 2026-10-14 17:46                                                     │"

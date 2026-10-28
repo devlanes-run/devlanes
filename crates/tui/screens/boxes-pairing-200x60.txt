@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                       starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop                                                                                          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 0 of 3 connected ┐
 │ ! hetzner                                                                                                                                                                        needs pairing · ssh │
 │   link      waiting for a new pairing code, with ports and hostnames kept                                                                                                                            │
@@ -60,7 +60,7 @@
  enter type code   d disconnect   n new box   p pairing code   j k select   esc back                                                                                              ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
 1: 0-180 bold, 181-198 bold dim, 199 bold
 2: 0 bold, 2-3 reversed, 4-10 bold reversed, 11-197 reversed, 199 bold
 3: 0 bold, 4-13 dim, 14-74 yellow, 199 bold

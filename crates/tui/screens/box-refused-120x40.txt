@@ -1,6 +1,6 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox   on hetzner: devlanes r…  M  D  B · 3 issues
- lanes  1 @0  2 @4                                                                              1-9 or [ ] switch lanes
-┌ @4 · 6/7 up ─────────────────────────────────┐┌ api-gateway  ready ────────────────────────────────────── on hetzner ┐
+ devlanes  1 acme   2 billing   3 shop   on hetzner: devlanes restart acme@4:api-ga…  Monitor  Daemon  Boxes · 3 issues
+ lanes  1 main  2 @0  3 feat/checkout 4/8  4 fix/cache  5 spike/old-search  6 @4                1-9 or [ ] switch lanes
+┌ @4 hetzner · 6/7 up ─────────────────────────┐┌ api-gateway  ready ────────────────────────────────────── on hetzner ┐
 │ ▾ services                                 6 ││ ! r does not restart it here. On hetzner: ssh hetzner, then devlanes │
 │   ● api-gateway                              ││   restart acme@4:api-gateway                                         │
 │   ● web-app                                  ││                                                                      │
@@ -40,9 +40,9 @@
  o open in browser   z zoom   / filter   B boxes   read-only: manage it on hetzner                ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 101 bold, 104 bold, 107 bold, 108-118 yellow
-1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
-2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 69-106 darkgray, 108-117 dim, 119 darkgray
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold, 104-107 dim, 108-118 yellow
+1: 0-6 dim, 8-9 dim, 10-13 red, 16-17 dim, 18-19 green, 22-23 dim, 24-40 yellow, 43-53 dim, 56-57 dim, 58-73 yellow, 75-80 bold reversed, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
+2: 0 darkgray, 2-11 bold, 12-20 dim, 22-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 69-106 darkgray, 108-117 dim, 119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray
 4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 119 darkgray
 5: 0 darkgray, 4-12 green, 47-48 darkgray, 119 darkgray

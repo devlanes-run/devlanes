@@ -1,4 +1,4 @@
- devlanes  1 acme  ›  starting feat/checkout: 4 of 8 r…  M  D  Boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 3 issues
 ┌ boxes ────────────────────────────────────── 0 of 3 connected · j k for more ┐
 │ ! hetzner                                                needs pairing · ssh │
 │   link      waiting for a new pairing code, with ports and hostnames kept    │
@@ -24,7 +24,7 @@
  enter type code   d disconnect   n new box               ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 18-19 dim, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
 1: 0-45 bold, 46-78 bold dim, 79 bold
 2: 0 bold, 2-3 reversed, 4-10 bold reversed, 11-77 reversed, 79 bold
 3: 0 bold, 4-13 dim, 14-74 yellow, 79 bold

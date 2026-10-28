@@ -1482,9 +1482,11 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
         } else {
             " "
         };
-        let name = match lane.index {
-            Some(index) => format!("{} @{index}", lane_name(lane)),
-            None => format!("{} (no lane)", lane_name(lane)),
+        // A box lane has no branch here; its box names it.
+        let name = match (app.lane_box(&lane.reference), lane.index) {
+            (Some(boxed), Some(index)) => format!("@{index} on {}", clean(&boxed.host)),
+            (None, Some(index)) => format!("{} @{index}", lane_name(lane)),
+            (_, None) => format!("{} (no lane)", lane_name(lane)),
         };
         let mut spans = vec![
             Span::styled(format!("{marker} "), theme.focus()),

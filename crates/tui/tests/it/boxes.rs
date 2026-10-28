@@ -1,9 +1,9 @@
-//! Boxes in the TUI: box projects after the local ones, read-only lanes
+//! Boxes in the TUI: box lanes in the tab of their project, read-only lanes
 //! whose keys say where to act instead, the details pane and the boxes view.
 
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_proto::remote::MIRROR_EVENT;
-use devlanes_tui::app::{App, Effect, Focus, Msg, RowId, Section, Selected, View};
+use devlanes_tui::app::{App, Dialog, Effect, Focus, Msg, RowId, Section, Selected, View};
 use ratatui::{Terminal, backend::TestBackend};
 use serde_json::{Value, json};
 
@@ -120,16 +120,30 @@ fn acts(effects: &[Effect]) -> bool {
 }
 
 #[tokio::test]
-async fn box_projects_follow_the_local_ones_labelled_with_the_box() -> TestResult {
+async fn box_lanes_join_the_tab_of_their_project() -> TestResult {
     let mut app = with_boxes(100, 24).await;
-    assert_eq!(app.projects(), ["acme", "shop", "acme @hetzner"]);
-    // Shift+3: the box project, on its only lane.
-    let effects = app.update(key(KeyCode::Char('#')));
+    assert_eq!(app.projects(), ["acme", "shop"]);
+    let lanes: Vec<&str> = app
+        .project_lanes()
+        .iter()
+        .map(|lane| lane.reference.as_str())
+        .collect();
+    assert_eq!(lanes, ["acme@0", "acme@1", "acme@1 @hetzner", "acme@2"]);
+    // 3: the box lane, by its place in the bar.
+    let effects = app.update(key(KeyCode::Char('3')));
     assert!(!acts(&effects), "{effects:?}");
-    assert_eq!(app.project(), Some("acme @hetzner"));
+    assert_eq!(app.project(), Some("acme"));
     assert_eq!(
         app.selected.as_ref().map(|s| s.lane.as_str()),
         Some("acme@1 @hetzner")
+    );
+    // This machine's shared containers stay out of the box lane's infra.
+    assert!(
+        app.rows()
+            .iter()
+            .all(|row| !matches!(&row.id, RowId::Container(name) if name != "db")),
+        "{:?}",
+        app.rows()
     );
     // g: the lane itself, with the box's facts.
     app.update(key(KeyCode::Char('g')));
@@ -267,12 +281,12 @@ async fn actions_on_box_units_do_nothing_and_name_the_command_for_the_box() -> T
 async fn quitting_never_offers_to_stop_a_boxs_lanes() {
     let mut app = with_boxes(100, 24).await;
     select(&mut app, Selected::unit("acme@1 @hetzner", "web"));
-    let effects = app.update(key(KeyCode::Char('q')));
-    assert!(app.dialog.is_none(), "no quit dialog for a box lane");
-    assert!(
-        effects.iter().any(|e| matches!(e, Effect::Quit)),
-        "{effects:?}"
-    );
+    app.update(key(KeyCode::Char('q')));
+    // The tab's running lanes are this machine's acme@0 and hetzner's.
+    match &app.dialog {
+        Some(Dialog::Quit(dialog)) => assert_eq!(dialog.lanes, ["acme@0"]),
+        other => panic!("expected the quit dialog: {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -500,19 +514,38 @@ async fn remote_events_refetch_the_boxes_once_at_a_time() {
     assert_eq!(fetches(&app.update(state)), 0);
     assert_eq!(fetches(&app.update(Msg::Boxes(Ok(hosts())))), 1);
     assert_eq!(fetches(&app.update(Msg::Boxes(Ok(hosts())))), 0);
-    assert_eq!(
-        app.projects().last().map(String::as_str),
-        Some("acme @hetzner")
-    );
-    // A box that goes away takes its project, and the selection moves on.
+    assert!(app.lane("acme@1 @hetzner").is_some());
+    // A box that goes away takes its lanes, and the selection moves to the
+    // nearest lane left in the project.
     select(&mut app, Selected::unit("acme@1 @hetzner", "web"));
     app.update(Msg::Boxes(Ok(json!({"items": []}))));
     assert_eq!(app.projects(), ["acme", "shop"]);
-    assert!(
-        app.selected
-            .as_ref()
-            .is_some_and(|s| !s.lane.ends_with("@hetzner")),
-        "{:?}",
-        app.selected
+    assert_eq!(
+        app.selected.as_ref().map(|s| s.lane.as_str()),
+        Some("acme@1")
     );
+}
+
+#[tokio::test]
+async fn a_project_only_boxes_run_gets_one_tab() {
+    let listing = |host: &str| {
+        json!({"host": host, "state": "connected", "transport": "ssh",
+            "registry": {"lanes": [{"key": {"project": "billing", "lane": "0"}, "index": 0}], "units": []}})
+    };
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    app.update(Msg::Boxes(Ok(
+        json!({"items": [listing("fork-b"), listing("fork-a")]}),
+    )));
+    assert_eq!(app.projects(), ["acme", "shop", "billing"]);
+    app.update(key(KeyCode::Tab));
+    app.update(key(KeyCode::Tab));
+    assert_eq!(app.project(), Some("billing"));
+    // One number, the boxes by name.
+    let lanes: Vec<&str> = app
+        .project_lanes()
+        .iter()
+        .map(|lane| lane.reference.as_str())
+        .collect();
+    assert_eq!(lanes, ["billing@0 @fork-a", "billing@0 @fork-b"]);
 }

@@ -1,4 +1,4 @@
- devlanes  1 acme  ›  starting feat/checkout: 4 of 8 r…  M  D  Boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 3 issues
 ┌ boxes ────────────────────────────────────── 1 of 3 connected · j k for more ┐
 │ ⠋ devbox                                              reconnecting · command │
 │   link      next try in 8s                                                   │
@@ -24,7 +24,7 @@
  x revoke   n new box   p pairing code   j k select       ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 18-19 dim, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
 1: 0 darkgray, 1-7 bold, 8-45 darkgray, 46-78 dim, 79 darkgray
 2: 0 darkgray, 4-9 bold, 68-77 dim, 79 darkgray
 3: 0 darkgray, 4-13 dim, 14-27 yellow, 79 darkgray

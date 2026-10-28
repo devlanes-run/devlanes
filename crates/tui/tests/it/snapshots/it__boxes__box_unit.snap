@@ -2,8 +2,9 @@
 source: crates/tui/tests/it/boxes.rs
 expression: draw(&app)?.backend()
 ---
-" devlanes  1 acme   2 shop   3 acme @hetzner                      Monitor  Daemon  Boxes · 2 issues "
-"┌ acme@1 on hetzner ───────────────────┐┌ worker  running ───────────────────────────── on hetzner ┐"
+" devlanes  1 acme   2 shop                            ✕ 1 failed  Monitor  Daemon  Boxes · 2 issues "
+" lanes  1 main  2 feat/login  3 @1  4 fix/cache                             1-9 or [ ] switch lanes "
+"┌ @1 hetzner · 3/3 up ─────────────────┐┌ worker  running ───────────────────────────── on hetzner ┐"
 "│ ▾ services                         2 ││ state     running on the box                             │"
 "│   ● web                              ││ ports     default 24101  in use here by postgres (pid    │"
 "│   ◉ worker                           ││                          812)                            │"
@@ -14,7 +15,6 @@ expression: draw(&app)?.backend()
 "│ ▾ infra                              ││                                                          │"
 "│   ▾ containers                  1 up ││                                                          │"
 "│     ● db                             ││                                                          │"
-"│                                      ││                                                          │"
 "│                                      ││                                                          │"
 "│                                      ││                                                          │"
 "│                                      ││                                                          │"

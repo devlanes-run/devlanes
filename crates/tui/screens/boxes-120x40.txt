@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox   starting feat/chec…  M  D  Boxes · 3 issues
+ devlanes  1 acme   2 billing   3 shop          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────── 1 of 3 connected ┐
 │ ● hetzner                                                                                            connected · ssh │
 │   link      connected since 2026-10-14 15:32                                                                         │
@@ -40,7 +40,7 @@
  enter disconnect   n new box   p pairing code   j k select   esc back                            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 41-42 dim, 43-55 green, 59-60 dim, 61-72 green, 97 bold, 100 bold, 103-107 bold underlined, 108-118 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103-107 bold underlined, 108-118 yellow
 1: 0-100 bold, 101-118 bold dim, 119 bold
 2: 0 bold, 2-3 reversed, 4-10 bold reversed, 11-117 reversed, 119 bold
 3: 0 bold, 4-13 dim, 119 bold

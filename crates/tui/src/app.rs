@@ -1033,9 +1033,12 @@ pub enum BoxPart {
 pub struct BoxesView {
     /// `host.list` as last fetched.
     pub hosts: Vec<crate::boxes::BoxHost>,
-    /// The connected boxes' lanes, read-only, as the list draws them; they
-    /// come after this machine's lanes and never mix with them.
-    pub lanes: Vec<LaneSummary>,
+    /// The connected boxes' lanes, read-only, as the list draws them. They
+    /// join the tab of this machine's project of the same name, after its
+    /// lanes in [`App::all_lanes`].
+    pub lanes: Vec<crate::boxes::BoxLane>,
+    /// This machine's stopped lanes whose hostnames a chosen box lane took.
+    pub yielded: Vec<crate::boxes::YieldedLane>,
     /// Seconds since `hosts` arrived, so a retry countdown can count down.
     pub age: u64,
     /// The clients of this machine as a box (`remote.clients`).
@@ -2719,13 +2722,15 @@ impl App {
         // Box lanes only when this machine has none of its own.
         running
             .or(self.lanes.first())
-            .or(self.boxes.lanes.first())
+            .or(self.boxes.lanes.first().map(|lane| &lane.summary))
             .map(|lane| lane.reference.clone())
     }
 
     /// Every lane the list can show: this machine's, then the boxes'.
     pub fn all_lanes(&self) -> impl Iterator<Item = &LaneSummary> {
-        self.lanes.iter().chain(&self.boxes.lanes)
+        self.lanes
+            .iter()
+            .chain(self.boxes.lanes.iter().map(|lane| &lane.summary))
     }
 
     /// A lane by reference, local or of a box.
@@ -2733,13 +2738,30 @@ impl App {
         self.all_lanes().find(|lane| lane.reference == reference)
     }
 
+    /// The box lane `reference` (`acme@1 @hetzner`); `None` for this
+    /// machine's lanes.
+    pub fn lane_box(&self, reference: &str) -> Option<&crate::boxes::BoxLane> {
+        self.boxes
+            .lanes
+            .iter()
+            .find(|lane| lane.summary.reference == reference)
+    }
+
     /// The box behind the box lane `reference`, with the lane's own reference
     /// on the box (`acme@1`); `None` for this machine's lanes.
     pub fn box_lane(&self, reference: &str) -> Option<(&crate::boxes::BoxHost, String)> {
-        self.boxes.hosts.iter().find_map(|host| {
-            let lane = reference.strip_suffix(&format!(" @{}", host.host))?;
-            host.lane(lane).map(|_| (host, lane.to_owned()))
-        })
+        let lane = self.lane_box(reference)?;
+        let host = self
+            .boxes
+            .hosts
+            .iter()
+            .find(|host| host.host == lane.host)?;
+        Some((host, lane.lane.clone()))
+    }
+
+    /// The box lane `reference` runs on, `None` for this machine's lanes.
+    fn host_of_lane(&self, reference: &str) -> Option<&str> {
+        self.lane_box(reference).map(|lane| lane.host.as_str())
     }
 
     /// Whether a spinner is on screen somewhere, so the runtime redraws often.
@@ -2848,8 +2870,8 @@ impl App {
 
     // ---- tree -------------------------------------------------------------
 
-    /// Project names in tab order: this machine's, then the boxes'
-    /// (`acme @hetzner`).
+    /// Project names in tab order: this machine's, then those only boxes
+    /// run. A box lane joins the tab of the project with its name.
     pub fn projects(&self) -> Vec<String> {
         let mut projects: Vec<String> = Vec::new();
         for lane in self.all_lanes() {
@@ -2865,15 +2887,26 @@ impl App {
         self.selected_lane().map(|lane| lane.project.as_str())
     }
 
-    /// The lanes of the project shown, in chip order.
+    /// The lanes of the project shown, in chip order: by number, this
+    /// machine's lane first, then the boxes' by name.
     pub fn project_lanes(&self) -> Vec<&LaneSummary> {
         let Some(project) = self.project() else {
             return Vec::new();
         };
         // Lanes that exist; a worktree without one is not a lane to switch to.
-        self.all_lanes()
+        let mut lanes: Vec<&LaneSummary> = self
+            .all_lanes()
             .filter(|l| l.project == project && l.index.is_some())
-            .collect()
+            .collect();
+        // `None` sorts first, so this machine's lane leads its number.
+        lanes.sort_by_key(|lane| (lane.index, self.host_of_lane(&lane.reference)));
+        lanes
+    }
+
+    /// Whether lanes `a` and `b` run on the same machine: both here, or both
+    /// on one box.
+    fn same_machine(&self, a: &LaneSummary, b: &LaneSummary) -> bool {
+        self.host_of_lane(&a.reference) == self.host_of_lane(&b.reference)
     }
 
     /// The selected lane's rows as a tree, filtered.
@@ -2887,18 +2920,19 @@ impl App {
 
     /// A lane's tree with the project's shared containers.
     fn lane_tree(&self, lane: &LaneSummary, filter: Option<&str>) -> Vec<Node> {
-        let shared = self.shared_containers(&lane.project);
+        let shared = self.shared_containers(lane);
         tree::tree(lane, &shared, self.task_list(&lane.reference), filter)
     }
 
-    /// The project's shared containers, once each, from whichever of its
-    /// lanes reports them, so every lane lists them even when its own infra
-    /// is not up.
-    pub fn shared_containers(&self, project: &str) -> Vec<devlanes_proto::ContainerSummary> {
+    /// The shared containers of `lane`'s project, once each, from whichever
+    /// of its lanes reports them, so every lane lists them even when its own
+    /// infra is not up. Only lanes on `lane`'s machine count: a box lane in
+    /// the same tab shares nothing with this machine's.
+    pub fn shared_containers(&self, lane: &LaneSummary) -> Vec<devlanes_proto::ContainerSummary> {
         let mut shared: Vec<devlanes_proto::ContainerSummary> = Vec::new();
         for container in self
             .all_lanes()
-            .filter(|lane| lane.project == project)
+            .filter(|other| other.project == lane.project && self.same_machine(lane, other))
             .flat_map(|lane| lane.containers.iter())
             .filter(|c| c.shared)
         {
@@ -2922,7 +2956,7 @@ impl App {
             .find(|c| c.name == name)
             .cloned()
             .or_else(|| {
-                self.shared_containers(&lane.project)
+                self.shared_containers(lane)
                     .into_iter()
                     .find(|c| c.name == name)
             })
@@ -3193,28 +3227,27 @@ impl App {
     }
 
     /// A lane of the project `gone` belonged to, numbered closest to it (the
-    /// lower one on a tie); `None` when that project has no lanes left.
+    /// lower one on a tie), on the same machine when one is left there;
+    /// `None` when that project has no lanes left.
     fn neighbour_of(&self, gone: &str) -> Option<String> {
         let project = self
             .project_lane
             .iter()
             .find(|(_, lane)| lane.as_str() == gone)
             .map(|(project, _)| project.clone())?;
-        // A box lane is `acme@1 @<box>`, and box names may hold `@`
-        // (`user@host`); the lane part never holds a space.
-        let index = |reference: &str| {
-            let lane = reference
-                .split_once(" @")
-                .map_or(reference, |(lane, _)| lane);
-            lane.rsplit_once('@')
-                .and_then(|(_, n)| n.parse::<i64>().ok())
-        };
-        let target = index(gone).unwrap_or(0);
+        // The lane is gone, so its reference is all that says where it ran.
+        let host = crate::boxes::host_of(gone);
+        let lane = gone.split_once(" @").map_or(gone, |(lane, _)| lane);
+        let target = lane
+            .rsplit_once('@')
+            .and_then(|(_, n)| n.parse::<i64>().ok())
+            .unwrap_or(0);
         self.all_lanes()
             .filter(|lane| lane.project == project)
             .min_by_key(|lane| {
                 let n = lane.index.map_or(i64::MAX / 2, i64::from);
-                ((n - target).abs(), n)
+                let elsewhere = self.host_of_lane(&lane.reference) != host;
+                (elsewhere, (n - target).abs(), n)
             })
             .map(|lane| lane.reference.clone())
     }
@@ -4109,6 +4142,7 @@ impl App {
                     .iter()
                     .flat_map(crate::boxes::BoxHost::lanes)
                     .collect();
+                self.boxes.yielded = crate::boxes::parse_yielded(&value);
                 self.boxes.age = 0;
                 self.after_change(effects);
             }
