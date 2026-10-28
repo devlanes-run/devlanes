@@ -1607,13 +1607,22 @@ impl Drop for BringupMark {
 /// One start's or `infra up`'s share of the lane's `claiming` count.
 pub(crate) struct ClaimMark {
     lane: Arc<LaneRt>,
+    engine: std::sync::Weak<Inner>,
 }
 
 impl Drop for ClaimMark {
     /// Ends this share; the lane's units and containers count from then on.
+    /// Publishes, so a start that failed or left only containers up gives
+    /// box lanes back or reports what holds the ports, whichever way it
+    /// returned.
     fn drop(&mut self) {
-        let mut st = self.lane.st();
-        st.claiming = st.claiming.saturating_sub(1);
+        {
+            let mut st = self.lane.st();
+            st.claiming = st.claiming.saturating_sub(1);
+        }
+        if let Some(engine) = self.engine.upgrade() {
+            engine.publish_routes();
+        }
     }
 }
 
@@ -1621,9 +1630,12 @@ impl Inner {
     /// Counts `lane` as running for box lanes it clashes with until the mark
     /// drops, and waits until the mirrors gave those lanes up, so their ports
     /// are free before infra or a service binds them.
-    pub(crate) async fn claim_ports(&self, lane: &Arc<LaneRt>) -> ClaimMark {
+    pub(crate) async fn claim_ports(self: &Arc<Self>, lane: &Arc<LaneRt>) -> ClaimMark {
         lane.st().claiming += 1;
-        let mark = ClaimMark { lane: lane.clone() };
+        let mark = ClaimMark {
+            lane: lane.clone(),
+            engine: Arc::downgrade(self),
+        };
         let (version, _) = self.reassign();
         self.await_applied(version).await;
         mark

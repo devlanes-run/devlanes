@@ -237,10 +237,13 @@ pub enum Method {
     /// (its hostnames that clash), `box` and `reason`, plus `cause`
     /// (`local_running`, `local_stopped`, `box_chosen` or `box_earlier`),
     /// `winner` (the box whose lane serves the hostnames, null when a lane of
-    /// this machine does) and `can_use`, false while a running local lane
-    /// wins. The reply's top level has `yielded_local_lanes`, a list of
-    /// `{lane, winner}`: this machine's stopped lanes whose hostnames a chosen
-    /// box lane serves.
+    /// this machine does), `winner_lane` (the lane in use) and `can_use`,
+    /// false while a running local lane wins. With cause `local_running` the
+    /// entry also has `holds` (`processes` or `containers`), and
+    /// `compose_project` and `containers` while the local lane's own
+    /// containers hold ports. The reply's top level has
+    /// `yielded_local_lanes`, a list of `{lane, winner}`: this machine's
+    /// stopped lanes whose hostnames a chosen box lane took.
     #[serde(rename = "host.list")]
     HostList,
     /// Client side, for `devlanes remote use` and the TUI: chooses which lane
@@ -265,9 +268,10 @@ pub enum Method {
     /// such lane), `local_lane_running` (a running local lane, named by
     /// `local_lane`, keeps the hostnames or has the same reference. Its
     /// `holds` is `processes` when units run there, or `containers` when
-    /// only the lane's own containers do, with `compose_project` and the
-    /// plain `containers` by Docker name, so the message can name the
-    /// commands that stop them) and
+    /// only the lane's own containers that publish a host port do. While
+    /// such containers are up, with processes or not, it also has
+    /// `compose_project` and the plain `containers` by Docker name, so the
+    /// message can name every command that frees the ports) and
     /// `local_lane_unknown` (`host: null` for a lane this machine does not
     /// have). Calls run one at a time, and never during `remote disconnect`.
     #[serde(rename = "remote.use")]
@@ -1344,8 +1348,10 @@ pub mod remote {
     /// lane stops being mirrored for another reason than a choice. With
     /// cause `local_running` it also has `holds`, and for `containers`
     /// `compose_project` and `containers`, as `local_lane_running` has.
-    /// `choice_cleared` carries `lane`, `host` (the box whose choice a
-    /// starting local lane deleted, connected or not) and `local_lane`. `lane_switched` is a notice, not a
+    /// `choice_cleared` carries `lane`, `host` (the box whose choice a local
+    /// lane that holds its ports deleted, connected or not), `local_lane` and
+    /// `holds`, `containers` when only that lane's containers run, such as
+    /// ones that came back after a reboot. `lane_switched` is a notice, not a
     /// problem: `lane`, `to` and `from` (boxes, null for this machine) and
     /// `message`, after `remote.use` moved a lane.
     pub const WARNING_EVENT: &str = "remote.warning";

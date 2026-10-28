@@ -1662,17 +1662,44 @@ impl ContainerInfra {
         project: &str,
         containers: &BTreeMap<String, Vec<String>>,
         health: &BTreeMap<String, devlanes_infra_compose::Health>,
+        endpoints: &devlanes_infra_compose::Endpoints,
         shared: bool,
     ) {
         for (service, names) in containers {
             let state = health.get(service).map(compose_state);
+            let publishes = endpoints
+                .get(service)
+                .is_some_and(|endpoint| endpoint.port.is_some() || !endpoint.ports.is_empty());
             targets.extend(names.iter().map(|docker| InfraContainer {
                 name: service.clone(),
                 docker: docker.clone(),
                 shared,
                 compose_project: Some(project.to_owned()),
+                publishes,
                 state: state.clone(),
             }));
+        }
+    }
+
+    /// Sets the state of the plain containers among `targets` from what
+    /// Docker lists for their project, by name. A daemon that restarted knows
+    /// them only this way, and a container Docker doesn't list is `missing`.
+    fn plain_states(
+        targets: &mut [InfraContainer],
+        managed: &[devlanes_infra_docker::ManagedContainer],
+    ) {
+        for target in targets
+            .iter_mut()
+            .filter(|target| target.compose_project.is_none())
+        {
+            let state = managed
+                .iter()
+                .find(|container| container.name == target.docker)
+                .map_or_else(
+                    || "missing".to_owned(),
+                    |container| docker_state(&container.health),
+                );
+            target.state = Some(state);
         }
     }
 
@@ -1693,6 +1720,7 @@ impl ContainerInfra {
             ),
             shared: container.scope == devlanes_infra_docker::Scope::Shared,
             compose_project: None,
+            publishes: !container.ports.is_empty(),
             state: state.map(str::to_owned),
         }));
     }
@@ -1818,6 +1846,7 @@ impl InfraProvider for ContainerInfra {
                 &shared.project,
                 &shared.containers,
                 &shared.health,
+                &shared.endpoints,
                 true,
             );
             report.insert("shared".into(), json!(shared));
@@ -1858,6 +1887,7 @@ impl InfraProvider for ContainerInfra {
                 &lane_report.project,
                 &lane_report.containers,
                 &lane_report.health,
+                &lane_report.endpoints,
                 false,
             );
             report.insert("lane".into(), json!(lane_report));
@@ -1918,6 +1948,7 @@ impl InfraProvider for ContainerInfra {
                 &shared.project,
                 &shared.containers,
                 &shared.health,
+                &shared.endpoints,
                 true,
             );
         }
@@ -1928,12 +1959,21 @@ impl InfraProvider for ContainerInfra {
                 &lane.project,
                 &lane.containers,
                 &lane.health,
+                &lane.endpoints,
                 false,
             );
         }
         if let Ok(containers) = Self::containers(spec) {
             Self::container_namespace(&mut namespace, &containers);
             Self::plain_targets(&mut targets, &containers, None);
+            // Without it the daemon wouldn't know which run, and a lane whose
+            // containers hold its ports would let a box take them.
+            if !containers.is_empty()
+                && let Some(docker) = &self.docker
+                && let Ok(managed) = docker.list_managed(&spec.project).await
+            {
+                Self::plain_states(&mut targets, &managed);
+            }
         }
         Ok(InfraUp {
             namespace: Value::Object(namespace),
@@ -2321,6 +2361,21 @@ fn compose_state(health: &devlanes_infra_compose::Health) -> String {
     }
 }
 
+/// A plain container's health as the `state` its target carries, spelled
+/// like [`compose_state`].
+fn docker_state(health: &devlanes_infra_docker::Health) -> String {
+    use devlanes_infra_docker::Health;
+    match health {
+        Health::Running => "running".into(),
+        Health::Starting => "starting".into(),
+        Health::Healthy => "healthy".into(),
+        Health::Unhealthy => "unhealthy".into(),
+        Health::Exited { code } => format!("exited {code}"),
+        Health::Other { state } => state.clone(),
+        Health::Missing => "missing".into(),
+    }
+}
+
 /// A compose service's health as start progress.
 fn compose_progress(
     (name, health): (&String, &devlanes_infra_compose::Health),
@@ -2382,6 +2437,38 @@ mod tests {
         async fn ask(&self, _prompt: RemotePrompt) -> Option<String> {
             None
         }
+    }
+
+    /// Plain containers listed from their spec get the state Docker reports
+    /// by name, so a restarted daemon knows which ones run. Compose targets
+    /// keep theirs, and a container Docker doesn't list is `missing`.
+    #[test]
+    fn plain_containers_get_their_state_from_docker() {
+        let target = |docker: &str, compose: Option<&str>| InfraContainer {
+            name: docker.into(),
+            docker: docker.into(),
+            shared: false,
+            compose_project: compose.map(str::to_owned),
+            publishes: true,
+            state: compose.map(|_| "healthy".to_owned()),
+        };
+        let mut targets = vec![
+            target("devlanes-acme-lane0-cerbos", None),
+            target("devlanes-acme-lane0-search", None),
+            target("acme-lane0-db-1", Some("acme-lane0")),
+        ];
+        let managed = devlanes_infra_docker::ManagedContainer {
+            id: "c1".into(),
+            name: "devlanes-acme-lane0-cerbos".into(),
+            key: Some("cerbos".into()),
+            scope: Some(devlanes_infra_docker::Scope::Lane(0)),
+            health: devlanes_infra_docker::Health::Running,
+            ports: BTreeMap::from([(3592, 21050)]),
+            config_hash: None,
+        };
+        ContainerInfra::plain_states(&mut targets, &[managed]);
+        let states: Vec<Option<&str>> = targets.iter().map(|t| t.state.as_deref()).collect();
+        assert_eq!(states, [Some("running"), Some("missing"), Some("healthy")]);
     }
 
     /// The command transport's list of devlanes' own variables names the

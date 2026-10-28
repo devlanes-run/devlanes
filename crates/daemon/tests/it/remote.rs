@@ -99,8 +99,11 @@ async fn engine_with(
 ) -> Harness {
     let runner = FakeRunner::default();
     let processes = FakeProcesses::default();
+    let infra = FakeInfra::default();
     let mut integ = Integrations::with_runner(Arc::new(runner.clone()));
     integ.processes = Arc::new(processes.clone());
+    // Only projects with `infra` reach it.
+    integ.infra = Arc::new(infra.clone());
     if let Some(remote) = remote {
         integ.remote = remote;
     }
@@ -121,7 +124,7 @@ async fn engine_with(
     Harness {
         engine,
         runner,
-        infra: FakeInfra::default(),
+        infra,
         processes,
         home: home.to_path_buf(),
         idle,

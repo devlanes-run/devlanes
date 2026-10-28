@@ -39,21 +39,18 @@ impl Remotes {
 
 /// Whether a local lane holds its ports, so it wins over every box lane it
 /// clashes with: from the start of a start that passed its checks, while a
-/// unit or an orphan runs, and while its own containers are up. Shared
-/// containers of the project bind no port of the lane's block. Returns what
-/// holds them.
+/// unit or an orphan runs, and while one of its own containers that
+/// publishes a host port is up. Shared containers bind no port of the lane's
+/// block, and a container without a published port can't take one from a
+/// box. Returns what holds them.
 pub(crate) fn hold(st: &LaneSt) -> Option<Hold> {
-    if st.claiming > 0 || st.any_running() {
-        return Some(Hold::Processes);
-    }
     let own: Vec<_> = st
         .infra_containers
         .iter()
-        .filter(|container| !container.shared && container_up(container.state.as_deref()))
+        .filter(|container| {
+            !container.shared && container.publishes && container_up(container.state.as_deref())
+        })
         .collect();
-    if own.is_empty() {
-        return None;
-    }
     let compose_project = own
         .iter()
         .find_map(|container| container.compose_project.clone());
@@ -63,19 +60,25 @@ pub(crate) fn hold(st: &LaneSt) -> Option<Hold> {
         .map(|container| container.docker.clone())
         .collect();
     containers.sort();
-    Some(Hold::Containers {
+    let running = st.any_running();
+    let mut hold = Hold {
+        processes: st.claiming > 0 || running,
+        starting: false,
         compose_project,
         containers,
-    })
+    };
+    hold.starting = st.claiming > 0 && !running && !hold.has_containers();
+    (hold.processes || hold.has_containers()).then_some(hold)
 }
 
 /// Whether a container in `state` binds its ports. A state nobody reported
 /// yet counts as down: a plain container listed from its spec may never have
 /// run, and refusing a choice for it would ask to stop what isn't there.
+/// `oom` counts as up, since running out of memory doesn't stop it.
 fn container_up(state: Option<&str>) -> bool {
     matches!(
         state,
-        Some("running" | "starting" | "healthy" | "unhealthy" | "restarting" | "paused")
+        Some("running" | "starting" | "healthy" | "unhealthy" | "restarting" | "paused" | "oom")
     )
 }
 
@@ -86,16 +89,13 @@ fn local_running(host: &str, lane: &str, running: &str, hold: &Hold) -> RpcError
     if let Some(fields) = data.as_object_mut() {
         fields.extend(hold.fields());
     }
-    let them = match hold {
-        Hold::Processes => "it",
-        Hold::Containers { .. } => "them",
-    };
     use_error(
         "local_lane_running",
         data,
         format!(
-            "{}. Stop {them} with {}, then run devlanes remote use {host} {lane}.",
+            "{}. Stop {} with {}, then run devlanes remote use {host} {lane}.",
             hold.runs(running),
+            hold.them(),
             hold.stop_command(running)
         ),
         1,
@@ -205,7 +205,14 @@ impl Inner {
                         let local = next
                             .skip(host, lane)
                             .map_or_else(|| lane.clone(), |skip| skip.winner_lane.clone());
-                        cleared.push((lane.clone(), host.clone(), local));
+                        // Containers that came back by themselves, after a
+                        // reboot say, are no start.
+                        let containers = lanes
+                            .iter()
+                            .find(|candidate| candidate.lane == local)
+                            .and_then(|candidate| candidate.hold.as_ref())
+                            .is_some_and(|hold| !hold.processes);
+                        cleared.push((lane.clone(), host.clone(), local, containers));
                     }
                 }
                 stored.clone()
@@ -329,14 +336,18 @@ impl Inner {
         (lanes, boxes)
     }
 
-    /// Reports each choice a starting local lane cleared and deletes it from
-    /// the store in the background, unless another choice replaced it.
-    fn announce_cleared(&self, cleared: Vec<(String, String, String)>) {
-        for (lane, host, local) in cleared {
-            let message = format!(
-                "{local} started on this machine, so {host}'s {lane} is no longer mirrored or chosen."
-            );
-            tracing::info!(%host, %lane, %local, "a starting local lane cleared a lane choice");
+    /// Reports each choice a local lane that holds its ports cleared, as
+    /// `(lane, box, local lane, held by containers only)`, and deletes it
+    /// from the store in the background, unless another choice replaced it.
+    fn announce_cleared(&self, cleared: Vec<(String, String, String, bool)>) {
+        for (lane, host, local, containers) in cleared {
+            let runs = if containers {
+                format!("{local}'s containers run on this machine")
+            } else {
+                format!("{local} started on this machine")
+            };
+            let message = format!("{runs}, so {host}'s {lane} is no longer mirrored or chosen.");
+            tracing::info!(%host, %lane, %local, "a local lane cleared a lane choice");
             self.bus.emit(
                 wire::WARNING_EVENT,
                 json!({
@@ -344,6 +355,7 @@ impl Inner {
                     "code": "choice_cleared",
                     "lane": lane,
                     "local_lane": local,
+                    "holds": if containers { "containers" } else { "processes" },
                     "message": message,
                 }),
             );
@@ -440,8 +452,9 @@ impl Inner {
                         1,
                     ));
                 }
-                // Whatever took the lane's hostnames, also a choice of another
-                // project's lane.
+                // Deleting only this lane's own choice would leave a chosen
+                // lane of another project holding the names, and `--local`
+                // would change nothing.
                 let hosts: BTreeSet<String> = local
                     .iter()
                     .filter(|route| route.lane == lane)
@@ -574,7 +587,7 @@ impl Inner {
             .skip(host, lane)
             .filter(|skip| skip.cause == Cause::LocalRunning)
         {
-            let hold = skip.hold.clone().unwrap_or(Hold::Processes);
+            let hold = skip.hold.clone().unwrap_or_else(Hold::processes);
             return Err(local_running(host, lane, &skip.winner_lane, &hold));
         }
         Ok(true)
@@ -629,16 +642,25 @@ mod tests {
             docker: docker.into(),
             shared,
             compose_project: compose.map(str::to_owned),
+            publishes: true,
             state: state.map(str::to_owned),
         }
     }
 
-    /// Only the lane's own containers that are up hold its ports, and the
-    /// refusal names the commands that stop exactly those. Shared
-    /// containers, stopped ones and ones nobody reported on count as down.
+    /// Only the lane's own containers that are up and publish a host port
+    /// hold its ports, and the refusal names the commands that stop exactly
+    /// those. Shared containers, stopped ones, ones nobody reported on and
+    /// ones without a published port count as down. `oom` counts as up.
     #[test]
     fn a_lane_held_by_its_containers_names_them() {
         let mut st = LaneSt::new("id".into(), "/repo".into(), None, true);
+        let mut worker = container(
+            "acme-lane0-worker-1",
+            false,
+            Some("acme-lane0"),
+            Some("running"),
+        );
+        worker.publishes = false;
         st.infra_containers = vec![
             container("acme-cache-1", true, Some("acme"), Some("running")),
             container(
@@ -648,23 +670,20 @@ mod tests {
                 Some("exited 0"),
             ),
             container("devlanes-acme-lane0-search", false, None, None),
+            worker,
         ];
         assert_eq!(hold(&st), None);
         st.infra_containers.extend([
-            container(
-                "acme-lane0-db-1",
-                false,
-                Some("acme-lane0"),
-                Some("healthy"),
-            ),
+            container("acme-lane0-db-1", false, Some("acme-lane0"), Some("oom")),
             container("devlanes-acme-lane0-cerbos", false, None, Some("running")),
         ]);
         let held = hold(&st).expect("held");
         assert_eq!(
             held,
-            Hold::Containers {
+            Hold {
                 compose_project: Some("acme-lane0".into()),
                 containers: vec!["devlanes-acme-lane0-cerbos".into()],
+                ..Hold::default()
             }
         );
         let error = local_running("fork-b", "acme@0", "acme@0", &held);
@@ -680,9 +699,18 @@ mod tests {
             "acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos, then run devlanes remote use fork-b acme@0."
         );
 
+        // Processes and containers both up: both commands, so one refusal
+        // is enough.
         st.claiming = 1;
         let error = local_running("fork-b", "acme@0", "acme@0", &hold(&st).expect("held"));
         assert_eq!(error.data["holds"], "processes");
+        assert_eq!(error.data["compose_project"], "acme-lane0");
+        assert_eq!(
+            error.data["message"],
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos, then run devlanes remote use fork-b acme@0."
+        );
+        st.infra_containers.clear();
+        let error = local_running("fork-b", "acme@0", "acme@0", &hold(&st).expect("held"));
         assert!(error.data.get("compose_project").is_none());
         assert_eq!(
             error.data["message"],

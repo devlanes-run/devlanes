@@ -126,9 +126,17 @@ async fn start_forks(
     (alpha, beta)
 }
 
-/// Subscribes to the client's events, as an attached CLI would.
-fn subscribe(client: &ClientSide, id: u64) -> (Session, mpsc::Receiver<Frame>, JoinHandle<()>) {
-    let (session, frames) = Session::local(id);
+/// How long a test waits for an event it expects.
+const EVENT_WAIT: Duration = Duration::from_secs(10);
+
+/// Subscribes to the client's events, as an attached CLI would, and returns
+/// once the subscription is in place: every event from then on reaches
+/// `frames`, and none from before does.
+async fn subscribe(
+    client: &ClientSide,
+    id: u64,
+) -> (Session, mpsc::Receiver<Frame>, JoinHandle<()>) {
+    let (session, mut frames) = Session::local(id);
     let request = Request {
         id: 1,
         method: Method::Subscribe,
@@ -140,28 +148,75 @@ fn subscribe(client: &ClientSide, id: u64) -> (Session, mpsc::Receiver<Frame>, J
     let task = tokio::spawn(async move {
         let _ = engine.handle(request, watching).await;
     });
-    (session, frames, task)
-}
-
-/// The `remote.warning` events received within `wait`.
-async fn warnings_within(frames: &mut mpsc::Receiver<Frame>, wait: Duration) -> Vec<Value> {
-    let mut found = Vec::new();
-    let _ = tokio::time::timeout(wait, async {
+    // The first event a subscriber gets is its own resync.
+    let subscribed = tokio::time::timeout(EVENT_WAIT, async {
         while let Some(frame) = frames.recv().await {
             if let Frame::Control(Control::Event(event)) = frame
-                && event.event == "remote.warning"
+                && event.event == devlanes_proto::events::RESYNC
             {
-                found.push(event.data);
+                return;
             }
         }
     })
     .await;
+    assert!(subscribed.is_ok(), "the subscription starts");
+    (session, frames, task)
+}
+
+/// The `remote.warning` events up to and including the first one `last`
+/// accepts. Fails when it doesn't arrive within [`EVENT_WAIT`].
+async fn warnings_until(
+    frames: &mut mpsc::Receiver<Frame>,
+    last: impl Fn(&Value) -> bool,
+) -> Vec<Value> {
+    let mut found = Vec::new();
+    let arrived = tokio::time::timeout(EVENT_WAIT, async {
+        while let Some(frame) = frames.recv().await {
+            if let Frame::Control(Control::Event(event)) = frame
+                && event.event == "remote.warning"
+            {
+                let done = last(&event.data);
+                found.push(event.data);
+                if done {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await;
+    assert_eq!(arrived, Ok(true), "the expected warning arrives: {found:?}");
     found
 }
 
-/// The `remote.warning` events received within a short while.
-async fn warnings(frames: &mut mpsc::Receiver<Frame>) -> Vec<Value> {
-    warnings_within(frames, Duration::from_secs(2)).await
+/// [`warnings_until`] a warning with `code` about `lane`.
+async fn warnings_until_code(
+    frames: &mut mpsc::Receiver<Frame>,
+    code: &str,
+    lane: &str,
+) -> Vec<Value> {
+    warnings_until(frames, |w| w["code"] == code && w["lane"] == lane).await
+}
+
+/// Asserts that no warning in `seen` has one of `codes`.
+fn none_of(seen: &[Value], codes: &[&str]) {
+    for code in codes {
+        assert!(
+            !seen.iter().any(|w| w["code"] == *code),
+            "no {code}: {seen:?}"
+        );
+    }
+}
+
+/// Whether no port box `host` lists has a conflict.
+async fn no_port_conflicts(client: &ClientSide, host: &str) -> bool {
+    client.host_named(host).await["ports"]
+        .as_array()
+        .is_none_or(|ports| {
+            ports
+                .iter()
+                .all(|port| port["conflicts"].as_array().is_none_or(Vec::is_empty))
+        })
 }
 
 /// `remote.use` for `lane` with `host` (null for this machine's lane).
@@ -380,7 +435,6 @@ async fn remote_use_switches_a_lane_between_boxes() {
             None,
         )
         .await;
-        let (session, mut frames, events) = subscribe(&client, 9_201);
         client.connect("alpha").await;
         let routed = eventually(SOON, || async {
             answers(&client, FORK_HOSTS[0], "web-from-alpha")
@@ -402,6 +456,7 @@ async fn remote_use_switches_a_lane_between_boxes() {
         })
         .await;
         assert!(bound.is_some(), "{}", client.host_named("alpha").await);
+        let (session, mut frames, events) = subscribe(&client, 9_201).await;
 
         for (lane, host, code) in [
             ("forkapp@0", Some("gamma"), "box_unknown"),
@@ -422,11 +477,13 @@ async fn remote_use_switches_a_lane_between_boxes() {
         let (mut socket, greeting) = websocket(client.proxy_port, FORK_HOSTS[0]).await;
         assert_eq!(greeting, "web-from-alpha");
         assert!(answers(&client, FORK_HOSTS[1], "docs-from-alpha").await);
-        let before = warnings_within(&mut frames, Duration::from_millis(500)).await;
-        assert!(
-            !before.iter().any(|w| w["code"] == "port_in_use"),
-            "{before:?}"
-        );
+        for host in ["alpha", "beta"] {
+            assert!(
+                no_port_conflicts(&client, host).await,
+                "{}",
+                client.host_named(host).await
+            );
+        }
 
         let first = Arc::new(tokio::sync::Notify::new());
         let looping = request_loop(
@@ -532,13 +589,11 @@ async fn remote_use_switches_a_lane_between_boxes() {
             client.host_named("alpha").await
         );
 
-        let seen = warnings(&mut frames).await;
-        for code in ["port_in_use", "lane_skipped", "open_failed"] {
-            assert!(
-                !seen.iter().any(|w| w["code"] == code),
-                "no {code} for a switch: {seen:?}"
-            );
-        }
+        // `remote.use` announces a switch after the mirrors applied it, so
+        // whatever they said about it came first.
+        let mut seen = warnings_until_code(&mut frames, "lane_switched", "forkapp@0").await;
+        seen.extend(warnings_until_code(&mut frames, "lane_switched", "forkapp@0").await);
+        none_of(&seen, &["port_in_use", "lane_skipped", "open_failed"]);
         let notices: Vec<&Value> = seen
             .iter()
             .filter(|w| w["code"] == "lane_switched")
@@ -646,7 +701,6 @@ async fn a_switch_keeps_routes_that_name_the_port() {
         let boxes = [("alpha", &alpha), ("beta", &beta)];
         let client =
             ClientSide::start_full(&tmp, "client", "26400-26489", &boxes, None, controls).await;
-        let (session, mut frames, events) = subscribe(&client, 9_205);
         client.connect("alpha").await;
         let routed = eventually(SOON, || async {
             answers(&client, FORK_HOSTS[0], "web-from-alpha")
@@ -673,7 +727,7 @@ async fn a_switch_keeps_routes_that_name_the_port() {
             "the routes name the ports: {:?}",
             client.published.lock().expect("published").last()
         );
-        let _ = warnings(&mut frames).await;
+        let (session, mut frames, events) = subscribe(&client, 9_205).await;
 
         let first = Arc::new(tokio::sync::Notify::new());
         let looping = request_loop(
@@ -699,13 +753,8 @@ async fn a_switch_keeps_routes_that_name_the_port() {
                 .expect("connect to the port"),
         );
         keep_alive_get(&mut raw, "web-from-beta").await;
-        let seen = warnings(&mut frames).await;
-        for code in ["port_in_use", "lane_skipped", "open_failed"] {
-            assert!(
-                !seen.iter().any(|w| w["code"] == code),
-                "no {code} for a switch: {seen:?}"
-            );
-        }
+        let seen = warnings_until_code(&mut frames, "lane_switched", "forkapp@0").await;
+        none_of(&seen, &["port_in_use", "lane_skipped", "open_failed"]);
 
         session.close();
         let _ = events.await;
@@ -747,7 +796,6 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
         .await;
         let boxes = [("alpha", &alpha), ("beta", &beta)];
         let client = ClientSide::start_with(&tmp, "client", "26700-26789", &boxes, None).await;
-        let (session, mut frames, events) = subscribe(&client, 9_206);
         client.connect("alpha").await;
         let bound = eventually(SOON, || async {
             binds(&client, "alpha", DB).await.then_some(())
@@ -760,11 +808,15 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
             skip.map(|skip| skip["cause"].clone()),
             Some(json!("box_earlier"))
         );
-        let connected = warnings(&mut frames).await;
-        assert!(
-            !connected.iter().any(|w| w["code"] == "port_in_use"),
-            "{connected:?}"
-        );
+        // The port went to alpha only, and nothing competes for it.
+        for host in ["alpha", "beta"] {
+            assert!(
+                no_port_conflicts(&client, host).await,
+                "{}",
+                client.host_named(host).await
+            );
+        }
+        let (session, mut frames, events) = subscribe(&client, 9_206).await;
         let mut raw = BufReader::new(
             TcpStream::connect((Ipv6Addr::LOCALHOST, DB))
                 .await
@@ -788,13 +840,8 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
                 .expect("connect again"),
         );
         keep_alive_get(&mut raw, "db-from-beta").await;
-        let seen = warnings(&mut frames).await;
-        for code in ["port_in_use", "lane_skipped"] {
-            assert!(
-                !seen.iter().any(|w| w["code"] == code),
-                "no {code} for a switch: {seen:?}"
-            );
-        }
+        let seen = warnings_until_code(&mut frames, "lane_switched", "dbapp@0").await;
+        none_of(&seen, &["port_in_use", "lane_skipped"]);
 
         session.close();
         let _ = events.await;
@@ -809,10 +856,11 @@ async fn a_lane_without_hostnames_switches_by_its_port() {
 #[tokio::test(flavor = "multi_thread")]
 /// A choice beats a stopped local lane: the box lane is mirrored and the
 /// local lane is listed as yielded, until `remote use --local` gives the
-/// hostnames back. Starting the local lane deletes a choice with
-/// `choice_cleared` and takes the hostnames back as soon as the start
-/// begins, before any service spawns, and while it runs a choice is refused
-/// with `local_lane_running`.
+/// hostnames back. Starting the local lane takes the hostnames back as soon
+/// as the start passed its checks, before any service spawns, and deletes
+/// the choice with `choice_cleared` once something runs, here its
+/// `lane.start` task. While it runs a choice is refused with
+/// `local_lane_running`.
 async fn a_choice_and_this_machines_own_lane() {
     if !ipv6_loopback().await {
         eprintln!("skipping a_choice_and_this_machines_own_lane: no IPv6 loopback");
@@ -838,8 +886,10 @@ async fn a_choice_and_this_machines_own_lane() {
             .call(Method::LaneList, json!({}), cx(&local_repo))
             .await
             .expect("local lane list");
-        let (session, mut frames, events) = subscribe(&client, 9_202);
+        let (session, mut frames, events) = subscribe(&client, 9_202).await;
         client.connect("box").await;
+        // The first skip is said.
+        warnings_until_code(&mut frames, "lane_skipped", "boxapp@0").await;
         let skip = eventually(SOON, || skipped(&client, "box", "boxapp@0")).await;
         let skip = skip.expect("the box lane is skipped");
         assert_eq!(
@@ -848,11 +898,6 @@ async fn a_choice_and_this_machines_own_lane() {
             "{skip}"
         );
         assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
-        let connected = warnings(&mut frames).await;
-        assert!(
-            connected.iter().any(|w| w["code"] == "lane_skipped"),
-            "the first skip is said: {connected:?}"
-        );
 
         let reply = use_lane(&client, "boxapp@0", Some("box")).await;
         assert_eq!(
@@ -894,6 +939,7 @@ async fn a_choice_and_this_machines_own_lane() {
             let (session, _frames) = Session::local(9_203);
             engine.handle(request, session).await
         });
+        // The task the start runs counts as something running.
         let cleared = eventually(SOON, || async {
             (client.host().await["chosen_lanes"] == json!([])).then_some(())
         })
@@ -922,20 +968,15 @@ async fn a_choice_and_this_machines_own_lane() {
             use_lane(&client, "boxapp@0", Some("box")).await,
             Err("local_lane_running".to_owned())
         );
-        let seen = warnings(&mut frames).await;
-        assert!(
-            seen.iter().any(|w| w["code"] == "choice_cleared"
-                && w["host"] == "box"
-                && w["lane"] == "boxapp@0"
-                && w["message"]
-                    == "boxapp@0 started on this machine, so box's boxapp@0 is no longer mirrored or chosen."),
-            "{seen:?}"
+        let seen = warnings_until_code(&mut frames, "choice_cleared", "boxapp@0").await;
+        let cleared = seen.last().expect("choice_cleared");
+        assert_eq!(cleared["host"], "box", "{cleared}");
+        assert_eq!(
+            cleared["message"],
+            "boxapp@0 started on this machine, so box's boxapp@0 is no longer mirrored or chosen."
         );
         // `--local` and the cleared choice were said by their own notices.
-        assert!(
-            !seen.iter().any(|w| w["code"] == "lane_skipped"),
-            "{seen:?}"
-        );
+        none_of(&seen, &["lane_skipped"]);
 
         // A box that is not connected is refused the same while the lane
         // runs here, and once it is stopped the choice waits for the box.
@@ -950,10 +991,7 @@ async fn a_choice_and_this_machines_own_lane() {
             .await
             .expect("local stop");
         let reply = use_lane(&client, "boxapp@0", Some("box")).await;
-        assert_eq!(
-            reply.map(|reply| reply["pending"].clone()),
-            Ok(json!(true))
-        );
+        assert_eq!(reply.map(|reply| reply["pending"].clone()), Ok(json!(true)));
         assert_eq!(client.host().await["chosen_lanes"], json!(["boxapp@0"]));
         // Starting the lane deletes that choice too, connected or not.
         client
@@ -962,12 +1000,8 @@ async fn a_choice_and_this_machines_own_lane() {
             .await
             .expect("local start again");
         assert_eq!(client.host().await["chosen_lanes"], json!([]));
-        let seen = warnings(&mut frames).await;
-        assert!(
-            seen.iter()
-                .any(|w| w["code"] == "choice_cleared" && w["host"] == "box"),
-            "{seen:?}"
-        );
+        let seen = warnings_until_code(&mut frames, "choice_cleared", "boxapp@0").await;
+        assert_eq!(seen.last().map(|w| w["host"].clone()), Some(json!("box")));
         let stored = eventually(SOON, || async {
             let home = client.h.home.join("state.db");
             let store = Store::open(home).await.ok()?;
@@ -977,6 +1011,106 @@ async fn a_choice_and_this_machines_own_lane() {
         })
         .await;
         assert!(stored.is_some(), "the store loses the cleared choice");
+
+        session.close();
+        let _ = events.await;
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A local start whose infra fails holds the lane only while it runs: the
+/// chosen box lane is mirrored again afterwards, and its choice kept.
+/// Containers brought up by `infra up` clear the choice and say the
+/// containers did. A start that ends with only the lane's containers up gets
+/// a new choice refused with `holds: containers` and the Compose project that
+/// stops them.
+async fn a_failed_start_gives_the_box_lane_back() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping a_failed_start_gives_the_box_lane_back: no IPv6 loopback");
+        return;
+    }
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let box_repo = repo(&tmp.path, "boxrepo", BOX);
+        let side = BoxSide::start(&tmp, "box", "26800-26899").await;
+        side.h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&box_repo))
+            .await
+            .expect("box start");
+        let local_repo = repo(
+            &tmp.path,
+            "localrepo",
+            "project: boxapp\ninfra:\n  containers:\n    db: { image: \"postgres:16\", ports: { pg: 5432 }, per_lane: true }\nservices:\n  web:\n    run: fail\n    hosts: [\"web.${{ lane.domain }}\"]\n",
+        );
+        let client = ClientSide::start(&tmp, "client", "26900-26999", &side).await;
+        client
+            .h
+            .call(Method::LaneList, json!({}), cx(&local_repo))
+            .await
+            .expect("local lane list");
+        client.connect("box").await;
+        let skip = eventually(SOON, || skipped(&client, "box", "boxapp@0")).await;
+        assert!(skip.is_some(), "the stopped local lane wins first");
+        assert!(use_lane(&client, "boxapp@0", Some("box")).await.is_ok());
+        assert!(answers(&client, "web.boxapp.localhost", "hello-from-box").await);
+
+        *client.h.infra.fail_up.lock().expect("lock") = Some(
+            devlanes_daemon::integrations::InfraError::new("docker_failed", "docker is down"),
+        );
+        let failed = client
+            .h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
+            .await;
+        assert!(failed.is_err(), "{failed:?}");
+        let back = eventually(SOON, || async {
+            answers(&client, "web.boxapp.localhost", "hello-from-box")
+                .await
+                .then_some(())
+        })
+        .await;
+        assert!(back.is_some(), "the box lane is mirrored again");
+        assert_eq!(client.host().await["chosen_lanes"], json!(["boxapp@0"]));
+
+        let (session, mut frames, events) = subscribe(&client, 9_207).await;
+        *client.h.infra.fail_up.lock().expect("lock") = None;
+        client
+            .h
+            .call(Method::InfraUp, json!({}), cx(&local_repo))
+            .await
+            .expect("infra up");
+        let seen = warnings_until_code(&mut frames, "choice_cleared", "boxapp@0").await;
+        assert_eq!(
+            seen.last().map(|w| w["message"].clone()),
+            Some(json!(
+                "boxapp@0's containers run on this machine, so box's boxapp@0 is no longer mirrored or chosen."
+            ))
+        );
+        let ended = client
+            .h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
+            .await
+            .expect("a start whose service fails");
+        assert_eq!(ended["ready"], false, "{ended}");
+        let refused = client
+            .h
+            .call(
+                Method::RemoteUse,
+                json!({"lane": "boxapp@0", "host": "box"}),
+                Context::default(),
+            )
+            .await
+            .expect_err("the containers hold the lane");
+        assert_eq!(refused.code, "local_lane_running");
+        assert_eq!(refused.data["holds"], "containers", "{:?}", refused.data);
+        assert_eq!(refused.data["compose_project"], "boxapp-lane0");
+        assert_eq!(
+            refused.data["message"],
+            "boxapp@0's containers run on this machine. Stop them with docker compose -p boxapp-lane0 stop, then run devlanes remote use box boxapp@0."
+        );
 
         session.close();
         let _ = events.await;
@@ -1018,14 +1152,13 @@ async fn local_takes_its_hostnames_back_from_another_projects_choice() {
             .call(Method::LaneList, json!({}), cx(&shop))
             .await
             .expect("local lane list");
-        let (session, mut frames, events) = subscribe(&client, 9_204);
         client.connect("box").await;
         let skip = eventually(SOON, || skipped(&client, "box", "boxapp@0")).await;
         assert_eq!(
             skip.map(|skip| (skip["cause"].clone(), skip["winner_lane"].clone())),
             Some((json!("local_stopped"), json!("shop@0")))
         );
-        let _ = warnings(&mut frames).await;
+        let (session, mut frames, events) = subscribe(&client, 9_204).await;
 
         assert!(use_lane(&client, "boxapp@0", Some("box")).await.is_ok());
         assert!(answers(&client, "web.boxapp.localhost", "hello-from-box").await);
@@ -1040,16 +1173,8 @@ async fn local_takes_its_hostnames_back_from_another_projects_choice() {
         assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
         let skip = skipped(&client, "box", "boxapp@0").await.expect("skipped");
         assert_eq!(skip["cause"], "local_stopped", "{skip}");
-        let seen = warnings(&mut frames).await;
-        assert!(
-            !seen.iter().any(|w| w["code"] == "lane_skipped"),
-            "{seen:?}"
-        );
-        assert!(
-            seen.iter()
-                .any(|w| w["code"] == "lane_switched" && w["lane"] == "shop@0"),
-            "{seen:?}"
-        );
+        let seen = warnings_until_code(&mut frames, "lane_switched", "shop@0").await;
+        none_of(&seen, &["lane_skipped"]);
 
         session.close();
         let _ = events.await;

@@ -301,6 +301,9 @@ pub struct InfraContainer {
     /// The Compose project the container belongs to, as `docker compose -p`
     /// takes it, or `None` for a plain `infra.containers` container.
     pub compose_project: Option<String>,
+    /// Whether it publishes a host port. Only such a container can hold a
+    /// port a box lane needs here.
+    pub publishes: bool,
     /// `ContainerSummary.state` as the provider last saw it; container events
     /// keep it current. `None` when the provider cannot tell.
     pub state: Option<String>,

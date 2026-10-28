@@ -648,6 +648,7 @@ mod tests {
             docker: docker.into(),
             shared: false,
             compose_project: None,
+            publishes: false,
             state: None,
         };
         let mut replicas = vec![

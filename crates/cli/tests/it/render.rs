@@ -2891,6 +2891,14 @@ fn lane_choice_warnings_say_how_to_switch() {
         ),
         "warn fork-b: acme@1 started on this machine, so fork-b's shop@0 is no longer mirrored or chosen.\n"
     );
+    // Containers that came back by themselves are no start.
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "choice_cleared", "lane": "acme@0",
+                    "local_lane": "acme@0", "holds": "containers", "message": "…"})
+        ),
+        "warn fork-b: acme@0's containers run on this machine, so fork-b's acme@0 is no longer mirrored or chosen.\n"
+    );
 }
 
 /// `remote use` says where the lane comes from now and which lane stopped
@@ -3044,6 +3052,14 @@ fn remote_use_refusals_say_what_to_do() {
                    "containers": ["devlanes-clickmax-lane0-cerbos"], "message": "…"}),
             "clickmax@0's containers run on this machine. Stop them with docker compose -p clickmax-lane0 stop and docker stop devlanes-clickmax-lane0-cerbos, then run devlanes remote use fork-b clickmax@0.",
             "docker compose -p clickmax-lane0 stop",
+        ),
+        (
+            "local_lane_running",
+            json!({"host": "fork-b", "lane": "acme@0", "local_lane": "acme@0",
+                   "holds": "processes", "compose_project": "acme-lane0",
+                   "containers": [], "message": "…"}),
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0 and docker compose -p acme-lane0 stop, then run devlanes remote use fork-b acme@0.",
+            "docker compose -p acme-lane0 stop",
         ),
         (
             "local_lane_unknown",

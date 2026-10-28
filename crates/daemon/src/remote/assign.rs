@@ -38,41 +38,58 @@ pub(super) struct LocalLane {
 }
 
 /// What keeps a running local lane's ports, which says how to free them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Hold {
-    /// Units or orphans run, or a start is under way: `devlanes stop --lane`
-    /// frees the ports.
-    Processes,
-    /// Only the lane's own containers are up, which `devlanes stop` leaves
-    /// running. `compose_project` is the lane's Compose project and
-    /// `containers` its plain containers, by Docker name.
-    Containers {
-        compose_project: Option<String>,
-        containers: Vec<String>,
-    },
+/// Processes and the lane's own containers can both be up. `devlanes stop`
+/// stops the processes only, so the commands name both.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Hold {
+    /// Units or orphans run, or a start is under way.
+    pub processes: bool,
+    /// Only a start under way holds the ports so far, with no unit or
+    /// container up yet. The lane wins, but choices it beats are kept until
+    /// something runs: a start that fails gives the box lane back.
+    pub starting: bool,
+    /// The lane's Compose project, while one of its containers that
+    /// publishes a host port is up.
+    pub compose_project: Option<String>,
+    /// The lane's plain containers that are up and publish a host port, by
+    /// Docker name.
+    pub containers: Vec<String>,
 }
 
 impl Hold {
-    /// The `holds` value of `local_lane_running` and skipped lanes.
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::Processes => "processes",
-            Self::Containers { .. } => "containers",
+    /// A hold by processes only.
+    pub(crate) fn processes() -> Self {
+        Self {
+            processes: true,
+            ..Self::default()
         }
     }
 
-    /// `holds`, and for containers `compose_project` and `containers`, as
-    /// fields to merge into error data or a skipped lane.
+    /// Whether any of the lane's own containers counts.
+    pub(crate) fn has_containers(&self) -> bool {
+        self.compose_project.is_some() || !self.containers.is_empty()
+    }
+
+    /// The `holds` value of `local_lane_running` and skipped lanes.
+    pub(crate) fn as_str(&self) -> &'static str {
+        if self.processes {
+            "processes"
+        } else {
+            "containers"
+        }
+    }
+
+    /// `holds`, and `compose_project` and `containers` while the lane's own
+    /// containers count, as fields to merge into error data or a skipped lane.
     pub(crate) fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
         let mut fields = serde_json::Map::new();
         fields.insert("holds".into(), self.as_str().into());
-        if let Self::Containers {
-            compose_project,
-            containers,
-        } = self
-        {
-            fields.insert("compose_project".into(), compose_project.clone().into());
-            fields.insert("containers".into(), containers.clone().into());
+        if self.has_containers() {
+            fields.insert(
+                "compose_project".into(),
+                self.compose_project.clone().into(),
+            );
+            fields.insert("containers".into(), self.containers.clone().into());
         }
         fields
     }
@@ -81,30 +98,34 @@ impl Hold {
     /// lane's own containers: its Compose project holds no shared service,
     /// and plain containers are named by Docker name.
     pub(crate) fn stop_command(&self, lane: &str) -> String {
-        match self {
-            Self::Processes => format!("devlanes stop --lane {lane}"),
-            Self::Containers {
-                compose_project,
-                containers,
-            } => {
-                let mut commands = Vec::new();
-                if let Some(project) = compose_project {
-                    commands.push(format!("docker compose -p {project} stop"));
-                }
-                if !containers.is_empty() {
-                    commands.push(format!("docker stop {}", containers.join(" ")));
-                }
-                commands.join(" and ")
-            }
+        let mut commands = Vec::new();
+        if self.processes {
+            commands.push(format!("devlanes stop --lane {lane}"));
+        }
+        if let Some(project) = &self.compose_project {
+            commands.push(format!("docker compose -p {project} stop"));
+        }
+        if !self.containers.is_empty() {
+            commands.push(format!("docker stop {}", self.containers.join(" ")));
+        }
+        match commands.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            _ => commands.join(""),
         }
     }
 
     /// What runs, as the start of a sentence about local lane `lane`.
     pub(crate) fn runs(&self, lane: &str) -> String {
-        match self {
-            Self::Processes => format!("{lane} runs on this machine"),
-            Self::Containers { .. } => format!("{lane}'s containers run on this machine"),
+        if self.processes {
+            format!("{lane} runs on this machine")
+        } else {
+            format!("{lane}'s containers run on this machine")
         }
+    }
+
+    /// The pronoun for what runs: `it` for the lane, `them` for containers.
+    pub(crate) fn them(&self) -> &'static str {
+        if self.processes { "it" } else { "them" }
     }
 }
 
@@ -329,7 +350,8 @@ pub(super) fn assign(
                     .map(|winner| winner.lane.to_owned())
                     .collect();
                 let cause = first.rank.0;
-                if candidate.rank.0 == Cause::BoxChosen && cause == Cause::LocalRunning {
+                let settled = first.hold.is_none_or(|hold| !hold.starting);
+                if candidate.rank.0 == Cause::BoxChosen && cause == Cause::LocalRunning && settled {
                     assignment
                         .cleared
                         .insert(candidate.lane.to_owned(), host.to_owned());
@@ -347,14 +369,17 @@ pub(super) fn assign(
                         hosts,
                         local_lanes,
                         hold: (cause == Cause::LocalRunning)
-                            .then(|| first.hold.cloned().unwrap_or(Hold::Processes)),
+                            .then(|| first.hold.cloned().unwrap_or_else(Hold::processes)),
                     },
                 );
             }
         }
     }
     // Also for a box that is not connected: its lane would lose once it is.
-    for lane in local.iter().filter(|lane| lane.running) {
+    // A start that has nothing up yet keeps the choice, in case it fails.
+    let settled =
+        |lane: &&LocalLane| lane.running && lane.hold.as_ref().is_none_or(|hold| !hold.starting);
+    for lane in local.iter().filter(settled) {
         if let Some(host) = choices.get(&lane.lane) {
             assignment.cleared.insert(lane.lane.clone(), host.clone());
         }
@@ -468,19 +493,42 @@ mod tests {
         LocalLane {
             lane: lane.into(),
             running,
-            hold: running.then_some(Hold::Processes),
+            hold: running.then(Hold::processes),
             hosts: names(hosts),
         }
     }
 
+    /// A start that has nothing up yet wins the lane but keeps the choice
+    /// it beats, of a connected box or not, so a failed start gives the box
+    /// lane back.
+    #[test]
+    fn a_start_with_nothing_up_keeps_the_choice() {
+        let mut lane = local("acme@0", true, WEB);
+        lane.hold = Some(Hold {
+            processes: true,
+            starting: true,
+            ..Hold::default()
+        });
+        let boxes = [
+            on_box("fork-a", 1, &[("acme@0", WEB)]),
+            on_box("fork-b", 2, &[("acme@0", WEB)]),
+        ];
+        let got = assign(&[lane.clone()], &boxes, &chose(&[("acme@0", "fork-b")]));
+        assert!(got.mirrored.is_empty());
+        assert!(got.cleared.is_empty(), "{:?}", got.cleared);
+        let got = assign(&[lane], &boxes[..1], &chose(&[("acme@0", "fork-c")]));
+        assert!(got.cleared.is_empty(), "{:?}", got.cleared);
+    }
+
     /// A skip by a lane whose own containers run names them, and the
     /// commands stop only those: the lane's Compose project and its plain
-    /// containers.
+    /// containers. With processes up too, both commands are named.
     #[test]
     fn a_lane_held_by_containers_says_how_to_stop_them() {
-        let hold = Hold::Containers {
+        let hold = Hold {
             compose_project: Some("acme-lane0".into()),
             containers: vec!["devlanes-acme-lane0-cerbos".into()],
+            ..Hold::default()
         };
         let mut lane = local("acme@0", true, WEB);
         lane.hold = Some(hold.clone());
@@ -500,20 +548,26 @@ mod tests {
             "acme@0's containers run on this machine"
         );
         assert_eq!(
-            Hold::Processes.stop_command("acme@0"),
+            Hold::processes().stop_command("acme@0"),
             "devlanes stop --lane acme@0"
         );
+        assert!(!Hold::processes().fields().contains_key("compose_project"));
         let fields = hold.fields();
         assert_eq!(fields["holds"], "containers");
         assert_eq!(fields["compose_project"], "acme-lane0");
-        let compose_only = Hold::Containers {
+        let both = Hold {
+            processes: true,
             compose_project: Some("acme-lane0".into()),
-            containers: Vec::new(),
+            ..Hold::default()
         };
         assert_eq!(
-            compose_only.stop_command("acme@0"),
-            "docker compose -p acme-lane0 stop"
+            both.stop_command("acme@0"),
+            "devlanes stop --lane acme@0 and docker compose -p acme-lane0 stop"
         );
+        assert_eq!(both.runs("acme@0"), "acme@0 runs on this machine");
+        let fields = both.fields();
+        assert_eq!(fields["holds"], "processes");
+        assert_eq!(fields["compose_project"], "acme-lane0");
     }
 
     /// Box `host`, connected `serial`th, with `lanes` and their hostnames.
