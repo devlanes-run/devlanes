@@ -867,6 +867,81 @@ async fn copy_mode_jumps_scroll_the_long_log_to_the_cursor() -> TestResult {
     Ok(())
 }
 
+/// The wheel, mouse moves and frames reuse the parsed log and the shown
+/// entries, so a scroll costs the lines on screen and not the whole log.
+/// Only arriving lines parse it again, and only new filters fold it again.
+#[tokio::test]
+async fn scrolling_the_log_does_not_parse_it_again() -> TestResult {
+    use crossterm::event::MouseEventKind;
+    let mut app = daemon_app(120, 40).await?;
+    let lines: Vec<String> = (0..3000)
+        .map(|i| {
+            format!(
+                "2026-10-21T10:{:02}:{:02}.000Z DEBUG request{{id={i} method=status}}: devlanes_daemon::engine: answered request method=status took={i}us client=\"tui {i}\" lane=acme@{}",
+                (i / 60) % 60,
+                i % 60,
+                i % 7
+            )
+        })
+        .collect();
+    app.update(Msg::DaemonLog(Ok(LogChunk {
+        lines,
+        position: LogPosition {
+            offset: 9000,
+            file: (1, 2),
+        },
+        reset: false,
+    })));
+    let before = screen(&render(&app)?);
+    let (entries, shown) = app.daemon_shown();
+    assert_eq!(app.daemon.log.len(), 2000, "the log keeps its newest lines");
+    let log = app.daemon_log_view.get();
+    for tick in 0..200 {
+        let kind = if tick < 100 {
+            MouseEventKind::ScrollUp
+        } else {
+            MouseEventKind::ScrollDown
+        };
+        app.update(mouse(MouseEventKind::Moved, log.x + 3, log.y + 3));
+        app.update(mouse(kind, log.x + 3, log.y + 3));
+        if tick == 99 {
+            assert_eq!(app.daemon.scroll, 300);
+        }
+        render(&app)?;
+    }
+    // Back where it started, paused, with the same entries in view.
+    assert_eq!(app.daemon.scroll, 0);
+    let entries_shown = |text: &str| -> Vec<String> {
+        text.lines()
+            .filter(|line| line.contains(" DEBUG "))
+            .map(str::to_owned)
+            .collect()
+    };
+    let after = entries_shown(&screen(&render(&app)?));
+    assert!(after.len() > 20, "{after:?}");
+    assert_eq!(after, entries_shown(&before));
+    let (again, shown_again) = app.daemon_shown();
+    assert!(Arc::ptr_eq(&entries, &again), "the log was parsed again");
+    assert!(
+        Arc::ptr_eq(&shown, &shown_again),
+        "the log was folded again"
+    );
+    // A level floor folds again; arriving lines parse again.
+    app.update(key(KeyCode::Char('w')));
+    assert!(!Arc::ptr_eq(&shown, &app.daemon_shown().1));
+    assert!(Arc::ptr_eq(&entries, &app.daemon_shown().0));
+    app.update(Msg::DaemonLog(Ok(LogChunk {
+        lines: vec!["2026-10-21T11:00:00.000Z  INFO devlanes_daemon: newer entry".into()],
+        position: LogPosition {
+            offset: 9100,
+            file: (1, 2),
+        },
+        reset: false,
+    })));
+    assert!(!Arc::ptr_eq(&entries, &app.daemon_shown().0));
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_log_that_fits_does_not_scroll() -> TestResult {
     let mut app = daemon_app(120, 40).await?;

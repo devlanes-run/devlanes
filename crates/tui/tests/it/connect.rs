@@ -8,13 +8,14 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_proto::{
     Event, RpcError,
-    remote::{PROMPT_EVENT, STATE_EVENT},
+    remote::{PAIRING_CODE_TTL_MS, PROMPT_EVENT, STATE_EVENT},
 };
 use devlanes_tui::{
     ApiError, DaemonApi,
     app::{App, Dialog, Effect, Msg, View},
     connect::{PairState, Step},
 };
+use ratatui::style::Modifier;
 use serde_json::{Value, json};
 
 use crate::daemon::{Step as Script, presses, run_keys, shifted};
@@ -33,6 +34,21 @@ async fn boxes_app(width: u16, height: u16, hosts: Value) -> App {
     app.update(Msg::Boxes(Ok(json!({"items": hosts}))));
     app.update(Msg::Clients(Ok(json!({"items": [], "now_ms": 0}))));
     app
+}
+
+/// `remote.pair`'s reply for `code`, built as the daemon's `pair_method`
+/// builds it.
+pub fn pair_reply(code: &str) -> Value {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        });
+    json!({
+        "code": code,
+        "expires_at_ms": now.saturating_add(PAIRING_CODE_TTL_MS),
+        "valid_ms": PAIRING_CODE_TTL_MS,
+    })
 }
 
 /// Types `text` one key at a time.
@@ -121,12 +137,36 @@ async fn a_new_ssh_box_connects_by_its_name() -> TestResult {
     let effects = app.update(key(KeyCode::Enter));
     assert!(opened(&effects).is_none(), "{effects:?}");
     assert!(screen(&render(&app)?).contains("Type the box's name."));
+    // A placeholder is dim and slanted, typed text is neither.
+    let style_of = |buffer: &ratatui::buffer::Buffer, needle: &str| {
+        (0..buffer.area.height).find_map(|y| {
+            let line = row(buffer, y);
+            let at = line.find(needle)?;
+            let x = u16::try_from(line[..at].chars().count()).ok()?;
+            Some(buffer[(x, y)].style())
+        })
+    };
+    let hint = style_of(&render(&app)?, "hetzner or me@").ok_or("no placeholder")?;
+    assert!(
+        hint.add_modifier.contains(Modifier::DIM | Modifier::ITALIC),
+        "{hint:?}"
+    );
     type_text(&mut app, "hetzner");
     let buffer = render(&app)?;
     assert_clean(&buffer, "the form");
+    let typed = style_of(&buffer, "hetzner▏").ok_or("no typed name")?;
+    assert!(
+        !typed
+            .add_modifier
+            .intersects(Modifier::DIM | Modifier::ITALIC),
+        "{typed:?}"
+    );
     let text = screen(&buffer);
     assert!(text.contains("connect a box"), "{text}");
-    assert!(text.contains("devlanes never edits it."), "{text}");
+    assert!(
+        text.contains("devlanes runs ssh hetzner, so your SSH config applies."),
+        "{text}"
+    );
     let effects = app.update(key(KeyCode::Enter));
     assert_eq!(
         opened(&effects).map(|(_, host)| host).as_deref(),
@@ -161,7 +201,11 @@ async fn prompts_are_answered_in_the_modal() -> TestResult {
     let text = screen(&render(&app)?);
     assert!(text.contains("hetzner needs a pairing code."), "{text}");
     assert!(
-        text.contains("On hetzner, press p in the Boxes view or run devlanes daemon"),
+        text.contains("On hetzner, press p in its Boxes view."),
+        "{text}"
+    );
+    assert!(
+        text.contains("Or run devlanes daemon pair there."),
         "{text}"
     );
     assert!(!text.contains('`'), "{text}");
@@ -273,9 +317,15 @@ async fn enter_acts_on_the_box_by_its_state() -> TestResult {
     let mut app = boxes_app(100, 30, hosts).await;
     app.update(key(KeyCode::Enter));
     match &app.dialog {
-        Some(Dialog::Confirm { title, detail, .. }) => {
+        Some(Dialog::Confirm {
+            title,
+            prompt,
+            detail,
+            ..
+        }) => {
             assert_eq!(title, "disconnect hetzner");
-            assert_eq!(detail[1], "Its lanes keep running on the box.");
+            assert_eq!(prompt, "Its ports and hostnames stop working here.");
+            assert_eq!(detail, &["Its lanes keep running on the box.".to_owned()]);
         }
         other => return Err(format!("no confirm dialog: {other:?}").into()),
     }
@@ -365,11 +415,42 @@ async fn the_pairing_code_modal() -> TestResult {
         effects.iter().any(|e| matches!(e, Effect::Pair)),
         "{effects:?}"
     );
-    app.update(Msg::Paired(Ok(
-        json!({"code": "K7QM-3XWD", "expires_at_ms": 1, "valid_ms": 600_000}),
-    )));
+    app.update(Msg::Paired(Ok(pair_reply("K7QM-3XWD"))));
     let buffer = render(&app)?;
     assert_clean(&buffer, "the pairing code");
+    // The code stands alone on its row, centered in the dialog, bold and in
+    // the attention color; without color it is bold only.
+    let code_style =
+        |app: &App| -> Result<(u16, ratatui::style::Style), Box<dyn std::error::Error>> {
+            let buffer = render(app)?;
+            let area = app.dialog_area.borrow().ok_or("no dialog")?;
+            let y = (area.y..area.bottom())
+                .find(|y| {
+                    row(&buffer, *y).contains("K7QM-3XWD") && !row(&buffer, *y).contains("--code")
+                })
+                .ok_or("no code row")?;
+            let line = row(&buffer, y);
+            let at = line.find("K7QM-3XWD").ok_or("no code")?;
+            let x = u16::try_from(line[..at].chars().count())?;
+            let left = x - area.x - 1;
+            let right = area.right() - 1 - (x + 9);
+            assert!(
+                left.abs_diff(right) <= 1,
+                "not centered: {left} and {right}\n{line}"
+            );
+            Ok((x, buffer[(x, y)].style()))
+        };
+    let (_, style) = code_style(&app)?;
+    assert_eq!(style.fg, Some(ratatui::style::Color::Yellow), "{style:?}");
+    assert!(style.add_modifier.contains(Modifier::BOLD), "{style:?}");
+    app.theme.tier = devlanes_tui::theme::Tier::Plain;
+    let (_, plain) = code_style(&app)?;
+    assert!(
+        matches!(plain.fg, None | Some(ratatui::style::Color::Reset)),
+        "{plain:?}"
+    );
+    assert!(plain.add_modifier.contains(Modifier::BOLD), "{plain:?}");
+    app.theme.tier = devlanes_tui::theme::Tier::Ansi;
     let text = screen(&buffer);
     for expected in [
         "K7QM-3XWD",
@@ -388,6 +469,23 @@ async fn the_pairing_code_modal() -> TestResult {
             .any(|e| matches!(e, Effect::Copy(text) if text == "K7QM-3XWD")),
         "{effects:?}"
     );
+    // At 10 minutes the code is gone and `y` copies nothing.
+    for _ in 0..598 {
+        app.update(Msg::Tick);
+    }
+    let text = screen(&render(&app)?);
+    assert!(text.contains("This code expired."), "{text}");
+    assert!(!text.contains("K7QM-3XWD"), "{text}");
+    let effects = app.update(key(KeyCode::Char('y')));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Copy(_))),
+        "{effects:?}"
+    );
+    // A reply without `valid_ms` still counts down from 10 minutes.
+    app.update(key(KeyCode::Char('p')));
+    app.update(Msg::Paired(Ok(json!({"code": "K7QM-3XWD"}))));
+    app.update(Msg::Tick);
+    assert!(screen(&render(&app)?).contains("expires in 9m 59s"));
 
     let paused = RpcError::new(
         "pairing_paused",
@@ -685,7 +783,7 @@ async fn drive_answers_the_code_and_the_passphrase() -> TestResult {
     steps.push(Script::Screen("needs a pairing code"));
     steps.extend(presses(typed("K7QM-3XWD")));
     steps.extend(presses(vec![key(KeyCode::Enter)]));
-    steps.push(Script::Screen("ssh asks:"));
+    steps.push(Script::Screen("Enter passphrase for key:"));
     steps.extend(presses(typed("hunter2")));
     steps.extend(presses(vec![key(KeyCode::Enter)]));
     run_keys(

@@ -21,19 +21,19 @@
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                       ┌ pairing code ────────────────────────────────────────┐                                                                       │
-│                                                                       │   K7QM-3XWD                                          │                                                                       │
-│                                                                       │                                                      │                                                                       │
-│                                                                       │ It works once and expires in 9m 57s.                 │                                                                       │
-│                                                                       │                                                      │                                                                       │
-│                                                                       │ On the other machine, run:                           │                                                                       │
-│                                                                       │ devlanes remote connect <box> --code K7QM-3XWD       │                                                                       │
-│                                                                       │ <box> is this machine's SSH name there.              │                                                                       │
-│                                                                       │                                                      │                                                                       │
-│                                                                       │ Or press n in its Boxes view. It asks for this code. │                                                                       │
-│                                                                       │                                                      │                                                                       │
-│                                                                       │ y copy code   p new code   esc close                 │                                                                       │
-│                                                                       └──────────────────────────────────────────────────────┘                                                                       │
+│                                                                                                                                                                                                      │
+│                                                                         ┌ pairing code ────────────────────────────────────┐                                                                         │
+│                                                                         │                                                  │                                                                         │
+│                                                                         │                     K7QM-3XWD                    │                                                                         │
+│                                                                         │       It works once and expires in 9m 59s.       │                                                                         │
+│                                                                         │                                                  │                                                                         │
+│                                                                         │ On the other machine, run                        │                                                                         │
+│                                                                         │   devlanes remote connect <box> --code K7QM-3XWD │                                                                         │
+│                                                                         │ <box> is this machine's SSH name there.          │                                                                         │
+│                                                                         │ Or press n in its Boxes view and type the code.  │                                                                         │
+│                                                                         │                                                  │                                                                         │
+│                                                                         │ y copy code   p new code   esc close             │                                                                         │
+│                                                                         └──────────────────────────────────────────────────┘                                                                         │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -83,19 +83,19 @@
 20: 0 darkgray, 199 darkgray
 21: 0 darkgray, 199 darkgray
 22: 0 darkgray, 199 darkgray
-23: 0 darkgray, 72-127 bold, 199 darkgray
-24: 0 darkgray, 72 bold, 76-84 bold, 127 bold, 199 darkgray
-25: 0 darkgray, 72 bold, 127 bold, 199 darkgray
-26: 0 darkgray, 72 bold, 127 bold, 199 darkgray
-27: 0 darkgray, 72 bold, 127 bold, 199 darkgray
-28: 0 darkgray, 72 bold, 74-99 dim, 127 bold, 199 darkgray
-29: 0 darkgray, 72 bold, 74-119 bold, 127 bold, 199 darkgray
-30: 0 darkgray, 72 bold, 74-112 dim, 127 bold, 199 darkgray
-31: 0 darkgray, 72 bold, 127 bold, 199 darkgray
-32: 0 darkgray, 72 bold, 74-125 dim, 127 bold, 199 darkgray
-33: 0 darkgray, 72 bold, 127 bold, 199 darkgray
-34: 0 darkgray, 72 bold, 74 bold, 75-84 dim, 88 bold, 89-97 dim, 101-103 bold, 104-109 dim, 127 bold, 199 darkgray
-35: 0 darkgray, 72-127 bold, 199 darkgray
+23: 0 darkgray, 199 darkgray
+24: 0 darkgray, 74-125 bold, 199 darkgray
+25: 0 darkgray, 74 bold, 125 bold, 199 darkgray
+26: 0 darkgray, 74 bold, 96-104 bold yellow, 125 bold, 199 darkgray
+27: 0 darkgray, 74 bold, 82-117 dim, 125 bold, 199 darkgray
+28: 0 darkgray, 74 bold, 125 bold, 199 darkgray
+29: 0 darkgray, 74 bold, 125 bold, 199 darkgray
+30: 0 darkgray, 74 bold, 76-123 bold, 125 bold, 199 darkgray
+31: 0 darkgray, 74 bold, 76-114 dim, 125 bold, 199 darkgray
+32: 0 darkgray, 74 bold, 76-122 dim, 125 bold, 199 darkgray
+33: 0 darkgray, 74 bold, 125 bold, 199 darkgray
+34: 0 darkgray, 74 bold, 76 bold, 77-86 dim, 90 bold, 91-99 dim, 103-105 bold, 106-111 dim, 125 bold, 199 darkgray
+35: 0 darkgray, 74-125 bold, 199 darkgray
 36: 0 darkgray, 199 darkgray
 37: 0 darkgray, 199 darkgray
 38: 0 darkgray, 199 darkgray

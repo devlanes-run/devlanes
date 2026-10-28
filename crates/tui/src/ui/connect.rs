@@ -18,8 +18,8 @@ use crate::theme::{Glyph, Glyphs, Theme, Tone};
 /// What a dialog shows: its title, its body and its keys.
 type Parts = (String, Vec<Line<'static>>, Vec<Line<'static>>);
 
-/// The label column of the form's rows, the marker included.
-const LABEL: usize = 13;
+/// The label column of the form's rows: the marker, a space and the label.
+const LABEL: usize = 12;
 
 /// `text` wrapped in `width` cells, in `style`.
 fn wrapped(text: &str, width: usize, style: Style) -> Vec<Line<'static>> {
@@ -38,10 +38,31 @@ fn cursor(theme: &Theme) -> &'static str {
     }
 }
 
-/// `▌Name         hetzner▏`: a row of the form, the marker and the label in
-/// the focus color while it has the keys, padded to `width` so the dialog
-/// keeps its width as the text grows. A value too long for the row shows
-/// its end; an empty one shows `placeholder` dimmed.
+/// `▌ Name       ` or `  Name       `: the marker and the label of a form
+/// row, as the options page starts its rows.
+fn label_spans(theme: &Theme, label: &str, focused: bool) -> Vec<Span<'static>> {
+    let marker = if focused {
+        theme.glyph(Glyph::Marker)
+    } else {
+        " "
+    };
+    vec![
+        Span::styled(marker, theme.focus()),
+        Span::raw(format!(" {label:<w$}", w = LABEL - 2)),
+    ]
+}
+
+/// What a placeholder looks like: dimmer than typed text, and slanted where
+/// the terminal can, so it never reads as a value.
+fn placeholder_style(theme: &Theme) -> Style {
+    theme.quiet().add_modifier(Modifier::ITALIC)
+}
+
+/// `▌ Name        hetzner▏      `: a text row of a form, padded to `width`
+/// so the dialog keeps its width as the text grows. While it has the keys
+/// the row is selected as the options page selects one, and its field is
+/// cut out of the selection like the value being edited there. A value too
+/// long for the field shows its end; an empty one shows `placeholder`.
 fn input_row(
     theme: &Theme,
     label: &str,
@@ -50,36 +71,128 @@ fn input_row(
     focused: bool,
     width: usize,
 ) -> Line<'static> {
-    let (marker, label_style) = if focused {
-        (theme.glyph(Glyph::Marker), theme.focus())
+    let mut spans = label_spans(theme, label, focused);
+    // A space each side of the text inside the field.
+    let room = width.saturating_sub(LABEL + 2).max(2);
+    let field = if focused {
+        crate::settings::editing_style(theme)
     } else {
-        (" ", theme.quiet())
+        Style::new()
     };
-    let room = width.saturating_sub(LABEL + 1).max(2);
-    let mut spans = vec![
-        Span::styled(marker, theme.focus()),
-        Span::styled(format!("{label:<w$}", w = LABEL - 1), label_style),
-    ];
+    let mut cells = vec![Span::styled(" ", field)];
     let chars: Vec<char> = value.chars().collect();
     if chars.is_empty() {
         if focused {
-            spans.push(Span::raw(cursor(theme)));
+            cells.push(Span::styled(cursor(theme), field));
         }
-        spans.push(Span::styled(text::clip(placeholder, room), theme.quiet()));
+        let hint = text::clip(placeholder, room.saturating_sub(1));
+        let style = if focused {
+            field
+                .remove_modifier(Modifier::BOLD)
+                .patch(placeholder_style(theme))
+        } else {
+            placeholder_style(theme)
+        };
+        cells.push(Span::styled(hint, style));
     } else {
         // The end of the text stays in view while typing.
+        let room = room.saturating_sub(usize::from(focused));
         let shown: String = if chars.len() > room {
             let tail: String = chars[chars.len() - (room - 1)..].iter().collect();
             format!("…{tail}")
         } else {
             value.to_owned()
         };
-        spans.push(Span::raw(shown));
+        cells.push(Span::styled(shown, field));
         if focused {
-            spans.push(Span::raw(cursor(theme)));
+            cells.push(Span::styled(cursor(theme), field));
         }
     }
+    if !focused {
+        spans.extend(cells);
+        return pad(spans, width);
+    }
+    let used = super::spans_width(&cells);
+    cells.push(Span::styled(
+        " ".repeat(width.saturating_sub(LABEL + used)),
+        field,
+    ));
+    let mut spans = selected(theme, spans);
+    spans.extend(cells);
+    fit(spans, width)
+}
+
+/// `▌ Reach by    (•) SSH name    ( ) command`: how the box is reached, the
+/// choice in bold. While the row has the keys it is selected and the choice
+/// is cut out of the selection like a field.
+fn reach_row(theme: &Theme, reach: Reach, focused: bool, width: usize) -> Line<'static> {
+    let ascii = theme.glyphs == Glyphs::Ascii;
+    let mut spans = label_spans(theme, "Reach by", focused);
+    if focused {
+        spans = selected(theme, spans);
+    }
+    let pick = if focused {
+        crate::settings::editing_style(theme)
+    } else {
+        Style::new().add_modifier(Modifier::BOLD)
+    };
+    let other = if focused {
+        theme.selection()
+    } else {
+        theme.quiet()
+    };
+    for (index, (option, label)) in [(Reach::Ssh, "SSH name"), (Reach::Command, "command")]
+        .into_iter()
+        .enumerate()
+    {
+        let on = option == reach;
+        let mark = match (on, ascii) {
+            (true, false) => "(•)",
+            (true, true) => "(*)",
+            (false, _) => "( )",
+        };
+        if index > 0 {
+            spans.push(Span::styled("  ", other));
+        }
+        spans.push(Span::styled(
+            format!(" {mark} {label} "),
+            if on { pick } else { other },
+        ));
+    }
+    if focused {
+        let used = super::spans_width(&spans);
+        spans.push(Span::styled(
+            " ".repeat(width.saturating_sub(used)),
+            theme.selection(),
+        ));
+    }
     pad(spans, width)
+}
+
+/// `spans` in the selection's colors, as a selected row of the options page.
+fn selected(theme: &Theme, spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    spans
+        .into_iter()
+        .map(|span| span.patch_style(theme.selection()))
+        .collect()
+}
+
+/// `text`'s first sentence and what follows it, each ending in a period:
+/// `hetzner does not accept connections. Set … there` gives
+/// `hetzner does not accept connections.` and `Set … there.`.
+fn sentences(text: &str) -> (String, Option<String>) {
+    let stop = |part: &str| {
+        let part = part.trim();
+        if part.ends_with(['.', '?', '!']) {
+            part.to_owned()
+        } else {
+            format!("{part}.")
+        }
+    };
+    match text.split_once(". ") {
+        Some((head, rest)) if !rest.trim().is_empty() => (stop(head), Some(stop(rest))),
+        _ => (stop(text), None),
+    }
 }
 
 /// `spans` cut to `width` cells, then filled with spaces to it.
@@ -112,11 +225,16 @@ pub(super) fn connect(app: &App, dialog: &ConnectDialog, width: usize) -> Parts 
         Step::Waiting => waiting(app, dialog, width),
         Step::Prompt(prompt) => question(theme, &host, prompt, width),
         Step::Failed(worded) => {
+            // The first sentence says what happened; what to do follows plain.
+            let (head, rest) = sentences(&worded.summary);
             let mut body = wrapped(
-                &worded.summary,
+                &head,
                 width,
                 theme.tone(Tone::Failure).add_modifier(Modifier::BOLD),
             );
+            if let Some(rest) = rest {
+                body.extend(wrapped(&rest, width, Style::new()));
+            }
             for detail in &worded.detail {
                 body.extend(wrapped(detail, width, Style::new()));
             }
@@ -133,38 +251,8 @@ pub(super) fn connect(app: &App, dialog: &ConnectDialog, width: usize) -> Parts 
 /// for a box reached by one, what that means, and what is wrong.
 fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
     let form = &dialog.form;
-    let ascii = theme.glyphs == Glyphs::Ascii;
-    let option = |reach: Reach, label: &str| {
-        let on = form.reach == reach;
-        let mark = match (on, ascii) {
-            (true, false) => "(•)",
-            (true, true) => "(*)",
-            (false, _) => "( )",
-        };
-        let style = if on {
-            Style::new().add_modifier(Modifier::BOLD)
-        } else {
-            theme.quiet()
-        };
-        Span::styled(format!("{mark} {label}"), style)
-    };
     let focused = form.field == Field::Reach;
-    let (marker, label_style) = if focused {
-        (theme.glyph(Glyph::Marker), theme.focus())
-    } else {
-        (" ", theme.quiet())
-    };
-    let mut body = vec![pad(
-        vec![
-            Span::styled(marker, theme.focus()),
-            Span::styled(format!("{:<w$}", "Reach it by", w = LABEL - 1), label_style),
-            option(Reach::Ssh, "SSH name"),
-            Span::raw("   "),
-            option(Reach::Command, "command"),
-        ],
-        width,
-    )];
-    body.push(Line::from(""));
+    let mut body = vec![reach_row(theme, form.reach, focused, width)];
     let name_hint = match form.reach {
         Reach::Ssh => "hetzner or me@203.0.113.4",
         Reach::Command => "a name for it, like acme",
@@ -188,22 +276,22 @@ fn form(theme: &Theme, dialog: &ConnectDialog, width: usize) -> Parts {
         ));
     }
     body.push(Line::from(""));
-    let about = match form.reach {
-        Reach::Ssh => {
-            "devlanes runs ssh with this name, so your SSH config applies. devlanes never edits it."
-                .to_owned()
-        }
-        Reach::Command => {
-            let name = match clean(form.name.trim()) {
-                name if name.is_empty() => "<name>".to_owned(),
-                name => name,
-            };
-            format!(
-                "The command must run devlanes tunnel --stdio in the box. It is saved as remote.boxes.{name}.command in config.yaml."
-            )
-        }
+    let name = match clean(form.name.trim()) {
+        name if name.is_empty() => "<name>".to_owned(),
+        name => name,
     };
-    body.extend(wrapped(&about, width, theme.quiet()));
+    let about = match form.reach {
+        Reach::Ssh => vec![format!(
+            "devlanes runs ssh {name}, so your SSH config applies."
+        )],
+        Reach::Command => vec![
+            "The command must run devlanes tunnel --stdio in the box.".to_owned(),
+            format!("devlanes saves it as remote.boxes.{name}.command."),
+        ],
+    };
+    for line in about {
+        body.extend(wrapped(&line, width, theme.quiet()));
+    }
     if form.configured().is_some() {
         body.push(Line::from(""));
         body.extend(wrapped(
@@ -271,16 +359,15 @@ fn question(theme: &Theme, host: &str, prompt: &Prompt, width: usize) -> Parts {
             format!("{host} needs a pairing code.")
         };
         body.extend(wrapped(&lead, width, bold));
-        body.extend(wrapped(
-            &format!(
-                "On {host}, press p in the Boxes view or run devlanes daemon pair. Type the code here."
-            ),
-            width,
-            theme.quiet(),
-        ));
+        for line in [
+            format!("On {host}, press p in its Boxes view."),
+            "Or run devlanes daemon pair there.".to_owned(),
+        ] {
+            body.extend(wrapped(&line, width, theme.quiet()));
+        }
         "Code"
     } else {
-        body.extend(wrapped("ssh asks:", width, bold));
+        body.extend(wrapped("ssh asks", width, theme.quiet()));
         for line in &prompt.text {
             body.extend(wrapped(line, width, Style::new()));
         }
@@ -320,39 +407,37 @@ pub(super) fn pair(app: &App, dialog: &PairDialog, width: usize) -> Parts {
         PairState::Code { code, valid_ms } => {
             let left = valid_ms.map(|valid| dialog.left(valid));
             if left == Some(0) {
-                let body = wrapped("This code expired. p gets a new one.", width, Style::new());
+                let body = wrapped("This code expired.", width, bold);
                 (body, vec![("p", "new code"), close])
             } else {
+                // The code is what the person reads out or types, so it
+                // stands alone in the middle, in the attention color.
                 let mut body = vec![
-                    Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(code.clone(), bold.patch(theme.focus())),
-                    ]),
                     Line::from(""),
+                    Line::styled(code.clone(), bold.patch(theme.tone(Tone::Attention))).centered(),
                 ];
                 let expires = match left {
                     Some(ms) => format!("It works once and expires in {}.", countdown(ms)),
                     None => "It works once.".to_owned(),
                 };
-                body.extend(wrapped(&expires, width, Style::new()));
+                body.extend(
+                    wrapped(&expires, width, theme.quiet())
+                        .into_iter()
+                        .map(Line::centered),
+                );
                 body.push(Line::from(""));
-                body.extend(wrapped("On the other machine, run:", width, theme.quiet()));
+                body.extend(wrapped("On the other machine, run", width, Style::new()));
                 body.extend(wrapped(
-                    &format!("devlanes remote connect <box> --code {code}"),
+                    &format!("  devlanes remote connect <box> --code {code}"),
                     width,
                     theme.key(),
                 ));
-                body.extend(wrapped(
+                for line in [
                     "<box> is this machine's SSH name there.",
-                    width,
-                    theme.quiet(),
-                ));
-                body.push(Line::from(""));
-                body.extend(wrapped(
-                    "Or press n in its Boxes view. It asks for this code.",
-                    width,
-                    theme.quiet(),
-                ));
+                    "Or press n in its Boxes view and type the code.",
+                ] {
+                    body.extend(wrapped(line, width, theme.quiet()));
+                }
                 (body, vec![("y", "copy code"), ("p", "new code"), close])
             }
         }

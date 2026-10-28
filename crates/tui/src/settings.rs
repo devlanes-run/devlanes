@@ -1600,8 +1600,9 @@ fn render_list(
 }
 
 /// The value being edited: reverse video in the focus color, so it stands
-/// apart from the selected row in every color tier.
-fn editing_style(theme: &Theme) -> Style {
+/// apart from the selected row in every color tier. The boxes view's forms
+/// draw their text fields the same way.
+pub(crate) fn editing_style(theme: &Theme) -> Style {
     let mut style = theme.focus().add_modifier(Modifier::BOLD);
     if theme.reverse_selection() {
         // The row is reversed already; a plain cell stands out of it.

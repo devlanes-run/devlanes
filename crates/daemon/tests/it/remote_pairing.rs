@@ -12,7 +12,7 @@ use devlanes_daemon::{Handler, Session};
 use devlanes_ipc::Frame;
 use devlanes_proto::{
     Context, Control, Method, Request, RpcError,
-    remote::{CLIENTS_EVENT, PROMPT_EVENT, TOKEN_PREFIX, is_random_id},
+    remote::{CLIENTS_EVENT, PAIRING_CODE_TTL_MS, PROMPT_EVENT, TOKEN_PREFIX, is_random_id},
 };
 use devlanes_state::Store;
 use serde_json::{Value, json};
@@ -44,6 +44,15 @@ async fn connect_unattended(client: &ClientSide, params: Value) -> Result<Value,
         context: Context::default(),
     };
     client.h.engine.handle(request, session).await
+}
+
+/// Milliseconds since the Unix epoch, the clock `expires_at_ms` is on.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 /// The id a client engine keeps in its home.
@@ -675,8 +684,16 @@ async fn pairing_needs_connections_to_be_allowed() {
         tokio::fs::write(&config, "remote:\n  allow_connections: true\n")
             .await
             .expect("config");
+        let before = now_ms();
         let paired = pair().await.expect("a code");
         assert!(paired["code"].as_str().is_some(), "{paired}");
+        // The TUI counts down from `valid_ms`, the CLI from `expires_at_ms`.
+        assert_eq!(paired["valid_ms"], PAIRING_CODE_TTL_MS, "{paired}");
+        let expires = paired["expires_at_ms"].as_u64().unwrap_or_default();
+        assert!(
+            (before + PAIRING_CODE_TTL_MS..=now_ms() + PAIRING_CODE_TTL_MS).contains(&expires),
+            "{paired}"
+        );
         side.stop().await;
     })
     .await

@@ -1327,7 +1327,14 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
     }
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
         let label = if index == 0 { "skipped" } else { "" };
-        let text = format!("{}: {}", clean(&skipped.lane), skip_reason(app, skipped));
+        let lane = clean(&skipped.lane);
+        let reason = skip_reason(app, skipped);
+        // `acme@0: acme@0 on this machine …` would name the lane twice.
+        let reason = match reason.strip_prefix(&format!("{lane} on this machine ")) {
+            Some(rest) => format!("the same lane on this machine {rest}"),
+            None => reason,
+        };
+        let text = format!("{lane}: {reason}");
         lines.extend(fact(label, &text, theme.tone(Tone::Attention)));
     }
     for (index, refused) in host.skipped_hosts.iter().enumerate() {

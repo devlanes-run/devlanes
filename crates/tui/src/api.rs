@@ -547,7 +547,7 @@ pub trait DaemonApi: Send + Sync {
         )))
     }
     /// `remote.pair`: a one-time code for another machine, with `valid_ms`,
-    /// how long it is valid from now, added.
+    /// how long it is valid from the reply.
     async fn pair(&self) -> Result<Value, ApiError> {
         Err(ApiError::Rpc(RpcError::new(
             "unknown_method",
@@ -1256,19 +1256,10 @@ impl DaemonApi for ClientApi {
         .await
     }
 
-    /// Calls `remote.pair` on the shared connection and adds `valid_ms`:
-    /// the daemon runs on this machine, so its expiry time is on this clock.
+    /// Calls `remote.pair` on the shared connection.
     async fn pair(&self) -> Result<Value, ApiError> {
-        let mut value = self
-            .shared_request(Method::RemotePair, json!({}), self.context(None, false))
-            .await?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
-        if let Some(expires) = value.get("expires_at_ms").and_then(Value::as_u64) {
-            value["valid_ms"] = json!(expires.saturating_sub(now));
-        }
-        Ok(value)
+        self.shared_request(Method::RemotePair, json!({}), self.context(None, false))
+            .await
     }
 
     /// Calls `remote.clients` on the shared connection and adds
