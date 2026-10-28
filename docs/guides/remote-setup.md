@@ -207,7 +207,11 @@ devlanes doesn't set it for you, because options on the `ssh` command line would
 
 ### Several boxes
 
-Connect to each box by its own name. Give every machine its own `ports.range`, for example `20000-24999` on the client, `25000-29999` on one box and `30000-32767` on the other, then `devlanes daemon restart` on each; lanes that already have ports keep them until `devlanes lane clean`. When two boxes run the same project, this machine mirrors one box's lane, the box connected first unless you choose another with `devlanes remote use <box> <lane>`, and lists the other under `skipped_lanes` in `remote ls`. [Several boxes with the same project](remote-multiple-boxes.md) has the order and how to switch. When the ranges of two connected boxes overlap, `remote ls` shows a warning on both while they do.
+Connect to each box by its own name. Give every machine its own `ports.range`, for example `20000-24999` on the client, `25000-29999` on one box and `30000-32767` on the other, then `devlanes daemon restart` on each.
+
+Lanes that already have ports keep them until `devlanes lane clean`. Forks of one image share their range, since they start from the same user config, so give a fork its own range right after it is made if its new lanes must not share ports with the other forks' ([overlapping port ranges](remote-multiple-boxes.md#overlapping-port-ranges)).
+
+When two boxes run the same project, this machine mirrors one box's lane, the box connected first unless you choose another with `devlanes remote use <box> <lane>`, and lists the other under `skipped_lanes` in `remote ls`. [Several boxes with the same project](remote-multiple-boxes.md) has the order and how to switch. When the ranges of two connected boxes overlap, `remote ls` shows a warning on both while they do.
 
 ### Box proxy on another port
 
@@ -258,7 +262,7 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | ``the box printed more than 64 KiB before `devlanes tunnel --stdio` started`` | a profile file prints a lot on every login | make it quiet for non-interactive sessions |
 | `port 5432 is not mirrored because postgres (pid 812) uses it here` | a local process holds the port | stop it, or mark the box container `hidden` |
 | `lane acme@1 is not mirrored because this machine's acme@1 is in use` | a stopped local lane of the same project has that hostname | `devlanes remote use <box> acme@1`, or give one side another `project` name ([several boxes](remote-multiple-boxes.md)) |
-| `lane acme@1 is not mirrored because acme@1 runs on this machine` | a running local lane has that hostname, and it always wins | stop it here, then `devlanes remote use <box> acme@1` ([several boxes](remote-multiple-boxes.md)) |
+| `lane acme@1 is not mirrored because acme@1 runs on this machine` | a running local lane has that hostname, and it always wins | `devlanes stop --lane acme@1`, then `devlanes remote use <box> acme@1` ([several boxes](remote-multiple-boxes.md)) |
 | `lane acme@0 is not mirrored because hetzner's acme@0 is in use` | another connected box serves the same hostname, because it connected first or you chose it | `devlanes remote use <box> acme@0` switches ([several boxes](remote-multiple-boxes.md)) |
 | `port 20012 is not mirrored because box hetzner (acme@0:api) uses it here` | another connected box's mirror holds the port | give the boxes different `ports.range` values |
 | `the box's ports.range 20000-32767 overlaps box hetzner (20000-32767), so ...` | two connected boxes hand out ports from the same pool | set another `ports.range` in `~/.devlanes/config.yaml` on one box, then `devlanes daemon restart` there |

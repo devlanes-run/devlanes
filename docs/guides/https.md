@@ -14,7 +14,7 @@ A request to a starting service waits until it is ready. A hostname whose servic
 
 ## Open services by hostname
 
-Open a service at its hostname, such as `https://api.acme-2.localhost`, and not at `http://localhost:<port>`. The proxy gives the hostname HTTPS, HTTP/2, WebSockets and the lane's own site for cookies. Plain `http://` on port 80 only redirects known hostnames to HTTPS. A raw port skips all of that, and the browser treats it as a different origin, with its own cookies and storage. Bookmarks, OAuth callbacks and CORS settings that name the hostname also keep working when the lane moves to another box ([several boxes with the same project](remote-multiple-boxes.md)).
+Open a service at its hostname, such as `https://api.acme-2.localhost`, and not at `http://localhost:<port>`. The proxy gives the hostname HTTPS, HTTP/2, WebSockets and the lane's own site for cookies. Plain `http://` on port 80 only redirects known hostnames to HTTPS. A raw port skips all of that. The browser treats `localhost:<port>` as another origin, and cookies set there reach every port on `localhost`, every lane's included. Bookmarks, OAuth callbacks and CORS settings that name the hostname also keep working when the lane moves to another box ([several boxes with the same project](remote-multiple-boxes.md)).
 
 ## Trust the CA once
 
