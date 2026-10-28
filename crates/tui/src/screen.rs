@@ -52,6 +52,8 @@ struct History {
     loading: bool,
     /// The next view starts over: the stream was reopened.
     restart: bool,
+    /// Index the next view's lines should start at; `None` before the first.
+    next: Option<u64>,
 }
 
 /// A line above the screen: as drawn, and where the log has it.
@@ -91,6 +93,13 @@ impl TerminalScreen {
         self.history.is_some()
     }
 
+    /// Whether the current stream drew this screen with views.
+    pub fn viewed(&self) -> bool {
+        self.history
+            .as_ref()
+            .is_some_and(|history| history.next.is_some() && !history.restart)
+    }
+
     /// Feeds raw output from the attach stream.
     pub fn process(&mut self, bytes: &[u8]) {
         self.parser.process(bytes);
@@ -109,18 +118,32 @@ impl TerminalScreen {
     /// keeps showing the same rows.
     pub fn apply_view(&mut self, view: &AttachView) {
         let before = self.total_rows();
-        let history = self.history.get_or_insert_with(History::default);
-        if std::mem::take(&mut history.restart) {
+        // A raw stream never gets views; this keeps it from turning into one.
+        let Some(history) = self.history.as_mut() else {
+            return;
+        };
+        let mut lines = view.lines.as_slice();
+        // The first view, or one after lines the daemon no longer kept, starts
+        // the lines over; those above it come from the log.
+        let restart = std::mem::take(&mut history.restart);
+        let fell_behind = history.next.is_some_and(|next| view.from > next);
+        if restart || fell_behind || history.next.is_none() {
             *history = History {
                 width: history.width,
+                log_unit: view.log_unit.clone(),
+                before: Some(format!("before:{}#{}", view.log_unit, view.before_seq)),
                 ..History::default()
             };
+            if fell_behind {
+                self.offset = 0;
+            }
+        } else if let Some(next) = history.next {
+            // Lines the pane already has.
+            let seen = usize::try_from(next.saturating_sub(view.from)).unwrap_or(usize::MAX);
+            lines = &lines[seen.min(lines.len())..];
         }
-        if history.log_unit.is_empty() {
-            history.log_unit.clone_from(&view.log_unit);
-            history.before = Some(format!("before:{}#{}", view.log_unit, view.before_seq));
-        }
-        for line in &view.lines {
+        history.next = Some(view.from + view.lines.len() as u64);
+        for line in lines {
             history.push_back(line.styled.clone(), line.seq);
         }
         let size = (non_zero(view.rows), non_zero(view.columns));

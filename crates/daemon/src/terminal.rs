@@ -94,12 +94,15 @@ pub(crate) struct Terminal {
     /// terminal. A console host erases rows to repaint its window and passes
     /// on only a clear of the scrollback (`cls`), so there only that does.
     erase_ends: bool,
-    /// The start of an erase at the end of the last chunk.
+    /// The start of a sequence [`next_boundary`] finds, at the end of the
+    /// last chunk.
     seam: Vec<u8>,
 }
 
-/// Longest erase [`next_erase`] finds that a chunk may split: `ESC [ nnn J`.
-const ERASE_MAX: usize = 6;
+/// The switches to the alternate screen.
+const ALTERNATE: [&[u8]; 3] = [b"\x1b[?1049h", b"\x1b[?1047h", b"\x1b[?47h"];
+/// Longest sequence [`next_boundary`] finds: `ESC [ ? 1049 h`.
+const BOUNDARY_MAX: usize = 8;
 
 impl Terminal {
     /// An empty grid of `size` whose first logged line gets sequence `first_seq`.
@@ -135,33 +138,43 @@ impl Terminal {
         }
     }
 
-    /// Feeds output. What a clear of the screen removes reaches the log
-    /// first; everything else waits for [`Self::settle`].
+    /// Feeds output. What a clear of the screen removes, or a switch to the
+    /// alternate screen hides, reaches the log first; everything else waits
+    /// for [`Self::settle`].
     pub(crate) fn process(&mut self, mut bytes: &[u8]) {
-        // An erase split across two chunks: its start is already in the parser.
+        // A sequence split across two chunks: its start is already in the parser.
         let seam = std::mem::take(&mut self.seam);
         if !seam.is_empty() {
             let mut joined = seam.clone();
-            joined.extend_from_slice(&bytes[..bytes.len().min(ERASE_MAX)]);
-            if let Some((0, end)) = next_erase(&joined) {
+            joined.extend_from_slice(&bytes[..bytes.len().min(BOUNDARY_MAX)]);
+            if let Some((0, end)) = next_boundary(&joined) {
                 let rest = end - seam.len();
-                self.erase(&joined[..end], &bytes[..rest]);
+                self.boundary(&joined[..end], &bytes[..rest]);
                 bytes = &bytes[rest..];
             }
         }
-        while let Some((start, end)) = next_erase(bytes) {
+        while let Some((start, end)) = next_boundary(bytes) {
             self.parser.process(&bytes[..start]);
-            self.erase(&bytes[start..end], &bytes[start..end]);
+            self.boundary(&bytes[start..end], &bytes[start..end]);
             bytes = &bytes[end..];
         }
         self.parser.process(bytes);
-        self.seam = bytes[bytes.len() - erase_prefix(bytes)..].to_vec();
+        self.seam = bytes[bytes.len() - boundary_prefix(bytes)..].to_vec();
     }
 
-    /// Feeds `fed`, the part of erase `sequence` the parser has not seen. One
-    /// that ends the screen logs what it showed first.
-    fn erase(&mut self, sequence: &[u8], fed: &[u8]) {
-        let ends = !self.parser.screen().alternate_screen() && self.ends_screen(sequence);
+    /// Feeds `fed`, the part of `sequence` (see [`next_boundary`]) the parser
+    /// has not seen. A switch to the alternate screen logs what the main
+    /// screen shows first: a unit that exits before switching back would
+    /// otherwise never log it. An erase that ends the screen does the same,
+    /// then starts a new one.
+    fn boundary(&mut self, sequence: &[u8], fed: &[u8]) {
+        let main = !self.parser.screen().alternate_screen();
+        if main && ALTERNATE.contains(&sequence) {
+            self.settle_through(Through::LastText);
+            self.parser.process(fed);
+            return;
+        }
+        let ends = main && self.ends_screen(sequence);
         if ends {
             self.settle_through(Through::LastText);
         }
@@ -531,7 +544,7 @@ impl Terminal {
         (0..row).filter(|&row| !screen.row_wrapped(row)).count()
     }
 
-    /// Whether `sequence`, an erase found by [`next_erase`], ends what the
+    /// Whether `sequence`, found by [`next_boundary`], ends what the
     /// screen showed.
     fn ends_screen(&self, sequence: &[u8]) -> bool {
         if !self.erase_ends {
@@ -697,43 +710,48 @@ fn parser(size: TerminalSize, rows: Rows) -> vt100::Parser<Rows> {
     vt100::Parser::new_with_callbacks(cells(size.rows), cells(size.columns), 0, rows)
 }
 
-/// Where the first erase of the screen or terminal reset in `bytes` starts
-/// and ends: `ESC c`, or `ESC [ n J`.
-fn next_erase(bytes: &[u8]) -> Option<(usize, usize)> {
+/// Where the first sequence in `bytes` that ends or hides what the main
+/// screen shows starts and ends: a terminal reset (`ESC c`), an erase of
+/// the display (`ESC [ n J`) or a switch to the alternate screen
+/// ([`ALTERNATE`]).
+fn next_boundary(bytes: &[u8]) -> Option<(usize, usize)> {
     let mut from = 0;
     while let Some(at) = bytes[from..].iter().position(|&byte| byte == 0x1b) {
         let start = from + at;
-        match bytes.get(start + 1) {
-            Some(b'c') => return Some((start, start + 2)),
-            Some(b'[') => {
-                let params = &bytes[start + 2..];
-                let digits = params
-                    .iter()
-                    .take_while(|byte| byte.is_ascii_digit())
-                    .count();
-                if params.get(digits) == Some(&b'J') {
-                    return Some((start, start + 2 + digits + 1));
-                }
+        let rest = &bytes[start..];
+        if rest.starts_with(b"\x1bc") {
+            return Some((start, start + 2));
+        }
+        if let Some(params) = rest.strip_prefix(b"\x1b[") {
+            let digits = params
+                .iter()
+                .take_while(|byte| byte.is_ascii_digit())
+                .count();
+            if params.get(digits) == Some(&b'J') {
+                return Some((start, start + 2 + digits + 1));
             }
-            _ => {}
+        }
+        if let Some(switch) = ALTERNATE.iter().find(|switch| rest.starts_with(switch)) {
+            return Some((start, start + switch.len()));
         }
         from = start + 1;
     }
     None
 }
 
-/// Length of the start of an erase (see [`next_erase`]) that `bytes` ends with.
-fn erase_prefix(bytes: &[u8]) -> usize {
-    let tail = &bytes[bytes.len().saturating_sub(ERASE_MAX - 1)..];
+/// Length of the start of a sequence [`next_boundary`] finds that `bytes`
+/// ends with.
+fn boundary_prefix(bytes: &[u8]) -> usize {
+    let tail = &bytes[bytes.len().saturating_sub(BOUNDARY_MAX - 1)..];
     let Some(at) = tail.iter().rposition(|&byte| byte == 0x1b) else {
         return 0;
     };
-    let rest = &tail[at + 1..];
-    let started = match rest.split_first() {
-        None => true,
-        Some((b'[', digits)) => digits.iter().all(u8::is_ascii_digit),
-        Some(_) => false,
-    };
+    let rest = &tail[at..];
+    let erase = rest
+        .strip_prefix(b"\x1b[")
+        .is_some_and(|digits| digits.iter().all(u8::is_ascii_digit));
+    let started =
+        rest == b"\x1b" || erase || ALTERNATE.iter().any(|switch| switch.starts_with(rest));
     if started { tail.len() - at } else { 0 }
 }
 
@@ -1004,6 +1022,28 @@ mod tests {
         let mut terminal = unix();
         assert!(feed(&mut terminal, b"\x1b[?1049hmenu\r\nitem\r\n").is_empty());
         assert_eq!(feed(&mut terminal, b"\x1b[?1049ldone\r\n"), ["done"]);
+    }
+
+    #[test]
+    /// Lines printed in the same batch as a switch to the alternate screen
+    /// are logged once, even when the unit ends before switching back, and
+    /// also when the switch is split across two chunks.
+    fn lines_before_the_alternate_screen_are_logged() {
+        let mut terminal = unix();
+        terminal.process(b"before\r\n\x1b[?1049hmenu\r\n");
+        terminal.settle();
+        terminal.finish();
+        assert_eq!(terminal.take_log(), ["before"]);
+        let mut terminal = unix();
+        terminal.process(b"one\r\ntwo\x1b[?10");
+        terminal.process(b"49hmenu");
+        terminal.settle();
+        terminal.finish();
+        assert_eq!(terminal.take_log(), ["one", "two"]);
+        // Back on the main screen, those lines are not new.
+        terminal.process(b"\x1b[?1049l\r\nafter\r\n");
+        terminal.settle();
+        assert_eq!(terminal.take_log(), ["after"]);
     }
 
     #[test]

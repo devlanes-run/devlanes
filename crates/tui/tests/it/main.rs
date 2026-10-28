@@ -152,7 +152,8 @@ fn focus_terminal(app: &mut App, bytes: &[u8]) -> Option<u64> {
     Some(generation)
 }
 
-/// Marks the attach stream open and feeds it terminal output.
+/// Marks the attach stream open and feeds it terminal output: a unit's
+/// stream as the daemon's view drawing it, a container's as raw bytes.
 fn feed(app: &mut App, generation: u64, bytes: &[u8]) {
     app.update(Msg::AttachOpened {
         generation,
@@ -162,10 +163,32 @@ fn feed(app: &mut App, generation: u64, bytes: &[u8]) {
             lane: String::new(),
         }),
     });
-    app.update(Msg::AttachOutput {
-        generation,
-        bytes: bytes.to_vec(),
-    });
+    let size = app
+        .attached
+        .as_ref()
+        .filter(|a| a.generation == generation && a.screen.has_history())
+        .map(|a| a.screen.screen().size());
+    let msg = match size {
+        Some((rows, columns)) => Msg::AttachView {
+            generation,
+            view: Box::new(devlanes_proto::AttachView {
+                stream_id: 1,
+                from: 0,
+                lines: Vec::new(),
+                log_unit: "api".into(),
+                before_seq: 1,
+                columns: columns.get(),
+                rows: rows.get(),
+                screen: String::from_utf8_lossy(bytes).into_owned(),
+                whole: false,
+            }),
+        },
+        None => Msg::AttachOutput {
+            generation,
+            bytes: bytes.to_vec(),
+        },
+    };
+    app.update(msg);
 }
 
 // ---- snapshots ---------------------------------------------------------------
@@ -1083,6 +1106,94 @@ async fn new_lines_keep_a_scrolled_pane_in_place() -> TestResult {
     app.update(key(KeyCode::PageUp));
     let text = draw(&app)?.backend().to_string();
     assert!(text.contains("line 064"), "{text}");
+    Ok(())
+}
+
+#[tokio::test]
+/// A view that starts past the lines the pane has (the daemon no longer
+/// kept the ones between) starts the lines over instead of joining across
+/// the gap; scrolling up then reads everything older from the log.
+async fn a_gap_in_the_views_is_read_from_the_log() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    let first: Vec<String> = (0..5).map(|i| format!("line {i:03}")).collect();
+    open_view(&mut app, generation, &first, 0, "on screen\r\n");
+    // Lines 5 to 2999 never reached the pane.
+    let late: Vec<String> = (3000..3005).map(|i| format!("line {i:03}")).collect();
+    let mut next = view(&app, &late, 3000, "");
+    next.screen.clear();
+    next.whole = false;
+    app.update(Msg::AttachView {
+        generation,
+        view: Box::new(next),
+    });
+    let effects = app.update(key(KeyCode::PageUp));
+    let query = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::FetchLogs { query, .. } => Some(query),
+            _ => None,
+        })
+        .ok_or(format!("no fetch: {effects:?}"))?;
+    assert_eq!(query.cursor.as_deref(), Some("before:api#3000"));
+    let text = draw(&app)?.backend().to_string();
+    assert!(
+        text.contains("line 3004") && !text.contains("line 004"),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+/// A daemon too old for `history` sends terminal bytes: the pane keeps its
+/// own scrollback, resizes reopen the stream once they settle, and typing
+/// reopens it as interactive when the daemon refuses `attach.role`.
+async fn an_older_daemons_raw_stream_keeps_working() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    app.update(Msg::AttachOpened {
+        generation,
+        result: Ok(devlanes_proto::AttachResult {
+            stream_id: 1,
+            unit: String::new(),
+            lane: String::new(),
+        }),
+    });
+    let output: String = (0..60).map(|i| format!("line {i:03}\r\n")).collect();
+    app.update(Msg::AttachOutput {
+        generation,
+        bytes: output.into_bytes(),
+    });
+    let attached = app.attached.as_ref().ok_or("nothing attached")?;
+    assert!(!attached.screen.has_history(), "a raw screen");
+    let live = draw(&app)?.backend().to_string();
+    let oldest = (0..60)
+        .find(|i| live.contains(&format!("line {i:03}")))
+        .ok_or(live.clone())?;
+    app.update(key(KeyCode::PageUp));
+    let text = draw(&app)?.backend().to_string();
+    let older = format!("line {:03}", oldest - 1);
+    assert!(text.contains(&older), "its own scrollback: {text}");
+    app.update(key(KeyCode::Esc));
+    let effects = app.update(Msg::Resize(120, 30));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::SettleResize { .. })),
+        "{effects:?}"
+    );
+    app.update(key(KeyCode::Enter));
+    let error = devlanes_proto::RpcError::new("unknown_method", serde_json::json!({}), 2);
+    let effects = app.update(Msg::RoleRefused {
+        generation,
+        error: devlanes_tui::ApiError::Rpc(error),
+    });
+    assert!(
+        matches!(attach_in(&effects), Some((_, true))),
+        "{effects:?}"
+    );
     Ok(())
 }
 

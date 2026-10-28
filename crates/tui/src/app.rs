@@ -1618,6 +1618,13 @@ impl App {
             Msg::AttachOutput { generation, bytes } => {
                 let settling = self.resize_settling;
                 if let Some(attached) = self.attached_mut(generation) {
+                    // A daemon too old for `history` sends terminal bytes: the
+                    // pane keeps its own scrollback then, and resizes reopen
+                    // the stream, as before.
+                    if attached.screen.has_history() && !attached.screen.viewed() {
+                        let (rows, columns) = attached.screen.size();
+                        attached.screen = TerminalScreen::new(rows, columns);
+                    }
                     attached.screen.process(&bytes);
                     // The reopened stream's first output is the daemon's full
                     // redraw; before the reopen, output only reaches the live grid.
