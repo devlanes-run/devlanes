@@ -59,6 +59,7 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         .as_ref()
         .map(|power| Span::styled(format!(" {}", clean(&power.level)), theme.quiet()));
     let on_box = app.box_lane(&lane.reference);
+    let grey = app.grey(&lane.reference).is_some();
     match lane.index {
         // A box lane goes by its reference on the box: `acme@1 on hetzner`.
         _ if on_box.is_some() && app.project_lanes().len() < 2 => {
@@ -78,10 +79,13 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
                 name.push(Span::styled(format!(" {}", clean(&host.host)), bold));
             }
             name.extend(power);
-            name.push(Span::styled(
-                format!(" · {}/{} up", counts.up, counts.total),
-                theme.quiet(),
-            ));
+            // Narrow lists cut the title, and what serves the lane matters more.
+            if !grey {
+                name.push(Span::styled(
+                    format!(" · {}/{} up", counts.up, counts.total),
+                    theme.quiet(),
+                ));
+            }
         }
         index => {
             name.push(Span::styled(lane_name(lane), bold));
@@ -104,7 +108,7 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
     if let Some(word) = word {
         name.push(Span::styled(format!(" · {word}"), theme.tone(Tone::Busy)));
     }
-    if app.grey(&lane.reference).is_some() {
+    if grey {
         name.push(Span::styled(" · not mirrored", theme.quiet()));
     }
     name.push(Span::raw(" "));

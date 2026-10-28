@@ -1,14 +1,14 @@
  devlanes  1 acme   2 billing   3 shop                                                                                          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
  lanes  1 @0  2 @0 hetzner ○  3 @1 4/8  4 @2  5 @3  6 @4 hetzner                                                                                                                1-9 or [ ] switch lanes
-┌ @0 hetzner · 2/2 up · not mirrored ──────────┐┌ api-gateway  ready ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
-│ ▾ services                                 2 ││ ! Not mirrored here because acme@0 on this machine serves its hostnames.                                                                             │
-│   ● api-gateway                              ││   Its ports and hostnames are mirrored once that changes.                                                                                            │
-│   ● web-app                                  ││                                                                                                                                                      │
-│                                              ││ state     ready on the box                                                                                                                           │
+┌ @0 hetzner · not mirrored ───────────────────┐┌ api-gateway  ready ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
+│ ▾ services                                 2 ││ ! Not mirrored. acme@0 runs on this machine. Stop it there to use this one.                                                                          │
+│   ● api-gateway                              ││                                                                                                                                                      │
+│   ● web-app                                  ││ state     ready on the box                                                                                                                           │
 │                                              ││ ports     default 24000  lane not mirrored                                                                                                           │
 │                                              ││ hosts     gateway.acme.localhost  not routed here (lane not mirrored)                                                                                │
 │                                              ││                                                                                                                                                      │
 │                                              ││ Read-only here. On hetzner: ssh hetzner, then devlanes logs acme@0:api-gateway                                                                       │
+│                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -62,15 +62,15 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold, 184-187 dim, 188-198 yellow
 1: 0-6 dim, 8-9 dim, 10-11 red, 13-28 bold reversed, 30-31 dim, 32-37 yellow, 40-43 dim, 46-47 dim, 48-49 yellow, 52-53 dim, 54-63 green, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
-2: 0 darkgray, 2-11 bold, 12-35 dim, 37-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 69-186 darkgray, 188-197 dim, 199 darkgray
+2: 0 darkgray, 2-11 bold, 12-26 dim, 28-48 darkgray, 50-60 bold, 61-62 dim, 63-67 green, 69-186 darkgray, 188-197 dim, 199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 199 darkgray
 4: 0 darkgray, 1-46 reversed, 47-48 darkgray, 199 darkgray
-5: 0 darkgray, 4-12 green, 47-48 darkgray, 199 darkgray
-6: 0 darkgray, 47-48 darkgray, 50-75 dim, 199 darkgray
-7: 0 darkgray, 47-48 darkgray, 50-59 dim, 75-91 yellow, 199 darkgray
-8: 0 darkgray, 47-48 darkgray, 50-59 dim, 60-118 yellow, 199 darkgray
-9: 0 darkgray, 47-48 darkgray, 199 darkgray
-10: 0 darkgray, 47-48 darkgray, 50-127 dim, 199 darkgray
+5: 0 darkgray, 4-12 green, 47-48 darkgray, 50-75 dim, 199 darkgray
+6: 0 darkgray, 47-48 darkgray, 50-59 dim, 75-91 yellow, 199 darkgray
+7: 0 darkgray, 47-48 darkgray, 50-59 dim, 60-118 yellow, 199 darkgray
+8: 0 darkgray, 47-48 darkgray, 199 darkgray
+9: 0 darkgray, 47-48 darkgray, 50-127 dim, 199 darkgray
+10: 0 darkgray, 47-48 darkgray, 199 darkgray
 11: 0 darkgray, 47-48 darkgray, 199 darkgray
 12: 0 darkgray, 47-48 darkgray, 199 darkgray
 13: 0 darkgray, 47-48 darkgray, 199 darkgray

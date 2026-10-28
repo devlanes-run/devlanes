@@ -1044,6 +1044,22 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
         .reason
         .as_ref()
         .is_some_and(|r| r.code == "worktree_missing");
+    // A stopped lane whose hostnames a chosen box lane took.
+    if let Some(note) = app
+        .grey(&lane.reference)
+        .as_ref()
+        .and_then(super::boxes::grey_note)
+    {
+        lines.extend(banner(
+            theme,
+            Glyph::Attention,
+            Tone::Attention,
+            &note,
+            &[],
+            width,
+        ));
+        lines.push(Line::from(""));
+    }
     if missing {
         lines.extend(banner(
             theme,

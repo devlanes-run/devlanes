@@ -16,7 +16,7 @@ use ratatui::{
 use super::list::{container_look, lane_summary};
 use super::pane::{LABEL, banner, details, field, render_box, sentence, title, unit_facts_title};
 use super::{draw_box, fit, spread, unit_look};
-use crate::app::{App, BoxPart};
+use crate::app::{App, BoxPart, Grey};
 use crate::boxes::{BoxHost, RegistryUnit};
 use crate::clients::{Client, short_id};
 use crate::text::{self, clean, clip};
@@ -39,7 +39,7 @@ pub(super) fn pane(
         format!("on {}", clean(&host.host)),
         theme.quiet(),
     )];
-    let mut lines = notes(app, host, box_lane, width);
+    let mut lines = notes(app, host, box_lane, &lane.reference, width);
     match app.selected_id().cloned() {
         Some(RowId::Unit(name)) => {
             let unit = lane.units.iter().find(|u| u.name == name);
@@ -131,8 +131,15 @@ pub(super) fn pane(
 
 /// Banners above a box lane's details: a key that just did nothing here and
 /// what to run on the box instead, a link that is down, so what shows is the
-/// last known state, and a lane this machine does not mirror.
-fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'static>> {
+/// last known state, and a lane this machine does not mirror. `reference`
+/// is the lane's in the TUI, `acme@1 @hetzner`.
+fn notes(
+    app: &App,
+    host: &BoxHost,
+    box_lane: &str,
+    reference: &str,
+    width: usize,
+) -> Vec<Line<'static>> {
     let theme = &app.theme;
     let attention = |text: &str, rest: &[String]| {
         let mut lines = banner(theme, Glyph::Attention, Tone::Attention, text, rest, width);
@@ -173,14 +180,41 @@ fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'s
     if let Some((down, rest)) = down {
         lines.extend(attention(&down, &rest));
     }
-    if let Some(skipped) = host.skipped(box_lane) {
-        let reason = skip_reason(app, skipped);
-        lines.extend(attention(
-            &format!("Not mirrored here because {reason}."),
-            &["Its ports and hostnames are mirrored once that changes.".to_owned()],
-        ));
+    if let Some(grey) = app.grey(reference) {
+        match grey_note(&grey) {
+            Some(note) => lines.extend(attention(&note, &[])),
+            // A daemon without `remote.use` says why, and nothing switches it.
+            None => {
+                let reason = host
+                    .skipped(box_lane)
+                    .map_or_else(|| clean(&grey.reason), |skipped| skip_reason(app, skipped));
+                lines.extend(attention(
+                    &format!("Not mirrored here because {reason}."),
+                    &["Its ports and hostnames are mirrored once that changes.".to_owned()],
+                ));
+            }
+        }
     }
     lines
+}
+
+/// The first line of a grey lane's pane: what serves its hostnames instead
+/// and how to use this one. `None` from daemons without `remote.use`.
+pub(super) fn grey_note(grey: &Grey) -> Option<String> {
+    let lane = clean(&grey.lane);
+    match (grey.cause.as_deref()?, &grey.winner) {
+        ("local_running", _) => Some(format!(
+            "Not mirrored. {lane} runs on this machine. Stop it there to use this one."
+        )),
+        (_, Some(winner)) if grey.can_use => Some(format!(
+            "Not mirrored. {}'s {lane} is in use. Press m to use this one.",
+            clean(winner)
+        )),
+        (_, None) if grey.can_use => Some(format!(
+            "Not mirrored. {lane} on this machine is in use. Press m to use this one."
+        )),
+        _ => None,
+    }
 }
 
 /// Why a box lane is skipped, naming the local lane that serves its
