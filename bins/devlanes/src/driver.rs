@@ -196,9 +196,15 @@ impl ClientDriver {
     }
 
     /// Lane-scoped context; the client env is only sent with process-starting requests.
+    /// An empty `lane` keeps the driver's own lane, so `stop --logs-dir` without
+    /// `--lane` reaches the cwd's lane as plain `stop` does.
     fn lane_context(&self, lane: &str) -> Context {
         Context {
-            lane: Some(lane.to_owned()),
+            lane: if lane.is_empty() {
+                self.context.lane.clone()
+            } else {
+                Some(lane.to_owned())
+            },
             env: None,
             ..self.context.clone()
         }

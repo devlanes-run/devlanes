@@ -433,8 +433,8 @@ fn with_failures(mut result: Value, failures: &[UnitFailure]) -> Value {
     result
 }
 
-/// Implements stop --logs-dir after the caller resolves the request's canonical lane.
-/// Artifact failures never prevent the explicit stop; this never shuts down the daemon.
+/// Implements stop --logs-dir in `lane`, or in the lane of the driver's cwd when
+/// `lane` is empty (no `--lane`). Artifact failures never prevent the explicit stop; this never shuts down the daemon.
 pub async fn stop_with_logs<D: WithDriver + ?Sized>(
     lane: &str,
     selection: Selection,
