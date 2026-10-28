@@ -1472,11 +1472,11 @@
           "markdownDescription": "What devlanes does when a worktree gets its lane: only reserve it, also set it up, or also start it. Defaults to `register`. A worktree gets a lane the first time devlanes runs in it or `devlanes lane new` creates it, not merely because it exists."
         },
         "primary": {
-          "description": "Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the only worktree that gets a lane by itself. Defaults to the remote's default branch, else `main` or `master`.",
+          "description": "Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the only worktree that gets a lane by itself. Defaults to the remote's default branch, else `main` or `master`. In CI (a variable such as `CI` or `GITHUB_ACTIONS` is set) the checkout takes lane 0 on any branch when lane 0 is free.",
           "examples": [
             "main"
           ],
-          "markdownDescription": "Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the only worktree that gets a lane by itself. Defaults to the remote's default branch, else `main` or `master`.",
+          "markdownDescription": "Branch whose worktree is lane 0, the main lane (`lanes.main` in expressions) and the only worktree that gets a lane by itself. Defaults to the remote's default branch, else `main` or `master`. In CI (a variable such as `CI` or `GITHUB_ACTIONS` is set) the checkout takes lane 0 on any branch when lane 0 is free.",
           "type": [
             "string",
             "null"
