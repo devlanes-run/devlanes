@@ -349,18 +349,34 @@ pub fn rpc(error: &RpcError) -> Worded {
             )
         }
         "config_names_other_project" => (
-            format!(
-                "the project file here now names project {}",
-                known(data, "project")
-            ),
+            match field(data, "lane") {
+                lane if lane.is_empty() => format!(
+                    "the project file now names project {}",
+                    known(data, "project")
+                ),
+                lane => format!(
+                    "{lane}'s project file now names project {}",
+                    known(data, "project")
+                ),
+            },
             Vec::new(),
             Some("devlanes lane gc --yes".into()),
         ),
         "project_name_taken" => (
             format!(
-                "project {} is already used by {}",
+                "project {} is already used by {}; set another project: in this file",
                 known(data, "project"),
                 known(data, "other")
+            ),
+            Vec::new(),
+            None,
+        ),
+        "duplicate_project_name" => (
+            format!(
+                "{} and {} both name project {}; change project: in one of them",
+                known(data, "file"),
+                known(data, "other"),
+                known(data, "project")
             ),
             Vec::new(),
             None,

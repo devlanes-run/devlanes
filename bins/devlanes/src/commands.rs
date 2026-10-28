@@ -964,14 +964,23 @@ fn scoped_logs(request: &Request, args: &[&str]) -> Hint {
     scoped(request, &all)
 }
 
-/// `devlanes ARGS` with the user's `--lane` and `--project`.
+/// `devlanes ARGS` with the user's `--lane`, `--project` and `--file`.
 fn scoped(request: &Request, args: &[&str]) -> Hint {
+    let file = request
+        .context
+        .file
+        .as_ref()
+        .map(|file| file.to_string_lossy());
     let mut all: Vec<&str> = args.to_vec();
     if let Some(lane) = &request.context.lane {
         all.extend(["--lane", lane.as_str()]);
     }
     if let Some(project) = &request.context.project {
         all.extend(["--project", project.as_str()]);
+    }
+    // Without it the hint would read the cwd's devlanes.yaml project instead.
+    if let Some(file) = &file {
+        all.extend(["--file", file.as_ref()]);
     }
     Hint::command(all)
 }
@@ -1008,6 +1017,8 @@ fn more_hint(method: Method, request: &Request) -> Option<Hint> {
                 )
             })
         }
+        // The config has no cursor; a bigger budget prints all of it.
+        Method::ConfigShow => Some(scoped(request, &["debug", "config", "--budget", "1048576"])),
         _ => None,
     }
 }
@@ -1015,7 +1026,6 @@ fn more_hint(method: Method, request: &Request) -> Option<Hint> {
 /// Common hints for daemon error codes; the CLI owns all wording.
 fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
     match error.code.as_str() {
-        "config_names_other_project" => Some(Hint::command(["lane", "gc", "--yes"])),
         "unit_failed" | "ready_timeout" => {
             // A non-2xx answer to an http check is fixed in the config, not found in logs.
             if let Some(hint) = devlanes_cli::status_hint(&error.data) {
@@ -1424,5 +1434,55 @@ mod tests {
             ..run
         };
         assert!(matches!(streamed_output(&watch), Some(None)));
+    }
+
+    /// A command run with `--file` gets hints that name the same file, and a
+    /// truncated `debug config` points at a bigger budget for the same lane.
+    #[test]
+    fn hints_keep_the_project_file() {
+        let file = std::env::temp_dir().join("devlanes.prod.yaml");
+        let request = Request {
+            id: 0,
+            method: Method::ConfigShow,
+            params: json!({}),
+            context: devlanes_proto::Context {
+                lane: Some("acme-prod@2".into()),
+                file: Some(file.clone()),
+                ..devlanes_proto::Context::default()
+            },
+        };
+        let expected = Hint::command([
+            "debug",
+            "config",
+            "--budget",
+            "1048576",
+            "--lane",
+            "acme-prod@2",
+            "--file",
+            &file.to_string_lossy(),
+        ]);
+        assert_eq!(
+            more_hint(Method::ConfigShow, &request).map(|hint| hint.0),
+            Some(expected.0)
+        );
+        let logs = Request {
+            method: Method::Logs,
+            params: json!({"units": ["api"]}),
+            ..request
+        };
+        let expected = Hint::command([
+            "logs",
+            "api",
+            "--tail",
+            "500",
+            "--lane",
+            "acme-prod@2",
+            "--file",
+            &file.to_string_lossy(),
+        ]);
+        assert_eq!(
+            more_hint(Method::Logs, &logs).map(|hint| hint.0),
+            Some(expected.0)
+        );
     }
 }

@@ -60,22 +60,50 @@ fn parser_definition_is_consistent() {
 /// `--file` reaches the daemon as a path from the cwd, `-p` names the project, and
 /// `logs -f` keeps meaning `--follow`.
 fn project_file_and_short_project_flags() {
-    let cli = Cli::parse_from([
+    let cli = Cli::parse_from(["devlanes", "--file", "devlanes.prod.yaml", "status"]);
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(
+        req.context.file,
+        Some(PathBuf::from("/fixture/worktree").join("devlanes.prod.yaml"))
+    );
+    let cli = Cli::parse_from(["devlanes", "-p", "acme-prod", "status"]);
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.project.as_deref(), Some("acme-prod"));
+    assert!(req.context.file.is_none());
+    let cli = Cli::parse_from(["devlanes", "logs", "-f", "api"]);
+    assert!(cli.file.is_none());
+}
+
+#[test]
+/// The file names its project, so `-p` and an inherited `DEVLANES_PROJECT` (which
+/// clap reads into the same field) are left out instead of refused.
+fn project_file_sends_only_the_file() {
+    let mut cli = Cli::parse_from([
         "devlanes",
         "-p",
-        "acme-prod",
+        "acme",
         "--file",
         "devlanes.prod.yaml",
         "status",
     ]);
     let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
-    assert_eq!(req.context.project.as_deref(), Some("acme-prod"));
-    assert_eq!(
-        req.context.file,
-        Some(PathBuf::from("/fixture/worktree").join("devlanes.prod.yaml"))
-    );
-    let cli = Cli::parse_from(["devlanes", "logs", "-f", "api"]);
-    assert!(cli.file.is_none());
+    assert_eq!(req.context.project, None);
+    assert!(req.context.file.is_some());
+    // What `DEVLANES_PROJECT` of the lane this command runs in would set.
+    cli = Cli::parse_from(["devlanes", "--file", "devlanes.prod.yaml", "start"]);
+    cli.project = Some("acme".into());
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.project, None);
+}
+
+#[test]
+/// An absolute `--file` is sent as given, not joined below the cwd.
+fn absolute_project_file_stays_as_given() {
+    let file = std::env::temp_dir().join("devlanes.prod.yaml");
+    let os = std::ffi::OsStr::new;
+    let cli = Cli::parse_from([os("devlanes"), os("--file"), file.as_os_str(), os("status")]);
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.file, Some(file));
 }
 
 #[test]
@@ -576,7 +604,8 @@ fn environment_is_captured_only_for_relevant_methods() {
     for (args, capture) in [
         (vec!["start"], true),
         (vec!["restart", "api"], true),
-        (vec!["reload"], true),
+        // The lane keeps the env its last start stored.
+        (vec!["reload"], false),
         (vec!["run", "migrate"], true),
         (vec!["exec", "--name", "demo", "--", "echo"], true),
         (vec!["lane", "resume"], true),

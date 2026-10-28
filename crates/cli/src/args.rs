@@ -76,7 +76,7 @@ pub struct Cli {
     /// Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
     #[arg(short = 'p', long, global = true, env = "DEVLANES_PROJECT", hide_env = true, value_name = "PROJECT", help_heading = GLOBAL)]
     pub project: Option<String>,
-    /// Use this project file instead of the nearest devlanes.yaml, such as devlanes.prod.yaml; once used, --project <name> finds it
+    /// Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
     // No `-f`: `logs -f` and the other `--follow` flags already take it.
     #[arg(long, global = true, value_name = "FILE", help_heading = GLOBAL)]
     pub file: Option<PathBuf>,
@@ -130,16 +130,19 @@ the default profile.")]
     /// Stop and start units again with a fresh environment, or the whole lane when none are named
     #[command(
         long_about = "Stop and start units again with a fresh environment, or the whole lane when none are named.\n\n\
-A whole-lane restart stops everything, keeping the lane's profiles and\n\
-services, then starts it like a plain devlanes start: infra, setup, tasks and\n\
-services, with ports the edited project file needs."
+A whole-lane restart stops everything, keeps the lane's saved profiles and\n\
+services, and starts it again as a plain devlanes start does: infra, setup,\n\
+tasks, services and any port change in the project file."
     )]
     Restart(RestartArgs),
-    /// Apply project file changes to the running lane
-    #[command(long_about = "Apply project file changes to the running lane.\n\n\
+    /// Apply project file and .env changes to the running lane
+    #[command(
+        long_about = "Apply project file and .env changes to the running lane.\n\n\
 Stops the units the file removed, restarts the ones it changed and starts the\n\
-ones it added. When infra or ports changed it restarts the whole lane instead.\n\
-With units, it applies only their changes. devlanes status shows what changed.")]
+ones it added. Without units, a change to infra or ports restarts the whole\n\
+lane instead. With units, it applies only their changes. devlanes status shows\n\
+what changed."
+    )]
     Reload(ReloadArgs),
     /// Show lanes and units with state, ports, URLs, CPU and memory
     Status(StatusArgs),
@@ -345,7 +348,7 @@ pub struct RestartArgs {
 
 #[derive(Debug, Args)]
 pub struct ReloadArgs {
-    /// Units whose changes to apply ([lane:]unit) [default: every change of the lane]
+    /// Apply only these units' changes ([lane:]unit) [default: every change in the lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start every selected service immediately, bypassing the machine-wide start gate for this run
@@ -880,11 +883,19 @@ impl Cli {
         }
         // The daemon resolves the file, so a relative one names a path below the cwd.
         let file = self.file.as_ref().map(|file| cwd.join(file));
+        // The file names its project. `-p` is dropped rather than refused with clap's
+        // `conflicts_with`, which counts `DEVLANES_PROJECT` as given: inside a lane that
+        // env var names the lane's project and would point lookups at it instead.
+        let project = if file.is_some() {
+            None
+        } else {
+            self.project.clone()
+        };
         let mut context = Context {
             cwd,
             file,
             actor: runtime.actor.clone(),
-            project: self.project.clone(),
+            project,
             lane: self.lane.clone(),
             yes: self.yes,
             env: None,
@@ -1215,14 +1226,11 @@ impl Cli {
             Some(Command::Tunnel { .. }) => return Ok(Action::Tunnel),
             Some(Command::Askpass { prompt }) => return Ok(Action::Askpass(prompt.clone())),
         };
+        // `reload` is absent: it applies the project file, and the lane keeps the env
+        // its last start stored, as when the TUI reloads.
         if matches!(
             method,
-            Method::Start
-                | Method::Restart
-                | Method::Reload
-                | Method::Run
-                | Method::Exec
-                | Method::Resume
+            Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
         ) {
             context.env = Some(environment());
         }

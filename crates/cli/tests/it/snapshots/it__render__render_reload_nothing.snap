@@ -4,10 +4,10 @@ expression: text
 ---
 --- human (exit 0)
 acme@2
-! acme@2 already runs what its project file says
+✓ nothing to reload: acme@2 matches its project file
 --- plain (exit 0)
 acme@2
-warn acme@2 already runs what its project file says
+ok nothing to reload: acme@2 matches its project file
 --- agent (exit 0)
 acme@2: ready
-warn acme@2 already runs what its project file says
+ok nothing to reload: acme@2 matches its project file

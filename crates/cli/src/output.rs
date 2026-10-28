@@ -602,6 +602,11 @@ fn continuation(report: &Report<'_>) -> String {
     if let Some(hint) = &report.more {
         return format!("truncated; more: {}", hint.0);
     }
+    // The YAML is what was asked for; without a cursor, a bigger budget is the rest.
+    if report.method == Method::ConfigShow {
+        let hint = Hint::command(["debug", "config", "--budget", "1048576"]);
+        return format!("truncated; more: {}", hint.0);
+    }
     let command = if report.method == Method::Logs {
         "logs"
     } else {

@@ -635,4 +635,33 @@ mod tests {
             ]
         );
     }
+
+    /// `debug config` leaves out unset fields and the mappings that end up empty,
+    /// since the daemon sends every unset map as `{}`.
+    #[test]
+    fn config_show_leaves_out_unset_fields() {
+        let data = json!({
+            "lane": "acme@0", "files": [],
+            "config": {
+                "project": "acme",
+                "lanes": {"primary": null, "max": null},
+                "services": {"api": {"run": "serve", "env": {}, "cwd": null}},
+            },
+        });
+        let lines = other::config_show(&data);
+        assert!(
+            !lines.iter().any(|line| line.starts_with("lanes")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("env") || line.contains("cwd")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.trim() == "run: serve"),
+            "{lines:?}"
+        );
+    }
 }

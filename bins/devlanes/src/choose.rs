@@ -281,4 +281,20 @@ mod tests {
         std::fs::write(temp.path().join("devlanes.yaml"), "project: acme\n").expect("config");
         assert!(has_config(&nested).await);
     }
+
+    /// A devlanes.yaml above the repository root belongs to another project, so
+    /// a repository below it has no config of its own.
+    #[tokio::test]
+    async fn config_search_stops_at_the_repository_root() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("devlanes.yaml"), "project: outer\n").expect("config");
+        let repo = temp.path().join("repo");
+        let nested = repo.join("apps/web");
+        std::fs::create_dir_all(repo.join(".git")).expect("git");
+        std::fs::create_dir_all(&nested).expect("dirs");
+        assert!(!has_config(&nested).await);
+        assert!(!has_config(&repo).await);
+        std::fs::write(repo.join("devlanes.yaml"), "project: acme\n").expect("config");
+        assert!(has_config(&nested).await);
+    }
 }

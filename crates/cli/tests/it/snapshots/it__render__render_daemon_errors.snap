@@ -9,9 +9,14 @@ hint: devlanes status acme@feat
 error: this removes lane acme@2 and its data; rerun with --yes
 error: task reset asks: Drop the database?; rerun with --yes
 error: task console is interactive; run it from a terminal
-error: project `acme` is already used by /work/other-acme; give this one another `project:`
-error: the project file here now names project `acme-next`; this lane keeps its ports and data until `devlanes lane gc --yes` collects it
+error: project acme is already used by /work/other-acme; set another project: in this file
+error: the project file now names project acme-next
 hint: devlanes lane gc --yes
+error: acme@2's project file now names project acme-next
+hint: devlanes lane gc --yes
+error: devlanes.prod.yaml and devlanes.yaml both name project acme; change project: in one of them
+error: acme-prod not found; a project from a file other than devlanes.yaml is known once a command names it with --file
+hint: devlanes lane ls
 error: port 5173 is taken by shop@1:web
 hint: devlanes stop shop@1:web
 error: Docker isn't running or can't be reached

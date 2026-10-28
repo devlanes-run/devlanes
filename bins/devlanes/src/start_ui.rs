@@ -10,9 +10,9 @@ use devlanes_client::{Client, Paths};
 use devlanes_proto::{Method, Request, RpcError};
 use devlanes_tui::{
     ApiError,
-    start::{StartExit, await_start, follow_start},
+    start::{StartExit, StartFrame, StartHandoff, await_start, follow_start},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{driver::rpc_error, output::emit};
 
@@ -73,6 +73,9 @@ pub async fn run(
             return Ok(rendered.exit_code);
         }
     };
+    if let Some(data) = nothing_reloaded(request.method, &handoff) {
+        return crate::commands::render_result(runtime, request.method, data, None);
+    }
     let options = crate::wiring::tui_options(paths).await;
     let exit = devlanes_tui::run_start(paths.clone(), options, handoff)
         .await
@@ -85,6 +88,21 @@ pub async fn run(
             DETACHED
         }
     })
+}
+
+/// The result of a `reload` that answered before the TUI opened without starting
+/// anything (nothing changed, or only removed units stopped). It prints as the
+/// CLI result, since the TUI would open only to show one line.
+fn nothing_reloaded(method: Method, handoff: &StartHandoff) -> Option<&Value> {
+    let Some(StartFrame::Done(Ok(data))) = handoff.frames.last() else {
+        return None;
+    };
+    let empty = |key: &str| {
+        data.get(key)
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+    };
+    (method == Method::Reload && empty("started") && empty("failures")).then_some(data)
 }
 
 /// Says that leaving did not stop the start.
@@ -103,5 +121,26 @@ fn api_error(error: ApiError) -> RpcError {
             RpcError::new("daemon_unreachable", json!({"message": message}), 4)
         }
         ApiError::Decode(message) => RpcError::new("bad_response", json!({"message": message}), 1),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A reload whose result came first and started nothing prints as text; one
+    /// that started a unit, or any other start, opens the TUI.
+    #[test]
+    fn a_reload_that_started_nothing_skips_the_tui() {
+        let handoff = |data: Value| StartHandoff {
+            label: "reload".into(),
+            frames: vec![StartFrame::Done(Ok(data))],
+            stream: tokio::sync::mpsc::channel(1).1,
+        };
+        let nothing = handoff(json!({"lane": "acme@2", "started": [], "failures": []}));
+        assert!(nothing_reloaded(Method::Reload, &nothing).is_some());
+        assert!(nothing_reloaded(Method::Start, &nothing).is_none());
+        let started = handoff(json!({"lane": "acme@2", "started": ["acme@2:api"]}));
+        assert!(nothing_reloaded(Method::Reload, &started).is_none());
     }
 }

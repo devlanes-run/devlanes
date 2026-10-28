@@ -291,11 +291,19 @@ fn split_ready<'a>(ready: &[&'a UnitSummary]) -> (Vec<&'a UnitSummary>, usize) {
 }
 
 /// One line per [`devlanes_proto::LaneWarning`] of a start: advice, never a failure.
+/// `nothing_to_reload` reports the reload's outcome, so it reads as an ok line.
 fn start_warnings(result: &StartResult, cx: &Ctx<'_>) -> Vec<String> {
     result
         .warnings
         .iter()
-        .map(|warning| cx.warning(&words::lane_warning(&warning.code, &warning.data)))
+        .map(|warning| {
+            let line = words::lane_warning(&warning.code, &warning.data);
+            if warning.code == "nothing_to_reload" {
+                format!("{} {line}", cx.mark(Outcome::Ok))
+            } else {
+                cx.warning(&line)
+            }
+        })
         .collect()
 }
 

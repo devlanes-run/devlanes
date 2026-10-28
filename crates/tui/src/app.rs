@@ -5831,17 +5831,19 @@ impl App {
                 });
             }
             Some(MonitorRow::Group(group)) if !group.shared => {
-                // As on the lane's row in the list: `r` reloads a lane with changes.
-                let reloads = method == Method::Restart
-                    && self
-                        .lanes
-                        .iter()
-                        .any(|lane| lane.reference == group.key && tree::reloads_on_r(lane));
+                // As on the lane's row in the list: `r` reloads a lane with changes,
+                // and does not start a stopped lane by restarting it.
+                let lane = self.lanes.iter().find(|lane| lane.reference == group.key);
+                let reloads = method == Method::Restart && lane.is_some_and(tree::reloads_on_r);
                 let (method, verb) = if reloads {
                     (Method::Reload, method_verb(Method::Reload))
                 } else {
                     (method, verb)
                 };
+                if method == Method::Restart && lane.is_some_and(|lane| !tree::lane_is_live(lane)) {
+                    self.set_notice(format!("nothing running in {}", group.key));
+                    return;
+                }
                 self.pending_begin(&group.key);
                 let target = Target::Lane(group.key.clone());
                 if method != Method::Start {

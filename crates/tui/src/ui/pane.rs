@@ -1293,14 +1293,15 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
         lines.extend(field(theme, "infra", &infra.join(", "), width, plain));
     }
     let _ = counts;
-    if lane.config_changed {
-        lines.extend(field(
-            theme,
-            "config",
-            "changed since the lane started; r reloads the changes",
-            width,
-            plain,
-        ));
+    let reloads = tree::reloads_on_r(lane);
+    if lane.config_changed || reloads {
+        // Without drift the file does not load, so a reload would only refuse.
+        let note = if reloads {
+            "changed since the lane started; r reloads the changes"
+        } else {
+            "changed since the lane started"
+        };
+        lines.extend(field(theme, "config", note, width, plain));
         // One line per unit, in the list's order: `web: run, env API_URL`, `api: removed`.
         let drifted = lane
             .units

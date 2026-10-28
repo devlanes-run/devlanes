@@ -191,7 +191,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                     "message": "stopped worker, which the project file no longer has"}}],
             }),
         ),
-        // Nothing to apply: only the warning, no `nothing to start`.
+        // Nothing to apply: one ok line, no warning and no `nothing to start`.
         (
             "reload_nothing",
             Method::Reload,
@@ -200,6 +200,30 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "ready": true, "timed_out": false, "failures": [], "skipped_tasks": [], "units": [],
                 "warnings": [{"code": "nothing_to_reload", "data": {"lane": "acme@2",
                     "message": "acme@2 already runs what its project file says"}}],
+            }),
+        ),
+        // `reload web` when web has no change.
+        (
+            "reload_nothing_for_units",
+            Method::Reload,
+            json!({
+                "lane": "acme@2", "started": [], "already_running": [], "whole_lane": false,
+                "ready": true, "timed_out": false, "failures": [], "skipped_tasks": [], "units": [],
+                "warnings": [{"code": "nothing_to_reload", "data": {"lane": "acme@2", "units": ["web"],
+                    "message": "acme@2 already runs what its project file says"}}],
+            }),
+        ),
+        // Infra changed, so the reload restarted the whole lane.
+        (
+            "reload_restarted_lane",
+            Method::Reload,
+            json!({
+                "lane": "acme@2", "branch": "feat/billing", "started": ["acme@2:api", "acme@2:web"],
+                "already_running": [], "whole_lane": true, "ready": true, "timed_out": false,
+                "failures": [], "skipped_tasks": [],
+                "units": [unit("api", "ready"), unit("web", "ready")],
+                "warnings": [{"code": "reload_restarted_lane", "data": {"lane": "acme@2",
+                    "message": "infra or ports changed, so the whole lane restarted"}}],
             }),
         ),
         (
@@ -253,6 +277,21 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             );
             drifted["config_changed"] = json!(true);
             page(vec![drifted])
+        }),
+        // Only the infra changed (reload restarts the lane), and a file that no longer
+        // loads: `config changed` without a command, since a reload would refuse.
+        ("status_drift_lane_only", Method::Status, {
+            let mut infra = lane(
+                Some(2),
+                "feat/billing",
+                "running",
+                vec![unit("api", "ready")],
+            );
+            infra["config_changed"] = json!(true);
+            infra["infra_changed"] = json!(true);
+            let mut broken = lane(Some(3), "fix/login", "running", vec![unit("api", "ready")]);
+            broken["config_changed"] = json!(true);
+            page(vec![infra, broken])
         }),
         // An `infra.external` entry: no process, its own state word.
         ("status_external", Method::Status, {
@@ -685,6 +724,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                  "lane": "shop@0", "other": "acme@0", "message": "web.acme.localhost is routed by shop@0 and acme@0"},
             ]}),
         ),
+        // `lanes` holds only unset fields, so it is left out.
         (
             "config_show",
             Method::ConfigShow,
@@ -692,8 +732,8 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "project": "acme", "lane": "acme@0",
                 "files": ["/work/acme/devlanes.yaml", "/work/acme/devlanes.local.yaml"],
                 "config": {
-                    "project": "acme", "tags": {},
-                    "lanes": {"primary": null, "max": null, "vars": {}},
+                    "project": "acme",
+                    "lanes": {"primary": null, "max": null},
                     "services": {"api": {
                         "extends": "node", "cwd": null,
                         "run": "npm run dev:local",
@@ -1742,6 +1782,48 @@ fn agent_output_stays_within_the_budget() {
 }
 
 #[test]
+/// A config bigger than the budget ends with the command that prints all of it,
+/// for the same lane when the caller passes it.
+fn agent_debug_config_is_cut_with_a_continuation() {
+    let services: serde_json::Map<String, Value> = (0..1000)
+        .map(|i| {
+            (
+                format!("svc-{i}"),
+                json!({"run": format!("serve --port {i}")}),
+            )
+        })
+        .collect();
+    let data = json!({"project": "acme", "lane": "acme@2", "files": [], "config": {"project": "acme", "services": services}});
+    let reporter = runtime(OutputMode::Agent).reporter();
+    let rendered = reporter
+        .result(&Report::new(Method::ConfigShow, &data))
+        .expect("render");
+    assert!(
+        rendered.stdout.len() <= DEFAULT_BUDGET,
+        "{}",
+        rendered.stdout.len()
+    );
+    assert!(
+        rendered
+            .stdout
+            .ends_with("truncated; more: devlanes debug config --budget 1048576\n"),
+        "{}",
+        rendered.stdout
+    );
+    let more = Hint::command(["debug", "config", "--budget", "1048576", "--lane", "acme@2"]);
+    let rendered = reporter
+        .result(&Report::new(Method::ConfigShow, &data).with_more(more))
+        .expect("render");
+    assert!(
+        rendered
+            .stdout
+            .ends_with("truncated; more: devlanes debug config --budget 1048576 --lane acme@2\n"),
+        "{}",
+        rendered.stdout
+    );
+}
+
+#[test]
 fn start_progress_prints_finished_steps_once() {
     let mut output = String::new();
     let reporter = runtime(OutputMode::Plain).reporter();
@@ -2026,6 +2108,22 @@ fn daemon_errors_are_worded_with_hints() {
             "config_names_other_project",
             json!({"project": "acme-next", "message": "the project file here now names project `acme-next`; this lane keeps its ports and data until `devlanes lane gc --yes` collects it"}),
             1,
+        ),
+        RpcError::new(
+            "config_names_other_project",
+            json!({"project": "acme-next", "lane": "acme@2", "message": "the project file now names `acme-next`"}),
+            1,
+        ),
+        RpcError::new(
+            "duplicate_project_name",
+            json!({"project": "acme", "file": "devlanes.prod.yaml", "other": "devlanes.yaml", "message": "both files name `acme`"}),
+            1,
+        ),
+        // An unknown `-p`: the daemon only marks it with `hint`; its prose stays out.
+        RpcError::new(
+            "not_found",
+            json!({"reference": "acme-prod", "candidates": [], "hint": "name the file with --file first"}),
+            3,
         ),
         RpcError::new(
             "port_in_use_by_lane",

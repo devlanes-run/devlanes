@@ -2286,8 +2286,8 @@ pub(super) fn config_check(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 }
 
 /// `debug config`: `# lane` and `# from` comment lines, then the config as YAML, so
-/// the whole output still parses as a project file. Unset fields are left out of
-/// the YAML; `--json` keeps them.
+/// the whole output still parses as a project file. Unset fields and empty mappings
+/// are left out of the YAML; `--json` keeps them.
 pub(super) fn config_show(data: &Value) -> Vec<String> {
     let mut lines = vec![format!("# lane {}", text(data, "lane"))];
     for file in list(data, "files") {
@@ -2303,7 +2303,9 @@ pub(super) fn config_show(data: &Value) -> Vec<String> {
 }
 
 /// `value` without null fields and the mappings left empty once those are gone,
-/// which the daemon sends for every setting the files leave at its default.
+/// which the daemon sends for every setting the files leave at its default. The
+/// daemon also sends unset maps as `{}`, so an empty mapping a file wrote (an empty
+/// profile) goes too.
 fn without_unset(value: &Value) -> Value {
     match value {
         Value::Object(fields) => Value::Object(
