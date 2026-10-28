@@ -202,11 +202,16 @@ impl Inner {
         if let Some(extra) = extra {
             overrides.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+        use tracing::Instrument as _;
         let facts = self.facts(project, lane)?;
         // Every launch (service, task, hook, `exec`) is planned here, and may write to it.
-        self.ensure_lane_data(project, lane).await?;
+        self.ensure_lane_data(project, lane)
+            .instrument(tracing::debug_span!("lane data"))
+            .await?;
         let (lane_dir, primary_dir) = self.config_dirs(project, lane);
-        let dotenv = read_dotenv(lane_dir, primary_dir).await;
+        let dotenv = read_dotenv(lane_dir, primary_dir)
+            .instrument(tracing::debug_span!("dotenv"))
+            .await;
         let lanes_main = if index == Some(0) {
             None
         } else {
@@ -232,6 +237,10 @@ impl Inner {
         input.public_https_port = self.integ.routes.https_port();
         input.only = only;
         let resolved = devlanes_resolve::resolve_lane(input)
+            .instrument(tracing::debug_span!(
+                "resolve lane",
+                planned = only.map_or(-1, |only| only.len() as i64)
+            ))
             .await
             .map_err(|error| resolve_error(&error))?;
         // A unit must never be spawned on a port the config leaves to a server

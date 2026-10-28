@@ -20,6 +20,7 @@ use devlanes_core::{
 };
 use indexmap::IndexMap;
 use serde_json::{Value, json};
+use tracing::Instrument as _;
 
 use crate::{
     DEFAULT_READY_TIMEOUT, Launch, Ready, ReadySpec, ResolveError, ResolveInput, ResolvedCommand,
@@ -74,7 +75,10 @@ async fn plan_lane<E: Extensions>(
     // so error paths name the profile that failed.
     let remap = merge_options(config, &profiles);
     let base_env = env_namespace(input.client_env, input.dotenv);
-    let (layout, ns) = layout::build(&input, &base_env)?;
+    let (layout, ns) = {
+        let _span = tracing::debug_span!("layout").entered();
+        layout::build(&input, &base_env)?
+    };
     let lane_context = ns.lane_context(&base_env);
     let mut profile_envs = Vec::new();
     let mut every_profile_skips_infra = !profiles.is_empty();
@@ -133,7 +137,8 @@ async fn plan_lane<E: Extensions>(
         if errors.contains_key(&key) || !input.plans(&key) {
             continue;
         }
-        match planner.service(unit).await {
+        let span = tracing::debug_span!("plan", unit = %unit.unit);
+        match planner.service(unit).instrument(span).await {
             Ok(service) => {
                 services.insert(unit.unit.clone(), service);
             }
@@ -155,7 +160,12 @@ async fn plan_lane<E: Extensions>(
         if !input.plans(&format!("tasks.{name}")) {
             continue;
         }
-        match planner.task(name, task, task_profiles).await {
+        let span = tracing::debug_span!("plan", unit = %name);
+        match planner
+            .task(name, task, task_profiles)
+            .instrument(span)
+            .await
+        {
             Ok(task) => {
                 tasks.insert(name.clone(), task);
             }
@@ -174,7 +184,12 @@ async fn plan_lane<E: Extensions>(
             if !input.plans(&format!("infra.{phase}.{name}")) {
                 continue;
             }
-            match planner.infra_command(phase, name, entry).await {
+            let span = tracing::debug_span!("plan", unit = %format!("infra.{phase}.{name}"));
+            match planner
+                .infra_command(phase, name, entry)
+                .instrument(span)
+                .await
+            {
                 Ok(command) => {
                     target.insert(name.clone(), command);
                 }
@@ -482,6 +497,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let facts = input.facts;
         let lane_path = facts.path.as_path();
         let path = spec.path;
+        let evaluating = tracing::trace_span!("evaluate env").entered();
         let global = env_map(&input.config.global_env, context, "global_env")?;
         let own = env_map(spec.env, context, &format!("{path}.env"))?;
         // Later profiles win over earlier ones within the profile layer.
@@ -489,6 +505,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
         for (env_path, env) in &self.profile_envs {
             profile.extend(env_map(env, context, env_path)?);
         }
+        drop(evaluating);
         let cwd = match spec.cwd {
             Some(value) => lane_path.join(
                 value
@@ -519,7 +536,10 @@ impl<E: Extensions> Planner<'_, '_, E> {
         let mut first = None;
         let mut script = None;
         if let DraftCommand::Script { source, name } = &command {
-            let (runner, plan) = self.render_script(spec.unit, source, name, &[]).await?;
+            let (runner, plan) = self
+                .render_script(spec.unit, source, name, &[])
+                .instrument(tracing::trace_span!("render script"))
+                .await?;
             script = Some(ScriptInfo {
                 source: source.clone(),
                 name: name.clone(),
@@ -542,7 +562,9 @@ impl<E: Extensions> Planner<'_, '_, E> {
                     cwd: &base_cwd,
                     script: script.as_ref(),
                 };
-                detect_platform(&self.contributors, &detect).await
+                detect_platform(&self.contributors, &detect)
+                    .instrument(tracing::trace_span!("detect platform"))
+                    .await
             }
         };
         let no_ports = BTreeMap::new();
@@ -581,6 +603,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
         for contributor in &self.contributors {
             contributor
                 .apply(&mut draft, &cx)
+                .instrument(tracing::trace_span!("contributor", name = contributor.id()))
                 .await
                 .map_err(|e| ResolveError::Contributor {
                     unit: spec.unit.to_owned(),
@@ -626,6 +649,7 @@ impl<E: Extensions> Planner<'_, '_, E> {
                     Some(plan) if unchanged && args.is_empty() => plan,
                     _ => {
                         self.render_script(spec.unit, &source, &name, &args)
+                            .instrument(tracing::trace_span!("render script"))
                             .await?
                             .1
                     }

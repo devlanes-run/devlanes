@@ -517,19 +517,31 @@ impl LanePhase for InfraPhase {
     }
 
     async fn run(&self, engine: &Arc<Inner>, cx: &mut StartCx) -> PhaseResult {
-        let empty_spec = match engine.infra_spec(&cx.project, &cx.lane, &[]).await {
+        use tracing::Instrument as _;
+        let empty_spec = match engine
+            .infra_spec(&cx.project, &cx.lane, &[])
+            .instrument(tracing::debug_span!("infra spec"))
+            .await
+        {
             Ok(spec) => spec,
             Err(error) => return PhaseResult::Error(error),
         };
         if empty_spec.is_empty() {
             return PhaseResult::Skipped(reason("no_infra", json!({})));
         }
-        let needs = match engine.integ.infra.port_needs(&empty_spec).await {
+        let needs = match engine
+            .integ
+            .infra
+            .port_needs(&empty_spec)
+            .instrument(tracing::debug_span!("infra port needs"))
+            .await
+        {
             Ok(needs) => needs,
             Err(error) => return PhaseResult::Error(infra_error(error)),
         };
         if let Err(error) = engine
             .allocate_lane_held(&cx.project, &cx.lane, &needs)
+            .instrument(tracing::debug_span!("allocate"))
             .await
         {
             return PhaseResult::Error(error);
@@ -537,6 +549,7 @@ impl LanePhase for InfraPhase {
         cx.infra_needs = needs;
         let spec = match engine
             .infra_spec(&cx.project, &cx.lane, &cx.infra_needs)
+            .instrument(tracing::debug_span!("infra spec"))
             .await
         {
             Ok(spec) => spec,
@@ -555,10 +568,17 @@ impl LanePhase for InfraPhase {
         // The containers' state last reported on `progress` events.
         let mut shown = Vec::new();
         let result = match &skip {
-            Some(_) => engine.integ.infra.namespace(&spec).await,
+            Some(_) => {
+                engine
+                    .integ
+                    .infra
+                    .namespace(&spec)
+                    .instrument(tracing::debug_span!("infra namespace"))
+                    .await
+            }
             // A hung `up` must not keep a stop waiting for the lane.
             None => tokio::select! {
-                up = engine.with_container_progress(cx, &spec, &mut shown, engine.integ.infra.up(&spec)) => up,
+                up = engine.with_container_progress(cx, &spec, &mut shown, engine.integ.infra.up(&spec)).instrument(tracing::debug_span!("infra up")) => up,
                 () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
             },
         };
@@ -578,7 +598,7 @@ impl LanePhase for InfraPhase {
             // Setup and services rely on the containers, so their `ready` checks
             // finish the phase; a stop still interrupts the wait.
             tokio::select! {
-                result = engine.with_container_progress(cx, &spec, &mut shown, engine.containers_ready(&cx.lane, &spec)) => {
+                result = engine.with_container_progress(cx, &spec, &mut shown, engine.containers_ready(&cx.lane, &spec)).instrument(tracing::debug_span!("containers ready")) => {
                     if let Err(error) = result {
                         return PhaseResult::Error(error);
                     }
@@ -700,9 +720,11 @@ impl LanePhase for SetupPhase {
             .values()
             .filter_map(|command| command.container.clone())
             .collect();
-        let started = engine
-            .containers_started_at(&cx.project, &cx.lane, &cx.infra_needs, containers)
-            .await;
+        let started = tracing::Instrument::instrument(
+            engine.containers_started_at(&cx.project, &cx.lane, &cx.infra_needs, containers),
+            tracing::debug_span!("container start times"),
+        )
+        .await;
         let mut pending: Vec<(String, Option<String>)> = Vec::new();
         for (name, command) in &resolved.setup {
             let started_at = command
@@ -1992,9 +2014,17 @@ impl Inner {
         lane: &Arc<LaneRt>,
         options: StartOptions,
     ) -> Result<StartResult, RpcError> {
-        let op = lane.op.lock().await;
+        use tracing::Instrument as _;
+        // A start queued behind another operation on the lane waits here.
+        let op = lane
+            .op
+            .lock()
+            .instrument(tracing::debug_span!("lane lock"))
+            .await;
         // Units already running are left alone, so a frozen lane would stay frozen.
-        self.wake_lane(project, lane, Some(Activity::Command)).await;
+        self.wake_lane(project, lane, Some(Activity::Command))
+            .instrument(tracing::debug_span!("wake"))
+            .await;
         // Installed once `op` is ours, until the start answered: a whole-lane stop
         // fires its token and waits for `op` next; a single-unit stop withdraws
         // units through it without waiting. A later start installs its own.
@@ -2043,7 +2073,10 @@ impl Inner {
         if let Some(env) = options.env.clone() {
             project.st().last_env = Some(env);
         }
-        self.apply_move(project, lane).await.map_err(fail)?;
+        self.apply_move(project, lane)
+            .instrument(tracing::debug_span!("apply move"))
+            .await
+            .map_err(fail)?;
         self.refresh_views_held(project, lane).await;
         let reference = lane.st().reference(&project.name());
         let fail = |error: RpcError| with_ownership(error, &reference, &[]);
@@ -2055,6 +2088,7 @@ impl Inner {
             .ok_or_else(|| fail(RpcError::new("no_config", json!({"lane": reference}), 1)))?;
         let config_dir = lane.st().path.join(&project.config_dir);
         check_compose_files(&config, config_dir)
+            .instrument(tracing::debug_span!("compose files"))
             .await
             .map_err(fail)?;
         // The saved record, not the profiles in effect: a transient start changes

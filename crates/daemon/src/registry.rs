@@ -1429,6 +1429,14 @@ impl Inner {
 
     /// The refresh, with the lane whose `op` the caller holds, if any.
     async fn refresh_with(self: &Arc<Self>, project: &Arc<ProjectRt>, held: Option<&Arc<LaneRt>>) {
+        use tracing::Instrument as _;
+        self.refresh_lanes(project, held)
+            .instrument(tracing::debug_span!("refresh views"))
+            .await;
+    }
+
+    /// Body of [`Self::refresh_with`], in its span.
+    async fn refresh_lanes(self: &Arc<Self>, project: &Arc<ProjectRt>, held: Option<&Arc<LaneRt>>) {
         let mut lanes = project.lanes();
         lanes.sort_by_key(|lane| {
             lane.st()
@@ -1471,9 +1479,11 @@ impl Inner {
                 }
                 continue;
             }
-            let view = self
-                .compute_view(project, &lane, main_services.as_ref())
-                .await;
+            let view = tracing::Instrument::instrument(
+                self.compute_view(project, &lane, main_services.as_ref()),
+                tracing::debug_span!("lane view", name = index.unwrap_or_default()),
+            )
+            .await;
             match view {
                 Ok(view) => {
                     if index == Some(0) {
@@ -1498,12 +1508,14 @@ impl Inner {
                 }
             }
         }
+        let _span = tracing::debug_span!("publish routes").entered();
         self.publish_routes();
     }
 
     /// True when the lane's config names a port without a persisted offset or
     /// fixes a block size other than the lane's.
     fn needs_allocation(&self, lane: &LaneRt) -> bool {
+        let _span = tracing::debug_span!("port needs").entered();
         let st = lane.st();
         let (Some(config), Some(allocation)) = (st.config.loaded(), &st.allocation) else {
             return false;
