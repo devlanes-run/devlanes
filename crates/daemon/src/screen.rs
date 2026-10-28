@@ -8,13 +8,13 @@
 //! terminal of that size would have drawn it. Programs on the alternate screen
 //! (editors, pagers) redraw themselves after a resize, so their grid is sent.
 
-use std::{collections::VecDeque, num::NonZeroU16};
+use std::collections::VecDeque;
 
 use bytes::Bytes;
 use devlanes_core::TerminalSize;
 
-/// Rows kept above the grid; deep history comes from log segments.
-const SCROLLBACK: usize = 200;
+use crate::terminal::{Terminal, cells};
+
 /// Recent output kept for replay: enough for several screens of colored log
 /// lines at any width.
 const HISTORY: usize = 128 * 1024;
@@ -23,24 +23,34 @@ const LINE_SEARCH: usize = 16 * 1024;
 
 /// The screen model plus the output it was fed, for replay at other sizes.
 pub(crate) struct Screen {
-    parser: vt100::Parser,
-    /// The last [`HISTORY`] bytes fed to `parser`, starting at a line start
+    terminal: Terminal,
+    /// The last [`HISTORY`] bytes fed to `terminal`, starting at a line start
     /// once trimmed.
     history: VecDeque<u8>,
 }
 
 impl Screen {
-    /// An empty screen of `size`.
-    pub(crate) fn new(size: TerminalSize) -> Self {
+    /// An empty screen of `size` whose first logged line gets `first_seq`.
+    pub(crate) fn new(size: TerminalSize, first_seq: u64) -> Self {
         Self {
-            parser: vt100::Parser::new(cells(size.rows), cells(size.columns), SCROLLBACK),
+            terminal: Terminal::new(size, first_seq, true),
             history: VecDeque::new(),
         }
     }
 
+    /// The terminal behind the model.
+    pub(crate) fn terminal(&self) -> &Terminal {
+        &self.terminal
+    }
+
+    /// The terminal behind the model, to settle it and take its log.
+    pub(crate) fn terminal_mut(&mut self) -> &mut Terminal {
+        &mut self.terminal
+    }
+
     /// Feeds output to the model and the replay history.
     pub(crate) fn process(&mut self, bytes: &[u8]) {
-        self.parser.process(bytes);
+        self.terminal.process(bytes);
         self.history.extend(bytes);
         if self.history.len() > HISTORY {
             self.history.drain(..self.history.len() - HISTORY);
@@ -58,36 +68,25 @@ impl Screen {
         }
     }
 
-    /// Resizes the grid, as the PTY was.
+    /// Resizes the grid, as the PTY was, re-wrapping what it shows.
     pub(crate) fn resize(&mut self, size: TerminalSize) {
-        self.parser
-            .screen_mut()
-            .set_size(cells(size.rows), cells(size.columns));
-    }
-
-    /// The grid's size.
-    fn size(&self) -> TerminalSize {
-        let (rows, columns) = self.parser.screen().size();
-        TerminalSize {
-            columns: columns.get(),
-            rows: rows.get(),
-        }
+        self.terminal.reflow(size);
     }
 
     /// The model as the program drew it.
     pub(crate) fn screen(&self) -> &vt100::Screen {
-        self.parser.screen()
+        self.terminal.screen()
     }
 
     /// Clear, home and the screen as a viewer of `size` should see it (the
     /// grid's size when `None`), plus the program's input modes.
     pub(crate) fn snapshot(&self, size: Option<TerminalSize>) -> Bytes {
-        let screen = self.parser.screen();
+        let screen = self.terminal.screen();
         let mut bytes = b"\x1b[H\x1b[2J".to_vec();
         if screen.alternate_screen() {
             bytes.extend_from_slice(screen.contents_formatted().as_bytes());
         } else {
-            let size = size.unwrap_or_else(|| self.size());
+            let size = size.unwrap_or_else(|| self.terminal.size());
             let mut replay = vt100::Parser::new(cells(size.rows), cells(size.columns), 0);
             let (front, back) = self.history.as_slices();
             replay.process(front);
@@ -103,11 +102,6 @@ impl Screen {
         bytes.extend_from_slice(screen.input_mode_formatted().as_bytes());
         Bytes::from(bytes)
     }
-}
-
-/// vt100 rejects zero-sized screens; a client reporting 0 rows still gets one.
-fn cells(value: u16) -> NonZeroU16 {
-    NonZeroU16::new(value).unwrap_or(NonZeroU16::MIN)
 }
 
 #[cfg(test)]
@@ -126,7 +120,7 @@ mod tests {
     /// terminal would show them.
     #[test]
     fn a_resize_shows_lines_rewrapped_at_the_new_size() {
-        let mut screen = Screen::new(TerminalSize::default());
+        let mut screen = Screen::new(TerminalSize::default(), 1);
         for i in 0..60 {
             screen.process(format!("{i:03} {}\r\n", "x".repeat(176)).as_bytes());
         }
@@ -147,7 +141,7 @@ mod tests {
     /// An observer of another size gets the output at its own size.
     #[test]
     fn a_snapshot_uses_the_viewer_size() {
-        let mut screen = Screen::new(TerminalSize::default());
+        let mut screen = Screen::new(TerminalSize::default(), 1);
         screen.process(format!("{}\r\nnext\r\n", "y".repeat(150)).as_bytes());
         let size = TerminalSize {
             columns: 160,
@@ -163,10 +157,13 @@ mod tests {
     /// The alternate screen is sent as the program drew it.
     #[test]
     fn the_alternate_screen_is_sent_as_drawn() {
-        let mut screen = Screen::new(TerminalSize {
-            columns: 40,
-            rows: 5,
-        });
+        let mut screen = Screen::new(
+            TerminalSize {
+                columns: 40,
+                rows: 5,
+            },
+            1,
+        );
         screen.process(b"before\r\n\x1b[?1049h\x1b[Hmenu");
         let shown = draw(&screen.snapshot(None), 40, 5);
         assert_eq!(shown.screen().contents(), "menu");
@@ -175,7 +172,7 @@ mod tests {
     /// Trimmed history starts at a line, never in the middle of one.
     #[test]
     fn history_is_trimmed_at_a_line_start() {
-        let mut screen = Screen::new(TerminalSize::default());
+        let mut screen = Screen::new(TerminalSize::default(), 1);
         let line = format!("{}\r\n", "z".repeat(998));
         for _ in 0..(HISTORY / line.len() + 10) {
             screen.process(line.as_bytes());

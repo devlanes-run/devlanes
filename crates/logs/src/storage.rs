@@ -9,7 +9,7 @@ use std::{
 use devlanes_proto::LogLine;
 use serde::{Deserialize, Serialize};
 
-use crate::{Error, Frame, Framer, Result, extract_level};
+use crate::{Error, Frame, Framer, Result, SGR_RESET, extract_level};
 
 const MAX_DISK_LINE: u64 = (crate::MAX_LINE_BYTES * 4 + 256) as u64;
 /// Held with `flock` by the one writer of a directory; readers never take it.
@@ -231,6 +231,35 @@ impl UnitLog {
             self.failed = true;
         }
         result
+    }
+
+    /// Appends one finished line, text with SGR colors and no other escapes (a
+    /// terminal row as a screen model captured it), as [`line_records`]
+    /// records. Nothing is framed: the caller decides where lines end, so it
+    /// knows the sequence each line gets.
+    pub fn append_line(&mut self, line: &str, timestamp_ms: u64) -> Result<()> {
+        self.ensure_writable()?;
+        let chunks = record_chunks(line);
+        let last = chunks.len() - 1;
+        for (index, chunk) in chunks.into_iter().enumerate() {
+            let text = strip_sgr(chunk);
+            // Only a line with visible text needs its colors, as the framer keeps them.
+            let styled = (text.len() != chunk.len() && !text.is_empty())
+                .then(|| format!("{chunk}{SGR_RESET}"));
+            let frame = Frame {
+                raw: Vec::new(),
+                text,
+                styled,
+                timestamp_ms,
+                partial: false,
+                continued: index < last,
+            };
+            if let Err(error) = self.append(frame) {
+                self.failed = true;
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// Poll every 200 ms; `force` flushes all streams at child EOF before closing.
@@ -817,6 +846,36 @@ pub(crate) fn read_record(
         },
         size as u64,
     )))
+}
+
+/// How many records [`UnitLog::append_line`] writes for `line`: one, or more
+/// when it is longer than [`crate::MAX_LINE_BYTES`].
+pub fn line_records(line: &str) -> u64 {
+    record_chunks(line).len() as u64
+}
+
+/// `line` cut into records of at most [`crate::MAX_LINE_BYTES`], at character
+/// boundaries and never inside a color sequence.
+fn record_chunks(line: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut rest = line;
+    while rest.len() > crate::MAX_LINE_BYTES {
+        let mut end = crate::MAX_LINE_BYTES;
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        // A sequence cut in two would read as text in both records.
+        if let Some(start) = rest[..end].rfind('\x1b')
+            && start > 0
+            && !rest[start..end].contains('m')
+        {
+            end = start;
+        }
+        chunks.push(&rest[..end]);
+        rest = &rest[end..];
+    }
+    chunks.push(rest);
+    chunks
 }
 
 /// `text` without its `ESC [ … m` sequences: the only escapes stored lines keep.

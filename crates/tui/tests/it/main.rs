@@ -135,19 +135,25 @@ fn attach_in(effects: &[Effect]) -> Option<(u64, bool)> {
     })
 }
 
-/// Enter on a watched unit: the stream reopens as interactive, and typing
-/// starts once that stream is open. Returns its generation.
+/// Enter on a watched unit: the stream becomes interactive where it is, and
+/// typing starts at once. Feeds it `bytes`; returns its generation.
 fn focus_terminal(app: &mut App, bytes: &[u8]) -> Option<u64> {
+    let generation = app.attached.as_ref()?.generation;
     let effects = app.update(key(KeyCode::Enter));
-    let (generation, interactive) = attach_in(&effects)?;
-    assert!(interactive, "focus reopens the stream as interactive");
-    assert_eq!(app.focus, Focus::List, "focus waits for the stream");
-    feed(app, generation, bytes);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachRole(true))),
+        "focus makes the stream interactive: {effects:?}"
+    );
+    assert!(attach_in(&effects).is_none(), "no new stream: {effects:?}");
     assert_eq!(app.focus, Focus::Terminal);
+    feed(app, generation, bytes);
     Some(generation)
 }
 
-/// Marks the attach stream open and feeds it terminal output.
+/// Marks the attach stream open and feeds it terminal output: a unit's
+/// stream as the daemon's view drawing it, a container's as raw bytes.
 fn feed(app: &mut App, generation: u64, bytes: &[u8]) {
     app.update(Msg::AttachOpened {
         generation,
@@ -157,10 +163,32 @@ fn feed(app: &mut App, generation: u64, bytes: &[u8]) {
             lane: String::new(),
         }),
     });
-    app.update(Msg::AttachOutput {
-        generation,
-        bytes: bytes.to_vec(),
-    });
+    let size = app
+        .attached
+        .as_ref()
+        .filter(|a| a.generation == generation && a.screen.has_history())
+        .map(|a| a.screen.screen().size());
+    let msg = match size {
+        Some((rows, columns)) => Msg::AttachView {
+            generation,
+            view: Box::new(devlanes_proto::AttachView {
+                stream_id: 1,
+                from: 0,
+                lines: Vec::new(),
+                log_unit: "api".into(),
+                before_seq: 1,
+                columns: columns.get(),
+                rows: rows.get(),
+                screen: String::from_utf8_lossy(bytes).into_owned(),
+                whole: false,
+            }),
+        },
+        None => Msg::AttachOutput {
+            generation,
+            bytes: bytes.to_vec(),
+        },
+    };
+    app.update(msg);
 }
 
 // ---- snapshots ---------------------------------------------------------------
@@ -778,16 +806,15 @@ async fn tasks_run_with_s_and_ask_only_when_their_config_does() -> TestResult {
         task: "migrate".into(),
         result: Ok(json!({"interactive": true})),
     });
-    let interactive = effects.iter().rev().find_map(|e| match e {
-        Effect::Attach {
-            generation,
-            unit,
-            interactive: true,
-            ..
-        } if unit == "acme@0:migrate" => Some(*generation),
-        _ => None,
-    });
-    let generation = interactive.ok_or_else(|| format!("no interactive attach: {effects:?}"))?;
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachRole(true))),
+        "the task's stream becomes interactive: {effects:?}"
+    );
+    let attached = app.attached.as_ref().ok_or("nothing attached")?;
+    assert_eq!(attached.unit, "migrate");
+    let generation = attached.generation;
     assert_eq!(app.focus, Focus::List, "focus waits for the stream");
     feed(&mut app, generation, b"");
     assert_eq!(app.focus, Focus::Terminal);
@@ -834,17 +861,13 @@ async fn zoom_resizes_the_pty() -> TestResult {
         "observers never resize"
     );
     let before = app.pane_size();
-    // Zooming means looking at this terminal: it reopens as interactive at the new size.
+    let stream = app.attached.as_ref().map(|a| a.generation);
+    // Zooming means looking at this terminal: the stream becomes interactive
+    // where it is and asks for the new size.
     let effects = app.update(key(KeyCode::Char('z')));
     let [
-        Effect::Detach,
-        Effect::Attach {
-            generation,
-            columns,
-            rows,
-            interactive: true,
-            ..
-        },
+        Effect::AttachRole(true),
+        Effect::ResizePty { columns, rows },
     ] = effects.as_slice()
     else {
         return Err(format!("unexpected {effects:?}").into());
@@ -853,38 +876,13 @@ async fn zoom_resizes_the_pty() -> TestResult {
     // column of margin inside it.
     assert_eq!((*columns, *rows), (97, 19));
     assert!(*columns > before.0);
-    // Another viewer may have resized it meanwhile, so the size is sent again once open.
-    let effects = opened(&mut app, *generation);
-    assert!(
-        matches!(
-            effects.as_slice(),
-            [Effect::ResizePty {
-                columns: 97,
-                rows: 19
-            }]
-        ),
-        "{effects:?}"
-    );
-    // Unzooming resizes the interactive stream, then reopens it once resizing settles.
+    // Unzooming resizes it again; the stream stays.
     let effects = app.update(key(KeyCode::Char('z')));
-    let [
-        Effect::ResizePty { columns, .. },
-        Effect::SettleResize { token, .. },
-    ] = effects.as_slice()
-    else {
+    let [Effect::ResizePty { columns, .. }] = effects.as_slice() else {
         return Err(format!("unexpected {effects:?}").into());
     };
     assert_eq!(*columns, before.0);
-    let stale = app.update(Msg::ResizeSettled { token: token - 1 });
-    assert!(stale.is_empty(), "an older resize timer does nothing");
-    let effects = app.update(Msg::ResizeSettled { token: *token });
-    assert!(
-        matches!(
-            attach_in(&effects),
-            Some((g, true)) if g > *generation
-        ),
-        "{effects:?}"
-    );
+    assert_eq!(app.attached.as_ref().map(|a| a.generation), stream);
     Ok(())
 }
 
@@ -930,20 +928,77 @@ async fn copy_mode_copies_the_cursor_line() -> TestResult {
     Ok(())
 }
 
+/// A daemon view for `app`'s pane: `lines` that left the unit's screen, the
+/// first with sequence `first_seq`, and `screen` drawn whole.
+fn view(app: &App, lines: &[String], first_seq: u64, screen: &str) -> devlanes_proto::AttachView {
+    let (columns, rows) = app.attach_size();
+    devlanes_proto::AttachView {
+        stream_id: 1,
+        from: first_seq,
+        lines: lines
+            .iter()
+            .zip(first_seq..)
+            .map(|(line, seq)| devlanes_proto::ScrolledLine {
+                styled: line.clone(),
+                seq,
+            })
+            .collect(),
+        log_unit: "api".into(),
+        before_seq: first_seq,
+        columns,
+        rows,
+        screen: format!("\x1b[H\x1b[2J{screen}"),
+        whole: true,
+    }
+}
+
+/// Marks the attach stream open and applies its first view.
+fn open_view(app: &mut App, generation: u64, lines: &[String], first_seq: u64, screen: &str) {
+    app.update(Msg::AttachOpened {
+        generation,
+        result: Ok(devlanes_proto::AttachResult {
+            stream_id: 1,
+            unit: String::new(),
+            lane: String::new(),
+        }),
+    });
+    let view = Box::new(view(app, lines, first_seq, screen));
+    app.update(Msg::AttachView { generation, view });
+}
+
+/// Where `needle` starts in the drawn screen.
+fn place_of(buffer: &ratatui::buffer::Buffer, needle: &str) -> Option<(u16, u16)> {
+    let area = buffer.area;
+    (area.top()..area.bottom())
+        .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            needle.chars().enumerate().all(|(i, c)| {
+                buffer
+                    .cell((x + i as u16, y))
+                    .is_some_and(|cell| cell.symbol() == c.to_string())
+            })
+        })
+}
+
 #[tokio::test]
-/// Scrolling past the pane's own scrollback shows the stored logs from about
-/// where the screen was scrolled to, wrapped and in their colors, and `c`
-/// does not jump back to the live screen.
-async fn stored_logs_keep_their_colors_and_the_scroll_position() -> TestResult {
+/// The pane is one surface: scrolling up moves from the unit's screen into
+/// the lines that left it, and on into the log's older lines, read once the
+/// top of what the pane keeps comes near. They are wrapped and in their
+/// colors, in order, and `c` selects in them.
+async fn scrolling_moves_from_the_screen_into_the_log() -> TestResult {
     use devlanes_proto::{LogLine, Page};
     use devlanes_tui::app::PaneMode;
     use ratatui::style::Color;
     let api = FakeApi::with_lanes(mixed_lanes());
     let (mut app, _) = loaded(&api, 100, 24).await;
     let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
-    feed(&mut app, generation, b"newest\r\n");
-    let (width, height) = app.pane_size();
-    let page = usize::from(height / 2);
+    let scrolled: Vec<String> = (90..100).map(|i| format!("line {i:03}")).collect();
+    open_view(&mut app, generation, &scrolled, 90, "on screen\r\n");
+    let text = draw(&app)?.backend().to_string();
+    assert!(
+        text.contains("on screen") && !text.contains("line 099"),
+        "{text}"
+    );
     let effects = app.update(key(KeyCode::PageUp));
     let query = effects
         .iter()
@@ -952,15 +1007,17 @@ async fn stored_logs_keep_their_colors_and_the_scroll_position() -> TestResult {
             _ => None,
         })
         .ok_or(format!("no fetch: {effects:?}"))?;
+    assert_eq!(query.cursor.as_deref(), Some("before:api#90"));
     assert!(query.styled, "colors are asked for");
     let text = draw(&app)?.backend().to_string();
     assert!(
-        text.contains("newest"),
-        "the live screen stays while loading: {text}"
+        text.contains("line 099") && text.contains("on screen"),
+        "{text}"
     );
-    let lines: Vec<LogLine> = (0..100)
+    let width = app.pane_size().0;
+    let lines: Vec<LogLine> = (0..90)
         .map(|seq| {
-            let text = if seq == 80 {
+            let text = if seq == 85 {
                 format!("long {}", "x".repeat(usize::from(width) + 10))
             } else {
                 format!("line {seq:03}")
@@ -975,51 +1032,233 @@ async fn stored_logs_keep_their_colors_and_the_scroll_position() -> TestResult {
             }
         })
         .collect();
-    app.update(Msg::Logs {
+    let effects = app.update(Msg::Logs {
         generation,
-        older: false,
         result: Ok(Page::complete(lines)),
     });
-    let attached = app.attached.as_ref().ok_or("nothing attached")?;
-    let PaneMode::Logs(view) = &attached.mode else {
-        return Err(format!("not on stored logs: {:?}", attached.mode).into());
-    };
-    assert_eq!(view.offset, page);
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::FetchLogs { .. })),
+        "the log has nothing older: {effects:?}"
+    );
+    // The page went above what was shown; the pane did not move.
+    let shown = draw(&app)?.backend().to_string();
+    assert_eq!(shown, text);
+    app.update(key(KeyCode::PageUp));
     let terminal = draw(&app)?;
     let buffer = terminal.backend().buffer();
     let text = terminal.backend().to_string();
+    let xs = text.chars().filter(|&c| c == 'x').count();
     assert!(
-        !text.contains('…'),
+        xs >= usize::from(width) + 10,
         "lines wrap instead of being cut: {text}"
     );
-    let xs = text.chars().filter(|&c| c == 'x').count();
-    assert!(xs >= usize::from(width) + 10, "{text}");
-    // The newest line shown sits `page` lines above the newest stored one.
-    let newest = format!("line {:03}", 99 - page);
-    let area = buffer.area;
-    let place = (area.top()..area.bottom())
-        .flat_map(|y| (area.left()..area.right()).map(move |x| (x, y)))
-        .find(|&(x, y)| {
-            newest.chars().enumerate().all(|(i, c)| {
-                buffer
-                    .cell((x + i as u16, y))
-                    .is_some_and(|cell| cell.symbol() == c.to_string())
-            })
-        })
-        .ok_or(format!("{newest} not shown: {text}"))?;
+    let from_log = place_of(buffer, "line 089").ok_or(format!("log lines not shown: {text}"))?;
+    let from_stream = place_of(buffer, "line 090").ok_or(text.clone())?;
+    assert_eq!(from_stream.1, from_log.1 + 1, "in order, nothing between");
     assert_eq!(
-        buffer[place].fg,
+        buffer[from_log].fg,
         Color::Indexed(2),
         "stored colors are drawn"
     );
-    let below = format!("line {:03}", 100 - page);
-    assert!(!text.contains(&below), "{text}");
     app.update(key(KeyCode::Char('c')));
     let attached = app.attached.as_ref().ok_or("nothing attached")?;
     assert!(
-        matches!(attached.mode, PaneMode::Logs(_)),
+        matches!(attached.mode, PaneMode::Copy(_)),
         "{:?}",
         attached.mode
+    );
+    Ok(())
+}
+
+#[tokio::test]
+/// Lines that leave the unit's screen while the pane is scrolled back go
+/// below what it shows, so it does not move under the reader.
+async fn new_lines_keep_a_scrolled_pane_in_place() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    let scrolled: Vec<String> = (0..60).map(|i| format!("line {i:03}")).collect();
+    open_view(&mut app, generation, &scrolled, 0, "on screen\r\n");
+    app.update(key(KeyCode::PageUp));
+    let terminal = draw(&app)?;
+    let top = place_of(terminal.backend().buffer(), "line 051");
+    assert!(top.is_some(), "{}", terminal.backend());
+    let more: Vec<String> = (60..65).map(|i| format!("line {i:03}")).collect();
+    let mut next = view(&app, &more, 60, "");
+    // Nothing on the screen changed.
+    next.screen.clear();
+    next.whole = false;
+    app.update(Msg::AttachView {
+        generation,
+        view: Box::new(next),
+    });
+    let terminal = draw(&app)?;
+    assert_eq!(
+        place_of(terminal.backend().buffer(), "line 051"),
+        top,
+        "{}",
+        terminal.backend()
+    );
+    // Back at the bottom, the new lines sit right above the screen.
+    app.update(key(KeyCode::Esc));
+    app.update(key(KeyCode::PageUp));
+    let text = draw(&app)?.backend().to_string();
+    assert!(text.contains("line 064"), "{text}");
+    Ok(())
+}
+
+#[tokio::test]
+/// A view that starts past the lines the pane has (the daemon no longer
+/// kept the ones between) starts the lines over instead of joining across
+/// the gap; scrolling up then reads everything older from the log.
+async fn a_gap_in_the_views_is_read_from_the_log() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    let first: Vec<String> = (0..5).map(|i| format!("line {i:03}")).collect();
+    open_view(&mut app, generation, &first, 0, "on screen\r\n");
+    // Lines 5 to 2999 never reached the pane.
+    let late: Vec<String> = (3000..3005).map(|i| format!("line {i:03}")).collect();
+    let mut next = view(&app, &late, 3000, "");
+    next.screen.clear();
+    next.whole = false;
+    app.update(Msg::AttachView {
+        generation,
+        view: Box::new(next),
+    });
+    let effects = app.update(key(KeyCode::PageUp));
+    let query = effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::FetchLogs { query, .. } => Some(query),
+            _ => None,
+        })
+        .ok_or(format!("no fetch: {effects:?}"))?;
+    assert_eq!(query.cursor.as_deref(), Some("before:api#3000"));
+    let text = draw(&app)?.backend().to_string();
+    assert!(
+        text.contains("line 3004") && !text.contains("line 004"),
+        "{text}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+/// A daemon too old for `history` sends terminal bytes: the pane keeps its
+/// own scrollback, resizes reopen the stream once they settle, and typing
+/// reopens it as interactive when the daemon refuses `attach.role`.
+async fn an_older_daemons_raw_stream_keeps_working() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    app.update(Msg::AttachOpened {
+        generation,
+        result: Ok(devlanes_proto::AttachResult {
+            stream_id: 1,
+            unit: String::new(),
+            lane: String::new(),
+        }),
+    });
+    let output: String = (0..60).map(|i| format!("line {i:03}\r\n")).collect();
+    app.update(Msg::AttachOutput {
+        generation,
+        bytes: output.into_bytes(),
+    });
+    let attached = app.attached.as_ref().ok_or("nothing attached")?;
+    assert!(!attached.screen.has_history(), "a raw screen");
+    let live = draw(&app)?.backend().to_string();
+    let oldest = (0..60)
+        .find(|i| live.contains(&format!("line {i:03}")))
+        .ok_or(live.clone())?;
+    app.update(key(KeyCode::PageUp));
+    let text = draw(&app)?.backend().to_string();
+    let older = format!("line {:03}", oldest - 1);
+    assert!(text.contains(&older), "its own scrollback: {text}");
+    app.update(key(KeyCode::Esc));
+    let effects = app.update(Msg::Resize(120, 30));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::SettleResize { .. })),
+        "{effects:?}"
+    );
+    app.update(key(KeyCode::Enter));
+    let error = devlanes_proto::RpcError::new("unknown_method", serde_json::json!({}), 2);
+    let effects = app.update(Msg::RoleRefused {
+        generation,
+        error: devlanes_tui::ApiError::Rpc(error),
+    });
+    assert!(
+        matches!(attach_in(&effects), Some((_, true))),
+        "{effects:?}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+/// Typing into a watched unit makes its stream interactive where it is: no
+/// new stream, the pane keeps its output, and keys go to the unit at once.
+async fn typing_switches_the_stream_role_in_place() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    open_view(&mut app, generation, &[], 0, "watched output\r\n");
+    let effects = app.update(key(KeyCode::Enter));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachRole(true))),
+        "{effects:?}"
+    );
+    assert!(attach_in(&effects).is_none(), "no new stream: {effects:?}");
+    assert_eq!(app.focus, Focus::Terminal);
+    let text = draw(&app)?.backend().to_string();
+    assert!(text.contains("watched output"), "{text}");
+    let effects = app.update(key(KeyCode::Char('y')));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Input(bytes) if bytes == b"y")),
+        "{effects:?}"
+    );
+    // A daemon without `attach.role` gets a reopened stream, still showing
+    // the output until the new one draws.
+    let error = devlanes_proto::RpcError::new("unknown_method", serde_json::json!({}), 2);
+    let effects = app.update(Msg::RoleRefused {
+        generation,
+        error: devlanes_tui::ApiError::Rpc(error),
+    });
+    assert!(
+        matches!(attach_in(&effects), Some((_, true))),
+        "{effects:?}"
+    );
+    let text = draw(&app)?.backend().to_string();
+    assert!(text.contains("watched output"), "{text}");
+    Ok(())
+}
+
+#[tokio::test]
+/// A resize tells the daemon the pane's new size, which redraws the stream
+/// at it; the stream is not reopened.
+async fn a_resize_redraws_the_stream_in_place() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    open_view(&mut app, generation, &[], 0, "output\r\n");
+    let effects = app.update(Msg::Resize(120, 30));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ResizePty { .. })),
+        "{effects:?}"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::SettleResize { .. })),
+        "{effects:?}"
     );
     Ok(())
 }

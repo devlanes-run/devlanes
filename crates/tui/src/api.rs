@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use devlanes_client::{Client, Frame, Paths};
 use devlanes_proto::{
-    Actor, ActorKind, AttachParams, AttachResult, Context, Control, Event, LaneSummary, LogLine,
-    LogQuery, Method, Outcome, Page, ResizeParams, RpcError, RunParams, Selection,
+    Actor, ActorKind, AttachParams, AttachResult, AttachView, Context, Control, Event, LaneSummary,
+    LogLine, LogQuery, Method, Outcome, Page, ResizeParams, RpcError, RunParams, Selection, events,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
@@ -412,7 +412,12 @@ impl EventStream {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachInput {
     Bytes(Bytes),
-    Resize { columns: u16, rows: u16 },
+    Resize {
+        columns: u16,
+        rows: u16,
+    },
+    /// Makes the stream the unit's interactive viewer, or an observer again.
+    Role(bool),
 }
 
 /// What an attached stream delivers: terminal output, or a failure of input,
@@ -420,10 +425,15 @@ pub enum AttachInput {
 #[derive(Debug, Clone)]
 pub enum AttachEvent {
     Output(Bytes),
+    /// A redraw of a stream opened with `history`.
+    View(Box<AttachView>),
     /// The stream failed; it closes next.
     Error(ApiError),
     /// The daemon refused a resize; the stream goes on (a pipe unit has no terminal).
     ResizeRefused(ApiError),
+    /// The daemon refused a role change, as one too old for `attach.role`
+    /// does; the stream goes on in its old role.
+    RoleRefused(ApiError),
 }
 
 /// An open terminal stream. Dropping it detaches; the unit keeps running.
@@ -725,6 +735,8 @@ pub struct ProfileList {
 #[derive(Debug, PartialEq)]
 pub enum StreamFrame {
     Output(Bytes),
+    /// An [`events::ATTACH_VIEW`] for the stream.
+    View(Box<AttachView>),
     /// The daemon's empty binary frame: the unit exited and the stream is closed.
     End,
     Failed(ApiError),
@@ -749,6 +761,13 @@ pub fn attach_frame(frame: devlanes_client::Result<Frame>, stream_id: u64) -> St
             Outcome::Error { error } => StreamFrame::Failed(ApiError::Rpc(error)),
             Outcome::Ok { .. } => StreamFrame::Other,
         },
+        Ok(Frame::Control(Control::Event(event))) if event.event == events::ATTACH_VIEW => {
+            match serde_json::from_value::<AttachView>(event.data) {
+                Ok(view) if view.stream_id == stream_id => StreamFrame::View(Box::new(view)),
+                Ok(_) => StreamFrame::Other,
+                Err(error) => StreamFrame::Failed(ApiError::Decode(error.to_string())),
+            }
+        }
         Ok(_) => StreamFrame::Other,
         Err(error) => StreamFrame::Failed(ApiError::from(error)),
     }
@@ -979,9 +998,31 @@ impl DaemonApi for ClientApi {
                             Err(error) => break Some(ApiError::from(error)),
                         }
                     }
+                    Step::Input(Some(AttachInput::Role(interactive))) => {
+                        let params = json!({"stream_id": stream_id, "interactive": interactive});
+                        match client
+                            .request(Method::AttachRole, params, context.clone())
+                            .await
+                        {
+                            Ok(_) => {}
+                            // An older daemon: the app reopens the stream instead.
+                            Err(devlanes_client::Error::Rpc(error)) => {
+                                let event = AttachEvent::RoleRefused(ApiError::Rpc(error));
+                                if output_tx.send(event).await.is_err() {
+                                    return;
+                                }
+                            }
+                            Err(error) => break Some(ApiError::from(error)),
+                        }
+                    }
                     Step::Frame(frame) => match attach_frame(frame, stream_id) {
                         StreamFrame::Output(data) => {
                             if output_tx.send(AttachEvent::Output(data)).await.is_err() {
+                                return;
+                            }
+                        }
+                        StreamFrame::View(view) => {
+                            if output_tx.send(AttachEvent::View(view)).await.is_err() {
                                 return;
                             }
                         }

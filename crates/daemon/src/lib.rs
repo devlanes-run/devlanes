@@ -41,6 +41,7 @@ mod sampler;
 mod screen;
 mod spawn_error;
 mod stream;
+mod terminal;
 pub mod units;
 pub mod update;
 mod wsl;

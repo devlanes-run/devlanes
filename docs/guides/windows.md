@@ -80,7 +80,7 @@ devlanes completions powershell | Out-String | Invoke-Expression
 
 ## Terminals in units
 
-Services default to `pty: true`. On Windows that runs the service in a ConPTY pseudo console, which re-renders the program's output the way a console window would: it rewrites line endings, cursor movement and colour sequences. `devlanes logs`, the log files and `ready.log` patterns therefore see the console's rendering, not the bytes the program wrote. Set `pty: false` on a unit whose logs must hold exactly what it wrote.
+Services default to `pty: true`. On Windows that runs the service in a ConPTY pseudo console, which re-renders the program's output the way a console window would: it rewrites line endings, cursor movement and colour sequences, and repaints its whole window when it is resized. `devlanes logs` and the log files hold the lines as that console showed them, each once, however often it repainted; `ready.log` patterns see its rendering as it arrives, not the bytes the program wrote. Set `pty: false` on a unit whose logs must hold exactly what it wrote.
 
 `pty: true` units stop about 5 seconds after the daemon dies, because their pseudo console closes with it. `pty: false` units keep running, and the next daemon finds them as orphans, as on macOS and Linux.
 

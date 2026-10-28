@@ -208,9 +208,13 @@ async fn a_double_click_on_a_running_unit_types_into_it() -> TestResult {
     let (y, text, _) = place(&app, index)?;
     app.update(click(text, y));
     let effects = app.update(click(text, y));
-    let (generation, interactive) = attach_in(&effects).ok_or("no interactive attach")?;
-    assert!(interactive);
-    feed(&mut app, generation, b"$ ");
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachRole(true))),
+        "the stream becomes interactive: {effects:?}"
+    );
+    assert!(attach_in(&effects).is_none(), "no new stream: {effects:?}");
     assert_eq!(app.focus, devlanes_tui::app::Focus::Terminal);
     // A click on the list returns to watching.
     app.update(click(text, y));
@@ -309,18 +313,6 @@ fn resizes(effects: &[Effect]) -> Vec<(u16, u16)> {
         .collect()
 }
 
-/// An opened stream for `generation`.
-fn opened(generation: u64) -> Msg {
-    Msg::AttachOpened {
-        generation,
-        result: Ok(devlanes_proto::AttachResult {
-            stream_id: 2,
-            unit: String::new(),
-            lane: String::new(),
-        }),
-    }
-}
-
 #[tokio::test]
 async fn zoom_resizes_and_a_refused_resize_does_not_stop_later_ones() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
@@ -353,6 +345,24 @@ async fn zoom_resizes_and_a_refused_resize_does_not_stop_later_ones() -> TestRes
     Ok(())
 }
 
+/// A whole redraw of `generation`'s stream at `size` showing `screen`.
+fn redrawn(generation: u64, size: (u16, u16), screen: &str) -> Msg {
+    Msg::AttachView {
+        generation,
+        view: Box::new(devlanes_proto::AttachView {
+            stream_id: 2,
+            from: 0,
+            lines: Vec::new(),
+            log_unit: "api".into(),
+            before_seq: 1,
+            columns: size.0,
+            rows: size.1,
+            screen: format!("\x1b[H\x1b[2J{screen}"),
+            whole: true,
+        }),
+    }
+}
+
 #[tokio::test]
 async fn zoom_from_watching_renders_output_at_the_zoomed_width() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
@@ -360,28 +370,21 @@ async fn zoom_from_watching_renders_output_at_the_zoomed_width() -> TestResult {
     let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
     feed(&mut app, generation, b"");
     let normal = app.attach_size();
-    // Watching: `z` reopens the stream as the PTY's owner at the zoomed size.
+    // Watching: `z` makes the stream the PTY's owner and asks for the zoomed size.
     let effects = app.update(key(KeyCode::Char('z')));
     let big = app.attach_size();
     assert!(big.0 > normal.0 + 40, "{normal:?} -> {big:?}");
-    let reopened = effects
-        .iter()
-        .find_map(|e| match e {
-            Effect::Attach {
-                generation,
-                columns,
-                rows,
-                interactive: true,
-                ..
-            } if (*columns, *rows) == big => Some(*generation),
-            _ => None,
-        })
-        .ok_or(format!("no interactive attach at {big:?}: {effects:?}"))?;
-    // Once open, the size is sent again in case another viewer changed it.
-    assert_eq!(resizes(&app.update(opened(reopened))), [big]);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachRole(true))),
+        "{effects:?}"
+    );
+    assert_eq!(resizes(&effects), [big]);
+    assert!(attach_in(&effects).is_none(), "no new stream: {effects:?}");
     // A line wider than the old pane fills one row of the zoomed pane.
     let line = format!("TRACE {}", "x".repeat(usize::from(big.0) - 10));
-    feed(&mut app, reopened, format!("{line}\r\n").as_bytes());
+    app.update(redrawn(generation, big, &format!("{line}\r\n")));
     let text = draw(&app)?.backend().to_string();
     let rows: Vec<&str> = text.lines().filter(|row| row.contains("TRACE")).collect();
     assert_eq!(rows.len(), 1, "{text}");
@@ -395,42 +398,27 @@ fn shown(app: &App) -> Result<String, Box<dyn std::error::Error>> {
 }
 
 #[tokio::test]
-async fn zoom_keeps_the_last_frame_until_the_reopened_stream_draws() -> TestResult {
+/// A zoom keeps the stream; the pane shows its frame until the daemon's
+/// redraw at the new size replaces it, never a blank or a locally cut one.
+async fn zoom_keeps_the_frame_until_the_redraw_at_the_new_size() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
     let (mut app, _) = loaded(&api, 100, 24).await;
     let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
     feed(&mut app, generation, b"");
-    let generation = focus_terminal(&mut app, b"OLD FRAME\r\n$ ").ok_or("no interactive attach")?;
+    focus_terminal(&mut app, b"OLD FRAME\r\n$ ").ok_or("no interactive attach")?;
     app.update(key(KeyCode::Esc));
     let effects = app.update(key(KeyCode::Char('z')));
-    let token = effects
-        .iter()
-        .find_map(|e| match e {
-            Effect::SettleResize { token, .. } => Some(*token),
-            _ => None,
-        })
-        .ok_or(format!("no settle timer: {effects:?}"))?;
-    // The shell redraws into the locally resized grid meanwhile; the pane
-    // still shows the frame from before the zoom.
-    app.update(Msg::AttachOutput {
-        generation,
-        bytes: b"\x1b[H\x1b[2Jlocal redraw".to_vec(),
-    });
+    let big = app.attach_size();
+    assert_eq!(resizes(&effects), [big]);
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::SettleResize { .. } | Effect::Attach { .. })),
+        "{effects:?}"
+    );
     let text = shown(&app)?;
     assert!(text.contains("OLD FRAME"), "{text}");
-    assert!(!text.contains("local redraw"), "{text}");
-    // Settled: the stream reopens, and the pane is not blank while it opens.
-    let effects = app.update(Msg::ResizeSettled { token });
-    let (reopened, interactive) = attach_in(&effects).ok_or(format!("no reopen: {effects:?}"))?;
-    assert!(interactive && reopened > generation, "{effects:?}");
-    app.update(opened(reopened));
-    let text = shown(&app)?;
-    assert!(text.contains("OLD FRAME"), "{text}");
-    // The daemon's redraw at the new size replaces it.
-    app.update(Msg::AttachOutput {
-        generation: reopened,
-        bytes: b"\x1b[H\x1b[2JNEW FRAME".to_vec(),
-    });
+    app.update(redrawn(generation, big, "NEW FRAME"));
     let text = shown(&app)?;
     assert!(text.contains("NEW FRAME"), "{text}");
     assert!(!text.contains("OLD FRAME"), "{text}");
@@ -443,16 +431,11 @@ async fn zoom_from_watching_keeps_the_last_frame_until_the_stream_draws() -> Tes
     let (mut app, _) = loaded(&api, 100, 24).await;
     let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
     feed(&mut app, generation, b"WATCHED FRAME");
-    // Watching: `z` reopens at once, without a settle timer.
     let effects = app.update(key(KeyCode::Char('z')));
-    let (reopened, _) = attach_in(&effects).ok_or(format!("no reopen: {effects:?}"))?;
-    app.update(opened(reopened));
+    assert!(attach_in(&effects).is_none(), "no new stream: {effects:?}");
     let text = shown(&app)?;
     assert!(text.contains("WATCHED FRAME"), "{text}");
-    app.update(Msg::AttachOutput {
-        generation: reopened,
-        bytes: b"\x1b[H\x1b[2JZOOMED FRAME".to_vec(),
-    });
+    app.update(redrawn(generation, app.attach_size(), "ZOOMED FRAME"));
     let text = shown(&app)?;
     assert!(text.contains("ZOOMED FRAME"), "{text}");
     assert!(!text.contains("WATCHED FRAME"), "{text}");
@@ -460,7 +443,9 @@ async fn zoom_from_watching_keeps_the_last_frame_until_the_stream_draws() -> Tes
 }
 
 #[tokio::test]
-async fn units_the_daemon_marks_without_a_pty_are_never_resized() -> TestResult {
+/// A unit the daemon marks without a PTY gets no resize when its stream
+/// opens; later sizes only tell the daemon how wide to redraw it.
+async fn units_the_daemon_marks_without_a_pty_get_no_resize_when_opened() -> TestResult {
     let mut lanes = mixed_lanes();
     for unit in &mut lanes[0].units {
         unit.pty = false;
@@ -470,7 +455,12 @@ async fn units_the_daemon_marks_without_a_pty_are_never_resized() -> TestResult 
     let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
     feed(&mut app, generation, b"");
     let effects = app.update(key(KeyCode::Enter));
-    let (generation, _) = attach_in(&effects).ok_or("no interactive attach")?;
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::AttachRole(true))),
+        "{effects:?}"
+    );
     let opened = app.update(Msg::AttachOpened {
         generation,
         result: Ok(devlanes_proto::AttachResult {
@@ -480,9 +470,6 @@ async fn units_the_daemon_marks_without_a_pty_are_never_resized() -> TestResult 
         }),
     });
     assert!(resizes(&opened).is_empty(), "{opened:?}");
-    app.update(key(KeyCode::Esc));
-    let zoomed = app.update(key(KeyCode::Char('z')));
-    assert!(resizes(&zoomed).is_empty(), "{zoomed:?}");
     Ok(())
 }
 

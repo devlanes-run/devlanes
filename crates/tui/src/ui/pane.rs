@@ -15,8 +15,8 @@ use tui_term::widget::{Cursor, PseudoTerminal};
 use super::list::{container_look, lane_name, lane_summary};
 use super::{fit, spread, target_error, unit_look};
 use crate::app::{
-    App, AttachState, Attached, CopyState, ErrorEntry, Focus, LogView, PaneMode, is_orphaned,
-    lane_profiles, started_by_agent, unit_ref,
+    App, AttachState, Attached, CopyState, ErrorEntry, Focus, PaneMode, is_orphaned, lane_profiles,
+    started_by_agent, unit_ref,
 };
 use crate::screen::ScreenView;
 use crate::text::{self, clean, clip};
@@ -391,7 +391,11 @@ fn render_unit(
         .filter(|a| a.lane == lane.reference && a.unit == unit.name && !a.container);
     // A unit that does not run has nothing to watch or type into.
     let right = attached
-        .filter(|a| is_active_state(&unit.state) || !matches!(a.mode, PaneMode::Live))
+        .filter(|a| {
+            is_active_state(&unit.state)
+                || !matches!(a.mode, PaneMode::Live)
+                || a.screen.scroll_offset() > 0
+        })
         .and_then(|a| mode_text(app, a, usize::from(boxed.width)))
         .unwrap_or_default();
     render_box(
@@ -422,11 +426,6 @@ fn render_unit(
             let mut lines = card;
             lines.extend(stopped_lines(app, unit, Some(reason), width));
             details(frame, lines, area, app);
-        }
-        // Until the first page arrives the live screen stays, so the pane
-        // does not blank out between the two.
-        (_, PaneMode::Logs(view)) if !(view.loading && view.lines.is_empty()) => {
-            render_logs(theme, view, frame, area);
         }
         (_, mode) => {
             let rows = u16::try_from(card.len()).unwrap_or(u16::MAX);
@@ -463,13 +462,11 @@ fn mode_text(app: &App, attached: &Attached, width: usize) -> Option<Vec<Span<'s
     let quiet = |text: &str| Some(vec![Span::styled(text.to_owned(), theme.quiet())]);
     match (&attached.mode, &attached.state) {
         (PaneMode::Copy(_), _) => quiet("selecting · v mark · y copy · esc cancel"),
-        (PaneMode::Logs(view), _) if view.loading => quiet("stored logs · loading…"),
-        (PaneMode::Logs(_), _) => quiet("stored logs · esc returns to live"),
-        (_, AttachState::Closed) => quiet("output ended"),
         (_, AttachState::Failed(_)) => None,
         (PaneMode::Live, _) if attached.screen.scroll_offset() > 0 => {
             quiet(&format!("{} lines up", attached.screen.scroll_offset()))
         }
+        (_, AttachState::Closed) => quiet("output ended"),
         _ if app.focus == Focus::Terminal => {
             let back = if app.full_screen() {
                 "typing · ctrl+] returns"
@@ -1477,12 +1474,20 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
 /// Draws the unit's screen. With `tail`, only the last rows with text fit,
 /// so the end of a dead unit's output shows under its card.
 fn render_terminal(app: &App, attached: &Attached, frame: &mut Frame, area: Rect, tail: bool) {
-    let shown = attached.shown();
-    let view = ScreenView::new(shown);
     let mut cursor = Cursor::default();
     if app.focus != Focus::Terminal {
         cursor.hide();
     }
+    // A unit's pane: the rows of its surface at the scroll position.
+    if attached.held.is_none()
+        && let Some(surface) = attached.screen.view(area.height, tail)
+    {
+        let view = ScreenView::new(surface.screen());
+        frame.render_widget(PseudoTerminal::new(&view).cursor(cursor), area);
+        return;
+    }
+    let shown = attached.shown();
+    let view = ScreenView::new(shown);
     let inner = area;
     if !tail {
         frame.render_widget(PseudoTerminal::new(&view).cursor(cursor), inner);
@@ -1508,34 +1513,6 @@ fn render_terminal(app: &App, attached: &Attached, frame: &mut Frame, area: Rect
             }
         }
     }
-}
-
-/// Stored log lines, newest at the bottom, scrolled by `view.offset`.
-fn render_logs(theme: &Theme, view: &LogView, frame: &mut Frame, area: Rect) {
-    let height = usize::from(area.height);
-    if view.lines.is_empty() {
-        frame.render_widget(
-            Paragraph::new("No stored logs for this unit yet.").style(theme.quiet()),
-            area,
-        );
-        return;
-    }
-    let end = view.lines.len().saturating_sub(view.offset);
-    let start = end.saturating_sub(height);
-    // The parser keeps escape sequences and control bytes inside its grid,
-    // so the stored colors reach the pane without `clean`.
-    let parser = crate::screen::stored_lines(
-        view.lines[start..end]
-            .iter()
-            .map(|line| line.styled.as_deref().unwrap_or(&line.text)),
-        area.height,
-        area.width,
-        start == 0,
-    );
-    let screen = ScreenView::new(parser.screen());
-    let mut cursor = Cursor::default();
-    cursor.hide();
-    frame.render_widget(PseudoTerminal::new(&screen).cursor(cursor), area);
 }
 
 /// Reverses the selected cells and marks the copy cursor.
