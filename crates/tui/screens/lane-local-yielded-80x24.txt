@@ -1,8 +1,8 @@
  devlanes  1 acme   2 billing   3 shop                   Monitor  Daemon  Boxes
  lanes  1 @0 ○  2 @0 fork-a  3 @0 fork-b ○  4 @1        1-9 or [ ] switch lanes
-┌ @0 · not mirrored ───────────┐┌ main @0 · not running ───────────────────────┐
-│ ▾ services                 4 ││ ! Not mirrored. fork-a's shop@0 is in use.   │
-│   · storefront               ││   Press m to use this one.                   │
+┌ @0 · not in use ─────────────┐┌ main @0 · not running ───────────────────────┐
+│ ▾ services                 4 ││ ! fork-a's shop@0 is in use instead. Press m │
+│   · storefront               ││   to use this one.                           │
 │   · checkout-api             ││                                              │
 │   · mailer                   ││ Not running. s starts the lane with its      │
 │   · admin                    ││ default profile, p picks profiles.           │
@@ -16,8 +16,8 @@
 │                              ││           · admin            stopped         │
 │                              ││                                              │
 │                              ││ lanes in shop                                │
-│                              ││ ▌ main @0                  not mirrored      │
-│                              ││   @0 on fork-a             running · 2 up    │
+│                              ││ ▌ main @0                  not in use        │
+│                              ││   @0 on fork-a             in use            │
 │                              ││   @0 on fork-b             not mirrored      │
 │                              ││ … z shows the rest                           │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
@@ -26,7 +26,7 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 57 bold, 58-63 dim, 66 bold, 67-71 dim, 74 bold, 75-78 dim
 1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-26 green, 29-41 dim, 44-47 dim, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
-2: 0 darkgray, 1-19 bold reversed, 20-32 darkgray, 34-37 bold, 41-54 dim, 56-79 darkgray
+2: 0 darkgray, 1-17 bold reversed, 18-32 darkgray, 34-37 bold, 41-54 dim, 56-79 darkgray
 3: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 34-35 yellow, 79 darkgray
 4: 0 darkgray, 4-5 dim, 6-15 dim blue, 31-32 darkgray, 79 darkgray
 5: 0 darkgray, 4-5 dim, 6-17 dim blue, 31-32 darkgray, 79 darkgray
@@ -42,8 +42,8 @@
 15: 0 darkgray, 31-32 darkgray, 44-45 dim, 63-69 dim, 79 darkgray
 16: 0 darkgray, 31-32 darkgray, 79 darkgray
 17: 0 darkgray, 31-32 darkgray, 34-46 bold, 79 darkgray
-18: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-72 dim, 79 darkgray
-19: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-74 dim, 79 darkgray
+18: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-70 dim, 79 darkgray
+19: 0 darkgray, 31-32 darkgray, 34-35 bold, 79 darkgray
 20: 0 darkgray, 31-32 darkgray, 34-35 bold, 61-72 dim, 79 darkgray
 21: 0 darkgray, 31-32 darkgray, 34-51 dim, 79 darkgray
 22: 0-79 darkgray

@@ -239,6 +239,68 @@ async fn m_on_a_grey_box_lane_asks_the_daemon_to_use_it() -> TestResult {
     Ok(())
 }
 
+/// Nothing of a grey lane is routed here, so it offers nothing to open.
+#[tokio::test]
+async fn a_grey_lane_has_nothing_to_open() -> TestResult {
+    let mut app = with_forks(120, 30).await;
+    select(&mut app, Selected::lane("acme@1 @fork-b"));
+    assert!(
+        !footer(&app)?.contains("open in browser"),
+        "{}",
+        footer(&app)?
+    );
+    let effects = app.update(key(KeyCode::Char('o')));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::OpenUrl(_))),
+        "{effects:?}"
+    );
+    assert_eq!(
+        notice(&app),
+        "this lane is not in use here, so it has nothing to open. m uses it"
+    );
+    // The lane in use still opens.
+    select(&mut app, Selected::lane("acme@1 @fork-a"));
+    assert!(
+        footer(&app)?.contains("o open in browser"),
+        "{}",
+        footer(&app)?
+    );
+    Ok(())
+}
+
+/// A box lane that this machine's stopped lane keeps out names it the way
+/// every message does.
+#[tokio::test]
+async fn a_lane_this_machine_keeps_reads_this_machines() -> TestResult {
+    let lane = json!({"key": {"project": "acme", "lane": "1"}, "index": 1});
+    let listing = json!({"items": [{"host": "fork-a", "state": "connected", "transport": "ssh",
+        "skipped_lanes": [{"lane": "acme@1", "hosts": [], "box": null,
+                           "reason": "this machine's acme@1 is in use", "cause": "local_stopped",
+                           "winner": null, "winner_lane": "acme@1", "can_use": true}],
+        "registry": {"lanes": [lane], "units": []}}]});
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 120, 40).await;
+    app.update(Msg::Boxes(Ok(listing)));
+    select(&mut app, Selected::lane("acme@1 @fork-a"));
+    let text = pane(&app)?;
+    assert!(
+        text.contains("Not mirrored. This machine's acme@1 is in use. Press m to use this one."),
+        "{text}"
+    );
+    app.update(crate::shifted('B'));
+    let terminal = draw(&app)?;
+    let buffer = terminal.backend().buffer();
+    let screen: String = (0..buffer.area.height)
+        .flat_map(|y| (0..buffer.area.width).map(move |x| (x, y)))
+        .map(|(x, y)| buffer[(x, y)].symbol().to_owned())
+        .collect();
+    assert!(
+        screen.contains("acme@1: this machine's acme@1 is in use. Press m to use this one."),
+        "{screen}"
+    );
+    Ok(())
+}
+
 /// A `lane_switched` notice from the daemon, for a switch any client made.
 fn switched(lane: &str, to: Option<&str>, message: Option<&str>) -> Msg {
     Msg::Event(Event {
@@ -292,9 +354,21 @@ async fn m_on_a_yielded_local_lane_gives_the_hostnames_back_to_this_machine() ->
     select(&mut app, Selected::lane("acme@1"));
     let text = pane(&app)?;
     assert!(
-        text.contains("Not mirrored. fork-a's acme@1 is in use. Press m to use this one."),
+        text.contains("! fork-a's acme@1 is in use instead. Press m to use this one."),
         "{text}"
     );
+    // The lanes table says which acme@1 is live, and which are not.
+    for expected in [
+        "feat/login @1 not in use",
+        "@1 on fork-a in use",
+        "@1 on fork-b not mirrored",
+        "main @0 in use",
+    ] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
+    // This machine's own lane is not mirrored from anywhere: it is not in use.
+    let title = row(&app, 2)?;
+    assert!(title.contains("@1 · not in use "), "{title}");
     assert!(footer(&app)?.starts_with(" m use this one   "));
     let effects = app.update(key(KeyCode::Char('m')));
     assert_eq!(uses(&effects), [("acme@1".into(), None)]);
@@ -695,8 +769,8 @@ async fn the_boxes_view_names_what_serves_a_skipped_lane_and_the_chosen_ones() -
         .join(" ");
     for expected in [
         "chosen acme@1",
-        "acme@1: fork-a's acme@1 is in use. m uses this one.",
-        "acme@0: the same lane runs on this machine. m stops it and uses this one.",
+        "acme@1: fork-a's acme@1 is in use. Press m to use this one.",
+        "skipped acme@0 also runs on this machine. Press m to stop it and use this one.",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }

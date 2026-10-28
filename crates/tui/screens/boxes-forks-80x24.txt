@@ -10,7 +10,7 @@
 │   link      connected since 2026-10-14 16:46                                 │
 │   box       devlanes 1.0.0 · proxy on 8443 · ports.range 31000-31999         │
 │   mirror    1 lane · no ports bound here · 0 hostnames routed                │
-│   skipped   shop@0: fork-a's shop@0 is in use. m uses this one.              │
+│   skipped   shop@0: fork-a's shop@0 is in use. Press m to use this one.      │
 │                                                                              │
 │                                                                              │
 │                                                                              │

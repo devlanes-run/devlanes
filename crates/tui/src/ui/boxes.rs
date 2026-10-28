@@ -206,41 +206,42 @@ pub(super) fn grey_note(grey: &Grey) -> Option<String> {
         ("local_running", _) => Some(format!(
             "Not mirrored. {serving} runs on this machine. Press m to stop it and use this one."
         )),
+        // This machine's own lane, which a chosen box lane took over.
+        (_, Some(winner)) if grey.host.is_none() => Some(format!(
+            "{}'s {serving} is in use instead. Press m to use this one.",
+            clean(winner)
+        )),
         (_, Some(winner)) if grey.can_use => Some(format!(
             "Not mirrored. {}'s {serving} is in use. Press m to use this one.",
             clean(winner)
         )),
         (_, None) if grey.can_use => Some(format!(
-            "Not mirrored. {serving} on this machine is in use. Press m to use this one."
+            "Not mirrored. This machine's {serving} is in use. Press m to use this one."
         )),
         _ => None,
     }
 }
 
-/// A skipped lane's row in the boxes view after `acme@0: `: what serves its
-/// hostnames and what `m` on the row does. `None` from daemons without
-/// `remote.use`.
+/// A skipped lane's row in the boxes view: what serves its hostnames and
+/// what `m` on the row does. `None` from daemons without `remote.use`.
 fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
     let cause = skipped.cause.as_deref()?;
-    let winner = skipped.served_by();
-    let serving = skipped.serving().to_owned();
-    // `acme@0: acme@0 runs on this machine` would name the lane twice.
-    let local = if serving == skipped.lane {
-        "the same lane".to_owned()
-    } else {
-        clean(&serving)
-    };
-    match (cause, winner) {
+    let lane = clean(&skipped.lane);
+    let serving = clean(skipped.serving());
+    match (cause, skipped.served_by()) {
+        // `acme@0: acme@0 runs on this machine` would name the lane twice.
+        ("local_running", _) if serving == lane => Some(format!(
+            "{lane} also runs on this machine. Press m to stop it and use this one."
+        )),
         ("local_running", _) => Some(format!(
-            "{local} runs on this machine. m stops it and uses this one."
+            "{lane}: {serving} runs on this machine. Press m to stop it and use this one."
         )),
         (_, Some(winner)) if skipped.can_use => Some(format!(
-            "{}'s {} is in use. m uses this one.",
-            clean(winner),
-            clean(&serving)
+            "{lane}: {}'s {serving} is in use. Press m to use this one.",
+            clean(winner)
         )),
         (_, None) if skipped.can_use => Some(format!(
-            "{local} on this machine is in use. m uses this one."
+            "{lane}: this machine's {serving} is in use. Press m to use this one."
         )),
         _ => None,
     }
@@ -252,7 +253,7 @@ fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
 fn skip_reason(app: &App, skipped: &crate::boxes::SkippedLane) -> String {
     match app.local_lane_serving(&skipped.hosts) {
         Some(local) if skipped.other.is_none() => {
-            format!("{} on this machine serves its hostnames", clean(&local))
+            format!("this machine's {} is in use", clean(&local))
         }
         _ => clean(&skipped.reason),
     }
@@ -1385,19 +1386,8 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> (Vec<Line<'static>>, V
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
         skipped_rows.push(lines.len());
         let label = if index == 0 { "skipped" } else { "" };
-        let lane = clean(&skipped.lane);
-        let text = match skipped_words(skipped) {
-            Some(words) => format!("{lane}: {words}"),
-            None => {
-                let reason = skip_reason(app, skipped);
-                // `acme@0: acme@0 on this machine …` would name the lane twice.
-                let reason = match reason.strip_prefix(&format!("{lane} on this machine ")) {
-                    Some(rest) => format!("the same lane on this machine {rest}"),
-                    None => reason,
-                };
-                format!("{lane}: {reason}")
-            }
-        };
+        let text = skipped_words(skipped)
+            .unwrap_or_else(|| format!("{}: {}", clean(&skipped.lane), skip_reason(app, skipped)));
         lines.extend(fact(label, &text, theme.tone(Tone::Attention)));
     }
     for (index, refused) in host.skipped_hosts.iter().enumerate() {

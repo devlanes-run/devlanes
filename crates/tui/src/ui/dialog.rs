@@ -20,7 +20,8 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
         "list",
         &[
             ("j k  up down", "move; k from the top selects the lane"),
-            ("g G", "the lane, the last row"),
+            // One line for both, so the not mirrored glyph fits 60 rows.
+            ("g G  t  i", "the lane, the last row, the tasks, the infra"),
             ("h l", "fold, unfold; h moves to the section"),
             (
                 "enter  space",
@@ -34,7 +35,6 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
                 "n N  e",
                 "next, previous problem; every error in full (or click it)",
             ),
-            ("t  i", "jump to the tasks, the infra"),
             (
                 "s  x  r",
                 "start, stop, restart the selection; s runs a task",
@@ -171,6 +171,16 @@ fn window(len: usize, selected: usize, room: usize) -> usize {
     selected.saturating_sub(room / 2).min(len - room)
 }
 
+/// The marker of a lane chip this machine does not mirror, as the legend
+/// shows it: the hollow dot, or the parentheses ascii glyphs put around the
+/// lane's name.
+fn unmirrored(theme: &Theme) -> &'static str {
+    match theme.unmirrored() {
+        ("", close) => close.trim_start(),
+        _ => "()",
+    }
+}
+
 /// The glyph legend as a grid in as many columns as fit `max` cells, four at
 /// most: three lines on a wide screen, so the keys below still fit 60 rows,
 /// and one more line for each column a narrow screen drops.
@@ -183,17 +193,16 @@ fn legend_lines(legend: &[(&'static str, Style, &'static str)], max: usize) -> V
                     .iter()
                     .skip(column)
                     .step_by(columns)
-                    .map(|(_, _, word)| text::width(word))
+                    .map(|(glyph, _, word)| text::width(glyph) + 1 + text::width(word))
                     .max()
                     .unwrap_or(0)
             })
             .collect()
     };
-    // Two cells of indent, then `glyph word` per entry.
-    let total = |widths: &[usize]| {
-        2 + widths.iter().map(|width| width + 2).sum::<usize>()
-            + GAP * widths.len().saturating_sub(1)
-    };
+    // Two cells of indent, then `glyph word` per entry; the ascii marker
+    // `()` takes two cells.
+    let total =
+        |widths: &[usize]| 2 + widths.iter().sum::<usize>() + GAP * widths.len().saturating_sub(1);
     let columns = (1..=4)
         .rev()
         .find(|columns| total(&widths(*columns)) <= max)
@@ -206,7 +215,8 @@ fn legend_lines(legend: &[(&'static str, Style, &'static str)], max: usize) -> V
             for (index, (glyph, style, word)) in row.iter().enumerate() {
                 line.push(Span::styled(format!("{glyph} "), *style));
                 line.push(Span::raw(if index + 1 < row.len() {
-                    format!("{word:<width$}", width = widths[index] + GAP)
+                    let pad = widths[index] + GAP - text::width(glyph) - 1;
+                    format!("{word:<pad$}")
                 } else {
                     (*word).to_owned()
                 }));
@@ -587,6 +597,11 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
                 ),
                 (theme.glyph(Glyph::Done), theme.tone(Tone::Ok), "task done"),
                 (theme.glyph(Glyph::Bar), Style::new(), "the unit's color"),
+                (
+                    unmirrored(theme),
+                    theme.quiet(),
+                    "not mirrored here, m uses it",
+                ),
             ];
             let mut body = vec![Line::styled("glyphs", theme.quiet())];
             body.extend(legend_lines(&legend, max));

@@ -21,7 +21,7 @@
 │                              ││                                              │
 │                              ││                                              │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
- m use this one   o open in browser   [ ] switch lane     ? all keys   q quit
+ m use this one   [ ] switch lane   / filter   B boxes    ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 57 bold, 58-63 dim, 66 bold, 67-71 dim, 74 bold, 75-78 dim
@@ -47,4 +47,4 @@
 20: 0 darkgray, 31-32 darkgray, 79 darkgray
 21: 0 darkgray, 31-32 darkgray, 79 darkgray
 22: 0-79 darkgray
-23: 1 bold, 2-17 dim, 18 bold, 19-37 dim, 38-40 bold, 41-55 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim
+23: 1 bold, 2-17 dim, 18-20 bold, 21-35 dim, 36 bold, 37-46 dim, 47 bold, 48-56 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

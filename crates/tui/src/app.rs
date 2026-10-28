@@ -2929,6 +2929,21 @@ impl App {
         })
     }
 
+    /// Whether lane `reference` is the one in use for hostnames that a grey
+    /// lane also has, so the lanes table can say which one is live.
+    pub fn in_use(&self, reference: &str) -> bool {
+        if self.grey(reference).is_some() {
+            return false;
+        }
+        let (host, own) = match self.lane_box(reference) {
+            Some(lane) => (Some(lane.host.as_str()), lane.lane.as_str()),
+            None => (None, reference),
+        };
+        self.all_lanes()
+            .filter_map(|lane| self.grey(&lane.reference))
+            .any(|grey| grey.winner.as_deref() == host && grey.serving == own)
+    }
+
     /// This machine's lane that serves one of `hosts`: a unit URL naming it,
     /// or the lane's domain it falls under. Only for daemons without
     /// `remote.use`, which name no lane in use.
@@ -5610,6 +5625,17 @@ impl App {
                     self.make_interactive(effects);
                     self.resize_pane(effects);
                 }
+            }
+            // A grey lane's hostnames lead to the lane in use instead.
+            KeyCode::Char('o')
+                if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|s| self.grey(&s.lane).is_some()) =>
+            {
+                self.set_notice(
+                    "this lane is not in use here, so it has nothing to open. m uses it".into(),
+                );
             }
             KeyCode::Char('o') => self.open_url(effects),
             KeyCode::Char('m') => {

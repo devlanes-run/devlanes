@@ -1421,12 +1421,13 @@ fn hints(app: &App) -> Vec<Hint> {
         return Vec::new();
     };
     let mut hints = lane_hints(app, lane);
-    // Only where `m` can switch, if need be after stopping this machine's lane.
-    if app
-        .grey(&lane.reference)
-        .is_some_and(|grey| grey.switchable())
-    {
-        hints.insert(0, ("m", "use this one", ch('m')));
+    if let Some(grey) = app.grey(&lane.reference) {
+        // Its hostnames lead to the lane in use, so there is nothing to open.
+        hints.retain(|(key, ..)| *key != "o");
+        // Only where `m` can switch, if need be after stopping this machine's lane.
+        if grey.switchable() {
+            hints.insert(0, ("m", "use this one", ch('m')));
+        }
     }
     hints
 }

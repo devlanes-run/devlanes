@@ -57,7 +57,7 @@
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- m use this one   o open in browser   [ ] switch lane   / filter   B boxes   read-only: manage it on fork-b (ssh fork-b)                                                          ? all keys   q quit
+ m use this one   [ ] switch lane   / filter   B boxes   read-only: manage it on fork-b (ssh fork-b)                                                                              ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
@@ -119,4 +119,4 @@
 56: 0 darkgray, 47-48 darkgray, 199 darkgray
 57: 0 darkgray, 47-48 darkgray, 199 darkgray
 58: 0-199 darkgray
-59: 1 bold, 2-17 dim, 18 bold, 19-37 dim, 38-40 bold, 41-55 dim, 56 bold, 57-66 dim, 67 bold, 68-119 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1 bold, 2-17 dim, 18-20 bold, 21-35 dim, 36 bold, 37-46 dim, 47 bold, 48-99 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

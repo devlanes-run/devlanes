@@ -1509,15 +1509,22 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
             Span::raw(format!("{:<24} ", clip(&name, 24))),
         ];
         let mut summary = lane_summary(app, lane);
-        if app.grey(&lane.reference).is_some() {
-            let mut grey = vec![Span::styled("not mirrored", theme.quiet())];
+        // Lanes that share hostnames: which one is live, and which are not.
+        let mark = match app.grey(&lane.reference) {
+            Some(grey) if grey.host.is_none() => Some(("not in use", theme.quiet())),
+            Some(_) => Some(("not mirrored", theme.quiet())),
+            None if app.in_use(&lane.reference) => Some(("in use", Style::new())),
+            None => None,
+        };
+        if let Some((mark, style)) = mark {
+            let mut marked = vec![Span::styled(mark, style)];
             // The lane's state comes second and goes first where it would be cut.
             let room = width.saturating_sub(super::spans_width(&spans));
-            if !summary.is_empty() && 15 + super::spans_width(&summary) <= room {
-                grey.push(Span::styled(" · ", theme.quiet()));
-                grey.extend(summary);
+            if !summary.is_empty() && text::width(mark) + 3 + super::spans_width(&summary) <= room {
+                marked.push(Span::styled(" · ", theme.quiet()));
+                marked.extend(summary);
             }
-            summary = grey;
+            summary = marked;
         }
         if lane.index.is_none() {
             summary = vec![Span::styled(

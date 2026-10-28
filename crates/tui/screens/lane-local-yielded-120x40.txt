@@ -1,7 +1,7 @@
  devlanes  1 acme   2 billing   3 shop                                                           Monitor  Daemon  Boxes
  lanes  1 @0 main ○  2 @0 fork-a  3 @0 fork-b ○  4 @1 feat/gift-cards                           1-9 or [ ] switch lanes
-┌ @0 · not mirrored ───────────────────────────┐┌ main @0 · not running ───────────────────────────────────────────────┐
-│ ▾ services                                 4 ││ ! Not mirrored. fork-a's shop@0 is in use. Press m to use this one.  │
+┌ @0 · not in use ─────────────────────────────┐┌ main @0 · not running ───────────────────────────────────────────────┐
+│ ▾ services                                 4 ││ ! fork-a's shop@0 is in use instead. Press m to use this one.        │
 │   · storefront                               ││                                                                      │
 │   · checkout-api                             ││ Not running. s starts the lane with its default profile, p picks     │
 │   · mailer                                   ││ profiles.                                                            │
@@ -15,8 +15,8 @@
 │                                              ││           · admin            stopped                                 │
 │                                              ││                                                                      │
 │                                              ││ lanes in shop                                                        │
-│                                              ││ ▌ main @0                  not mirrored · not running                │
-│                                              ││   @0 on fork-a             running · 2 up                            │
+│                                              ││ ▌ main @0                  not in use · not running                  │
+│                                              ││   @0 on fork-a             in use · running · 2 up                   │
 │                                              ││   @0 on fork-b             not mirrored · running · 2 up             │
 │                                              ││   feat/gift-cards @1       not running                               │
 │                                              ││                                                                      │
@@ -42,7 +42,7 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 7-19 bold reversed, 21-22 dim, 23-31 green, 34-46 dim, 49-68 dim, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
-2: 0 darkgray, 1-19 bold reversed, 20-48 darkgray, 50-53 bold, 57-70 dim, 72-119 darkgray
+2: 0 darkgray, 1-17 bold reversed, 18-48 darkgray, 50-53 bold, 57-70 dim, 72-119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray
 4: 0 darkgray, 4-5 dim, 6-15 dim blue, 47-48 darkgray, 119 darkgray
 5: 0 darkgray, 4-5 dim, 6-17 dim blue, 47-48 darkgray, 119 darkgray
@@ -57,8 +57,8 @@
 14: 0 darkgray, 47-48 darkgray, 60-61 dim, 79-85 dim, 119 darkgray
 15: 0 darkgray, 47-48 darkgray, 119 darkgray
 16: 0 darkgray, 47-48 darkgray, 50-62 bold, 119 darkgray
-17: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-102 dim, 119 darkgray
-18: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-90 dim, 119 darkgray
+17: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-100 dim, 119 darkgray
+18: 0 darkgray, 47-48 darkgray, 50-51 bold, 83-99 dim, 119 darkgray
 19: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-105 dim, 119 darkgray
 20: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-87 dim, 119 darkgray
 21: 0 darkgray, 47-48 darkgray, 119 darkgray

@@ -37,7 +37,7 @@
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
- m use this one   o open in browser   z zoom   / filter   B boxes   read-only                     ? all keys   q quit
+ m use this one   z zoom   / filter   B boxes   read-only: manage it on fork-b (ssh fork-b)       ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
@@ -79,4 +79,4 @@
 36: 0 darkgray, 47-48 darkgray, 119 darkgray
 37: 0 darkgray, 47-48 darkgray, 119 darkgray
 38: 0-119 darkgray
-39: 1 bold, 2-17 dim, 18 bold, 19-37 dim, 38 bold, 39-46 dim, 47 bold, 48-57 dim, 58 bold, 59-76 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim
+39: 1 bold, 2-17 dim, 18 bold, 19-26 dim, 27 bold, 28-37 dim, 38 bold, 39-90 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

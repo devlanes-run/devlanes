@@ -7,7 +7,7 @@
 │   fix       run devlanes daemon pair on hetzner, then press enter here                                               │
 │   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999                                                  │
 │   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed                                                   │
-│   skipped   acme@0: the same lane runs on this machine. m stops it and uses this one.                                │
+│   skipped   acme@0 also runs on this machine. Press m to stop it and use this one.                                   │
 │             ext.example.com (acme@4:ext-build): not under .localhost                                                 │
 │   syncs     acme@4:ext-build  up to date, following changes                                                          │
 │   ! the box runs devlanes 0.9.2 and this machine 1.0.0. Install the same release on both.                            │
@@ -49,7 +49,7 @@
 6: 0 bold, 4-13 dim, 14-71 bold, 119 bold
 7: 0 bold, 4-13 dim, 119 bold
 8: 0 bold, 4-13 dim, 119 bold
-9: 0 bold, 4-13 dim, 14-86 yellow, 119 bold
+9: 0 bold, 4-13 dim, 14-83 yellow, 119 bold
 10: 0 bold, 4-13 dim, 14-69 yellow, 119 bold
 11: 0 bold, 4-13 dim, 14-60 green, 119 bold
 12: 0 bold, 4-90 yellow, 119 bold
