@@ -1504,20 +1504,20 @@
         "vars": {
           "additionalProperties": {
             "$ref": "#/$defs/Templated_Scalar",
-            "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`.",
+            "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`.",
             "examples": [
               "acme_${{ lane.name }}"
             ],
-            "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`."
+            "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`."
           },
           "default": {},
-          "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`.",
+          "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`.",
           "examples": [
             {
               "db_name": "acme_${{ lane.name }}"
             }
           ],
-          "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`.",
+          "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`.",
           "type": "object"
         }
       },

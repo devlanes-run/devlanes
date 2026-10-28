@@ -26,7 +26,7 @@ services:
       VITE_API_URL: "${{ services.api.public_url }}"
 ```
 
-The browser talks to `https://acme-2.localhost` and `https://api.acme-2.localhost`; both share the site `acme-2.localhost`, so a cookie with `Domain=acme-2.localhost` and `SameSite=Lax` works across them and never leaks into lane 3. `DEVLANES_ORIGINS` is in every service's environment and lists the https origins of the lane, so the API's CORS allow-list can be `process.env.DEVLANES_ORIGINS.split(',')` instead of a hardcoded list. It is not reachable as `${{ env.DEVLANES_ORIGINS }}`, since `env.*` reads your shell, not devlanes' own variables.
+The browser talks to `https://acme2.localhost` and `https://api.acme2.localhost`; both share the site `acme2.localhost`, so a cookie with `Domain=acme2.localhost` and `SameSite=Lax` works across them and never leaks into lane 3. `DEVLANES_ORIGINS` is in every service's environment and lists the https origins of the lane, so the API's CORS allow-list can be `process.env.DEVLANES_ORIGINS.split(',')` instead of a hardcoded list. It is not reachable as `${{ env.DEVLANES_ORIGINS }}`, since `env.*` reads your shell, not devlanes' own variables.
 
 For server-to-server calls prefer `${{ services.api.url }}` (`http://127.0.0.1:<port>`, no TLS, no proxy hop). Use `public_url` when the value ends up in a browser, an OAuth redirect or a webhook.
 
@@ -114,7 +114,7 @@ services:
         fallback: true  # only when nothing else matched
 ```
 
-Exact hostnames win over wildcards; a `fallback` wildcard loses to every other route. `*.acme-2.localhost` covers `foo.acme-2.localhost` and `a.b.acme-2.localhost`, not `acme-2.localhost` itself. For a second-level product domain use a lane var: `pages_domain: ${{ 'pages' if lane.index == 0 else 'pages-' ~ lane.index }}.localhost` and `"*.${{ lane.pages_domain }}"`. The var must end in `.localhost`, or in your `hostnames.tld` with the resolver strategy.
+Exact hostnames win over wildcards; a `fallback` wildcard loses to every other route. `*.acme2.localhost` covers `foo.acme2.localhost` and `a.b.acme2.localhost`, not `acme2.localhost` itself. For a product domain on a site of its own use a lane var: `pages_domain: ${{ domain('pages') }}` and `"*.${{ lane.pages_domain }}"` ([a site of its own](https.md#a-site-of-its-own)).
 
 Quote wildcard entries: an unquoted leading `*` is a YAML alias. `/etc/hosts` takes only exact names, so programs that cannot resolve `*.localhost` reach wildcard hostnames only through the resolver strategy, and only under its `hostnames.tld`; a lane var hardcoded to `.localhost` stays out of their reach. See [Hostnames and HTTPS](https.md#programs-that-cannot-resolve-localhost).
 
@@ -213,7 +213,7 @@ services:
     run_script:
       file: package.json                 # apps/billing/package.json
       name: dev
-    hosts: "${{ lane.domain }}"          # billing.localhost, billing-2.localhost
+    hosts: "${{ lane.domain }}"          # billing.localhost, billing2.localhost
 ```
 
 A worktree can hold a lane of each project whose file it has, so one worktree of this repository can run a lane of `acme` and a lane of `billing` side by side.

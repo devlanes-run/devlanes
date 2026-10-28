@@ -127,7 +127,8 @@ pub struct LanesConfig {
     /// Values computed for each lane and read as `${{ lane.<name> }}`, such as a database
     /// name, vhost, bucket or Redis index per lane. A var named `domain` replaces the
     /// default lane domain, and one named `port` fixes where the lane's port block starts.
-    /// Cannot be combined with `matrix`.
+    /// `${{ domain('pages') }}` gives a name a site of its own in each lane, such as
+    /// `pages2.localhost` in lane 2. Cannot be combined with `matrix`.
     #[serde(default)]
     #[schemars(extend("examples" = [{"db_name":"acme_${{ lane.name }}"}]))]
     pub vars: Env,
