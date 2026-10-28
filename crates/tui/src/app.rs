@@ -1135,6 +1135,9 @@ pub struct Grey {
     /// `processes`, which a stop ends, or only `containers`, which no
     /// devlanes command stops alone.
     pub holds: Option<String>,
+    /// The command that stops that lane's own containers, when they count
+    /// for either `holds`.
+    pub containers: Option<String>,
     /// The daemon's words, for daemons that send no `cause`.
     pub reason: String,
 }
@@ -2909,11 +2912,6 @@ impl App {
     pub fn grey(&self, reference: &str) -> Option<Grey> {
         if let Some((host, lane)) = self.box_lane(reference) {
             let skipped = host.skipped(&lane)?;
-            let holds = skipped.holds.clone().or_else(|| {
-                (skipped.cause.as_deref() == Some("local_running"))
-                    .then(|| self.local_holds(skipped.serving()))
-                    .flatten()
-            });
             return Some(Grey {
                 serving: skipped.serving().to_owned(),
                 winner: skipped.served_by().map(str::to_owned),
@@ -2921,7 +2919,8 @@ impl App {
                 host: Some(host.host.clone()),
                 can_use: skipped.can_use,
                 cause: skipped.cause.clone(),
-                holds,
+                holds: skipped.holds.clone(),
+                containers: skipped.containers_command(),
                 reason: skipped.reason.clone(),
             });
         }
@@ -2948,30 +2947,9 @@ impl App {
             can_use: true,
             cause: Some("box_chosen".into()),
             holds: None,
+            containers: None,
             reason: String::new(),
         })
-    }
-
-    /// What keeps this machine's lane `reference` running, as status shows
-    /// it: `processes` while a unit or an orphan runs, else `containers`
-    /// while one of its own containers is up, as the daemon counts them.
-    /// Shared containers hold no port of the lane.
-    fn local_holds(&self, reference: &str) -> Option<String> {
-        let lane = self.lanes.iter().find(|lane| lane.reference == reference)?;
-        if lane.units.iter().any(|unit| is_active(&unit.state)) {
-            return Some("processes".into());
-        }
-        // Status lists started containers, so one without a state is up.
-        let up = |state: Option<&str>| {
-            state.is_none_or(|s| {
-                !matches!(s, "created" | "dead" | "removing" | "stopped")
-                    && !s.starts_with("exited")
-            })
-        };
-        lane.containers
-            .iter()
-            .any(|c| !c.shared && up(c.state.as_deref()))
-            .then(|| "containers".into())
     }
 
     /// Whether lane `reference` is the one in use for hostnames that a grey
@@ -4598,7 +4576,7 @@ impl App {
                     });
                 }
                 (Some("local_running"), Some(host)) => {
-                    self.switch_prompt(grey.serving, grey.lane, host);
+                    self.switch_prompt(grey.serving, grey.lane, host, grey.containers);
                 }
                 _ => self.set_notice(
                     "the daemon is too old to switch lanes. Upgrade it and restart it".to_owned(),
@@ -4618,7 +4596,13 @@ impl App {
     /// box `host`'s lane `lane` out. Confirmed, it stops `local` the way `x`
     /// does, and [`App::send_switch`] sends `remote.use` once the stop
     /// answered.
-    fn switch_prompt(&mut self, local: String, lane: String, host: String) {
+    fn switch_prompt(
+        &mut self,
+        local: String,
+        lane: String,
+        host: String,
+        containers: Option<String>,
+    ) {
         let action = self.next_action();
         let stop = Effect::Control {
             action,
@@ -4628,12 +4612,17 @@ impl App {
             label: format!("stop {local}"),
             target: Target::Lane(local.clone()),
         };
+        // A stop leaves the lane's own containers up, and they keep its
+        // ports until they stop too.
+        let then = match &containers {
+            Some(command) => {
+                format!("Its own containers keep running. Stop them too with {command}.")
+            }
+            None => format!("Then {host}'s {lane} serves its hostnames and ports."),
+        };
         self.dialog = Some(Dialog::Confirm {
             prompt: format!("{local} runs on this machine. Stop it and use {host}'s {lane}?"),
-            detail: vec![
-                format!("It stops every unit of {local} here."),
-                format!("Then {host}'s {lane} serves its hostnames and ports."),
-            ],
+            detail: vec![format!("It stops every unit of {local} here."), then],
             action: "stop and switch",
             strict: true,
             effect: Box::new(stop),
@@ -4743,7 +4732,24 @@ impl App {
                     && let Some(host) = host
                     && let Some(local) = error.data.get("local_lane").and_then(Value::as_str) =>
             {
-                self.switch_prompt(local.to_owned(), lane.to_owned(), host.to_owned());
+                let command = refusal_containers(error);
+                self.switch_prompt(local.to_owned(), lane.to_owned(), host.to_owned(), command);
+            }
+            // In the TUI `m` switches once they stopped, so the words come
+            // from the data rather than the CLI's message.
+            Err(ApiError::Rpc(ref error)) if containers => {
+                let local = error
+                    .data
+                    .get("local_lane")
+                    .and_then(Value::as_str)
+                    .unwrap_or(lane);
+                let words =
+                    crate::boxes::containers_run(local, refusal_containers(error).as_deref());
+                self.report(
+                    &format!("use {lane} from {from}"),
+                    None,
+                    Worded::local(&words),
+                );
             }
             Err(error) => self.api_error(&format!("use {lane} from {from}"), None, error, effects),
         }
@@ -7718,6 +7724,24 @@ fn log_query(lane: &str, unit: &str, cursor: Option<String>) -> LogQuery {
         styled: true,
         ..LogQuery::default()
     }
+}
+
+/// The command that stops the own containers a `local_lane_running`
+/// refusal names in `compose_project` and `containers`, for either `holds`.
+fn refusal_containers(error: &RpcError) -> Option<String> {
+    let data = &error.data;
+    let containers: Vec<String> = data
+        .get("containers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    crate::boxes::containers_command(
+        data.get("compose_project").and_then(Value::as_str),
+        &containers,
+    )
 }
 
 /// A `remote.warning`'s `message` as a header notice: without the

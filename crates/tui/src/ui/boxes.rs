@@ -17,7 +17,7 @@ use super::list::{container_look, lane_summary};
 use super::pane::{LABEL, banner, details, field, render_box, sentence, title, unit_facts_title};
 use super::{draw_box, fit, spread, unit_look};
 use crate::app::{App, BoxPart, Grey};
-use crate::boxes::{BoxHost, RegistryUnit};
+use crate::boxes::{BoxHost, RegistryUnit, containers_run};
 use crate::clients::{Client, short_id};
 use crate::text::{self, clean, clip};
 use crate::theme::{Glyph, Theme, Tone};
@@ -205,7 +205,8 @@ pub(super) fn grey_note(grey: &Grey) -> Option<String> {
     match (grey.cause.as_deref()?, &grey.winner) {
         // Only its own containers are up, which no devlanes command stops.
         ("local_running", _) if grey.held_by_containers() => Some(format!(
-            "Not mirrored. {serving}'s containers run on this machine. Stop them, then press m."
+            "Not mirrored. {}",
+            containers_run(&serving, grey.containers.as_deref())
         )),
         ("local_running", _) => Some(format!(
             "Not mirrored. {serving} runs on this machine. Press m to stop it and use this one."
@@ -227,19 +228,20 @@ pub(super) fn grey_note(grey: &Grey) -> Option<String> {
 }
 
 /// A skipped lane's row in the boxes view: what serves its hostnames and
-/// what `m` on the row does. `containers` when only this machine's lane's
-/// own containers keep it running. `None` from daemons without
-/// `remote.use`.
-fn skipped_words(skipped: &crate::boxes::SkippedLane, containers: bool) -> Option<String> {
+/// what `m` on the row does. `None` from daemons without `remote.use`.
+fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
     let cause = skipped.cause.as_deref()?;
     let lane = clean(&skipped.lane);
     let serving = clean(skipped.serving());
+    let containers = skipped.holds.as_deref() == Some("containers");
+    let command = skipped.containers_command();
     match (cause, skipped.served_by()) {
-        ("local_running", _) if containers && serving == lane => Some(format!(
-            "{lane}'s containers run on this machine. Stop them, then press m."
-        )),
+        ("local_running", _) if containers && serving == lane => {
+            Some(containers_run(&lane, command.as_deref()))
+        }
         ("local_running", _) if containers => Some(format!(
-            "{lane}: {serving}'s containers run on this machine. Stop them, then press m."
+            "{lane}: {}",
+            containers_run(&serving, command.as_deref())
         )),
         // `acme@0: acme@0 runs on this machine` would name the lane twice.
         ("local_running", _) if serving == lane => Some(format!(
@@ -1404,11 +1406,7 @@ fn host_lines(
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
         let start = lines.len();
         let label = if index == 0 { "skipped" } else { "" };
-        let reference = crate::boxes::lane_reference(&skipped.lane, &host.host);
-        let containers = app
-            .grey(&reference)
-            .is_some_and(|grey| grey.held_by_containers());
-        let text = skipped_words(skipped, containers)
+        let text = skipped_words(skipped)
             .unwrap_or_else(|| format!("{}: {}", clean(&skipped.lane), skip_reason(app, skipped)));
         lines.extend(fact(label, &text, theme.tone(Tone::Attention)));
         skipped_rows.push(start..lines.len());

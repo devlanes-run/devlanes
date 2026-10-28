@@ -210,6 +210,14 @@ a box lane while this machine runs shop@0: grey, and m offers to stop the local 
 - 120x40: [txt](lane-box-local-running-120x40.txt) · [png](lane-box-local-running-120x40.png) · [ansi](lane-box-local-running-120x40.ansi)
 - 80x24: [txt](lane-box-local-running-80x24.txt) · [png](lane-box-local-running-80x24.png) · [ansi](lane-box-local-running-80x24.ansi)
 
+## lane-box-containers
+
+a box lane while only shop@0's own containers run on this machine: the pane names the commands that stop them, and m switches after that
+
+- 200x60: [txt](lane-box-containers-200x60.txt) · [png](lane-box-containers-200x60.png) · [ansi](lane-box-containers-200x60.ansi)
+- 120x40: [txt](lane-box-containers-120x40.txt) · [png](lane-box-containers-120x40.png) · [ansi](lane-box-containers-120x40.ansi)
+- 80x24: [txt](lane-box-containers-80x24.txt) · [png](lane-box-containers-80x24.png) · [ansi](lane-box-containers-80x24.ansi)
+
 ## dialog-stop-and-switch
 
 m on fork-b's shop@0 while this machine runs shop@0: asks before stopping it, y stops it and switches

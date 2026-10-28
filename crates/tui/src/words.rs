@@ -565,6 +565,9 @@ pub fn rpc(error: &RpcError) -> Worded {
             };
             let summary = if message.is_empty() {
                 fallback.to_owned()
+            } else if let Some((head, _)) = message.split_once(", then run devlanes remote use") {
+                // The CLI's next step. Here `m` does it.
+                format!("{head}, then press m.")
             } else {
                 message
             };

@@ -120,12 +120,53 @@ pub struct SkippedLane {
     /// lane runs, and from daemons without `remote.use`.
     pub can_use: bool,
     /// What keeps this machine's lane running for `local_running`:
-    /// `processes` or `containers`. The contract does not promise it here,
-    /// so the TUI tells them apart from status when it is absent.
+    /// `processes`, which a stop ends, or only `containers`. The daemon
+    /// sends it with every `local_running` entry.
     pub holds: Option<String>,
+    /// The Compose project of that lane's own containers, when they count.
+    pub compose_project: Option<String>,
+    /// That lane's own plain containers that count, by Docker name.
+    pub containers: Vec<String>,
+}
+
+/// The commands that stop a local lane's own containers:
+/// `docker compose -p acme-lane0 stop` for its Compose project and
+/// `docker stop <names>` for plain containers. `None` when neither is known.
+pub fn containers_command(compose_project: Option<&str>, containers: &[String]) -> Option<String> {
+    let mut commands = Vec::new();
+    if let Some(project) = compose_project.filter(|p| !p.is_empty()) {
+        commands.push(format!(
+            "docker compose -p {} stop",
+            crate::text::clean(project)
+        ));
+    }
+    if !containers.is_empty() {
+        let names: Vec<String> = containers.iter().map(|c| crate::text::clean(c)).collect();
+        commands.push(format!("docker stop {}", names.join(" ")));
+    }
+    (!commands.is_empty()).then(|| commands.join(" and "))
+}
+
+/// `acme@0's containers run on this machine. Stop them with docker compose
+/// -p acme-lane0 stop, then press m.`, without the command when the daemon
+/// sends none. In the TUI `m` switches once they stopped, where the CLI's
+/// words end in `devlanes remote use`.
+pub fn containers_run(lane: &str, command: Option<&str>) -> String {
+    let lane = crate::text::clean(lane);
+    match command {
+        Some(command) => format!(
+            "{lane}'s containers run on this machine. Stop them with {command}, then press m."
+        ),
+        None => format!("{lane}'s containers run on this machine. Stop them, then press m."),
+    }
 }
 
 impl SkippedLane {
+    /// [`containers_command`] for the local lane that keeps this one out.
+    pub fn containers_command(&self) -> Option<String> {
+        containers_command(self.compose_project.as_deref(), &self.containers)
+    }
+
     /// The lane in use instead: `winner_lane`, else this lane's own
     /// reference, which the clashing lane shares unless another project's
     /// lane clashes.

@@ -703,9 +703,26 @@ pub fn forks_local_running() -> Value {
             "lane": "shop@0", "hosts": ["storefront.shop.localhost", "checkout.shop.localhost"],
             "box": null, "reason": "shop@0 runs on this machine",
             "cause": "local_running", "winner": null, "winner_lane": "shop@0", "can_use": false,
+            "holds": "processes",
         }]);
     }
     list["yielded_local_lanes"] = json!([]);
+    list
+}
+
+/// [`forks_local_running`] after `shop@0` stopped here with its own
+/// containers left up: its Compose project and a plain `shop-cache`
+/// container keep the hostnames, which no devlanes command stops alone.
+pub fn forks_containers() -> Value {
+    let mut list = forks_local_running();
+    for item in list["items"].as_array_mut().into_iter().flatten() {
+        for skipped in item["skipped_lanes"].as_array_mut().into_iter().flatten() {
+            skipped["reason"] = json!("shop@0's containers run on this machine");
+            skipped["holds"] = json!("containers");
+            skipped["compose_project"] = json!("shop-lane0");
+            skipped["containers"] = json!(["shop-cache"]);
+        }
+    }
     list
 }
 

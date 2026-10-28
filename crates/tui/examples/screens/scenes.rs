@@ -651,6 +651,14 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "lane-box-containers",
+            what: "a box lane while only shop@0's own containers run on this machine: the pane names the commands that stop them, and m switches after that",
+            setup: |f| {
+                forks(f, data::forks_containers);
+                f.lane("shop@0 @fork-b");
+            },
+        },
+        Scene {
             name: "dialog-stop-and-switch",
             what: "m on fork-b's shop@0 while this machine runs shop@0: asks before stopping it, y stops it and switches",
             setup: |f| {
