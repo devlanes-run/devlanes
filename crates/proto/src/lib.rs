@@ -178,7 +178,7 @@ pub enum Method {
     #[serde(rename = "url")]
     Url,
     /// Reply `{units, lanes, range_ms, system?, daemon?}`, or `{lane, peaks}`
-    /// with `peaks: true`. Unit and lane rows have `history` rows of
+    /// ([`UnitPeak`] each) with `peaks: true`. Unit and lane rows have `history` rows of
     /// `[ts_ms, cpu_percent, memory_bytes]`, plus `windows` when asked for or
     /// past the raw ring.
     ///
@@ -1144,12 +1144,29 @@ pub fn split_styled(lines: Vec<LogLine>) -> (Vec<String>, Vec<String>) {
     (lines.into_iter().map(|line| line.text).collect(), styled)
 }
 
-/// Per-unit peaks for the current lane start, for CI summaries.
+/// Per-unit usage for the current lane start, for CI summaries. The fields
+/// after the peaks are absent from older daemons.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UnitPeak {
     pub unit: String,
     pub peak_memory_bytes: Option<u64>,
     pub peak_cpu_percent: Option<f64>,
+    /// Mean of the samples since the lane started; `None` before the first one.
+    #[serde(default)]
+    pub avg_memory_bytes: Option<u64>,
+    #[serde(default)]
+    pub avg_cpu_percent: Option<f64>,
+    /// `UnitSummary.state` of the unit's latest run; `None` for a unit
+    /// without one (an orphan, or a unit gone from the lane).
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
+    /// When the latest run ended (Unix ms); `None` while it runs.
+    #[serde(default)]
+    pub finished_at_ms: Option<u64>,
 }
 
 /// Remote operation: the messages a client daemon exchanges with a box's

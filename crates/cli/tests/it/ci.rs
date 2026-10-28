@@ -163,31 +163,84 @@ async fn github_escaping_and_append_only_summary() {
         provider.group_start("infra\n::error::oops%"),
         "::group::infra%0A::error::oops%25\n"
     );
-    let summary = resource_summary(&[
+    let peaks = [
         ResourcePeak {
             unit: "api".into(),
             peak_memory_bytes: Some(2 * 1_048_576),
             peak_cpu_percent: Some(125.5),
+            avg_memory_bytes: Some(1_048_576),
+            avg_cpu_percent: Some(40.25),
+            state: Some("ready".into()),
+            started_at_ms: Some(1_000),
+            ..ResourcePeak::default()
         },
         ResourcePeak {
             unit: "worker".into(),
+            peak_memory_bytes: Some(3 * 1_073_741_824),
+            peak_cpu_percent: Some(3.0),
+            avg_memory_bytes: Some(1_073_741_824),
+            avg_cpu_percent: Some(1.0),
+            state: Some("failed".into()),
+            exit_code: Some(1),
+            started_at_ms: Some(1_000),
+            finished_at_ms: Some(4_000),
+        },
+        // An older daemon sends peaks only.
+        ResourcePeak {
+            unit: "db_*|<b>".into(),
+            peak_memory_bytes: Some(1_048_576),
+            peak_cpu_percent: Some(0.5),
             ..ResourcePeak::default()
         },
-    ]);
+    ];
+    let tails = BTreeMap::from([(
+        "worker".to_owned(),
+        vec![
+            "\x1b[31mmissing config\x1b[0m".to_owned(),
+            "</pre><script>alert(1)</script> & | *x*".to_owned(),
+        ],
+    )]);
+    let summary = resource_summary("devlanes with · acme@0 · exit 1", &peaks, &tails, 3_726_000);
     provider
         .append_summary("Earlier step\n")
         .await
         .expect("append");
-    provider.append_summary(&summary).await.expect("append");
+    provider
+        .append_summary(&summary.markdown)
+        .await
+        .expect("append");
     insta::assert_snapshot!(tokio::fs::read_to_string(path).await.expect("summary"), @r#"
     Earlier step
-    | Unit | Peak memory | Peak CPU |
-    | --- | ---: | ---: |
-    | api | 2.0 MiB | 125.5% |
-    | worker | – | – |
+    ## devlanes with · acme@0 · exit 1
+
+    | Unit | State | Ran | Avg CPU | Peak CPU | Avg memory | Peak memory |
+    | --- | --- | ---: | ---: | ---: | ---: | ---: |
+    | api | ready | 1h 02m | 40.2% | 125.5% | 1.0 MiB | 2.0 MiB |
+    | worker | failed (exit 1) | 3s | 1.0% | 3.0% | 1.0 GiB | 3.0 GiB |
+    | db\_\*&#124;&lt;b&gt; | – | – | – | 0.5% | – | 1.0 MiB |
+
+    <details>
+    <summary>worker failed (exit 1): last log lines</summary>
+
+    <pre>
+    missing config
+    &lt;/pre&gt;&lt;script&gt;alert(1)&lt;/script&gt; &amp; | *x*
+    </pre>
+
+    </details>
     "#);
-    // Nothing measured: no table, not a header without rows.
-    assert_eq!(resource_summary(&[]), "");
+    insta::assert_snapshot!(summary.text, @r"
+    devlanes with · acme@0 · exit 1
+    unit      state               ran  avg cpu  peak cpu  avg memory  peak memory
+    api       ready            1h 02m    40.2%    125.5%     1.0 MiB      2.0 MiB
+    worker    failed (exit 1)      3s     1.0%      3.0%     1.0 GiB      3.0 GiB
+    db_*|<b>  –                     –        –      0.5%           –      1.0 MiB
+    ");
+    // Nothing measured: no table, not a heading without rows.
+    assert_eq!(
+        resource_summary("devlanes stop", &[], &BTreeMap::new(), 0),
+        ResourceSummary::default()
+    );
 }
 
 #[test]
@@ -522,21 +575,45 @@ impl WithDriver for FakeDriver {
             unit("db", "ready to accept connections"),
         ])
     }
-    /// Peak fixtures differ from instantaneous resource usage by contract.
-    async fn metrics(&mut self, _lane: &str) -> Result<Vec<ResourcePeak>, RpcError> {
+    /// Peak fixtures differ from instantaneous resource usage by contract. A
+    /// failed `api` ran 3 seconds; a running one has no start time, so the
+    /// snapshots do not depend on the clock.
+    async fn metrics(&mut self, _lane: &str) -> Result<LaneUsage, RpcError> {
         self.calls.push("metrics".into());
-        Ok(vec![
+        let api = if self.ready {
             ResourcePeak {
-                unit: "api".into(),
-                peak_memory_bytes: Some(1_048_576),
-                peak_cpu_percent: Some(20.0),
-            },
+                state: Some("ready".into()),
+                ..ResourcePeak::default()
+            }
+        } else {
             ResourcePeak {
-                unit: "db".into(),
-                peak_memory_bytes: Some(2_097_152),
-                peak_cpu_percent: Some(3.0),
-            },
-        ])
+                state: Some("failed".into()),
+                exit_code: Some(1),
+                started_at_ms: Some(1_000),
+                finished_at_ms: Some(4_000),
+                ..ResourcePeak::default()
+            }
+        };
+        Ok(LaneUsage {
+            lane: "acme@0".into(),
+            peaks: vec![
+                ResourcePeak {
+                    unit: "api".into(),
+                    peak_memory_bytes: Some(1_048_576),
+                    peak_cpu_percent: Some(20.0),
+                    avg_memory_bytes: Some(524_288),
+                    avg_cpu_percent: Some(5.0),
+                    ..api
+                },
+                ResourcePeak {
+                    unit: "db".into(),
+                    peak_memory_bytes: Some(2_097_152),
+                    peak_cpu_percent: Some(3.0),
+                    state: Some("ready".into()),
+                    ..ResourcePeak::default()
+                },
+            ],
+        })
     }
     /// Selective cleanup must not expand to a whole-lane stop.
     async fn stop(&mut self, lane: &str, selection: Selection) -> Result<Value, RpcError> {
@@ -555,7 +632,8 @@ impl WithDriver for FakeDriver {
         } else {
             Ok(
                 json!({"items": [{"lane": "acme@0", "state": "idle", "units": [
-                    {"name": "api", "lane": "acme@0", "state": "stopped", "exit_code": 143}
+                    {"name": "api", "lane": "acme@0", "state": "stopped", "exit_code": 143,
+                     "finished_at_ms": 9_000}
                 ]}]}),
             )
         }
@@ -661,19 +739,23 @@ async fn with_success_and_command_failure_preserve_exit_codes_and_summary() {
             output.matches("::group::").count(),
             output.matches("::endgroup::").count()
         );
-        assert!(output.contains("| api | 1.0 MiB | 20.0% |"));
+        let markdown = tokio::fs::read_to_string(runtime.summary_path.expect("path"))
+            .await
+            .expect("summary");
         assert!(
-            tokio::fs::read_to_string(runtime.summary_path.expect("path"))
-                .await
-                .expect("summary")
-                .contains(&format!("Exit code: {code}"))
+            markdown.starts_with(&format!("## devlanes with · acme@0 · exit {code}\n")),
+            "{markdown}"
+        );
+        assert!(
+            markdown.contains("| api | ready | – | 5.0% | 20.0% | 0.5 MiB | 1.0 MiB |"),
+            "{markdown}"
         );
         snapshots.insert(code, format!("exit={}\n{}", outcome.exit_code, output));
     }
     insta::assert_json_snapshot!(snapshots, @r#"
     {
-      "0": "exit=0\n::group::services\n::endgroup::\n| Unit | Peak memory | Peak CPU |\n| --- | ---: | ---: |\n| api | 1.0 MiB | 20.0% |\n",
-      "3": "exit=3\n::group::services\n::endgroup::\n| Unit | Peak memory | Peak CPU |\n| --- | ---: | ---: |\n| api | 1.0 MiB | 20.0% |\n"
+      "0": "exit=0\n::group::services\n::endgroup::\ndevlanes with · acme@0 · exit 0\nunit  state  ran  avg cpu  peak cpu  avg memory  peak memory\napi   ready    –     5.0%     20.0%     0.5 MiB      1.0 MiB\n",
+      "3": "exit=3\n::group::services\n::endgroup::\ndevlanes with · acme@0 · exit 3\nunit  state  ran  avg cpu  peak cpu  avg memory  peak memory\napi   ready    –     5.0%     20.0%     0.5 MiB      1.0 MiB\n"
     }
     "#);
 }
@@ -724,7 +806,8 @@ async fn with_json_prints_no_empty_object() {
 #[tokio::test]
 async fn with_start_failure_writes_logs_and_stops_without_running_command() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let (plan, runtime) = plan(temp.path(), false);
+    let (plan, mut runtime) = plan(temp.path(), false);
+    runtime.summary_path = Some(temp.path().join("summary"));
     let mut driver = FakeDriver {
         ready: false,
         ..FakeDriver::default()
@@ -746,9 +829,29 @@ async fn with_start_failure_writes_logs_and_stops_without_running_command() {
     ::error title=api exited 1::missing config
     failed acme@0:api exit=1
       | missing config
-    | Unit | Peak memory | Peak CPU |
-    | --- | ---: | ---: |
-    | api | 1.0 MiB | 20.0% |
+    devlanes with · acme@0 · exit 1
+    unit  state            ran  avg cpu  peak cpu  avg memory  peak memory
+    api   failed (exit 1)   3s     5.0%     20.0%     0.5 MiB      1.0 MiB
+    "#);
+    // The failed unit's last lines, as its annotation has them, folded away.
+    let markdown = tokio::fs::read_to_string(runtime.summary_path.expect("path"))
+        .await
+        .expect("summary");
+    insta::assert_snapshot!(markdown, @r#"
+    ## devlanes with · acme@0 · exit 1
+
+    | Unit | State | Ran | Avg CPU | Peak CPU | Avg memory | Peak memory |
+    | --- | --- | ---: | ---: | ---: | ---: | ---: |
+    | api | failed (exit 1) | 3s | 5.0% | 20.0% | 0.5 MiB | 1.0 MiB |
+
+    <details>
+    <summary>api failed (exit 1): last log lines</summary>
+
+    <pre>
+    missing config
+    </pre>
+
+    </details>
     "#);
 }
 
@@ -835,9 +938,9 @@ async fn with_timed_out_start_reports_every_unready_unit() {
     ::endgroup::
     ::error title=api exited 1::missing config
     ::error title=worker failed::waiting for queue
-    | Unit | Peak memory | Peak CPU |
-    | --- | ---: | ---: |
-    | api | 1.0 MiB | 20.0% |
+    devlanes with · acme@0 · exit 1
+    unit  state            ran  avg cpu  peak cpu  avg memory  peak memory
+    api   failed (exit 1)   3s     5.0%     20.0%     0.5 MiB      1.0 MiB
     ");
 }
 
@@ -957,6 +1060,16 @@ async fn stop_artifacts_and_summary_do_not_stop_daemon() {
     // A normal stop keeps the unit's 143 without failing; the stopped unit is listed.
     assert_eq!(outcome.exit_code, 0);
     assert!(output.contains("api"), "{output}");
+    // The summary shows how each unit ended, as the stop result says.
+    assert!(
+        output.contains(
+            "devlanes stop · acme@0\n\
+             unit  state    ran  avg cpu  peak cpu  avg memory  peak memory\n\
+             api   stopped    –     5.0%     20.0%     0.5 MiB      1.0 MiB\n\
+             db    ready      –        –      3.0%           –      2.0 MiB\n"
+        ),
+        "{output}"
+    );
     // Every unit of the lane: `stop --logs-dir` saves the lane, not one invocation's units.
     assert_eq!(outcome.log_files.len(), 3);
     assert_eq!(driver.calls, ["logs", "metrics", "stop"]);

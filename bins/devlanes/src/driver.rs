@@ -4,14 +4,14 @@ use std::{collections::BTreeMap, path::Path};
 
 use async_trait::async_trait;
 use devlanes_cli::{
-    CommandExit, LaneLogQuery, ResourcePeak, UnitFailure, UnitLogs, WithDriver, WithOwnership,
+    CommandExit, LaneLogQuery, LaneUsage, UnitFailure, UnitLogs, WithDriver, WithOwnership,
     WithStart,
 };
 use devlanes_client::{Client, Error as ClientError, Paths};
 use devlanes_ipc::Frame;
 use devlanes_proto::{
     Context, Control, Event, LaneSummary, LogLine, LogQuery, Method, Outcome, Page, Request,
-    RpcError, Selection, StartResult, UnitPeak,
+    RpcError, Selection, StartResult,
 };
 use serde_json::{Value, json};
 #[cfg(unix)]
@@ -664,25 +664,15 @@ impl WithDriver for ClientDriver {
         Ok(units)
     }
 
-    /// Peaks from run history for the summary table.
-    async fn metrics(&mut self, lane: &str) -> Result<Vec<ResourcePeak>, RpcError> {
+    /// Peaks and means from run history, with each unit's run, for the summary.
+    async fn metrics(&mut self, lane: &str) -> Result<LaneUsage, RpcError> {
         let context = self.lane_context(lane);
         let data = self
             .call(Method::Metrics, json!({"peaks": true}), context)
             .await?;
-        let peaks: Vec<UnitPeak> =
-            serde_json::from_value(data.get("peaks").cloned().unwrap_or_else(|| json!([])))
-                .map_err(|error| {
-                    RpcError::new("bad_response", json!({"message": error.to_string()}), 1)
-                })?;
-        Ok(peaks
-            .into_iter()
-            .map(|peak| ResourcePeak {
-                unit: peak.unit,
-                peak_memory_bytes: peak.peak_memory_bytes,
-                peak_cpu_percent: peak.peak_cpu_percent,
-            })
-            .collect())
+        serde_json::from_value(data).map_err(|error| {
+            RpcError::new("bad_response", json!({"message": error.to_string()}), 1)
+        })
     }
 
     /// Stops exactly the selection in that lane.

@@ -222,6 +222,48 @@ pub(crate) struct Orphan {
     pub members: Vec<devlanes_core::ProcessIdentity>,
 }
 
+/// The sampler's readings of one unit over a lane start: peaks plus running
+/// sums for the means, so nothing grows with the number of samples.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct UnitUsage {
+    peak_memory: u64,
+    peak_cpu: f64,
+    memory_sum: u128,
+    cpu_sum: f64,
+    samples: u64,
+}
+
+impl UnitUsage {
+    /// Adds one reading.
+    pub(crate) fn add(&mut self, cpu_percent: f64, memory_bytes: u64) {
+        self.peak_memory = self.peak_memory.max(memory_bytes);
+        self.peak_cpu = self.peak_cpu.max(cpu_percent);
+        self.memory_sum += u128::from(memory_bytes);
+        self.cpu_sum += cpu_percent;
+        self.samples += 1;
+    }
+
+    /// Peak `(memory, cpu)`; `None` before the first reading.
+    pub(crate) fn peak(&self) -> (Option<u64>, Option<f64>) {
+        if self.samples == 0 {
+            return (None, None);
+        }
+        (Some(self.peak_memory), Some(self.peak_cpu))
+    }
+
+    /// Mean `(memory, cpu)`; `None` before the first reading.
+    pub(crate) fn average(&self) -> (Option<u64>, Option<f64>) {
+        if self.samples == 0 {
+            return (None, None);
+        }
+        let memory = self.memory_sum / u128::from(self.samples);
+        (
+            Some(u64::try_from(memory).unwrap_or(u64::MAX)),
+            Some(self.cpu_sum / self.samples as f64),
+        )
+    }
+}
+
 /// Mutable state of one worktree lane.
 pub(crate) struct LaneSt {
     pub identity: String,
@@ -248,8 +290,8 @@ pub(crate) struct LaneSt {
     pub setup_env: EnvMap,
     pub last_error: Option<RpcError>,
     pub skipped_tasks: Vec<String>,
-    /// Per-unit peaks for the current lane start: `(memory, cpu)`.
-    pub peaks: BTreeMap<String, (Option<u64>, Option<f64>)>,
+    /// Per-unit CPU and memory over the current lane start.
+    pub usage: BTreeMap<String, UnitUsage>,
     /// Set by the moves check: the index this lane takes at its next start.
     pub moves_to: Option<u32>,
     /// Why a selected unit did not start: a lane phase before services failed.
@@ -412,7 +454,7 @@ impl LaneSt {
             setup_env: EnvMap::new(),
             last_error: None,
             skipped_tasks: Vec::new(),
-            peaks: BTreeMap::new(),
+            usage: BTreeMap::new(),
             moves_to: None,
             phase_reasons: BTreeMap::new(),
             orphans: BTreeMap::new(),

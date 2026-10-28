@@ -159,6 +159,90 @@ async fn units_are_sampled_and_missing_readings_are_absent() {
     .expect("timeout");
 }
 
+/// Reports each unit's leader at 2% CPU and 2 MiB, then 4% and 4 MiB, in turn.
+#[derive(Default)]
+struct Alternating {
+    calls: std::sync::atomic::AtomicU64,
+}
+
+#[async_trait]
+impl MetricsSource for Alternating {
+    fn name(&self) -> &'static str {
+        "fake"
+    }
+
+    async fn sample(&self, request: &SampleRequest) -> Result<Vec<Sample>, Error> {
+        let high = self.calls.fetch_add(1, Ordering::SeqCst) % 2 == 1;
+        let (cpu, memory) = if high { (4.0, 4 << 20) } else { (2.0, 2 << 20) };
+        let ts_ms = unix_ms(std::time::SystemTime::now());
+        Ok(request
+            .units
+            .iter()
+            .filter_map(|target| {
+                let leader = target.processes.first()?;
+                Some(Sample {
+                    subject: Subject::Process {
+                        unit: target.unit.clone(),
+                        pid: leader.pid,
+                        start_time: leader.start_time,
+                    },
+                    cpu_percent: cpu,
+                    footprint_bytes: memory,
+                    rss_bytes: memory,
+                    ts_ms,
+                })
+            })
+            .collect())
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `metrics {peaks: true}` gives each unit its peaks, the means of the same
+/// samples and its latest run (state, start, no end while it runs).
+async fn peaks_carry_means_and_the_run() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                metrics: vec![Arc::new(Alternating::default())],
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let api = eventually(Duration::from_secs(15), || async {
+            let reply = h
+                .call(Method::Metrics, json!({"peaks": true}), cx(&main))
+                .await
+                .expect("metrics");
+            let api = reply["peaks"]
+                .as_array()?
+                .iter()
+                .find(|peak| peak["unit"] == "api")?
+                .clone();
+            let low_seen = api["avg_cpu_percent"].as_f64().is_some_and(|avg| avg < 4.0);
+            (api["peak_cpu_percent"] == 4.0 && low_seen).then_some(api)
+        })
+        .await
+        .expect("both readings were sampled");
+        assert_eq!(api["peak_memory_bytes"], 4 << 20, "{api}");
+        let cpu = api["avg_cpu_percent"].as_f64().expect("avg cpu");
+        let memory = api["avg_memory_bytes"].as_u64().expect("avg memory");
+        assert!(cpu > 2.0 && cpu < 4.0, "{api}");
+        assert!(memory > 2 << 20 && memory < 4 << 20, "{api}");
+        assert_eq!(api["state"], "ready", "{api}");
+        assert!(api["started_at_ms"].as_u64().is_some(), "{api}");
+        assert!(api["finished_at_ms"].is_null(), "{api}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 /// A `metrics` reply over the last `range_ms`.
 async fn metrics(h: &crate::Harness, context: Context, range_ms: u64) -> Value {
     h.call(Method::Metrics, json!({"range_ms": range_ms}), context)

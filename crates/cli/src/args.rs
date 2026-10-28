@@ -152,8 +152,9 @@ Waits for ready first; when a unit fails it prints the failure and exits 1\n\
 without running the command. The command gets the lane's environment, including\n\
 DEVLANES_PUBLIC_URL_<SERVICE> for every service, plus NODE_EXTRA_CA_CERTS,\n\
 DENO_CERT, SSL_CERT_FILE and REQUESTS_CA_BUNDLE for the devlanes CA unless the\n\
-shell sets them. Afterwards devlanes writes --logs-dir, prints peak CPU and\n\
-memory when output is not a terminal (CI logs, pipes), stops what it started\n\
+shell sets them. Afterwards devlanes writes --logs-dir, prints each unit's\n\
+state, run time and average and peak CPU and memory when output is not a\n\
+terminal (CI logs, pipes; also the GitHub step summary), stops what it started\n\
 (and the daemon, if it started it) and exits with the command's exit code.",
         after_help = WITH_AFTER
     )]
