@@ -13,7 +13,7 @@ impl HostConn {
     /// mirrored port with its state, the skipped lanes and hostnames, this
     /// machine's HTTPS port (`https_port`) and whether it serves the box's own
     /// (`serves_box_port`). Reasons are worded for the box, which shows them
-    /// as this machine's.
+    /// as this machine's: a skipped lane names the lane in use instead.
     pub(super) fn mirror_report(
         &self,
         https_port: Option<u16>,
@@ -61,9 +61,11 @@ impl HostConn {
             .skipped
             .iter()
             .map(|skipped| {
-                let reason = match skipped.get("box").and_then(Value::as_str) {
-                    Some(other) => format!("box {other} already serves its hostnames there"),
-                    None => "a lane on that machine serves its hostnames".to_owned(),
+                let text = |key: &str| skipped.get(key).and_then(Value::as_str);
+                let winner_lane = text("winner_lane").unwrap_or_default();
+                let reason = match text("box") {
+                    Some(other) => format!("that machine uses {other}'s {winner_lane}"),
+                    None => format!("that machine uses its own {winner_lane}"),
                 };
                 SkippedLane {
                     lane: skipped
@@ -364,7 +366,7 @@ mod tests {
         let skipped = MirrorReport {
             skipped_lanes: vec![SkippedLane {
                 lane: "acme@1".into(),
-                reason: "a lane on that machine serves its hostnames".into(),
+                reason: "that machine uses its own acme@1".into(),
             }],
             ..MirrorReport::default()
         };

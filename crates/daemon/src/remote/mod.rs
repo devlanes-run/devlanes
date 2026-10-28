@@ -14,6 +14,11 @@
 //! Client and box exchange [`report`]s of what the client mirrors: the client
 //! sends one after its mirror changed, and the box keeps the latest per client.
 //!
+//! Which lane serves hostnames that several lanes claim, local or on a box, is
+//! one decision for the whole client ([`assign`]), recomputed whenever a
+//! registry, a link, a local lane or a choice (`remote.use`, [`choice`])
+//! changes. The mirrors and the route publisher read it.
+//!
 //! A box that requires pairing serves a client only with the remote token it
 //! gave that client for a one-time code ([`pairing`]). The client keeps the
 //! token per box; without a valid one and nobody to type a code, its link
@@ -26,11 +31,8 @@
 //! the sync entries a tunnel may stream. `remote.pair`, `remote.pairing.*`,
 //! `remote.clients` and `remote.revoke` manage pairings.
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the mirrors read it from the next change on")
-)]
 mod assign;
+mod choice;
 mod feed;
 mod identity;
 mod mirror;
@@ -38,6 +40,7 @@ mod pairing;
 mod report;
 mod sync;
 
+pub(crate) use assign::Assignment;
 pub(crate) use report::{HIDDEN, UnitTarget};
 
 use std::{
@@ -128,6 +131,20 @@ pub(crate) struct Remotes {
     /// Why the restore could not open a wanted box, by name, shown by `remote
     /// ls` until the box connects or is disconnected.
     restore_errors: Mutex<BTreeMap<String, String>>,
+    /// Which box serves a lane several lanes clash on, lane reference to box,
+    /// as `remote_lane_choices` holds it.
+    choices: Mutex<BTreeMap<String, String>>,
+    /// Set once `choices` was read from the store.
+    choices_loaded: tokio::sync::OnceCell<()>,
+    /// The latest [`assign::Assignment`] and its version, which goes up with
+    /// every change.
+    assignment: Mutex<(u64, Arc<assign::Assignment>)>,
+    /// Held while the assignment is computed and stored, so one computed
+    /// from older inputs never replaces a newer one.
+    assigning: Mutex<()>,
+    /// This machine's lanes in a start that has not spawned yet, with how
+    /// many starts each. They count as running, so they win at once.
+    starting: Mutex<BTreeMap<String, usize>>,
 }
 
 /// How often box HTTPS ports that could not be opened are tried again: nothing
@@ -171,11 +188,21 @@ impl Remotes {
             && !lock(&self.codes).outstanding(std::time::Instant::now())
     }
 
-    /// Mirrored routes of every connected box, in connect order.
-    pub(crate) fn routes(&self) -> Vec<RouteEntry> {
+    /// Mirrored routes of every connected box, in connect order, of the lanes
+    /// `assignment` mirrors. A box that lost a lane may not have dropped its
+    /// routes yet, and the winner's come in only once it built them, so a
+    /// hostname is never routed to two boxes.
+    pub(crate) fn routes(&self, assignment: &assign::Assignment) -> Vec<RouteEntry> {
         self.all()
             .iter()
-            .flat_map(|conn| lock(&conn.view).routes.clone())
+            .flat_map(|conn| {
+                lock(&conn.view)
+                    .routes
+                    .iter()
+                    .filter(|route| assignment.mirrors(&conn.name, &route.lane))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .collect()
     }
 
@@ -407,6 +434,8 @@ pub(crate) struct HostConn {
     /// Set once [`watch_link`] wrote a connection of this link to
     /// `remote_hosts`, which makes the box wanted.
     recorded: watch::Sender<bool>,
+    /// The assignment version the mirror last reconciled with.
+    applied: watch::Sender<u64>,
     /// When the live session started (Unix ms); `None` while not connected.
     connected_since: Mutex<Option<u64>>,
     /// Woken when the registry, the mirror view or a sync changed;
@@ -1107,6 +1136,7 @@ impl Inner {
         code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let identity = self.client_identity().await?;
+        self.load_choices().await;
         let _connecting = self.remote.connecting.lock().await;
         self.replace_host(host, identity, watcher, connected_before, None, code)
             .await
@@ -1240,6 +1270,7 @@ impl Inner {
             label: Mutex::new(String::new()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
+            applied: watch::Sender::new(0),
             connected_since: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             announce_task: Mutex::new(None),
@@ -1307,11 +1338,13 @@ impl Inner {
             if let Err(error) = self.store.set_remote_host_wanted(name.clone(), false).await {
                 tracing::warn!(%error, host = %name, "a restarted daemon may connect this box again");
             }
+            self.forget_choices_of(name).await;
         }
         drop(connecting);
         let names: Vec<String> = names.into_iter().collect();
         self.refresh_range_overlaps();
         self.reconcile_box_ports().await;
+        self.reassign();
         self.publish_routes();
         Ok(json!({"disconnected": names}))
     }
@@ -1319,12 +1352,23 @@ impl Inner {
     /// `remote ls`: boxes known from `remote_hosts` plus live connection state,
     /// with each live box's registry and mirror view ([`HostConn::list_json`]).
     /// A wanted box the restore could not open is `failed` with its error.
+    /// Every box lists its `chosen_lanes`, and `yielded_local_lanes` names this
+    /// machine's stopped lanes whose hostnames a chosen box lane serves.
     pub(crate) async fn host_list(self: &Arc<Self>) -> Result<Value, RpcError> {
+        self.load_choices().await;
         let https_port = self.integ.routes.https_port();
         let suffixes = mirror::route_suffixes(self);
         let open_ports = self.remote.box_ports.lock().await.open.clone();
         let stored = self.store.remote_hosts().await.unwrap_or_default();
         let restore_errors = lock(&self.remote.restore_errors).clone();
+        let choices = lock(&self.remote.choices).clone();
+        let chosen = |host: &str| -> Vec<&String> {
+            choices
+                .iter()
+                .filter(|(_, chosen)| *chosen == host)
+                .map(|(lane, _)| lane)
+                .collect()
+        };
         let mut items: BTreeMap<String, Value> = BTreeMap::new();
         for host in stored {
             let mut item = json!({
@@ -1355,8 +1399,19 @@ impl Inner {
             }
             items.insert(conn.name.clone(), status);
         }
+        for (name, item) in &mut items {
+            item["chosen_lanes"] = json!(chosen(name));
+        }
+        let yielded: Vec<Value> = self
+            .remote
+            .assignment()
+            .yielded
+            .iter()
+            .map(|(lane, winner)| json!({"lane": lane, "winner": winner}))
+            .collect();
         Ok(json!({
             "items": items.into_values().collect::<Vec<_>>(),
+            "yielded_local_lanes": yielded,
             "truncated": false,
             "next_cursor": null,
         }))
@@ -1479,11 +1534,21 @@ impl Inner {
         }))
     }
 
-    /// Makes sure no box mirror holds one of `ports` before a local service binds
-    /// them. A mirror gives up ports inside a local block (local lanes win), so
-    /// this wakes the mirrors and waits up to [`RELEASE_WAIT`]; a port still held
-    /// then, such as a literal `PORT` the box also uses, fails with `port_mirrored`.
-    pub(crate) async fn release_for_local(&self, ports: &BTreeSet<u16>) -> Result<(), RpcError> {
+    /// Makes sure no box mirror holds one of `ports` before a local service of
+    /// `lane` binds them. A starting lane counts as running, so it takes its
+    /// hostnames back from every box lane it clashes with, deleting a choice
+    /// of one ([`Inner::reassign`]). A mirror gives up ports inside a local
+    /// block and those of lanes it no longer mirrors, so this wakes the
+    /// mirrors and waits up to [`RELEASE_WAIT`]; a port still held then, such
+    /// as a literal `PORT` the box also uses, fails with `port_mirrored`.
+    pub(crate) async fn release_for_local(
+        &self,
+        lane: &str,
+        ports: &BTreeSet<u16>,
+    ) -> Result<(), RpcError> {
+        let _starting = self.remote.starting(lane);
+        self.load_choices().await;
+        self.reassign();
         let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
         loop {
             let held = self.remote.all().into_iter().find_map(|conn| {
@@ -1524,6 +1589,8 @@ impl Inner {
     /// [`Inner::restore_remotes`]'s work. Stops opening boxes once a shutdown
     /// began, which waits for this before it closes the boxes opened so far.
     async fn restore_wanted(self: &Arc<Self>) {
+        // Before any box connects, so the first assignment has the choices.
+        self.load_choices().await;
         // Name order, so the restore order does not depend on the store.
         let wanted: BTreeMap<String, String> = match self.store.remote_hosts().await {
             Ok(hosts) => hosts
@@ -2271,8 +2338,14 @@ mod tests {
 
     /// A connection to `box` whose link state is whatever the test sends.
     fn conn_with(state: watch::Receiver<LinkState>) -> Arc<HostConn> {
+        conn_named("box", 0, state)
+    }
+
+    /// A connection to box `name`, connected `serial`th, whose link state is
+    /// whatever the test sends.
+    fn conn_named(name: &str, serial: u64, state: watch::Receiver<LinkState>) -> Arc<HostConn> {
         Arc::new(HostConn {
-            name: "box".into(),
+            name: name.into(),
             kind: "memory",
             state,
             registry: ClientRegistry::default(),
@@ -2286,11 +2359,12 @@ mod tests {
             syncs: Mutex::new(BTreeMap::new()),
             hashes: Mutex::new(HashMap::new()),
             warnings: Mutex::new(BTreeMap::new()),
-            serial: 0,
+            serial,
             info: Mutex::new(BoxInfo::default()),
             label: Mutex::new(String::new()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
+            applied: watch::Sender::new(0),
             connected_since: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             announce_task: Mutex::new(None),
@@ -2399,6 +2473,60 @@ mod tests {
             code: "K7QM-3XWD".into(),
         });
         assert!(lock(&slot).is_some(), "a later connect's code stays");
+    }
+
+    /// The hand-over between two boxes: the box that won a lane waits for the
+    /// one that lost it to release the port both use, wakes it once, and
+    /// goes on as soon as the port is free. A port held for a lane its holder
+    /// still mirrors is a plain conflict, so nothing waits for it, and a port
+    /// never released ends the wait at [`RELEASE_WAIT`].
+    #[tokio::test(start_paused = true)]
+    async fn a_winner_waits_only_for_ports_the_loser_releases() {
+        use futures_util::FutureExt as _;
+        let (_state, receiver) = watch::channel(LinkState::Stopped);
+        let winner = conn_named("fork-b", 2, receiver.clone());
+        let loser = conn_named("fork-a", 1, receiver);
+        let others = || vec![winner.clone(), loser.clone()];
+        let mirroring = |host: &str| {
+            let mut assignment = assign::Assignment::default();
+            assignment
+                .mirrored
+                .insert((host.to_owned(), "acme@0".to_owned()));
+            assignment
+        };
+        lock(&loser.view).bound.insert(3000, "acme@0:web".into());
+
+        let start = tokio::time::Instant::now();
+        assert!(mirror::wait_for_release(2, others, &[3000], &mirroring("fork-a")).await);
+        assert_eq!(
+            start.elapsed(),
+            Duration::ZERO,
+            "fork-a still mirrors acme@0"
+        );
+        assert!(mirror::wait_for_release(2, others, &[3001], &mirroring("fork-b")).await);
+        assert_eq!(start.elapsed(), Duration::ZERO, "nobody holds 3001");
+
+        let releasing = loser.clone();
+        let release = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            lock(&releasing.view).bound.remove(&3000);
+        });
+        assert!(mirror::wait_for_release(2, others, &[3000], &mirroring("fork-b")).await);
+        let waited = start.elapsed();
+        assert!(
+            waited >= Duration::from_millis(100) && waited < Duration::from_millis(200),
+            "{waited:?}"
+        );
+        assert!(
+            loser.wake.notified().now_or_never().is_some(),
+            "the loser was woken"
+        );
+        release.await.expect("release");
+
+        lock(&loser.view).bound.insert(3000, "acme@0:web".into());
+        let start = tokio::time::Instant::now();
+        assert!(!mirror::wait_for_release(2, others, &[3000], &mirroring("fork-b")).await);
+        assert!(start.elapsed() >= RELEASE_WAIT, "{:?}", start.elapsed());
     }
 
     /// Ranges overlap when they share one port; invalid ranges never parse.

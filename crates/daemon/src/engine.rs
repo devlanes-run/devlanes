@@ -391,6 +391,7 @@ pub(crate) fn mutating(method: &Method) -> bool {
             | Method::InfraDown
             | Method::Connect
             | Method::Disconnect
+            | Method::RemoteUse
             | Method::RemotePair
             | Method::RemotePairingClaim
             | Method::RemoteRevoke
@@ -552,6 +553,7 @@ impl Inner {
             Method::Connect => self.connect_method(params, &session).await,
             Method::Disconnect => self.disconnect_method(params).await,
             Method::HostList => self.host_list().await,
+            Method::RemoteUse => self.use_method(params).await,
             Method::HostsRetry => self.hosts_retry().await,
             // A newer client's method: answer instead of dropping the connection.
             Method::Unknown => Err(RpcError::new("unknown_method", json!({}), 2)),

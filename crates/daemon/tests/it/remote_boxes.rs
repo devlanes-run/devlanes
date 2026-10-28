@@ -71,7 +71,8 @@ fn warns(host: &Value, text: &str) -> bool {
 
 // Port ranges: every test in this binary that binds real ports takes its own
 // fixed range, so concurrent tests never hand out the same number. The ones
-// here use 21000-21499, 22000-22999, 27500-27999 and 30000-32767.
+// here use 21000-21499, 22000-22999, 27500-27999 and 30000-32767, and
+// `remote_choice.rs` uses 13500-14999.
 
 #[tokio::test(flavor = "multi_thread")]
 /// Two boxes running the same project: the box connected later skips its lane
@@ -142,12 +143,10 @@ async fn two_boxes_with_one_project() {
         .await
         .expect("beta's boxapp lane is skipped");
         assert_eq!(skipped["box"], "alpha", "{skipped}");
-        assert!(
-            skipped["reason"]
-                .as_str()
-                .is_some_and(|r| r.contains("box alpha")),
-            "{skipped}"
-        );
+        assert_eq!(skipped["winner"], "alpha", "{skipped}");
+        assert_eq!(skipped["cause"], "box_earlier", "{skipped}");
+        assert_eq!(skipped["can_use"], true, "{skipped}");
+        assert_eq!(skipped["reason"], "alpha's boxapp@0 is in use", "{skipped}");
         let held =
             format!("port {alpha_echo} is not mirrored because box alpha (boxapp@0:echo) uses it");
         let found = eventually(SOON, || async {
@@ -341,10 +340,9 @@ async fn a_lane_this_machine_and_a_box_both_collide_with_names_this_machine() {
         .await
         .expect("beta's lane is skipped");
         assert!(skipped["box"].is_null(), "{skipped}");
-        assert_eq!(
-            skipped["reason"], "this machine serves its hostnames",
-            "{skipped}"
-        );
+        assert_eq!(skipped["reason"], "mixl@0 runs on this machine", "{skipped}");
+        assert_eq!(skipped["cause"], "local_running", "{skipped}");
+        assert_eq!(skipped["can_use"], false, "{skipped}");
         assert_eq!(
             skipped["hosts"],
             json!(["local.mix.localhost", "shared.mix.localhost"]),
@@ -445,7 +443,7 @@ async fn local_wildcards_and_names_win_over_overlapping_box_names() {
                 .find(|entry| entry["lane"] == lane)
                 .unwrap_or_else(|| panic!("{lane} skipped: {skipped:?}"));
             assert_eq!(entry["hosts"], json!([name]), "{entry}");
-            assert_eq!(entry["reason"], "this machine serves its hostnames");
+            assert_eq!(entry["reason"], "wildlocal@0 runs on this machine");
         }
         let routed = eventually(SOON, || async {
             http_get(client.proxy_port, "web.apart.localhost")
@@ -524,7 +522,7 @@ async fn tls_get(tls: &tokio_rustls::TlsConnector, port: u16, host: &str) -> Opt
 }
 
 /// Disconnects the box `name` from `client`.
-async fn disconnect(client: &ClientSide, name: &str) {
+pub(super) async fn disconnect(client: &ClientSide, name: &str) {
     client
         .h
         .call(

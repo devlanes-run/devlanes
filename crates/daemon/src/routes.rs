@@ -62,19 +62,26 @@ impl Inner {
     /// Builds the complete route list; local lanes come first, then hostnames
     /// mirrored from connected boxes, and the first claim of a host keeps it.
     pub(crate) fn route_entries(&self) -> Vec<RouteEntry> {
-        self.with_remote_routes(self.local_routes().entries)
+        let local = self.local_routes().entries;
+        let assignment = self.remote.assignment();
+        self.with_remote_routes(local, &assignment)
     }
 
-    /// Appends mirrored routes whose hostnames no local route claims, in connect
-    /// order, so the box connected first keeps a name two boxes claim until the
-    /// later one's mirror skips that lane.
-    fn with_remote_routes(&self, mut routes: Vec<RouteEntry>) -> Vec<RouteEntry> {
+    /// Drops the routes of local lanes that gave way to a chosen box lane and
+    /// appends the mirrored routes of the box lanes `assignment` mirrors whose
+    /// hostnames no local route claims, in connect order.
+    fn with_remote_routes(
+        &self,
+        mut routes: Vec<RouteEntry>,
+        assignment: &crate::remote::Assignment,
+    ) -> Vec<RouteEntry> {
+        routes.retain(|route| !assignment.yielded.contains_key(&route.lane));
         let key = |route: &RouteEntry| {
             let host = route.host.trim_end_matches('.').to_ascii_lowercase();
             (host, route.fallback)
         };
         let mut seen: BTreeSet<(String, bool)> = routes.iter().map(key).collect();
-        for route in self.remote.routes() {
+        for route in self.remote.routes(assignment) {
             if seen.insert(key(&route)) {
                 routes.push(route);
             }
@@ -290,7 +297,10 @@ impl Inner {
         for (project, lane) in changed {
             self.emit_lane_event(&project, &lane);
         }
-        let routes = self.with_remote_routes(local.entries);
+        // Local routes or lane states may have changed what clashes; a change
+        // marks the snapshot dirty again, so the next pass publishes it.
+        let (_, assignment) = self.reassign_with(&local.entries);
+        let routes = self.with_remote_routes(local.entries, &assignment);
         self.sync_hosts(&routes);
         self.integ.routes.publish(routes);
     }

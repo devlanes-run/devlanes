@@ -1229,7 +1229,7 @@ impl LanePhase for ServicesPhase {
                     .chain([service.port])
                     .filter(|port| *port != 0)
                     .collect();
-                if let Err(error) = engine.release_for_local(&ports).await {
+                if let Err(error) = engine.release_for_local(&cx.reference, &ports).await {
                     cx.failures.push(UnitFailureData {
                         lane: cx.reference.clone(),
                         unit: service.unit.clone(),
