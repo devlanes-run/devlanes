@@ -40,7 +40,7 @@ lanes:
   removed_worktrees: stop
   # Ports reserved per lane; by default what the services need plus half again.
   # block_size: 80
-  # Most worktrees that get a lane; the rest stay unassigned.
+  # Most worktrees that get a lane; the rest stay unassigned. Read from the primary worktree's file.
   # max: 6
   # Also write this project's hostnames to /etc/hosts, for programs that cannot resolve *.localhost.
   hosts_file: always

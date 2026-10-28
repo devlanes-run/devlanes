@@ -71,8 +71,11 @@ fn render(project: &Value, user: &Value) -> String {
     );
     page.push_str("## Project config\n\n");
     page.push_str(&format!(
-        "`devlanes.yaml` at the repository root (or a subdirectory, in a monorepo), with \
-         optional overrides in `devlanes.local.yaml` next to it. Schema: `{}`.\n\n",
+        "`devlanes.yaml` at the repository root or in a subdirectory; devlanes uses the \
+         nearest one above the current directory, up to the repository root. Another \
+         project file in the same directory, such as `devlanes.prod.yaml`, is named once \
+         with `--file`. Each project file can have local overrides in a `.local.yaml` next \
+         to it. Schema: `{}`.\n\n",
         text(&project["$id"])
     ));
     sections(&mut page, project);
@@ -87,29 +90,37 @@ fn render(project: &Value, user: &Value) -> String {
     page
 }
 
-/// How `devlanes.local.yaml` merges, from `crates/config/src/loader.rs`; the
-/// schema cannot say it.
+/// How local overlays and file-level `extends` merge, from
+/// `crates/config/src/loader.rs`; the schema cannot say it.
 const LOCAL_OVERRIDES: &str = "## Local overrides\n\n\
-`devlanes.local.yaml` next to `devlanes.yaml` holds the changes one developer wants on \
-their machine only, such as a service turned off or a server they run themselves. It takes \
-the same keys, every one optional, and the same modeline, \
+A project file's local overlay holds the changes one developer wants on their machine \
+only, such as a service turned off or a server they run themselves: `devlanes.local.yaml` \
+for `devlanes.yaml`, `devlanes.prod.local.yaml` for `devlanes.prod.yaml`. It sits next to \
+its project file and takes the same keys, every one optional, and the same modeline, \
 `# yaml-language-server: $schema=https://devlanes.run/v1/schema.json`. Keep it out of Git: \
-add it to `.gitignore`. A lane reads the file in its own worktree, else the primary \
+add it to `.gitignore`. A lane reads the overlay in its own worktree, else the primary \
 worktree's.\n\n\
 ```yaml\n\
 # devlanes.local.yaml\n\
 services:\n  web:\n    autostart: false   # a plain `devlanes start` skips it unless the lane ran it before or the default profile names it\n\
 infra:\n  external:\n    pgadmin:\n      address: 127.0.0.1:5050\n      hosts: \"pgadmin.${{ lane.domain }}\"\n\
 ```\n\n\
-It is merged over `devlanes.yaml` before templates are expanded. Mappings merge by key at \
+It is merged over its project file before templates are expanded. Mappings merge by key at \
 every level (services, tasks, templates, profiles, the top-level `tags`, `infra.containers`, \
 `infra.external`, `infra.setup`, `infra.teardown`, every `env`, `lanes.vars`), and a key the \
 local file leaves out keeps its value. Lists and single values replace. `run`, `run_script` \
 and a task's `steps` drop each other, and so do the `ready` checks. A service only in the \
-local file needs `run` or `run_script`. `project` is refused there; it is set in \
-`devlanes.yaml` only. \
-[Local overrides](../guides/ports-and-env.md#local-overrides) in the ports and environment \
-guide has the details.\n\n";
+local file needs `run` or `run_script`. `project` and `extends` are refused there.\n\n\
+A project file builds on others with `extends`, one path or a list, relative to the file: \
+`devlanes.prod.yaml` with `extends: devlanes.yaml` runs the same apps under another \
+project. Each extended file is merged with its own local overlay, in list order, then the \
+file itself and its overlay, by the same rules; later files win. An extended file may be \
+partial and its `project` is ignored, so the extending file sets its own. Files that \
+extend each other are an error. The ports and environment guide has the details under \
+[local overrides](../guides/ports-and-env.md#local-overrides) and \
+[extending another project file](../guides/ports-and-env.md#extending-another-project-file), \
+and [several projects in one directory](../guides/services.md#several-projects-in-one-directory) \
+says what two such projects share.\n\n";
 
 /// One `###` section with a table per top-level key of `schema`.
 fn sections(page: &mut String, schema: &Value) {

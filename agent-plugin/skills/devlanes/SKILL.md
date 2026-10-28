@@ -32,6 +32,8 @@ A unit is a service, task, `exec` command or `infra.external` entry, referenced 
 
 Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged. A reference that matches nothing or several lanes fails with exit 3 and lists the candidates.
 
+Commands use the project of the nearest `devlanes.yaml` above the current directory, up to the repository root. A repository can hold more projects: a `devlanes.yaml` in a subdirectory, or another file such as `devlanes.prod.yaml`, which is named once with `--file devlanes.prod.yaml` (`devlanes --file devlanes.prod.yaml start`) and afterwards reached with `-p PROJECT`. `-p` also reads `DEVLANES_PROJECT`, which devlanes sets in every process it starts, so devlanes commands run from a service or task stay in its project. Renaming `project:` makes a new project with new lanes, ports and hostnames; the old project's lanes stay listed until `devlanes lane gc --yes`, which you run only when the user agrees.
+
 ## Commands
 
 | Goal | Command |
@@ -44,7 +46,8 @@ Output prints lanes as `acme@2 (feat/billing)`. Paste references back unchanged.
 | Lines around a log cursor | `devlanes logs api --around CURSOR -C 20` |
 | Crashes, exit codes, port conflicts | `devlanes debug errors --since 15m` |
 | Reason a unit is not running | `devlanes debug why worker` |
-| Restart after a code change | `devlanes restart api` |
+| Restart after a code change | `devlanes restart api`, or `devlanes restart` for the whole lane |
+| Apply a `devlanes.yaml` edit to what runs | `devlanes reload`, or `devlanes reload api` |
 | Run a configured task | `devlanes run --list`, then `devlanes run migrate` |
 | Ad-hoc long-running command | `devlanes exec --name storybook -- pnpm storybook` |
 | Route a server devlanes does not run | `infra.external` in `devlanes.local.yaml` ([Ports outside the config](#ports-outside-the-config)) |
@@ -92,7 +95,7 @@ Failures come first, each with its last log lines and the command that shows mor
 | `starting`, `queued` | Starting, or waiting for a start slot. `devlanes wait UNIT --timeout 180s`. |
 | `running` | A task or exec in progress. Wait for it or read its logs. |
 | `external` | An `infra.external` entry: devlanes routes its port and hostnames but runs nothing there, so it has no logs and `start` or `stop` do not apply. Whatever listens on the port is yours to run. |
-| `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code or config and `devlanes restart UNIT`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. |
+| `failed` | Exited or never got ready. Read the printed tail, then `devlanes logs UNIT --tail 200` and `devlanes debug why UNIT`; fix the code and `devlanes restart UNIT`, or fix the config and `devlanes reload`. A service that keeps failing its ready check usually has the wrong port or check: see references/configuration.md. |
 | `exited` | A task or exec that ended. `devlanes logs UNIT --tail 50` shows how. |
 | `stopping`, `stopped`, `idle` | Not running. `devlanes start UNIT` when you need it. |
 | `orphaned` | A previous daemon left the process running and nothing supervises it. `devlanes stop UNIT --lane LANE`, then start it again. |
@@ -111,6 +114,8 @@ devlanes debug errors                # only if something failed
 devlanes logs api --tail 200
 # fix the code, then
 devlanes restart api
+# or, after editing devlanes.yaml
+devlanes reload
 devlanes with -- pnpm test
 devlanes stop --mine
 ```

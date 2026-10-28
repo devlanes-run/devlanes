@@ -4,13 +4,15 @@
 
 `devlanes start` brings up the lane of the current worktree: infra, setup, `lane.create` and `lane.start` tasks, services, then `after: services` tasks. It waits until every started unit is ready or one fails. Units that already run are left alone, so starting twice is safe, and Ctrl-C detaches without stopping anything. `devlanes start api web` starts only those services and `devlanes start --profile e2e` the units of a profile.
 
-`devlanes stop` without unit names runs the lane's `lane.stop` tasks and stops its processes; containers keep running ([infra](infra.md#lifecycle)). `devlanes stop api` stops one service. `devlanes restart api` stops a unit and starts it again with the environment of the shell that ran `restart`.
+`devlanes stop` without unit names runs the lane's `lane.stop` tasks and stops its processes; containers keep running ([infra](infra.md#lifecycle)). `devlanes stop api` stops one service. `devlanes restart api` stops a unit and starts it again with the environment of the shell that ran `restart`. `devlanes restart` without unit names restarts the whole lane: it stops the lane as `devlanes stop` does, without forgetting what ran, then starts the same services and profiles again with infra, setup and tasks, as a plain start does. `devlanes reload` applies only what an edit of the project file changed ([editing the project file](#editing-the-project-file)).
 
 A service that exits shows as failed and stays that way until you start or restart it. devlanes never restarts a process by itself.
 
 ## Bringing a lane back
 
 The first plain `devlanes start` of a lane starts its `default` profile, or every service with `autostart` left on when the project has no `default` profile. After that, a plain start brings back what the lane ran: the services you started (by profile or by name) and did not stop, with the same profiles. That is what makes a reboot or a daemon crash cost one command. On a lane that still runs, a plain start also starts what its profiles select and is missing, such as a service you just added. `devlanes stop` without unit names forgets what ran, so the next plain start uses the `default` profile again; stopping one service only leaves that service out. Set `start.restore: false` in `~/.devlanes/config.yaml` to always start the `default` profile.
+
+A saved profile or service that the project file no longer has is left out of a plain start, `lane resume` and `daemon restart`, with a `saved_profile_removed` or `saved_service_removed` warning that names it; the rest of the lane starts. A profile typed on the command line still fails when it does not exist.
 
 The daemon never stores a shell's environment, so after a reboot, a crash or `devlanes daemon stop` each lane needs one start from a shell. A plain `devlanes start` brings back its own lane with the current shell's environment and names the other lanes that ran. `devlanes lane resume` uses the current shell's environment for every lane that was not stopped by hand and starts the services each one ran. `devlanes daemon restart` asks first when processes are running, then restarts the daemon and starts the services that ran again ([restarting the daemon](#restarting-the-daemon)). `lane resume` and `daemon restart` bring services back even with `start.restore: false`.
 
@@ -21,6 +23,28 @@ The daemon never stores a shell's environment, so after a reboot, a crash or `de
 The new daemon and the services it starts again get the environment of whoever asked for the restart: the shell that ran `devlanes daemon restart`, or the shell that opened the TUI for `R`. That is how a changed `PATH`, `SSH_AUTH_SOCK` or other variable reaches the daemon and its services, so restart from a shell that has it.
 
 On a terminal, `daemon stop` and `daemon restart` show each step as it happens: closing box connections, waking idle lanes, running `lane.stop` tasks, stopping processes (with how many are left), saving state, then for a restart the new daemon's start and each lane coming back. `daemon.log` records how long each shutdown step took and names any process that took more than 2 seconds to stop. While the daemon is away, every view of the TUI shows the same steps with the daemon log below them, and its `devlanes` logo turns grey while the daemon stops or starts and red while it is stopped or not answering.
+
+## Editing the project file
+
+devlanes reads a lane's config again when any file it was loaded from changes: the project file, the files it `extends`, their local files (the primary worktree's copy too, when the lane falls back to it) and the `.env` its expressions read. An edit never touches running units. Instead, each running unit shows how it differs from what the file would start now, and a missing one that the file would start shows too:
+
+- `changed`, with the fields that differ: `run`, `cwd`, `ports`, `pty`, `ready`, `stop`, `files` (a file devlanes writes for the unit, such as a preset's config overlay) and `env NAME` for each variable, named without its value;
+- `removed`: it runs and the file no longer has it;
+- `added`: the lane's profiles select it now, did not at the lane's last whole start, and it is not running. A service you left out with `devlanes start api` never counts as added.
+
+`devlanes status` says `config changed` on the lane with what differs and the command that applies it, and `--json` has each unit's `drift`. In the TUI the lane and each unit that differs are marked, and the lane's details pane lists them, such as `api: run, env API_URL` and `worker: removed`.
+
+`devlanes reload` applies only that: it stops removed units, restarts changed ones, starts added ones and leaves the rest running. `devlanes reload api` applies api's part alone. When the infra settings changed since the lane's last whole start, or the edit needs ports the lane's block cannot hold, `reload` restarts the whole lane instead, since infra comes up before services and the block only moves while nothing runs. A removed unit keeps running until a `reload`, a whole-lane `restart` or a `stop`. `r` on a lane in the TUI reloads when the lane has changes and restarts the whole lane otherwise; on a unit it restarts that unit.
+
+While units run, a project file that stops loading, through a typo, a rebase conflict, deleting it or a `project:` that names another project, leaves the lane's hostnames and routes on the last config that loaded, so the running services stay reachable. The lane shows the file's error, and `start`, `restart` and `reload` refuse with it until the file loads again. `devlanes debug config` prints the merged config the lane loads, with expressions left unevaluated, and the files it came from.
+
+## Renames and branch switches
+
+A project is its `project:` name. Renaming it makes a new project with its own lanes, domains, ports and containers, and the next command in the worktree uses that one. The old project's lanes stay with the reason `config_names_other_project`, and what they ran keeps running until you stop it. `devlanes lane gc` lists them along with lanes whose project file was deleted, and `devlanes lane gc --yes` cleans those that run nothing: it frees their ports, removes their own containers and deletes their data folders. Their `lane.clean` tasks and `infra.teardown` do not run, since the worktree's file no longer declares them for that project.
+
+Checking out a branch whose project file names another project moves the worktree's lane the same way. Switching back finds the old lane as it was, with its index, ports and saved services, as long as `lane gc --yes` did not clean it in between.
+
+Worktrees on other branches can hold other versions of the project file, and each lane runs its own. `lanes.primary` and `lanes.max` belong to the whole project and come from the primary worktree's file. The shared infra (`infra.compose`, `infra.project_name` and containers that are not `per_lane`) is one set of containers for every lane, so the lane that starts last applies its version. A lane whose file sets any of these differently gets a `project_setting_ignored` or `infra_spec_conflict` warning naming the settings. `devlanes lane gc` keeps the port offsets of every service that some worktree's file still has.
 
 ## Services that start on demand
 
@@ -78,7 +102,7 @@ tasks:
     interactive: true
 ```
 
-Start order: infra, setup, `lane.create` tasks (until they succeed once per lane), `lane.start` tasks (every start, in file order), services together, `after: services` tasks. A failed task before services fails the start and prints its log tail. `devlanes run reset-db` runs a task by hand; `devlanes run --list` shows them. Tasks with `confirm` need `--yes` without a terminal, and `interactive` tasks get your terminal and never run from a hook.
+Start order: infra, setup, `lane.create` tasks (until they succeed once per lane), `lane.start` tasks (every start, in file order), services together, `after: services` tasks. An `infra.setup` entry or `lane.create` task that you edit after it succeeded runs again at the next start; devlanes compares its declaration in the file, so an edit to a variable it reads does not count. A failed task before services fails the start and prints its log tail. `devlanes run reset-db` runs a task by hand; `devlanes run --list` shows them. Tasks with `confirm` need `--yes` without a terminal, and `interactive` tasks get your terminal and never run from a hook.
 
 `lane.stop` tasks run before the processes stop when the whole lane stops: `devlanes stop` without unit names, `devlanes daemon stop` and `daemon restart`. `lane.clean` tasks run on `devlanes lane clean`, after the processes stop and before `infra.teardown`.
 

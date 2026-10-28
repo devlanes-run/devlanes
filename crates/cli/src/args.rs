@@ -647,7 +647,7 @@ Without --start, a terminal asks whether to start the new lane right away."
         #[arg(id = "clean_lane", value_name = "LANE")]
         lane: Option<String>,
     },
-    /// Clean lanes whose worktrees are gone and drop unused port offsets (needs --yes)
+    /// Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
     Gc,
     /// Start the lanes that were running before a reboot or daemon restart
     #[command(

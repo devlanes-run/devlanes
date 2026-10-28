@@ -14,11 +14,11 @@ Start with [getting started](getting-started.md). The two references are generat
 - [Run and run_script](guides/run-scripts.md): the six script runners, which file picks which, and how presets pass their flags.
 - [Languages](guides/languages.md): Node, Bun, Deno, Python and Rust services, mise and direnv.
 - [Framework presets](guides/presets.md): Vite, Next, Wrangler and Tauri.
-- [Ports and environment](guides/ports-and-env.md): port blocks, named ports, `PORT`, expressions, env layers, `.env`.
+- [Ports and environment](guides/ports-and-env.md): port blocks, named ports, `PORT`, expressions, env layers, `.env`, local overrides and `extends`.
 - [Hostnames and HTTPS](guides/https.md): the proxy, the CA, trusting it per OS and runtime, resolver strategies, LAN access.
 - [Infra](guides/infra.md): Compose and plain containers, shared versus per-lane, recipes for Postgres, MySQL, Redis, RabbitMQ, MinIO and Mailpit.
-- [Service patterns](guides/services.md): APIs behind a frontend, workers, several ports, wildcards, replicas, CI.
-- [Lane lifecycle](guides/lifecycle.md): start, stop, what a plain start brings back, `lane resume`, on-demand services, lifecycle tasks, and idle lanes that are throttled and frozen.
+- [Service patterns](guides/services.md): APIs behind a frontend, workers, several ports, wildcards, replicas, monorepos, several projects in one repository, CI.
+- [Lane lifecycle](guides/lifecycle.md): start, stop, what a plain start brings back, `lane resume`, `reload` after a config edit, project renames, on-demand services, lifecycle tasks, and idle lanes that are throttled and frozen.
 - [Terminals](guides/terminals.md): tab progress bars, clipboard.
 - [Remote setup](guides/remote-setup.md): preparing a box and a client for `devlanes remote connect`.
 - [Remote boxes over Tailscale](guides/remote-tailscale.md): MagicDNS names, OpenSSH keys or Tailscale SSH, check mode, Headscale.

@@ -2,18 +2,40 @@
 
 Read this before you create or change a `devlanes.yaml`. It covers each area with the options that matter and the mistakes agents make. Every field, with types and examples, is in [docs/reference/config.md](https://github.com/devlanes-run/devlanes/blob/main/docs/reference/config.md); [docs/examples/devlanes.yaml](https://github.com/devlanes-run/devlanes/blob/main/docs/examples/devlanes.yaml) shows them in context.
 
-After every edit run `devlanes config check`. It validates expressions, references and preset options and points at the line of a mistake. Then `devlanes start` and `devlanes status`.
+After every edit run `devlanes config check`. It validates expressions, references and preset options and points at the line of a mistake. Then `devlanes start` and `devlanes status`. An edit never restarts what runs: `status` shows the lane as `config changed` with the units the edit changed, added or removed, and `devlanes reload` applies only those (it restarts the whole lane when infra or the port block changed). `devlanes debug config` prints the merged config, with `extends` and local files applied and expressions left unevaluated.
 
 ## File layout
 
-`devlanes.yaml` sits at the repository root (or a package root in a monorepo) and is committed, so every worktree has it. Start it with the schema modeline so editors complete fields:
+`devlanes.yaml` sits at the repository root (or a package root in a monorepo, as its own project) and is committed, so every worktree has it. Start it with the schema modeline so editors complete fields:
 
 ```yaml
 # yaml-language-server: $schema=https://devlanes.run/v1/schema.json
 project: acme
 ```
 
-`project` is lowercase letters, digits, dots, underscores and dashes, shared by every worktree. The other top-level keys are `lanes`, `infra`, `global_env`, `tags`, `templates`, `tasks`, `services` and `profiles`.
+`project` is lowercase letters, digits, dots, underscores and dashes, shared by every worktree. The other top-level keys are `extends`, `lanes`, `infra`, `global_env`, `tags`, `templates`, `tasks`, `services` and `profiles`.
+
+The project is its name. Renaming `project` makes a new project with new lanes, ports, hostnames and containers, and the old project's lanes stay listed until `devlanes lane gc --yes`; tell the user before renaming, and run the gc only when they agree. Another repository cannot use a name already taken (`project_name_taken`).
+
+Commands use the nearest `devlanes.yaml` above the current directory, up to the repository root. In a monorepo, a `devlanes.yaml` in a subdirectory is a separate project, and its relative paths (`cwd`, the directory `run` starts in, `run_script.file`, `sync`, `infra.compose`) start at that subdirectory.
+
+## Several projects in one directory
+
+A second file next to `devlanes.yaml` runs the same apps another way. It extends `devlanes.yaml` and sets its own `project`:
+
+```yaml
+# devlanes.prod.yaml
+extends: devlanes.yaml                  # a path or a list, relative to this file
+project: acme-prod
+profiles:
+  default:
+    run_scripts:
+      dev: start
+    env:
+      NODE_ENV: production
+```
+
+The extended files merge first, each followed by its own local file (`devlanes.local.yaml`), then this file and `devlanes.prod.local.yaml`; later files win with the local-override rules below. An extended file may be partial and its `project` is ignored. Run it with `devlanes --file devlanes.prod.yaml start` the first time and `devlanes -p acme-prod ...` after that. Both projects run side by side (`acme.localhost` and `acme-prod.localhost`), but they share the shared Compose project (`devlanes infra down` from one stops both), any value built only from `lane.name` such as a database name (put `${{ project.name }}` in it to keep data apart), a `lanes.vars.domain` that spells out the name, and build output in the worktree such as `.next`.
 
 ## Services
 
@@ -42,7 +64,7 @@ services:
 
 - `run_script: { file, name }` works with `package.json` (npm, pnpm, yarn or bun, from `packageManager` or the lockfile), `Makefile`, `justfile`, `deno.json`, `pyproject.toml` (uv or poetry) and `Cargo.toml` (a bin), and runs in that file's directory, so `devlanes config check` refuses a `cwd` next to it. The `file#name` string form is refused. Prefer it to `run: pnpm -F pkg dev` whenever the command is a script in a file: the script is checked before start, profiles can remap its name, and presets require it (`preset` with `run` is refused; drop the preset and write its flags into `run` instead).
 - `infra.setup` and `infra.teardown` entries take only `run`.
-- A multi-line `run` string is a shell script. Without `cwd`, `run` starts at the lane's worktree root.
+- A multi-line `run` string is a shell script. Without `cwd`, `run` starts in the project file's directory, the worktree root unless the file sits in a subdirectory.
 - `autostart: false` keeps a service out of a plain `devlanes start` when no `default` profile exists; naming the service or its tag still starts it. `autostart` also takes an expression, such as `${{ lane.index == 0 }}`, evaluated per lane.
 - `keep_awake: true` on a worker, queue consumer, scheduler or tunnel (`stripe listen`) keeps its whole lane from being throttled or frozen while it runs. Without it, a lane with no requests, connections or commands is frozen after `lanes.freeze_after` (15 minutes by default) and a waiting worker stalls until something resumes the lane.
 - `replicas: N` runs N instances (`replica.index` counts from 1), each with its own port.
@@ -269,7 +291,7 @@ services:
     hosts: "crm.${{ lane.domain }}"
 ```
 
-Templates resolve after local overrides. Mappings (`env`, `ready`, `stop`, preset options) merge by key; lists (`tags`, `hosts`) and scalars replace. Setting `run` or `run_script`, or one `ready` check, drops the inherited alternative.
+Templates resolve after local overrides and file-level `extends`, which names project files rather than templates. Mappings (`env`, `ready`, `stop`, preset options) merge by key; lists (`tags`, `hosts`) and scalars replace. Setting `run` or `run_script`, or one `ready` check, drops the inherited alternative.
 
 ## Presets and platforms
 
@@ -296,7 +318,7 @@ For build output another program loads from a fixed path, such as an unpacked br
 
 ## Local overrides and user config
 
-`devlanes.local.yaml` next to `devlanes.yaml` holds personal changes and stays out of Git (add it to `.gitignore`). It merges by key before templates, for example `services: { web: { autostart: false } }`; lists and single values replace. A lane whose worktree has no such file uses the primary worktree's. Declare an `infra.external` entry for a server only one developer runs here, not in `devlanes.yaml`.
+`devlanes.local.yaml` next to `devlanes.yaml` holds personal changes and stays out of Git (add it to `.gitignore`); another project file has its own, such as `devlanes.prod.local.yaml`. It merges by key before templates, for example `services: { web: { autostart: false } }`; lists and single values replace. It cannot set `project` or `extends`. A lane whose worktree has no such file uses the primary worktree's. Declare an `infra.external` entry for a server only one developer runs here, not in `devlanes.yaml`.
 
 Machine settings live in `~/.devlanes/config.yaml` (or `$DEVLANES_HOME/config.yaml`): `ports.range`, `lanes.data_dir` (root of the lane data folders), `proxy` ports and LAN access, `startup` (how many services start at once), `tls` (devlanes or mkcert CA, trust stores), `hostnames`, `terminal`, log and history retention, `updates.check`. They never go in the project file. Prefer `devlanes config set proxy.https_port 8443` over editing the file: it keeps comments, refuses a value that would not load and says whether the change needs `devlanes daemon restart`. `devlanes config get KEY` prints the value in effect, defaults included, and `devlanes config unset KEY` puts the default back; none of them needs the daemon. An unknown key or invalid value written by hand stops the daemon from starting, with the file and line to fix; `devlanes doctor` checks the file without restarting.
 

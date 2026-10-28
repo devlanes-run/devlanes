@@ -33,7 +33,7 @@ A command is blocked when all of these hold:
 - it is detached: a lone `&` after it (or after the commands joined to it), `run_in_background`, `setsid -f`, `tmux new -d` or `screen -dm` in Bash, and `Start-Process` without `-Wait`, `Start-Job`, `Start-ThreadJob` or `cmd /c start` without `/wait` in PowerShell;
 - it looks like a dev server: a `dev`, `start`, `serve`, `watch`, `--watch`, `preview` or `up` argument, a `server.js`-style script, or a tool such as `vite`, `next`, `wrangler` or `uvicorn` without `build`, `test`, `lint` or `check`;
 - it is not devlanes itself, such as `devlanes logs api -f &`;
-- the directory it runs in, after any `cd` before it, or one of its parents has `devlanes.yaml`.
+- the directory it runs in, after any `cd` before it, or one of its parents up to the repository root (the first directory holding `.git`) has `devlanes.yaml`. A `devlanes.yaml` above the repository root belongs to another project and does not count, the same rule devlanes uses to find a project.
 
 `DEVLANES_BLOCK_BACKGROUND=0` in the agent's environment allows every call, and so do arguments other than `--agent claude-code` or `--agent codex`, which come from a newer plugin.
 

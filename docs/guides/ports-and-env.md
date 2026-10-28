@@ -2,7 +2,7 @@
 
 ## Ports
 
-Each lane of each project gets a block of consecutive ports from one machine-wide pool (`ports.range` in `~/.devlanes/config.yaml`, default `20000-32767`). Blocks of different lanes and projects never overlap, so two projects and five worktrees run at once without a port plan. Inside the block every service has a fixed offset, shared by all lanes of the project: if `api` is `lane.port + 3` in lane 0 it is `lane.port + 3` in lane 4 too. Offsets persist in the daemon's database and survive restarts, config edits and branch switches; `devlanes lane gc` drops offsets of services that no longer exist.
+Each lane of each project gets a block of consecutive ports from one machine-wide pool (`ports.range` in `~/.devlanes/config.yaml`, default `20000-32767`). Blocks of different lanes and projects never overlap, so two projects and five worktrees run at once without a port plan. Inside the block every service has a fixed offset, shared by all lanes of the project: if `api` is `lane.port + 3` in lane 0 it is `lane.port + 3` in lane 4 too. Offsets persist in the daemon's database and survive restarts, config edits and branch switches; `devlanes lane gc` drops offsets of services that no worktree's project file still has.
 
 The block size is what the project needs plus half again, rounded up to ten, so a project with 7 ports gets 20. `lanes.block_size` fixes it (a config error if too small). A running lane keeps its block when the config grows; when the new ports do not fit, the next start says `the edited config needs ports the running lane's block cannot hold; stop the lane, then start it again`.
 
@@ -106,7 +106,7 @@ Every process devlanes starts (services, tasks, infra commands) and every comman
 | Variable | Value |
 | --- | --- |
 | `DEVLANES` | `1` |
-| `DEVLANES_PROJECT` | `project` from `devlanes.yaml`, such as `acme` |
+| `DEVLANES_PROJECT` | `project` from the project file, such as `acme`. devlanes commands run by the process read it as `--project`, so they stay in this project |
 | `DEVLANES_LANE` | the lane index: `0` for the primary worktree, then `1`, `2`, … A lane whose branch becomes the primary one takes index 0, so key lasting state on `DEVLANES_LANE_DATA` instead |
 | `DEVLANES_LANE_NAME` | `main` for lane 0, `lane<N>` for the others |
 | `DEVLANES_LANE_DATA` | the [lane data folder](#lane-data-folder), `~/.devlanes/data/<project>/<lane id>`. The lane id is not the index |
@@ -195,16 +195,30 @@ infra:
       hosts: "pgadmin.${{ lane.domain }}"
 ```
 
-Each lane reads the file in its own worktree, and when that worktree has none, as a new one does, the primary worktree's. Changes to it are picked up like changes to `devlanes.yaml`, and an error in it is reported with its own file name and line.
+Every project file has its own local file, named after it: `devlanes.prod.yaml` takes `devlanes.prod.local.yaml`. Each lane reads the local file in its own worktree, and when that worktree has none, as a new one does, the primary worktree's. Changes to it are picked up like changes to the project file ([editing the project file](lifecycle.md#editing-the-project-file)), and an error in it is reported with its own file name and line.
 
-The file is merged over `devlanes.yaml` before templates are expanded:
+The local file is merged over its project file before templates are expanded:
 
-- Mappings merge by key at every level: services, tasks, templates, profiles, the top-level `tags`, `infra.containers`, `infra.external`, `infra.setup` and `infra.teardown`, every `env`, `lanes.vars`, a container's `ports`, a service's `ready` and `stop`, and preset options. A key the local file leaves out keeps its value from `devlanes.yaml`.
+- Mappings merge by key at every level: services, tasks, templates, profiles, the top-level `tags`, `infra.containers`, `infra.external`, `infra.setup` and `infra.teardown`, every `env`, `lanes.vars`, a container's `ports`, a service's `ready` and `stop`, and preset options. A key the local file leaves out keeps its value from the project file.
 - Lists and single values replace: a service's `tags`, `hosts` and `sync`, `autostart`, `infra.hidden`, `infra.per_lane`, `lanes.matrix` and the like. An `infra.hosts` entry replaces that container's hostnames, and a profile written as a list replaces only its `include`.
-- Alternatives drop each other: `run` drops the `run_script` from `devlanes.yaml` and the reverse (a task's `steps` too), and one `ready` check (`tcp`, `http`, `log`, `cmd`) drops the others. A `run_script` may set only `file` or only `name` and keep the other.
-- A service that exists only in the local file needs `run` or `run_script`, its own or from the template it `extends`. `project` is refused there: the name lives in `devlanes.yaml`, so every machine gives the project the same lanes, domains and container names.
+- Alternatives drop each other: `run` drops the `run_script` from the project file and the reverse (a task's `steps` too), and one `ready` check (`tcp`, `http`, `log`, `cmd`) drops the others. A `run_script` may set only `file` or only `name` and keep the other.
+- A service that exists only in the local file needs `run` or `run_script`, its own or from the template it `extends`. `project` and a file-level `extends` are refused there: the name lives in the project file, so every machine gives the project the same lanes, domains and container names.
 
 Nothing can be deleted: turn a service off with `autostart: false`, and empty a list by setting it to `[]`.
+
+### Extending another project file
+
+A project file can build on others with a top-level `extends`, one path or a list, relative to the file that names it:
+
+```yaml
+# devlanes.prod.yaml
+extends: devlanes.yaml                  # or a list: [devlanes.yaml, devlanes.shared.yaml]
+project: acme-prod
+```
+
+Each extended file is merged with its own local file, in list order, then the file itself and its local file, by the rules above. For `devlanes.prod.yaml` that is `devlanes.yaml`, `devlanes.local.yaml`, `devlanes.prod.yaml`, `devlanes.prod.local.yaml`, the last one winning. An extended file may be partial, and may extend others in turn. Its `project` is ignored, so the file being loaded must set its own; files that extend each other are an error. Templates are expanded after everything is merged, so a template from `devlanes.yaml` sees the overrides of `devlanes.prod.yaml`. Relative paths in an extended file start where the file being loaded is, as if they were written there. `devlanes debug config` prints the merged result, with expressions left unevaluated, and the files it came from in merge order.
+
+This top-level `extends` names files; a service's `extends` names a [template](services.md#tags-profiles-and-templates). [Several projects in one directory](services.md#several-projects-in-one-directory) has a complete dev and prod pair.
 
 ## Lane data folder
 

@@ -1,0 +1,34 @@
+# A second project in the same directory: the apps of devlanes.yaml built and run the
+# production way. Register it once with `devlanes --file devlanes.prod.yaml start`; after
+# that `devlanes -p acme-prod ...` finds it from anywhere in the repository.
+
+# Merged first: devlanes.yaml, then devlanes.local.yaml, then this file, then
+# devlanes.prod.local.yaml. Later files win; mappings merge by key, lists and scalars replace.
+extends: devlanes.yaml
+
+# A project of its own, with its own lanes, ports, hostnames and containers.
+project: acme-prod
+
+lanes:
+  vars:
+    # devlanes.yaml fixes the domain to acme, so prod sets its own: acme-prod.localhost in lane 0.
+    domain: ${{ project.name }}${{ '' if lane.index == 0 else '-' ~ lane.index }}.localhost
+    # Values built only from lane.name are the same in both projects; this keeps prod's
+    # database apart. The vhost, bucket and Redis DB are still shared.
+    db_name: acme_prod_${{ lane.name }}
+
+tasks:
+  build:
+    run: pnpm build
+    when: lane.start
+    # Runs before services on every start of the default profile.
+    profiles: [default]
+
+profiles:
+  # Keeps devlanes.yaml's selection, [+essential], and runs it the production way.
+  default:
+    # Services whose run_script names dev run start instead.
+    run_scripts:
+      dev: start
+    env:
+      NODE_ENV: production
