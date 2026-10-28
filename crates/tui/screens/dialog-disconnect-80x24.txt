@@ -4,19 +4,19 @@
 │   link      connected since 2026-10-14 15:32                                 │
 │   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999          │
 │   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed           │
-│   skipped   acme@0: the same lane on this machine serves its hostnames       │
-│             ext.example.com (acme@4:ext-build): not under .localhost         │
-│   syncs     acm┌────────────────────────────────────────────┐                │
-│   ! the box run│ Disconnect hetzner?                        │ll the same     │
-│     release on │                                            │                │
-│   ! the box sto│ Its ports and hostnames stop working here. │le-linger or    │
-│     devlanes da│ Its lanes keep running on the box.         │                │
-│   ! this machin│                                            │ion denied).    │
-│     Open its ho│ y disconnect   n cancel                    │                │
-│                └────────────────────────────────────────────┘                │
+│   skipped   acme@0: the same lane runs on this machine. Stop it there to use │
+│             this one.                                                        │
+│             ext┌────────────────────────────────────────────┐calhost         │
+│   syncs     acm│ Disconnect hetzner?                        │                │
+│   ! the box run│                                            │ll the same     │
+│     release on │ Its ports and hostnames stop working here. │                │
+│   ! the box sto│ Its lanes keep running on the box.         │le-linger or    │
+│     devlanes da│                                            │                │
+│   ! this machin│ y disconnect   n cancel                    │ion denied).    │
+│     Open its ho└────────────────────────────────────────────┘                │
+│                                                                              │
 │ ⠋ devbox                                              reconnecting · command │
 │   link      next try in 8s                                                   │
-│   error     docker exec exited 1: Error response from daemon: container      │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ this machine ────────────────────────────────────────────────────────────────┐
 │ No other machine connects here yet. Press p for a pairing code.              │
@@ -30,19 +30,19 @@
 3: 0 bold, 4-13 dim, 79 bold
 4: 0 bold, 4-13 dim, 79 bold
 5: 0 bold, 4-13 dim, 79 bold
-6: 0 bold, 4-13 dim, 14-71 yellow, 79 bold
-7: 0 bold, 4-13 dim, 14-69 yellow, 79 bold
-8: 0 bold, 4-13 dim, 14-16 green, 17-62 bold, 79 bold
-9: 0 bold, 4-16 yellow, 17 bold, 19-37 bold, 62 bold, 63-73 yellow, 79 bold
-10: 0 bold, 6-16 yellow, 17 bold, 62 bold, 79 bold
-11: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-74 yellow, 79 bold
-12: 0 bold, 6-16 yellow, 17 bold, 62 bold, 79 bold
-13: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-74 yellow, 79 bold
-14: 0 bold, 6-16 yellow, 17 bold, 19 bold, 20-30 dim, 34 bold, 35-41 dim, 62 bold, 79 bold
-15: 0 bold, 17-62 bold, 79 bold
-16: 0 bold, 4-9 bold, 68-77 dim, 79 bold
-17: 0 bold, 4-13 dim, 14-27 yellow, 79 bold
-18: 0 bold, 4-13 dim, 14-72 yellow, 79 bold
+6: 0 bold, 4-13 dim, 14-77 yellow, 79 bold
+7: 0 bold, 4-13 dim, 14-22 yellow, 79 bold
+8: 0 bold, 4-13 dim, 14-16 yellow, 17-62 bold, 63-69 yellow, 79 bold
+9: 0 bold, 4-13 dim, 14-16 green, 17 bold, 19-37 bold, 62 bold, 79 bold
+10: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-73 yellow, 79 bold
+11: 0 bold, 6-16 yellow, 17 bold, 62 bold, 79 bold
+12: 0 bold, 4-16 yellow, 17 bold, 62 bold, 63-74 yellow, 79 bold
+13: 0 bold, 6-16 yellow, 17 bold, 62 bold, 79 bold
+14: 0 bold, 4-16 yellow, 17 bold, 19 bold, 20-30 dim, 34 bold, 35-41 dim, 62 bold, 63-74 yellow, 79 bold
+15: 0 bold, 6-16 yellow, 17-62 bold, 79 bold
+16: 0 bold, 79 bold
+17: 0 bold, 4-9 bold, 68-77 dim, 79 bold
+18: 0 bold, 4-13 dim, 14-27 yellow, 79 bold
 19: 0-79 bold
 20: 0 darkgray, 1-14 bold, 15-79 darkgray
 21: 0 darkgray, 2-64 dim, 79 darkgray

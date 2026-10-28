@@ -320,6 +320,36 @@ async fn a_local_start_that_clears_a_choice_says_so() {
     assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
 }
 
+#[tokio::test]
+async fn the_boxes_view_names_what_serves_a_skipped_lane_and_the_chosen_ones() -> TestResult {
+    let mut app = with_forks(120, 40).await;
+    app.update(crate::shifted('B'));
+    app.update(Msg::Boxes(Ok(forks())));
+    let terminal = draw(&app)?;
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                .replace('│', " ")
+        })
+        .collect();
+    let text = rows
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    for expected in [
+        "chosen acme@1",
+        "acme@1: fork-a's acme@1 is in use. Press m on this box's lane to use it.",
+        "acme@0: the same lane runs on this machine. Stop it there to use this one.",
+    ] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
+    Ok(())
+}
+
 /// The whole loop: `4` and `m` on this machine's grey `acme@1` send
 /// `remote.use` with `host: null`, then fetch `host.list` again.
 #[tokio::test]
