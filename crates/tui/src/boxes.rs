@@ -548,17 +548,17 @@ mod tests {
              "ports": [{"port": 20101, "lane": "acme@1", "unit": "web", "kind": "service",
                         "state": "bound", "addresses": ["127.0.0.1", "::1"], "conflicts": [],
                         "relay": null, "last_error": null}],
-             "routes": [{"host": "web.acme-1.localhost", "port": 20101, "lane": "acme@1",
-                         "unit": "web", "url": "https://web.acme-1.localhost:8443",
+             "routes": [{"host": "web.acme1.localhost", "port": 20101, "lane": "acme@1",
+                         "unit": "web", "url": "https://web.acme1.localhost:8443",
                          "state": "ready"}],
              "registry": {
                  "lanes": [{"key": {"project": "acme", "lane": "1"}, "index": 1,
-                            "domain": "acme-1.localhost"}],
+                            "domain": "acme1.localhost"}],
                  "units": [
                     {"key": {"lane": {"project": "acme", "lane": "1"}, "kind": "service", "name": "web"},
                      "hidden": false, "state": "ready",
                      "ports": [{"name": "default", "port": 20101}],
-                     "hosts": [{"host": "web.acme-1.localhost", "port": 20101}]},
+                     "hosts": [{"host": "web.acme1.localhost", "port": 20101}]},
                     {"key": {"lane": {"project": "acme", "lane": "1"}, "kind": "task", "name": "migrate"},
                      "hidden": false, "state": "exited", "ports": [], "hosts": []},
                     {"key": {"lane": {"project": "acme", "lane": "1"}, "kind": "container", "name": "db"},
@@ -644,14 +644,11 @@ mod tests {
         let web = &lane.units[0];
         assert_eq!(
             web.urls,
-            [
-                "https://web.acme-1.localhost:8443",
-                "http://127.0.0.1:20101"
-            ]
+            ["https://web.acme1.localhost:8443", "http://127.0.0.1:20101"]
         );
         assert_eq!(
             web.public_url.as_deref(),
-            Some("https://web.acme-1.localhost:8443")
+            Some("https://web.acme1.localhost:8443")
         );
         assert_eq!(lane.units[1].kind, "task");
         // Held on 127.0.0.1 by something else, the port opens on ::1 only.

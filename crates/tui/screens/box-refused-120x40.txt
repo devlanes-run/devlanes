@@ -8,7 +8,7 @@
 │   ● api-admin                                ││ ports     default 24100  mirrored here                               │
 │   · web-docs                                 ││                          last try: nothing on the box accepted it    │
 │   ● ext-build                                ││                          (connection refused)                        │
-│                                              ││ hosts     https://gateway.acme-4.localhost:8443                      │
+│                                              ││ hosts     https://gateway.acme4.localhost:8443                       │
 │ ▾ tasks                                    1 ││                                                                      │
 │   ■ migrate                            ended ││ Read-only here. On hetzner: ssh hetzner, then devlanes logs          │
 │                                              ││ acme@4:api-gateway                                                   │

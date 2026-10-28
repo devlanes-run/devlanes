@@ -6,7 +6,7 @@
 │   ● web-app                  ││                          (pid 9131), but its │
 │   ◉ wrk-email                ││                          hostnames still open│
 │   ● api-admin                ││                          it                  │
-│   · web-docs                 ││ hosts     https://app.acme-4.localhost:8443  │
+│   · web-docs                 ││ hosts     https://app.acme4.localhost:8443   │
 │   ● ext-build                ││                                              │
 │                              ││ Read-only here. On hetzner: ssh hetzner, then│
 │ ▾ tasks                    1 ││ devlanes logs acme@4:web-app                 │

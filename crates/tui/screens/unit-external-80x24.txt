@@ -8,7 +8,7 @@
 │   ⠋ migrate          running ││ connect mirror it while a lane of the project│
 │   · seed             not run ││ runs.                                        │
 │   · lint             not run ││                                              │
-│   · typecheck        not run ││ url       https://pgadmin.acme-1.localhost   │
+│   · typecheck        not run ││ url       https://pgadmin.acme1.localhost    │
 │   · test-e2e         not run ││ url       http://127.0.0.1:5050              │
 │   · codegen          not run ││                                              │
 │   · clean-cache      not run ││                                              │

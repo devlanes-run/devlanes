@@ -11,7 +11,7 @@
 │                              ││                          the box accepted it │
 │ ▾ tasks                    1 ││                          (connection refused)│
 │   ■ migrate            ended ││ hosts                                        │
-│                              ││   https://gateway.acme-4.localhost:8443      │
+│                              ││   https://gateway.acme4.localhost:8443       │
 │ ▾ infra                      ││                                              │
 │   ▾ containers          1 up ││ Read-only here. On hetzner: ssh hetzner, then│
 │     ● postgres               ││ devlanes logs acme@4:api-gateway             │

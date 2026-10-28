@@ -2,7 +2,7 @@
  lanes  ‹ 3 @1 4/8  4 @2  5 @3  6 @4 hetzner            1-9 or [ ] switch lanes
 ┌ @4 hetzner · 6/7 up ─────────┐┌ acme@4  running · 6 up ────────── on hetzner ┐
 │ ▾ services                 6 ││ box       hetzner · ssh · devlanes 0.9.2     │
-│   ● api-gateway              ││ domain    acme-4.localhost                   │
+│   ● api-gateway              ││ domain    acme4.localhost                    │
 │   ● web-app                  ││ services  5 of 6 up                          │
 │   ◉ wrk-email                ││           · web-docs         stopped         │
 │   ● api-admin                ││ tasks     1 ended                            │
@@ -11,9 +11,9 @@
 │                              ││ proxy     this machine serves its hostnames  │
 │ ▾ tasks                    1 ││           on 8443, but its URLs use 443      │
 │   ■ migrate            ended ││ urls                                         │
-│                              ││   https://gateway.acme-4.localhost:8443      │
-│ ▾ infra                      ││   https://app.acme-4.localhost:8443          │
-│   ▾ containers          1 up ││   https://docs.acme-4.localhost:8443         │
+│                              ││   https://gateway.acme4.localhost:8443       │
+│ ▾ infra                      ││   https://app.acme4.localhost:8443           │
+│   ▾ containers          1 up ││   https://docs.acme4.localhost:8443          │
 │     ● postgres               ││ syncs     ext-build  up to date, following   │
 │                              ││                      changes                 │
 │                              ││                                              │

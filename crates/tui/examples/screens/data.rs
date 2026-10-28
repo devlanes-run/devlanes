@@ -257,7 +257,7 @@ fn starting() -> LaneSummary {
         unit(reference, "stub-stripe", "ready", "service"),
         unit(reference, "setup.db", "exited", "task"),
         unit(reference, "migrate", "running", "task"),
-        external(reference, "pgadmin", 5050, Some("pgadmin.acme-1.localhost")),
+        external(reference, "pgadmin", 5050, Some("pgadmin.acme1.localhost")),
     ];
     units[6].role = Some("setup".into());
     units[6].exit_code = Some(0);
@@ -509,9 +509,9 @@ pub fn boxes() -> Value {
                 db,
             ],
             "routes": [
-                route("gateway.acme-4.localhost", "api-gateway", "ready"),
-                route("app.acme-4.localhost", "web-app", "ready"),
-                route("docs.acme-4.localhost", "web-docs", "idle"),
+                route("gateway.acme4.localhost", "api-gateway", "ready"),
+                route("app.acme4.localhost", "web-app", "ready"),
+                route("docs.acme4.localhost", "web-docs", "idle"),
             ],
             "skipped_lanes": [{"lane": "acme@0", "hosts": ["gateway.acme.localhost"], "box": null,
                                "reason": "acme@0 runs on this machine", "cause": "local_running",
@@ -530,16 +530,16 @@ pub fn boxes() -> Value {
             "registry": {
                 "lanes": [
                     {"key": key("acme", 0), "index": 0, "domain": "acme.localhost"},
-                    {"key": key("acme", 4), "index": 4, "domain": "acme-4.localhost"},
+                    {"key": key("acme", 4), "index": 4, "domain": "acme4.localhost"},
                 ],
                 "units": [
                     unit("acme", 0, "service", "api-gateway", "ready", port(24_000), host("gateway.acme.localhost", 24_000)),
                     unit("acme", 0, "service", "web-app", "ready", port(24_001), json!([])),
-                    unit("acme", 4, "service", "api-gateway", "ready", port(24_100), host("gateway.acme-4.localhost", 24_100)),
-                    unit("acme", 4, "service", "web-app", "ready", port(24_101), host("app.acme-4.localhost", 24_101)),
+                    unit("acme", 4, "service", "api-gateway", "ready", port(24_100), host("gateway.acme4.localhost", 24_100)),
+                    unit("acme", 4, "service", "web-app", "ready", port(24_101), host("app.acme4.localhost", 24_101)),
                     unit("acme", 4, "service", "wrk-email", "running", port(24_102), json!([])),
                     admin,
-                    unit("acme", 4, "service", "web-docs", "idle", port(24_104), host("docs.acme-4.localhost", 24_104)),
+                    unit("acme", 4, "service", "web-docs", "idle", port(24_104), host("docs.acme4.localhost", 24_104)),
                     unit("acme", 4, "service", "ext-build", "ready", port(24_105), host("ext.example.com", 24_105)),
                     unit("acme", 4, "task", "migrate", "exited", json!([]), json!([])),
                     unit("acme", 4, "container", "postgres", "running",

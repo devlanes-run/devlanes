@@ -24,7 +24,7 @@
 │     ● postgres                               ││ 10:43:34 GET /v1/orders/1238 200 7ms                                 │
 │     ● redis                                  ││ 10:43:45 GET /v1/orders/1255 200 3ms                                 │
 │   ▾ external                               1 ││ 10:43:56 GET /v1/orders/1272 200 4ms                                 │
-│     · pgadmin       pgadmin.acme-1.localhost ││ 10:43:07 GET /v1/orders/1289 200 5ms                                 │
+│     · pgadmin        pgadmin.acme1.localhost ││ 10:43:07 GET /v1/orders/1289 200 5ms                                 │
 │   ▸ setup                             1 done ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │
@@ -66,7 +66,7 @@
 23: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-57 dim, 79-81 color2, 119 darkgray
 24: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-57 dim, 79-81 color2, 119 darkgray
 25: 0 darkgray, 4-5 dim, 45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 119 darkgray
-26: 0 darkgray, 6-7 dim, 8-14 cyan, 22-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 119 darkgray
+26: 0 darkgray, 6-7 dim, 8-14 cyan, 23-45 dim, 47-48 darkgray, 50-57 dim, 79-81 color2, 119 darkgray
 27: 0 darkgray, 4-5 dim, 40-45 dim, 47-48 darkgray, 119 darkgray
 28: 0 darkgray, 47-48 darkgray, 119 darkgray
 29: 0 darkgray, 47-48 darkgray, 119 darkgray

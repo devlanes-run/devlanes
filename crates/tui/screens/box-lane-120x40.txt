@@ -2,7 +2,7 @@
  lanes  1 @0  2 @0 hetzner ○  3 @1 4/8  4 @2  5 @3  6 @4 hetzner                                1-9 or [ ] switch lanes
 ┌ @4 hetzner · 6/7 up ─────────────────────────┐┌ acme@4  running · 6 up ────────────────────────────────── on hetzner ┐
 │ ▾ services                                 6 ││ box       hetzner · ssh · devlanes 0.9.2                             │
-│   ● api-gateway                              ││ domain    acme-4.localhost                                           │
+│   ● api-gateway                              ││ domain    acme4.localhost                                            │
 │   ● web-app                                  ││ services  5 of 6 up                                                  │
 │   ◉ wrk-email                                ││           · web-docs         stopped                                 │
 │   ● api-admin                                ││ tasks     1 ended                                                    │
@@ -10,9 +10,9 @@
 │   ● ext-build                                ││ ports     4 of 5 mirrored here                                       │
 │                                              ││ proxy     this machine serves its hostnames on 8443, but its URLs use│
 │ ▾ tasks                                    1 ││           443                                                        │
-│   ■ migrate                            ended ││ urls      https://gateway.acme-4.localhost:8443                      │
-│                                              ││           https://app.acme-4.localhost:8443                          │
-│ ▾ infra                                      ││           https://docs.acme-4.localhost:8443                         │
+│   ■ migrate                            ended ││ urls      https://gateway.acme4.localhost:8443                       │
+│                                              ││           https://app.acme4.localhost:8443                           │
+│ ▾ infra                                      ││           https://docs.acme4.localhost:8443                          │
 │   ▾ containers                          1 up ││ syncs     ext-build  up to date, following changes                   │
 │     ● postgres                               ││                                                                      │
 │                                              ││ Read-only here. On hetzner: ssh hetzner, then devlanes status acme@4 │

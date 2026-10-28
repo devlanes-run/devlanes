@@ -11,7 +11,7 @@
 │                              ││                          (pid 9131), but its │
 │ ▾ tasks                    1 ││                          hostnames still open│
 │   ■ migrate            ended ││                          it                  │
-│                              ││ hosts     https://app.acme-4.localhost:8443  │
+│                              ││ hosts     https://app.acme4.localhost:8443   │
 │ ▾ infra                      ││           (pairing needed)                   │
 │   ▾ containers          1 up ││                                              │
 │     ● postgres               ││ Read-only here. On hetzner: ssh hetzner, then│

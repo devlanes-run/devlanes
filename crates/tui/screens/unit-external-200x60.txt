@@ -4,7 +4,7 @@
 │ ▾ services                                 6 ││ A server on port 5050 from infra.external. The proxy routes its hostnames there, and devlanes does not run it.                                       │
 │   ● api-gateway                              ││ Machines connected with devlanes remote connect mirror it while a lane of the project runs.                                                          │
 │   ⠋ api-orders                      starting ││                                                                                                                                                      │
-│   ⠋ api-users                       starting ││ url       https://pgadmin.acme-1.localhost                                                                                                           │
+│   ⠋ api-users                       starting ││ url       https://pgadmin.acme1.localhost                                                                                                            │
 │   … web-app            queued · next in line ││ url       http://127.0.0.1:5050                                                                                                                      │
 │   … wrk-email           queued · 2nd in line ││                                                                                                                                                      │
 │   ● stub-stripe                              ││                                                                                                                                                      │
@@ -24,7 +24,7 @@
 │     ● postgres                               ││                                                                                                                                                      │
 │     ● redis                                  ││                                                                                                                                                      │
 │   ▾ external                               1 ││                                                                                                                                                      │
-│     · pgadmin       pgadmin.acme-1.localhost ││                                                                                                                                                      │
+│     · pgadmin        pgadmin.acme1.localhost ││                                                                                                                                                      │
 │   ▸ setup                             1 done ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │

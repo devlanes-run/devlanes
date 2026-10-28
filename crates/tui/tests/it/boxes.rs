@@ -37,15 +37,15 @@ fn hosts() -> Value {
                  "conflicts": [{"holder": null,
                                 "message": "port 24110 is not mirrored because binding it on 127.0.0.1 failed: access denied"}]},
             ],
-            "routes": [{"host": "web.acme-1.localhost", "port": 24100, "lane": "acme@1",
-                        "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
+            "routes": [{"host": "web.acme1.localhost", "port": 24100, "lane": "acme@1",
+                        "unit": "web", "url": "https://web.acme1.localhost", "state": "ready"}],
             "skipped_lanes": [], "skipped_hosts": [], "syncs": [],
             "warnings": ["the box runs devlanes 0.0.1 and this machine X. Install the same release on both."],
             "registry": {
-                "lanes": [{"key": lane, "index": 1, "domain": "acme-1.localhost"}],
+                "lanes": [{"key": lane, "index": 1, "domain": "acme1.localhost"}],
                 "units": [
                     unit("service", "web", "ready", json!([{"name": "default", "port": 24100}]),
-                         json!([{"host": "web.acme-1.localhost", "port": 24100}])),
+                         json!([{"host": "web.acme1.localhost", "port": 24100}])),
                     unit("service", "worker", "running", json!([{"name": "default", "port": 24101}]), json!([])),
                     unit("task", "migrate", "running", json!([]), json!([])),
                     unit("container", "db", "running", json!([{"name": "5432", "port": 24110}]), json!([])),
@@ -169,13 +169,13 @@ async fn a_box_unit_shows_its_details_instead_of_a_terminal() -> TestResult {
     // The URL that opens it here is a link like every unit URL.
     assert!(
         app.link_targets()
-            .contains(&"https://web.acme-1.localhost".to_owned())
+            .contains(&"https://web.acme1.localhost".to_owned())
     );
     let effects = app.update(key(KeyCode::Char('o')));
     assert!(
         effects
             .iter()
-            .any(|e| matches!(e, Effect::OpenUrl(url) if url == "https://web.acme-1.localhost")),
+            .any(|e| matches!(e, Effect::OpenUrl(url) if url == "https://web.acme1.localhost")),
         "{effects:?}"
     );
     Ok(())
@@ -393,7 +393,7 @@ async fn sections_and_containers_of_a_box_lane_show_their_details() -> TestResul
     assert!(!acts(&effects), "{effects:?}");
     let text = screen_text(&draw(&app)?);
     assert!(text.contains("name    state     url"), "{text}");
-    assert!(text.contains("https://web.acme-1.localhost"), "{text}");
+    assert!(text.contains("https://web.acme1.localhost"), "{text}");
     assert!(!text.contains("memory"), "no metrics for box units: {text}");
     // Enter folds a section of a box lane as of any lane.
     app.update(key(KeyCode::Enter));
