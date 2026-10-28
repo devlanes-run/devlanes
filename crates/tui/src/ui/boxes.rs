@@ -819,7 +819,8 @@ fn render_hosts(app: &App, frame: &mut Frame, area: Rect) {
         }
         let start = lines.len();
         let (mut block, skipped_rows) = host_lines(app, host, width);
-        // The box's first line, or every line of its selected skipped lane.
+        // A wrapped skipped lane is one row for `j k` and `m`, so all of its
+        // lines show the selection.
         let rows = match app.boxes.lane {
             None => Some(0..1),
             Some(lane) => skipped_rows.get(lane).cloned(),
@@ -1380,7 +1381,12 @@ fn host_lines(
             .iter()
             .filter(|p| p.state.as_deref() == Some("bound"))
             .count();
-        let lanes = registry.lanes.len();
+        // A skipped lane is the box's but not mirrored; its row below says why.
+        let lanes = registry
+            .lanes
+            .iter()
+            .filter(|lane| host.skipped(&lane.key.reference()).is_none())
+            .count();
         let routes = host.routes.len();
         let ports = match host.ports.len() {
             0 => "no ports bound here".to_owned(),
@@ -1388,7 +1394,11 @@ fn host_lines(
             n => format!("{bound} of {n} ports bound here"),
         };
         let parts = [
-            format!("{lanes} {}", if lanes == 1 { "lane" } else { "lanes" }),
+            match lanes {
+                0 => "no lanes".to_owned(),
+                1 => "1 lane".to_owned(),
+                n => format!("{n} lanes"),
+            },
             ports,
             format!(
                 "{routes} {} routed",

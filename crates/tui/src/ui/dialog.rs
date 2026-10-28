@@ -600,7 +600,7 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
                 (
                     unmirrored(theme),
                     theme.quiet(),
-                    "not mirrored here, m uses it",
+                    "not in use here, m uses it",
                 ),
             ];
             let mut body = vec![Line::styled("glyphs", theme.quiet())];

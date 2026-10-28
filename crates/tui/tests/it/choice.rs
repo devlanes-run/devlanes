@@ -117,6 +117,8 @@ fn row(app: &devlanes_tui::app::App, y: u16) -> Result<String, Box<dyn std::erro
         .collect())
 }
 
+/// The lanes row: by number, this machine's lane first, then the boxes by
+/// name.
 #[tokio::test]
 async fn the_lanes_row_goes_by_number_with_this_machine_first_then_boxes_by_name() -> TestResult {
     let app = with_forks(120, 30).await;
@@ -148,6 +150,8 @@ async fn the_lanes_row_goes_by_number_with_this_machine_first_then_boxes_by_name
     Ok(())
 }
 
+/// A long box name is cut in its chip, and whole in the list's title where
+/// it fits.
 #[tokio::test]
 async fn a_long_box_name_is_cut_in_the_chip_and_whole_in_the_title() -> TestResult {
     let mut listing = forks();
@@ -224,6 +228,8 @@ async fn grey_chips_are_dim_and_marked_without_color() -> TestResult {
     Ok(())
 }
 
+/// `m` on a grey box lane sends `remote.use` for it, and the daemon's
+/// notice says it switched.
 #[tokio::test]
 async fn m_on_a_grey_box_lane_asks_the_daemon_to_use_it() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -517,6 +523,8 @@ async fn a_switch_from_another_client_shows_the_daemons_notice() {
     assert_eq!(notice(&app), "acme@1 now comes from this machine");
 }
 
+/// A reply that switched nothing gets a notice, since no `lane_switched`
+/// follows.
 #[tokio::test]
 async fn a_reply_that_switched_nothing_says_why() {
     let mut app = with_forks(120, 30).await;
@@ -537,6 +545,8 @@ async fn a_reply_that_switched_nothing_says_why() {
     assert_eq!(notice(&app), "fork-b's acme@1 is already in use");
 }
 
+/// `m` on this machine's lane that a chosen box lane took over sends
+/// `remote.use` with `host: null`.
 #[tokio::test]
 async fn m_on_a_yielded_local_lane_gives_the_hostnames_back_to_this_machine() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -698,6 +708,7 @@ async fn m_stops_this_machines_lane_after_a_confirm_then_switches() -> TestResul
     Ok(())
 }
 
+/// A stop the daemon refuses ends the stop and switch with its words.
 #[tokio::test]
 async fn a_failed_stop_ends_the_switch_with_the_daemons_words() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -732,6 +743,8 @@ async fn a_failed_stop_ends_the_switch_with_the_daemons_words() -> TestResult {
     Ok(())
 }
 
+/// A lane the daemon still counts as running after 30 seconds ends the
+/// stop and switch.
 #[tokio::test]
 async fn a_lane_the_daemon_keeps_counting_as_running_ends_the_switch() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -759,6 +772,7 @@ async fn a_lane_the_daemon_keeps_counting_as_running_ends_the_switch() -> TestRe
     Ok(())
 }
 
+/// `n` in the stop and switch dialog stops nothing and switches nothing.
 #[tokio::test]
 async fn n_keeps_this_machines_lane_running() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -819,6 +833,7 @@ async fn the_pane_names_the_lane_in_use_when_another_project_clashes() -> TestRe
     Ok(())
 }
 
+/// `m` on a lane already in use, or on one no box runs, only says so.
 #[tokio::test]
 async fn m_on_a_lane_in_use_only_says_so() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -840,6 +855,7 @@ async fn m_on_a_lane_in_use_only_says_so() -> TestResult {
     Ok(())
 }
 
+/// A refused `remote.use` shows the daemon's message.
 #[tokio::test]
 async fn a_refused_switch_shows_the_daemons_words() -> TestResult {
     let mut app = with_forks(120, 30).await;
@@ -910,6 +926,7 @@ async fn a_choice_for_a_box_that_is_not_connected_waits_for_it() {
     assert!(effects.iter().any(|e| matches!(e, Effect::FetchBoxes)));
 }
 
+/// A local lane that starts and clears a choice says so in one notice.
 #[tokio::test]
 async fn a_local_start_that_clears_a_choice_says_so() {
     let mut app = with_forks(120, 30).await;
@@ -949,6 +966,8 @@ async fn a_local_start_that_clears_a_choice_says_so() {
     );
 }
 
+/// The boxes view names the lane in use for each skipped lane, and the
+/// chosen lanes.
 #[tokio::test]
 async fn the_boxes_view_names_what_serves_a_skipped_lane_and_the_chosen_ones() -> TestResult {
     let mut app = with_forks(120, 40).await;

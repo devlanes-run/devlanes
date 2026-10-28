@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                           Monitor  Daemon  Boxes
+ devlanes  1 acme   2 billing   3 shop                                                Monitor  Daemon  Boxes · 2 issues
  lanes  1 @0 main ○  2 @0 fork-a  3 @0 fork-b ○  4 @1 feat/gift-cards                           1-9 or [ ] switch lanes
 ┌ @0 · not in use ─────────────────────────────┐┌ main @0 · not running ───────────────────────────────────────────────┐
 │ ▾ services                                 4 ││ ! fork-a's shop@0 is in use instead. Press m to use this one.        │
@@ -40,7 +40,7 @@
  m use this one   s start lane   S start all   p start with profiles   C clean lane               ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold, 104-107 dim, 108-118 yellow
 1: 0-6 dim, 7-19 bold reversed, 21-22 dim, 23-31 green, 34-46 dim, 49-68 dim, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 darkgray, 1-17 bold reversed, 18-48 darkgray, 50-53 bold, 57-70 dim, 72-119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray

@@ -1,4 +1,4 @@
- devlanes  1 acme x   2 billing !   3 shop *                                                                                                                                     Monitor  Daemon  Boxes
+ devlanes  1 acme x   2 billing !   3 shop *                                                                                                                          Monitor  Daemon  Boxes · 2 issues
  lanes  1 (@0 main)  2 @0 fork-a *  3 (@0 fork-b)  4 @1 feat/gift-cards -                                                                                                       1-9 or [ ] switch lanes
 + @0 fork-a · 2/2 up --------------------------++ shop@0  running · 2 up ------------------------------------------------------------------------------------------------------------------- on fork-a +
 | v services                                 2 || box       fork-a · ssh · devlanes 1.0.0                                                                                                              |
@@ -60,7 +60,7 @@
  o open in browser   [ ] switch lane   / filter   B boxes   read-only: manage it on fork-a (ssh fork-a)                                                                           ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-8 bold, 11-12 dim, 22-23 dim, 35-44 bold reversed, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
+0: 1-8 bold, 11-12 dim, 22-23 dim, 35-44 bold reversed, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold, 184-187 dim
 1: 0-6 dim, 8-18 dim, 20-34 bold reversed, 36-48 dim, 51-70 dim, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 dim, 1-20 bold reversed, 21-49 dim, 50-55 bold dim, 56-199 dim
 3: 0 dim, 2-3 dim, 45 dim, 47-48 dim, 50-59 dim, 199 dim

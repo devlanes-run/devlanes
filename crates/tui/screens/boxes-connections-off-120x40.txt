@@ -3,7 +3,7 @@
 │ ● hetzner                                                                                            connected · ssh │
 │   link      connected since 2026-10-14 15:32                                                                         │
 │   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999                                                  │
-│   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed                                                   │
+│   mirror    1 lane · 4 of 5 ports bound here · 3 hostnames routed                                                    │
 │   skipped   acme@0 also runs on this machine. Press m to stop it and use this one.                                   │
 │             ext.example.com (acme@4:ext-build): not under .localhost                                                 │
 │   syncs     acme@4:ext-build  up to date, following changes                                                          │

@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                                                                                                           Monitor  Daemon  Boxes
+ devlanes  1 acme   2 billing   3 shop                                                                                                                                Monitor  Daemon  Boxes · 2 issues
  lanes  1 @0 main ○  2 @0 fork-a  3 @0 fork-b ○  4 @1 feat/gift-cards                                                                                                           1-9 or [ ] switch lanes
 ┌ @0 fork-a · 2/2 up ──────────────────────────┐┌ shop@0  running · 2 up ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────── on fork-a ┐
 │ ▾ services                                 2 ││ box       fork-a · ssh · devlanes 1.0.0                                                                                                              │
@@ -60,7 +60,7 @@
  o open in browser   [ ] switch lane   / filter   B boxes   read-only: manage it on fork-a (ssh fork-a)                                                                           ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold, 184-187 dim, 188-198 yellow
 1: 0-6 dim, 8-18 dim, 20-32 bold reversed, 34-46 dim, 49-68 dim, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
 2: 0 darkgray, 1-20 bold reversed, 21-48 darkgray, 50-55 bold, 56-71 dim, 73-187 darkgray, 189-197 dim, 199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-59 dim, 199 darkgray

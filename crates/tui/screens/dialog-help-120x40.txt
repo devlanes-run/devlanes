@@ -1,82 +1,82 @@
- devla┌ keys ────────────────────────────────────────────────────────────────────────────────────────────────────┐Boxes
- lanes│ glyphs                                                                                                   │lanes
-┌ @0 ·│   ● ready (check passed)  ◉ running (no ready check)  z throttled         ❄ frozen                       │─────┐
-│ ▾ se│   · stopped, not run      ⠸ starting, stopping        … queued            ✕ failed                       │     │
-│   ● │   ◆ orphaned              ✓ task done                 ▍ the unit's color  ○ not mirrored here, m uses it │     │
-│   ● │                                                                                                          │     │
-│   ● │ list                                                                                                     │─────┤
-│   ● │   j k  up down      move; k from the top selects the lane                                                │k=40m│
-│   ● │   g G  t  i         the lane, the last row, the tasks, the infra                                         │     │
-│   ● │   h l               fold, unfold; h moves to the section                                                 │k=53m│
-│   ● │   enter  space      fold a section, or type into a running unit                                          │     │
-│   ● │   [ ]  1-9          previous, next lane; lane by its place in the bar                                    │k=66m│
-│   ● │   n N  e            next, previous problem; every error in full (or click it)                            │     │
-│   ● │   s  x  r           start, stop, restart the selection; s runs a task                                    │k=79m│
-│   ● │   s  S              on the lane: its default services; every service                                     │     │
-│   ● │   r                 on the lane: reload changes, else restart it                                         │k=92m│
-│   ● │   p  C              start the lane with profiles, clean it (asks first)                                  │     │
-│   · │   o                 open the unit's address in a browser                                                 │k=105│
-│   ● │   m                 use a grey lane instead of the one in use                                            │     │
-│   ◉ │   /                 filter by name or +tag; enter keeps, esc clears                                      │k=118│
-│   ◉ │                                                                                                          │     │
-│   ◉ │ pane                                                                                                     │k=131│
-│   ◉ │   enter, click      type into the unit                                                                   │     │
-│   ✕ │   esc  ctrl+]       stop typing (ctrl+] in full-screen programs)                                         │k=144│
-│   ◉ │   z                 zoom the pane                                                                        │     │
-│   ◉ │   pgup pgdn  wheel  scroll; older lines come from stored logs                                            │k=157│
-│   ◉ │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy                                    │     │
-│   ● │                                                                                                          │k=170│
-│   ● │ monitor (M)                                                                                              │     │
-│   ◆ │   ←→  < >           sort by the previous, next column                                                    │k=183│
-│   ● │   i                 reverse the sort                                                                     │     │
-│   ● │   /  e              filter, grouped or flat                                                              │k=196│
-│   ● │   h l  z            fold, unfold a lane; detail graphs fill the page                                     │     │
-│   ● │   c  m              cpu or memory in the big box (memory: a square per core)                             │k=209│
-│   ● │   s  x  r           start, stop, restart the unit or lane                                                │     │
-│   ● │   enter             open the unit in its project                                                         │     │
-│   ⠋ │                                                                                                          │     │
-│   ● │ …                                                                                                        │     │
-└─────│ any key closes                                                                                           │─────┘
- r res└──────────────────────────────────────────────────────────────────────────────────────────────────────────┘uit
+ devlan┌ keys ──────────────────────────────────────────────────────────────────────────────────────────────────┐ Boxes
+ lanes │ glyphs                                                                                                 │ lanes
+┌ @0 · │   ● ready (check passed)  ◉ running (no ready check)  z throttled         ❄ frozen                     │──────┐
+│ ▾ ser│   · stopped, not run      ⠸ starting, stopping        … queued            ✕ failed                     │      │
+│   ● G│   ◆ orphaned              ✓ task done                 ▍ the unit's color  ○ not in use here, m uses it │      │
+│   ● a│                                                                                                        │      │
+│   ● a│ list                                                                                                   │──────┤
+│   ● a│   j k  up down      move; k from the top selects the lane                                              │ok=40m│
+│   ● a│   g G  t  i         the lane, the last row, the tasks, the infra                                       │      │
+│   ● a│   h l               fold, unfold; h moves to the section                                               │ok=53m│
+│   ● a│   enter  space      fold a section, or type into a running unit                                        │      │
+│   ● a│   [ ]  1-9          previous, next lane; lane by its place in the bar                                  │ok=66m│
+│   ● a│   n N  e            next, previous problem; every error in full (or click it)                          │      │
+│   ● a│   s  x  r           start, stop, restart the selection; s runs a task                                  │ok=79m│
+│   ● w│   s  S              on the lane: its default services; every service                                   │      │
+│   ● w│   r                 on the lane: reload changes, else restart it                                       │ok=92m│
+│   ● w│   p  C              start the lane with profiles, clean it (asks first)                                │      │
+│   · w│   o                 open the unit's address in a browser                                               │ok=105│
+│   ● w│   m                 use a grey lane instead of the one in use                                          │      │
+│   ◉ w│   /                 filter by name or +tag; enter keeps, esc clears                                    │ok=118│
+│   ◉ w│                                                                                                        │      │
+│   ◉ w│ pane                                                                                                   │ok=131│
+│   ◉ w│   enter, click      type into the unit                                                                 │      │
+│   ✕ w│   esc  ctrl+]       stop typing (ctrl+] in full-screen programs)                                       │ok=144│
+│   ◉ w│   z                 zoom the pane                                                                      │      │
+│   ◉ w│   pgup pgdn  wheel  scroll; older lines come from stored logs                                          │ok=157│
+│   ◉ w│   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy                                  │      │
+│   ● s│                                                                                                        │ok=170│
+│   ● s│ monitor (M)                                                                                            │      │
+│   ◆ s│   ←→  < >           sort by the previous, next column                                                  │ok=183│
+│   ● s│   i                 reverse the sort                                                                   │      │
+│   ● s│   /  e              filter, grouped or flat                                                            │ok=196│
+│   ● s│   h l  z            fold, unfold a lane; detail graphs fill the page                                   │      │
+│   ● p│   c  m              cpu or memory in the big box (memory: a square per core)                           │ok=209│
+│   ● d│   s  x  r           start, stop, restart the unit or lane                                              │      │
+│   ● m│   enter             open the unit in its project                                                       │      │
+│   ⠋ m│                                                                                                        │      │
+│   ● c│ …                                                                                                      │      │
+└──────│ any key closes                                                                                         │──────┘
+ r rest└────────────────────────────────────────────────────────────────────────────────────────────────────────┘quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6-114 bold, 115-118 dim
-1: 0-5 dim, 6 bold, 8-13 dim, 113 bold, 114-119 dim
-2: 0 darkgray, 2-3 bold, 4-5 dim, 6 bold, 10-11 green, 34-35 green, 62-63 dim, 82-83 blue, 113 bold, 114-119 darkgray
-3: 0 darkgray, 2-3 dim, 6 bold, 10-11 dim, 62-63 dim, 82-83 red, 113 bold, 119 darkgray
-4: 0 darkgray, 4-5 green, 6 bold, 10-11 yellow, 34-35 green, 82-83 dim, 113 bold, 119 darkgray
-5: 0 darkgray, 4-5 green, 6 bold, 113 bold, 119 darkgray
-6: 0 darkgray, 4-5 green, 6 bold, 8-11 dim, 113 bold, 114-119 darkgray
-7: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-8: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-9: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-10: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-11: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-12: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-13: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-14: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-15: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-16: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-17: 0 darkgray, 4-5 dim, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-18: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-19: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-20: 0 darkgray, 4-5 green, 6 bold, 113 bold, 119 darkgray
-21: 0 darkgray, 4-5 green, 6 bold, 8-11 dim, 113 bold, 119 darkgray
-22: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-23: 0 darkgray, 1-5 reversed, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-24: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-25: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-26: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-27: 0 darkgray, 4-5 green, 6 bold, 113 bold, 119 darkgray
-28: 0 darkgray, 4-5 green, 6 bold, 8-18 dim, 113 bold, 119 darkgray
-29: 0 darkgray, 4-5 yellow, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-30: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-31: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-32: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-33: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-34: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-35: 0 darkgray, 4-5 green, 6 bold, 8-27 bold, 113 bold, 119 darkgray
-36: 0 darkgray, 6 bold, 113 bold, 119 darkgray
-37: 0 darkgray, 4-5 green, 6 bold, 8 dim, 113 bold, 119 darkgray
-38: 0-5 darkgray, 6 bold, 8-21 dim, 113 bold, 114-119 darkgray
-39: 1 bold, 2-5 dim, 6-113 bold, 114-119 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-112 bold, 114 bold, 115-118 dim
+1: 0-6 dim, 7 bold, 9-14 dim, 112 bold, 113-119 dim
+2: 0 darkgray, 2-3 bold, 4-6 dim, 7 bold, 11-12 green, 35-36 green, 63-64 dim, 83-84 blue, 112 bold, 113-119 darkgray
+3: 0 darkgray, 2-3 dim, 7 bold, 11-12 dim, 63-64 dim, 83-84 red, 112 bold, 119 darkgray
+4: 0 darkgray, 4-5 green, 6 blue, 7 bold, 11-12 yellow, 35-36 green, 83-84 dim, 112 bold, 119 darkgray
+5: 0 darkgray, 4-5 green, 6 blue, 7 bold, 112 bold, 119 darkgray
+6: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-12 dim, 112 bold, 113-119 darkgray
+7: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+8: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+9: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+10: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+11: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+12: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+13: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+14: 0 darkgray, 4-6 green, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+15: 0 darkgray, 4-6 green, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+16: 0 darkgray, 4-6 green, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+17: 0 darkgray, 4-5 dim, 6 dim green, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+18: 0 darkgray, 4-6 green, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+19: 0 darkgray, 4-5 green, 6 magenta, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+20: 0 darkgray, 4-5 green, 6 magenta, 7 bold, 112 bold, 119 darkgray
+21: 0 darkgray, 4-5 green, 6 magenta, 7 bold, 9-12 dim, 112 bold, 119 darkgray
+22: 0 darkgray, 4-5 green, 6 magenta, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+23: 0 darkgray, 1-6 reversed, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+24: 0 darkgray, 4-5 green, 6 magenta, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+25: 0 darkgray, 4-5 green, 6 magenta, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+26: 0 darkgray, 4-5 green, 6 magenta, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+27: 0 darkgray, 4-5 green, 6 darkgray, 7 bold, 112 bold, 119 darkgray
+28: 0 darkgray, 4-5 green, 6 darkgray, 7 bold, 9-19 dim, 112 bold, 119 darkgray
+29: 0 darkgray, 4-5 yellow, 6 darkgray, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+30: 0 darkgray, 4-5 green, 6 darkgray, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+31: 0 darkgray, 4-5 green, 6 darkgray, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+32: 0 darkgray, 4-5 green, 6 darkgray, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+33: 0 darkgray, 4-5 green, 6 cyan, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+34: 0 darkgray, 4-5 green, 6 cyan, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+35: 0 darkgray, 4-6 green, 7 bold, 9-28 bold, 112 bold, 119 darkgray
+36: 0 darkgray, 6 green, 7 bold, 112 bold, 119 darkgray
+37: 0 darkgray, 4-5 green, 6 dim blue, 7 bold, 9 dim, 112 bold, 119 darkgray
+38: 0-6 darkgray, 7 bold, 9-22 dim, 112 bold, 113-119 darkgray
+39: 1 bold, 2-6 dim, 7-112 bold, 113-119 dim

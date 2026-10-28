@@ -646,11 +646,40 @@ pub fn forks() -> Value {
         "box": "fork-a", "reason": "fork-a's shop@0 is in use",
         "cause": "box_chosen", "winner": "fork-a", "winner_lane": "shop@0", "can_use": true,
     }]);
-    json!({
+    let mut list = json!({
         "items": [chosen, other],
         "yielded_local_lanes": [{"lane": "shop@0", "winner": "fork-a"}],
         "truncated": false, "next_cursor": null,
-    })
+    });
+    range_overlaps(&mut list);
+    list
+}
+
+/// The `ports_range_overlap` warning each fork gets, in the daemon's words
+/// (`range_overlap` in `crates/daemon/src/remote/mod.rs`): every fork of
+/// one image has the same `ports.range`.
+fn range_overlaps(list: &mut Value) {
+    let Some(items) = list["items"].as_array_mut() else {
+        return;
+    };
+    let hosts: Vec<String> = items
+        .iter()
+        .filter_map(|item| item["host"].as_str().map(str::to_owned))
+        .collect();
+    for item in items.iter_mut() {
+        let Some(host) = item["host"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        let others: Vec<String> = hosts
+            .iter()
+            .filter(|other| **other != host)
+            .map(|other| format!("box {other} (31000-31999)"))
+            .collect();
+        item["warnings"] = json!([format!(
+            "box {host}'s ports.range 31000-31999 overlaps {}. Lanes both boxes run go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
+            others.join(" and ")
+        )]);
+    }
 }
 
 /// [`forks`] with a third fork and the long names VMs made from one image
@@ -688,6 +717,7 @@ pub fn long_forks() -> Value {
     {
         rename(&mut yielded["winner"], "fork-a", "clickmax-fork-a");
     }
+    range_overlaps(&mut list);
     list
 }
 

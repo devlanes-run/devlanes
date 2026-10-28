@@ -1509,7 +1509,8 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
             Span::raw(format!("{:<24} ", clip(&name, 24))),
         ];
         let mut summary = lane_summary(app, lane);
-        // Lanes that share hostnames: which one is live, and which are not.
+        // Lanes that share hostnames look alike in this table; only the
+        // mark tells which one a browser reaches.
         let mark = match app.grey(&lane.reference) {
             Some(grey) if grey.host.is_none() => Some(("not in use", theme.quiet())),
             Some(_) => Some(("not mirrored", theme.quiet())),

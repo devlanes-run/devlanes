@@ -6,7 +6,7 @@
 │             code from devlanes daemon pair on the box                        │
 │   fix       run devlanes daemon pair on hetzner, then press enter here       │
 │   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999          │
-│   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed           │
+│   mirror    1 lane · 4 of 5 ports bound here · 3 hostnames routed            │
 │   skipped   acme@0 also runs on this machine. Press m to stop it and use     │
 │             this one.                                                        │
 │             ext.example.com (acme@4:ext-build): not under .localhost         │

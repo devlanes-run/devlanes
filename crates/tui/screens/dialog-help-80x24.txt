@@ -5,7 +5,7 @@
 ││   · stopped, not run      ⠸ starting, stopping                             ││
 ││   … queued                ✕ failed                                         ││
 ││   ◆ orphaned              ✓ task done                                      ││
-││   ▍ the unit's color      ○ not mirrored here, m uses it                   │┤
+││   ▍ the unit's color      ○ not in use here, m uses it                     │┤
 ││                                                                            ││
 ││ list                                                                       ││
 ││   j k  up down      move; k from the top selects the lane                  ││

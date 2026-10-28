@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                   Monitor  Daemon  Boxes
+ devlanes  1 acme   2 billing   3 shop        Monitor  Daemon  Boxes · 2 issues
  lanes  1 @0  2 @0 fork-a ○  3 @0 fork-b ○  4 @1        1-9 or [ ] switch lanes
 ┌ @0 fork-b · not mirrored ────┐┌ shop@0  running · 2 up ─────────── on fork-b ┐
 │ ▾ services                 2 ││ ! Not mirrored. shop@0 runs on this machine. │
@@ -24,7 +24,7 @@
  m use this one   [ ] switch lane   / filter   B boxes    ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 57 bold, 58-63 dim, 66 bold, 67-71 dim, 74 bold, 75-78 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 46 bold, 47-52 dim, 55 bold, 56-60 dim, 63 bold, 64-67 dim, 68-78 yellow
 1: 0-6 dim, 8-9 dim, 10-11 green, 14-26 dim, 28-42 bold reversed, 44-47 dim, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
 2: 0 darkgray, 1-26 bold reversed, 27-32 darkgray, 34-39 bold, 40-55 dim, 57-67 darkgray, 69-77 dim, 79 darkgray
 3: 0 darkgray, 2-3 dim, 29 dim, 31-32 darkgray, 34-35 yellow, 79 darkgray
