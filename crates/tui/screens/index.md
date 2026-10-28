@@ -202,9 +202,17 @@ a box lane while this machine runs shop@0: grey, the pane says to stop the local
 - 120x40: [txt](lane-box-local-running-120x40.txt) · [png](lane-box-local-running-120x40.png) · [ansi](lane-box-local-running-120x40.ansi)
 - 80x24: [txt](lane-box-local-running-80x24.txt) · [png](lane-box-local-running-80x24.png) · [ansi](lane-box-local-running-80x24.ansi)
 
+## dialog-stop-and-switch
+
+m on fork-b's shop@0 while this machine runs shop@0: asks before stopping it, y stops it and switches
+
+- 200x60: [txt](dialog-stop-and-switch-200x60.txt) · [png](dialog-stop-and-switch-200x60.png) · [ansi](dialog-stop-and-switch-200x60.ansi)
+- 120x40: [txt](dialog-stop-and-switch-120x40.txt) · [png](dialog-stop-and-switch-120x40.png) · [ansi](dialog-stop-and-switch-120x40.ansi)
+- 80x24: [txt](dialog-stop-and-switch-80x24.txt) · [png](dialog-stop-and-switch-80x24.png) · [ansi](dialog-stop-and-switch-80x24.ansi)
+
 ## boxes-forks
 
-the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one with the lane in use and m
+the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one selected (j j), with the lane in use and m
 
 - 200x60: [txt](boxes-forks-200x60.txt) · [png](boxes-forks-200x60.png) · [ansi](boxes-forks-200x60.ansi)
 - 120x40: [txt](boxes-forks-120x40.txt) · [png](boxes-forks-120x40.png) · [ansi](boxes-forks-120x40.ansi)

@@ -21,12 +21,12 @@
 ┌ this machine ────────────────────────────────────────────────────────────────┐
 │ No other machine connects here yet. Press p for a pairing code.              │
 └──────────────────────────────────────────────────────────────────────────────┘
- enter disconnect   n new box   p pairing code            ? all keys   q quit
+ m use this one   n new box   p pairing code              ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 68 bold, 71 bold, 74-78 bold underlined
 1: 0-60 bold, 61-78 bold dim, 79 bold
-2: 0 bold, 2-3 reversed, 4-9 bold reversed, 10-77 reversed, 79 bold
+2: 0 bold, 2-3 green, 4-9 bold, 63-71 green, 72-77 dim, 79 bold
 3: 0 bold, 4-13 dim, 79 bold
 4: 0 bold, 4-13 dim, 79 bold
 5: 0 bold, 4-13 dim, 79 bold
@@ -36,7 +36,7 @@
 9: 0 bold, 4-13 dim, 79 bold
 10: 0 bold, 4-13 dim, 79 bold
 11: 0 bold, 4-13 dim, 79 bold
-12: 0 bold, 4-13 dim, 14-64 yellow, 79 bold
+12: 0 bold, 2-77 reversed, 79 bold
 13: 0 bold, 79 bold
 14: 0 bold, 79 bold
 15: 0 bold, 79 bold
@@ -47,4 +47,4 @@
 20: 0 darkgray, 1-14 bold, 15-79 darkgray
 21: 0 darkgray, 2-64 dim, 79 darkgray
 22: 0-79 darkgray
-23: 1-5 bold, 6-19 dim, 20 bold, 21-31 dim, 32 bold, 33-48 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim
+23: 1 bold, 2-17 dim, 18 bold, 19-29 dim, 30 bold, 31-46 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

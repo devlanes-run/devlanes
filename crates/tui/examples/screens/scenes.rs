@@ -639,11 +639,22 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "dialog-stop-and-switch",
+            what: "m on fork-b's shop@0 while this machine runs shop@0: asks before stopping it, y stops it and switches",
+            setup: |f| {
+                f.show_boxes(data::forks_local_running());
+                f.lane("shop@0 @fork-b");
+                f.key(KeyCode::Char('m'));
+            },
+        },
+        Scene {
             name: "boxes-forks",
-            what: "the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one with the lane in use and m",
+            what: "the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one selected (j j), with the lane in use and m",
             setup: |f| {
                 forks(f, data::forks);
                 f.shifted('B');
+                f.key(KeyCode::Char('j'));
+                f.key(KeyCode::Char('j'));
             },
         },
         Scene {
