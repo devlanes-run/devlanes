@@ -1654,10 +1654,12 @@ impl ContainerInfra {
         }
     }
 
-    /// Stats targets for compose services, one per running replica, with the
-    /// state `docker compose ps` reported for the service.
+    /// Stats targets for compose services of Compose project `project`, one
+    /// per running replica, with the state `docker compose ps` reported for
+    /// the service.
     fn compose_targets(
         targets: &mut Vec<InfraContainer>,
+        project: &str,
         containers: &BTreeMap<String, Vec<String>>,
         health: &BTreeMap<String, devlanes_infra_compose::Health>,
         shared: bool,
@@ -1668,6 +1670,7 @@ impl ContainerInfra {
                 name: service.clone(),
                 docker: docker.clone(),
                 shared,
+                compose_project: Some(project.to_owned()),
                 state: state.clone(),
             }));
         }
@@ -1689,6 +1692,7 @@ impl ContainerInfra {
                 container.scope,
             ),
             shared: container.scope == devlanes_infra_docker::Scope::Shared,
+            compose_project: None,
             state: state.map(str::to_owned),
         }));
     }
@@ -1809,7 +1813,13 @@ impl InfraProvider for ContainerInfra {
                 .await
                 .map_err(compose_error)?;
             Self::compose_namespace(&mut namespace, &shared.endpoints);
-            Self::compose_targets(&mut targets, &shared.containers, &shared.health, true);
+            Self::compose_targets(
+                &mut targets,
+                &shared.project,
+                &shared.containers,
+                &shared.health,
+                true,
+            );
             report.insert("shared".into(), json!(shared));
             self.watch_events(&shared.project);
         }
@@ -1845,6 +1855,7 @@ impl InfraProvider for ContainerInfra {
             Self::compose_namespace(&mut namespace, &lane_report.endpoints);
             Self::compose_targets(
                 &mut targets,
+                &lane_report.project,
                 &lane_report.containers,
                 &lane_report.health,
                 false,
@@ -1902,11 +1913,23 @@ impl InfraProvider for ContainerInfra {
         );
         if let Some(shared) = shared {
             Self::compose_namespace(&mut namespace, &shared.endpoints);
-            Self::compose_targets(&mut targets, &shared.containers, &shared.health, true);
+            Self::compose_targets(
+                &mut targets,
+                &shared.project,
+                &shared.containers,
+                &shared.health,
+                true,
+            );
         }
         if let Some(lane) = lane {
             Self::compose_namespace(&mut namespace, &lane.endpoints);
-            Self::compose_targets(&mut targets, &lane.containers, &lane.health, false);
+            Self::compose_targets(
+                &mut targets,
+                &lane.project,
+                &lane.containers,
+                &lane.health,
+                false,
+            );
         }
         if let Ok(containers) = Self::containers(spec) {
             Self::container_namespace(&mut namespace, &containers);

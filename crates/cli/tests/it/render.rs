@@ -2852,6 +2852,16 @@ fn lane_choice_warnings_say_how_to_switch() {
         line(skipped("local_running", Value::Null)),
         "warn fork-b: lane acme@0 is not mirrored because acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, then run devlanes remote use fork-b acme@0.\n"
     );
+    // `devlanes stop` leaves containers up, so the commands stop exactly the
+    // lane's own ones.
+    let mut held = skipped("local_running", Value::Null);
+    held["holds"] = json!("containers");
+    held["compose_project"] = json!("acme-lane0");
+    held["containers"] = json!(["devlanes-acme-lane0-cerbos"]);
+    assert_eq!(
+        line(held),
+        "warn fork-b: lane acme@0 is not mirrored because acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos, then run devlanes remote use fork-b acme@0.\n"
+    );
     // A switch someone asked for is a plain line, not a warning.
     assert_eq!(
         line(
@@ -2960,7 +2970,12 @@ fn remote_ls_names_the_lane_in_use() {
              "winner": "fork-b", "winner_lane": "clickmax@0", "can_use": true},
             {"lane": "shop@0", "hosts": ["shop.localhost"], "box": null,
              "reason": "shop@0 runs on this machine", "cause": "local_running",
-             "winner": null, "winner_lane": "shop@0", "can_use": false}]},
+             "winner": null, "winner_lane": "shop@0", "can_use": false,
+             "holds": "processes"},
+            {"lane": "blog@0", "hosts": ["blog.localhost"], "box": null,
+             "reason": "blog@0's containers run on this machine", "cause": "local_running",
+             "winner": null, "winner_lane": "blog@0", "can_use": false,
+             "holds": "containers", "compose_project": "blog-lane0", "containers": []}]},
         {"host": "fork-b", "state": "connected", "transport": "ssh", "ports": [],
          "chosen_lanes": ["clickmax@0"], "skipped_lanes": []},
     ], "yielded_local_lanes": [{"lane": "clickmax@0", "winner": "fork-b"}],
@@ -2969,6 +2984,7 @@ fn remote_ls_names_the_lane_in_use() {
     for expected in [
         "note: not mirrored because fork-b's clickmax@0 is in use. devlanes remote use fork-a clickmax@0 switches.",
         "note: not mirrored because shop@0 runs on this machine. Stop it with devlanes stop --lane shop@0, then run devlanes remote use fork-a shop@0.",
+        "note: not mirrored because blog@0's containers run on this machine. Stop them with docker compose -p blog-lane0 stop, then run devlanes remote use fork-a blog@0.",
         "chosen: clickmax@0",
         "note: fork-b's lane is in use instead. devlanes remote use --local clickmax@0 switches back.",
     ] {
@@ -2980,6 +2996,8 @@ fn remote_ls_names_the_lane_in_use() {
         "winner_lane",
         "chosen_lanes",
         "yielded",
+        "holds",
+        "compose_project",
     ] {
         assert!(!text.contains(hidden), "{hidden}: {text}");
     }
@@ -3018,6 +3036,14 @@ fn remote_use_refusals_say_what_to_do() {
             json!({"host": "fork-b", "lane": "clickmax@0", "local_lane": "clickmax@0", "message": "…"}),
             "clickmax@0 runs on this machine. Stop it with devlanes stop --lane clickmax@0, then run devlanes remote use fork-b clickmax@0.",
             "devlanes stop --lane clickmax@0",
+        ),
+        (
+            "local_lane_running",
+            json!({"host": "fork-b", "lane": "clickmax@0", "local_lane": "clickmax@0",
+                   "holds": "containers", "compose_project": "clickmax-lane0",
+                   "containers": ["devlanes-clickmax-lane0-cerbos"], "message": "…"}),
+            "clickmax@0's containers run on this machine. Stop them with docker compose -p clickmax-lane0 stop and docker stop devlanes-clickmax-lane0-cerbos, then run devlanes remote use fork-b clickmax@0.",
+            "docker compose -p clickmax-lane0 stop",
         ),
         (
             "local_lane_unknown",

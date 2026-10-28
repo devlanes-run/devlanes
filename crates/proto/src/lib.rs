@@ -263,7 +263,11 @@ pub enum Method {
     /// `remote.warning` notice with code `lane_switched`. Errors, each with a
     /// `message`: `box_unknown`, `lane_not_on_box` (the connected box has no
     /// such lane), `local_lane_running` (a running local lane, named by
-    /// `local_lane`, keeps the hostnames or has the same reference) and
+    /// `local_lane`, keeps the hostnames or has the same reference. Its
+    /// `holds` is `processes` when units run there, or `containers` when
+    /// only the lane's own containers do, with `compose_project` and the
+    /// plain `containers` by Docker name, so the message can name the
+    /// commands that stop them) and
     /// `local_lane_unknown` (`host: null` for a lane this machine does not
     /// have). Calls run one at a time, and never during `remote disconnect`.
     #[serde(rename = "remote.use")]
@@ -1337,7 +1341,9 @@ pub mod remote {
     /// `{host, code, ...}` for mirroring problems such as a skipped lane or a
     /// busy port. `lane_skipped` carries `lane`, `hosts`, `box`, `local_lanes`
     /// and `cause` (as `host.list`'s `skipped_lanes`), and goes out when a
-    /// lane stops being mirrored for another reason than a choice.
+    /// lane stops being mirrored for another reason than a choice. With
+    /// cause `local_running` it also has `holds`, and for `containers`
+    /// `compose_project` and `containers`, as `local_lane_running` has.
     /// `choice_cleared` carries `lane`, `host` (the box whose choice a
     /// starting local lane deleted, connected or not) and `local_lane`. `lane_switched` is a notice, not a
     /// problem: `lane`, `to` and `from` (boxes, null for this machine) and

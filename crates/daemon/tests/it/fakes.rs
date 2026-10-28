@@ -688,6 +688,7 @@ impl FakeInfra {
                 name: "db".into(),
                 docker: format!("{}-lane{}-db-{replica}", spec.project, spec.lane),
                 shared: false,
+                compose_project: Some(format!("{}-lane{}", spec.project, spec.lane)),
                 state: Some("healthy".into()),
             })
             .collect();
@@ -695,6 +696,7 @@ impl FakeInfra {
             name: "cache".into(),
             docker: format!("{}-cache-1", spec.project),
             shared: true,
+            compose_project: Some(spec.project.clone()),
             state: None,
         });
         containers

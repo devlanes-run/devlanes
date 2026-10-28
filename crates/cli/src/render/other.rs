@@ -2006,7 +2006,17 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
             let note = skipped_note(&host, skipped);
             if let Some(entry) = skipped.as_object_mut() {
                 // The note says all of these in words.
-                for key in ["box", "reason", "cause", "winner", "winner_lane", "can_use"] {
+                for key in [
+                    "box",
+                    "reason",
+                    "cause",
+                    "winner",
+                    "winner_lane",
+                    "can_use",
+                    "holds",
+                    "compose_project",
+                    "containers",
+                ] {
                     entry.remove(key);
                 }
                 entry.insert("note".into(), Value::String(note));
@@ -2065,10 +2075,12 @@ fn skipped_note(host: &str, skipped: &Value) -> String {
         Some(true) => {
             format!("not mirrored because {reason}. devlanes remote use {host} {lane} switches.")
         }
-        Some(false) => format!(
-            "not mirrored because {reason}. Stop it with devlanes stop --lane {}, then run devlanes remote use {host} {lane}.",
-            crate::shell_quote(&text(skipped, "winner_lane"))
-        ),
+        Some(false) => {
+            let (_, stop) = super::words::local_hold(skipped, &text(skipped, "winner_lane"));
+            format!(
+                "not mirrored because {reason}. {stop}, then run devlanes remote use {host} {lane}."
+            )
+        }
         // A daemon from before lane choices.
         None => format!("not mirrored because {reason}"),
     }

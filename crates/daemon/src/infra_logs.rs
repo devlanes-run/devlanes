@@ -647,6 +647,7 @@ mod tests {
             name: "db".into(),
             docker: docker.into(),
             shared: false,
+            compose_project: None,
             state: None,
         };
         let mut replicas = vec![

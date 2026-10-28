@@ -202,15 +202,27 @@ impl View {
 pub(super) fn skip_reason(skip: &Skip) -> String {
     let lane = &skip.winner_lane;
     match (skip.cause, &skip.winner) {
-        (Cause::LocalRunning, _) => format!("{lane} runs on this machine"),
+        (Cause::LocalRunning, _) => skip.hold.as_ref().map_or_else(
+            || format!("{lane} runs on this machine"),
+            |hold| hold.runs(lane),
+        ),
         (_, Some(winner)) => format!("{winner}'s {lane} is in use"),
         (_, None) => format!("this machine's {lane} is in use"),
     }
 }
 
+/// Adds what holds the running local lane's ports to a skipped lane's
+/// `fields`, when one is the cause: `holds`, and for containers
+/// `compose_project` and `containers`.
+fn add_hold(fields: &mut Value, skip: &Skip) {
+    if let (Some(hold), Some(fields)) = (&skip.hold, fields.as_object_mut()) {
+        fields.extend(hold.fields());
+    }
+}
+
 /// A skipped lane as `host.list` lists it.
 fn skip_json(lane: &LaneKey, skip: &Skip) -> Value {
-    json!({
+    let mut entry = json!({
         "lane": lane_ref(lane),
         "hosts": skip.hosts,
         "box": skip.winner,
@@ -219,7 +231,9 @@ fn skip_json(lane: &LaneKey, skip: &Skip) -> Value {
         "winner": skip.winner,
         "winner_lane": skip.winner_lane,
         "can_use": skip.cause != Cause::LocalRunning,
-    })
+    });
+    add_hold(&mut entry, skip);
+    entry
 }
 
 /// The link's state as the mirror sees it.
@@ -468,19 +482,18 @@ impl Mirror {
             let switched = skip.cause == Cause::BoxChosen || self.chosen.contains(&lane_ref(lane));
             if !self.skipped.contains_key(lane) && !switched {
                 tracing::warn!(host = %self.conn.name, lane = %lane_ref(lane), hosts = ?skip.hosts, winner = ?skip.winner, cause = skip.cause.as_str(), "lane skipped: another lane serves its hostnames");
-                engine.bus.emit(
-                    wire::WARNING_EVENT,
-                    json!({
-                        "host": self.conn.name,
-                        "code": "lane_skipped",
-                        "lane": lane_ref(lane),
-                        "hosts": skip.hosts,
-                        "box": skip.winner,
-                        "local_lanes": skip.local_lanes,
-                        "cause": skip.cause.as_str(),
-                        "winner_lane": skip.winner_lane,
-                    }),
-                );
+                let mut warning = json!({
+                    "host": self.conn.name,
+                    "code": "lane_skipped",
+                    "lane": lane_ref(lane),
+                    "hosts": skip.hosts,
+                    "box": skip.winner,
+                    "local_lanes": skip.local_lanes,
+                    "cause": skip.cause.as_str(),
+                    "winner_lane": skip.winner_lane,
+                });
+                add_hold(&mut warning, skip);
+                engine.bus.emit(wire::WARNING_EVENT, warning);
             }
         }
         self.skipped = skipped;

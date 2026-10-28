@@ -29,10 +29,83 @@ use super::mirror::below;
 pub(super) struct LocalLane {
     /// `project@index`.
     pub lane: String,
-    /// Whether any of its units runs.
+    /// Whether it holds its ports, so it wins over every box lane.
     pub running: bool,
+    /// What holds them while it runs.
+    pub hold: Option<Hold>,
     /// Its routed hostnames.
     pub hosts: BTreeSet<String>,
+}
+
+/// What keeps a running local lane's ports, which says how to free them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Hold {
+    /// Units or orphans run, or a start is under way: `devlanes stop --lane`
+    /// frees the ports.
+    Processes,
+    /// Only the lane's own containers are up, which `devlanes stop` leaves
+    /// running. `compose_project` is the lane's Compose project and
+    /// `containers` its plain containers, by Docker name.
+    Containers {
+        compose_project: Option<String>,
+        containers: Vec<String>,
+    },
+}
+
+impl Hold {
+    /// The `holds` value of `local_lane_running` and skipped lanes.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Processes => "processes",
+            Self::Containers { .. } => "containers",
+        }
+    }
+
+    /// `holds`, and for containers `compose_project` and `containers`, as
+    /// fields to merge into error data or a skipped lane.
+    pub(crate) fn fields(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut fields = serde_json::Map::new();
+        fields.insert("holds".into(), self.as_str().into());
+        if let Self::Containers {
+            compose_project,
+            containers,
+        } = self
+        {
+            fields.insert("compose_project".into(), compose_project.clone().into());
+            fields.insert("containers".into(), containers.clone().into());
+        }
+        fields
+    }
+
+    /// The commands that free the ports of local lane `lane`. Only the
+    /// lane's own containers: its Compose project holds no shared service,
+    /// and plain containers are named by Docker name.
+    pub(crate) fn stop_command(&self, lane: &str) -> String {
+        match self {
+            Self::Processes => format!("devlanes stop --lane {lane}"),
+            Self::Containers {
+                compose_project,
+                containers,
+            } => {
+                let mut commands = Vec::new();
+                if let Some(project) = compose_project {
+                    commands.push(format!("docker compose -p {project} stop"));
+                }
+                if !containers.is_empty() {
+                    commands.push(format!("docker stop {}", containers.join(" ")));
+                }
+                commands.join(" and ")
+            }
+        }
+    }
+
+    /// What runs, as the start of a sentence about local lane `lane`.
+    pub(crate) fn runs(&self, lane: &str) -> String {
+        match self {
+            Self::Processes => format!("{lane} runs on this machine"),
+            Self::Containers { .. } => format!("{lane}'s containers run on this machine"),
+        }
+    }
 }
 
 /// A connected box and its mirrorable lanes.
@@ -99,6 +172,9 @@ pub(crate) struct Skip {
     pub hosts: BTreeSet<String>,
     /// Local lanes that serve any of them.
     pub local_lanes: BTreeSet<String>,
+    /// What holds the ports of the running local lane in use, when that is
+    /// the cause.
+    pub hold: Option<Hold>,
 }
 
 /// What [`assign`] decided.
@@ -156,6 +232,7 @@ struct Candidate<'a> {
     owner: Owner<'a>,
     lane: &'a str,
     hosts: &'a BTreeSet<String>,
+    hold: Option<&'a Hold>,
 }
 
 /// Decides which lanes are mirrored, given this machine's `local` lanes, the
@@ -179,6 +256,7 @@ pub(super) fn assign(
             owner: Owner::Local,
             lane: &lane.lane,
             hosts: &lane.hosts,
+            hold: lane.hold.as_ref().filter(|_| lane.running),
         });
     }
     for host in boxes {
@@ -194,6 +272,7 @@ pub(super) fn assign(
                 owner: Owner::Box(&host.host),
                 lane,
                 hosts,
+                hold: None,
             });
         }
     }
@@ -267,6 +346,8 @@ pub(super) fn assign(
                         winner_lane: first.lane.to_owned(),
                         hosts,
                         local_lanes,
+                        hold: (cause == Cause::LocalRunning)
+                            .then(|| first.hold.cloned().unwrap_or(Hold::Processes)),
                     },
                 );
             }
@@ -387,8 +468,52 @@ mod tests {
         LocalLane {
             lane: lane.into(),
             running,
+            hold: running.then_some(Hold::Processes),
             hosts: names(hosts),
         }
+    }
+
+    /// A skip by a lane whose own containers run names them, and the
+    /// commands stop only those: the lane's Compose project and its plain
+    /// containers.
+    #[test]
+    fn a_lane_held_by_containers_says_how_to_stop_them() {
+        let hold = Hold::Containers {
+            compose_project: Some("acme-lane0".into()),
+            containers: vec!["devlanes-acme-lane0-cerbos".into()],
+        };
+        let mut lane = local("acme@0", true, WEB);
+        lane.hold = Some(hold.clone());
+        let got = assign(
+            &[lane],
+            &[on_box("fork-b", 1, &[("acme@0", WEB)])],
+            &chose(&[]),
+        );
+        let skip = got.skip("fork-b", "acme@0").expect("skipped");
+        assert_eq!(skip.hold.as_ref(), Some(&hold));
+        assert_eq!(
+            hold.stop_command("acme@0"),
+            "docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos"
+        );
+        assert_eq!(
+            hold.runs("acme@0"),
+            "acme@0's containers run on this machine"
+        );
+        assert_eq!(
+            Hold::Processes.stop_command("acme@0"),
+            "devlanes stop --lane acme@0"
+        );
+        let fields = hold.fields();
+        assert_eq!(fields["holds"], "containers");
+        assert_eq!(fields["compose_project"], "acme-lane0");
+        let compose_only = Hold::Containers {
+            compose_project: Some("acme-lane0".into()),
+            containers: Vec::new(),
+        };
+        assert_eq!(
+            compose_only.stop_command("acme@0"),
+            "docker compose -p acme-lane0 stop"
+        );
     }
 
     /// Box `host`, connected `serial`th, with `lanes` and their hostnames.

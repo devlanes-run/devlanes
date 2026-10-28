@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use super::{
     Remotes,
-    assign::{Assignment, BoxLanes, Cause, LocalLane, PortUse, assign, clashing_choices},
+    assign::{Assignment, BoxLanes, Cause, Hold, LocalLane, PortUse, assign, clashing_choices},
     mirror, now_ms,
 };
 use crate::{
@@ -40,24 +40,63 @@ impl Remotes {
 /// Whether a local lane holds its ports, so it wins over every box lane it
 /// clashes with: from the start of a start that passed its checks, while a
 /// unit or an orphan runs, and while its own containers are up. Shared
-/// containers of the project bind no port of the lane's block.
-pub(crate) fn holds_ports(st: &LaneSt) -> bool {
-    st.claiming > 0
-        || st.any_running()
-        || st
-            .infra_containers
-            .iter()
-            .any(|container| !container.shared)
+/// containers of the project bind no port of the lane's block. Returns what
+/// holds them.
+pub(crate) fn hold(st: &LaneSt) -> Option<Hold> {
+    if st.claiming > 0 || st.any_running() {
+        return Some(Hold::Processes);
+    }
+    let own: Vec<_> = st
+        .infra_containers
+        .iter()
+        .filter(|container| !container.shared && container_up(container.state.as_deref()))
+        .collect();
+    if own.is_empty() {
+        return None;
+    }
+    let compose_project = own
+        .iter()
+        .find_map(|container| container.compose_project.clone());
+    let mut containers: Vec<String> = own
+        .iter()
+        .filter(|container| container.compose_project.is_none())
+        .map(|container| container.docker.clone())
+        .collect();
+    containers.sort();
+    Some(Hold::Containers {
+        compose_project,
+        containers,
+    })
 }
 
-/// `local_lane_running`: this machine's `running` keeps box `host`'s `lane`
-/// from serving.
-fn local_running(host: &str, lane: &str, running: &str) -> RpcError {
+/// Whether a container in `state` binds its ports. A state nobody reported
+/// yet counts as down: a plain container listed from its spec may never have
+/// run, and refusing a choice for it would ask to stop what isn't there.
+fn container_up(state: Option<&str>) -> bool {
+    matches!(
+        state,
+        Some("running" | "starting" | "healthy" | "unhealthy" | "restarting" | "paused")
+    )
+}
+
+/// `local_lane_running`: this machine's `running`, held by `hold`, keeps
+/// box `host`'s `lane` from serving.
+fn local_running(host: &str, lane: &str, running: &str, hold: &Hold) -> RpcError {
+    let mut data = json!({"host": host, "lane": lane, "local_lane": running});
+    if let Some(fields) = data.as_object_mut() {
+        fields.extend(hold.fields());
+    }
+    let them = match hold {
+        Hold::Processes => "it",
+        Hold::Containers { .. } => "them",
+    };
     use_error(
         "local_lane_running",
-        json!({"host": host, "lane": lane, "local_lane": running}),
+        data,
         format!(
-            "{running} runs on this machine. Stop it with devlanes stop --lane {running}, then run devlanes remote use {host} {lane}."
+            "{}. Stop {them} with {}, then run devlanes remote use {host} {lane}.",
+            hold.runs(running),
+            hold.stop_command(running)
         ),
         1,
     )
@@ -207,18 +246,18 @@ impl Inner {
     }
 
     /// The assignment's inputs: this machine's lanes from `local`, counted
-    /// as running by [`holds_ports`], and every box whose link has not ended,
+    /// as running by [`hold`], and every box whose link has not ended,
     /// with the hostnames this machine would route and the ports of each of
     /// its lanes. A box lane counts only once the box's mirror built its
     /// routes, so a box that connects never wins a lane it has no routes for
     /// yet.
     fn assign_inputs(&self, local: &[RouteEntry]) -> (Vec<LocalLane>, Vec<BoxLanes>) {
-        let running: BTreeMap<String, bool> = self
+        let mut running: BTreeMap<String, Hold> = self
             .all_lanes()
             .iter()
-            .map(|(project, lane)| {
+            .filter_map(|(project, lane)| {
                 let st = lane.st();
-                (st.reference(&project.name()), holds_ports(&st))
+                Some((st.reference(&project.name()), hold(&st)?))
             })
             .collect();
         let mut hosts: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -230,10 +269,14 @@ impl Inner {
         }
         let lanes = hosts
             .into_iter()
-            .map(|(lane, hosts)| LocalLane {
-                running: running.get(&lane).copied().unwrap_or(false),
-                lane,
-                hosts,
+            .map(|(lane, hosts)| {
+                let hold = running.remove(&lane);
+                LocalLane {
+                    running: hold.is_some(),
+                    hold,
+                    lane,
+                    hosts,
+                }
             })
             .collect();
         let suffixes = mirror::route_suffixes(self);
@@ -489,8 +532,8 @@ impl Inner {
                 .any(|stored| stored.name == host);
             if known {
                 return match self.running_here(lane) {
-                    true => Err(local_running(host, lane, lane)),
-                    false => Ok(false),
+                    Some(hold) => Err(local_running(host, lane, lane, &hold)),
+                    None => Ok(false),
                 };
             }
             return Err(use_error(
@@ -518,8 +561,8 @@ impl Inner {
         // A running local lane of the same reference holds its ports even
         // when no hostname clashes, and the start that made it run cleared
         // any choice for it.
-        if self.running_here(lane) {
-            return Err(local_running(host, lane, lane));
+        if let Some(hold) = self.running_here(lane) {
+            return Err(local_running(host, lane, lane, &hold));
         }
         // A running local lane of another reference only wins where its
         // hostnames clash, which only the assignment with this choice tells.
@@ -531,16 +574,20 @@ impl Inner {
             .skip(host, lane)
             .filter(|skip| skip.cause == Cause::LocalRunning)
         {
-            return Err(local_running(host, lane, &skip.winner_lane));
+            let hold = skip.hold.clone().unwrap_or(Hold::Processes);
+            return Err(local_running(host, lane, &skip.winner_lane, &hold));
         }
         Ok(true)
     }
 
-    /// Whether this machine's lane `lane` holds its ports ([`holds_ports`]).
-    fn running_here(&self, lane: &str) -> bool {
-        self.all_lanes().iter().any(|(project, local)| {
+    /// What holds the ports of this machine's lane `lane`, if it holds them
+    /// ([`hold`]).
+    fn running_here(&self, lane: &str) -> Option<Hold> {
+        self.all_lanes().iter().find_map(|(project, local)| {
             let st = local.st();
-            st.reference(&project.name()) == lane && holds_ports(&st)
+            (st.reference(&project.name()) == lane)
+                .then(|| hold(&st))
+                .flatten()
         })
     }
 
@@ -562,5 +609,84 @@ impl Inner {
         if tokio::time::timeout(APPLY_WAIT, all).await.is_err() {
             tracing::debug!(version, "a mirror did not apply a lane choice in time");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::integrations::InfraContainer;
+
+    /// A container of the lane, in `state`, from Compose project `compose`.
+    fn container(
+        docker: &str,
+        shared: bool,
+        compose: Option<&str>,
+        state: Option<&str>,
+    ) -> InfraContainer {
+        InfraContainer {
+            name: docker.into(),
+            docker: docker.into(),
+            shared,
+            compose_project: compose.map(str::to_owned),
+            state: state.map(str::to_owned),
+        }
+    }
+
+    /// Only the lane's own containers that are up hold its ports, and the
+    /// refusal names the commands that stop exactly those. Shared
+    /// containers, stopped ones and ones nobody reported on count as down.
+    #[test]
+    fn a_lane_held_by_its_containers_names_them() {
+        let mut st = LaneSt::new("id".into(), "/repo".into(), None, true);
+        st.infra_containers = vec![
+            container("acme-cache-1", true, Some("acme"), Some("running")),
+            container(
+                "acme-lane0-old-1",
+                false,
+                Some("acme-lane0"),
+                Some("exited 0"),
+            ),
+            container("devlanes-acme-lane0-search", false, None, None),
+        ];
+        assert_eq!(hold(&st), None);
+        st.infra_containers.extend([
+            container(
+                "acme-lane0-db-1",
+                false,
+                Some("acme-lane0"),
+                Some("healthy"),
+            ),
+            container("devlanes-acme-lane0-cerbos", false, None, Some("running")),
+        ]);
+        let held = hold(&st).expect("held");
+        assert_eq!(
+            held,
+            Hold::Containers {
+                compose_project: Some("acme-lane0".into()),
+                containers: vec!["devlanes-acme-lane0-cerbos".into()],
+            }
+        );
+        let error = local_running("fork-b", "acme@0", "acme@0", &held);
+        assert_eq!(error.code, "local_lane_running");
+        assert_eq!(error.data["holds"], "containers");
+        assert_eq!(error.data["compose_project"], "acme-lane0");
+        assert_eq!(
+            error.data["containers"],
+            json!(["devlanes-acme-lane0-cerbos"])
+        );
+        assert_eq!(
+            error.data["message"],
+            "acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos, then run devlanes remote use fork-b acme@0."
+        );
+
+        st.claiming = 1;
+        let error = local_running("fork-b", "acme@0", "acme@0", &hold(&st).expect("held"));
+        assert_eq!(error.data["holds"], "processes");
+        assert!(error.data.get("compose_project").is_none());
+        assert_eq!(
+            error.data["message"],
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, then run devlanes remote use fork-b acme@0."
+        );
     }
 }

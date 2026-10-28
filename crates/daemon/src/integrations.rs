@@ -298,6 +298,9 @@ pub struct InfraContainer {
     pub docker: String,
     /// Shared project infra rather than the lane's own container.
     pub shared: bool,
+    /// The Compose project the container belongs to, as `docker compose -p`
+    /// takes it, or `None` for a plain `infra.containers` container.
+    pub compose_project: Option<String>,
     /// `ContainerSummary.state` as the provider last saw it; container events
     /// keep it current. `None` when the provider cannot tell.
     pub state: Option<String>,
