@@ -566,6 +566,42 @@ mod tests {
         assert_eq!(parse(&json!({})), Vec::<BoxHost>::new());
     }
 
+    /// `remote.use`'s fields: the chosen lanes, what wins over a skipped
+    /// lane, and this machine's lanes that gave way. Daemons without them
+    /// leave a skipped lane unusable and name the earlier box by `box`.
+    #[test]
+    fn choices_parse_with_what_wins_over_a_skipped_lane() {
+        let listed = json!({
+            "items": [{"host": "fork-b", "state": "connected", "chosen_lanes": ["acme@1"],
+                "skipped_lanes": [
+                    {"lane": "acme@0", "hosts": [], "box": "fork-a", "reason": "r",
+                     "cause": "box_chosen", "winner": "fork-a", "can_use": true},
+                    {"lane": "acme@2", "hosts": [], "box": null, "reason": "r",
+                     "cause": "local_running", "winner": null, "can_use": false},
+                    {"lane": "acme@3", "hosts": [], "box": "old", "reason": "r"},
+                ]}],
+            "yielded_local_lanes": [{"lane": "acme@0", "winner": "fork-a"}, {"winner": "x"}],
+        });
+        let host = &parse(&listed)[0];
+        assert!(host.chosen("acme@1") && !host.chosen("acme@0"));
+        let chosen = host.skipped("acme@0").map(|s| (s.served_by(), s.can_use));
+        assert_eq!(chosen, Some((Some("fork-a"), true)));
+        let running = host.skipped("acme@2").map(|s| (s.served_by(), s.can_use));
+        assert_eq!(running, Some((None, false)));
+        let older = host.skipped("acme@3").map(|s| (s.served_by(), s.can_use));
+        assert_eq!(older, Some((Some("old"), false)));
+        assert_eq!(
+            parse_yielded(&listed),
+            [YieldedLane {
+                lane: "acme@0".into(),
+                winner: "fork-a".into()
+            }]
+        );
+        assert!(parse_yielded(&json!({"items": []})).is_empty());
+        assert_eq!(host_of("acme@1 @me@gpu"), Some("me@gpu"));
+        assert_eq!(host_of("acme@1"), None);
+    }
+
     /// A box lane is labelled with the box, lists services and tasks as
     /// units and containers as infra, and opens through the routed URL first.
     #[test]

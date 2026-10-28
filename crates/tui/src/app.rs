@@ -1108,6 +1108,9 @@ pub struct Grey {
     /// The box whose lane serves the hostnames; `None` when this machine's
     /// lane does.
     pub winner: Option<String>,
+    /// The reference of the lane that serves them, on `winner` or here. It
+    /// is `lane` unless another project's lane clashes on a hostname.
+    pub serving: String,
     /// `m` can make it the one in use: false while this machine's lane runs,
     /// and on daemons without `remote.use`.
     pub can_use: bool,
@@ -2813,8 +2816,12 @@ impl App {
     pub fn grey(&self, reference: &str) -> Option<Grey> {
         if let Some((host, lane)) = self.box_lane(reference) {
             let skipped = host.skipped(&lane)?;
+            let winner = skipped.served_by();
             return Some(Grey {
-                winner: skipped.served_by().map(str::to_owned),
+                serving: self
+                    .serving_lane(winner, &skipped.hosts)
+                    .unwrap_or_else(|| lane.clone()),
+                winner: winner.map(str::to_owned),
                 lane,
                 host: Some(host.host.clone()),
                 can_use: skipped.can_use,
@@ -2823,14 +2830,55 @@ impl App {
             });
         }
         let yielded = self.boxes.yielded.iter().find(|y| y.lane == reference)?;
+        // `yielded_local_lanes` names the box only: its lane is the route
+        // there for one of this lane's hostnames, else the lane chosen for it.
+        let winner = self.boxes.hosts.iter().find(|h| h.host == yielded.winner);
+        let serving = winner.and_then(|winner| {
+            let local = self.lanes.iter().find(|l| l.reference == reference);
+            winner
+                .routes
+                .iter()
+                .find(|route| local.is_some_and(|local| serves_host(local, &route.host)))
+                .map(|route| route.lane.clone())
+                .or_else(|| {
+                    (winner.chosen_lanes.len() == 1).then(|| winner.chosen_lanes[0].clone())
+                })
+        });
         Some(Grey {
             lane: yielded.lane.clone(),
             host: None,
             winner: Some(yielded.winner.clone()),
+            serving: serving.unwrap_or_else(|| yielded.lane.clone()),
             can_use: true,
             cause: Some("box_chosen".into()),
             reason: String::new(),
         })
+    }
+
+    /// The lane that serves one of `hosts` instead of a skipped box lane:
+    /// box `winner`'s lane routed for one of them, or with no winner this
+    /// machine's lane that serves one.
+    pub fn serving_lane(&self, winner: Option<&str>, hosts: &[String]) -> Option<String> {
+        let Some(winner) = winner else {
+            return self.local_lane_serving(hosts);
+        };
+        self.boxes
+            .hosts
+            .iter()
+            .find(|host| host.host == winner)?
+            .routes
+            .iter()
+            .find(|route| hosts.iter().any(|h| h.eq_ignore_ascii_case(&route.host)))
+            .map(|route| route.lane.clone())
+    }
+
+    /// This machine's lane that serves one of `hosts`: a unit URL naming it,
+    /// or the lane's domain it falls under.
+    pub fn local_lane_serving(&self, hosts: &[String]) -> Option<String> {
+        self.lanes
+            .iter()
+            .find(|lane| hosts.iter().any(|host| serves_host(lane, host)))
+            .map(|lane| lane.reference.clone())
     }
 
     /// The box lane `reference` runs on, `None` for this machine's lanes.
@@ -4372,7 +4420,7 @@ impl App {
             let notice = if grey.cause.as_deref() == Some("local_running") {
                 format!(
                     "{} runs on this machine. Stop it there to use this one",
-                    grey.lane
+                    grey.serving
                 )
             } else {
                 "the daemon is too old to switch lanes. Upgrade it and restart it".to_owned()
@@ -7343,6 +7391,18 @@ fn log_query(lane: &str, unit: &str, cursor: Option<String>) -> LogQuery {
         styled: true,
         ..LogQuery::default()
     }
+}
+
+/// Whether `lane` serves hostname `host`: a unit URL names it, or it falls
+/// under the lane's domain.
+fn serves_host(lane: &LaneSummary, host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let under = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+    lane.units.iter().flat_map(|u| &u.urls).any(|url| {
+        url.strip_prefix("https://")
+            .and_then(|rest| rest.split([':', '/']).next())
+            .is_some_and(|named| named.eq_ignore_ascii_case(&host))
+    }) || lane.domain.as_deref().is_some_and(under)
 }
 
 /// Projects by name, lanes by index, unassigned lanes last; units sorted

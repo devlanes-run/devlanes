@@ -262,6 +262,49 @@ async fn m_is_refused_while_this_machine_runs_the_lane() -> TestResult {
     Ok(())
 }
 
+/// Another project's lane may clash on a hostname: the pane names the lane
+/// that serves it, found by that hostname.
+#[tokio::test]
+async fn the_pane_names_the_lane_in_use_when_another_project_clashes() -> TestResult {
+    let lane = json!({"key": {"project": "billing", "lane": "0"}, "index": 0});
+    let fork = |host: &str, skipped: Value, routes: Value| {
+        json!({"host": host, "state": "connected", "transport": "ssh",
+               "skipped_lanes": skipped, "routes": routes,
+               "registry": {"lanes": [lane], "units": []}})
+    };
+    let listing = json!({"items": [
+        fork("fork-a", json!([]), json!([{"host": "pay.billing.localhost", "lane": "shop@3",
+                                          "unit": "pay", "url": null, "state": "ready"}])),
+        fork("fork-b", json!([{"lane": "billing@0", "hosts": ["pay.billing.localhost"],
+                               "box": "fork-a", "reason": "r", "cause": "box_earlier",
+                               "winner": "fork-a", "can_use": true}]), json!([])),
+        fork("fork-c", json!([{"lane": "billing@0", "hosts": ["api.acme.localhost"],
+                               "box": null, "reason": "r", "cause": "local_running",
+                               "winner": null, "can_use": false}]), json!([])),
+    ]});
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 120, 30).await;
+    app.update(Msg::Boxes(Ok(listing)));
+    select(&mut app, Selected::lane("billing@0 @fork-b"));
+    let text = pane(&app)?;
+    assert!(
+        text.contains("Not mirrored. fork-a's shop@3 is in use."),
+        "{text}"
+    );
+    select(&mut app, Selected::lane("billing@0 @fork-c"));
+    let text = pane(&app)?;
+    assert!(
+        text.contains("Not mirrored. acme@0 runs on this machine."),
+        "{text}"
+    );
+    app.update(key(KeyCode::Char('m')));
+    assert_eq!(
+        notice(&app),
+        "acme@0 runs on this machine. Stop it there to use this one"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn m_on_a_lane_in_use_only_says_so() -> TestResult {
     let mut app = with_forks(120, 30).await;

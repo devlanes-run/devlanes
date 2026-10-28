@@ -201,17 +201,17 @@ fn notes(
 /// The first line of a grey lane's pane: what serves its hostnames instead
 /// and how to use this one. `None` from daemons without `remote.use`.
 pub(super) fn grey_note(grey: &Grey) -> Option<String> {
-    let lane = clean(&grey.lane);
+    let serving = clean(&grey.serving);
     match (grey.cause.as_deref()?, &grey.winner) {
         ("local_running", _) => Some(format!(
-            "Not mirrored. {lane} runs on this machine. Stop it there to use this one."
+            "Not mirrored. {serving} runs on this machine. Stop it there to use this one."
         )),
         (_, Some(winner)) if grey.can_use => Some(format!(
-            "Not mirrored. {}'s {lane} is in use. Press m to use this one.",
+            "Not mirrored. {}'s {serving} is in use. Press m to use this one.",
             clean(winner)
         )),
         (_, None) if grey.can_use => Some(format!(
-            "Not mirrored. {lane} on this machine is in use. Press m to use this one."
+            "Not mirrored. {serving} on this machine is in use. Press m to use this one."
         )),
         _ => None,
     }
@@ -220,20 +220,30 @@ pub(super) fn grey_note(grey: &Grey) -> Option<String> {
 /// A skipped lane's row in the boxes view after `acme@0: `: what serves its
 /// hostnames and how to use this box's lane instead. `None` from daemons
 /// without `remote.use`.
-fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
-    let lane = clean(&skipped.lane);
-    match (skipped.cause.as_deref()?, skipped.served_by()) {
-        ("local_running", _) => {
-            Some("the same lane runs on this machine. Stop it there to use this one.".to_owned())
-        }
-        (_, Some(winner)) if skipped.can_use => Some(format!(
-            "{}'s {lane} is in use. Press m on this box's lane to use it.",
-            clean(winner)
+fn skipped_words(app: &App, skipped: &crate::boxes::SkippedLane) -> Option<String> {
+    let cause = skipped.cause.as_deref()?;
+    let winner = skipped.served_by();
+    let serving = app
+        .serving_lane(winner, &skipped.hosts)
+        .unwrap_or_else(|| skipped.lane.clone());
+    // `acme@0: acme@0 runs on this machine` would name the lane twice.
+    let local = if serving == skipped.lane {
+        "the same lane".to_owned()
+    } else {
+        clean(&serving)
+    };
+    match (cause, winner) {
+        ("local_running", _) => Some(format!(
+            "{local} runs on this machine. Stop it there to use this one."
         )),
-        (_, None) if skipped.can_use => Some(
-            "the same lane on this machine is in use. Press m on this box's lane to use it."
-                .to_owned(),
-        ),
+        (_, Some(winner)) if skipped.can_use => Some(format!(
+            "{}'s {} is in use. Press m on this box's lane to use it.",
+            clean(winner),
+            clean(&serving)
+        )),
+        (_, None) if skipped.can_use => Some(format!(
+            "{local} on this machine is in use. Press m on this box's lane to use it."
+        )),
         _ => None,
     }
 }
@@ -242,30 +252,12 @@ fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
 /// hostnames when one does: local lanes win over every box, so that lane is
 /// the one to stop.
 fn skip_reason(app: &App, skipped: &crate::boxes::SkippedLane) -> String {
-    match local_owner(app, &skipped.hosts) {
+    match app.local_lane_serving(&skipped.hosts) {
         Some(local) if skipped.other.is_none() => {
             format!("{} on this machine serves its hostnames", clean(&local))
         }
         _ => clean(&skipped.reason),
     }
-}
-
-/// The local lane that serves one of `hosts`: a unit URL naming it, or the
-/// lane's domain it falls under.
-fn local_owner(app: &App, hosts: &[String]) -> Option<String> {
-    let serves = |lane: &LaneSummary, host: &str| {
-        let host = host.to_ascii_lowercase();
-        let under = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
-        lane.units.iter().flat_map(|u| &u.urls).any(|url| {
-            url.strip_prefix("https://")
-                .and_then(|rest| rest.split([':', '/']).next())
-                .is_some_and(|named| named.eq_ignore_ascii_case(&host))
-        }) || lane.domain.as_deref().is_some_and(under)
-    };
-    app.lanes
-        .iter()
-        .find(|lane| hosts.iter().any(|host| serves(lane, host)))
-        .map(|lane| lane.reference.clone())
 }
 
 /// The last lines of a box pane: `Read-only here.` and where to act instead.
@@ -1388,7 +1380,7 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
         let label = if index == 0 { "skipped" } else { "" };
         let lane = clean(&skipped.lane);
-        let text = match skipped_words(skipped) {
+        let text = match skipped_words(app, skipped) {
             Some(words) => format!("{lane}: {words}"),
             None => {
                 let reason = skip_reason(app, skipped);
