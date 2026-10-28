@@ -849,7 +849,8 @@ fn native(path: &str) -> Vec<u8> {
 
 #[tokio::test]
 /// Migration 011 keeps a shared name on the most recently started project and
-/// renames the others to `<name>-old<id>`. Earlier setup rows have no spec hash
+/// renames the others to `<name>-old<id>`, with a random suffix when another
+/// project already has that name. Earlier setup rows have no spec hash
 /// and earlier config rows read as `devlanes.yaml`. Its down script keys
 /// projects by repository again, keeping the oldest project of each.
 async fn migration_makes_project_names_unique_and_down_keys_by_repository() {
@@ -887,6 +888,19 @@ async fn migration_makes_project_names_unique_and_down_keys_by_repository() {
     let recent = insert("/test/b", Some(2));
     // Never started, so it loses even with the highest ID.
     let never = insert("/test/c", None);
+    // Already holds the name the older duplicate would get.
+    let taken = native("/test/d/.git");
+    let holder: i64 = diesel::insert_into(p::table)
+        .values((
+            p::name.eq(format!("acme-old{older}")),
+            p::identity.eq(taken.clone()),
+            p::common_dir.eq(Some(taken)),
+            p::root_path.eq(native("/test/d")),
+            p::primary_branch.eq("main"),
+        ))
+        .returning(p::id)
+        .get_result(&mut c)
+        .expect("project holding the old name");
     let worktree: i64 = diesel::insert_into(w::table)
         .values((
             w::project_id.eq(older),
@@ -928,12 +942,19 @@ async fn migration_makes_project_names_unique_and_down_keys_by_repository() {
         .into_iter()
         .map(|project| (project.id.0, project.name))
         .collect();
+    assert_eq!(names.len(), 4, "{names:?}");
+    let (id, collided) = &names[0];
+    assert_eq!(*id, older);
+    assert!(
+        collided.starts_with(&format!("acme-old{older}-")),
+        "{collided}"
+    );
     assert_eq!(
-        names,
+        names[1..],
         [
-            (older, format!("acme-old{older}")),
             (recent, "acme".to_owned()),
             (never, format!("acme-old{never}")),
+            (holder, format!("acme-old{older}")),
         ]
     );
     let kept = store
@@ -944,7 +965,7 @@ async fn migration_makes_project_names_unique_and_down_keys_by_repository() {
     assert_eq!(kept.id.0, recent);
     assert_eq!(kept.root_path, PathBuf::from("/test/b"));
     let renamed = store
-        .project_by_name(format!("acme-old{older}"))
+        .project_by_name(collided.clone())
         .await
         .expect("query")
         .expect("renamed");
@@ -998,6 +1019,7 @@ async fn migration_makes_project_names_unique_and_down_keys_by_repository() {
             (older, native("/test/a/.git")),
             (recent, native("/test/b/.git")),
             (never, native("/test/c/.git")),
+            (holder, native("/test/d/.git")),
         ]
     );
     c.run_pending_migrations(MIGRATIONS).expect("redo 011");
