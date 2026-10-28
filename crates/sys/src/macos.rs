@@ -645,23 +645,12 @@ mod tests {
         assert_ne!(u32::from(stat), libc::SZOMB);
     }
 
-    /// Whether the scheduling priority `ps` reports for `pid` is at most 4
-    /// (`MAXPRI_THROTTLE`), the background band's ceiling. `ps` shows the base
-    /// priority minus a CPU usage penalty that is only aged when the thread
-    /// runs again, so a sleeping process in the band can show less than 4, and
-    /// one out of it less than its normal base. `getpriority(PRIO_DARWIN_PROCESS)`
-    /// can't read the band back: XNU answers with the caller's own state
-    /// whatever PID is passed.
+    /// Whether `pid`'s base priority is at most 4 (`MAXPRI_THROTTLE`), the
+    /// background band's ceiling. `getpriority(PRIO_DARWIN_PROCESS)` can't read
+    /// the band back: XNU answers with the caller's own state whatever PID is
+    /// passed.
     fn in_band(pid: u32) -> bool {
-        let output = Command::new("/bin/ps")
-            .args(["-o", "pri=", "-p", &pid.to_string()])
-            .output()
-            .expect("run ps");
-        let priority: u32 = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse()
-            .expect("priority");
-        priority <= 4
+        crate::macos::base_priority(pid).expect("base priority") <= 4
     }
 
     /// A same-user child can be put in the background band and taken out again,

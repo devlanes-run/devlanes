@@ -52,7 +52,7 @@ mod macos {
         process::{Child, Command, Stdio},
         sync::mpsc,
         thread,
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use devlanes_core::{LaneId, ProcessIdentity, ProjectId};
@@ -274,19 +274,62 @@ mod macos {
         assert!(samples.is_empty(), "stale identity sampled: {samples:?}");
     }
 
+    /// Runs `ps -o time= -p <pid>` with a timeout and returns the CPU time it
+    /// reports. `ps` reads it with `task_info`, already in seconds, so it does not
+    /// depend on the mach timebase the collector converts.
+    fn ps_cpu_time(pid: u32) -> Duration {
+        let (send, receive) = mpsc::channel();
+        thread::spawn(move || {
+            let output = Command::new("/bin/ps")
+                .args(["-o", "time=", "-p", &pid.to_string()])
+                .output();
+            let _ = send.send(output);
+        });
+        let output = receive
+            .recv_timeout(COMMAND_TIMEOUT)
+            .expect("ps finished in time")
+            .expect("run ps");
+        assert!(output.status.success(), "ps failed: {output:?}");
+        // `[[hours:]minutes:]seconds.hundredths`
+        let seconds = String::from_utf8_lossy(&output.stdout)
+            .trim()
+            .split(':')
+            .map(|part| part.parse::<f64>().expect("ps time is numeric"))
+            .fold(0.0, |total, part| total * 60.0 + part);
+        Duration::from_secs_f64(seconds)
+    }
+
     pub fn busy_process_cpu_uses_converted_ticks() {
         let child = spawn("/usr/bin/yes", &[]);
-        let identity = process_identity(child.0.id()).expect("child identity");
+        let pid = child.0.id();
+        let identity = process_identity(pid).expect("child identity");
         let source = MacosSource::new().expect("source");
         let units = [target("busy", Vec::new(), vec![identity])];
+        let started = Instant::now();
         source.sample_blocking(&units, None).expect("first sample");
-        thread::sleep(Duration::from_millis(500));
+        let before = ps_cpu_time(pid);
+        // A loaded runner can give `yes` well under a core, so the window ends
+        // once it has used enough CPU for `ps`'s hundredths to be precise, not
+        // after a fixed time.
+        let deadline = Instant::now() + COMMAND_TIMEOUT * 2;
+        while ps_cpu_time(pid).saturating_sub(before) < Duration::from_millis(500) {
+            assert!(
+                Instant::now() < deadline,
+                "yes got too little CPU to measure"
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+        let elapsed = started.elapsed();
         let samples = source.sample_blocking(&units, None).expect("second sample");
-        let cpu = sample_for(&samples, identity.pid)
-            .expect("busy sampled")
-            .cpu_percent;
-        // One spinning thread: unconverted ticks would read about 41x too low or high.
-        assert!((10.0..=150.0).contains(&cpu), "cpu {cpu}%");
+        let used = ps_cpu_time(pid).saturating_sub(before);
+        let cpu = sample_for(&samples, pid).expect("busy sampled").cpu_percent;
+        let expected = used.as_secs_f64() / elapsed.as_secs_f64() * 100.0;
+        // Unconverted ticks would read about 41x too low on Apple Silicon.
+        let ratio = cpu / expected;
+        assert!(
+            (0.5..=2.0).contains(&ratio),
+            "collector {cpu}% vs ps {expected}% over {elapsed:?}"
+        );
     }
 
     /// The samples whose subject is [`Subject::Daemon`].

@@ -869,19 +869,15 @@ async fn throttle_round_trip() -> Result<(), Error> {
         let mut cleanup = Cleanup::default();
         cleanup.unit(&unit);
         let leader = unit.identity().pid;
-        // `ps` shows the scheduled priority: the base priority minus a CPU
-        // usage penalty that is only aged when the thread runs again. A
-        // sleeping leader keeps its startup penalty, so it can show less than
-        // `MAXPRI_THROTTLE` (4) in the band and less than its startup value
-        // after it; only which side of 4 it is on is reliable.
-        let in_band = || {
-            ps_column(&[leader], "pri")
-                .remove(&leader)
-                .and_then(|pri| pri.parse::<u32>().ok())
-                .map(|pri| pri <= 4)
-        };
 
-        if cfg!(target_os = "macos") {
+        #[cfg(target_os = "macos")]
+        {
+            // The base priority, not the one `ps` shows: that one subtracts a
+            // CPU usage penalty that is only recomputed when the thread runs, so
+            // a sleeping leader woken under load by the thaw could stay at or
+            // below 4 after leaving the band.
+            let in_band =
+                || devlanes_sys::macos::base_priority(leader).map(|priority| priority <= 4);
             assert_eq!(in_band(), Some(false));
             unit.set_power(Power::Throttled).await?;
             eventually(|| async { in_band() == Some(true) }).await;
@@ -892,7 +888,9 @@ async fn throttle_round_trip() -> Result<(), Error> {
             eventually(|| async { in_band() == Some(true) }).await;
             unit.set_power(Power::Normal).await?;
             eventually(|| async { in_band() == Some(false) }).await;
-        } else {
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
             assert!(matches!(
                 unit.set_power(Power::Throttled).await,
                 Err(Error::Unsupported(_))
