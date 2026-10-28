@@ -829,7 +829,8 @@ impl Inner {
     }
 
     /// Computes `moves_to` for every assigned lane (applied at its next start).
-    /// Under CI a lane that holds lane 0 keeps it on any branch.
+    /// Under CI a lane that holds lane 0 keeps it on any branch, and no lane on
+    /// the primary branch moves onto it.
     pub(crate) fn update_moves(&self, project: &ProjectRt) {
         let primary = project.st().primary_branch.clone();
         let lanes = project.lanes();
@@ -848,6 +849,7 @@ impl Inner {
             let on_primary = st.branch.as_deref() == Some(primary.as_str());
             st.moves_to = match (on_primary, index) {
                 (true, 0) | (false, 1..) => None,
+                (true, _) if self.opts.ci && used.contains(&0) => None,
                 (true, _) => Some(0),
                 (false, 0) if self.opts.ci => None,
                 (false, 0) => Some(free),

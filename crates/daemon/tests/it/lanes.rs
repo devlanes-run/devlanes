@@ -542,6 +542,99 @@ async fn a_detached_checkout_takes_lane_zero_under_ci() {
     .expect("timeout");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+/// Under CI the checkout keeps lane 0: a second worktree on the primary branch
+/// gets lane 1 and no pending move, and starting it renumbers nothing.
+async fn under_ci_a_primary_branch_worktree_leaves_the_checkout_on_lane_zero() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        git(&main, &["checkout", "-q", "--detach"]);
+        let second = tmp.path.join("wt-main");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                &second.display().to_string(),
+                "main",
+            ],
+        );
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                ci: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start the checkout");
+        h.call(Method::Start, json!({}), cx(&second))
+            .await
+            .expect("start the second worktree");
+        let checkout = lane_at(&h, &main, &main).await;
+        let other = lane_at(&h, &main, &second).await;
+        assert_eq!((checkout.index, checkout.moves_to), (Some(0), None));
+        assert_eq!((other.index, other.moves_to), (Some(1), None));
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// Under CI an extra lane of a folder never takes lane 0, even once it is free.
+async fn under_ci_an_extra_lane_never_takes_lane_zero() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        git(&main, &["checkout", "-q", "--detach"]);
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                ci: true,
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::LaneNew, json!({"name": "second"}), cx(&main))
+            .await
+            .expect("lane new");
+        let extra = |lanes: Vec<LaneSummary>| {
+            lanes
+                .into_iter()
+                .find(|lane| lane.name.as_deref() == Some("second"))
+                .expect("the extra lane")
+        };
+        let second = extra(lanes(&h, &main).await);
+        assert_eq!((second.index, second.moves_to), (Some(1), None));
+        // With the checkout's lane gone, lane 0 is free; the extra lane stays.
+        let yes = Context {
+            yes: true,
+            ..cx(&main)
+        };
+        h.call(Method::LaneClean, json!({}), yes)
+            .await
+            .expect("clean the checkout's lane");
+        let second = Context {
+            lane: Some("second".into()),
+            ..cx(&main)
+        };
+        h.call(Method::Start, json!({}), second)
+            .await
+            .expect("start the extra lane");
+        let second = extra(lanes(&h, &main).await);
+        assert_ne!(second.index, Some(0), "{second:?}");
+        assert_eq!(second.moves_to, None);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 /// One web service in a two-port block.
 const SMALL: &str = "project: demo\nlanes: { block_size: 2 }\nservices:\n  web: { run: sleep, ready: started, hosts: [\"web.${{ lane.domain }}\"] }\n";
 
