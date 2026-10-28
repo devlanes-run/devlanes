@@ -24,7 +24,7 @@
 │   fix       enter signs in again                                                                                                                                                                     │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                            ┌ disconnect hetzner ────────────────────────┐                                                                            │
+│                                                                            ┌────────────────────────────────────────────┐                                                                            │
 │                                                                            │ Disconnect hetzner?                        │                                                                            │
 │                                                                            │                                            │                                                                            │
 │                                                                            │ Its ports and hostnames stop working here. │                                                                            │

@@ -41,7 +41,7 @@ async fn the_engine_goes_idle_after_the_last_subscriber_with_nothing_running() {
         )
         .await;
         let wait = Duration::from_millis(800);
-        // Never watched: a daemon only commands used stays.
+        // Never watched: a daemon only commands used stays for ten grace periods.
         assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());
         h.call(Method::Start, json!({}), cx(&main))
             .await
@@ -60,6 +60,52 @@ async fn the_engine_goes_idle_after_the_last_subscriber_with_nothing_running() {
         // A subscriber keeps it up again.
         let _watching = h.engine.subscribe();
         assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A daemon no subscriber ever watched still goes idle, after ten grace
+/// periods with nothing running instead of one.
+async fn an_unwatched_engine_goes_idle_after_a_longer_wait() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(
+            &tmp.path,
+            "r",
+            "project: quiet\nservices:\n  api: { run: sleep }\n",
+        );
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                idle_exit: Some(Duration::from_millis(200)),
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        // Running units keep it up however long nobody watches.
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), h.engine.idle())
+                .await
+                .is_err()
+        );
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        let stopped = tokio::time::Instant::now();
+        tokio::time::timeout(Duration::from_secs(10), h.engine.idle())
+            .await
+            .expect("idle once the lane stopped");
+        assert!(
+            stopped.elapsed() >= Duration::from_millis(1800),
+            "waited {:?}",
+            stopped.elapsed()
+        );
         h.close().await;
     })
     .await

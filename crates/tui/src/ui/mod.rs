@@ -1141,7 +1141,23 @@ fn hints(app: &App) -> Vec<Hint> {
                 crate::app::DaemonBox::Log => ("tab", "to checks", KeyCode::Tab),
                 crate::app::DaemonBox::Checks => ("tab", "to log", KeyCode::Tab),
             };
-            let mut hints = vec![
+            // Down, the page is only the log: no checks, nothing to restart or stop.
+            if app.daemon_down() {
+                let mut hints = vec![
+                    ("j k", "scroll", ch('k')),
+                    follow,
+                    ("w", "level", ch('w')),
+                    ("/", "filter", ch('/')),
+                    ("T", "targets", ch('T')),
+                    ("c", "copy", ch('c')),
+                    fold,
+                ];
+                if app.daemon.busy.is_none() && app.connection != crate::app::Connection::Online {
+                    hints.insert(0, ("s", "start daemon", ch('s')));
+                }
+                return hints;
+            }
+            return vec![
                 ("j k", "scroll", ch('k')),
                 follow,
                 ("w", "level", ch('w')),
@@ -1154,12 +1170,6 @@ fn hints(app: &App) -> Vec<Hint> {
                 ("R", "restart", ch('R')),
                 ("S", "stop", ch('S')),
             ];
-            // Stopped, starting it is what matters: first, and S no longer stops.
-            if app.daemon.stopped {
-                hints.pop();
-                hints.insert(0, ("S", "start daemon", ch('S')));
-            }
-            return hints;
         }
         View::Boxes => {
             let mut hints = Vec::new();

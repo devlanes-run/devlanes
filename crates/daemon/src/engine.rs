@@ -19,7 +19,7 @@ use devlanes_core::{
     LaneId, ProjectId,
     refs::{LaneCandidate, LaneRef, ReferenceError, ResolveContext, UnitRef},
 };
-use devlanes_proto::{Context, Method, Request, RpcError};
+use devlanes_proto::{Context, Method, Request, RpcError, events};
 use devlanes_state::Store;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -50,13 +50,18 @@ pub struct EngineOptions {
     /// Release checks (see `update`); never downloads or installs anything.
     pub update_check: crate::update::UpdateCheckOptions,
     /// Exit this long after the last event subscriber (a TUI) left while
-    /// nothing runs; `None` keeps the daemon up. Only for a daemon a client
-    /// spawned: a service manager would not start it again.
+    /// nothing runs, or [`UNWATCHED_IDLE_FACTOR`] times longer when none ever
+    /// came; `None` keeps the daemon up. Only for a daemon a client spawned:
+    /// a service manager would not start it again.
     pub idle_exit: Option<Duration>,
     /// Lane activity shared with the proxy, which records requests in it and
     /// waits on it for frozen lanes to thaw.
     pub idle: Arc<crate::idle::IdleBoard>,
 }
+
+/// A daemon only commands used waits this many idle grace periods before it
+/// exits: five minutes with the default 30 seconds.
+pub const UNWATCHED_IDLE_FACTOR: u32 = 10;
 
 impl EngineOptions {
     /// Options rooted at `home` with the documented layout and defaults.
@@ -200,6 +205,12 @@ impl Handler for Engine {
         // Usually the server's token already fired; an embedder may call this
         // directly. Either way, new mutations and spawns are refused from here on.
         self.inner.shutdown.cancel();
+        // Subscribers stay connected until everything stopped, which can take
+        // a while; this tells them the daemon is going away meanwhile.
+        self.inner.bus.emit(
+            events::DAEMON_STOPPING,
+            json!({"reason": request.reason.as_str(), "processes": self.managed_processes()}),
+        );
         self.inner.remote_shutdown().await;
         let hooks = (request.reason == ShutdownReason::Explicit).then_some(&request.interrupt);
         let (stopped, tasks) = self.inner.stop_everything(hooks).await;
@@ -220,8 +231,10 @@ impl Handler for Engine {
         }))
     }
 
-    /// With `idle_exit`, resolves once a subscriber was seen, none is left,
-    /// and nothing ran or was in flight for the whole grace period.
+    /// With `idle_exit`, resolves once no subscriber is left and nothing ran
+    /// or was in flight for the whole grace period. A daemon no subscriber
+    /// (a TUI) ever watched waits [`UNWATCHED_IDLE_FACTOR`] times longer: only
+    /// commands used it, and the next one may follow soon.
     async fn idle(&self) {
         let Some(grace) = self.inner.opts.idle_exit else {
             return std::future::pending().await;
@@ -235,12 +248,17 @@ impl Handler for Engine {
                 quiet_since = None;
                 continue;
             }
-            if !self.inner.watched.load(Ordering::Relaxed) || !self.inner.is_idle() {
+            if !self.inner.is_idle() {
                 quiet_since = None;
                 continue;
             }
+            let wait = if self.inner.watched.load(Ordering::Relaxed) {
+                grace
+            } else {
+                grace * UNWATCHED_IDLE_FACTOR
+            };
             let since = *quiet_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= grace {
+            if since.elapsed() >= wait {
                 return;
             }
         }

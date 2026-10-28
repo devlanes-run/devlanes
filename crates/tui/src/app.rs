@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use devlanes_client::restart::RunningLane;
 use devlanes_proto::{
     ActorKind, AttachResult, Event, LaneSummary, LogLine, LogQuery, Method, ORPHANED, Page,
     RpcError, RunParams, Selection, UnitSummary, events,
@@ -182,6 +183,19 @@ pub struct DaemonView {
     pub busy: Option<&'static str>,
     /// Set after this TUI stopped the daemon, until one is reachable again.
     pub stopped: bool,
+    /// Ticks since the daemon went out of reach ([`App::daemon_down`]).
+    pub down_ticks: u32,
+    /// The daemon said it is shutting down (`daemon.stopping`), with the
+    /// processes it stops first; until a daemon answers a new subscription.
+    pub stopping: Option<u64>,
+    /// Ticks the connection has been reconnecting, so a blip that heals
+    /// before the next tick does not swap the page.
+    reconnecting_ticks: u32,
+    /// [`App::daemon_down`] at the end of the last update, to act once on a change.
+    was_down: bool,
+    /// The view the TUI left for the daemon page when the daemon went down,
+    /// opened again once it answers.
+    view_before_down: Option<View>,
     /// Facts and log failures repeat every refresh; only a change is reported.
     last_error: Option<String>,
     ticks: u8,
@@ -1486,6 +1500,8 @@ impl App {
                     self.starts.reset();
                 }
                 self.connection = Connection::Online;
+                self.daemon.reconnecting_ticks = 0;
+                self.daemon.stopping = None;
                 // Someone may have started the daemon this TUI stopped.
                 self.daemon.stopped = false;
                 effects.push(Effect::Refresh);
@@ -1932,18 +1948,28 @@ impl App {
             Msg::Spin => self.spin = self.spin.wrapping_add(1),
             Msg::DaemonRestarted(result) | Msg::DaemonStarted(result) => {
                 let verb = if self.daemon.busy == Some("restarting") {
+                    // The first q of a restart only warned.
+                    self.quitting = false;
                     "restart"
                 } else {
                     "start"
                 };
                 self.daemon.busy = None;
                 match result {
-                    Ok(status) => {
+                    Ok(mut status) => {
+                        let resume = status
+                            .as_object_mut()
+                            .and_then(|status| status.remove("resume"))
+                            .and_then(|resume| {
+                                serde_json::from_value::<Vec<RunningLane>>(resume).ok()
+                            })
+                            .unwrap_or_default();
                         self.daemon.stopped = false;
                         self.daemon.status = Some(status);
                         self.set_notice(format!("daemon {verb}ed"));
                         // Reconnect now instead of waiting for the next backoff step.
                         effects.extend([Effect::Subscribe, Effect::Refresh, Effect::FetchDaemon]);
+                        self.resume_lanes(resume, &mut effects);
                     }
                     Err(error) => {
                         self.api_error(&format!("{verb} the daemon"), None, error, &mut effects);
@@ -1951,7 +1977,81 @@ impl App {
                 }
             }
         }
+        self.follow_daemon_down(&mut effects);
         effects
+    }
+
+    /// The daemon is out of reach: this TUI is restarting, stopping or
+    /// starting it, stopped it, or lost it for at least one tick. Lanes
+    /// and facts on screen are stale then, and no action reaches it.
+    pub fn daemon_down(&self) -> bool {
+        matches!(
+            self.daemon.busy,
+            Some("restarting" | "stopping" | "starting")
+        ) || self.daemon.stopped
+            || self.daemon.stopping.is_some()
+            || (matches!(self.connection, Connection::Reconnecting { .. })
+                && self.daemon.reconnecting_ticks > 0)
+    }
+
+    /// When the daemon goes down, opens the daemon page, whose log shows
+    /// what happens meanwhile, following it; when it answers again, goes back
+    /// to the view that was open.
+    fn follow_daemon_down(&mut self, effects: &mut Vec<Effect>) {
+        let down = self.daemon_down();
+        if down == self.daemon.was_down {
+            return;
+        }
+        self.daemon.was_down = down;
+        if down {
+            self.daemon.down_ticks = 0;
+            // The checks box is hidden while the daemon is down.
+            self.daemon.focus = DaemonBox::Log;
+            self.daemon.checks_copy = None;
+            self.daemon_follow();
+            if self.view != View::Daemon {
+                self.daemon.view_before_down = Some(self.view);
+                // Nothing reaches a unit now; keys must not go to a dead terminal.
+                self.focus = Focus::List;
+                self.set_view(View::Daemon, effects);
+            }
+            return;
+        }
+        if let Some(view) = self.daemon.view_before_down.take()
+            && self.view == View::Daemon
+        {
+            self.set_view(view, effects);
+        }
+    }
+
+    /// Refuses a key that leaves the daemon page while the daemon is down.
+    fn refuse_while_down(&mut self) {
+        let notice = if self.daemon.stopped {
+            "the daemon is stopped: s starts it, q quits"
+        } else {
+            "the daemon is not reachable: the other views come back with it"
+        };
+        self.set_notice(notice.into());
+    }
+
+    /// Starts again, after a restart, the services each lane ran, with the
+    /// profiles of its last start. These are ordinary starts: their progress
+    /// shows in the tab and the lane rows, and a failure lands on the lane.
+    fn resume_lanes(&mut self, lanes: Vec<RunningLane>, effects: &mut Vec<Effect>) {
+        for lane in lanes {
+            self.pending_begin(&lane.lane);
+            effects.push(Effect::Control {
+                method: Method::Start,
+                lane: lane.lane.clone(),
+                selection: Selection {
+                    units: lane.units,
+                    profiles: lane.profiles,
+                    ..Selection::default()
+                },
+                label: format!("start {}", lane.lane),
+                target: Target::Lane(lane.lane),
+            });
+        }
     }
 
     /// Reports a daemon-tab failure unless it repeats the last one.
@@ -2061,7 +2161,9 @@ impl App {
     /// first loss goes to the error list, unless this TUI is stopping or
     /// restarting the daemon itself; retries only update the header.
     fn lost_connection(&mut self, reason: Option<&ApiError>, effects: &mut Vec<Effect>) {
-        let expected = self.daemon.stopped || self.daemon.busy.is_some();
+        // A daemon that announced its shutdown closes the connection when done.
+        let expected =
+            self.daemon.stopped || self.daemon.busy.is_some() || self.daemon.stopping.is_some();
         let attempt = match self.connection {
             Connection::Reconnecting { attempt } => attempt.saturating_add(1),
             _ => {
@@ -2175,6 +2277,10 @@ impl App {
         }
         match event.event.as_str() {
             events::RESYNC => effects.push(Effect::Refresh),
+            events::DAEMON_STOPPING => {
+                let processes = event.data.get("processes").and_then(Value::as_u64);
+                self.daemon.stopping = Some(processes.unwrap_or(0));
+            }
             events::LANE_CHANGED => {
                 let lane = event
                     .data
@@ -3319,7 +3425,10 @@ impl App {
         }
         // The daemon page shows nothing of the selected project, so Tab moves
         // between its boxes there instead of switching projects.
-        if self.view == View::Daemon && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+        if self.view == View::Daemon
+            && matches!(key.code, KeyCode::Tab | KeyCode::BackTab)
+            && !self.daemon_down()
+        {
             self.daemon.focus = match self.daemon.focus {
                 DaemonBox::Checks => DaemonBox::Log,
                 DaemonBox::Log => DaemonBox::Checks,
@@ -3612,6 +3721,19 @@ impl App {
     fn global_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let plain = !ctrl && !key.modifiers.contains(KeyModifiers::ALT);
+        // Every other view shows what the daemon said last, and acts on it.
+        let leaves = match key.code {
+            KeyCode::Char('M' | 'D' | 'B') | KeyCode::Esc => true,
+            KeyCode::Tab | KeyCode::BackTab => true,
+            KeyCode::Char(c) => {
+                !ctrl && (c.is_ascii_digit() || project_digit(c, key.modifiers).is_some())
+            }
+            _ => false,
+        };
+        if leaves && self.daemon_down() && self.view == View::Daemon {
+            self.refuse_while_down();
+            return true;
+        }
         match key.code {
             KeyCode::Char('c') if ctrl => self.quit(effects),
             KeyCode::Char('q') if plain => self.quit(effects),
@@ -3660,7 +3782,7 @@ impl App {
             effects.push(Effect::ReadDaemonLog {
                 from: self.daemon.log_position,
             });
-            if !self.daemon.stopped {
+            if !self.daemon_down() {
                 effects.push(Effect::FetchDaemon);
                 effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
             }
@@ -4023,6 +4145,12 @@ impl App {
                 } else {
                     self.dialog = Some(Dialog::Targets(TargetPicker { items, index: 0 }));
                 }
+            }
+            // Nothing to restart, stop or clean through while it does not answer.
+            KeyCode::Char('R' | 'S' | 'X')
+                if self.daemon_down() && !self.daemon.stopped && self.daemon.busy.is_none() =>
+            {
+                self.set_notice("the daemon is not answering: s starts one if none runs".into());
             }
             KeyCode::Char('R') => self.daemon_prompt(
                 "restart the daemon",
@@ -6301,6 +6429,13 @@ impl App {
                 }
             }
         }
+        if self.daemon.was_down {
+            self.daemon.down_ticks = self.daemon.down_ticks.saturating_add(1);
+        }
+        self.daemon.reconnecting_ticks = match self.connection {
+            Connection::Reconnecting { .. } => self.daemon.reconnecting_ticks.saturating_add(1),
+            _ => 0,
+        };
         if self.view == View::Daemon {
             // The log is a local file, readable even while the daemon is down.
             effects.push(Effect::ReadDaemonLog {
@@ -6358,6 +6493,21 @@ impl App {
     /// project on screen run, then does what `tui.on_quit` says (asks by
     /// default). Pressed again while stopping, it closes without waiting.
     pub fn quit(&mut self, effects: &mut Vec<Effect>) {
+        // The restart runs in this TUI: quitting before the new daemon is up
+        // leaves no daemon and nothing started again, so it asks for a second q.
+        if self.daemon.busy == Some("restarting") && !self.quitting {
+            self.quitting = true;
+            self.set_notice(
+                "the restart runs in this TUI: q again quits, and what ran does not start again"
+                    .into(),
+            );
+            return;
+        }
+        // Lanes on screen are stale while the daemon is down; nothing could stop them.
+        if self.daemon_down() {
+            effects.push(Effect::Quit);
+            return;
+        }
         // A box's lanes are the box's to stop.
         let running: Vec<String> = self
             .project_lanes()

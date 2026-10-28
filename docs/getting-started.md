@@ -51,7 +51,7 @@ devlanes url open web    # open a service in the browser
 devlanes stop            # stop the lane
 ```
 
-The daemon starts on first use or with `devlanes daemon start`, and stops on its own about 30 seconds after the last TUI closes while nothing runs (`daemon.exit_when_idle`). `start` is safe to repeat: running services are left alone. A lane without requests, connections or commands for 15 minutes is frozen, and the next request, connection or command resumes it ([idle lanes](guides/lifecycle.md#idle-lanes)).
+The daemon starts on first use or with `devlanes daemon start`, and stops on its own about 30 seconds after the last TUI closes while nothing runs, or about 5 minutes after the last command when no TUI was open (`daemon.exit_when_idle`). `start` is safe to repeat: running services are left alone. A lane without requests, connections or commands for 15 minutes is frozen, and the next request, connection or command resumes it ([idle lanes](guides/lifecycle.md#idle-lanes)).
 
 On a terminal, `start` opens the TUI on the lane and runs the start inside it: the header shows the phase (infra, setup, tasks, services), the tree shows each service coming up, and a service that fails shows its reason and the end of its log in the details pane. When the start ends, the header keeps the result and the TUI stays open. Quitting keeps services running unless you choose otherwise: while lanes run, `q` asks whether to keep or stop them (`tui.on_quit` in `~/.devlanes/config.yaml` answers for you). The exit status is 0 when the start was ready, 1 when it failed, and 130 when you quit before it ended (the start keeps going in the daemon). A start the daemon refuses outright, such as a worktree without `devlanes.yaml` or an unknown unit, prints its error before any TUI opens. `restart`, `lane resume` and `lane new --start` work the same way.
 
@@ -83,7 +83,7 @@ Node and Python services get the CA through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_
 
 ## TUI
 
-Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every lane of the project, the state of each unit and a live terminal for the selected one. Closing the TUI leaves everything running. `M` opens the resource monitor and `D` the daemon page. `B` opens the boxes view, where you connect [remote boxes](remote.md#in-the-tui) and pair other machines with this one. Connected boxes' projects follow the local ones, read-only.
+Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every lane of the project, the state of each unit and a live terminal for the selected one. Closing the TUI leaves everything running. `M` opens the resource monitor and `D` the daemon page. While the daemon restarts, stops or does not answer, the TUI shows the daemon page with its log and returns to the view you had once the daemon answers again. `B` opens the boxes view, where you connect [remote boxes](remote.md#in-the-tui) and pair other machines with this one. Connected boxes' projects follow the local ones, read-only.
 
 ## Coding agents
 

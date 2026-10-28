@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use super::{draw_box, fit};
-use crate::app::{App, DaemonBox, LogCopy};
+use crate::app::{App, Connection, DaemonBox, LogCopy};
 use crate::daemonlog::{self, Entry, Level, LogPos, LogView, Shown};
 use crate::doctor::{self, Check, CheckState};
 use crate::text::{self, clean};
@@ -29,6 +29,10 @@ const NARROW_PREFIX: usize = 15;
 
 /// The boxes, top to bottom.
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
+    if app.daemon_down() {
+        render_down(app, frame, area);
+        return;
+    }
     let wide = area.width >= 100;
     let facts = fact_lines(app, wide);
     let checks_width = if wide {
@@ -89,6 +93,92 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     if below.height >= 3 {
         render_log(app, frame, below);
     }
+}
+
+/// The page while the daemon is down: what is happening in place of the
+/// facts and checks, which describe the daemon that went away, then the log,
+/// where the old daemon stopping and the new one starting show up.
+fn render_down(app: &App, frame: &mut Frame, area: Rect) {
+    let width = usize::from(area.width.saturating_sub(2)).max(1);
+    let lines = down_lines(app, width);
+    let height = u16::try_from(lines.len() + 2)
+        .unwrap_or(u16::MAX)
+        .min(area.height);
+    let top = Rect::new(area.x, area.y, area.width, height);
+    draw_box(app, frame, top, title(" daemon "), Vec::new(), false);
+    frame.render_widget(Paragraph::new(lines), inside(top));
+    // No checks box to scroll or click while it is hidden.
+    app.daemon_checks_box.set(Rect::default());
+    let below = Rect::new(area.x, area.y + height, area.width, area.height - height);
+    if below.height >= 3 {
+        render_log(app, frame, below);
+    }
+}
+
+/// What happens to the daemon, how long it has, and the keys that act on it.
+fn down_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let theme = &app.theme;
+    let view = &app.daemon;
+    let its = |count: Option<u64>| match count {
+        Some(1) => "its 1 process".to_owned(),
+        Some(n) if n > 0 => format!("its {n} processes"),
+        _ => "what it runs".to_owned(),
+    };
+    let processes = its(view.managed_processes());
+    let (headline, detail) = match view.busy {
+        Some("restarting") => (
+            "Restarting the daemon",
+            format!(
+                "The old daemon stops {processes} first, then a new one starts and the lanes that ran start again. The other views come back once it answers; q quits."
+            ),
+        ),
+        Some("stopping") => (
+            "Stopping the daemon",
+            format!("It stops {processes} first."),
+        ),
+        Some("starting") => (
+            "Starting the daemon",
+            "The other views come back once it answers.".to_owned(),
+        ),
+        _ if view.stopped => (
+            "The daemon is stopped",
+            "s starts it, q quits.".to_owned(),
+        ),
+        // Announced by the daemon, likely restarted or stopped from elsewhere.
+        _ if view.stopping.is_some() && app.connection == Connection::Online => (
+            "The daemon is shutting down",
+            format!(
+                "It stops {} first. If it restarts, the other views come back once the new daemon answers; q quits.",
+                its(view.stopping)
+            ),
+        ),
+        _ => (
+            "The daemon is not answering",
+            "Retrying on its own: it may be restarting from another terminal. s starts one if none runs, q quits."
+                .to_owned(),
+        ),
+    };
+    let mut head = vec![Span::styled(
+        headline.to_owned(),
+        theme.tone(Tone::Busy).add_modifier(Modifier::BOLD),
+    )];
+    if !view.stopped {
+        head.push(Span::styled(
+            format!(
+                " {} {}",
+                theme.spinner(app.spin),
+                doctor::uptime(u64::from(view.down_ticks) * 1000)
+            ),
+            theme.quiet(),
+        ));
+    }
+    let mut lines = vec![fit(head, width)];
+    lines.extend(
+        text::wrap(&clean(&detail), width)
+            .into_iter()
+            .map(|line| Line::styled(line, theme.quiet())),
+    );
+    lines
 }
 
 /// The checks box's rows from its scroll on, with the copy selection, and

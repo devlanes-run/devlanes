@@ -6,7 +6,7 @@ use devlanes_cli::{
     Action, Cli, CommandTitle, Hint, InterruptPolicy, Rendered, Report, ReporterStream, Runtime,
     export_environment, run_with, stop_with_logs, write_completions,
 };
-use devlanes_client::{Client, Paths};
+use devlanes_client::{Client, Paths, restart::RunningLane};
 use devlanes_ipc::Frame;
 use devlanes_proto::{Control, Method, Outcome, Request, RpcError, Selection};
 use serde_json::{Value, json};
@@ -309,7 +309,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             Ok(0)
         }
         Action::DaemonStart => daemon_start(runtime, &paths()?).await,
-        Action::DaemonRestart(context) => daemon_restart(runtime, &paths()?, context).await,
+        Action::DaemonRestart(context) => daemon_restart_and_resume(cli, runtime, context).await,
         Action::DaemonLogs { follow, tail } => daemon_logs(follow, tail.unwrap_or(100)).await,
         Action::DebugBundle {
             to,
@@ -389,21 +389,94 @@ async fn daemon_start(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> 
     render_result(runtime, Method::DaemonStatus, &data, None)
 }
 
-/// `daemon restart`: stops the daemon (any protocol), starts a new one and starts
-/// again what ran. An invalid user config fails first: the new daemon would refuse
-/// to start, and the old one would already have stopped every lane.
+/// What `daemon restart` did before the lanes that ran start again.
+#[derive(Debug)]
+struct Restarted {
+    /// The exit status so far.
+    code: u8,
+    /// Lanes to start again with their own streamed progress; empty when there
+    /// is nothing to start or JSON output already started them.
+    resume: Vec<RunningLane>,
+}
+
+/// Prints a progress line on stderr for people; agents and JSON get only results.
+fn restart_progress(runtime: &Runtime, line: &str) {
+    if runtime.quiet
+        || matches!(
+            runtime.mode,
+            devlanes_cli::OutputMode::Json | devlanes_cli::OutputMode::Agent
+        )
+    {
+        return;
+    }
+    emit(&Rendered {
+        stderr: format!("{line}\n"),
+        ..Rendered::default()
+    });
+}
+
+/// `daemon restart`, then each lane that ran starts again the way `devlanes
+/// start` shows it, one lane after another.
+async fn daemon_restart_and_resume(
+    cli: &Cli,
+    runtime: &Runtime,
+    context: devlanes_proto::Context,
+) -> Result<u8, RpcError> {
+    let restarted = daemon_restart(runtime, &paths()?, context.clone()).await?;
+    let mut code = restarted.code;
+    if restarted.resume.is_empty() {
+        return Ok(code);
+    }
+    let names: Vec<&str> = restarted
+        .resume
+        .iter()
+        .map(|lane| lane.lane.as_str())
+        .collect();
+    restart_progress(
+        runtime,
+        &format!("starting again what ran in {}", names.join(", ")),
+    );
+    for lane in restarted.resume {
+        let selection = Selection {
+            units: lane.units,
+            profiles: lane.profiles,
+            ..Selection::default()
+        };
+        let mut params = serde_json::to_value(selection)
+            .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
+        // The same progress `devlanes start` streams, where it streams any.
+        if runtime.mode != devlanes_cli::OutputMode::Agent {
+            params["events"] = json!(true);
+        }
+        let request = Request {
+            id: 0,
+            method: Method::Start,
+            params,
+            context: devlanes_proto::Context {
+                lane: Some(lane.lane),
+                env: context.env.clone(),
+                actor: context.actor.clone(),
+                ..devlanes_proto::Context::default()
+            },
+        };
+        code = code.max(rpc(cli, runtime, request).await?);
+    }
+    Ok(code)
+}
+
+/// `daemon restart`: stops the daemon (any protocol) and starts a new one. JSON
+/// output also starts again what ran, so it stays one document; otherwise the
+/// caller does, with progress. An invalid user config fails first: the new
+/// daemon would refuse to start, and the old one would already have stopped
+/// every lane.
 async fn daemon_restart(
     runtime: &Runtime,
     paths: &Paths,
     context: devlanes_proto::Context,
-) -> Result<u8, RpcError> {
+) -> Result<Restarted, RpcError> {
     crate::user_config::load(paths).await?;
     // What runs now comes back after the restart; `daemon stop` keeps it stopped.
     let mut running = Vec::new();
-    let (env, actor) = (
-        context.env.clone().unwrap_or_default(),
-        context.actor.clone(),
-    );
     // Any protocol: restarting is how an incompatible daemon gets replaced.
     match Client::connect_any(paths).await {
         Ok(mut client) => {
@@ -421,8 +494,19 @@ async fn daemon_restart(
                     &format!("restart the daemon and stop {processes} processes?"),
                 )?
             {
-                return Ok(devlanes_cli::exit::USAGE);
+                return Ok(Restarted {
+                    code: devlanes_cli::exit::USAGE,
+                    resume: Vec::new(),
+                });
             }
+            restart_progress(
+                runtime,
+                &match processes {
+                    0 => "stopping the daemon…".to_owned(),
+                    1 => "stopping the daemon and its 1 process…".to_owned(),
+                    n => format!("stopping the daemon and its {n} processes…"),
+                },
+            );
             // The old daemon's own pid, so the wait below ends when exactly
             // that process is gone.
             let pid = client
@@ -435,12 +519,12 @@ async fn daemon_restart(
                 .ok()
                 .and_then(|status| status.get("pid").and_then(Value::as_u64))
                 .and_then(|pid| i32::try_from(pid).ok());
-            let context = devlanes_proto::Context {
+            let shutdown = devlanes_proto::Context {
                 yes: true,
-                ..context
+                ..context.clone()
             };
             client
-                .request(Method::DaemonShutdown, json!({}), context)
+                .request(Method::DaemonShutdown, json!({}), shutdown)
                 .await
                 .map_err(rpc_error)?;
             drop(client);
@@ -461,25 +545,22 @@ async fn daemon_restart(
     if data.is_object() {
         data["running"] = json!(true);
     }
-    let items = if running.is_empty() {
-        Vec::new()
-    } else {
-        client.resume_running(&running, &env, &actor).await
-    };
-    // JSON output stays one document; text prints the starts after the status.
+    // JSON output stays one document, with the starts' results in it.
     if runtime.mode == devlanes_cli::OutputMode::Json {
+        let (env, actor) = (context.env.unwrap_or_default(), context.actor);
+        let items = client.resume_running(&running, &env, &actor).await;
         if data.is_object() {
             data["resumed"] = json!(items);
         }
-        return render_result(runtime, Method::DaemonStatus, &data, None);
+        return Ok(Restarted {
+            code: render_result(runtime, Method::DaemonStatus, &data, None)?,
+            resume: Vec::new(),
+        });
     }
-    let status = render_result(runtime, Method::DaemonStatus, &data, None)?;
-    if items.is_empty() {
-        return Ok(status);
-    }
-    let page = json!({"items": items, "truncated": false, "next_cursor": null});
-    let resumed = render_result(runtime, Method::Resume, &page, None)?;
-    Ok(status.max(resumed))
+    Ok(Restarted {
+        code: render_result(runtime, Method::DaemonStatus, &data, None)?,
+        resume: running,
+    })
 }
 
 /// Longest `daemon restart` waits for the old daemon, which first stops every unit

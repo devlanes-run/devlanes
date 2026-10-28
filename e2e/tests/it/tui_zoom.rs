@@ -261,6 +261,18 @@ impl Tui {
         Ok(())
     }
 
+    /// Waits until `text` is nowhere on the screen.
+    fn wait_for_gone(&self, text: &str) -> Result<()> {
+        let start = Instant::now();
+        while self.dump().contains(text) {
+            if start.elapsed() > Duration::from_secs(30) {
+                return Err(Error::Unexpected(format!("{text} stayed\n{}", self.dump())));
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        Ok(())
+    }
+
     /// Waits until the pane's width satisfies `width` and its rows hold the
     /// service's lines whole, each wrapped at that width, filling the pane
     /// from top to bottom. Otherwise says what is wrong, with the screen.
@@ -392,6 +404,67 @@ fn pane_fills_at_every_size(pty: bool) -> Result<()> {
     } else {
         Err(Error::Unexpected(problems.join("\n\n")))
     }
+}
+
+/// A service, and a `lane.stop` task that takes a few seconds, so each
+/// restart below keeps the daemon away long enough to see the TUI wait for it.
+const SLOW_STOP: &str = r#"project: fixture-tui-restart
+services:
+  api:
+    run: [fixture-server, --log-line, api-ready]
+    pty: false
+    ready: { http: { path: /healthz } }
+tasks:
+  linger:
+    run: [fixture-server, --port, "0", --exit-after, 3s]
+    when: lane.stop
+"#;
+
+/// Waits until `lab`'s lane runs `api` again, on a new daemon.
+fn api_ready_again(lab: &Lab) -> Result<()> {
+    lab.eventually("api to be ready again", Duration::from_secs(60), || {
+        let lanes = lab.lanes(lab.repo())?;
+        let ready = devlanes_e2e::lane(&lanes, "fixture-tui-restart@0")
+            .and_then(|lane| devlanes_e2e::unit(lane, "api"))
+            .is_some_and(|api| api["state"] == "ready");
+        Ok(ready.then_some(()))
+    })
+}
+
+/// A restart from another terminal sends the TUI to the daemon page while the
+/// daemon is away, and back to the lanes once it answers; a restart from the
+/// daemon page says what it does and starts the lane again on the new daemon.
+#[test]
+fn tui_waits_on_the_daemon_page_through_restarts() -> Result<()> {
+    let lab = Lab::with_config(SLOW_STOP, BUDGET)?;
+    let started = lab.json(lab.repo(), &["start"])?;
+    assert_eq!(started["ready"], true, "{started}");
+    let mut tui = Tui::open(&lab)?;
+    tui.wait_for_text("api")?;
+
+    thread::scope(|scope| -> Result<()> {
+        let cli = scope.spawn(|| lab.devlanes(lab.repo(), &["daemon", "restart", "--yes"]));
+        let shown = tui
+            .wait_for_text("The daemon is shutting down")
+            .and_then(|()| tui.wait_for_text("daemon.log"));
+        let output = cli
+            .join()
+            .map_err(|_| setup("the restart thread panicked"))??;
+        output.expect_code(0)?;
+        shown
+    })?;
+    api_ready_again(&lab)?;
+    tui.wait_for_gone("daemon.log")?;
+
+    tui.keys(b"D")?;
+    tui.wait_for_text("daemon.log")?;
+    tui.keys(b"R")?;
+    tui.wait_for_text("Restart the daemon?")?;
+    tui.keys(b"y")?;
+    tui.wait_for_text("Restarting the daemon")?;
+    tui.wait_for_gone("Restarting the daemon")?;
+    api_ready_again(&lab)?;
+    Ok(())
 }
 
 /// A PTY unit: existing output is re-wrapped at every pane size.

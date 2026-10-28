@@ -286,7 +286,7 @@ It is merged over `devlanes.yaml` before templates are expanded. Mappings merge 
 | Path | Type | Description | Example |
 | --- | --- | --- | --- |
 | `daemon` | object | The daemon's lifetime: whether it stops on its own once the last TUI closes and nothing runs. | `{"exit_when_idle":false}` |
-| `daemon.exit_when_idle` | boolean | Stop the daemon about 30 seconds after the last TUI closes, once nothing runs or starts, no box or client is connected or waiting to reconnect, and no pairing code is outstanding. The next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits. One installed with `devlanes daemon install` keeps running. | `true` |
+| `daemon.exit_when_idle` | boolean | Stop the daemon about 30 seconds after the last TUI closes, once nothing runs or starts, no box or client is connected or waiting to reconnect, and no pairing code is outstanding. A daemon only commands used, with no TUI ever open, waits about 5 minutes instead. The next devlanes command starts it again. Containers keep running either way. Defaults to true. Only a daemon a command started on demand exits. One installed with `devlanes daemon install` keeps running. | `true` |
 
 ### history
 

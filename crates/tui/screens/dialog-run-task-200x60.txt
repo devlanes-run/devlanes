@@ -24,7 +24,7 @@
 │   ✕ wrk-export               failed · exit 1 ││ 10:43:34 GET /v1/orders/1238 200 7ms                                                                                                                 │
 │   ◉ wrk-cron                                 ││ 10:43:45 GET /v1/orders/1255 200 3ms                                                                                                                 │
 │   ◉ wrk-webhooks                             ││ 10:43:56 GET /v1/orders/1272 200 4ms                                                                                                                 │
-│   ◉ wrk-ledger                               ││ 10:43:07 GET /v1/orders/128┌ run seed ─────────────────────────────────┐                                                                             │
+│   ◉ wrk-ledger                               ││ 10:43:07 GET /v1/orders/128┌───────────────────────────────────────────┐                                                                             │
 │   ● stub-stripe                              ││                            │ Run seed in acme@0?                       │                                                                             │
 │   ● stub-s3                                  ││                            │                                           │                                                                             │
 │   ◆ stub-twilio         orphaned · pid 48211 ││                            │ Its config asks for a confirmation first. │                                                                             │

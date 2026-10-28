@@ -12,7 +12,7 @@
 │   · typecheck                        not run ││ tasks     7 not run                                                  │
 │   · test-e2e                         not run ││ config    changed since the lane started; r restarts with it         │
 │   · codegen                          not run ││                                                                      │
-│   · clean-cache                 ┌ clean acme@2 ───────────────────────────────────┐                                  │
+│   · clean-cache                 ┌─────────────────────────────────────────────────┐                                  │
 │                                 │ Clean fix/cache (acme@2)?                       │ · 1 starting · 34 up             │
 │ ▾ infra                         │                                                 │ · 4 of 8 ready                   │
 │   ▾ shared                      │ It stops every unit in the lane, then:          │ing · config changed              │

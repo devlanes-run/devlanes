@@ -1366,6 +1366,10 @@ pub mod events {
     pub const RESULT: &str = "result";
     /// Sent instead of dropped events after a subscriber overflowed; clients must re-query.
     pub const RESYNC: &str = "resync";
+    /// `{reason: explicit|idle|signal, processes}` once when the daemon begins
+    /// to shut down, before it stops its `processes` managed processes; the
+    /// connection closes when it is done. A restart starts a new daemon after.
+    pub const DAEMON_STOPPING: &str = "daemon.stopping";
     /// `{lane, code, data}` for advice that never blocks a start. Code
     /// `memory_baseline`: `{peak_memory_bytes, available_memory_bytes, units}` when
     /// the units being started usually peak above the memory available now.

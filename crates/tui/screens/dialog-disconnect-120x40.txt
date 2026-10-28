@@ -14,7 +14,7 @@
 │ ⠋ devbox                                                                                      reconnecting · command │
 │   link      next try in 8s                                                                                           │
 │   error     docker exec exited 1: Error response from daemon: container devbox is not running                        │
-│   box       devlanes 1.0.0 · proxy ┌ disconnect hetzner ────────────────────────┐                                    │
+│   box       devlanes 1.0.0 · proxy ┌────────────────────────────────────────────┐                                    │
 │   proxy     this machine serves its│ Disconnect hetzner?                        │ use                                │
 │   mirror    1 lane · no ports bound│                                            │                                    │
 │                                    │ Its ports and hostnames stop working here. │                                    │

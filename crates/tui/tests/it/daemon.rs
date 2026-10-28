@@ -3,7 +3,7 @@
 use std::{io::Write, sync::Arc, time::Duration};
 
 use crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
-use devlanes_proto::RpcError;
+use devlanes_proto::{Method, RpcError};
 use devlanes_tui::{
     ApiError, DaemonApi, Options,
     app::{App, DaemonBox, Dialog, Effect, Msg, Target, View},
@@ -298,15 +298,42 @@ async fn restart_and_stop_ask_first_and_enter_does_not_confirm() -> TestResult {
         [Effect::ScheduleReconnect { .. }]
     ));
     assert!(app.errors.is_empty(), "{:?}", app.errors);
-    assert!(row(&render(&app)?, 0).contains("daemon restarting…"));
-    let effects = app.update(Msg::DaemonRestarted(Ok(daemon_status())));
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::Subscribe, Effect::Refresh, Effect::FetchDaemon]
-    ));
+    let buffer = render(&app)?;
+    assert!(row(&buffer, 0).contains("daemon restarting…"));
+    // The facts of the old daemon give way to what is happening.
+    let text = screen(&buffer);
+    assert!(text.contains("Restarting the daemon"), "{text}");
+    assert!(text.contains("stops its 3 processes"), "{text}");
+    assert!(!text.contains("pid 4242"), "{text}");
+    // The lanes that ran come back as ordinary starts once the new daemon answers.
+    let mut status = daemon_status();
+    status["resume"] = json!([
+        {"lane": "acme@0", "profiles": ["backend"], "units": ["api", "worker"]},
+    ]);
+    let effects = app.update(Msg::DaemonRestarted(Ok(status)));
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [
+                Effect::Subscribe,
+                Effect::Refresh,
+                Effect::FetchDaemon,
+                Effect::Control { method: Method::Start, lane, selection, .. },
+            ] if lane == "acme@0"
+                && selection.units == ["api", "worker"]
+                && selection.profiles == ["backend"]
+        ),
+        "{effects:?}"
+    );
     assert_eq!(
         app.notice.as_ref().map(|n| n.text.as_str()),
         Some("daemon restarted")
+    );
+    assert!(
+        app.daemon
+            .status
+            .as_ref()
+            .is_some_and(|s| s.get("resume").is_none())
     );
 
     app.update(shifted('S'));
@@ -323,7 +350,7 @@ async fn restart_and_stop_ask_first_and_enter_does_not_confirm() -> TestResult {
         row(&buffer, 0)
     );
     assert!(
-        row(&buffer, 23).contains("S start daemon"),
+        row(&buffer, 23).contains("s start daemon"),
         "{}",
         row(&buffer, 23)
     );
@@ -342,6 +369,102 @@ async fn restart_and_stop_ask_first_and_enter_does_not_confirm() -> TestResult {
 }
 
 #[tokio::test]
+async fn a_lost_daemon_shows_the_daemon_page_until_it_answers() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let mut app = App::new(100, 24);
+    app.update(Msg::Status(api.status().await));
+    app.update(Msg::Subscribed(Ok(())));
+    assert_eq!(app.view, View::Project);
+    // A blip that heals before the next tick leaves the page alone.
+    app.update(Msg::EventsEnded(None));
+    assert!(!app.daemon_down());
+    assert_eq!(app.view, View::Project);
+    let effects = app.update(Msg::Tick);
+    assert!(app.daemon_down());
+    assert_eq!(app.view, View::Daemon);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ReadDaemonLog { .. })),
+        "{effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::FetchDaemon)),
+        "nothing to ask while it is gone: {effects:?}"
+    );
+    let text = screen(&render(&app)?);
+    assert!(text.contains("The daemon is not answering"), "{text}");
+    assert_screen!("daemon_down_100x24", text);
+    // The other views would show stale lanes; they wait for the daemon.
+    for refused in [shifted('M'), key(KeyCode::Esc), key(KeyCode::Char('1'))] {
+        assert!(app.update(refused).is_empty());
+        assert_eq!(app.view, View::Daemon);
+    }
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|n| n.text.contains("come back with it")),
+        "{:?}",
+        app.notice
+    );
+    // q quits at once: nothing could stop the lanes on screen.
+    assert!(matches!(
+        app.update(key(KeyCode::Char('q'))).as_slice(),
+        [Effect::Quit]
+    ));
+    app.update(Msg::Reconnect);
+    app.update(Msg::Subscribed(Ok(())));
+    assert!(!app.daemon_down());
+    assert_eq!(app.view, View::Project);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_daemon_that_announces_its_shutdown_gets_the_daemon_page_at_once() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let mut app = App::new(100, 24);
+    app.update(Msg::Status(api.status().await));
+    app.update(Msg::Subscribed(Ok(())));
+    app.update(Msg::Event(devlanes_proto::Event {
+        seq: 9,
+        event: devlanes_proto::events::DAEMON_STOPPING.into(),
+        data: json!({"reason": "explicit", "processes": 26}),
+    }));
+    assert_eq!(app.view, View::Daemon);
+    let text = screen(&render(&app)?);
+    assert!(text.contains("The daemon is shutting down"), "{text}");
+    assert!(text.contains("It stops its 26 processes first"), "{text}");
+    // The connection closing afterwards is what was announced, not an error.
+    app.update(Msg::EventsEnded(None));
+    assert!(app.errors.is_empty(), "{:?}", app.errors);
+    app.update(Msg::Reconnect);
+    app.update(Msg::Subscribed(Ok(())));
+    assert!(!app.daemon_down());
+    assert_eq!(app.view, View::Project);
+    Ok(())
+}
+
+#[tokio::test]
+async fn quitting_during_a_restart_asks_for_a_second_q() -> TestResult {
+    let mut app = daemon_app(80, 24).await?;
+    app.update(shifted('R'));
+    app.update(key(KeyCode::Char('y')));
+    assert!(app.update(key(KeyCode::Char('q'))).is_empty());
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|n| n.text.contains("q again quits")),
+        "{:?}",
+        app.notice
+    );
+    assert!(matches!(
+        app.update(key(KeyCode::Char('q'))).as_slice(),
+        [Effect::Quit]
+    ));
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_small_window_keeps_the_dialog_keys() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
     let mut app = App::new(50, 8);
@@ -350,13 +473,7 @@ async fn a_small_window_keeps_the_dialog_keys() -> TestResult {
     let buffer = render(&app)?;
     let text = screen(&buffer);
     // The explanation is cut; the keys that confirm and cancel are not.
-    for expected in [
-        "clean acme@0",
-        "Clean main (acme@0)?",
-        "enter clean",
-        "esc cancel",
-        "…",
-    ] {
+    for expected in ["Clean main (acme@0)?", "enter clean", "esc cancel", "…"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
     assert_screen!("clean_confirm_50x8", text);

@@ -513,7 +513,8 @@ pub trait DaemonApi: Send + Sync {
     /// Stops the daemon and everything it manages. Sends `yes`; confirm first.
     async fn stop_daemon(&self) -> Result<Value, ApiError>;
     /// Stops the daemon, waits for it to exit and starts a new one; returns
-    /// the new daemon's status. Sends `yes`; confirm first.
+    /// the new daemon's status with `resume`, the lanes that ran
+    /// ([`devlanes_client::restart::RunningLane`]). Sends `yes`; confirm first.
     async fn restart_daemon(&self) -> Result<Value, ApiError>;
     /// Starts the daemon when none is running; returns its status.
     async fn start_daemon(&self) -> Result<Value, ApiError>;
@@ -1093,8 +1094,10 @@ impl DaemonApi for ClientApi {
         result
     }
 
-    /// Shutdown, then a new daemon from this binary that starts again what
-    /// ran, as `devlanes daemon restart` does.
+    /// Shutdown, then a new daemon from this binary. What ran comes back in
+    /// the status's `resume` for the app to start again like any start, so
+    /// the restart ends as soon as the new daemon answers instead of after
+    /// every lane is ready.
     async fn restart_daemon(&self) -> Result<Value, ApiError> {
         // The new daemon refuses an invalid user config, so check it before the old
         // one stops every lane, as `devlanes daemon restart` does.
@@ -1145,17 +1148,8 @@ impl DaemonApi for ClientApi {
             )));
         }
         let mut status = self.start_daemon().await?;
-        if !running.is_empty() {
-            let context = self.context(None, true);
-            let mut client = Client::connect_or_spawn(&self.paths).await?;
-            let resumed = client
-                .resume_running(&running, &context.env.unwrap_or_default(), &context.actor)
-                .await;
-            // The starts' results ride along; lanes report their progress
-            // through events like any start.
-            if status.is_object() {
-                status["resumed"] = json!(resumed);
-            }
+        if status.is_object() {
+            status["resume"] = json!(running);
         }
         Ok(status)
     }

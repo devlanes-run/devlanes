@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/daemon.rs
+expression: text
+---
+" devlanes  1 acme   2 shop                 daemon not responding, retrying…  Monitor  Daemon  Boxes "
+"┌ daemon ──────────────────────────────────────────────────────────────────────────────────────────┐"
+"│The daemon is not answering ⠙ 0s                                                                  │"
+"│Retrying on its own: it may be restarting from another terminal. s starts one if none runs, q     │"
+"│quits.                                                                                            │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+"┌ daemon.log ─────────────────────────────────── following · all levels · repeats folded · 0 lines ┐"
+"│Empty so far.                                                                                     │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+" s start daemon   j k scroll   F pause   w level   / filter   T targets       ? all keys   q quit   "

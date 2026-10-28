@@ -321,8 +321,8 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
         Dialog::Welcome(welcome) => return crate::welcome::render(theme, welcome, frame, area),
         Dialog::Connect(dialog) => super::connect::connect(app, dialog, narrow),
         Dialog::Pair(dialog) => super::connect::pair(app, dialog, narrow),
+        // The prompt already asks what the title would name, so the border stays bare.
         Dialog::Confirm {
-            title,
             prompt,
             detail,
             action,
@@ -341,7 +341,7 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
             } else {
                 keys(theme, &[("enter", action), ("esc", "cancel")])
             };
-            (title.clone(), body, vec![tail])
+            (String::new(), body, vec![tail])
         }
         Dialog::Targets(picker) => {
             let width = max.min(56);
@@ -629,14 +629,16 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
     );
     let rect = off_borders(frame, area, rect);
     *app.dialog_area.borrow_mut() = Some(rect);
-    let block = Block::new()
+    let mut block = Block::new()
         .borders(Borders::ALL)
         .border_type(BorderType::Plain)
-        .border_style(theme.focus())
-        .title(Span::raw(format!(
+        .border_style(theme.focus());
+    if !title.is_empty() {
+        block = block.title(Span::raw(format!(
             " {} ",
             clip(&clean(&title), usize::from(width.saturating_sub(4)))
         )));
+    }
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(lines).block(block.padding(ratatui::widgets::Padding::horizontal(1))),

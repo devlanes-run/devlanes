@@ -14,7 +14,7 @@
 │ ⠋ devbox                                                                                      reconnecting · command │
 │   link      next try in 8s                                                                                           │
 │   error     docker exec exited 1: Error response from daemon: container devbox is not running                        │
-│   box       devlanes 1.0┌ revoke laptop ──────────────────────────────────────────────────┐                          │
+│   box       devlanes 1.0┌─────────────────────────────────────────────────────────────────┐                          │
 │   proxy     this machine│ Revoke laptop (dl_cid_3f2a9c1e)?                                │                          │
 │   mirror    1 lane · no │                                                                 │                          │
 │                         │ It deletes the client's 2 pairings and ends its connection now. │                          │

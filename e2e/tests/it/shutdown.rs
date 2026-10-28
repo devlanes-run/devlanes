@@ -116,6 +116,30 @@ fn daemon_restart_brings_back_what_ran() -> Result<()> {
     Ok(())
 }
 
+/// Text output says what the restart does while it does it, then starts the
+/// lane again the way `devlanes start` prints it.
+#[test]
+fn daemon_restart_prints_its_progress() -> Result<()> {
+    let lab = Lab::with_config(CONFIG, BUDGET)?;
+    start(&lab)?;
+    let output = lab.devlanes(
+        lab.repo(),
+        &["--output", "plain", "daemon", "restart", "--yes"],
+    )?;
+    output.expect_code(0)?;
+    for expected in [
+        "stopping the daemon and its 1 process…",
+        "starting again what ran in fixture-shutdown@0",
+    ] {
+        assert!(output.stderr.contains(expected), "{expected}: {output}");
+    }
+    assert!(output.stdout.contains("api"), "{output}");
+    let lanes = lab.lanes(lab.repo())?;
+    let zero = need(lane(&lanes, "fixture-shutdown@0"), "lane 0")?;
+    assert_eq!(units_in(zero, "ready"), ["api"], "{zero}");
+    Ok(())
+}
+
 /// An on-demand service next to the default one, for a selection a plain start
 /// would not pick by itself.
 const ON_DEMAND: &str = r#"project: fixture-restore

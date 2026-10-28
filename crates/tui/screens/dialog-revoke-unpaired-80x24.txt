@@ -4,7 +4,7 @@
 │                                                                              │
 │   n   connect to a box by its SSH name or a command                          │
 │                                                                              │
-│ A bo┌ revoke laptop ──────────────────────────────────────────────────┐e top │
+│ A bo┌─────────────────────────────────────────────────────────────────┐e top │
 │ bar.│ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
 │     │                                                                 │      │
 │     │ It deletes the client's 2 pairings and ends its connection now. │      │

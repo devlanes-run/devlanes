@@ -6,7 +6,7 @@
 │   mirror    2 lanes · 4 of 5 ports bound here · 3 hostnames routed           │
 │   skipped   acme@0: acme@0 on this machine serves its hostnames              │
 │             ext.example.com (acme@4:ext-build): not under .localhost         │
-│   syncs     acm┌ disconnect hetzner ────────────────────────┐                │
+│   syncs     acm┌────────────────────────────────────────────┐                │
 │   ! the box run│ Disconnect hetzner?                        │ll the same     │
 │     release on │                                            │                │
 │   ! the box sto│ Its ports and hostnames stop working here. │le-linger or    │

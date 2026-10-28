@@ -24,7 +24,7 @@
 │   fix       enter signs in again                                                                                                                                                                     │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                 ┌ revoke laptop ──────────────────────────────────────────────────┐                                                                  │
+│                                                                 ┌─────────────────────────────────────────────────────────────────┐                                                                  │
 │                                                                 │ Revoke laptop (dl_cid_3f2a9c1e)?                                │                                                                  │
 │                                                                 │                                                                 │                                                                  │
 │                                                                 │ It deletes the client's 2 pairings and ends its connection now. │                                                                  │

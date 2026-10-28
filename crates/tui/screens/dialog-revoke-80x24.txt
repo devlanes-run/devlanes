@@ -6,7 +6,7 @@
 │             devbox is not running                                            │
 │   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767         │
 │   proxy     this machine serves its hostnames on 8443 and on 9443, which its │
-│     ┌ revoke laptop ──────────────────────────────────────────────────┐      │
+│     ┌─────────────────────────────────────────────────────────────────┐      │
 │   mi│ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
 │     │                                                                 │      │
 │ ! gp│ It deletes the client's 2 pairings and ends its connection now. │· ssh │
