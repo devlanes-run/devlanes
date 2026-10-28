@@ -777,6 +777,37 @@ async fn the_boxes_view_names_what_serves_a_skipped_lane_and_the_chosen_ones() -
     Ok(())
 }
 
+/// A skipped lane row that wraps is selected on every line.
+#[tokio::test]
+async fn a_wrapped_skipped_lane_row_is_selected_whole() -> TestResult {
+    let mut app = with_forks(80, 24).await;
+    app.update(crate::shifted('B'));
+    app.update(Msg::Boxes(Ok(forks())));
+    app.update(key(KeyCode::Char('j')));
+    let terminal = draw(&app)?;
+    let buffer = terminal.backend().buffer();
+    let selected: Vec<String> = (0..buffer.area.height)
+        .filter(|y| buffer[(4, *y)].modifier.contains(Modifier::REVERSED))
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+        })
+        .collect();
+    let joined = selected
+        .join(" ")
+        .replace('│', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(selected.len(), 2, "{selected:?}");
+    assert!(
+        joined.contains("acme@0 also runs on this machine. Press m to stop it and use this one."),
+        "{joined}"
+    );
+    Ok(())
+}
+
 /// `j` moves through each box's skipped lanes, and `m` on one does what
 /// `m` does on that lane in its tab.
 #[tokio::test]

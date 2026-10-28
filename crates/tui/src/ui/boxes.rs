@@ -805,16 +805,18 @@ fn render_hosts(app: &App, frame: &mut Frame, area: Rect) {
         }
         let start = lines.len();
         let (mut block, skipped_rows) = host_lines(app, host, width);
-        // The box's first line, or the first line of its selected skipped lane.
-        let row = match app.boxes.lane {
-            None => Some(0),
-            Some(lane) => skipped_rows.get(lane).copied(),
+        // The box's first line, or every line of its selected skipped lane.
+        let rows = match app.boxes.lane {
+            None => Some(0..1),
+            Some(lane) => skipped_rows.get(lane).cloned(),
         };
         if focused
             && index == selected
-            && let Some(line) = row.and_then(|row| block.get_mut(row))
+            && let Some(rows) = rows
         {
-            *line = highlight(theme, std::mem::take(line), width);
+            for line in block.iter_mut().take(rows.end).skip(rows.start) {
+                *line = highlight(theme, std::mem::take(line), width);
+            }
         }
         lines.extend(block);
         blocks.push((start, lines.len(), index));
@@ -1231,8 +1233,12 @@ fn when(app: &App, ms: u64) -> String {
 }
 
 /// One box: its name and link state, then the facts that apply. Also the
-/// line each skipped lane starts on, which the selection can be on.
-fn host_lines(app: &App, host: &BoxHost, width: usize) -> (Vec<Line<'static>>, Vec<usize>) {
+/// lines each skipped lane takes, which the selection can be on.
+fn host_lines(
+    app: &App,
+    host: &BoxHost,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<std::ops::Range<usize>>) {
     let theme = &app.theme;
     let plain = Style::new();
     let quiet = theme.quiet();
@@ -1384,11 +1390,12 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> (Vec<Line<'static>>, V
     }
     let mut skipped_rows = Vec::new();
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
-        skipped_rows.push(lines.len());
+        let start = lines.len();
         let label = if index == 0 { "skipped" } else { "" };
         let text = skipped_words(skipped)
             .unwrap_or_else(|| format!("{}: {}", clean(&skipped.lane), skip_reason(app, skipped)));
         lines.extend(fact(label, &text, theme.tone(Tone::Attention)));
+        skipped_rows.push(start..lines.len());
     }
     for (index, refused) in host.skipped_hosts.iter().enumerate() {
         let label = if index == 0 && host.skipped_lanes.is_empty() {
