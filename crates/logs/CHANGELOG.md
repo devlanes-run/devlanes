@@ -1,5 +1,9 @@
 # devlanes-logs
 
+## 0.7.1 — 2026-10-28
+
+Version bump only, to follow other packages.
+
 ## 0.7.0 — 2026-10-28
 
 ### Patch changes
