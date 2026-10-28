@@ -223,8 +223,8 @@ pub(crate) struct Orphan {
 }
 
 /// Longest gap a reading stands for, so a unit that went unread for a while
-/// does not let its next reading count for the whole gap. Twice the slow
-/// sampler interval.
+/// does not let its next reading count for the whole gap. Kept above the
+/// sampler's slowest interval (5 s, in `sampler.rs`).
 const USAGE_GAP_MS: u64 = 10_000;
 
 /// The sampler's readings of one unit over a lane start: peaks plus running
