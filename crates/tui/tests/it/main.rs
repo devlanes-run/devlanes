@@ -1218,6 +1218,53 @@ async fn new_lines_keep_a_scrolled_pane_in_place() -> TestResult {
 }
 
 #[tokio::test]
+/// A screen that gets shorter loses rows below what a scrolled pane shows,
+/// so the pane stays where it is instead of moving up by the difference.
+async fn a_shorter_screen_keeps_a_scrolled_pane_in_place() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 100, 24).await;
+    let generation = select_unit(&mut app, "api").ok_or("api not reachable")?;
+    let scrolled: Vec<String> = (0..60).map(|i| format!("line {i:03}")).collect();
+    let mut first = view(&app, &scrolled, 0, &"\r\n".repeat(20));
+    first.rows = 21;
+    app.update(Msg::AttachOpened {
+        generation,
+        result: Ok(devlanes_proto::AttachResult {
+            stream_id: 1,
+            unit: String::new(),
+            lane: String::new(),
+        }),
+    });
+    app.update(Msg::AttachView {
+        generation,
+        view: Box::new(first),
+    });
+    for _ in 0..4 {
+        app.update(key(KeyCode::PageUp));
+    }
+    let terminal = draw(&app)?;
+    let buffer = terminal.backend().buffer();
+    let (needle, top) = scrolled
+        .iter()
+        .find_map(|line| Some((line.clone(), place_of(buffer, line)?)))
+        .ok_or(format!("no line shown: {}", terminal.backend()))?;
+    let mut shorter = view(&app, &[], 60, "on screen\r\n");
+    shorter.rows = 2;
+    app.update(Msg::AttachView {
+        generation,
+        view: Box::new(shorter),
+    });
+    let terminal = draw(&app)?;
+    assert_eq!(
+        place_of(terminal.backend().buffer(), &needle),
+        Some(top),
+        "{}",
+        terminal.backend()
+    );
+    Ok(())
+}
+
+#[tokio::test]
 /// A view that starts past the lines the pane has (the daemon no longer
 /// kept the ones between) starts the lines over instead of joining across
 /// the gap; scrolling up then reads everything older from the log.

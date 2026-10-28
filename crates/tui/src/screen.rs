@@ -152,8 +152,10 @@ impl TerminalScreen {
             self.parser = vt100::Parser::new(size.0, size.1, 0);
         }
         self.parser.process(view.screen.as_bytes());
+        // Rows came or went below what a scrolled pane shows (a shorter
+        // screen loses its bottom rows), so the offset follows both ways.
         if self.offset > 0 {
-            self.offset += self.total_rows().saturating_sub(before);
+            self.offset = (self.offset + self.total_rows()).saturating_sub(before);
         }
     }
 

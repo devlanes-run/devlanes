@@ -160,7 +160,8 @@ impl Sizing {
 /// size report `ESC[8;<rows>;<columns>t` it sends after some resizes, which
 /// would resize a viewer's window.
 ///
-/// Where a repaint for a resize begins (`ESC[?25l ESC[H`), it puts
+/// Where a repaint for a resize begins (`ESC[?25l ESC[H`, with SGR sequences
+/// between them when the program left colors active), it puts
 /// `ESC[8;<rows>;<columns>t` for the new size, so the daemon's screen model
 /// switches sizes at the first byte drawn at the new one (see
 /// [`devlanes_core::Unit::renders_screen`]). A sequence split across reads is
@@ -172,6 +173,9 @@ pub(crate) struct Toggles {
     /// An `ESC[?25l` held back until the next sequence shows whether a repaint
     /// starts.
     hidden: bool,
+    /// SGR sequences after a held `ESC[?25l`: the console host resets the
+    /// colors a program left active before it moves home to repaint.
+    styles: Vec<u8>,
     /// Asked at each repaint start for the size it is drawn at.
     sizing: Option<Arc<Sizing>>,
 }
@@ -203,11 +207,12 @@ impl Toggles {
         out
     }
 
-    /// Writes a held `ESC[?25l`.
+    /// Writes a held `ESC[?25l` and the SGR sequences after it.
     fn release(&mut self, out: &mut Vec<u8>) {
         if std::mem::take(&mut self.hidden) {
             out.extend_from_slice(HIDE_CURSOR);
         }
+        out.append(&mut self.styles);
     }
 
     /// One byte through the filter.
@@ -264,6 +269,10 @@ impl Toggles {
         if sequence == HIDE_CURSOR {
             self.release(out);
             self.hidden = true;
+            return;
+        }
+        if self.hidden && last == b'm' {
+            self.styles.extend_from_slice(sequence);
             return;
         }
         if self.hidden && sequence == HOME {
@@ -376,6 +385,27 @@ mod tests {
         );
         let state = sizing.state.lock().expect("state");
         assert_eq!((state.current, state.pending), (size, None));
+    }
+
+    /// A program that left a color active gets its repaint started with a
+    /// reset between the hidden cursor and the home: it is still marked, and
+    /// colors before anything else pass as they came.
+    #[test]
+    fn a_repaint_after_colors_is_marked() {
+        let size = TerminalSize {
+            columns: 150,
+            rows: 12,
+        };
+        let sizing = sizing(Some(size));
+        let mut toggles = Toggles::with_sizing(Arc::clone(&sizing));
+        let out = toggles.filter(b"\x1b[36mcyan\r\n\x1b[?25l\x1b[m\x1b[3");
+        assert_eq!(out, b"\x1b[36mcyan\r\n");
+        let out = toggles.filter(b"6m\x1b[Hcyan\x1b[?25l\x1b[1mx");
+        assert_eq!(
+            out,
+            b"\x1b[8;12;150t\x1b[?25l\x1b[m\x1b[36m\x1b[Hcyan\x1b[?25l\x1b[1mx"
+        );
+        assert_eq!(sizing.state.lock().expect("state").pending, None);
     }
 
     /// A request while a resize is in flight waits for its repaint; only the
