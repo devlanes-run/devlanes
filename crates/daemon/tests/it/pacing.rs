@@ -210,6 +210,8 @@ async fn queued_units_stop_bypass_and_restart() {
             Setup {
                 gate: Some(gate.clone()),
                 metrics: busy_metrics(),
+                // The restart waits for the units' ports to be free here.
+                user: crate::pool("12500-12749"),
                 ..Setup::default()
             },
         )
@@ -378,6 +380,8 @@ async fn settled_startup_peak_becomes_the_memory_need() {
                     cpu_percent: 1.0,
                     footprint_bytes: footprint,
                 })],
+                // The restart waits for the unit's port to be free here.
+                user: crate::pool("12750-12999"),
                 ..Setup::default()
             },
         )
