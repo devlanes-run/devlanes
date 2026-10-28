@@ -39,9 +39,15 @@ impl Remotes {
 
 /// Whether a local lane holds its ports, so it wins over every box lane it
 /// clashes with: from the start of a start that passed its checks, while a
-/// unit or an orphan runs, and while its containers are up.
+/// unit or an orphan runs, and while its own containers are up. Shared
+/// containers of the project bind no port of the lane's block.
 pub(crate) fn holds_ports(st: &LaneSt) -> bool {
-    st.claiming > 0 || st.any_running() || !st.infra_containers.is_empty()
+    st.claiming > 0
+        || st.any_running()
+        || st
+            .infra_containers
+            .iter()
+            .any(|container| !container.shared)
 }
 
 /// `local_lane_running`: this machine's `running` keeps box `host`'s `lane`

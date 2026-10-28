@@ -1374,7 +1374,7 @@ impl Inner {
         self.wake_lane(&project, &lane, Some(crate::idle::Activity::Command))
             .await;
         // The containers bind the lane's ports, so box lanes it clashes with
-        // give them up first. Its containers keep it counted once up.
+        // give them up first. Its own containers keep it counted once up.
         let claim = self.claim_ports(&lane).await;
         let up = self.integ.infra.up(&spec).await.map_err(RpcError::from)?;
         {
@@ -1408,16 +1408,7 @@ impl Inner {
                 json!({"lanes_running": running, "flag": "--yes"}),
             ));
         }
-        let down = self.integ.infra.down(&spec).await.map_err(RpcError::from)?;
-        // The lanes no longer hold the shared containers' ports, which box
-        // lanes they clash with may take back.
-        for lane in project.lanes() {
-            lane.st()
-                .infra_containers
-                .retain(|container| !container.shared);
-        }
-        self.reassign();
-        Ok(down)
+        self.integ.infra.down(&spec).await.map_err(RpcError::from)
     }
 
     /// `infra.status` for the request's lane.
