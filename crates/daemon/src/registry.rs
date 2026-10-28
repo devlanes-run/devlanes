@@ -2307,7 +2307,10 @@ impl Inner {
                 }
                 if sweepable(&lane.st()) {
                     let reference = lane.st().reference(&project.name());
-                    match engine.clean_lane(&project, &lane, None).await {
+                    match engine
+                        .clean_lane(&project, &lane, None, crate::lifecycle::Logs::Keep)
+                        .await
+                    {
                         Ok(_) => {
                             tracing::info!(lane = %reference, "cleaned a lane whose worktree is gone")
                         }
@@ -2356,9 +2359,10 @@ impl Inner {
                         .stop_lane(&project, &lane, None, None, false)
                         .await
                         .map(drop),
-                    RemovedWorktrees::Clean => {
-                        engine.clean_lane(&project, &lane, None).await.map(drop)
-                    }
+                    RemovedWorktrees::Clean => engine
+                        .clean_lane(&project, &lane, None, crate::lifecycle::Logs::Keep)
+                        .await
+                        .map(drop),
                 };
                 if let Err(error) = result {
                     tracing::warn!(code = %error.code, "removed worktree policy failed");

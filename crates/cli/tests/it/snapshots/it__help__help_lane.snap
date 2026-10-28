@@ -9,7 +9,7 @@ Usage: devlanes lane [OPTIONS] <COMMAND>
 Commands:
   ls      List lanes, including moved, unassigned and missing ones
   new     Add another lane for this folder
-  clean   Stop a lane, run its clean tasks and teardown, and free its ports (needs --yes)
+  clean   Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
   gc      Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
   resume  Start the lanes that were running before a reboot or daemon restart
   help    Print this message or the help of the given subcommand(s)
