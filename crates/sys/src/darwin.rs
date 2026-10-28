@@ -191,6 +191,33 @@ pub fn short_info(pid: u32) -> Option<ShortInfo> {
     })
 }
 
+/// Reads the task's base scheduling priority (`pti_priority` of
+/// `PROC_PIDTASKINFO`): 4 (`MAXPRI_THROTTLE`) in the background band, 31 for a
+/// default process. Unlike the priority `ps` shows, it carries no CPU usage
+/// penalty, so it changes as soon as the band does.
+pub fn base_priority(pid: u32) -> Option<i32> {
+    let pid = raw(pid)?;
+    let size = i32::try_from(size_of::<libc::proc_taskinfo>()).ok()?;
+    let mut info = MaybeUninit::<libc::proc_taskinfo>::zeroed();
+    // SAFETY: the buffer is `size` writable bytes for one `proc_taskinfo`.
+    let written = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTASKINFO,
+            0,
+            info.as_mut_ptr().cast::<c_void>(),
+            size,
+        )
+    };
+    if written != size {
+        return None;
+    }
+    // SAFETY: the buffer started zeroed and the kernel filled it; every field is
+    // plain integer data, valid for any bit pattern.
+    let info = unsafe { info.assume_init() };
+    Some(info.pti_priority)
+}
+
 /// Reads resource usage. `Err` only when the flavor itself is unsupported, so
 /// callers can fall back from v6 to v4 once; `Ok(None)` when the process is gone.
 pub fn rusage(pid: u32, flavor: RusageFlavor) -> Result<Option<RusageInfo>, FlavorUnsupported> {
@@ -361,6 +388,7 @@ mod tests {
         let short = short_info(pid).expect("own short info");
         assert_eq!(short.uid, crate::current_uid());
         assert!(!short.zombie);
+        assert!(base_priority(pid).is_some());
         let usage = rusage(pid, RusageFlavor::V6)
             .or_else(|_| rusage(pid, RusageFlavor::V4))
             .expect("a supported flavor")
