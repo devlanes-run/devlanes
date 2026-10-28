@@ -27,7 +27,7 @@
 │   ◉ wrk-ledger │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy              │                │
 │   ● stub-stripe│                                                                                    │ob_8130 took=170│
 │   ● stub-s3    │ monitor (M)                                                                        │                │
-│   ◆ stub-twilio│   < >               sort by the previous, next column                              │ob_8131 took=183│
+│   ◆ stub-twilio│   ←→  < >           sort by the previous, next column                              │ob_8131 took=183│
 │   ● stub-sendgr│   i                 reverse the sort                                               │                │
 │   ● stub-segmen│   /  e              filter, grouped or flat                                        │ob_8132 took=196│
 │   ● stub-auth0 │   h l  z            fold, unfold a lane; detail graphs fill the page               │                │

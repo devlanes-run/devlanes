@@ -420,6 +420,24 @@ fn themed(f: &mut Fake, tier: Tier, glyphs: Glyphs) {
     f.unit("acme@0", "api-gateway");
 }
 
+/// Selects acme@0's api-search, the busiest unit, on the open monitor and
+/// brings it into view whatever the sort puts above it.
+fn select_api_search(f: &mut Fake) {
+    let rows = f.app.monitor_rows();
+    let at = rows
+        .iter()
+        .position(|row| {
+            matches!(row.id(), MonitorId::Row { lane, unit, .. } if lane == "acme@0" && unit == "api-search")
+        })
+        .expect("api-search is in the monitor");
+    f.app.monitor.select_index(&rows, at);
+    // A frame tells the keys how many rows the table shows, and moving
+    // brings the selection into view on short screens.
+    let _ = render(&f.app);
+    f.key(KeyCode::Char('k'));
+    f.key(KeyCode::Char('j'));
+}
+
 /// Every state, in review order.
 fn scenes() -> Vec<Scene> {
     vec![
@@ -943,20 +961,22 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "monitor",
-            what: "the monitor (M): grouped by lane, sorted by cpu, api-search selected",
+            what: "the monitor (M): grouped by lane, sorted by name, api-search selected",
             setup: |f| {
                 f.shifted('M');
                 f.send(Msg::Tick);
-                f.key(KeyCode::Char('j'));
+                select_api_search(f);
             },
         },
         Scene {
             name: "monitor-sorted-filtered",
-            what: "flat (e), sorted by memory (>), filtered with /acme",
+            what: "flat (e), sorted by memory (left three times), filtered with /acme",
             setup: |f| {
                 f.shifted('M');
                 f.key(KeyCode::Char('e'));
-                f.key(KeyCode::Char('>'));
+                for _ in 0..3 {
+                    f.key(KeyCode::Left);
+                }
                 f.key(KeyCode::Char('/'));
                 f.type_text("acme");
                 f.key(KeyCode::Enter);
@@ -989,7 +1009,7 @@ fn scenes() -> Vec<Scene> {
             what: "the detail graphs zoomed (z) on api-search",
             setup: |f| {
                 f.shifted('M');
-                f.key(KeyCode::Char('j'));
+                select_api_search(f);
                 f.key(KeyCode::Char('z'));
             },
         },

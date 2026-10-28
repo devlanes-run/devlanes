@@ -104,8 +104,19 @@ async fn monitor(width: u16, height: u16, metrics: Metrics) -> App {
 
 #[tokio::test]
 async fn the_sort_steps_reverses_and_the_selection_follows_its_row() -> TestResult {
-    let mut app = monitor(120, 40, metrics(80.0, 5.0)).await;
+    let mut app = monitor(120, 40, metrics(5.0, 80.0)).await;
+    assert_eq!(app.monitor.sort, SortKey::Name, "by name until asked");
+    assert_eq!(order(&app), ["api", "web"]);
+    // Left from name wraps to uptime; right goes back.
+    app.update(key(KeyCode::Left));
+    assert_eq!(app.monitor.sort, SortKey::Uptime);
+    app.update(key(KeyCode::Right));
+    assert_eq!(app.monitor.sort, SortKey::Name);
+    for _ in 0..4 {
+        app.update(key(KeyCode::Right));
+    }
     assert_eq!(app.monitor.sort, SortKey::Cpu);
+    app.update(Msg::Metrics(Ok(metrics(80.0, 5.0))));
     assert_eq!(order(&app), ["api", "web"], "highest cpu first");
     app.update(key(KeyCode::Char('j')));
     app.update(key(KeyCode::Char('j')));

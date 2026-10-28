@@ -12,14 +12,15 @@ use crate::api::{LaneMetrics, Metrics, UnitMetrics};
 /// most this much history; past it the daemon sends 10 s windows instead.
 pub const RAW_RANGE_MS: u64 = 900_000;
 
-/// Columns the table sorts by, in the order `<` and `>` walk them.
+/// Columns the table sorts by, in the order the left and right arrows walk
+/// them. Name by default: a busier unit does not move rows every second.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SortKey {
+    #[default]
     Name,
     Lane,
     Kind,
     State,
-    #[default]
     Cpu,
     Mem,
     Peak,
@@ -937,6 +938,7 @@ mod tests {
         view.reverse = true;
         assert_eq!(names(&rows(Some(&metrics()), &[], &view))[0], "web");
         assert_eq!(names(&rows(Some(&metrics()), &[], &view))[1], "api");
+        assert_eq!(SortKey::default(), SortKey::Name);
         assert_eq!(SortKey::Cpu.step(1), SortKey::Mem);
         assert_eq!(SortKey::Name.step(-1), SortKey::Uptime);
     }
@@ -975,6 +977,7 @@ mod tests {
     fn the_selection_follows_its_row_and_falls_back_to_its_place() {
         let mut view = MonitorView {
             flat: true,
+            sort: SortKey::Cpu,
             ..MonitorView::default()
         };
         let mut data = metrics();

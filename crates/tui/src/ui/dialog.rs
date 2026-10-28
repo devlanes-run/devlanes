@@ -68,7 +68,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
     (
         "monitor (M)",
         &[
-            ("< >", "sort by the previous, next column"),
+            ("←→  < >", "sort by the previous, next column"),
             ("i", "reverse the sort"),
             ("/  e", "filter, grouped or flat"),
             ("h l  z", "fold, unfold a lane; detail graphs fill the page"),

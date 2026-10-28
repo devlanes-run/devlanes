@@ -27,7 +27,7 @@
 │   ◉ wrk-ledger                               ││        │   c  v  y  drag     select text, mark, copy (OSC 52), or drag to copy              │                                                        │
 │   ● stub-stripe                              ││        │                                                                                    │                                                        │
 │   ● stub-s3                                  ││        │ monitor (M)                                                                        │                                                        │
-│   ◆ stub-twilio         orphaned · pid 48211 ││        │   < >               sort by the previous, next column                              │                                                        │
+│   ◆ stub-twilio         orphaned · pid 48211 ││        │   ←→  < >           sort by the previous, next column                              │                                                        │
 │   ● stub-sendgrid                            ││        │   i                 reverse the sort                                               │                                                        │
 │   ● stub-segment                             ││        │   /  e              filter, grouped or flat                                        │                                                        │
 │   ● stub-auth0                               ││        │   h l  z            fold, unfold a lane; detail graphs fill the page               │                                                        │
