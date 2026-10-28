@@ -1087,10 +1087,12 @@ impl Inner {
         project: &Arc<ProjectRt>,
     ) -> Result<Vec<Arc<LaneRt>>, RpcError> {
         let primary = project.st().primary_branch.clone();
-        // `lanes.max` is project-wide: the primary worktree's file sets it.
+        // `lanes.max` is project-wide: the primary worktree's file sets it, and one that
+        // leaves it unset means no limit. A lane's own file counts only while the
+        // primary's does not load.
         let primary_max = self
             .primary_config(project)
-            .and_then(|config| literal(&config.lanes.max));
+            .map(|config| literal(&config.lanes.max));
         let mut lanes = project.lanes();
         lanes.sort_by_key(|lane| lane.st().path.clone());
         let mut assigned = Vec::new();
@@ -1117,7 +1119,7 @@ impl Inner {
                 .iter()
                 .filter_map(|l| l.st().index())
                 .collect();
-            if let Some(max) = primary_max.or_else(|| literal(&config.lanes.max))
+            if let Some(max) = primary_max.unwrap_or_else(|| literal(&config.lanes.max))
                 && used.len() >= usize::try_from(max).unwrap_or(usize::MAX)
             {
                 lane.st().unassigned = Some(RpcError::new(

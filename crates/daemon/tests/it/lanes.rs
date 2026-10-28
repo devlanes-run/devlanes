@@ -266,6 +266,33 @@ async fn project_wide_settings_follow_the_primary_worktree() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A primary worktree whose file leaves `lanes.max` unset has no limit, whatever
+/// another worktree's file sets.
+async fn an_unset_primary_lanes_max_is_no_limit() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        let wt = tmp.path.join("wt");
+        worktree(&main, &wt, "feat/x");
+        std::fs::write(
+            wt.join("devlanes.yaml"),
+            WEB.replace("project: demo\n", "project: demo\nlanes: { max: 1 }\n"),
+        )
+        .expect("limit in the worktree");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        lanes(&h, &main).await;
+        h.call(Method::Start, json!({}), cx(&wt))
+            .await
+            .expect("a second lane");
+        let lane = lane_at(&h, &wt, &wt).await;
+        assert_eq!(lane.reference, "demo@1", "{lane:?}");
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// Another repository that uses a project name already taken is refused while the
 /// first one is still on disk.
 async fn another_repository_cannot_take_a_project_name() {

@@ -109,6 +109,45 @@ async fn reload_applies_only_what_the_file_changed() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// Raising `replicas` adds the new replicas, which `reload` starts next to the
+/// running ones.
+async fn raised_replicas_are_added() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let file = |count: u8| {
+            format!("project: demo\nservices:\n  api: {{ run: sleep, ready: started, replicas: {count} }}\n")
+        };
+        let main = repo(&tmp.path, "r", &file(2));
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        std::fs::write(main.join("devlanes.yaml"), file(3)).expect("edit");
+        assert_eq!(
+            drift(&lane(&h, &main).await),
+            [(
+                "api.3".to_owned(),
+                UnitDrift {
+                    kind: "added".into(),
+                    fields: Vec::new()
+                }
+            )]
+        );
+        let result: StartResult = serde_json::from_value(
+            h.call(Method::Reload, json!({}), cx(&main))
+                .await
+                .expect("reload"),
+        )
+        .expect("result");
+        assert_eq!(result.started, ["demo@0:api.3"]);
+        assert!(drift(&lane(&h, &main).await).is_empty());
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// A `.env` value a service reads counts as a change of that variable, named
 /// without its value.
 async fn an_env_file_edit_is_drift_by_name() {
@@ -161,8 +200,7 @@ async fn another_shells_environment_is_not_drift() {
         h.call(Method::Start, json!({}), other)
             .await
             .expect("start from another shell");
-        std::fs::write(main.join("devlanes.yaml"), format!("{BEFORE}# a comment\n"))
-            .expect("edit");
+        std::fs::write(main.join("devlanes.yaml"), format!("{BEFORE}# a comment\n")).expect("edit");
         let edited = lane(&h, &main).await;
         assert!(drift(&edited).is_empty(), "{:?}", drift(&edited));
         assert!(!edited.config_changed);
@@ -189,8 +227,7 @@ async fn restart_and_reload_refuse_before_touching_the_lane() {
             .await
             .expect_err("typo");
         assert_eq!(typo.code, "not_found");
-        std::fs::write(main.join("devlanes.yaml"), "project: demo\n<<<<<<< HEAD\n")
-            .expect("break");
+        std::fs::write(main.join("devlanes.yaml"), "project: demo\n<<<<<<< HEAD\n").expect("break");
         let refused = h
             .call(Method::Restart, json!({}), cx(&main))
             .await

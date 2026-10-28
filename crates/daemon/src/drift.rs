@@ -144,12 +144,13 @@ impl UnitDrift {
     }
 }
 
-/// What the lane's profiles selected at its last whole start, and the infra settings
-/// it started with. A service the profiles select now but did not then is `added`;
-/// one the user left out on purpose (`start api` alone) never is.
+/// The units the lane's profiles selected at its last whole start, replicas
+/// included, and the infra settings it started with. A unit the profiles select now
+/// but did not then (a new service, or a replica of a raised `replicas`) is `added`;
+/// one the user stopped or left out on purpose (`start api` alone) never is.
 #[derive(Debug, Clone)]
 pub(crate) struct StartedWith {
-    pub services: Vec<String>,
+    pub units: BTreeSet<String>,
     pub infra: Value,
 }
 
@@ -157,11 +158,23 @@ impl StartedWith {
     /// Taken when a whole-lane start begins, with the profiles it starts with.
     pub(crate) fn new(config: &devlanes_config::ProjectConfig, profiles: &[String]) -> Self {
         Self {
-            services: devlanes_resolve::select_profiles(config, profiles, &[])
+            units: devlanes_resolve::select_profiles(config, profiles, &[])
                 .map(|selection| selection.services)
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .iter()
+                .flat_map(|service| units_of(config, service))
+                .collect(),
             infra: serde_json::to_value(&config.infra).unwrap_or(Value::Null),
         }
+    }
+}
+
+/// The unit names of `service` in `config`: the service name, or `<service>.<N>` for
+/// each replica when there are several, as the resolver lays them out.
+fn units_of(config: &devlanes_config::ProjectConfig, service: &str) -> Vec<String> {
+    match config.services.get(service).and_then(|s| s.replicas) {
+        Some(count) if count > 1 => (1..=count).map(|n| format!("{service}.{n}")).collect(),
+        _ => vec![service.to_owned()],
     }
 }
 
@@ -297,7 +310,7 @@ impl Inner {
                 // A previous daemon's process runs the unit too, unsupervised.
                 let alive =
                     running.iter().any(|(running, _)| *running == unit) || orphans.contains(&unit);
-                if selected.contains(&service) && !started.services.contains(&service) && !alive {
+                if selected.contains(&service) && !started.units.contains(&unit) && !alive {
                     drift.insert(unit, UnitDrift::Added);
                 }
             }
@@ -326,6 +339,10 @@ impl Inner {
         used: &Arc<devlanes_config::ProjectConfig>,
         spawned: &[String],
     ) {
+        // A unit a reload added counts as started: stopping it later is on purpose.
+        if let Some(started) = &mut lane.st().started_with {
+            started.units.extend(spawned.iter().cloned());
+        }
         let current = lane.st().config.loaded().cloned();
         let same = current.is_some_and(|current| {
             Arc::ptr_eq(&current, used)
