@@ -205,6 +205,14 @@ impl Inner {
         if let Some(extra) = extra {
             overrides.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+        // The lane's profiles were valid when it started; one the config dropped since
+        // is left out, as a plain start leaves it out (with a warning there).
+        let profiles: Vec<String> = profiles
+            .into_iter()
+            .filter(|name| {
+                name == devlanes_proto::DEFAULT_PROFILE || config.profiles.contains_key(name)
+            })
+            .collect();
         use tracing::Instrument as _;
         let facts = self.facts(project, lane)?;
         // Every launch (service, task, hook, `exec`) is planned here, and may write to it.

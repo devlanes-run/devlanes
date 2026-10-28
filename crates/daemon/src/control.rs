@@ -207,6 +207,7 @@ impl Inner {
                 all_at_once: selection.all_at_once,
                 start_id: Some(start_id),
                 arrival,
+                restoring: false,
             },
         );
         let mut result = self.with_lane_events(session, stream, start).await?;
@@ -311,6 +312,7 @@ impl Inner {
                 all_at_once: selection.all_at_once,
                 start_id: Some(start_id),
                 arrival,
+                restoring: false,
             },
         );
         let result = self.with_lane_events(session, stream, restart).await?;
@@ -367,6 +369,7 @@ impl Inner {
                             all_at_once: args.all_at_once,
                             start_id: Some(start_id),
                             arrival,
+                            restoring: false,
                         },
                     )
                 },
@@ -433,6 +436,7 @@ impl Inner {
                             all_at_once: false,
                             start_id: None,
                             arrival,
+                            restoring: true,
                         },
                     )
                     .await;
@@ -502,6 +506,7 @@ impl Inner {
                     all_at_once: false,
                     start_id: Some(start_id),
                     arrival,
+                    restoring: false,
                 },
             );
             let start = self.with_lane_events(session, stream, start).await?;
@@ -1170,7 +1175,6 @@ impl Inner {
     /// `task.list`: tasks plus the `run_script` files the config references.
     pub(crate) async fn task_list(self: &Arc<Self>, context: &Context) -> Result<Value, RpcError> {
         let (project, lane) = self.target_lane(context).await?;
-        // Read before the lane lock: the project's lock is never taken under a lane's.
         let (config_dir, _) = project.config_path();
         let (config, path) = {
             let st = lane.st();

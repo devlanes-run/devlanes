@@ -443,6 +443,8 @@ pub(crate) struct StartCx {
     pub config: Arc<devlanes_config::ProjectConfig>,
     /// Place in the start gate's line, taken when the request arrived.
     pub arrival: Option<devlanes_core::gate::Arrival>,
+    /// Saved profiles and services the config no longer has, reported as warnings.
+    pub dropped: Dropped,
 }
 
 /// One ordered step of the lane pipeline (plan 5.5).
@@ -1256,43 +1258,105 @@ pub(crate) struct TaskOutcome {
     pub leftovers: Vec<Leftovers>,
 }
 
-/// The saved services of a lane that its config still declares, for a start
-/// without services or profiles; empty falls back to its profiles.
-fn restored_services(
-    saved: Option<&devlanes_state::Lane>,
-    known: impl Fn(&str) -> bool,
-) -> Vec<String> {
-    saved
-        .map(|record| {
-            record
-                .services
-                .iter()
-                .filter(|name| known(name))
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default()
+/// Saved names a start brought back without, because the config no longer has them.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct Dropped {
+    pub profiles: Vec<String>,
+    pub services: Vec<String>,
 }
 
-/// The services a start selects. `saved` is the lane's record and
-/// `lane_profiles` the profiles in effect; `whole_lane` says the start brings
-/// the lane up. Pure, so a start can name its units before it waits for `op`.
+impl Dropped {
+    /// One `saved_profile_removed` / `saved_service_removed` warning per kind.
+    pub(crate) fn warnings(&self, lane: &str) -> Vec<devlanes_proto::LaneWarning> {
+        let mut warnings = Vec::new();
+        for (code, names, what) in [
+            ("saved_profile_removed", &self.profiles, "profile"),
+            ("saved_service_removed", &self.services, "service"),
+        ] {
+            if names.is_empty() {
+                continue;
+            }
+            let plural = if names.len() == 1 { "" } else { "s" };
+            warnings.push(devlanes_proto::LaneWarning {
+                code: code.into(),
+                data: json!({
+                    "lane": lane,
+                    "names": names,
+                    "message": format!(
+                        "{lane} ran {what}{plural} {} before, which the config no longer has; started without",
+                        names.join(", ")
+                    ),
+                }),
+            });
+        }
+        warnings
+    }
+}
+
+/// The service a saved unit name belongs to: itself, or `api` for replica `api.2`.
+fn saved_service<'a>(config: &devlanes_config::ProjectConfig, unit: &'a str) -> Option<&'a str> {
+    if config.services.contains_key(unit) {
+        return Some(unit);
+    }
+    let (base, replica) = unit.rsplit_once('.')?;
+    (replica.bytes().all(|b| b.is_ascii_digit()) && config.services.contains_key(base))
+        .then_some(base)
+}
+
+/// Splits saved service or unit names into the services the config still declares,
+/// deduplicated, and the names it dropped.
+fn split_saved(
+    config: &devlanes_config::ProjectConfig,
+    names: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let mut kept: Vec<String> = Vec::new();
+    let mut dropped = Vec::new();
+    for name in names {
+        match saved_service(config, name) {
+            Some(service) if !kept.iter().any(|known| known == service) => {
+                kept.push(service.to_owned());
+            }
+            Some(_) => {}
+            None => dropped.push(name.clone()),
+        }
+    }
+    (kept, dropped)
+}
+
+/// The services a start selects, and the saved names it left out. `saved` is the
+/// lane's record and `lane_profiles` the profiles in effect; `whole_lane` says the
+/// start brings the lane up. Saved profiles and services the config no longer has
+/// are dropped instead of failing the start, which a profile typed on the command line
+/// still does. Pure, so a start can name its units before it waits for `op`.
 fn start_selection(
     config: &devlanes_config::ProjectConfig,
     saved: Option<&devlanes_state::Lane>,
     lane_profiles: &[String],
     options: &StartOptions,
     whole_lane: bool,
-) -> Result<devlanes_resolve::Selection, devlanes_resolve::ResolveError> {
+) -> Result<(devlanes_resolve::Selection, Dropped), devlanes_resolve::ResolveError> {
+    let mut dropped = Dropped::default();
     // The saved record, not the profiles in effect: a transient start changes
     // those but must not be what the next plain start picks up.
-    let requested = if options.profiles.is_empty() {
+    let mut requested = if options.profiles.is_empty() {
         saved.map_or_else(|| lane_profiles.to_vec(), |r| r.profiles.clone())
     } else {
         options.profiles.clone()
     };
+    if options.profiles.is_empty() || options.restoring {
+        let (known, gone): (Vec<String>, Vec<String>) = requested.into_iter().partition(|name| {
+            name == devlanes_proto::DEFAULT_PROFILE || config.profiles.contains_key(name)
+        });
+        requested = known;
+        dropped.profiles = gone;
+    }
     let restored = if options.selectors.is_empty() && options.profiles.is_empty() {
-        restored_services(saved, |name| config.services.contains_key(name))
+        let names = saved
+            .map(|record| record.services.clone())
+            .unwrap_or_default();
+        let (kept, gone) = split_saved(config, &names);
+        dropped.services = gone;
+        kept
     } else {
         Vec::new()
     };
@@ -1300,6 +1364,10 @@ fn start_selection(
     // profiles select and it lacks, such as a service added to the config.
     let selectors = if whole_lane && !restored.is_empty() {
         restored.clone()
+    } else if options.restoring {
+        let (kept, gone) = split_saved(config, &options.selectors);
+        dropped.services.extend(gone);
+        kept
     } else {
         options.selectors.clone()
     };
@@ -1315,7 +1383,7 @@ fn start_selection(
             .autostart_pending
             .retain(|name| !restored.contains(name));
     }
-    Ok(selection)
+    Ok((selection, dropped))
 }
 
 /// How a unit another start was spawning ended for a start that joined it.
@@ -1569,6 +1637,10 @@ pub(crate) struct StartOptions {
     /// Place in the start gate's line, taken when the request arrived; `None`
     /// takes one when the services phase begins.
     pub arrival: Option<devlanes_core::gate::Arrival>,
+    /// `selectors` and `profiles` are what the lane ran before (a replacing
+    /// daemon's resume plan), so names the config no longer has are left out with
+    /// a warning instead of failing the start.
+    pub restoring: bool,
 }
 
 type Spawned = (UnitHost, Arc<dyn ManagedUnit>);
@@ -2052,7 +2124,7 @@ impl Inner {
                 !st.any_running() && st.bringup.is_none(),
             )
         };
-        let Ok(selection) =
+        let Ok((selection, _)) =
             start_selection(&config, saved.as_ref(), &lane_profiles, options, whole_lane)
         else {
             return;
@@ -2630,13 +2702,9 @@ impl Inner {
         }
         let reference = lane.st().reference(&project.name());
         let fail = |error: RpcError| with_ownership(error, &reference, &[]);
-        let config = lane
-            .st()
-            .config
-            .loaded()
-            .cloned()
-            .ok_or_else(|| fail(RpcError::new("no_config", json!({"lane": reference}), 1)))?;
-        let config_dir = lane.st().path.join(project.config_path().0);
+        let config = lane.st().config.require(&reference).map_err(fail)?;
+        let (relative, _) = project.config_path();
+        let config_dir = lane.st().path.join(relative);
         check_compose_files(&config, config_dir)
             .instrument(tracing::debug_span!("compose files"))
             .await
@@ -2645,7 +2713,7 @@ impl Inner {
             let st = lane.st();
             (st.record.clone(), st.profiles.clone())
         };
-        let selection = start_selection(
+        let (selection, dropped) = start_selection(
             &config,
             saved.as_ref(),
             &lane_profiles,
@@ -2709,6 +2777,7 @@ impl Inner {
             ctl: slot.ctl.clone(),
             config: config.clone(),
             arrival: options.arrival,
+            dropped,
         };
         tracing::debug!(
             lane = %reference,
@@ -2915,7 +2984,8 @@ impl Inner {
                 .retain(|failure| !withdrawn.contains_key(&failure.unit));
         }
         let branch = cx.lane.st().branch.clone();
-        let mut warnings = self.ca_warnings(&cx.reference, &cx.lane.st());
+        let mut warnings = cx.dropped.warnings(&cx.reference);
+        warnings.extend(self.ca_warnings(&cx.reference, &cx.lane.st()));
         let path = cx.lane.st().path.clone();
         warnings.extend(self.windows_drive_warning(&cx.reference, &path).await);
         for warning in &warnings {
@@ -3482,13 +3552,11 @@ impl Inner {
                 .unwrap_or_default()
         };
         let units = crate::engine::match_units(selectors, &candidates, &reference)?;
-        let config = lane.st().config.loaded().cloned().ok_or_else(|| {
-            with_ownership(
-                RpcError::new("no_config", json!({"lane": reference}), 1),
-                &reference,
-                &[],
-            )
-        })?;
+        let config = lane
+            .st()
+            .config
+            .require(&reference)
+            .map_err(|error| with_ownership(error, &reference, &[]))?;
         let resolved = self
             .resolve_config(project, lane, config.clone(), None)
             .await
@@ -3584,6 +3652,7 @@ impl Inner {
             ctl,
             config,
             arrival: options.arrival,
+            dropped: Dropped::default(),
         };
         // A restart is a services phase alone; its events carry the plan as a start's do.
         let phase = ServicesPhase.name();
@@ -3794,6 +3863,7 @@ impl Inner {
                 all_at_once: false,
                 start_id: None,
                 arrival: None,
+                restoring: false,
             },
         )
         .await
@@ -4340,6 +4410,66 @@ mod tests {
     /// A start's control under a fresh shutdown token.
     fn ctl(start_id: u64) -> Arc<StartCtl> {
         Arc::new(StartCtl::new(&CancellationToken::new(), start_id))
+    }
+
+    #[test]
+    /// A resume plan names units; replicas map to their service, and units and
+    /// profiles the config dropped are left out and reported.
+    fn restoring_maps_replicas_and_drops_removed_names() {
+        let config = devlanes_config::parse_project(
+            "project: demo\nprofiles:\n  front: [web]\nservices:\n  web: { run: serve, replicas: 2 }\n  api: { run: serve }\n",
+            None,
+        )
+        .expect("config");
+        let options = StartOptions {
+            selectors: vec!["web.1".into(), "web.2".into(), "gone".into()],
+            profiles: vec!["front".into(), "old".into()],
+            transient: false,
+            env: None,
+            overrides: EnvMap::new(),
+            actor: Actor::default(),
+            timeout: Duration::from_secs(1),
+            session: None,
+            setup_only: false,
+            all_at_once: false,
+            start_id: None,
+            arrival: None,
+            restoring: true,
+        };
+        let (selection, dropped) =
+            start_selection(&config, None, &[], &options, true).expect("selection");
+        assert_eq!(selection.services, ["web"]);
+        assert_eq!(selection.profiles, ["front"]);
+        assert_eq!(
+            dropped,
+            Dropped {
+                profiles: vec!["old".into()],
+                services: vec!["gone".into()],
+            }
+        );
+        assert_eq!(dropped.warnings("demo@0").len(), 2);
+    }
+
+    #[test]
+    /// The declaration hash follows the entry's content and is stable for the same text.
+    fn declaration_hashes_follow_the_entry() {
+        let one = devlanes_config::parse_project(
+            "project: demo\ntasks:\n  install: { run: pnpm install, when: lane.create }\n",
+            None,
+        )
+        .expect("config");
+        let two = devlanes_config::parse_project(
+            "project: demo\ntasks:\n  install: { run: pnpm install --frozen-lockfile, when: lane.create }\n",
+            None,
+        )
+        .expect("config");
+        let hash = |config: &devlanes_config::ProjectConfig| {
+            declaration_hash(config.tasks.get("install")).expect("hash")
+        };
+        assert_eq!(hash(&one), hash(&one.clone()));
+        assert_ne!(hash(&one), hash(&two));
+        assert!(same_declaration(None, Some(&hash(&two))));
+        assert!(!same_declaration(Some(&hash(&one)), Some(&hash(&two))));
     }
 
     #[tokio::test(start_paused = true)]

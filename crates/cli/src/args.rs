@@ -447,6 +447,8 @@ pub enum DebugCommand {
         #[arg(id = "thaw_lane", value_name = "LANE")]
         lane: Option<String>,
     },
+    /// Print the lane's project config as YAML after merging its files and templates; expressions stay unevaluated
+    Config,
     /// Write a redacted archive to attach to a bug report and print its path
     #[command(
         long_about = "Write a redacted archive to attach to a bug report and print its path.\n\n\
@@ -1020,6 +1022,7 @@ impl Cli {
                     }
                     (Method::DebugThaw, json!({}))
                 }
+                DebugCommand::Config => (Method::ConfigShow, json!({})),
                 DebugCommand::Bundle {
                     to,
                     log_lines,

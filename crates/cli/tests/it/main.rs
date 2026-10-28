@@ -144,6 +144,11 @@ fn entire_command_inventory_builds_actions() {
         (&["debug", "freeze"], Some(Method::DebugFreeze)),
         (&["debug", "freeze", "acme@2"], Some(Method::DebugFreeze)),
         (&["debug", "thaw"], Some(Method::DebugThaw)),
+        (&["debug", "config"], Some(Method::ConfigShow)),
+        (
+            &["debug", "config", "--lane", "acme@2"],
+            Some(Method::ConfigShow),
+        ),
         (&["lane", "resume"], Some(Method::Resume)),
         (&["lane", "ls"], Some(Method::LaneList)),
         (

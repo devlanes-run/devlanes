@@ -494,6 +494,7 @@ impl Inner {
             Method::DaemonResetState => self.reset_state(&context).await,
             Method::Doctor => self.doctor().await,
             Method::ConfigCheck => self.config_check(&context).await,
+            Method::ConfigShow => self.config_show(&context).await,
             Method::Start => self.start_method(params, &context, &session).await,
             Method::Stop => self.stop_method(params, &context).await,
             Method::Restart => self.restart_method(params, &context, &session).await,

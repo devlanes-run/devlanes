@@ -1023,6 +1023,60 @@ impl RouteSink for Recorder {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A config that stops parsing while units run (a typo, conflict markers) keeps their
+/// routes on the last config that loaded; the lane shows the error and refuses starts.
+async fn an_invalid_config_keeps_running_routes() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", WEB);
+        let recorder = Arc::new(Recorder::default());
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                routes: Some(recorder.clone()),
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        let hosts = || -> Vec<String> {
+            let mut hosts: Vec<String> = recorder
+                .0
+                .lock()
+                .expect("recorder")
+                .iter()
+                .map(|route| route.host.clone())
+                .collect();
+            hosts.sort();
+            hosts
+        };
+        let before = hosts();
+        assert!(
+            before.contains(&"web.demo.localhost".to_owned()),
+            "{before:?}"
+        );
+        std::fs::write(main.join("devlanes.yaml"), "project: demo\n<<<<<<< HEAD\n")
+            .expect("break the file");
+        let restart = h
+            .call(Method::Restart, json!({"units": ["web"]}), cx(&main))
+            .await
+            .expect_err("an invalid config refuses a restart");
+        assert_eq!(restart.code, "config_error");
+        let lane = lane_at(&h, &main, &main).await;
+        assert_eq!(
+            lane.reason.as_ref().map(|reason| reason.code.as_str()),
+            Some("config_error")
+        );
+        assert_eq!(hosts(), before);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// Units of one start become ready concurrently; the last `lane.changed` and the
 /// last route snapshot both show the final state.
 async fn concurrent_transitions_publish_the_final_state_last() {

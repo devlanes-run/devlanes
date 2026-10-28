@@ -430,7 +430,6 @@ impl Inner {
     fn project_holding(&self, cwd: &Path) -> Option<Arc<ProjectRt>> {
         let mut best: Option<(usize, bool, Arc<ProjectRt>)> = None;
         for (project, lane) in self.all_lanes() {
-            // Read before the lane lock: the project's lock is never taken under a lane's.
             let default = project.config_path().1 == devlanes_config::DEFAULT_PROJECT_FILE;
             let st = lane.st();
             // Any config state: a worktree whose file was deleted still has its lane.
@@ -1626,6 +1625,9 @@ impl Inner {
             if differs && (st.any_running() || in_flight || !st.starts.is_empty()) {
                 st.config_changed = true;
             }
+            if let ConfigState::Loaded(loaded) = &config {
+                st.last_good = Some(loaded.clone());
+            }
             st.config = config;
         }
     }
@@ -1749,7 +1751,10 @@ impl Inner {
                 Err(error) => {
                     let mut st = lane.st();
                     st.view = None;
-                    if !matches!(st.config, ConfigState::Missing | ConfigState::Invalid(_)) {
+                    if !matches!(
+                        st.config,
+                        ConfigState::Missing | ConfigState::Invalid(_) | ConfigState::Elsewhere(_)
+                    ) {
                         st.last_error = Some(error);
                     }
                 }
@@ -1791,13 +1796,18 @@ impl Inner {
     ) -> Result<LaneView, RpcError> {
         let (config, allocation, env, infra_ns) = {
             let st = lane.st();
-            let config = match &st.config {
-                ConfigState::Loaded(config) => config.clone(),
-                ConfigState::Invalid(error) => return Err(error.clone()),
-                ConfigState::Missing => {
+            // Running units keep the layout they started with while the file is broken.
+            let kept = st.last_good.clone().filter(|_| st.any_running());
+            let config = match (&st.config, kept) {
+                (ConfigState::Loaded(config), _) => config.clone(),
+                (_, Some(config)) => config,
+                (ConfigState::Invalid(error), None) => return Err(error.clone()),
+                (ConfigState::Missing, None) => {
                     return Err(RpcError::new("no_config", json!({"path": st.path}), 1));
                 }
-                ConfigState::Elsewhere(other) => return Err(crate::model::elsewhere_error(other)),
+                (ConfigState::Elsewhere(other), None) => {
+                    return Err(crate::model::elsewhere_error(other));
+                }
             };
             let allocation = st
                 .allocation

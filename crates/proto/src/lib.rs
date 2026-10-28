@@ -110,6 +110,11 @@ pub enum Method {
     Doctor,
     #[serde(rename = "config.check")]
     ConfigCheck,
+    /// The lane's project config after `extends`, local files and templates, with
+    /// expressions left as `${{ ... }}` text: `{project, lane, files, config}`,
+    /// where `files` lists the merged files in merge order.
+    #[serde(rename = "config.show")]
+    ConfigShow,
     #[serde(rename = "start")]
     Start,
     #[serde(rename = "stop")]

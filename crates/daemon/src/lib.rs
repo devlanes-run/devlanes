@@ -7,6 +7,7 @@
 mod attach;
 pub mod bus;
 mod certs;
+mod config_show;
 mod control;
 pub mod diagnostics;
 mod dns;

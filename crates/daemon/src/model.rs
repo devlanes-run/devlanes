@@ -72,6 +72,16 @@ impl ConfigState {
             _ => None,
         }
     }
+
+    /// The loaded config, else the reason there is none, for a command that needs it.
+    pub(crate) fn require(&self, lane: &str) -> Result<Arc<ProjectConfig>, RpcError> {
+        match self {
+            Self::Loaded(config) => Ok(config.clone()),
+            Self::Invalid(error) => Err(error.clone()),
+            Self::Elsewhere(other) => Err(elsewhere_error(other)),
+            Self::Missing => Err(RpcError::new("no_config", json!({"lane": lane}), 1)),
+        }
+    }
 }
 
 /// One service replica as laid out for this lane (ports, URLs, routes).
@@ -363,6 +373,10 @@ pub(crate) struct LaneSt {
     pub config_stamp: Option<crate::registry::ConfigStamp>,
     /// Every file the last config load read or looked for, which the stamp covers.
     pub config_files: Vec<PathBuf>,
+    /// The last config that loaded. While units run and the file is invalid, missing or
+    /// names another project, the lane's layout and routes keep following it, so a
+    /// typo or a rebase conflict does not take running services off the proxy.
+    pub last_good: Option<Arc<ProjectConfig>>,
     /// Set while an explicit daemon shutdown runs this lane's `lane.stop`
     /// tasks: their spawns pass the refusal that starts with the shutdown.
     pub shutdown_hooks: bool,
@@ -491,6 +505,7 @@ impl LaneSt {
             closing: false,
             config_stamp: None,
             config_files: Vec::new(),
+            last_good: None,
             shutdown_hooks: false,
             wanted: false,
             sweeping: false,

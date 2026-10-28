@@ -645,6 +645,24 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             ]}),
         ),
         (
+            "config_show",
+            Method::ConfigShow,
+            json!({
+                "project": "acme", "lane": "acme@0",
+                "files": ["/work/acme/devlanes.yaml", "/work/acme/devlanes.local.yaml"],
+                "config": {
+                    "project": "acme", "tags": {},
+                    "lanes": {"primary": null, "max": null, "vars": {}},
+                    "services": {"api": {
+                        "extends": "node", "cwd": null,
+                        "run": "npm run dev:local",
+                        "env": {"NODE_ENV": "development", "TOKEN": "${{ env.API_TOKEN }}"},
+                        "hosts": ["api.${{ lane.domain }}"],
+                    }},
+                },
+            }),
+        ),
+        (
             "daemon_status",
             Method::DaemonStatus,
             json!({"version": "0.1.0", "pid": 4242, "uptime_ms": 7_380_000, "managed_processes": 6, "socket": "/home/u/.devlanes/run/daemon.sock"}),

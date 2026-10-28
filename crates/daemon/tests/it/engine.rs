@@ -37,6 +37,7 @@ async fn fresh_repository_reports_no_config() {
         for (method, params) in [
             (Method::Start, json!({})),
             (Method::ConfigCheck, json!({})),
+            (Method::ConfigShow, json!({})),
             (Method::LaneNew, json!({})),
         ] {
             let error = h
@@ -51,6 +52,55 @@ async fn fresh_repository_reports_no_config() {
             assert_eq!(error.data["path"], json!(cwd));
             assert_eq!(error.data["searched_to"], json!(root));
         }
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `config.show` merges the local file over `devlanes.yaml` and expands templates,
+/// keeps expressions as text so the shell's and `.env` values stay out, and lists
+/// the files in merge order.
+async fn config_show_prints_the_merged_config() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(
+            &tmp.path,
+            "r",
+            "project: acme\n\
+             templates:\n  node:\n    run: npm run dev\n    env:\n      NODE_ENV: development\n\
+             services:\n  api:\n    extends: node\n    env:\n      TOKEN: \"${{ env.API_TOKEN }}\"\n",
+        );
+        std::fs::write(
+            main.join("devlanes.local.yaml"),
+            "services:\n  api:\n    run: npm run dev:local\n",
+        )
+        .expect("local file");
+        std::fs::write(main.join(".env"), "API_TOKEN=dotenv-token\n").expect(".env");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        let mut context = cx(&main);
+        context.env = Some([("API_TOKEN".into(), "shell-token".into())].into());
+        let shown = h
+            .call(Method::ConfigShow, json!({}), context)
+            .await
+            .expect("config show");
+        assert_eq!(shown["project"], "acme", "{shown}");
+        assert_eq!(shown["lane"], "acme@0", "{shown}");
+        assert_eq!(
+            shown["files"],
+            json!([main.join("devlanes.yaml"), main.join("devlanes.local.yaml")]),
+            "{shown}"
+        );
+        let api = &shown["config"]["services"]["api"];
+        assert_eq!(api["run"], "npm run dev:local", "{shown}");
+        assert_eq!(api["env"]["NODE_ENV"], "development", "{shown}");
+        assert_eq!(api["env"]["TOKEN"], "${{ env.API_TOKEN }}", "{shown}");
+        let text = shown.to_string();
+        assert!(
+            !text.contains("dotenv-token") && !text.contains("shell-token"),
+            "{text}"
+        );
         h.close().await;
     })
     .await
@@ -375,6 +425,29 @@ async fn start_pipeline_order_and_idempotence() {
         assert_eq!(
             &h.runner.journal.entries()[5..],
             ["echo task-migrate", "printenv DB_PORT; sleep"]
+        );
+
+        // An edited setup entry and an edited once-only task count as not done.
+        h.call(Method::Stop, json!({}), cx(&main))
+            .await
+            .expect("stop");
+        std::fs::write(
+            main.join("devlanes.yaml"),
+            PIPELINE
+                .replace("echo setup-db", "echo setup-db-v2")
+                .replace("echo task-build", "echo task-build-v2"),
+        )
+        .expect("edit");
+        let fourth = start(&h, cx(&main), json!({})).await;
+        assert!(fourth.ready, "{fourth:?}");
+        assert_eq!(
+            &h.runner.journal.entries()[7..],
+            [
+                "echo setup-db-v2",
+                "echo task-build-v2",
+                "echo task-migrate",
+                "printenv DB_PORT; sleep"
+            ]
         );
         h.close().await;
     })

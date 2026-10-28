@@ -1,0 +1,46 @@
+---
+source: crates/cli/tests/it/render.rs
+expression: text
+---
+--- human (exit 0)
+# lane acme@0
+# from /work/acme/devlanes.yaml
+# from /work/acme/devlanes.local.yaml
+project: acme
+services:
+  api:
+    extends: node
+    run: npm run dev:local
+    env:
+      NODE_ENV: development
+      TOKEN: ${{ env.API_TOKEN }}
+    hosts:
+    - api.${{ lane.domain }}
+--- plain (exit 0)
+# lane acme@0
+# from /work/acme/devlanes.yaml
+# from /work/acme/devlanes.local.yaml
+project: acme
+services:
+  api:
+    extends: node
+    run: npm run dev:local
+    env:
+      NODE_ENV: development
+      TOKEN: ${{ env.API_TOKEN }}
+    hosts:
+    - api.${{ lane.domain }}
+--- agent (exit 0)
+# lane acme@0
+# from /work/acme/devlanes.yaml
+# from /work/acme/devlanes.local.yaml
+project: acme
+services:
+  api:
+    extends: node
+    run: npm run dev:local
+    env:
+      NODE_ENV: development
+      TOKEN: ${{ env.API_TOKEN }}
+    hosts:
+    - api.${{ lane.domain }}
