@@ -41,9 +41,9 @@ lanes:
   max: 20
   # Values computed per lane and read as lane.<name>; lane.index is 0 for the primary worktree.
   vars:
-    pages_domain: ${{ 'pages' if lane.index == 0 else 'pages-' ~ lane.index }}.localhost
-    members_domain: ${{ 'members' if lane.index == 0 else 'members-' ~ lane.index }}.localhost
-    test_domain: ${{ 'test' if lane.index == 0 else 'test-' ~ lane.index }}.localhost
+    pages_domain: ${{ domain('pages') }}
+    members_domain: ${{ domain('members') }}
+    test_domain: ${{ domain('test') }}
     db_name: ${{ 'acme_v2' if lane.index == 0 else 'acme_v2_' ~ lane.name }}
     redis_db: ${{ 0 if lane.index == 0 else 40 + lane.index }}
     vhost: ${{ 'acme' if lane.index == 0 else 'acme_' ~ lane.name }}

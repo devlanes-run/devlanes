@@ -26,7 +26,7 @@ let resolution = probe_localhost(Duration::from_secs(2)).await;
 let desired = policy.desired(
     resolution,
     client.suffixes(),
-    [(Some(HostsFileMode::Always), ["web.acme-2.localhost", "api.acme-2.localhost"])],
+    [(Some(HostsFileMode::Always), ["web.acme2.localhost", "api.acme2.localhost"])],
 );
 
 let sync = HostsSync::spawn(client, SyncConfig::default());

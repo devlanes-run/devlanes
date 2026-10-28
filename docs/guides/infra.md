@@ -302,7 +302,7 @@ global_env:
   SMTP_PORT: ${{ infra.mailpit.ports['1025'] }}
 ```
 
-Each lane's outgoing mail lands in its own inbox at `https://mail.acme-2.localhost`.
+Each lane's outgoing mail lands in its own inbox at `https://mail.acme2.localhost`.
 
 ### A plain container per lane
 

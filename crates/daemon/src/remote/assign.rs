@@ -817,10 +817,10 @@ mod tests {
             },
             Case {
                 name: "lanes that clash with nothing are all mirrored",
-                local: vec![local("acme@1", true, &["web.acme-1.localhost"])],
+                local: vec![local("acme@1", true, &["web.acme1.localhost"])],
                 boxes: vec![
                     on_box("fork-a", 1, &[("acme@0", WEB)]),
-                    on_box("fork-b", 2, &[("acme@2", &["web.acme-2.localhost"])]),
+                    on_box("fork-b", 2, &[("acme@2", &["web.acme2.localhost"])]),
                 ],
                 choices: chose(&[("acme@0", "fork-a")]),
                 mirrored: &[("fork-a", "acme@0"), ("fork-b", "acme@2")],
@@ -1001,8 +1001,8 @@ mod tests {
         for (a, b) in [
             ("web.acme.localhost", "api.acme.localhost"),
             ("*.acme.localhost", "acme.localhost"),
-            ("*.acme.localhost", "web.acme-2.localhost"),
-            ("*.acme.localhost", "*.acme-2.localhost"),
+            ("*.acme.localhost", "web.acme2.localhost"),
+            ("*.acme.localhost", "*.acme2.localhost"),
             ("*.a.localhost", "*.ba.localhost"),
         ] {
             assert!(!overlap(a, b), "{a} and {b}");

@@ -25,7 +25,7 @@ tls
   ! cannot tell whether firefox trusts the CA: certutil is not installed
   ! the devlanes CA has no name constraints (it predates them), so a leaked key could sign certificates for any site
     fix: devlanes certs untrust && rm -r /home/u/.devlanes/ca && devlanes certs trust && devlanes daemon restart
-  ! api.example.com is outside the CA's names; HTTPS will fail; try api.acme-2.localhost (acme@2:api)
+  ! api.example.com is outside the CA's names; HTTPS will fail; try api.acme2.localhost (acme@2:api)
 hosts
   ✓ /etc/hosts fallback auto, resolver loopback, 3 names written
   ! the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0
@@ -59,7 +59,7 @@ tls
   warn cannot tell whether firefox trusts the CA: certutil is not installed
   warn the devlanes CA has no name constraints (it predates them), so a leaked key could sign certificates for any site
     fix: devlanes certs untrust && rm -r /home/u/.devlanes/ca && devlanes certs trust && devlanes daemon restart
-  warn api.example.com is outside the CA's names; HTTPS will fail; try api.acme-2.localhost (acme@2:api)
+  warn api.example.com is outside the CA's names; HTTPS will fail; try api.acme2.localhost (acme@2:api)
 hosts
   ok /etc/hosts fallback auto, resolver loopback, 3 names written
   warn the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0
@@ -82,7 +82,7 @@ warn proxy: https on port 443, where caddy (pid 5150) listens too; requests to l
 warn tls: cannot tell whether firefox trusts the CA: certutil is not installed
 warn tls: the devlanes CA has no name constraints (it predates them), so a leaked key could sign certificates for any site
   fix: devlanes certs untrust && rm -r /home/u/.devlanes/ca && devlanes certs trust && devlanes daemon restart
-warn tls: api.example.com is outside the CA's names; HTTPS will fail; try api.acme-2.localhost (acme@2:api)
+warn tls: api.example.com is outside the CA's names; HTTPS will fail; try api.acme2.localhost (acme@2:api)
 warn proxy: hostname web_app.localhost is invalid (acme@2:web): `web_app.localhost` contains `_`, which DNS names cannot; the route is left out
 warn hosts: the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0
   fix: devlanes certs trust --hosts

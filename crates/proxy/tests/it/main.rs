@@ -445,13 +445,13 @@ async fn status_pages_loop_detection_and_redirect() -> Result {
 #[tokio::test]
 async fn unknown_host_suggests_routes() -> Result {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let mut route = Route::new("app.acme-1.localhost", Upstream::Local(1));
+        let mut route = Route::new("app.acme1.localhost", Upstream::Local(1));
         route.owner = Some("acme@1".into());
         let proxy = Proxy::new(ProxyConfig::default(), RouteTable::new(vec![route])?);
         let running = run_proxy(proxy, None).await?;
         let response = request(
             TcpStream::connect(running.address).await?,
-            "app.acme-2.localhost",
+            "app.acme2.localhost",
             "/",
             &[],
         )
@@ -459,8 +459,8 @@ async fn unknown_host_suggests_routes() -> Result {
         assert_eq!(response.status(), 404);
         assert_eq!(response.headers()["x-devlanes-error"], "unknown-host");
         let markdown = text(response).await?;
-        assert!(markdown.contains("Did you mean `app.acme-1.localhost` (acme@1)?"));
-        assert!(markdown.contains("- `app.acme-1.localhost` (acme@1)"));
+        assert!(markdown.contains("Did you mean `app.acme1.localhost` (acme@1)?"));
+        assert!(markdown.contains("- `app.acme1.localhost` (acme@1)"));
         let response = request(
             TcpStream::connect(running.address).await?,
             "localhost",
@@ -478,7 +478,7 @@ async fn unknown_host_suggests_routes() -> Result {
         )
         .await?;
         assert_eq!(response.status(), 404);
-        assert!(!text(response).await?.contains("app.acme-1.localhost"));
+        assert!(!text(response).await?.contains("app.acme1.localhost"));
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await?

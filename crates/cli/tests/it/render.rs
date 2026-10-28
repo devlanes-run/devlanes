@@ -30,7 +30,7 @@ pub(crate) fn unit(name: &str, state: &str) -> Value {
     let port = 20100 + name.len() as u16;
     let mut urls = vec![json!(format!("http://127.0.0.1:{port}"))];
     if name != "worker" {
-        urls.push(json!(format!("https://{name}.acme-2.localhost:8443")));
+        urls.push(json!(format!("https://{name}.acme2.localhost:8443")));
     }
     json!({
         "name": name, "lane": "acme@2", "state": state,
@@ -76,7 +76,7 @@ pub(crate) fn lane(index: Option<u32>, branch: &str, state: &str, units: Vec<Val
         "path": format!("/work/acme-lanes/{}", branch.replace('/', "-")),
         "state": state, "config_changed": false, "units": units, "profile": null,
         "moves_to": null,
-        "domain": index.map(|i| if i == 0 { "acme.localhost".to_owned() } else { format!("acme-{i}.localhost") }),
+        "domain": index.map(|i| if i == 0 { "acme.localhost".to_owned() } else { format!("acme{i}.localhost") }),
         "port_block": index.map(|i| [20000 + i * 100, 20099 + i * 100]),
         "reason": null, "needs_env": false, "containers": [],
     })
@@ -303,7 +303,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             pgadmin["ports"] = json!({"default": 5050});
             pgadmin["urls"] = json!([
                 "http://127.0.0.1:5050",
-                "https://pgadmin.acme-2.localhost:8443"
+                "https://pgadmin.acme2.localhost:8443"
             ]);
             page(vec![lane(
                 Some(2),
@@ -473,7 +473,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                     {"code": "autostart_off", "data": {}},
                     {"code": "unassigned", "data": {"reason": "lanes_max", "max": 4}},
                     {"code": "no_config", "data": {}},
-                    {"code": "sudo_denied", "data": {"hosts": ["admin.acme-2.localhost"], "message": "sudo said no"}},
+                    {"code": "sudo_denied", "data": {"hosts": ["admin.acme2.localhost"], "message": "sudo said no"}},
                 {"code": "queued", "data": queued_reason["data"].clone()},
                 ],
             }),
@@ -495,15 +495,15 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         (
             "url",
             Method::Url,
-            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost", "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost"]}),
+            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme2.localhost", "urls": ["http://127.0.0.1:20101", "https://web.acme2.localhost"]}),
         ),
         (
             "url_clients",
             Method::Url,
-            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost:8443",
-            "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost:8443"],
+            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme2.localhost:8443",
+            "urls": ["http://127.0.0.1:20101", "https://web.acme2.localhost:8443"],
             "clients": [
-                {"client": "laptop", "id": "0123abcd", "alias": "hetzner", "url": "https://web.acme-2.localhost", "reachable": true, "reason": null},
+                {"client": "laptop", "id": "0123abcd", "alias": "hetzner", "url": "https://web.acme2.localhost", "reachable": true, "reason": null},
                 {"client": "desktop", "id": "4567ef01", "alias": "hetzner", "url": null, "reachable": false,
                  "reason": "port 20101 is in use there by postgres (pid 812)"},
             ]}),
@@ -513,9 +513,9 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Hosts,
             json!({
                 "items": [
-                    {"host": "api.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready",
-                     "clients": [{"client": "laptop", "url": "https://api.acme-2.localhost:9443", "reachable": true, "reason": null}]},
-                    {"host": "web.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": false, "state": "ready",
+                    {"host": "api.acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready",
+                     "clients": [{"client": "laptop", "url": "https://api.acme2.localhost:9443", "reachable": true, "reason": null}]},
+                    {"host": "web.acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": false, "state": "ready",
                      "clients": [{"client": "laptop", "url": null, "reachable": false, "reason": "the lane is not mirrored there"}]},
                 ],
                 "proxy": {"https": {"bound": true, "port": 443, "fallback_reason": null}},
@@ -527,8 +527,8 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Hosts,
             json!({
                 "items": [
-                    {"host": "api.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready"},
-                    {"host": "acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": true, "state": "idle"},
+                    {"host": "api.acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready"},
+                    {"host": "acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": true, "state": "idle"},
                 ],
                 "proxy": {"http": {"bound": true, "port": 80, "fallback_reason": null},
                           "https": {"bound": true, "port": 8443, "fallback_reason": "port 443 needs root"}},
@@ -692,7 +692,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                                     "message": "`web_app.localhost` contains `_`, which DNS names cannot; the route is left out"}}],
                 "ca_warnings": [{"code": "host_outside_ca", "data": {
                     "lane": "acme@2", "unit": "api", "host": "api.example.com",
-                    "permitted": ["localhost", "test"], "suggestion": "api.acme-2.localhost",
+                    "permitted": ["localhost", "test"], "suggestion": "api.acme2.localhost",
                 }}],
                 "projects": 2, "subscribers": 1,
                 "hosts": {"mode": "auto", "probe": "loopback", "state": "applied", "names": 3, "desired": 3, "skipped": 0,
@@ -1618,7 +1618,7 @@ fn leftover_processes_get_a_one_line_note() {
         {"name": "postgres", "ports": {"default": 20150}, "cpu_percent": 1.5, "memory_bytes": 52_000_000},
         {"name": "redis", "ports": {}, "shared": true, "cpu_percent": 0.5, "memory_bytes": 8_000_000},
         {"name": "s3mock", "ports": {"default": 19090}, "shared": true, "cpu_percent": 0.1,
-         "memory_bytes": 9_000_000, "urls": ["https://s3.acme-2.localhost"]},
+         "memory_bytes": 9_000_000, "urls": ["https://s3.acme2.localhost"]},
         {"name": "mail", "ports": {}},
     ]);
     let text = render_text(Method::Status, &json!({"items": [status]}));
@@ -1634,7 +1634,7 @@ fn leftover_processes_get_a_one_line_note() {
         .lines()
         .find(|line| line.contains("s3mock"))
         .unwrap_or_default();
-    assert!(s3.contains("https://s3.acme-2.localhost"), "{human}");
+    assert!(s3.contains("https://s3.acme2.localhost"), "{human}");
     assert!(
         !human.contains("mail"),
         "unsampled containers stay out\n{human}"
@@ -2413,8 +2413,8 @@ fn box_registries_stay_out_of_remote_ls() {
     let hosts = json!({"items": [{
         "host": "hetzner", "state": "connected", "transport": "ssh", "ports": [],
         "connected_since_ms": now - 5 * 60_000,
-        "routes": [{"host": "web.acme-1.localhost", "port": 20101, "lane": "acme@1",
-                    "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
+        "routes": [{"host": "web.acme1.localhost", "port": 20101, "lane": "acme@1",
+                    "unit": "web", "url": "https://web.acme1.localhost", "state": "ready"}],
         "registry": {"lanes": [{"key": {"project": "acme", "lane": "1"}, "index": 1}],
                      "units": [{"key": {"lane": {"project": "acme", "lane": "1"},
                                         "kind": "service", "name": "registered-only"}}]},
@@ -2434,7 +2434,7 @@ fn box_registries_stay_out_of_remote_ls() {
     ] {
         assert!(!text.contains(hidden), "{hidden}: {text}");
     }
-    assert!(text.contains("https://web.acme-1.localhost"), "{text}");
+    assert!(text.contains("https://web.acme1.localhost"), "{text}");
     assert!(text.contains("connected_since: 5m ago"), "{text}");
 }
 

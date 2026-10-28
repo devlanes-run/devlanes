@@ -123,7 +123,7 @@ hosts:
     host_header: upstream
 ```
 
-`lane.domain` is `<project>.localhost` in lane 0 and `<project>-<N>.localhost` in lane N. Keep every hostname under it, or under a lane variable built the same way, so lanes never collide. The proxy serves them over HTTPS on 443 (8443 when 443 cannot be bound). Hosts also make `ready` default to `tcp`.
+`lane.domain` is `<project>.localhost` in lane 0 and `<project><N>.localhost` in lane N, and `domain('pages')` gives any name the same rule (`pages.localhost`, `pages2.localhost`). Keep every hostname under it, or under a lane variable built the same way, so lanes never collide. The proxy serves them over HTTPS on 443 (8443 when 443 cannot be bound). Hosts also make `ready` default to `tcp`.
 
 TLS trust is already handled. Node units get `NODE_EXTRA_CA_CERTS` and Python units `SSL_CERT_FILE` pointing at the devlanes CA, and the user runs `devlanes certs trust` once for browsers and the system. Do not add `NODE_OPTIONS=--use-system-ca`, `NODE_TLS_REJECT_UNAUTHORIZED=0` or your own `NODE_EXTRA_CA_CERTS`. `lanes.hosts_file: always` also writes exact hostnames to `/etc/hosts` for programs that cannot resolve `*.localhost`; wildcards cannot go there.
 

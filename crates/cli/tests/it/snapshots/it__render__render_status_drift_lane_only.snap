@@ -5,13 +5,13 @@ expression: text
 --- human (exit 0)
 acme
   LANE  BRANCH        STATE    SERVICES  CPU   MEM        URL
-  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme-2.localhost:8443  (config changed: infra changed; devlanes reload --lane acme@2 applies it)
-  3     fix/login     running  1/1       4.5%  143.1 MiB  https://acme-3.localhost:8443  (config changed)
+  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme2.localhost:8443  (config changed: infra changed; devlanes reload --lane acme@2 applies it)
+  3     fix/login     running  1/1       4.5%  143.1 MiB  https://acme3.localhost:8443  (config changed)
 --- plain (exit 0)
 acme
   LANE  BRANCH        STATE    SERVICES  CPU   MEM        URL
-  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme-2.localhost:8443  (config changed: infra changed; devlanes reload --lane acme@2 applies it)
-  3     fix/login     running  1/1       4.5%  143.1 MiB  https://acme-3.localhost:8443  (config changed)
+  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme2.localhost:8443  (config changed: infra changed; devlanes reload --lane acme@2 applies it)
+  3     fix/login     running  1/1       4.5%  143.1 MiB  https://acme3.localhost:8443  (config changed)
 --- agent (exit 0)
 running acme@2 feat/billing 1/1 (config changed: infra changed; devlanes reload --lane acme@2 applies it)
 running acme@3 fix/login 1/1 (config changed)

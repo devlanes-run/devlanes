@@ -449,7 +449,7 @@ mod tests {
     /// gets the URL as one argument after the entry point.
     #[test]
     fn opener_inside_wsl() {
-        let url = "https://web.acme-2.localhost/?a=1&b=2";
+        let url = "https://web.acme2.localhost/?a=1&b=2";
         let system32 = Path::new("/mnt/c/Windows/System32");
         assert_eq!(
             wsl_opener(url, Some("/usr/bin/wslview".into()), system32),

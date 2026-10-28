@@ -485,10 +485,10 @@ mod tests {
     /// Routes of a plain project, a workerd project and a wildcard.
     fn routes() -> Vec<RouteEntry> {
         vec![
-            route("acme@2", "web.acme-2.localhost"),
+            route("acme@2", "web.acme2.localhost"),
             route("acme@2", "*.pages-2.acme.localhost"),
             route("worker@0", "api.worker.localhost"),
-            route("box:remote@1", "web.remote-1.localhost"),
+            route("box:remote@1", "web.remote1.localhost"),
         ]
     }
 
@@ -522,8 +522,8 @@ mod tests {
             chosen(Some(Auto), Fails),
             [
                 "api.worker.localhost",
-                "web.acme-2.localhost",
-                "web.remote-1.localhost"
+                "web.acme2.localhost",
+                "web.remote1.localhost"
             ]
         );
         assert_eq!(chosen(Some(Always), Loopback).len(), 3);
@@ -636,7 +636,7 @@ mod tests {
     async fn nothing_runs_until_names_are_needed() {
         let executor = executor(Arc::default());
         let hosts = hosts_file(executor.clone(), Auto, false);
-        hosts.update(&[route("acme@2", "web.acme-2.localhost")], &BTreeMap::new());
+        hosts.update(&[route("acme@2", "web.acme2.localhost")], &BTreeMap::new());
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert!(
             executor.calls().is_empty(),
@@ -654,7 +654,7 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
         assert_eq!(
             applies(&executor),
-            ["api.worker.localhost\nweb.acme-2.localhost\nweb.remote-1.localhost\n"]
+            ["api.worker.localhost\nweb.acme2.localhost\nweb.remote1.localhost\n"]
         );
         assert_eq!(hosts.status()["state"], "applied");
         assert_eq!(hosts.status()["names"], 3);
@@ -674,10 +674,10 @@ mod tests {
         assert_eq!(status["state"], "failed");
         assert_eq!(status["last_error"]["code"], "sudo_denied");
         let (code, data) = hosts
-            .reason(&["web.acme-2.localhost".into()])
+            .reason(&["web.acme2.localhost".into()])
             .expect("why reason");
         assert_eq!(code, "sudo_denied");
-        assert_eq!(data["hosts"], json!(["web.acme-2.localhost"]));
+        assert_eq!(data["hosts"], json!(["web.acme2.localhost"]));
         assert!(hosts.reason(&["other.localhost".into()]).is_none());
 
         deny.store(false, Ordering::SeqCst);
@@ -688,7 +688,7 @@ mod tests {
             2,
             "retry skips the five-minute backoff"
         );
-        assert!(hosts.reason(&["web.acme-2.localhost".into()]).is_none());
+        assert!(hosts.reason(&["web.acme2.localhost".into()]).is_none());
     }
 
     #[tokio::test(start_paused = true)]
@@ -793,7 +793,7 @@ mod tests {
         );
         assert_eq!(status["last_error"]["cause"]["code"], "sudo_denied");
         let (code, data) = hosts
-            .reason(&["web.acme-2.localhost".into()])
+            .reason(&["web.acme2.localhost".into()])
             .expect("why reason");
         assert_eq!(code, "helper_version_mismatch");
         assert_eq!(data["fix"], "devlanes certs trust --hosts");

@@ -377,7 +377,7 @@ mod tests {
             vars: BTreeMap::from([
                 (
                     "PUBLIC_BASE_URL".to_owned(),
-                    "https://api.acme-1.localhost".to_owned(),
+                    "https://api.acme1.localhost".to_owned(),
                 ),
                 ("A".to_owned(), "1".to_owned()),
             ]),
@@ -393,7 +393,7 @@ mod tests {
             script_body: Some("wrangler dev --persist-to .wrangler-state"),
         })
         .expect("valid input");
-        insta::assert_snapshot!(result.args.join(" "), @"--port 20010 --inspector-port 20011 --var A:1 --var PUBLIC_BASE_URL:https://api.acme-1.localhost --env-file .dev.vars.stripe");
+        insta::assert_snapshot!(result.args.join(" "), @"--port 20010 --inspector-port 20011 --var A:1 --var PUBLIC_BASE_URL:https://api.acme1.localhost --env-file .dev.vars.stripe");
         let registry = Path::new("/data/acme/7")
             .join(REGISTRY_DIR)
             .display()

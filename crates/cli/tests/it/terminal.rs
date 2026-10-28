@@ -187,7 +187,7 @@ fn human_output_links_urls_and_marks_sections() {
     let human = featured(runtime(&["devlanes"], true, false));
     let start = rendered(&human, Method::Start, &start_result());
     assert!(
-        start.contains("\x1b]8;;https://api.acme-2.localhost:8443\x1b\\https://api.acme-2.localhost:8443\x1b]8;;\x1b\\"),
+        start.contains("\x1b]8;;https://api.acme2.localhost:8443\x1b\\https://api.acme2.localhost:8443\x1b]8;;\x1b\\"),
         "{start:?}"
     );
     // The failed unit's row starts a section the terminal can jump to.
@@ -199,7 +199,7 @@ fn human_output_links_urls_and_marks_sections() {
                         "truncated": false, "next_cursor": null});
     let status = rendered(&human, Method::Status, &status);
     assert!(
-        status.contains("\x1b]8;;https://acme-2.localhost:8443\x1b\\"),
+        status.contains("\x1b]8;;https://acme2.localhost:8443\x1b\\"),
         "{status:?}"
     );
     let hosts = json!({

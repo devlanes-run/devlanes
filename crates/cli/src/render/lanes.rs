@@ -769,7 +769,7 @@ fn proxy_origin(lanes: &[LaneSummary]) -> Option<(String, String)> {
 }
 
 /// The lane's base URL from its domain, with the scheme and port the proxy
-/// serves units on (`https://acme-2.localhost:8443`); the bare domain when no
+/// serves units on (`https://acme2.localhost:8443`); the bare domain when no
 /// unit URL shows them.
 fn lane_url(lane: &LaneSummary, origin: Option<&(String, String)>) -> String {
     match (&lane.domain, origin) {

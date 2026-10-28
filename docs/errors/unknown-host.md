@@ -11,7 +11,7 @@ Over HTTPS the browser shows a certificate error instead of this page, because t
 
 ## Causes
 
-- A typo or the wrong lane number. Lane 2 of `acme` is `acme-2.localhost`; its `api` service is `api.acme-2.localhost`.
+- A typo or the wrong lane number. Lane 2 of `acme` is `acme2.localhost`; its `api` service is `api.acme2.localhost`.
 - The daemon does not know the lane yet. Run `devlanes start` in the project or worktree.
 - No `hosts` entry in `devlanes.yaml` declares the name.
 - Another lane claimed the name first; devlanes warns about the conflict.

@@ -64,7 +64,7 @@ impl Fake {
             preset_options: self.options.as_ref(),
             port: Some(20010),
             ports: &ports,
-            public_url: Some("https://api.acme-1.localhost"),
+            public_url: Some("https://api.acme1.localhost"),
             pty: true,
             script: script.as_ref(),
             client_env: &empty,
@@ -118,12 +118,12 @@ fn adapter_required_ports() {
 async fn adapter_renders_flags_and_env() {
     let mut fake = Fake::new(script_command());
     fake.options = Some(serde_json::json!({
-        "vars": { "PUBLIC_BASE_URL": "https://api.acme-1.localhost", "RETRIES": 3, "DEBUG": true },
+        "vars": { "PUBLIC_BASE_URL": "https://api.acme1.localhost", "RETRIES": 3, "DEBUG": true },
         "args": ["--env-file", ".dev.vars"]
     }));
     fake.script_body = Some("wrangler dev --persist-to .state");
     let draft = fake.apply().await.expect("apply");
-    insta::assert_snapshot!(draft.args.join(" "), @"--port 20010 --inspector-port 20011 --var DEBUG:true --var PUBLIC_BASE_URL:https://api.acme-1.localhost --var RETRIES:3 --env-file .dev.vars");
+    insta::assert_snapshot!(draft.args.join(" "), @"--port 20010 --inspector-port 20011 --var DEBUG:true --var PUBLIC_BASE_URL:https://api.acme1.localhost --var RETRIES:3 --env-file .dev.vars");
     let registry = Path::new(DATA).join("wrangler-registry");
     for name in REGISTRY_ENVS {
         assert_eq!(
@@ -247,7 +247,7 @@ fn preset_arg_rendering_matrix() {
     let wrangler_options = wrangler::WranglerOptions {
         vars: BTreeMap::from([(
             "PUBLIC_BASE_URL".to_owned(),
-            "https://api.acme-1.localhost".to_owned(),
+            "https://api.acme1.localhost".to_owned(),
         )]),
         args: Some(vec!["--env-file".into(), ".dev.vars".into()]),
         isolate_registry: None,

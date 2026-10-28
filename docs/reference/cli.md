@@ -7,7 +7,7 @@ Every `devlanes` command and option with its help text; `devlanes <command> --he
 Run a dev environment per git worktree, side by side.
 
 Every worktree of a project is a lane with its own ports, hostnames such as
-web.acme-2.localhost and environment, so branches run at the same time. A
+web.acme2.localhost and environment, so branches run at the same time. A
 per-user daemon owns the processes and containers and keeps them running when
 the terminal closes; this command and the TUI are its clients. Without a
 command, devlanes opens the TUI on a terminal and prints status otherwise.

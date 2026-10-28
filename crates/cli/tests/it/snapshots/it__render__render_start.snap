@@ -6,10 +6,10 @@ expression: text
 acme@2 · feat/billing
 ✗ services  4 of 5 ready
   ✗  admin   exited 1   Error: Cannot find module './env'
-  ✓  api     https://api.acme-2.localhost:8443
-  ✓  web     https://web.acme-2.localhost:8443
+  ✓  api     https://api.acme2.localhost:8443
+  ✓  web     https://web.acme2.localhost:8443
   ✓  worker  http://127.0.0.1:20106
-  ✓  mailer  https://mailer.acme-2.localhost:8443
+  ✓  mailer  https://mailer.acme2.localhost:8443
 ! seed skipped: admin failed
 
 logs: devlanes logs acme@2:admin --tail 200
@@ -17,10 +17,10 @@ logs: devlanes logs acme@2:admin --tail 200
 acme@2 · feat/billing
 failed services  4 of 5 ready
   failed  admin   exited 1   Error: Cannot find module './env'
-  ok      api     https://api.acme-2.localhost:8443
-  ok      web     https://web.acme-2.localhost:8443
+  ok      api     https://api.acme2.localhost:8443
+  ok      web     https://web.acme2.localhost:8443
   ok      worker  http://127.0.0.1:20106
-  ok      mailer  https://mailer.acme-2.localhost:8443
+  ok      mailer  https://mailer.acme2.localhost:8443
 skipped seed: admin failed
 
 logs: devlanes logs acme@2:admin --tail 200
@@ -31,7 +31,7 @@ failed admin exit=1
   | Error: Cannot find module './env'
   |     at main.ts:3:1
   more: devlanes logs acme@2:admin --tail 200
-ready api http://127.0.0.1:20103 https://api.acme-2.localhost:8443
-ready web http://127.0.0.1:20103 https://web.acme-2.localhost:8443
+ready api http://127.0.0.1:20103 https://api.acme2.localhost:8443
+ready web http://127.0.0.1:20103 https://web.acme2.localhost:8443
 ready worker http://127.0.0.1:20106
-ready mailer http://127.0.0.1:20106 https://mailer.acme-2.localhost:8443
+ready mailer http://127.0.0.1:20106 https://mailer.acme2.localhost:8443

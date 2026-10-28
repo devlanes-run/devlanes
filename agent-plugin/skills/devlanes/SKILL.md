@@ -72,8 +72,8 @@ failed admin-api exit=1
   |     at Module._resolveFilename (node:internal/modules/cjs/loader:1145:15)
   |     at /.../apps/admin-api/src/main.ts:3:1
   more: devlanes logs acme@2:admin-api --tail 200
-ready crm-api https://crm.acme-2.localhost
-ready user-web https://app.acme-2.localhost
+ready crm-api https://crm.acme2.localhost
+ready user-web https://app.acme2.localhost
 ready +5 (devlanes status acme@2)
 ```
 

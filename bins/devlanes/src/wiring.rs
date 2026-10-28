@@ -2572,11 +2572,11 @@ mod tests {
             entry("web.acme.localhost", "acme@0", "web", 3000),
             entry("api_v2.acme.localhost", "acme@0", "api", 3001),
             entry("web.acme.localhost.", "acme@1", "web", 3010),
-            entry("docs.acme-1.localhost", "acme@1", "docs", 3011),
+            entry("docs.acme1.localhost", "acme@1", "docs", 3011),
         ]);
         let routes = sink.proxy.routes();
         let hosts: Vec<&str> = routes.routes().iter().map(|r| r.host.as_str()).collect();
-        assert_eq!(hosts, ["docs.acme-1.localhost", "web.acme.localhost"]);
+        assert_eq!(hosts, ["docs.acme1.localhost", "web.acme.localhost"]);
         let rejected = &sink.status()["rejected"];
         assert_eq!(rejected[0]["host"], "api_v2.acme.localhost");
         assert_eq!(rejected[0]["lane"], "acme@0");

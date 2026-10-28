@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn entries_are_laid_out_per_lane() {
         let context = ExpressionContext {
-            lane: json!({"domain": "acme-1.localhost"}),
+            lane: json!({"domain": "acme1.localhost"}),
             ..ExpressionContext::default()
         };
         let infos = external_infos(&config(), &context, Some(8443));
@@ -343,10 +343,10 @@ mod tests {
         assert_eq!(pgadmin.port, 5050);
         assert_eq!(pgadmin.url, "http://127.0.0.1:5050");
         assert_eq!(pgadmin.routes.len(), 2);
-        assert_eq!(pgadmin.routes[0].host, "pgadmin.acme-1.localhost");
+        assert_eq!(pgadmin.routes[0].host, "pgadmin.acme1.localhost");
         assert_eq!(
             pgadmin.public_url().as_deref(),
-            Some("https://pgadmin.acme-1.localhost:8443")
+            Some("https://pgadmin.acme1.localhost:8443")
         );
         assert!(pgadmin.routes[1].fallback && pgadmin.routes[1].url.is_none());
         let docs = &infos[1];

@@ -21,11 +21,11 @@ fn main() -> io::Result<()> {
             owner: Some("acme@0"),
         },
         KnownHost {
-            host: "acme-1.localhost",
+            host: "acme1.localhost",
             owner: Some("acme@1"),
         },
         KnownHost {
-            host: "api.acme-1.localhost",
+            host: "api.acme1.localhost",
             owner: Some("acme@1"),
         },
         KnownHost {
@@ -37,7 +37,7 @@ fn main() -> io::Result<()> {
     let mut index =
         String::from("<!doctype html><meta charset=utf-8><title>devlanes pages</title><ul>");
     for code in ErrorCode::ALL {
-        let page = ErrorPage::new(code).host("acme-2.localhost");
+        let page = ErrorPage::new(code).host("acme2.localhost");
         let page = match code {
             ErrorCode::UnknownHost => page.known_hosts(known.clone()),
             ErrorCode::ServiceIdle => page

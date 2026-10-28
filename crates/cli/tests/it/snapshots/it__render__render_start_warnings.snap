@@ -5,32 +5,32 @@ expression: text
 --- human (exit 0)
 acme@2 · feat/billing
 ✓ services  5 of 5 ready
-  ✓  api     https://api.acme-2.localhost:8443
-  ✓  web     https://web.acme-2.localhost:8443
-  ✓  admin   https://admin.acme-2.localhost:8443
+  ✓  api     https://api.acme2.localhost:8443
+  ✓  web     https://web.acme2.localhost:8443
+  ✓  admin   https://admin.acme2.localhost:8443
   ✓  worker  http://127.0.0.1:20106
-  ✓  mailer  https://mailer.acme-2.localhost:8443
+  ✓  mailer  https://mailer.acme2.localhost:8443
 ! api.example.com is outside the CA's names; HTTPS will fail; try api.acme.test
 ! this lane's units peak at 8.0 GiB together, more than the 4.0 GiB available; starts may wait for memory
 ! acme@1, shop@0 also ran before the daemon stopped; devlanes lane resume starts them
 --- plain (exit 0)
 acme@2 · feat/billing
 ok services  5 of 5 ready
-  ok  api     https://api.acme-2.localhost:8443
-  ok  web     https://web.acme-2.localhost:8443
-  ok  admin   https://admin.acme-2.localhost:8443
+  ok  api     https://api.acme2.localhost:8443
+  ok  web     https://web.acme2.localhost:8443
+  ok  admin   https://admin.acme2.localhost:8443
   ok  worker  http://127.0.0.1:20106
-  ok  mailer  https://mailer.acme-2.localhost:8443
+  ok  mailer  https://mailer.acme2.localhost:8443
 warn api.example.com is outside the CA's names; HTTPS will fail; try api.acme.test
 warn this lane's units peak at 8.0 GiB together, more than the 4.0 GiB available; starts may wait for memory
 warn acme@1, shop@0 also ran before the daemon stopped; devlanes lane resume starts them
 --- agent (exit 0)
 acme@2 (feat/billing): 5/5 ready
-ready api http://127.0.0.1:20103 https://api.acme-2.localhost:8443
-ready web http://127.0.0.1:20103 https://web.acme-2.localhost:8443
-ready admin http://127.0.0.1:20105 https://admin.acme-2.localhost:8443
+ready api http://127.0.0.1:20103 https://api.acme2.localhost:8443
+ready web http://127.0.0.1:20103 https://web.acme2.localhost:8443
+ready admin http://127.0.0.1:20105 https://admin.acme2.localhost:8443
 ready worker http://127.0.0.1:20106
-ready mailer http://127.0.0.1:20106 https://mailer.acme-2.localhost:8443
+ready mailer http://127.0.0.1:20106 https://mailer.acme2.localhost:8443
 warn api.example.com is outside the CA's names; HTTPS will fail; try api.acme.test
 warn this lane's units peak at 8.0 GiB together, more than the 4.0 GiB available; starts may wait for memory
 warn acme@1, shop@0 also ran before the daemon stopped; devlanes lane resume starts them

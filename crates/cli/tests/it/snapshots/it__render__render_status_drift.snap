@@ -5,35 +5,35 @@ expression: text
 --- human (exit 0)
 acme
   LANE  BRANCH        STATE    SERVICES  CPU  MEM        URL
-  2     feat/billing  running  3/4       14%  429.2 MiB  https://acme-2.localhost:8443  (config changed: 1 changed, 1 removed, 1 added; devlanes reload --lane acme@2 applies it)
+  2     feat/billing  running  3/4       14%  429.2 MiB  https://acme2.localhost:8443  (config changed: 1 changed, 1 removed, 1 added; devlanes reload --lane acme@2 applies it)
 
   UNIT    STATE  PORT   CPU   MEM        URL
-  api     ready  20103  4.5%  143.1 MiB  https://api.acme-2.localhost:8443
-  web     ready  20103  4.5%  143.1 MiB  https://web.acme-2.localhost:8443
+  api     ready  20103  4.5%  143.1 MiB  https://api.acme2.localhost:8443
+  web     ready  20103  4.5%  143.1 MiB  https://web.acme2.localhost:8443
   worker  ready  20106  4.5%  143.1 MiB  http://127.0.0.1:20106
-  mailer  idle   20106  –     –          https://mailer.acme-2.localhost:8443
+  mailer  idle   20106  –     –          https://mailer.acme2.localhost:8443
   api: run, env API_URL changed in the project file
   worker: removed from the project file
   mailer: added to the project file
 --- plain (exit 0)
 acme
   LANE  BRANCH        STATE    SERVICES  CPU  MEM        URL
-  2     feat/billing  running  3/4       14%  429.2 MiB  https://acme-2.localhost:8443  (config changed: 1 changed, 1 removed, 1 added; devlanes reload --lane acme@2 applies it)
+  2     feat/billing  running  3/4       14%  429.2 MiB  https://acme2.localhost:8443  (config changed: 1 changed, 1 removed, 1 added; devlanes reload --lane acme@2 applies it)
 
   UNIT    STATE  PORT   CPU   MEM        URL
-  api     ready  20103  4.5%  143.1 MiB  https://api.acme-2.localhost:8443
-  web     ready  20103  4.5%  143.1 MiB  https://web.acme-2.localhost:8443
+  api     ready  20103  4.5%  143.1 MiB  https://api.acme2.localhost:8443
+  web     ready  20103  4.5%  143.1 MiB  https://web.acme2.localhost:8443
   worker  ready  20106  4.5%  143.1 MiB  http://127.0.0.1:20106
-  mailer  idle   20106  –     –          https://mailer.acme-2.localhost:8443
+  mailer  idle   20106  –     –          https://mailer.acme2.localhost:8443
   api: run, env API_URL changed in the project file
   worker: removed from the project file
   mailer: added to the project file
 --- agent (exit 0)
 running acme@2 feat/billing 3/4 (config changed: 1 changed, 1 removed, 1 added; devlanes reload --lane acme@2 applies it)
-ready acme@2:api http://127.0.0.1:20103 https://api.acme-2.localhost:8443 default=20103
+ready acme@2:api http://127.0.0.1:20103 https://api.acme2.localhost:8443 default=20103
   run, env API_URL changed in the project file
-ready acme@2:web http://127.0.0.1:20103 https://web.acme-2.localhost:8443 default=20103
+ready acme@2:web http://127.0.0.1:20103 https://web.acme2.localhost:8443 default=20103
 ready acme@2:worker http://127.0.0.1:20106 default=20106
   removed from the project file
-idle acme@2:mailer http://127.0.0.1:20106 https://mailer.acme-2.localhost:8443 default=20106
+idle acme@2:mailer http://127.0.0.1:20106 https://mailer.acme2.localhost:8443 default=20106
   added to the project file

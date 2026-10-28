@@ -375,7 +375,7 @@ pub(super) fn url(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     lines
 }
 
-/// `on laptop: https://web.acme-1.localhost`, or `on desktop, not reachable:
+/// `on laptop: https://web.acme1.localhost`, or `on desktop, not reachable:
 /// <reason>`, for one entry of `url`'s `clients`.
 fn client_url_line(client: &Value) -> String {
     let name = text(client, "client");
