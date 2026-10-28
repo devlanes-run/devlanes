@@ -229,8 +229,37 @@ pub enum Method {
     Connect,
     #[serde(rename = "disconnect")]
     Disconnect,
+    /// Client side, for `devlanes remote ls` and the TUI: every known box with
+    /// its link state, registry and what this machine mirrors of it.
+    ///
+    /// Each item has `chosen_lanes`, the lanes `remote.use` chose this box
+    /// for, mirrored or not. Each `skipped_lanes[]` entry has `lane`, `hosts`
+    /// (its hostnames that clash), `box` and `reason`, plus `cause`
+    /// (`local_running`, `local_stopped`, `box_chosen` or `box_earlier`),
+    /// `winner` (the box whose lane serves the hostnames, null when a lane of
+    /// this machine does) and `can_use`, false while a running local lane
+    /// wins. The reply's top level has `yielded_local_lanes`, a list of
+    /// `{lane, winner}`: this machine's stopped lanes whose hostnames a chosen
+    /// box lane serves.
     #[serde(rename = "host.list")]
     HostList,
+    /// Client side, for `devlanes remote use` and the TUI: chooses which lane
+    /// serves hostnames that several lanes clash on ([`remote::UseParams`]).
+    /// A box lane is chosen by `{lane, host}`, and `host: null` gives the
+    /// hostnames back to this machine's lane. The choice is kept across
+    /// reconnects and restarts until another one replaces it, the box is
+    /// disconnected, or a local lane it clashes with starts.
+    ///
+    /// Replies once the mirrors applied it: `{lane, host, previous,
+    /// mirrored}`, where `previous` is the box that served the hostnames
+    /// before (null for this machine) and `mirrored` whether the chosen lane
+    /// serves them now. Errors, each with a `message`: `box_unknown`,
+    /// `box_not_connected`, `lane_not_on_box` (the box has no such lane),
+    /// `local_lane_running` (a running local lane, named by `local_lane`, keeps
+    /// the hostnames) and `local_lane_unknown` (`host: null` for a lane this
+    /// machine does not have).
+    #[serde(rename = "remote.use")]
+    RemoteUse,
     /// Box side, for `devlanes tunnel`: the registry a connected client mirrors,
     /// streamed as [`remote::REGISTRY_SNAPSHOT_EVENT`] and then
     /// [`remote::REGISTRY_CHANGE_EVENT`]s until the request's connection
@@ -1274,9 +1303,23 @@ pub mod remote {
         #[serde(default)]
         pub address: Option<String>,
     }
+    /// Params of `remote.use`.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct UseParams {
+        /// Lane reference, `project@index`.
+        pub lane: String,
+        /// The box whose lane serves the hostnames, or `None` for this
+        /// machine's lane. Sent as `null`, never left out.
+        pub host: Option<String>,
+    }
+
     /// `{host, state, ...}` whenever a connection changes state.
     pub const STATE_EVENT: &str = "remote.state";
-    /// `{host, code, ...}` for mirroring problems such as a skipped lane or a busy port.
+    /// `{host, code, ...}` for mirroring problems such as a skipped lane or a
+    /// busy port. `lane_skipped` carries `lane`, `hosts`, `box`, `local_lanes`
+    /// and `cause` (as `host.list`'s `skipped_lanes`). `choice_cleared`
+    /// carries `lane` and `host` (the box whose choice a starting local lane
+    /// deleted).
     pub const WARNING_EVENT: &str = "remote.warning";
     /// `{host}` on a client daemon, at most a few times a second, when what
     /// `host.list` says about the box changed apart from its link state (which
