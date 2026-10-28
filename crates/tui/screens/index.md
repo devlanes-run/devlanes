@@ -476,7 +476,7 @@ ASCII glyphs (ui.glyphs: ascii, or a locale without UTF-8)
 
 ## monitor
 
-the monitor (M): grouped by lane, sorted by cpu, api-search selected
+the monitor (M): grouped by lane, sorted by name, api-search selected
 
 - 200x60: [txt](monitor-200x60.txt) · [png](monitor-200x60.png) · [ansi](monitor-200x60.ansi)
 - 120x40: [txt](monitor-120x40.txt) · [png](monitor-120x40.png) · [ansi](monitor-120x40.ansi)
@@ -484,7 +484,7 @@ the monitor (M): grouped by lane, sorted by cpu, api-search selected
 
 ## monitor-sorted-filtered
 
-flat (e), sorted by memory (>), filtered with /acme
+flat (e), sorted by memory (left three times), filtered with /acme
 
 - 200x60: [txt](monitor-sorted-filtered-200x60.txt) · [png](monitor-sorted-filtered-200x60.png) · [ansi](monitor-sorted-filtered-200x60.ansi)
 - 120x40: [txt](monitor-sorted-filtered-120x40.txt) · [png](monitor-sorted-filtered-120x40.png) · [ansi](monitor-sorted-filtered-120x40.ansi)

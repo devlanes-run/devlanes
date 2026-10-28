@@ -1092,7 +1092,7 @@ fn hints(app: &App) -> Vec<Hint> {
             return vec![
                 ("j k", "move", ch('j')),
                 ("enter", "open unit", KeyCode::Enter),
-                ("< >", "sort", ch('>')),
+                ("←→", "sort", KeyCode::Right),
                 ("i", "reverse", ch('i')),
                 ("/", "filter", ch('/')),
                 ("e", "flat", ch('e')),

@@ -1,7 +1,7 @@
 //! Graphs for the monitor: filled braille areas colored by a load gradient,
-//! block sparklines and meters. ratatui's `Chart` and `Canvas` paint one
-//! color per dataset or shape, so a gradient that runs green at the bottom
-//! to red at the top needs its own widget.
+//! one-row braille sparklines and meters. ratatui's `Chart` and `Canvas`
+//! paint one color per dataset or shape, so a gradient that runs green at
+//! the bottom to red at the top needs its own widget.
 
 use ratatui::{
     buffer::Buffer,
@@ -167,6 +167,44 @@ pub fn braille(
             buf[(x, y)].set_char(symbol).set_style(style);
         }
     }
+}
+
+/// A one-row braille graph `width` cells wide, two samples (0 to 1) per cell
+/// with the newest at the right, for a table row. Each cell comes with the
+/// higher of its samples, which colors it, or `None` without a sample. Zero
+/// is the bottom dot alone, as in [`braille`], and any load above zero shows
+/// at least one dot, so a light load does not read as idle. ASCII glyphs get
+/// [`blocks`] for the higher sample.
+pub fn braille_row(
+    values: &[Option<f64>],
+    width: usize,
+    glyphs: Glyphs,
+) -> Vec<Option<(char, f64)>> {
+    (0..width)
+        .map(|column| {
+            let sides = [0, 1].map(|side| at(values, width, column, side));
+            let high = sides.iter().flatten().copied().reduce(f64::max)?;
+            let symbol = match glyphs {
+                Glyphs::Unicode => {
+                    let mut bits = 0u8;
+                    for (value, dots) in sides.iter().zip([LEFT, RIGHT]) {
+                        let Some(value) = value else {
+                            continue;
+                        };
+                        let level = if *value > 0.0 {
+                            ((value.clamp(0.0, 1.0) * 4.0).round() as usize).max(1)
+                        } else {
+                            1
+                        };
+                        bits |= dots[..level].iter().fold(0, |all, bit| all | bit);
+                    }
+                    char::from_u32(0x2800 + u32::from(bits)).unwrap_or(' ')
+                }
+                Glyphs::Ascii => blocks(Some(high), glyphs),
+            };
+            Some((symbol, high))
+        })
+        .collect()
 }
 
 /// One block per value (0 to 1); a column without a sample stays blank.
@@ -529,6 +567,32 @@ mod tests {
         );
         assert_eq!(load_color(&theme(Tier::Plain), 1.0), None);
         assert_eq!(load_color(&dark, f64::NAN), load_color(&dark, 0.0));
+    }
+
+    #[test]
+    fn a_braille_row_keeps_light_load_off_the_idle_baseline() {
+        let row = |values: &[Option<f64>], width| -> String {
+            braille_row(values, width, Glyphs::Unicode)
+                .into_iter()
+                .map(|cell| cell.map_or(' ', |(symbol, _)| symbol))
+                .collect()
+        };
+        // Idle is the bottom dot; 2% is one dot too, but carries its load.
+        assert_eq!(row(&[Some(0.0), Some(0.0)], 1), "⣀");
+        assert_eq!(
+            braille_row(&[Some(0.0), Some(0.02)], 1, Glyphs::Unicode)[0],
+            Some(('⣀', 0.02))
+        );
+        // Full on the left, half on the right; a missing side stays empty.
+        assert_eq!(row(&[Some(1.0), Some(0.5)], 1), "⣧");
+        assert_eq!(row(&[None, Some(1.0)], 1), "⢸");
+        // Newest at the right edge; no sample at all is a blank cell.
+        assert_eq!(row(&[Some(1.0), Some(1.0)], 3), "  ⣿");
+        assert_eq!(braille_row(&[None, None], 1, Glyphs::Unicode), [None]);
+        assert_eq!(
+            braille_row(&[Some(0.0), Some(1.0)], 1, Glyphs::Ascii),
+            [Some(('#', 1.0))]
+        );
     }
 
     #[test]

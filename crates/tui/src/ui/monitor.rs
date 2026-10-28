@@ -1375,8 +1375,8 @@ fn header_line(page: &Page, layout: &Layout) -> Line<'static> {
                 Column::Mem => (mark(SortKey::Mem, "mem"), false),
                 Column::Lane => (mark(SortKey::Lane, "lane"), false),
                 Column::Uptime => (mark(SortKey::Uptime, "uptime"), true),
-                // One cell per second: `cpu -40s`.
-                Column::Spark => (format!("cpu -{}", span(width)), false),
+                // Two seconds per cell: `cpu -1m 20s`.
+                Column::Spark => (format!("cpu -{}", span(width * 2)), false),
                 Column::Peak => (mark(SortKey::Peak, "peak"), true),
                 Column::Kind => (mark(SortKey::Kind, "kind"), false),
                 Column::State => (mark(SortKey::State, "state"), false),
@@ -1393,9 +1393,10 @@ fn header_line(page: &Page, layout: &Layout) -> Line<'static> {
     Line::from(spans)
 }
 
-/// A history's CPU as a colored sparkline, one column per cell pinned to the
-/// clock like the graphs, against `scale` (one core for a unit, the machine
-/// for a lane). `key` names the series for the column cache.
+/// A history's CPU as a one-row braille sparkline, two seconds per cell
+/// pinned to the clock like the graphs, against `scale` (one core for a
+/// unit, the machine for a lane). `key` names the series for the column
+/// cache.
 fn sparkline(
     page: &Page,
     key: &str,
@@ -1404,16 +1405,16 @@ fn sparkline(
     scale: f64,
 ) -> Vec<Span<'static>> {
     let points: Points = history.iter().map(|p| (p.0, p.1)).collect();
-    scaled(page.columns(key, &points, width, true), scale)
+    let values = scaled(page.columns(key, &points, width * 2, true), scale);
+    graph::braille_row(&values, width, page.theme.glyphs)
         .into_iter()
-        .map(|value| {
-            // Zero is a dim baseline; a missing sample stays blank.
-            let style = match value {
-                Some(v) if v <= 0.0 => page.theme.rule(),
-                Some(v) => loaded(page.theme, v),
-                None => Style::new(),
-            };
-            Span::styled(graph::blocks(value, page.theme.glyphs).to_string(), style)
+        .map(|cell| match cell {
+            // Idle is a dim dotted baseline; a missing sample stays blank.
+            Some((symbol, high)) if high <= 0.0 => {
+                Span::styled(symbol.to_string(), page.theme.rule())
+            }
+            Some((symbol, high)) => Span::styled(symbol.to_string(), loaded(page.theme, high)),
+            None => Span::raw(" "),
         })
         .collect()
 }

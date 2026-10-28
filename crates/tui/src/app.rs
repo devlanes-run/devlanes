@@ -5181,15 +5181,15 @@ impl App {
             KeyCode::PageUp => self.monitor.select_index(&rows, index.saturating_sub(page)),
             KeyCode::Char('g') | KeyCode::Home => self.monitor.select_index(&rows, 0),
             KeyCode::Char('G') | KeyCode::End => self.monitor.select_index(&rows, usize::MAX),
-            KeyCode::Char('<') => self.monitor.sort = self.monitor.sort.step(-1),
-            KeyCode::Char('>') => self.monitor.sort = self.monitor.sort.step(1),
+            KeyCode::Left | KeyCode::Char('<') => self.monitor.sort = self.monitor.sort.step(-1),
+            KeyCode::Right | KeyCode::Char('>') => self.monitor.sort = self.monitor.sort.step(1),
             KeyCode::Char('i') => self.monitor.reverse = !self.monitor.reverse,
             KeyCode::Char('e') => self.monitor.flat = !self.monitor.flat,
             KeyCode::Char('/') => self.monitor.editing = true,
             KeyCode::Char('z') => self.monitor.zoom = !self.monitor.zoom,
             KeyCode::Char('c') => self.monitor.memory_first = false,
             KeyCode::Char('m') => self.monitor.memory_first = true,
-            KeyCode::Char('h') | KeyCode::Left => match rows.get(index) {
+            KeyCode::Char('h') => match rows.get(index) {
                 Some(MonitorRow::Group(group)) => {
                     self.monitor.folded.insert(group.key.clone());
                 }
@@ -5198,7 +5198,7 @@ impl App {
                 }
                 _ => {}
             },
-            KeyCode::Char('l') | KeyCode::Right => {
+            KeyCode::Char('l') => {
                 if let Some(MonitorRow::Group(group)) = rows.get(index) {
                     self.monitor.folded.remove(&group.key);
                 }

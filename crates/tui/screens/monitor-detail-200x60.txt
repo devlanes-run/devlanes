@@ -57,7 +57,7 @@
 │    └-6m 26s                                                                                                                                                                                       now│
 │since start   cpu peak 144%   mem peak 453.2M                                                                                                                                                         │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- j k move   enter open unit   < > sort   i reverse   / filter   e flat   m memory graph   s x r start stop restart   esc back                                                     ? all keys   q quit
+ j k move   enter open unit   ←→ sort   i reverse   / filter   e flat   m memory graph   s x r start stop restart   esc back                                                      ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177-183 bold underlined, 186 bold, 187-191 dim, 194 bold, 195-198 dim
@@ -119,4 +119,4 @@
 56: 0 darkgray, 5-198 dim, 199 darkgray
 57: 0 darkgray, 1-45 dim, 199 darkgray
 58: 0-199 darkgray
-59: 1-3 bold, 4-11 dim, 12-16 bold, 17-29 dim, 30-32 bold, 33-40 dim, 41 bold, 42-52 dim, 53 bold, 54-63 dim, 64 bold, 65-72 dim, 73 bold, 74-89 dim, 90-94 bold, 95-116 dim, 117-119 bold, 120-127 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1-3 bold, 4-11 dim, 12-16 bold, 17-29 dim, 30-31 bold, 32-39 dim, 40 bold, 41-51 dim, 52 bold, 53-62 dim, 63 bold, 64-71 dim, 72 bold, 73-88 dim, 89-93 bold, 94-115 dim, 116-118 bold, 119-126 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
