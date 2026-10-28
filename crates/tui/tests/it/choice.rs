@@ -137,10 +137,11 @@ async fn the_lanes_row_goes_by_number_with_this_machine_first_then_boxes_by_name
             "acme@2",
         ]
     );
+    // The branches that fit keep their name; the longest give way first.
     let bar = row(&app, 1)?;
     assert!(
         bar.contains(
-            " lanes  1 @0  2 @0 fork-a ○  3 @0 fork-b ○  4 @1 ○  5 @1 fork-a  6 @1 fork-b ○  7 @2 "
+            " lanes  1 @0 main  2 @0 fork-a ○  3 @0 fork-b ○  4 @1 ○  5 @1 fork-a  6 @1 fork-b ○  7 @2 "
         ),
         "{bar}"
     );
@@ -152,13 +153,36 @@ async fn a_long_box_name_is_cut_in_the_chip_and_whole_in_the_title() -> TestResu
     let mut listing = forks();
     listing["items"][1]["host"] = json!("clickmax-fork-3f2a");
     let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 120, 30).await;
+    app.update(Msg::Boxes(Ok(listing.clone())));
+    select(&mut app, Selected::lane("acme@1 @clickmax-fork-3f2a"));
+    let title = row(&app, 2)?;
+    assert!(title.contains("@1 clickmax-fork-3f2a · 0/0 up"), "{title}");
+    // At 80 columns the title has no room for all of it either.
     let (mut app, _) = loaded(&api, 80, 24).await;
     app.update(Msg::Boxes(Ok(listing)));
     select(&mut app, Selected::lane("acme@1 @clickmax-fork-3f2a"));
     let bar = row(&app, 1)?;
     assert!(bar.contains("@1 clickma…"), "{bar}");
     let title = row(&app, 2)?;
-    assert!(title.contains("@1 clickmax-fork-3f2a"), "{title}");
+    assert!(title.contains("@1 clickmax-fork-… · 0/0 up"), "{title}");
+    Ok(())
+}
+
+/// Forks that share a long start keep what tells them apart in the title
+/// too, so `not mirrored` still shows.
+#[tokio::test]
+async fn the_title_cuts_a_long_fork_name_as_the_chip_does() -> TestResult {
+    let mut listing = forks();
+    listing["items"][0]["host"] = json!("clickmax-fork-b");
+    listing["items"][1]["host"] = json!("clickmax-fork-a");
+    listing["items"][0]["skipped_lanes"][1]["winner"] = json!("clickmax-fork-a");
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 80, 24).await;
+    app.update(Msg::Boxes(Ok(listing)));
+    select(&mut app, Selected::lane("acme@1 @clickmax-fork-b"));
+    let title = row(&app, 2)?;
+    assert!(title.contains("@1 …fork-b · not mirrored "), "{title}");
     Ok(())
 }
 

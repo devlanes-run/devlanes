@@ -81,18 +81,29 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         }
         Some(index) if app.project_lanes().len() > 1 => {
             let counts = tree::counts(lane);
+            // Narrow lists cut the title, and what serves the lane matters more.
+            let after = match grey {
+                Some(grey) => grey.to_owned(),
+                None => format!(" · {}/{} up", counts.up, counts.total),
+            };
             name.push(Span::styled(format!("@{index}"), bold));
-            // The chip may cut the box's name; the title has room for all of it.
             if let Some((host, _)) = &on_box {
-                name.push(Span::styled(format!(" {}", clean(&host.host)), bold));
+                // The whole name where it fits, else cut as the chip cuts it,
+                // so `not mirrored` still shows.
+                let hosts: Vec<&str> = app
+                    .project_lanes()
+                    .iter()
+                    .filter_map(|l| app.lane_box(&l.reference).map(|b| b.host.as_str()))
+                    .collect();
+                let room = usize::from(boxed.width)
+                    .saturating_sub(6 + text::width(&format!("@{index}")) + text::width(&after));
+                let shown =
+                    super::short_box(&host.host, &hosts, room.max(super::box_room(app.size.0)));
+                name.push(Span::styled(format!(" {shown}"), bold));
             }
             name.extend(power);
-            // Narrow lists cut the title, and what serves the lane matters more.
             if grey.is_none() {
-                name.push(Span::styled(
-                    format!(" · {}/{} up", counts.up, counts.total),
-                    theme.quiet(),
-                ));
+                name.push(Span::styled(after, theme.quiet()));
             }
         }
         index => {
