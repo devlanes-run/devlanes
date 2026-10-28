@@ -1,5 +1,11 @@
 # devlanes-tui
 
+## 0.8.1 — 2026-10-28
+
+### Patch changes
+
+- [effb343](https://github.com/devlanes-run/devlanes/commit/effb343649781d8c516285391605f27d192c66c0) Fixed `pty: true` units on Windows whose output leaves a color active stopping to follow the TUI pane's size, which left a gap of empty rows above the cursor and blank lines in the log, and a scrolled-back pane jumping up when the unit's screen got shorter.
+
 ## 0.8.0 — 2026-10-28
 
 ### Patch changes

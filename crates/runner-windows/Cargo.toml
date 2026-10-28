@@ -1,7 +1,7 @@
 [package]
 name = "devlanes-runner-windows"
 description = "Job-object runner for daemon-owned units on Windows"
-version = "0.6.0"
+version = "0.6.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
