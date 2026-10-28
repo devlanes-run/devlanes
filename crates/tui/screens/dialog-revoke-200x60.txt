@@ -24,14 +24,14 @@
 │   fix       enter signs in again                                                                                                                                                                     │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                 ┌ revoke laptop · dl_cid_3f2a9c1e ────────────────────────────────┐                                                                  │
-│                                                                 │ It deletes the client's 2 pairings and ends its connection now. │                                                                  │
+│                                                                 ┌─────────────────────────────────────────────────────────────────┐                                                                  │
+│                                                                 │ Revoke laptop (dl_cid_3f2a9c1e)?                                │                                                                  │
 │                                                                 │                                                                 │                                                                  │
+│                                                                 │ It deletes the client's 2 pairings and ends its connection now. │                                                                  │
 │                                                                 │ It needs a new pairing code to connect again.                   │                                                                  │
 │                                                                 │                                                                 │                                                                  │
 │                                                                 │ y revoke   n cancel                                             │                                                                  │
 │                                                                 └─────────────────────────────────────────────────────────────────┘                                                                  │
-│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -87,13 +87,13 @@
 24: 0 darkgray, 199 darkgray
 25: 0 darkgray, 199 darkgray
 26: 0 darkgray, 66-132 bold, 199 darkgray
-27: 0 darkgray, 66 bold, 68-130 bold, 132 bold, 199 darkgray
+27: 0 darkgray, 66 bold, 68-99 bold, 132 bold, 199 darkgray
 28: 0 darkgray, 66 bold, 132 bold, 199 darkgray
 29: 0 darkgray, 66 bold, 132 bold, 199 darkgray
 30: 0 darkgray, 66 bold, 132 bold, 199 darkgray
-31: 0 darkgray, 66 bold, 68 bold, 69-75 dim, 79 bold, 80-86 dim, 132 bold, 199 darkgray
-32: 0 darkgray, 66-132 bold, 199 darkgray
-33: 0 darkgray, 199 darkgray
+31: 0 darkgray, 66 bold, 132 bold, 199 darkgray
+32: 0 darkgray, 66 bold, 68 bold, 69-75 dim, 79 bold, 80-86 dim, 132 bold, 199 darkgray
+33: 0 darkgray, 66-132 bold, 199 darkgray
 34: 0 darkgray, 199 darkgray
 35: 0 darkgray, 199 darkgray
 36: 0 darkgray, 199 darkgray

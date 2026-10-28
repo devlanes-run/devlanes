@@ -36,7 +36,7 @@
 │   ● ml-ranker                                ││        │   enter             open the unit in its project                                   │                                                        │
 │   ⠋ ml-embed                        starting ││        │                                                                                    │                                                        │
 │   ● cache-warm                               ││        │ daemon (D)                                                                         │                                                        │
-│                                              ││        │   R  S              restart the daemon, stop or start it                           │                                                        │
+│                                              ││        │   R  S              restart or stop the daemon; s starts it again                  │                                                        │
 │ ▾ tasks                                    7 ││        │   X                 clean the lanes whose worktree is gone                         │                                                        │
 │   ✓ migrate             done · runs at start ││        │   j k  g G          scroll the log (pauses), oldest, newest                        │                                                        │
 │   ✓ seed                                done ││        │   F  d              pause or follow the log, fold or unfold repeats                │                                                        │

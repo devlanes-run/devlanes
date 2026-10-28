@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/it/unavailable.rs
+expression: screen(&buffer)
+---
+" devlanes  1 acme   2 shop     daemon stopped · s starts it  M  D · 2 issues  B "
+"                                                                                "
+"  ▀▀▀▀▀    the daemon is stopped · s starts it                                  "
+"   ▀▀▀▀▀   ✓ stopped 26 processes in 1 lane 5.8s                                "
+"    ▀▀▀▀▀                                                                       "
+"                                                                                "
+"┌ daemon.log ─────────────── following · all levels · repeats folded · 3 lines ┐"
+"│── 2026-10-21 ────────────────────────────────────────────────────────────────│"
+"│09:12:01 INFO  daemon               listening                                 │"
+"│                                    socket=/home/acme/.devlanes/run/daemon.so │"
+"│                                    ck                                        │"
+"│09:14:02 INFO  daemon::engine       shutdown step started  step=units count=3 │"
+"│09:14:04 INFO  daemon::lifecycle    unit took long to stop  unit=acme@0:api   │"
+"│                                    elapsed_ms=2100                           │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"
+" s start daemon   j k scroll   F pause   w level   / filter   c copy   q quit   "

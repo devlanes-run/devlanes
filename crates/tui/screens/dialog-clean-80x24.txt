@@ -4,7 +4,7 @@
 │ ▾ services                 2 ││ Not running. s starts the lane with its      │
 │   · api-gateway              ││ default profile, p picks profiles.           │
 │   · web-app                  ││                                              │
-│             ┌ clean acme@2 ───────────────────────────────────┐              │
+│             ┌─────────────────────────────────────────────────┐              │
 │ ▾ tasks     │ Clean fix/cache (acme@2)?                       │              │
 │   · migrate │                                                 │              │
 │   · seed    │ It stops every unit in the lane, then:          │opped         │

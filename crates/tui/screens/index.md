@@ -514,6 +514,30 @@ the daemon page (D): facts, doctor checks and the daemon log
 - 120x40: [txt](daemon-120x40.txt) · [png](daemon-120x40.png) · [ansi](daemon-120x40.ansi)
 - 80x24: [txt](daemon-80x24.txt) · [png](daemon-80x24.png) · [ansi](daemon-80x24.ansi)
 
+## daemon-restarting
+
+a restart someone else ran, 3.4 s into stopping: the unavailable screen with its steps and the daemon log
+
+- 200x60: [txt](daemon-restarting-200x60.txt) · [png](daemon-restarting-200x60.png) · [ansi](daemon-restarting-200x60.ansi)
+- 120x40: [txt](daemon-restarting-120x40.txt) · [png](daemon-restarting-120x40.png) · [ansi](daemon-restarting-120x40.ansi)
+- 80x24: [txt](daemon-restarting-80x24.txt) · [png](daemon-restarting-80x24.png) · [ansi](daemon-restarting-80x24.ansi)
+
+## daemon-stopped
+
+after a stop someone else asked for: s starts the daemon
+
+- 200x60: [txt](daemon-stopped-200x60.txt) · [png](daemon-stopped-200x60.png) · [ansi](daemon-stopped-200x60.ansi)
+- 120x40: [txt](daemon-stopped-120x40.txt) · [png](daemon-stopped-120x40.png) · [ansi](daemon-stopped-120x40.ansi)
+- 80x24: [txt](daemon-stopped-80x24.txt) · [png](daemon-stopped-80x24.png) · [ansi](daemon-stopped-80x24.ansi)
+
+## daemon-not-answering
+
+the daemon gone without a word for a tick: the TUI retries on its own
+
+- 200x60: [txt](daemon-not-answering-200x60.txt) · [png](daemon-not-answering-200x60.png) · [ansi](daemon-not-answering-200x60.ansi)
+- 120x40: [txt](daemon-not-answering-120x40.txt) · [png](daemon-not-answering-120x40.png) · [ansi](daemon-not-answering-120x40.ansi)
+- 80x24: [txt](daemon-not-answering-80x24.txt) · [png](daemon-not-answering-80x24.png) · [ansi](daemon-not-answering-80x24.ansi)
+
 ## dialog-revoke
 
 revoking laptop (x on a client in the boxes view): asks first, y revokes

@@ -29,6 +29,7 @@ mod release;
 mod screens;
 mod start;
 mod terminal;
+mod unavailable;
 mod units;
 
 use std::{sync::Arc, time::Duration};

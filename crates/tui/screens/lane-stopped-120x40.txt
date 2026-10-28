@@ -37,7 +37,7 @@
 │                                              ││                                                                      │
 │                                              ││                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
- s start lane   S start all   p start with profiles   C clean lane   [ ] switch lane   / filter … ? all keys   q quit
+ s start lane   S start all   p start with profiles   C clean lane   [ ] switch lane   / filter   ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
@@ -79,4 +79,4 @@
 36: 0 darkgray, 47-48 darkgray, 119 darkgray
 37: 0 darkgray, 47-48 darkgray, 119 darkgray
 38: 0-119 darkgray
-39: 1 bold, 2-15 dim, 16 bold, 17-29 dim, 30 bold, 31-53 dim, 54 bold, 55-68 dim, 69-71 bold, 72-86 dim, 87 bold, 88-96 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim
+39: 1 bold, 2-15 dim, 16 bold, 17-29 dim, 30 bold, 31-53 dim, 54 bold, 55-68 dim, 69-71 bold, 72-86 dim, 87 bold, 88-94 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

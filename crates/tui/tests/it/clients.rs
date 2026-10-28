@@ -330,20 +330,12 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     app.update(key(KeyCode::Char('k')));
     app.update(key(KeyCode::Char('x')));
     match &app.dialog {
-        Some(Dialog::Confirm {
-            title,
-            prompt,
-            detail,
-            ..
-        }) => {
-            assert_eq!(title, "revoke laptop · dl_cid_3f2a9c1e");
-            assert_eq!(
-                prompt,
-                "It deletes the client's 2 pairings and ends its connection now."
-            );
+        Some(Dialog::Confirm { prompt, detail, .. }) => {
+            assert_eq!(prompt, "Revoke laptop (dl_cid_3f2a9c1e)?");
             assert_eq!(
                 detail,
                 &[
+                    "It deletes the client's 2 pairings and ends its connection now.".to_owned(),
                     "remote.require_pairing is false here, so it can reconnect without a code."
                         .to_owned()
                 ]
@@ -352,8 +344,11 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
         other => return Err(format!("no confirm dialog: {other:?}").into()),
     }
     let text = screen(&render(&app)?);
-    assert!(text.contains("revoke laptop · dl_cid_3f2a9c1e"), "{text}");
-    assert!(!text.contains("Revoke laptop"), "said twice: {text}");
+    assert_eq!(
+        text.matches("laptop (dl_cid_3f2a9c1e)").count(),
+        1,
+        "{text}"
+    );
     assert!(app.update(key(KeyCode::Enter)).is_empty());
     let effects = app.update(key(KeyCode::Char('y')));
     assert!(
@@ -368,7 +363,7 @@ async fn x_asks_before_revoking_the_selected_client() -> TestResult {
     app.update(key(KeyCode::Char('x')));
     match &app.dialog {
         Some(Dialog::Confirm { detail, .. }) => {
-            assert_eq!(detail[0], "It needs a new pairing code to connect again.");
+            assert_eq!(detail[1], "It needs a new pairing code to connect again.");
         }
         other => return Err(format!("no confirm dialog: {other:?}").into()),
     }

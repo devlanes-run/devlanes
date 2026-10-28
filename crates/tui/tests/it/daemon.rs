@@ -284,59 +284,17 @@ async fn restart_and_stop_ask_first_and_enter_does_not_confirm() -> TestResult {
     assert!(app.update(key(KeyCode::Char('n'))).is_empty());
     assert!(app.dialog.is_none());
 
-    app.update(shifted('R'));
-    let effects = app.update(key(KeyCode::Char('y')));
-    assert!(
-        matches!(effects.as_slice(), [Effect::RestartDaemon]),
-        "{effects:?}"
-    );
-    assert_eq!(app.daemon.busy, Some("restarting"));
-    // The old daemon closes the subscription; that is expected, not an error.
-    let effects = app.update(Msg::EventsEnded(None));
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::ScheduleReconnect { .. }]
-    ));
-    assert!(app.errors.is_empty(), "{:?}", app.errors);
-    assert!(row(&render(&app)?, 0).contains("daemon restarting…"));
-    let effects = app.update(Msg::DaemonRestarted(Ok(daemon_status())));
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::Subscribe, Effect::Refresh, Effect::FetchDaemon]
-    ));
-    assert_eq!(
-        app.notice.as_ref().map(|n| n.text.as_str()),
-        Some("daemon restarted")
-    );
-
+    // S asks the same way; y stops.
     app.update(shifted('S'));
+    let Some(Dialog::Confirm { prompt, detail, .. }) = &app.dialog else {
+        return Err(format!("no confirm dialog: {:?}", app.dialog).into());
+    };
+    assert_eq!(prompt, "Stop the daemon?");
+    assert_eq!(detail[1], "s starts the daemon again.");
     let effects = app.update(key(KeyCode::Char('y')));
-    assert!(matches!(effects.as_slice(), [Effect::StopDaemon]));
-    app.update(Msg::DaemonStopped(Ok(json!({"stopping": true}))));
-    app.update(Msg::EventsEnded(None));
-    assert!(app.daemon.stopped);
-    assert!(app.errors.is_empty(), "a requested stop is not an error");
-    let buffer = render(&app)?;
     assert!(
-        row(&buffer, 0).contains("daemon stopped"),
-        "{}",
-        row(&buffer, 0)
-    );
-    assert!(
-        row(&buffer, 23).contains("S start daemon"),
-        "{}",
-        row(&buffer, 23)
-    );
-    // Restart refuses while stopped; S starts it again.
-    assert!(app.update(shifted('R')).is_empty());
-    assert!(app.dialog.is_none());
-    let effects = app.update(shifted('S'));
-    assert!(matches!(effects.as_slice(), [Effect::StartDaemon]));
-    app.update(Msg::DaemonStarted(Ok(daemon_status())));
-    assert!(!app.daemon.stopped);
-    assert_eq!(
-        app.notice.as_ref().map(|n| n.text.as_str()),
-        Some("daemon started")
+        matches!(effects.last(), Some(Effect::StopDaemon)),
+        "{effects:?}"
     );
     Ok(())
 }
@@ -350,13 +308,7 @@ async fn a_small_window_keeps_the_dialog_keys() -> TestResult {
     let buffer = render(&app)?;
     let text = screen(&buffer);
     // The explanation is cut; the keys that confirm and cancel are not.
-    for expected in [
-        "clean acme@0",
-        "Clean main (acme@0)?",
-        "enter clean",
-        "esc cancel",
-        "…",
-    ] {
+    for expected in ["Clean main (acme@0)?", "enter clean", "esc cancel", "…"] {
         assert!(text.contains(expected), "{expected}: {text}");
     }
     assert_screen!("clean_confirm_50x8", text);
@@ -1062,7 +1014,7 @@ async fn help_lists_clean_and_the_daemon_page() -> TestResult {
     for expected in [
         "clean the lane (asks first)",
         "copy mode: v select, y copy, Y whole entries as in the file",
-        "restart the daemon, stop or start it",
+        "restart or stop the daemon; s starts it again",
         "clean the lanes whose worktree is gone",
         "connect, sign in, type a code or disconnect",
         "revoke the selected client",

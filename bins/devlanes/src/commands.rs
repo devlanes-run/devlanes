@@ -1,7 +1,5 @@
 //! Executes CLI actions: RPCs with streaming, local terminal work, and `with`.
 
-use std::time::Duration;
-
 use devlanes_cli::{
     Action, Cli, CommandTitle, Hint, InterruptPolicy, Rendered, Report, ReporterStream, Runtime,
     export_environment, run_with, stop_with_logs, write_completions,
@@ -143,6 +141,10 @@ fn apply_start_restore(action: Action) -> Action {
 async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcError> {
     let action = apply_start_restore(action);
     match action {
+        // Drawn step by step; `daemon.shutdown` answers only once everything stopped.
+        Action::Rpc(request) if request.method == Method::DaemonShutdown => {
+            crate::lifecycle::stop(runtime, &paths()?, request.context).await
+        }
         Action::Rpc(request) => rpc(cli, runtime, request).await,
         Action::RpcThenUi(request) => {
             let code = rpc(cli, runtime, request).await?;
@@ -309,7 +311,9 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             Ok(0)
         }
         Action::DaemonStart => daemon_start(runtime, &paths()?).await,
-        Action::DaemonRestart(context) => daemon_restart(runtime, &paths()?, context).await,
+        Action::DaemonRestart(context) => {
+            crate::lifecycle::restart(runtime, &paths()?, context).await
+        }
         Action::DaemonLogs { follow, tail } => daemon_logs(follow, tail.unwrap_or(100)).await,
         Action::DebugBundle {
             to,
@@ -387,163 +391,6 @@ async fn daemon_start(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> 
         data["started"] = json!(client.spawned);
     }
     render_result(runtime, Method::DaemonStatus, &data, None)
-}
-
-/// `daemon restart`: stops the daemon (any protocol), starts a new one and starts
-/// again what ran. An invalid user config fails first: the new daemon would refuse
-/// to start, and the old one would already have stopped every lane.
-async fn daemon_restart(
-    runtime: &Runtime,
-    paths: &Paths,
-    context: devlanes_proto::Context,
-) -> Result<u8, RpcError> {
-    crate::user_config::load(paths).await?;
-    // What runs now comes back after the restart; `daemon stop` keeps it stopped.
-    let mut running = Vec::new();
-    let (env, actor) = (
-        context.env.clone().unwrap_or_default(),
-        context.actor.clone(),
-    );
-    // Any protocol: restarting is how an incompatible daemon gets replaced.
-    match Client::connect_any(paths).await {
-        Ok(mut client) => {
-            if client.compatible() {
-                running = client.running_lanes().await.unwrap_or_else(|error| {
-                    tracing::warn!(%error, "could not read what runs; nothing is resumed");
-                    Vec::new()
-                });
-            }
-            let processes = client.peer.managed_processes;
-            if processes > 0
-                && !context.yes
-                && !confirm(
-                    runtime,
-                    &format!("restart the daemon and stop {processes} processes?"),
-                )?
-            {
-                return Ok(devlanes_cli::exit::USAGE);
-            }
-            // The old daemon's own pid, so the wait below ends when exactly
-            // that process is gone.
-            let pid = client
-                .request(
-                    Method::DaemonStatus,
-                    json!({}),
-                    devlanes_proto::Context::default(),
-                )
-                .await
-                .ok()
-                .and_then(|status| status.get("pid").and_then(Value::as_u64))
-                .and_then(|pid| i32::try_from(pid).ok());
-            let context = devlanes_proto::Context {
-                yes: true,
-                ..context
-            };
-            client
-                .request(Method::DaemonShutdown, json!({}), context)
-                .await
-                .map_err(rpc_error)?;
-            drop(client);
-            wait_for_daemon_exit(paths, pid).await?;
-        }
-        Err(error) if error.is_not_running() => {}
-        Err(error) => return Err(rpc_error(error)),
-    }
-    let mut client = connect(paths).await?;
-    let mut data = client
-        .request(
-            Method::DaemonStatus,
-            json!({}),
-            devlanes_proto::Context::default(),
-        )
-        .await
-        .map_err(rpc_error)?;
-    if data.is_object() {
-        data["running"] = json!(true);
-    }
-    let items = if running.is_empty() {
-        Vec::new()
-    } else {
-        client.resume_running(&running, &env, &actor).await
-    };
-    // JSON output stays one document; text prints the starts after the status.
-    if runtime.mode == devlanes_cli::OutputMode::Json {
-        if data.is_object() {
-            data["resumed"] = json!(items);
-        }
-        return render_result(runtime, Method::DaemonStatus, &data, None);
-    }
-    let status = render_result(runtime, Method::DaemonStatus, &data, None)?;
-    if items.is_empty() {
-        return Ok(status);
-    }
-    let page = json!({"items": items, "truncated": false, "next_cursor": null});
-    let resumed = render_result(runtime, Method::Resume, &page, None)?;
-    Ok(status.max(resumed))
-}
-
-/// Longest `daemon restart` waits for the old daemon, which first stops every unit
-/// with its stop policy.
-const DAEMON_EXIT_WAIT: Duration = Duration::from_secs(300);
-
-/// Waits until the old daemon process `pid` has exited (it releases the lock only
-/// after stopping everything); without a pid, until its socket stops answering.
-async fn wait_for_daemon_exit(paths: &Paths, pid: Option<i32>) -> Result<(), RpcError> {
-    let deadline = tokio::time::Instant::now() + DAEMON_EXIT_WAIT;
-    // The PID is pinned to the start time read now, while the old daemon still
-    // stops its units, so a process that reuses the PID later never counts as
-    // the daemon. Start times need only query access, which an elevated
-    // daemon grants too. The pipe is only the fallback when that fails: it
-    // closes when the shutdown begins, before the lock is released.
-    #[cfg(windows)]
-    let identity = match pid.and_then(|pid| u32::try_from(pid).ok()) {
-        Some(pid) => {
-            let started =
-                tokio::task::spawn_blocking(move || devlanes_sys_windows::proc::start_time(pid))
-                    .await;
-            match started {
-                Ok(Ok(Some(started))) => Some((pid, started)),
-                // No process has the PID any more.
-                Ok(Ok(None)) => return Ok(()),
-                Ok(Err(_)) | Err(_) => None,
-            }
-        }
-        None => None,
-    };
-    loop {
-        #[cfg(unix)]
-        let gone = match pid.and_then(rustix::process::Pid::from_raw) {
-            Some(pid) => rustix::process::test_kill_process(pid) == Err(rustix::io::Errno::SRCH),
-            None => Client::connect_any(paths)
-                .await
-                .is_err_and(|error| error.is_not_running()),
-        };
-        #[cfg(windows)]
-        let gone = match identity {
-            Some((pid, started)) => {
-                let alive = tokio::task::spawn_blocking(move || {
-                    devlanes_sys_windows::proc::matches(pid, started)
-                })
-                .await;
-                // A failed query keeps waiting; the deadline still bounds it.
-                matches!(alive, Ok(Ok(false)))
-            }
-            None => Client::connect_any(paths)
-                .await
-                .is_err_and(|error| error.is_not_running()),
-        };
-        if gone {
-            return Ok(());
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(RpcError::new(
-                "daemon_still_running",
-                json!({"pid": pid, "waited_s": DAEMON_EXIT_WAIT.as_secs()}),
-                1,
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
 }
 
 /// One-shot request returning the data, for actions that post-process it locally.
@@ -1047,7 +894,7 @@ fn read_tty(prompt: &str, kind: &str) -> Option<String> {
 }
 
 /// Renders the response data with the mode's reporter.
-fn render_result(
+pub(crate) fn render_result(
     runtime: &Runtime,
     method: Method,
     data: &Value,
@@ -1220,7 +1067,7 @@ fn hint_for(error: &RpcError, request: &Request) -> Option<Hint> {
 }
 
 /// Asks on a TTY; agents and CI must pass `--yes` instead.
-fn confirm(runtime: &Runtime, question: &str) -> Result<bool, RpcError> {
+pub(crate) fn confirm(runtime: &Runtime, question: &str) -> Result<bool, RpcError> {
     if !runtime.can_prompt() {
         return Err(RpcError::new(
             "confirmation_required",
@@ -1333,6 +1180,8 @@ async fn ui() -> Result<u8, RpcError> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use devlanes_cli::clap::Parser;
 
     use super::*;
@@ -1395,33 +1244,6 @@ mod tests {
         }
     }
 
-    /// The restart wait ends once the old daemon's pid is gone.
-    #[tokio::test]
-    async fn restart_waits_for_the_old_pid() {
-        #[cfg(unix)]
-        let mut child = std::process::Command::new("true").spawn().expect("spawn");
-        #[cfg(windows)]
-        let mut child = std::process::Command::new(
-            devlanes_sys_windows::file::system_directory()
-                .expect("System32")
-                .join("cmd.exe"),
-        )
-        .args(["/d", "/c", "exit"])
-        .spawn()
-        .expect("spawn");
-        let pid = i32::try_from(child.id()).expect("pid");
-        child.wait().expect("reaped");
-        let temp = tempfile::tempdir().expect("tempdir");
-        let paths = Paths::new(temp.path()).expect("paths");
-        tokio::time::timeout(
-            Duration::from_secs(5),
-            wait_for_daemon_exit(&paths, Some(pid)),
-        )
-        .await
-        .expect("returns at once")
-        .expect("gone");
-    }
-
     /// A restart with an invalid user config fails with the strict load's
     /// `config_error` before it reaches the running daemon, which keeps its lanes.
     #[tokio::test]
@@ -1445,7 +1267,7 @@ mod tests {
         };
         let error = tokio::time::timeout(
             Duration::from_secs(5),
-            daemon_restart(&runtime(), &paths, context),
+            crate::lifecycle::restart(&runtime(), &paths, context),
         )
         .await
         .expect("in time")

@@ -9,7 +9,7 @@ expression: screen(&render(&app)?)
 "│fail tls     no CA: no CA has been created yet                                │"
 "│             fix: devlanes certs trust                                        │"
 "│warn proxy   https on fallback port 8443: port 443 needs root                 │"
-"│      ┌ restart the daemon ───────────────────────────────────────────┐       │"
+"│      ┌───────────────────────────────────────────────────────────────┐       │"
 "│      │ Restart the daemon?                                           │       │"
 "│ok    │                                                               │       │"
 "└──────│ It stops 3 processes. The new daemon starts the running lanes │───────┘"

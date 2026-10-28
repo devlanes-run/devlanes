@@ -13,10 +13,10 @@
 │                                                                                                                      │
 │                                                                                                                      │
 │                                                                                                                      │
-│                                                                                                                      │
-│                         ┌ revoke laptop · dl_cid_3f2a9c1e ────────────────────────────────┐                          │
-│                         │ It deletes the client's 2 pairings and ends its connection now. │                          │
+│                         ┌─────────────────────────────────────────────────────────────────┐                          │
+│                         │ Revoke laptop (dl_cid_3f2a9c1e)?                                │                          │
 │                         │                                                                 │                          │
+│                         │ It deletes the client's 2 pairings and ends its connection now. │                          │
 │                         │ remote.require_pairing is false here, so it can reconnect       │                          │
 │                         │ without a code.                                                 │                          │
 │                         │                                                                 │                          │
@@ -55,9 +55,9 @@
 12: 0 darkgray, 119 darkgray
 13: 0 darkgray, 119 darkgray
 14: 0 darkgray, 119 darkgray
-15: 0 darkgray, 119 darkgray
-16: 0 darkgray, 26-92 bold, 119 darkgray
-17: 0 darkgray, 26 bold, 28-90 bold, 92 bold, 119 darkgray
+15: 0 darkgray, 26-92 bold, 119 darkgray
+16: 0 darkgray, 26 bold, 28-59 bold, 92 bold, 119 darkgray
+17: 0 darkgray, 26 bold, 92 bold, 119 darkgray
 18: 0 darkgray, 26 bold, 92 bold, 119 darkgray
 19: 0 darkgray, 26 bold, 92 bold, 119 darkgray
 20: 0 darkgray, 26 bold, 92 bold, 119 darkgray

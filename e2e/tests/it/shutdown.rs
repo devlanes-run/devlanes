@@ -37,6 +37,17 @@ fn start(lab: &Lab) -> Result<(i32, u16)> {
     Ok((need(pid(api), "api pid")?, port))
 }
 
+/// Waits until `api` is ready again, started by the daemon a restart brought up.
+fn api_ready(lab: &Lab) -> Result<()> {
+    lab.eventually("api to be ready again", Duration::from_secs(60), || {
+        let lanes = lab.lanes(lab.repo())?;
+        let ready = lane(&lanes, "fixture-shutdown@0")
+            .and_then(|lane| unit(lane, "api"))
+            .is_some_and(|api| api["state"] == "ready");
+        Ok(ready.then_some(()))
+    })
+}
+
 /// Waits until the daemon process `daemon` is gone and released its lock.
 fn wait_for_exit(lab: &Lab, daemon: i32) -> Result<()> {
     lab.eventually("the daemon to exit", Duration::from_secs(30), || {
@@ -87,18 +98,17 @@ fn daemon_restart_brings_back_what_ran() -> Result<()> {
     let api_started = need(start_time(api), "api start time")?;
     let daemon = need(lab.daemon_pid()?, "daemon pid")?;
     let restarted = lab.json(lab.repo(), &["daemon", "restart", "--yes"])?;
-    let resumed = restarted["resumed"].as_array().cloned().unwrap_or_default();
-    assert_eq!(resumed.len(), 1, "{restarted}");
-    assert_eq!(resumed[0]["lane"], "fixture-shutdown@0", "{restarted}");
+    // The restart ends when the new daemon answers; the lane comes back as a start.
     assert_eq!(
-        resumed[0]["started"],
-        json!(["fixture-shutdown@0:api"]),
+        restarted["resuming"],
+        json!(["fixture-shutdown@0"]),
         "{restarted}"
     );
     assert!(
         !alive(api) || start_time(api).as_deref() != Some(api_started.as_str()),
         "the old run (pid {api}) stopped"
     );
+    api_ready(&lab)?;
     let lanes = lab.lanes(lab.repo())?;
     let zero = need(lane(&lanes, "fixture-shutdown@0"), "lane 0")?;
     assert_eq!(units_in(zero, "ready"), ["api"], "{zero}");
@@ -113,6 +123,109 @@ fn daemon_restart_brings_back_what_ran() -> Result<()> {
         units_in(zero, "ready").is_empty(),
         "stop keeps it stopped: {zero}"
     );
+    Ok(())
+}
+
+/// Plain output prints each step of a restart as it finishes, then what starts
+/// again and how to wait for it.
+#[test]
+fn daemon_restart_prints_its_steps() -> Result<()> {
+    let lab = Lab::with_config(CONFIG, BUDGET)?;
+    start(&lab)?;
+    let output = lab.devlanes(
+        lab.repo(),
+        &["--output", "plain", "daemon", "restart", "--yes"],
+    )?;
+    output.expect_code(0)?;
+    for expected in [
+        "stopped 1 process in 1 lane",
+        "ran 1 lane.stop task",
+        "started devlanes",
+        "starting again: fixture-shutdown@0",
+        "next: devlanes status",
+    ] {
+        assert!(output.stdout.contains(expected), "{expected}: {output}");
+    }
+    api_ready(&lab)
+}
+
+/// `daemon stop` on plain output prints its steps, then the report.
+#[test]
+fn daemon_stop_prints_its_steps() -> Result<()> {
+    let lab = Lab::with_config(CONFIG, BUDGET)?;
+    start(&lab)?;
+    let daemon = need(lab.daemon_pid()?, "daemon pid")?;
+    let output = lab.devlanes(
+        lab.repo(),
+        &["--output", "plain", "daemon", "stop", "--yes"],
+    )?;
+    output.expect_code(0)?;
+    for expected in ["ran 1 lane.stop task", "stopped 1 process in 1 lane"] {
+        assert!(output.stdout.contains(expected), "{expected}: {output}");
+    }
+    wait_for_exit(&lab, daemon)
+}
+
+/// Once the old daemon was asked to stop, the restart no longer needs the
+/// client: killing it leaves the new daemon to come up and start the lane.
+#[test]
+fn a_restart_survives_its_client() -> Result<()> {
+    let config = format!(
+        "{CONFIG}  linger:\n    run: [fixture-server, --port, \"0\", --exit-after, 3s]\n    when: lane.stop\n"
+    );
+    let lab = Lab::with_config(&config, BUDGET)?;
+    start(&lab)?;
+    let daemon = need(lab.daemon_pid()?, "daemon pid")?;
+    let mut client = lab.spawn(lab.command(lab.repo(), &["daemon", "restart", "--yes"])?)?;
+    // The new daemon writes the marker while it waits; the client asks the old
+    // one to stop right after, and `linger` holds that shutdown for 3 s.
+    let marker = lab.home().join("run").join("daemon.replacing");
+    lab.eventually("the new daemon to wait", Duration::from_secs(20), || {
+        Ok(marker.exists().then_some(()))
+    })?;
+    std::thread::sleep(Duration::from_secs(1));
+    let _ = client.kill();
+    let _ = client.wait();
+    // The new daemon holds the lock by then, so only the old pid tells.
+    lab.eventually("the old daemon to exit", Duration::from_secs(30), || {
+        Ok((!alive(daemon)).then_some(()))
+    })?;
+    api_ready(&lab)?;
+    assert_ne!(need(lab.daemon_pid()?, "new daemon pid")?, daemon);
+    Ok(())
+}
+
+/// A new daemon that dies while the old one stops does not cost the lanes:
+/// the restarting client starts a daemon itself and brings them back there.
+#[test]
+fn a_restart_survives_a_new_daemon_that_dies() -> Result<()> {
+    let config = format!(
+        "{CONFIG}  linger:\n    run: [fixture-server, --port, \"0\", --exit-after, 3s]\n    when: lane.stop\n"
+    );
+    let lab = Lab::with_config(&config, BUDGET)?;
+    start(&lab)?;
+    let daemon = need(lab.daemon_pid()?, "daemon pid")?;
+    let restart = std::thread::scope(|scope| -> Result<devlanes_e2e::Output> {
+        let cli = scope.spawn(|| lab.devlanes(lab.repo(), &["daemon", "restart", "--yes"]));
+        let marker = lab.home().join("run").join("daemon.replacing");
+        let successor =
+            lab.eventually("the new daemon to wait", Duration::from_secs(20), || {
+                Ok(std::fs::read_to_string(&marker)
+                    .ok()
+                    .and_then(|pid| pid.trim().parse::<i32>().ok()))
+            })?;
+        // The client says go and asks the old daemon to stop right after the
+        // marker appears; `linger` keeps that shutdown going for 3 s.
+        std::thread::sleep(Duration::from_secs(1));
+        devlanes_e2e::kill(successor);
+        cli.join()
+            .map_err(|_| devlanes_e2e::Error::Setup("restart thread panicked".into()))?
+    })?;
+    restart.expect_code(0)?;
+    lab.eventually("the old daemon to exit", Duration::from_secs(30), || {
+        Ok((!alive(daemon)).then_some(()))
+    })?;
+    api_ready(&lab)?;
     Ok(())
 }
 

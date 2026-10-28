@@ -204,7 +204,7 @@ fn deep_shade(theme: &Theme) -> Style {
 }
 
 /// A logo bar: the top one yellow, the others gray.
-fn bar(theme: &Theme, top: bool) -> Style {
+pub fn bar(theme: &Theme, top: bool) -> Style {
     let color = match (theme.tier, top) {
         (Tier::Plain, _) => return Style::new(),
         (Tier::Ansi, true) => Color::Yellow,
@@ -229,40 +229,67 @@ fn letter_style(theme: &Theme, font: Font, c: char) -> Style {
 /// Draws the banner with its top-left corner at `area`'s; cells outside
 /// `area` are left alone.
 pub fn render(buf: &mut Buffer, area: Rect, theme: &Theme, size: Size) {
-    let mut put = |x: usize, y: usize, c: char, style: Style| {
-        let (Ok(dx), Ok(dy)) = (u16::try_from(x), u16::try_from(y)) else {
-            return;
-        };
-        if dx < area.width && dy < area.height {
-            buf[(area.x + dx, area.y + dy)].set_char(c).set_style(style);
-        }
-    };
     let Size::Art { font, logo } = size else {
-        for (x, c) in WORD.chars().enumerate() {
-            let t = x as f64 / (WORD.len() - 1) as f64;
-            put(x, 0, c, gradient(theme, t));
-        }
+        word(buf, area, |x| {
+            gradient(theme, x as f64 / (WORD.len() - 1) as f64)
+        });
         return;
     };
     let mut left = 0;
     if logo {
-        let mut top = true;
-        for (y, row) in font.logo().iter().enumerate() {
-            if row.is_empty() {
-                continue;
-            }
-            let style = bar(theme, top);
-            top = false;
-            for (x, c) in row.chars().enumerate().filter(|(_, c)| *c != ' ') {
-                put(x, y, c, style);
-            }
-        }
+        bars(buf, area, font.logo(), |index| bar(theme, index == 0));
         left = usize::from(width_of(font.logo()) + font.gap());
     }
     for (y, row) in font.rows().iter().enumerate() {
         for (x, c) in row.chars().enumerate().filter(|(_, c)| *c != ' ') {
-            put(left + x, y, c, letter_style(theme, font, c));
+            put(buf, area, left + x, y, c, letter_style(theme, font, c));
         }
+    }
+}
+
+/// Columns and rows of the small logo: three bars stepped one column right
+/// per row, as beside the small font.
+pub fn logo_size() -> (u16, u16) {
+    (width_of(&SMALL_LOGO), 3)
+}
+
+/// Draws the small logo with its top-left corner at `area`'s, bar `index`
+/// (0 the top one) in `style(index)`; cells outside `area` are left alone.
+pub fn logo(buf: &mut Buffer, area: Rect, style: impl Fn(usize) -> Style) {
+    bars(buf, area, &SMALL_LOGO, style);
+}
+
+/// Draws the word `devlanes` on `area`'s first row, letter `x` in
+/// `style(x)`: what stands for the logo without the block glyphs.
+pub fn word(buf: &mut Buffer, area: Rect, style: impl Fn(usize) -> Style) {
+    for (x, c) in WORD.chars().enumerate() {
+        put(buf, area, x, 0, c, style(x));
+    }
+}
+
+/// Draws the logo `rows`, skipping their empty ones; the bar on the
+/// `index`th drawn row takes `style(index)`.
+fn bars(buf: &mut Buffer, area: Rect, rows: &[&str], style: impl Fn(usize) -> Style) {
+    for (index, (y, row)) in rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| !row.is_empty())
+        .enumerate()
+    {
+        let style = style(index);
+        for (x, c) in row.chars().enumerate().filter(|(_, c)| *c != ' ') {
+            put(buf, area, x, y, c, style);
+        }
+    }
+}
+
+/// Sets the cell `x`, `y` columns and rows into `area` when it lies inside.
+fn put(buf: &mut Buffer, area: Rect, x: usize, y: usize, c: char, style: Style) {
+    let (Ok(dx), Ok(dy)) = (u16::try_from(x), u16::try_from(y)) else {
+        return;
+    };
+    if dx < area.width && dy < area.height {
+        buf[(area.x + dx, area.y + dy)].set_char(c).set_style(style);
     }
 }
 

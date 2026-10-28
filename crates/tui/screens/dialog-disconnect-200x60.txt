@@ -24,14 +24,14 @@
 │   fix       enter signs in again                                                                                                                                                                     │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
-│                                                                            ┌ disconnect hetzner ────────────────────────┐                                                                            │
-│                                                                            │ Its ports and hostnames stop working here. │                                                                            │
+│                                                                            ┌────────────────────────────────────────────┐                                                                            │
+│                                                                            │ Disconnect hetzner?                        │                                                                            │
 │                                                                            │                                            │                                                                            │
+│                                                                            │ Its ports and hostnames stop working here. │                                                                            │
 │                                                                            │ Its lanes keep running on the box.         │                                                                            │
 │                                                                            │                                            │                                                                            │
 │                                                                            │ y disconnect   n cancel                    │                                                                            │
 │                                                                            └────────────────────────────────────────────┘                                                                            │
-│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -87,13 +87,13 @@
 24: 0 bold, 199 bold
 25: 0 bold, 199 bold
 26: 0 bold, 77-122 bold, 199 bold
-27: 0 bold, 77 bold, 79-120 bold, 122 bold, 199 bold
+27: 0 bold, 77 bold, 79-97 bold, 122 bold, 199 bold
 28: 0 bold, 77 bold, 122 bold, 199 bold
 29: 0 bold, 77 bold, 122 bold, 199 bold
 30: 0 bold, 77 bold, 122 bold, 199 bold
-31: 0 bold, 77 bold, 79 bold, 80-90 dim, 94 bold, 95-101 dim, 122 bold, 199 bold
-32: 0 bold, 77-122 bold, 199 bold
-33: 0 bold, 199 bold
+31: 0 bold, 77 bold, 122 bold, 199 bold
+32: 0 bold, 77 bold, 79 bold, 80-90 dim, 94 bold, 95-101 dim, 122 bold, 199 bold
+33: 0 bold, 77-122 bold, 199 bold
 34: 0 bold, 199 bold
 35: 0 bold, 199 bold
 36: 0 bold, 199 bold

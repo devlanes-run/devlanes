@@ -21,7 +21,7 @@
 ┌ this machine ────────────────────────────────────────────────────────────────┐
 │ No other machine connects here yet. Press p for a pairing code.              │
 └──────────────────────────────────────────────────────────────────────────────┘
- enter show   d disconnect   n new box   p pairing code … ? all keys   q quit
+ enter show   d disconnect   n new box   p pairing code   ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 18-19 dim, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
@@ -47,4 +47,4 @@
 20: 0 darkgray, 1-14 bold, 15-79 darkgray
 21: 0 darkgray, 2-64 dim, 79 darkgray
 22: 0-79 darkgray
-23: 1-5 bold, 6-13 dim, 14 bold, 15-28 dim, 29 bold, 30-40 dim, 41 bold, 42-56 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim
+23: 1-5 bold, 6-13 dim, 14 bold, 15-28 dim, 29 bold, 30-40 dim, 41 bold, 42-54 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

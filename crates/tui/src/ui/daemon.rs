@@ -226,17 +226,6 @@ fn fact_lines(app: &App, wide: bool) -> Vec<Line<'static>> {
         )
     };
     let mut lines = Vec::new();
-    if let Some(busy) = view.busy {
-        lines.push(line("daemon", format!("{busy}…"), theme.tone(Tone::Busy)));
-    }
-    if view.stopped {
-        lines.push(line(
-            "daemon",
-            "Stopped. S starts it.".into(),
-            theme.quiet(),
-        ));
-        return lines;
-    }
     let status = view.status.as_ref();
     let doctor = view.doctor.as_ref();
     if status.is_none() && doctor.is_none() {
@@ -733,8 +722,9 @@ fn clip(text: &str, width: usize) -> String {
 }
 
 /// `daemon.log`: the shown entries ending `scroll` entries up from the
-/// newest, with day separators; the title says what is shown.
-fn render_log(app: &App, frame: &mut Frame, area: Rect) {
+/// newest, with day separators; the title says what is shown. The daemon
+/// page and the unavailable screen both draw it.
+pub(crate) fn render_log(app: &App, frame: &mut Frame, area: Rect) {
     let theme = &app.theme;
     let view = &app.daemon;
     let (entries, shown) = app.daemon_shown();

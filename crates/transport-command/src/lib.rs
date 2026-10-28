@@ -61,19 +61,21 @@ const SHOWN: usize = 4096;
 
 /// Variables devlanes sets for its own processes, which a command never
 /// inherits: the daemon's home and the readiness pipe its client reads
-/// (`DEVLANES_HOME`, `DEVLANES_READY_FD`, `DEVLANES_READY_STEPS`), and the
-/// prompt relay of a devlanes ssh run (`DEVLANES_ASKPASS_SOCKET`). A devlanes
+/// (`DEVLANES_HOME`, `DEVLANES_READY_FD`, `DEVLANES_READY_STEPS`), the pid a
+/// restarted daemon replaced (`DEVLANES_REPLACE_PID`), and the prompt relay of
+/// a devlanes ssh run (`DEVLANES_ASKPASS_SOCKET`). A devlanes
 /// the command starts on this machine would otherwise use the daemon's home
 /// and pipe, and anything it runs could send prompts to the relay.
 /// [`CommandOptions::env`] can still set them. The rest of the environment,
 /// such as `PATH`, `SSH_AUTH_SOCK` or `KUBECONFIG`, is inherited.
 // A variable devlanes adds for its own processes belongs here, or every box
 // command inherits it; the tests set each entry and check it stays out.
-pub const INTERNAL_ENV: [&str; 4] = [
+pub const INTERNAL_ENV: [&str; 5] = [
     "DEVLANES_HOME",
     "DEVLANES_READY_FD",
     "DEVLANES_READY_STEPS",
     "DEVLANES_ASKPASS_SOCKET",
+    "DEVLANES_REPLACE_PID",
 ];
 
 /// Settings for [`CommandTransport`].

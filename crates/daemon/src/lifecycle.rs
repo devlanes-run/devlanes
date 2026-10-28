@@ -15,7 +15,8 @@ use devlanes_core::{
     env::Environment,
 };
 use devlanes_proto::{
-    Actor, Leftovers, LogQuery, RpcError, StartResult, UnitFailureData, UnitSummary, events,
+    Actor, Leftovers, LogQuery, RpcError, StartResult, StoppingStep, UnitFailureData, UnitSummary,
+    events,
 };
 use devlanes_resolve::{Launch, ReadySpec, ResolvedCommand, ResolvedLane, ResolvedService};
 use devlanes_state::{DesiredState, TaskRunInput};
@@ -37,6 +38,7 @@ use crate::{
     },
     ready::Readiness,
     registry::{internal, store_error},
+    stopping::StopSteps,
     units::{UnitHost, UnitInfo, UnitState, now_ms},
 };
 
@@ -48,6 +50,8 @@ const PORT_RELEASE: Duration = Duration::from_secs(15);
 const START_POLL: Duration = Duration::from_millis(25);
 /// Nested `steps` deeper than this are treated as a cycle.
 const MAX_STEP_DEPTH: usize = 16;
+/// A unit stop longer than this is logged, to explain a slow daemon stop.
+const SLOW_STOP: Duration = Duration::from_secs(2);
 
 /// Whether the lane's `lane.stop` and `lane.clean` tasks can run: a lane whose
 /// worktree is gone (or that never got an env or record) has no directory or
@@ -2767,6 +2771,20 @@ impl Inner {
         let Ok(resolved) = self.resolve_full(project, lane).await else {
             return Vec::new();
         };
+        self.run_resolved_hook(project, lane, &resolved, hook, actor, cancel)
+            .await
+    }
+
+    /// [`Self::run_hook`] with the lane already resolved.
+    async fn run_resolved_hook(
+        self: &Arc<Self>,
+        project: &Arc<ProjectRt>,
+        lane: &Arc<LaneRt>,
+        resolved: &ResolvedLane,
+        hook: TaskWhen,
+        actor: &Actor,
+        cancel: &CancellationToken,
+    ) -> Vec<Value> {
         let trigger = match hook {
             TaskWhen::Stop => "lane.stop",
             TaskWhen::Clean => "lane.clean",
@@ -2785,7 +2803,7 @@ impl Inner {
             }
             let outcome = self
                 .run_task(
-                    project, lane, &resolved, name, trigger, actor, None, cancel, 0,
+                    project, lane, resolved, name, trigger, actor, None, cancel, 0,
                 )
                 .await;
             results.push(match outcome {
@@ -3211,19 +3229,32 @@ impl Inner {
     /// Daemon shutdown: stops every live unit with its policy. With `hooks` (an
     /// explicit shutdown) each lane with live units first runs its `lane.stop`
     /// tasks, as a whole-lane stop does, until `hooks` fires. Returns the
-    /// stopped units (`{lane, unit}`) and the task results.
+    /// stopped units (`{lane, unit}`) and the task results. Reports the
+    /// `thaw`, `tasks` and `units` steps of `steps`.
     pub(crate) async fn stop_everything(
         self: &Arc<Self>,
         hooks: Option<&CancellationToken>,
+        steps: &StopSteps<'_>,
     ) -> (Vec<Value>, Vec<Value>) {
         let lanes = self.all_lanes();
         let _ops = self.lock_lanes(&lanes).await;
+        let idle = lanes
+            .iter()
+            .filter(|(_, lane)| lane.st().power.is_some())
+            .count();
+        let thaw = steps.begin(StoppingStep::Thaw, idle, None);
         self.wake_all().await;
+        if let Some(thaw) = thaw {
+            steps.done(&thaw);
+        }
         let tasks = match hooks {
-            Some(cancel) => self.shutdown_hooks(&lanes, cancel).await,
-            None => Vec::new(),
+            Some(cancel) => self.shutdown_hooks(&lanes, cancel, steps).await,
+            None => {
+                steps.skipped(StoppingStep::Tasks);
+                Vec::new()
+            }
         };
-        (Self::stop_lanes_locked(&lanes).await, tasks)
+        (Self::stop_lanes_locked(&lanes, Some(steps)).await, tasks)
     }
 
     /// The `lane.stop` tasks of an explicit daemon shutdown, for every lane in
@@ -3231,21 +3262,56 @@ impl Inner {
     /// concurrently, each lane's tasks in file order. Each result is
     /// `{lane, task, exit_code | error}`; a failed task is logged and reported
     /// and never keeps the other tasks or the unit stops from running.
+    /// Reported as the `tasks` step of `steps`.
     async fn shutdown_hooks(
         self: &Arc<Self>,
         lanes: &[crate::engine::LanePair],
         cancel: &CancellationToken,
+        steps: &StopSteps<'_>,
     ) -> Vec<Value> {
-        let runs = lanes
+        // Resolved first, so the step knows how many tasks it runs.
+        let resolved = join_all(
+            lanes
+                .iter()
+                .filter(|(_, lane)| {
+                    let st = lane.st();
+                    hooks_runnable(&st) && st.any_alive()
+                })
+                .map(|(project, lane)| async move {
+                    let resolved = self.resolve_full(project, lane).await.ok()?;
+                    Some((project, lane, resolved))
+                }),
+        )
+        .await
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        let total = resolved
             .iter()
-            .filter(|(_, lane)| {
-                let st = lane.st();
-                hooks_runnable(&st) && st.any_alive()
+            .map(|(_, _, resolved)| {
+                resolved
+                    .tasks
+                    .values()
+                    .filter(|task| task.when == Some(TaskWhen::Stop) && task.active)
+                    .count()
             })
-            .map(|(project, lane)| async move {
+            .sum();
+        let Some(run) = steps.begin(StoppingStep::Tasks, total, None) else {
+            return Vec::new();
+        };
+        let runs = resolved
+            .into_iter()
+            .map(|(project, lane, resolved)| async move {
                 lane.st().shutdown_hooks = true;
                 let results = self
-                    .run_hook(project, lane, TaskWhen::Stop, &Actor::default(), cancel)
+                    .run_resolved_hook(
+                        project,
+                        lane,
+                        &resolved,
+                        TaskWhen::Stop,
+                        &Actor::default(),
+                        cancel,
+                    )
                     .await;
                 lane.st().shutdown_hooks = false;
                 let reference = lane.st().reference(&project.name());
@@ -3260,7 +3326,9 @@ impl Inner {
                     })
                     .collect::<Vec<_>>()
             });
-        join_all(runs).await.into_iter().flatten().collect()
+        let results = join_all(runs).await.into_iter().flatten().collect();
+        steps.done(&run);
+        results
     }
 
     /// Withdraws every queued start, interrupts running starts and takes the `op`
@@ -3282,20 +3350,59 @@ impl Inner {
 
     /// Stops every live unit of `lanes`, whose `op` locks the caller holds, once
     /// their spawns in flight landed; all at once, so the longest stop timeout
-    /// bounds the wait. Returns the stopped units as `{lane, unit}`.
-    pub(crate) async fn stop_lanes_locked(lanes: &[crate::engine::LanePair]) -> Vec<Value> {
+    /// bounds the wait. Returns the stopped units as `{lane, unit}`. With
+    /// `steps` (a daemon shutdown), reported as its `units` step, counting
+    /// down as each stop finishes. A unit slower than [`SLOW_STOP`] is logged.
+    pub(crate) async fn stop_lanes_locked(
+        lanes: &[crate::engine::LanePair],
+        steps: Option<&StopSteps<'_>>,
+    ) -> Vec<Value> {
         let mut stops = Vec::new();
         let mut stopped = Vec::new();
+        let mut busy_lanes = 0;
         for (project, lane) in lanes {
             lane.spawns_settled().await;
             let st = lane.st();
             let reference = st.reference(&project.name());
+            let before = stops.len();
             for (name, rec) in st.units.iter().filter(|(_, rec)| rec.host.is_alive()) {
-                stops.push((rec.host.clone(), rec.stop));
+                stops.push((reference.clone(), name.clone(), rec.host.clone(), rec.stop));
                 stopped.push(json!({"lane": reference, "unit": name}));
             }
+            if stops.len() > before {
+                busy_lanes += 1;
+            }
         }
-        join_all(stops.iter().map(|(host, policy)| host.stop(*policy))).await;
+        let total = stops.len();
+        let run = steps.and_then(|steps| steps.begin(StoppingStep::Units, total, Some(busy_lanes)));
+        let mut pending: FuturesUnordered<_> = stops
+            .into_iter()
+            .map(|(lane, unit, host, policy)| async move {
+                let begun = Instant::now();
+                if let Err(error) = host.stop(policy).await {
+                    tracing::warn!(%lane, %unit, code = %error.code, "unit stop failed");
+                }
+                (lane, unit, begun.elapsed())
+            })
+            .collect();
+        let mut left = total;
+        while let Some((lane, unit, elapsed)) = pending.next().await {
+            left -= 1;
+            if elapsed > SLOW_STOP {
+                tracing::info!(
+                    %lane,
+                    %unit,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    "unit was slow to stop"
+                );
+            }
+            if let (Some(steps), Some(run)) = (steps, &run) {
+                steps.progress(run, left);
+            }
+        }
+        if let (Some(steps), Some(run)) = (steps, &run) {
+            steps.done(run);
+        }
         stopped
     }
 

@@ -7,6 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use devlanes_client::restart::Progress;
 use devlanes_proto::{
     Actor, ActorKind, AttachParams, AttachResult, Event, LaneSummary, LogLine, LogQuery, Method,
     Page, RpcError, RunParams, Selection, UnitSummary,
@@ -14,7 +15,7 @@ use devlanes_proto::{
 use devlanes_tui::{
     ApiError, AttachEvent, AttachInput, AttachSession, ConnectEvent, ConnectSession, DaemonApi,
     EventStream, Metrics, MetricsQuery,
-    api::{ProfileInfo, ProfileList},
+    api::{ProfileInfo, ProfileList, ProgressSender},
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
@@ -206,14 +207,29 @@ impl DaemonApi for FakeApi {
         Ok(json!({"cleaned": ["acme@4"], "offsets_removed": 0}))
     }
 
-    async fn stop_daemon(&self) -> Result<Value, ApiError> {
+    async fn stop_daemon(&self, progress: ProgressSender) -> Result<Value, ApiError> {
         self.record("daemon.shutdown".into());
+        for step in [Progress::Stopping { processes: 3 }, Progress::Stopped] {
+            let _ = progress.send(step);
+        }
         Ok(json!({"stopping": true, "processes": 3}))
     }
 
-    async fn restart_daemon(&self) -> Result<Value, ApiError> {
+    async fn restart_daemon(&self, progress: ProgressSender) -> Result<Value, ApiError> {
         self.record("daemon.restart".into());
-        Ok(daemon_status())
+        for step in [
+            Progress::Stopping { processes: 3 },
+            Progress::Stopped,
+            Progress::Started {
+                version: VERSION.into(),
+                pid: Some(4242),
+            },
+        ] {
+            let _ = progress.send(step);
+        }
+        let mut status = daemon_status();
+        status["resuming"] = json!(["acme@0"]);
+        Ok(status)
     }
 
     async fn start_daemon(&self) -> Result<Value, ApiError> {

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use devlanes_client::restart::{self, Steps};
 use devlanes_proto::{
     ActorKind, AttachResult, Event, LaneSummary, LogLine, LogQuery, Method, ORPHANED, Page,
     RpcError, RunParams, Selection, UnitSummary, events,
@@ -32,6 +33,10 @@ use crate::words::{self, Worded};
 /// Smallest terminal that still fits a list, a pane and the help bar.
 pub const MIN_WIDTH: u16 = 40;
 pub const MIN_HEIGHT: u16 = 8;
+/// Longest the TUI waits for a new daemon before it shows the daemon as not
+/// answering: the client's per-step bound, twice, so a slow start still
+/// shows its steps.
+const STARTING_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 /// Notices stay this many one-second ticks; errors stay longer.
 const NOTICE_TICKS: u8 = 6;
 const ERROR_TICKS: u8 = 12;
@@ -186,10 +191,8 @@ pub struct DaemonView {
     pub checks_copy: Option<LogCopy>,
     /// Where a left button press in the checks box was, until its release.
     checks_press: Option<crate::daemonlog::LogPos>,
-    /// The restart, stop, start or gc in flight.
-    pub busy: Option<&'static str>,
-    /// Set after this TUI stopped the daemon, until one is reachable again.
-    pub stopped: bool,
+    /// `lane.gc` is in flight.
+    pub collecting: bool,
     /// Facts and log failures repeat every refresh; only a change is reported.
     last_error: Option<String>,
     ticks: u8,
@@ -293,6 +296,86 @@ pub enum Connection {
     Reconnecting { attempt: u32 },
 }
 
+/// How the daemon stands for the user. Anything but `Online` puts the
+/// unavailable screen in place of the body; [`App::daemon_moved`] makes
+/// every change.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DaemonState {
+    #[default]
+    Online,
+    /// Shutting down: this TUI's own S or R, or a `daemon.stopping` event
+    /// of a stop someone else asked for.
+    Stopping { restart: bool, steps: Steps },
+    /// The old daemon is gone and a new one is on its way (a restart, or
+    /// `s`), until the subscription opens on it.
+    Starting { restart: bool, steps: Steps },
+    /// Stopped on purpose, or a restart or start that failed; the steps say
+    /// how it went.
+    Stopped { steps: Steps },
+    /// Gone without a word for at least one tick; the TUI keeps retrying.
+    Unreachable,
+}
+
+impl DaemonState {
+    /// The color of the logo and the header's brand word.
+    pub fn logo(&self) -> crate::steps::LogoState {
+        use crate::steps::LogoState;
+        match self {
+            Self::Online => LogoState::Online,
+            Self::Stopping { .. } | Self::Starting { .. } => LogoState::Busy,
+            Self::Stopped { .. } | Self::Unreachable => LogoState::Down,
+        }
+    }
+
+    /// The steps the unavailable screen lists; none while online or unreachable.
+    pub fn steps(&self) -> Option<&Steps> {
+        match self {
+            Self::Stopping { steps, .. }
+            | Self::Starting { steps, .. }
+            | Self::Stopped { steps } => Some(steps),
+            Self::Online | Self::Unreachable => None,
+        }
+    }
+
+    /// The state in a few words after `daemon` (`restarting`), for the header
+    /// and the tab title; `None` while online.
+    pub fn words(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Online => return None,
+            Self::Stopping { restart: true, .. } | Self::Starting { restart: true, .. } => {
+                "restarting"
+            }
+            Self::Stopping { .. } => "stopping",
+            Self::Starting { .. } => "starting",
+            Self::Stopped { .. } => "stopped",
+            Self::Unreachable => "not answering",
+        })
+    }
+}
+
+/// What moves [`DaemonState`]; [`App::daemon_moved`] decides where to.
+#[derive(Debug)]
+enum Cause {
+    /// This TUI confirmed R (`restart`) or S.
+    Asked { restart: bool },
+    /// `s` on the unavailable screen.
+    Start,
+    /// A report of this TUI's own stop or restart, or a `daemon.stopping` event.
+    Progress(restart::Progress),
+    /// The subscription or a request found the daemon gone.
+    Lost,
+    /// A second passed.
+    Tick,
+    /// The subscription is open again.
+    Subscribed,
+    /// This TUI's stop is done.
+    StopDone,
+    /// This TUI's restart or start is done: the new daemon answers.
+    Answered,
+    /// This TUI's stop, restart or start failed, in words.
+    Failed(String),
+}
+
 /// The selected row and the lane it is in. The lane also decides the project
 /// tab and the lane chip that show.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -385,8 +468,7 @@ pub struct ErrorsDialog {
 pub enum Dialog {
     /// `y` confirms; `Enter` too unless `strict` (the daemon's stop and restart).
     Confirm {
-        /// The action, as the box title: `clean acme@2`.
-        title: String,
+        /// The question, in bold at the top: `Clean main (acme@2)?`.
         prompt: String,
         /// What will happen, one sentence per entry.
         detail: Vec<String>,
@@ -652,8 +734,11 @@ pub enum Msg {
     },
     /// New lines of the daemon's log file, or why it cannot be read.
     DaemonLog(Result<crate::logfile::LogChunk, String>),
+    /// A step of this TUI's own stop or restart, as it happens.
+    DaemonStep(restart::Progress),
     DaemonStopped(Result<Value, ApiError>),
-    /// The new daemon's status after a restart.
+    /// The new daemon's status after a restart, with the lanes it starts
+    /// again as `resuming`.
     DaemonRestarted(Result<Value, ApiError>),
     DaemonStarted(Result<Value, ApiError>),
     /// How devlanes was installed, and the release notices dismissed earlier.
@@ -1025,6 +1110,14 @@ pub struct App {
     /// The working directory, to open on its lane first.
     cwd: Option<PathBuf>,
     pub connection: Connection,
+    /// How the daemon stands for the user, on top of the connection.
+    pub daemon_state: DaemonState,
+    /// When [`DaemonState::Starting`] began, to give up on a new daemon that
+    /// never answers.
+    starting_since: Option<std::time::Instant>,
+    /// The time step rows count from; `None` is the real clock. Tests and
+    /// the screens example pin it so drawn times do not change.
+    pub clock: Option<std::time::Instant>,
     pub dialog: Option<Dialog>,
     pub attached: Option<Attached>,
     /// The latest `metrics` reply; `None` until one arrives or after an error.
@@ -1140,6 +1233,9 @@ impl App {
             dialog_area: RefCell::new(None),
             cwd: None,
             connection: Connection::Connecting,
+            daemon_state: DaemonState::Online,
+            starting_since: None,
+            clock: None,
             dialog: None,
             attached: None,
             metrics: None,
@@ -1207,16 +1303,16 @@ impl App {
     }
 
     /// The tab title: `devlanes · acme@0`, with how the lane stands when that
-    /// is worth a glance (`starting 3/8`, `stopping`, `cleaning`, `2 failed`,
-    /// `reconnecting`).
+    /// is worth a glance (`starting 3/8`, `stopping`, `cleaning`, `2 failed`),
+    /// or how the daemon stands while it is not online (`daemon restarting`).
     pub fn tab_title(&self) -> String {
         let Some(lane) = self.selected_lane() else {
             return "devlanes".into();
         };
         let mut title = format!("devlanes · {}", lane.reference);
         let counts = tree::counts(lane);
-        let state = if matches!(self.connection, Connection::Reconnecting { .. }) {
-            Some("reconnecting".to_owned())
+        let state = if let Some(words) = self.daemon_state.words() {
+            Some(format!("daemon {words}"))
         } else if lane.state == "starting" {
             Some(if counts.total > 0 {
                 format!("starting {}/{}", counts.up, counts.total)
@@ -1499,8 +1595,8 @@ impl App {
                     self.starts.reset();
                 }
                 self.connection = Connection::Online;
-                // Someone may have started the daemon this TUI stopped.
-                self.daemon.stopped = false;
+                // Whoever started the daemon, it answers now.
+                self.daemon_moved(Cause::Subscribed, &mut effects);
                 effects.push(Effect::Refresh);
                 self.fetch_boxes(&mut effects);
                 // A daemon started or reconnected to lists its own clients.
@@ -1520,9 +1616,12 @@ impl App {
                 self.lost_connection(Some(&error), &mut effects);
             }
             Msg::EventsEnded(reason) => self.lost_connection(reason.as_ref(), &mut effects),
+            // A finished restart or start subscribes at once and cancels the
+            // retry that was waiting, so it does not subscribe a second time.
             Msg::Reconnect => {
-                self.reconnect_pending = false;
-                effects.push(Effect::Subscribe);
+                if std::mem::take(&mut self.reconnect_pending) {
+                    effects.push(Effect::Subscribe);
+                }
             }
             Msg::Event(event) => self.event(event, &mut effects),
             Msg::AttachOpened { generation, result } => {
@@ -1584,10 +1683,9 @@ impl App {
                 self.container_failed(generation, error);
             }
             Msg::StreamError { generation, error } => {
-                // A lost connection is reported once by the subscription, and an
-                // intentional daemon stop or restart is not an error at all.
-                let expected =
-                    error.is_disconnect() || self.daemon.stopped || self.daemon.busy.is_some();
+                // A lost connection is reported once by the subscription, and a
+                // daemon that is not online has its own screen saying so.
+                let expected = error.is_disconnect() || self.daemon_state != DaemonState::Online;
                 let Some(attached) = self.attached_mut(generation) else {
                     return effects;
                 };
@@ -1775,7 +1873,7 @@ impl App {
                 }
             }
             Msg::GcDone(result) => {
-                self.daemon.busy = None;
+                self.daemon.collecting = false;
                 match result {
                     Ok(value) => {
                         let cleaned: Vec<String> = value
@@ -1889,21 +1987,18 @@ impl App {
                 self.daemon.log_error = Some(text::clean(&message));
                 self.report_daemon_once("read daemon.log", Worded::local(&message));
             }
-            Msg::DaemonStopped(result) => {
-                self.daemon.busy = None;
-                match result {
-                    Ok(_) => {
-                        self.daemon.stopped = true;
-                        self.daemon.status = None;
-                        // No daemon serves the clients now; the next one lists them again.
-                        self.boxes.clients.list = None;
-                        self.boxes.clients.selected = 0;
-                        self.boxes.part = BoxPart::Hosts;
-                        self.set_notice("daemon stopped".into());
-                    }
-                    Err(error) => self.api_error("stop the daemon", None, error, &mut effects),
+            Msg::DaemonStep(progress) => self.daemon_moved(Cause::Progress(progress), &mut effects),
+            Msg::DaemonStopped(result) => match result {
+                Ok(_) => {
+                    self.daemon.status = None;
+                    // No daemon serves the clients now; the next one lists them again.
+                    self.boxes.clients.list = None;
+                    self.boxes.clients.selected = 0;
+                    self.boxes.part = BoxPart::Hosts;
+                    self.daemon_moved(Cause::StopDone, &mut effects);
                 }
-            }
+                Err(error) => self.daemon_failed("stop the daemon", &error, &mut effects),
+            },
             Msg::Profiles { lane, result } => self.profiles_loaded(lane, result, &mut effects),
             Msg::Tasks { lane, result } => {
                 // Without `task.list` the list shows the tasks that ran.
@@ -1973,28 +2068,197 @@ impl App {
                 }
             }
             Msg::Spin => self.spin = self.spin.wrapping_add(1),
-            Msg::DaemonRestarted(result) | Msg::DaemonStarted(result) => {
-                let verb = if self.daemon.busy == Some("restarting") {
-                    "restart"
-                } else {
-                    "start"
-                };
-                self.daemon.busy = None;
-                match result {
-                    Ok(status) => {
-                        self.daemon.stopped = false;
-                        self.daemon.status = Some(status);
-                        self.set_notice(format!("daemon {verb}ed"));
-                        // Reconnect now instead of waiting for the next backoff step.
-                        effects.extend([Effect::Subscribe, Effect::Refresh, Effect::FetchDaemon]);
-                    }
-                    Err(error) => {
-                        self.api_error(&format!("{verb} the daemon"), None, error, &mut effects);
-                    }
-                }
-            }
+            Msg::DaemonRestarted(result) => self.daemon_answered("restart", result, &mut effects),
+            Msg::DaemonStarted(result) => self.daemon_answered("start", result, &mut effects),
         }
         effects
+    }
+
+    /// This TUI's restart or start (`verb`) ended. A new daemon answers:
+    /// subscribe to it now instead of at the next retry.
+    fn daemon_answered(
+        &mut self,
+        verb: &str,
+        result: Result<Value, ApiError>,
+        effects: &mut Vec<Effect>,
+    ) {
+        let status = match result {
+            Ok(status) => status,
+            Err(error) => {
+                self.daemon_failed(&format!("{verb} the daemon"), &error, effects);
+                return;
+            }
+        };
+        let resuming = status
+            .get("resuming")
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        self.set_notice(match resuming {
+            0 => format!("daemon {verb}ed"),
+            1 => format!("daemon {verb}ed, starting 1 lane again"),
+            n => format!("daemon {verb}ed, starting {n} lanes again"),
+        });
+        self.daemon.status = Some(status);
+        self.daemon_moved(Cause::Answered, effects);
+        // The retry may have subscribed already.
+        if self.connection != Connection::Online {
+            self.reconnect_pending = false;
+            effects.push(Effect::Subscribe);
+        }
+    }
+
+    /// This TUI's stop, restart or start failed: the error list gets it in
+    /// full, the steps end with it.
+    fn daemon_failed(&mut self, what: &str, error: &ApiError, effects: &mut Vec<Effect>) {
+        let worded = words::api(error);
+        let line = worded.one_line();
+        self.report(what, None, worded);
+        self.daemon_moved(Cause::Failed(line), effects);
+    }
+
+    /// The one place [`DaemonState`] changes. Leaving `Online` closes what
+    /// acted on the daemon and follows its log; coming back fetches its facts.
+    fn daemon_moved(&mut self, cause: Cause, effects: &mut Vec<Effect>) {
+        use DaemonState::{Online, Starting, Stopped, Stopping, Unreachable};
+        let now = self.now();
+        let was_online = self.daemon_state == Online;
+        let state = std::mem::take(&mut self.daemon_state);
+        self.daemon_state = match (state, cause) {
+            (_, Cause::Subscribed) => Online,
+            (Online, Cause::Asked { restart }) => Stopping {
+                restart,
+                steps: Steps::default(),
+            },
+            (Stopped { .. } | Unreachable, Cause::Start) => {
+                let mut steps = Steps::default();
+                steps.set(
+                    "start",
+                    "starting the daemon".into(),
+                    restart::RowState::Running,
+                    None,
+                    now,
+                );
+                Starting {
+                    restart: false,
+                    steps,
+                }
+            }
+            // A stop someone else asked for; this TUI's own reports come
+            // after it moved to `Stopping`.
+            (Online, Cause::Progress(restart::Progress::Step(step))) => {
+                let restart = step.restart;
+                let mut steps = Steps::default();
+                steps.apply(&restart::Progress::Step(step), now);
+                Stopping { restart, steps }
+            }
+            (Stopping { restart, mut steps }, Cause::Progress(progress)) => {
+                steps.apply(&progress, now);
+                // The old daemon is gone once the new one reports.
+                let gone = matches!(
+                    progress,
+                    restart::Progress::Stopped
+                        | restart::Progress::Starting(_)
+                        | restart::Progress::Started { .. }
+                );
+                if restart && gone {
+                    Starting { restart, steps }
+                } else {
+                    Stopping { restart, steps }
+                }
+            }
+            (Starting { restart, mut steps }, Cause::Progress(progress)) => {
+                steps.apply(&progress, now);
+                Starting { restart, steps }
+            }
+            // An announced stop: the connection closing is its end.
+            (Stopping { restart, mut steps }, Cause::Lost) => {
+                steps.apply(&restart::Progress::Stopped, now);
+                if restart {
+                    Starting { restart, steps }
+                } else {
+                    Stopped { steps }
+                }
+            }
+            (Online, Cause::Tick) if matches!(self.connection, Connection::Reconnecting { .. }) => {
+                Unreachable
+            }
+            // A new daemon that never answers (a restart that failed elsewhere)
+            // must not leave the screen spinning; `s` works from there.
+            (Starting { .. }, Cause::Tick)
+                if matches!(self.connection, Connection::Reconnecting { .. })
+                    && self.starting_since.is_some_and(|since| {
+                        now.saturating_duration_since(since) >= STARTING_LIMIT
+                    }) =>
+            {
+                Unreachable
+            }
+            (Stopping { steps, .. } | Stopped { steps }, Cause::StopDone) => Stopped { steps },
+            (Online | Unreachable, Cause::StopDone) => Stopped {
+                steps: Steps::default(),
+            },
+            (
+                Stopping {
+                    restart: true,
+                    steps,
+                },
+                Cause::Answered,
+            ) => Starting {
+                restart: true,
+                steps,
+            },
+            (state, Cause::Failed(message)) => {
+                let mut steps = state.steps().cloned().unwrap_or_default();
+                steps.fail(&message, now);
+                // A failure before anything stopped leaves the daemon as it was.
+                if self.connection == Connection::Online {
+                    Online
+                } else {
+                    Stopped { steps }
+                }
+            }
+            (state, _) => state,
+        };
+        let starting = matches!(self.daemon_state, Starting { .. });
+        self.starting_since = match (starting, self.starting_since) {
+            (true, Some(since)) => Some(since),
+            (true, None) => Some(now),
+            (false, _) => None,
+        };
+        let online = self.daemon_state == Online;
+        if was_online && !online {
+            self.leave_online(effects);
+        }
+        if !was_online && online {
+            effects.push(Effect::FetchDaemon);
+        }
+    }
+
+    /// The daemon went away: dialogs close, since what they act on is gone,
+    /// typing ends, and the log follows from its newest line, read at once.
+    fn leave_online(&mut self, effects: &mut Vec<Effect>) {
+        if matches!(self.dialog, Some(Dialog::Connect(_))) {
+            effects.push(Effect::ConnectDetach);
+        }
+        self.dialog = None;
+        self.stop_typing();
+        self.daemon.copy = None;
+        self.daemon.checks_copy = None;
+        self.daemon.focus = DaemonBox::Log;
+        self.daemon_follow();
+        effects.push(Effect::ReadDaemonLog {
+            from: self.daemon.log_position,
+        });
+    }
+
+    /// The daemon is not online and the TUI has shown lanes before: the
+    /// unavailable screen replaces the body and takes the keys.
+    pub fn unavailable(&self) -> bool {
+        self.loaded && self.daemon_state != DaemonState::Online
+    }
+
+    /// Now, on [`App::clock`].
+    pub fn now(&self) -> std::time::Instant {
+        self.clock.unwrap_or_else(std::time::Instant::now)
     }
 
     /// Reports a daemon-tab failure unless it repeats the last one.
@@ -2100,15 +2364,14 @@ impl App {
 
     // ---- connection -------------------------------------------------------
 
-    /// Marks the daemon unreachable and schedules one retry with backoff. The
-    /// first loss goes to the error list, unless this TUI is stopping or
-    /// restarting the daemon itself; retries only update the header.
+    /// Marks the connection lost and schedules one retry with backoff. The
+    /// first loss goes to the error list when nothing announced it; an
+    /// announced stop or restart moves on to its next state instead.
     fn lost_connection(&mut self, reason: Option<&ApiError>, effects: &mut Vec<Effect>) {
-        let expected = self.daemon.stopped || self.daemon.busy.is_some();
         let attempt = match self.connection {
             Connection::Reconnecting { attempt } => attempt.saturating_add(1),
             _ => {
-                if !expected {
+                if self.daemon_state == DaemonState::Online {
                     let worded = match reason {
                         Some(error) => words::api(error),
                         None => Worded::local("the daemon closed live updates"),
@@ -2119,6 +2382,7 @@ impl App {
             }
         };
         self.connection = Connection::Reconnecting { attempt };
+        self.daemon_moved(Cause::Lost, effects);
         if !self.reconnect_pending {
             self.reconnect_pending = true;
             let after_ms = (250u64 << attempt.min(5)).min(MAX_BACKOFF_MS);
@@ -2218,6 +2482,13 @@ impl App {
         }
         match event.event.as_str() {
             events::RESYNC => effects.push(Effect::Refresh),
+            events::DAEMON_STOPPING => {
+                // Every subscriber hears it, whoever asked; this TUI's own
+                // stop reports the same steps again, which changes nothing.
+                if let Ok(step) = serde_json::from_value(event.data.clone()) {
+                    self.daemon_moved(Cause::Progress(restart::Progress::Step(step)), effects);
+                }
+            }
             events::LANE_CHANGED => {
                 let lane = event
                     .data
@@ -2426,7 +2697,12 @@ impl App {
 
     /// Whether a spinner is on screen somewhere, so the runtime redraws often.
     pub fn spinning(&self) -> bool {
-        if matches!(&self.dialog, Some(Dialog::Connect(dialog)) if dialog.busy()) {
+        if matches!(&self.dialog, Some(Dialog::Connect(dialog)) if dialog.busy())
+            || matches!(
+                self.daemon_state,
+                DaemonState::Stopping { .. } | DaemonState::Starting { .. }
+            )
+        {
             return true;
         }
         self.all_lanes().any(|lane| {
@@ -3111,7 +3387,7 @@ impl App {
     /// failure to report, nor is a lost connection, which the subscription
     /// reports once.
     fn container_failed(&mut self, generation: u64, error: ApiError) {
-        let expected = error.is_disconnect() || self.daemon.stopped || self.daemon.busy.is_some();
+        let expected = error.is_disconnect() || self.daemon_state != DaemonState::Online;
         let Some(attached) = self.attached_mut(generation) else {
             return;
         };
@@ -3344,6 +3620,10 @@ impl App {
             }
             return;
         }
+        if self.unavailable() {
+            self.unavailable_key(key, effects);
+            return;
+        }
         if self.dialog.is_some() {
             self.dialog_key(key, effects);
             return;
@@ -3418,7 +3698,7 @@ impl App {
         }
         match self.view {
             View::Monitor => self.monitor_key(key, effects),
-            View::Daemon => self.daemon_key(key, effects),
+            View::Daemon => self.daemon_key(key),
             View::Boxes => self.boxes_key(key, effects),
             View::Project => self.list_key(key, effects),
         }
@@ -3556,9 +3836,11 @@ impl App {
             return;
         }
         self.dialog = Some(Dialog::Confirm {
-            title: format!("disconnect {name}"),
-            prompt: "Its ports and hostnames stop working here.".into(),
-            detail: vec!["Its lanes keep running on the box.".into()],
+            prompt: format!("Disconnect {name}?"),
+            detail: vec![
+                "Its ports and hostnames stop working here.".into(),
+                "Its lanes keep running on the box.".into(),
+            ],
             action: "disconnect",
             strict: true,
             effect: Box::new(Effect::Disconnect {
@@ -3567,13 +3849,8 @@ impl App {
         });
     }
 
-    /// Opens the pairing code modal and asks for a code, unless this TUI
-    /// keeps the daemon stopped.
+    /// Opens the pairing code modal and asks for a code.
     fn pair(&mut self, effects: &mut Vec<Effect>) {
-        if self.daemon.stopped {
-            self.set_notice("daemon stopped. S on the daemon page starts it".into());
-            return;
-        }
         self.dialog = Some(Dialog::Pair(crate::connect::PairDialog::loading()));
         effects.push(Effect::Pair);
     }
@@ -3728,10 +4005,8 @@ impl App {
             effects.push(Effect::ReadDaemonLog {
                 from: self.daemon.log_position,
             });
-            if !self.daemon.stopped {
-                effects.push(Effect::FetchDaemon);
-                effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
-            }
+            effects.push(Effect::FetchDaemon);
+            effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
         }
         if view == View::Monitor && self.view != View::Monitor {
             effects.push(Effect::FetchMetrics(self.metrics_query()));
@@ -3806,9 +4081,9 @@ impl App {
     // ---- clients of this machine as a box ---------------------------------
 
     /// Asks for `remote.clients`, once at a time, as [`App::fetch_boxes`]
-    /// asks for `host.list`; not while this TUI keeps the daemon stopped.
+    /// asks for `host.list`; not while the daemon is not online.
     fn fetch_clients(&mut self, effects: &mut Vec<Effect>) {
-        if self.daemon.stopped {
+        if self.daemon_state != DaemonState::Online {
             return;
         }
         let clients = &mut self.boxes.clients;
@@ -3874,10 +4149,6 @@ impl App {
     /// Opens the confirm dialog for revoking the selected client, or says why
     /// it has nothing to revoke.
     fn revoke_prompt(&mut self) {
-        if self.daemon.stopped {
-            self.set_notice("daemon stopped. S on the daemon page starts it".into());
-            return;
-        }
         let Some(client) = self.boxes.clients.current().cloned() else {
             self.set_notice("no client to revoke".into());
             return;
@@ -3913,9 +4184,8 @@ impl App {
             "remote.require_pairing is false here, so it can reconnect without a code."
         };
         self.dialog = Some(Dialog::Confirm {
-            title: format!("revoke {name} · {short}"),
-            prompt: connections,
-            detail: vec![again.into()],
+            prompt: format!("Revoke {name} ({short})?"),
+            detail: vec![connections, again.into()],
             action: "revoke",
             strict: true,
             effect: Box::new(Effect::RevokeClient {
@@ -4024,8 +4294,49 @@ impl App {
         self.after_change(effects);
     }
 
-    /// Keys on the daemon tab. Every action that stops something asks first.
-    fn daemon_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
+    /// Keys while the daemon is not online: q and Ctrl+C quit at once (the
+    /// lanes on screen are stale, so nothing asks about stopping them), `s`
+    /// starts a daemon that is stopped or not answering, and the log keys
+    /// work. Every other key waits for the daemon.
+    fn unavailable_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if key.code == KeyCode::Char('c') && ctrl {
+            effects.push(Effect::Quit);
+            return;
+        }
+        if self.daemon.copy.is_some() {
+            let page = usize::from(self.size.1 / 2).max(1);
+            self.daemon_copy_key(key, page, effects);
+            return;
+        }
+        if self.daemon.filter_editing {
+            self.daemon_filter_key(key, effects);
+            return;
+        }
+        match key.code {
+            KeyCode::Char('q') if !ctrl => effects.push(Effect::Quit),
+            KeyCode::Char('s')
+                if matches!(
+                    self.daemon_state,
+                    DaemonState::Stopped { .. } | DaemonState::Unreachable
+                ) =>
+            {
+                self.daemon_moved(Cause::Start, effects);
+                effects.push(Effect::StartDaemon);
+            }
+            KeyCode::Esc if !self.daemon.filters.text.is_empty() => {
+                self.daemon.filters.text.clear();
+                self.daemon_filters_changed();
+            }
+            _ => {
+                self.daemon_log_key(key);
+            }
+        }
+    }
+
+    /// The log's keys, on the daemon tab and the unavailable screen: scroll,
+    /// follow or pause, level, filter and copy mode. False for other keys.
+    fn daemon_log_key(&mut self, key: KeyEvent) -> bool {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let page = usize::from(self.size.1 / 2).max(1);
         let shown = self.daemon_shown().1.len();
@@ -4039,9 +4350,6 @@ impl App {
                 view.paused = true;
             }
         };
-        if self.daemon.focus == DaemonBox::Checks && self.checks_key(key) {
-            return;
-        }
         match key.code {
             // On the bottom line of the box, like copy mode in a unit's pane.
             KeyCode::Char('c') if !ctrl && shown > 0 => {
@@ -4068,11 +4376,25 @@ impl App {
                 self.daemon.filters.floor = self.daemon.filters.floor.next();
                 self.daemon_filters_changed();
             }
+            KeyCode::Char('/') => self.daemon.filter_editing = true,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Keys on the daemon tab. Every action that stops something asks first.
+    fn daemon_key(&mut self, key: KeyEvent) {
+        if self.daemon.focus == DaemonBox::Checks && self.checks_key(key) {
+            return;
+        }
+        if self.daemon_log_key(key) {
+            return;
+        }
+        match key.code {
             KeyCode::Char('d') => {
                 self.daemon.filters.unfolded = !self.daemon.filters.unfolded;
                 self.daemon_filters_changed();
             }
-            KeyCode::Char('/') => self.daemon.filter_editing = true,
             KeyCode::Char('i') => {
                 self.daemon.all_checks = !self.daemon.all_checks;
                 self.daemon.checks_scroll = 0;
@@ -4093,30 +4415,20 @@ impl App {
                 }
             }
             KeyCode::Char('R') => self.daemon_prompt(
-                "restart the daemon",
                 "Restart the daemon?",
                 "restart",
                 "This TUI reconnects on its own.",
                 Effect::RestartDaemon,
             ),
-            // S stops the daemon, and starts it when this TUI stopped it.
-            KeyCode::Char('S' | 's') if self.daemon.stopped => {
-                if self.daemon.busy.is_none() {
-                    self.daemon.busy = Some("starting");
-                    effects.push(Effect::StartDaemon);
-                }
-            }
             KeyCode::Char('S') => self.daemon_prompt(
-                "stop the daemon",
                 "Stop the daemon?",
                 "stop",
-                "S on this page starts the daemon again.",
+                "s starts the daemon again.",
                 Effect::StopDaemon,
             ),
             KeyCode::Char('X') => {
-                if self.daemon.busy.is_none() {
+                if !self.daemon.collecting {
                     self.dialog = Some(Dialog::Confirm {
-                        title: "clean gone lanes".into(),
                         prompt: "Clean every lane whose worktree is gone?".into(),
                         detail: vec![
                             "For each one it stops the units, runs lane.clean tasks and infra teardown, removes the lane's containers and volumes and frees its ports. It also drops port offsets no config uses.".into(),
@@ -4127,34 +4439,16 @@ impl App {
                     });
                 }
             }
-            KeyCode::Char('s') => {
-                if self.connection == Connection::Online {
-                    self.set_notice("daemon already running".into());
-                } else if self.daemon.busy.is_none() {
-                    self.daemon.busy = Some("starting");
-                    effects.push(Effect::StartDaemon);
-                }
-            }
+            KeyCode::Char('s') => self.set_notice("daemon already running".into()),
             _ => {}
         }
     }
 
     /// The confirm dialog for restarting or stopping the daemon, with the
     /// number of processes it would stop.
-    fn daemon_prompt(
-        &mut self,
-        title: &str,
-        prompt: &str,
-        action: &'static str,
-        after: &str,
-        effect: Effect,
-    ) {
-        if let Some(busy) = self.daemon.busy {
-            self.set_notice(format!("wait: daemon {busy}…"));
-            return;
-        }
-        if self.daemon.stopped {
-            self.set_notice("daemon stopped: S starts it".into());
+    fn daemon_prompt(&mut self, prompt: &str, action: &'static str, after: &str, effect: Effect) {
+        if self.daemon.collecting {
+            self.set_notice("wait: the daemon is cleaning lanes with missing worktrees…".into());
             return;
         }
         // A restart starts the running lanes again in the new daemon; a stop
@@ -4171,7 +4465,6 @@ impl App {
             None => format!("It stops every process the daemon runs. {again}"),
         };
         self.dialog = Some(Dialog::Confirm {
-            title: title.into(),
             prompt: prompt.into(),
             detail: vec![processes, after.into()],
             action,
@@ -4195,7 +4488,6 @@ impl App {
             None => reference.clone(),
         };
         self.dialog = Some(Dialog::Confirm {
-            title: format!("clean {reference}"),
             prompt: format!("Clean {name}?"),
             detail: vec![
                 "It stops every unit in the lane, then:".into(),
@@ -4214,7 +4506,7 @@ impl App {
     }
 
     /// Records an action the user just confirmed, so its progress shows.
-    fn begin(&mut self, effect: &Effect) {
+    fn begin(&mut self, effect: &Effect, effects: &mut Vec<Effect>) {
         match effect {
             Effect::Run { lane, .. } => self.pending_begin(lane),
             Effect::CleanLane { lane } => {
@@ -4222,9 +4514,9 @@ impl App {
                 self.cleaning.insert(lane.clone());
                 self.set_notice(format!("cleaning {lane}…"));
             }
-            Effect::LaneGc => self.daemon.busy = Some("collecting lanes"),
-            Effect::RestartDaemon => self.daemon.busy = Some("restarting"),
-            Effect::StopDaemon => self.daemon.busy = Some("stopping"),
+            Effect::LaneGc => self.daemon.collecting = true,
+            Effect::RestartDaemon => self.daemon_moved(Cause::Asked { restart: true }, effects),
+            Effect::StopDaemon => self.daemon_moved(Cause::Asked { restart: false }, effects),
             Effect::RevokeClient { name, .. } => self.set_notice(format!("revoking {name}…")),
             Effect::Disconnect { host } => {
                 self.set_notice(format!("disconnecting {}…", text::clean(host)));
@@ -4836,6 +5128,9 @@ impl App {
     /// Paste goes to the field of the connect modal, or to the unit in
     /// terminal focus.
     fn paste(&mut self, text: &str, effects: &mut Vec<Effect>) {
+        if self.unavailable() {
+            return;
+        }
         if let Some(Dialog::Connect(dialog)) = self.dialog.as_mut() {
             dialog.paste(text);
             return;
@@ -4865,7 +5160,7 @@ impl App {
                 if matches!(key.code, KeyCode::Char('y' | 'Y'))
                     || (key.code == KeyCode::Enter && !strict) =>
             {
-                self.begin(&effect);
+                self.begin(&effect, effects);
                 effects.push(*effect);
             }
             Dialog::Confirm { .. }
@@ -5097,7 +5392,6 @@ impl App {
                 self.global_key(ctrl_c, effects);
             }
             Outcome::RestartDaemon => self.daemon_prompt(
-                "restart the daemon",
                 "Restart the daemon?",
                 "restart",
                 "This TUI reconnects on its own.",
@@ -5642,7 +5936,6 @@ impl App {
         };
         if confirm {
             self.dialog = Some(Dialog::Confirm {
-                title: format!("run {task}"),
                 prompt: format!("Run {task} in {lane}?"),
                 detail: vec![if teardown {
                     "Teardown entries undo what setup made, such as the lane's database.".into()
@@ -5655,7 +5948,7 @@ impl App {
             });
             return;
         }
-        self.begin(&effect);
+        self.begin(&effect, effects);
         effects.push(effect);
     }
 
@@ -5925,6 +6218,26 @@ impl App {
                     }
                     _ => self.dialog = None,
                 }
+            }
+            return;
+        }
+        if self.unavailable() {
+            // Key hints still press their key; tabs, chips and rows are stale.
+            let key = press
+                .then(|| {
+                    self.hits
+                        .borrow()
+                        .iter()
+                        .find(|(rect, _)| rect.contains(position))
+                        .map(|(_, click)| click.clone())
+                })
+                .flatten();
+            match key {
+                Some(Click::Key(code, modifiers)) => {
+                    self.key(KeyEvent::new(code, modifiers), effects);
+                }
+                Some(_) => {}
+                None => self.daemon_mouse(mouse, effects),
             }
             return;
         }
@@ -6280,7 +6593,8 @@ impl App {
                 self.refusal = None;
             }
         }
-        let online = self.connection == Connection::Online;
+        let online =
+            self.connection == Connection::Online && self.daemon_state == DaemonState::Online;
         if self.view == View::Monitor && online {
             effects.push(Effect::FetchMetrics(self.metrics_query()));
         }
@@ -6303,9 +6617,7 @@ impl App {
             self.boxes.clients.ticks += 1;
             if self.boxes.clients.ticks >= CLIENTS_REFRESH_TICKS {
                 self.boxes.clients.ticks = 0;
-                if self.daemon.busy.is_none() {
-                    self.fetch_clients(effects);
-                }
+                self.fetch_clients(effects);
             }
         }
         // Phase timings and the spinner on terminals that only redraw per tick.
@@ -6329,29 +6641,31 @@ impl App {
         }
         // The daemon button's `!` comes from doctor: refreshed now and then
         // in the background, since doctor asks Docker for its version.
-        if self.view != View::Daemon && online && self.daemon.busy.is_none() {
+        if self.view != View::Daemon && online {
             self.daemon.background = self.daemon.background.saturating_sub(1);
             if self.daemon.background == 0 {
                 self.daemon.background = DOCTOR_BACKGROUND_TICKS;
-                if !self.daemon.stopped {
-                    effects.push(Effect::FetchDaemon);
-                }
+                effects.push(Effect::FetchDaemon);
             }
         }
-        if self.view == View::Daemon {
-            // The log is a local file, readable even while the daemon is down.
+        // The log is a local file, readable even while the daemon is down,
+        // and the unavailable screen shows it in every view.
+        if self.view == View::Daemon || self.daemon_state != DaemonState::Online {
             effects.push(Effect::ReadDaemonLog {
                 from: self.daemon.log_position,
             });
+        }
+        if self.view == View::Daemon {
             self.daemon.ticks += 1;
             if self.daemon.ticks >= DAEMON_REFRESH_TICKS {
                 self.daemon.ticks = 0;
-                if self.connection == Connection::Online && self.daemon.busy.is_none() {
+                if online {
                     effects.push(Effect::FetchDaemon);
                     effects.push(Effect::FetchMetrics(DAEMON_PAGE_METRICS));
                 }
             }
         }
+        self.daemon_moved(Cause::Tick, effects);
     }
 
     /// The release notice for the header and its key: the daemon runs another

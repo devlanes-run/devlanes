@@ -206,6 +206,12 @@ mod tests {
         assert_eq!(STEP_PREFIX, devlanes_client::STARTUP_STEP);
         assert_eq!(READY_STEPS_ENV, devlanes_client::READY_STEPS_ENV);
         assert_eq!(crate::STARTING_MARKER, devlanes_client::STARTING_MARKER);
+        assert_eq!(crate::REPLACING_MARKER, devlanes_client::REPLACING_MARKER);
+        assert_eq!(
+            crate::DAEMON_EXIT_WAIT,
+            devlanes_client::REPLACE_WAIT,
+            "the client waits as long as the replacing daemon"
+        );
         assert_eq!(failure_line("CODE: first\nsecond"), "CODE: first\n");
         let long = format!("CODE: {}", "x".repeat(1000));
         assert_eq!(failure_line(&long), format!("{long}\n"));

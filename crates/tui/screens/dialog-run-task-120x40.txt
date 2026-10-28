@@ -14,7 +14,7 @@
 │   · web-storybook                            ││ 10:42:44 GET /v1/orders/1068 404 7ms                                 │
 │   ● web-landing                              ││ 10:42:55 GET /v1/orders/1085 200 3ms                                 │
 │   ◉ wrk-email                                ││ 10:42:06 GET /v1/orders/1102 200 4ms                                 │
-│   ◉ wrk-billing                    ┌ run seed ─────────────────────────────────┐ 5ms                                 │
+│   ◉ wrk-billing                    ┌───────────────────────────────────────────┐ 5ms                                 │
 │   ◉ wrk-index                      │ Run seed in acme@0?                       │ 6ms                                 │
 │   ◉ wrk-thumbs                     │                                           │ 7ms                                 │
 │   ✕ wrk-export               failed│ Its config asks for a confirmation first. │ 3ms                                 │

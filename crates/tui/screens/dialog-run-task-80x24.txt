@@ -6,7 +6,7 @@
 │   ◉ wrk-webhooks             ││ 10:42:11 GET /v1/orders/1017 200 4ms         │
 │   ◉ wrk-ledger               ││ 10:42:22 GET /v1/orders/1034 200 5ms         │
 │   ● stub-stripe              ││ 10:42:33 GET /v1/orders/1051 200 6ms         │
-│   ● stub-s3    ┌ run seed ─────────────────────────────────┐ 404 7ms         │
+│   ● stub-s3    ┌───────────────────────────────────────────┐ 404 7ms         │
 │   ◆ stub-twilio│ Run seed in acme@0?                       │ 200 3ms         │
 │   ● stub-sendgr│                                           │ 200 4ms         │
 │   ● stub-segmen│ Its config asks for a confirmation first. │ 200 5ms         │
