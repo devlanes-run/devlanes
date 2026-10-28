@@ -29,7 +29,11 @@ use crate::{engine::Inner, model::lock};
 /// relay of the lane in one step and closes the connections to the old box.
 /// Nothing is unbound, so no other program can take the port meanwhile and
 /// no two boxes ever race to bind it. Routes name the same local port before
-/// and after, so the route table only changes which box it names.
+/// and after, so the route table only changes which box it names. When the
+/// new box runs the lane on other port numbers, its routes name its own
+/// relay, and the old relay keeps leading to the old box, each connection
+/// closed once answered: a request the proxy sends before it has the new
+/// routes still gets an answer.
 ///
 /// A box's mirror binds a listener when its lane is the owner and the port is
 /// free, and asks for a relay for each route. It unbinds a listener only
@@ -95,13 +99,25 @@ impl Target {
     fn point(&self, owner: Option<Owner>) {
         let mut current = lock(&self.0);
         match (current.as_mut(), owner) {
-            (Some(now), Some(next)) if now.same(&next) => now.unit = next.unit,
+            (Some(now), Some(next)) if now.same(&next) && !now.conns.is_cancelled() => {
+                now.unit = next.unit;
+            }
             (_, next) => {
                 if let Some(old) = current.take() {
                     old.conns.cancel();
                 }
                 *current = next;
             }
+        }
+    }
+
+    /// Closes the connections to the current box lane, but keeps leading new
+    /// ones there, each closed once answered. For a relay whose lane went to a
+    /// box that routes it through another relay: a request the proxy sends
+    /// before it has the new routes still gets an answer, from the old box.
+    fn retire(&self) {
+        if let Some(now) = lock(&self.0).as_ref() {
+            now.conns.cancel();
         }
     }
 
@@ -123,8 +139,12 @@ impl Listeners {
                 .point(assignment.listeners.get(port).and_then(resolve));
         }
         for (key, slot) in lock(&self.relays).iter() {
-            slot.target
-                .point(assignment.relays.get(key).and_then(resolve));
+            match assignment.relays.get(key).and_then(resolve) {
+                Some(owner) => slot.target.point(Some(owner)),
+                // Only lanes that moved to a box with other port numbers get
+                // here; forks of one lane share the relay and are repointed.
+                None => slot.target.retire(),
+            }
         }
     }
 

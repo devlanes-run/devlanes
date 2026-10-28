@@ -171,6 +171,8 @@ fn a_command_box_mirrors_its_lane() -> Result<()> {
 /// Two boxes run the same lane, as forks of one image do. The client mirrors
 /// the box connected first, lists the other's lane as skipped, and after
 /// `remote use` a request through its proxy reaches the other box's process.
+/// Requests sent one after another during the switch all succeed, from the
+/// first box until the second one answers and from the second after that.
 #[test]
 fn remote_use_switches_a_lane_between_two_boxes() -> Result<()> {
     if devlanes_e2e::curl()
@@ -262,14 +264,62 @@ fn remote_use_switches_a_lane_between_two_boxes() -> Result<()> {
         Ok(answering_pid()?.filter(|pid| *pid == fork_a))
     })?;
 
-    let used = client.json(
-        client.repo(),
-        &["remote", "use", "fork-b", "fixture-two@0", "--json"],
-    )?;
+    // Requests one after another through the proxy across the switch, each
+    // as `(curl exit, HTTP status, answering pid)`.
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let request = || {
+        let output = devlanes_e2e::curl()
+            .args(["-sS", "--max-time", "10", "--cacert"])
+            .arg(&ca)
+            .arg("--resolve")
+            .arg(format!("{host_name}:{port}:127.0.0.1"))
+            .args(["-w", "\n%{http_code}"])
+            .arg(format!("https://{host_name}:{port}/healthz"))
+            .output();
+        let Ok(output) = output else {
+            return (None, String::new(), None);
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        let (body, status) = stdout.rsplit_once('\n').unwrap_or(("", stdout.as_str()));
+        let pid = serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|reflected| reflected["pid"].as_i64());
+        (output.status.code(), status.to_owned(), pid)
+    };
+    let (used, seen) = std::thread::scope(|scope| {
+        let looping = scope.spawn(|| {
+            let mut seen = Vec::new();
+            while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                seen.push(request());
+            }
+            seen
+        });
+        std::thread::sleep(Duration::from_millis(500));
+        let used = client.json(
+            client.repo(),
+            &["remote", "use", "fork-b", "fixture-two@0", "--json"],
+        );
+        std::thread::sleep(Duration::from_millis(1500));
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        (used, looping.join().unwrap_or_default())
+    });
     assert_eq!(
-        used,
-        json!({"lane": "fixture-two@0", "host": "fork-b", "previous": "fork-a", "mirrored": true})
+        used?,
+        json!({"lane": "fixture-two@0", "host": "fork-b", "previous": "fork-a",
+               "mirrored": true, "pending": false})
     );
+    let first_b = seen
+        .iter()
+        .position(|(_, _, pid)| *pid == Some(fork_b))
+        .ok_or_else(|| Error::Unexpected(format!("fork-b never answered: {seen:?}")))?;
+    for (index, answer) in seen.iter().enumerate() {
+        let expected = if index < first_b { fork_a } else { fork_b };
+        assert_eq!(
+            answer,
+            &(Some(0), "200".to_owned(), Some(expected)),
+            "request {index} of {seen:?}"
+        );
+    }
     assert_eq!(
         answering_pid()?,
         Some(fork_b),
