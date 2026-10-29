@@ -937,7 +937,13 @@ fn shown_chip_width(app: &App) -> usize {
         .iter()
         .position(|lane| current == Some(lane.reference.as_str()))
         .unwrap_or(0);
-    spans_width(&lane_chip(app, lanes[active], &lanes, active, 0)) + 4
+    spans_width(&lane_chip(
+        app,
+        lanes[active],
+        &lanes,
+        active,
+        BRANCH_STAGES,
+    )) + 4
 }
 
 /// The project's lane chips from column `used` of `area`, up to column
@@ -954,55 +960,55 @@ fn lane_chips(
     let theme = &app.theme;
     let lanes = app.project_lanes();
     let current = app.selected.as_ref().map(|s| s.lane.as_str());
-    let build = |caps: &[usize]| -> Vec<Vec<Span<'static>>> {
+    let build = |stages: &[usize]| -> Vec<Vec<Span<'static>>> {
         lanes
             .iter()
             .enumerate()
-            .map(|(index, lane)| lane_chip(app, lane, &lanes, index, caps[index]))
+            .map(|(index, lane)| lane_chip(app, lane, &lanes, index, stages[index]))
             .collect()
     };
     // Each chip pads itself with a space on both sides, so the highlight is
-    // a block; that padding is also the gap between chips.
+    // a block. That padding is also the gap between chips.
     let width_of = |chips: &[Vec<Span<'static>>]| -> Vec<usize> {
         chips.iter().map(|chip| spans_width(chip) + 2).collect()
     };
-    // Beside box lanes, this machine's branches read better cut short than
-    // gone: the longest chip gives way first, a step at a time, so a short
-    // branch keeps its name while a long one is cut or dropped.
-    let room = budget.saturating_sub(used + 2);
     let local: Vec<usize> = (0..lanes.len())
         .filter(|index| app.lane_box(&lanes[*index].reference).is_none())
         .collect();
-    let fits = |caps: &[usize]| width_of(&build(caps)).iter().sum::<usize>() <= room;
-    let mut caps = vec![16; lanes.len()];
-    while !fits(&caps) {
-        let chips = build(&caps);
-        let Some(longest) = local
-            .iter()
-            .copied()
-            .filter(|index| caps[*index] > 0)
-            .max_by_key(|index| spans_width(&chips[*index]))
-        else {
-            break;
-        };
-        caps[longest] = match caps[longest] {
-            16 => 12,
-            12 => 8,
-            _ => 0,
-        };
-    }
-    // Room the cuts left over goes back to the branches, in row order.
-    for index in &local {
-        let before = caps[*index];
-        for wider in [16, 12, 8].into_iter().filter(|wider| *wider > before) {
-            caps[*index] = wider;
-            if fits(&caps) {
+    let mut stages = vec![0; lanes.len()];
+    // Beside box lanes, this machine's branches read better shortened than
+    // gone. The longest branch gives way first, a stage at a time, so a
+    // short one keeps its name while a long one loses its `type/` or goes.
+    if local.len() < lanes.len() {
+        let room = budget.saturating_sub(used + 2);
+        let fits = |stages: &[usize]| width_of(&build(stages)).iter().sum::<usize>() <= room;
+        // The ready count is no part of the name, so it never picks the chip.
+        let branch =
+            |index: usize, stage: usize| text::width(&numbered_label(lanes[index], None, stage));
+        while !fits(&stages) {
+            let Some(longest) = local
+                .iter()
+                .copied()
+                .filter(|index| stages[*index] < BRANCH_STAGES)
+                .max_by_key(|index| branch(*index, stages[*index]))
+            else {
                 break;
+            };
+            stages[longest] += 1;
+        }
+        // Room the cuts left over goes back to the branches, in row order.
+        for index in &local {
+            let before = stages[*index];
+            for wider in 0..before {
+                stages[*index] = wider;
+                if fits(&stages) {
+                    break;
+                }
+                stages[*index] = before;
             }
-            caps[*index] = before;
         }
     }
-    let chips = build(&caps);
+    let chips = build(&stages);
     let widths = width_of(&chips);
     let active = lanes
         .iter()
@@ -1128,7 +1134,7 @@ pub(crate) fn short_box(name: &str, names: &[&str], room: usize) -> String {
         .min()
         .unwrap_or(0);
     // With nothing shared, or nothing left after it because the name is the
-    // start of another one, `…` alone would say nothing: cut the end.
+    // start of another one, `…` alone would say nothing, so the end is cut.
     if shared == 0 || shared >= chars.len() {
         return clip(&name, room);
     }
@@ -1144,39 +1150,54 @@ pub(crate) fn short_box(name: &str, names: &[&str], room: usize) -> String {
     }
 }
 
+/// How many times this machine's branch can shorten in a chip before it
+/// goes: the whole name, without its `type/`, then that cut to 12 cells.
+pub(crate) const BRANCH_STAGES: usize = 3;
+
 /// What a lane is called in the chips of a tab that has box lanes: its number,
 /// which this machine's lane and the boxes' share, then the box or this
-/// machine's branch in up to `branch` cells, none at 0. `@0 main` and
-/// `@0 fork-a`. `host` is the box's name as [`short_box`] cut it.
-pub(crate) fn numbered_label(lane: &LaneSummary, host: Option<&str>, branch: usize) -> String {
+/// machine's branch at shortening `stage` ([`BRANCH_STAGES`] drops it).
+/// `@0 main`, `@3 old-search` and `@0 fork-a`. `host` is the box's name as
+/// [`short_box`] cut it.
+pub(crate) fn numbered_label(lane: &LaneSummary, host: Option<&str>, stage: usize) -> String {
     let number = lane
         .index
         .map(|index| format!("@{index}"))
         .unwrap_or_default();
-    match host {
-        Some(host) => format!("{number} {host}"),
-        None if branch > 0 => {
-            let name = lane
-                .name
-                .as_deref()
-                .or(lane.branch.as_deref())
-                .unwrap_or("detached");
-            format!("{number} {}", clip(&clean(name), branch))
-        }
-        None => number,
+    if let Some(host) = host {
+        return format!("{number} {host}");
+    }
+    let name = clean(
+        lane.name
+            .as_deref()
+            .or(lane.branch.as_deref())
+            .unwrap_or("detached"),
+    );
+    // `spike/old-search` is told apart by `old-search`. A cut below 12
+    // cells tells lanes apart by a letter or two, so the name goes instead.
+    let bare = match name.split_once('/') {
+        Some((_, rest)) if !rest.is_empty() => rest.to_owned(),
+        _ => name.clone(),
+    };
+    match stage {
+        0 => format!("{number} {}", clip(&name, 24)),
+        1 => format!("{number} {}", clip(&bare, 24)),
+        2 => format!("{number} {}", clip(&bare, 12)),
+        _ => number,
     }
 }
 
 /// One chip: its key (1-9, then 0), the name colored by state, `@N` when the
 /// name is shared, the ready count while starting. A lane this machine does
 /// not mirror is dim, with a hollow dot, or in parentheses with ascii glyphs.
-/// Beside box lanes, this machine's branch gets up to `branch` cells.
+/// Beside box lanes, this machine's branch shows at shortening `stage`, as
+/// [`numbered_label`] takes it.
 fn lane_chip(
     app: &App,
     lane: &LaneSummary,
     lanes: &[&LaneSummary],
     index: usize,
-    branch: usize,
+    stage: usize,
 ) -> Vec<Span<'static>> {
     let theme = &app.theme;
     let hosts: Vec<&str> = lanes
@@ -1191,7 +1212,7 @@ fn lane_chip(
         let host = app
             .lane_box(&lane.reference)
             .map(|l| short_box(&l.host, &hosts, box_room(app.size.0)));
-        (numbered_label(lane, host.as_deref(), branch), None)
+        (numbered_label(lane, host.as_deref(), stage), None)
     };
     let (glyph, tone) = lane_glyph(theme, lane, app.spin);
     let mut spans = Vec::new();
@@ -1791,13 +1812,20 @@ mod tests {
     #[test]
     fn box_lanes_go_by_number_and_box() {
         let zero = lane(0, "main", None);
-        assert_eq!(numbered_label(&zero, None, 0), "@0");
-        assert_eq!(numbered_label(&zero, None, 24), "@0 main");
+        assert_eq!(numbered_label(&zero, None, 0), "@0 main");
+        assert_eq!(numbered_label(&zero, None, 2), "@0 main");
+        assert_eq!(numbered_label(&zero, None, BRANCH_STAGES), "@0");
         let review = lane(1, "main", Some("review"));
-        assert_eq!(numbered_label(&review, None, 24), "@1 review");
-        // A long branch is cut short before it goes.
-        let spike = lane(3, "spike/old-search", None);
-        assert_eq!(numbered_label(&spike, None, 12), "@3 spike/old-s…");
+        assert_eq!(numbered_label(&review, None, 0), "@1 review");
+        // A long branch loses its `type/`, then is cut to 12 cells, then goes.
+        let spike = lane(3, "spike/old-search-results-v2", None);
+        assert_eq!(
+            numbered_label(&spike, None, 0),
+            "@3 spike/old-search-result…"
+        );
+        assert_eq!(numbered_label(&spike, None, 1), "@3 old-search-results-v2");
+        assert_eq!(numbered_label(&spike, None, 2), "@3 old-search-…");
+        assert_eq!(numbered_label(&spike, None, 3), "@3");
         assert_eq!(numbered_label(&zero, Some("fork-a"), 0), "@0 fork-a");
         assert_eq!((box_room(80), box_room(120), box_room(200)), (8, 12, 16));
     }
