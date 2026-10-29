@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-cli"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-client"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bytes",
  "devlanes-core",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-config"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "devlanes-core",
  "devlanes-preset-next",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-daemon"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1260,7 +1260,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-hosts-helper"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "tempfile",
 ]
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-ipc"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "bytes",
  "devlanes-proto",
@@ -1313,7 +1313,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-logs"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "devlanes-proto",
  "devlanes-sys-windows",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-proto"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "devlanes-version",
  "serde",
@@ -1543,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-proxy"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1569,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolve"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "devlanes-config",
@@ -1602,7 +1602,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolver-hosts"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "devlanes-hosts-helper",
@@ -1755,7 +1755,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-state"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "devlanes-core",
  "diesel",
@@ -1817,7 +1817,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-term"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "base64 0.22.1",
  "devlanes-proto",
@@ -1958,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui"
-version = "0.8.1"
+version = "0.9.0"
 dependencies = [
  "ab_glyph",
  "async-trait",
@@ -1992,7 +1992,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tunnel"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "bytes",
