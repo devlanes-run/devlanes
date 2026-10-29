@@ -40,7 +40,15 @@ async fn crashed(
     std::collections::BTreeMap<String, u32>,
 ) {
     let home = tmp.path.join("home");
-    let first = harness(&home, Setup::default()).await;
+    // Stopping an orphan waits for its ports, so they must be free on this machine.
+    let first = harness(
+        &home,
+        Setup {
+            user: crate::pool("12250-12499"),
+            ..Setup::default()
+        },
+    )
+    .await;
     let started = first
         .call(Method::Start, json!({}), cx(main))
         .await
@@ -62,6 +70,7 @@ async fn crashed(
         Setup {
             processes: Some(processes.clone()),
             logs: Some(tmp.path.join("logs-after-crash")),
+            user: crate::pool("12250-12499"),
             ..Setup::default()
         },
     )

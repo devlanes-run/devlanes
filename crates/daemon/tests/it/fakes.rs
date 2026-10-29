@@ -3,7 +3,9 @@
 //! Fake units understand a tiny script language in the unit's command
 //! (`;`-separated): `echo <text>`, `printenv <KEY>`, `serve` (binds `$PORT` and stays
 //! up), `tcp-echo` (echoes every connection on `$PORT`), `http <body>` (answers
-//! every request on `$PORT` with `<body>`), `sleep` (stays up), `exit <code>`,
+//! every request on `$PORT` with `<body>`), `http-keep <body>` (the same on
+//! kept-alive connections, and WebSockets that greet with `<body>` and echo),
+//! `sleep` (stays up), `exit <code>`,
 //! `fail` (prints `boom`, exits 1), `nap <ms>` (waits, then goes on),
 //! `hold` (waits until the test calls [`FakeRunner::release`]),
 //! `deaf` (stops reading input: writes block
@@ -332,7 +334,7 @@ impl FakeUnit {
                     drop(listener);
                     return;
                 }
-                "tcp-echo" | "http" => {
+                "tcp-echo" | "http" | "http-keep" => {
                     let Some(port) = env.get("PORT").and_then(|p| p.parse::<u16>().ok()) else {
                         self.print("no PORT");
                         continue;
@@ -344,16 +346,19 @@ impl FakeUnit {
                     };
                     self.print(&format!("listening on {port}"));
                     let body = rest.to_owned();
-                    let http = word == "http";
+                    let kind = word.to_owned();
                     let accept = async {
                         loop {
                             let Ok((stream, _)) = listener.accept().await else {
                                 continue;
                             };
                             let body = body.clone();
+                            let kind = kind.clone();
                             tokio::spawn(async move {
-                                if http {
+                                if kind == "http" {
                                     answer_http(stream, &body).await;
+                                } else if kind == "http-keep" {
+                                    keep_answering(stream, &body).await;
                                 } else {
                                     let (mut read, mut write) = stream.into_split();
                                     let _ = tokio::io::copy(&mut read, &mut write).await;
@@ -405,6 +410,50 @@ async fn answer_http(mut stream: tokio::net::TcpStream, body: &str) {
     );
     let _ = stream.write_all(response.as_bytes()).await;
     let _ = stream.shutdown().await;
+}
+
+/// Answers every request on `stream` with `body` and keeps the connection,
+/// as a dev server does, until the client asks to close. A WebSocket upgrade
+/// gets `101`, then `body` and a newline, then an echo of what the client sends.
+async fn keep_answering(mut stream: tokio::net::TcpStream, body: &str) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut pending = Vec::new();
+    let mut buffer = [0u8; 1024];
+    loop {
+        while !pending.windows(4).any(|w| w == b"\r\n\r\n") {
+            match stream.read(&mut buffer).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => pending.extend_from_slice(&buffer[..n]),
+            }
+        }
+        let end = pending
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map_or(pending.len(), |at| at + 4);
+        let head = String::from_utf8_lossy(&pending[..end]).to_ascii_lowercase();
+        pending.drain(..end);
+        if head.contains("upgrade: websocket") {
+            let greeting = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: upgrade\r\n\r\n{body}\n"
+            );
+            if stream.write_all(greeting.as_bytes()).await.is_err() {
+                return;
+            }
+            let (mut read, mut write) = stream.into_split();
+            let _ = tokio::io::copy(&mut read, &mut write).await;
+            return;
+        }
+        let closing = head.contains("connection: close");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\n{}\r\n{body}",
+            body.len(),
+            if closing { "connection: close\r\n" } else { "" }
+        );
+        if stream.write_all(response.as_bytes()).await.is_err() || closing {
+            let _ = stream.shutdown().await;
+            return;
+        }
+    }
 }
 
 #[async_trait]
@@ -563,6 +612,10 @@ pub struct FakeInfra {
     pub started_at: Arc<Mutex<Option<String>>>,
     /// When set, `up` fails with this error.
     pub fail_up: Arc<Mutex<Option<InfraError>>>,
+    /// When set, the state `namespace` reports for the lane's `db`, such as
+    /// `exited 1` for one an `up` that failed never started. `healthy`
+    /// otherwise.
+    pub namespace_db_state: Arc<Mutex<Option<String>>>,
     /// Lines every container's log holds. Line `n` is stamped [`fake_timestamp`]`(n)`.
     pub logs: Arc<Mutex<Vec<String>>>,
     /// `<docker> tail=<tail> follow=<follow>` for every `container_logs` call.
@@ -630,22 +683,26 @@ impl FakeInfra {
         json!({"db": {"port": port, "ports": {"5432": port}}, "cache": {"port": 6379, "ports": {"6379": 6379}}})
     }
 
-    /// The lane's `db` container (one per replica) and a shared `cache`, named
-    /// like compose would.
-    fn containers(&self, spec: &InfraSpec) -> Vec<InfraContainer> {
+    /// The lane's `db` container (one per replica) in `db_state` and a shared
+    /// `cache`, named like compose would.
+    fn containers(&self, spec: &InfraSpec, db_state: &str) -> Vec<InfraContainer> {
         let replicas = self.db_replicas.lock().map_or(1, |r| (*r).max(1));
         let mut containers: Vec<InfraContainer> = (1..=replicas)
             .map(|replica| InfraContainer {
                 name: "db".into(),
                 docker: format!("{}-lane{}-db-{replica}", spec.project, spec.lane),
                 shared: false,
-                state: Some("healthy".into()),
+                compose_project: Some(format!("{}-lane{}", spec.project, spec.lane)),
+                publishes: true,
+                state: Some(db_state.to_owned()),
             })
             .collect();
         containers.push(InfraContainer {
             name: "cache".into(),
             docker: format!("{}-cache-1", spec.project),
             shared: true,
+            compose_project: Some(spec.project.clone()),
+            publishes: true,
             state: None,
         });
         containers
@@ -676,7 +733,7 @@ impl InfraProvider for FakeInfra {
             namespace: Self::namespace(spec),
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             report: json!({"services": ["db"]}),
-            containers: self.containers(spec),
+            containers: self.containers(spec, "healthy"),
         })
     }
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
@@ -685,7 +742,15 @@ impl InfraProvider for FakeInfra {
             namespace: Self::namespace(spec),
             // As Compose's provider: the same env `up` gives, nothing started.
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
-            containers: self.containers(spec),
+            containers: self.containers(
+                spec,
+                &self
+                    .namespace_db_state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.clone())
+                    .unwrap_or_else(|| "healthy".into()),
+            ),
             ..InfraUp::default()
         })
     }

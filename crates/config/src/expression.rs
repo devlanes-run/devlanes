@@ -22,7 +22,20 @@ pub struct ExpressionContext {
     pub env: Value,
     pub projects: Value,
     pub replica: Value,
+    /// What `domain()` ends the domains it returns in: `localhost`, or the TLD
+    /// under the `resolver` strategy. Not a namespace of its own.
+    #[serde(skip, default = "default_suffix")]
+    pub domain_suffix: String,
 }
+
+/// [`crate::DEFAULT_DOMAIN_SUFFIX`] as an owned value, for serde.
+fn default_suffix() -> String {
+    crate::DEFAULT_DOMAIN_SUFFIX.to_owned()
+}
+
+/// The variable that hands [`ExpressionContext::domain_suffix`] to `domain()`.
+/// Its name keeps it out of the way of every namespace.
+const SUFFIX_VARIABLE: &str = "__devlanes_domain_suffix";
 
 impl Default for ExpressionContext {
     /// Provide empty namespaces so missing leaf values remain strictly undefined.
@@ -37,6 +50,7 @@ impl Default for ExpressionContext {
             env: serde_json::json!({}),
             projects: serde_json::json!({}),
             replica: serde_json::json!({}),
+            domain_suffix: default_suffix(),
         }
     }
 }
@@ -64,6 +78,9 @@ impl ExpressionContext {
         );
         if has_dashed_keys(&json) {
             aliases(&mut json);
+        }
+        if let Some(map) = json.as_object_mut() {
+            map.insert(SUFFIX_VARIABLE.into(), self.domain_suffix.clone().into());
         }
         PreparedContext {
             value: template_value(&json),
@@ -148,7 +165,44 @@ fn environment() -> Result<Environment<'static>, ConfigError> {
         .build()
         .map_err(|e| ConfigError::plain(e.to_string()))?;
     env.set_syntax(syntax);
+    env.add_function(DOMAIN_FUNCTION, domain);
     Ok(env)
+}
+
+/// The name of [`domain`] in expressions.
+const DOMAIN_FUNCTION: &str = "domain";
+
+/// `domain(name)`: the domain of `name` in the current lane, by the rule
+/// `lane.domain` follows by default ([`crate::lane_domain`]). It reads
+/// `lane.index` and the suffix only, which are set before `lanes.vars`, so it
+/// works inside `lanes.vars` too.
+fn domain(state: &minijinja::State<'_, '_>, name: &str) -> Result<String, minijinja::Error> {
+    // A whole sentence, since it follows the setting's path as is.
+    let fail = |message: String| {
+        minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!("in {DOMAIN_FUNCTION}('{name}'), {message}."),
+        )
+    };
+    let index = state
+        .lookup("lane")
+        .and_then(|lane| lane.get_attr("index").ok())
+        .and_then(|index| u64::try_from(index).ok())
+        .ok_or_else(|| fail("no lane is known here, so there is no index to add".into()))?;
+    let suffix = state
+        .lookup(SUFFIX_VARIABLE)
+        .and_then(|suffix| suffix.as_str().map(str::to_owned))
+        .unwrap_or_else(default_suffix);
+    crate::checked_lane_domain(name, index, &suffix).map_err(fail)
+}
+
+/// Why an evaluation failed, for its error. A `domain()` refusal already
+/// names the call and the rule, so it stands alone.
+fn failed(error: &minijinja::Error) -> String {
+    match error.detail() {
+        Some(detail) if detail.starts_with(&format!("in {DOMAIN_FUNCTION}(")) => detail.to_owned(),
+        _ => format!("expression failed: {}", describe(error)),
+    }
 }
 
 /// A MiniJinja error without its `(in <string>:1)` suffix, which names no real file.
@@ -260,7 +314,7 @@ pub fn evaluate<C: EvaluationContext>(text: &str, context: &C) -> Result<Value, 
         Form::Expression(expression) => {
             let value = expression
                 .eval(&context)
-                .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e))))?;
+                .map_err(|e| ConfigError::plain(failed(&e)))?;
             if value.is_undefined() {
                 return Err(ConfigError::plain(
                     "expression resolved to an undefined value",
@@ -272,7 +326,7 @@ pub fn evaluate<C: EvaluationContext>(text: &str, context: &C) -> Result<Value, 
             .get_template(TEMPLATE_NAME)
             .and_then(|template| template.render(context))
             .map(Value::String)
-            .map_err(|e| ConfigError::plain(format!("expression failed: {}", describe(&e)))),
+            .map_err(|e| ConfigError::plain(failed(&e))),
         Form::Broken(message) => Err(ConfigError::plain(message.clone())),
     }
 }
@@ -388,6 +442,12 @@ fn compile(text: &str) -> Result<Compiled, ConfigError> {
         if whole {
             single = Some(expression);
         }
+    }
+    // A call of `domain()` reads like a variable to the analysis. What it
+    // depends on is the lane index, which also keeps a text that calls it from
+    // being evaluated as a constant at load time, when no lane is known.
+    if references.remove(DOMAIN_FUNCTION) {
+        references.insert("lane.index".into());
     }
     let form = match single {
         Some(expression) => Form::Expression(expression),
@@ -829,6 +889,66 @@ mod tests {
         let compiles = COMPILES.lock().expect("compiles");
         assert_eq!(compiles.get(text), Some(&1));
         assert_eq!(compiles.get(mixed), Some(&1));
+    }
+
+    #[test]
+    /// `domain()` follows the lane and the suffix, works in mixed text, counts
+    /// as a `lane.index` reference, and refuses a name that isn't hostname
+    /// labels or a context without a lane.
+    fn domain_names_a_site_per_lane() {
+        let lane = |index: u64, suffix: &str| ExpressionContext {
+            lane: serde_json::json!({"index": index}),
+            domain_suffix: suffix.into(),
+            ..ExpressionContext::default()
+        };
+        let eval = |text: &str, context: &ExpressionContext| {
+            evaluate(text, context).map_err(|e| e.message)
+        };
+        let text = "${{ domain('pages') }}";
+        assert_eq!(
+            eval(text, &lane(0, "localhost")),
+            Ok("pages.localhost".into())
+        );
+        assert_eq!(
+            eval(text, &lane(3, "localhost")),
+            Ok("pages3.localhost".into())
+        );
+        assert_eq!(eval(text, &lane(3, "test")), Ok("pages3.test".into()));
+        assert_eq!(
+            eval("*.${{ domain('Docs.Pages') }}", &lane(2, "localhost")),
+            Ok("*.docs.pages2.localhost".into())
+        );
+        assert_eq!(
+            references(text).expect("references"),
+            BTreeSet::from(["lane.index".to_owned()])
+        );
+        assert_eq!(
+            eval("${{ domain('a_b') }}", &lane(1, "localhost")),
+            Err("in domain('a_b'), `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into())
+        );
+        assert_eq!(
+            eval("web.${{ domain('a_b') }}", &lane(1, "localhost")),
+            Err("in domain('a_b'), `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into()),
+            "mixed text gives the same error"
+        );
+        let long = format!("${{{{ domain('{}') }}}}", "a".repeat(63));
+        let error = eval(&long, &lane(2, "localhost")).expect_err("too long with its index");
+        assert!(
+            error.ends_with("2` is longer than 63 characters. Shorten it."),
+            "{error}"
+        );
+        assert_eq!(
+            eval("${{ domain('') }}", &lane(1, "localhost")),
+            Err("in domain(''), the name is empty.".into())
+        );
+        assert_eq!(
+            eval("${{ domain('*.x') }}", &lane(1, "localhost")),
+            Err("in domain('*.x'), a wildcard is not allowed here. Put `*.` before the call instead.".into())
+        );
+        assert_eq!(
+            eval(text, &ExpressionContext::default()),
+            Err("in domain('pages'), no lane is known here, so there is no index to add.".into())
+        );
     }
 
     #[test]

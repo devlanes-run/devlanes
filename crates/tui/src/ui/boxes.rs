@@ -16,8 +16,8 @@ use ratatui::{
 use super::list::{container_look, lane_summary};
 use super::pane::{LABEL, banner, details, field, render_box, sentence, title, unit_facts_title};
 use super::{draw_box, fit, spread, unit_look};
-use crate::app::{App, BoxPart};
-use crate::boxes::{BoxHost, RegistryUnit};
+use crate::app::{App, BoxPart, Grey};
+use crate::boxes::{BoxHost, RegistryUnit, containers_run};
 use crate::clients::{Client, short_id};
 use crate::text::{self, clean, clip};
 use crate::theme::{Glyph, Theme, Tone};
@@ -39,7 +39,7 @@ pub(super) fn pane(
         format!("on {}", clean(&host.host)),
         theme.quiet(),
     )];
-    let mut lines = notes(app, host, box_lane, width);
+    let mut lines = notes(app, host, box_lane, &lane.reference, width);
     match app.selected_id().cloned() {
         Some(RowId::Unit(name)) => {
             let unit = lane.units.iter().find(|u| u.name == name);
@@ -131,8 +131,15 @@ pub(super) fn pane(
 
 /// Banners above a box lane's details: a key that just did nothing here and
 /// what to run on the box instead, a link that is down, so what shows is the
-/// last known state, and a lane this machine does not mirror.
-fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'static>> {
+/// last known state, and a lane this machine does not mirror. `reference`
+/// is the lane's in the TUI, `acme@1 @hetzner`.
+fn notes(
+    app: &App,
+    host: &BoxHost,
+    box_lane: &str,
+    reference: &str,
+    width: usize,
+) -> Vec<Line<'static>> {
     let theme = &app.theme;
     let attention = |text: &str, rest: &[String]| {
         let mut lines = banner(theme, Glyph::Attention, Tone::Attention, text, rest, width);
@@ -173,44 +180,103 @@ fn notes(app: &App, host: &BoxHost, box_lane: &str, width: usize) -> Vec<Line<'s
     if let Some((down, rest)) = down {
         lines.extend(attention(&down, &rest));
     }
-    if let Some(skipped) = host.skipped(box_lane) {
-        let reason = skip_reason(app, skipped);
-        lines.extend(attention(
-            &format!("Not mirrored here because {reason}."),
-            &["Its ports and hostnames are mirrored once that changes.".to_owned()],
-        ));
+    if let Some(grey) = app.grey(reference) {
+        match grey_note(&grey) {
+            Some((note, commands)) => lines.extend(attention(&note, &commands)),
+            // A daemon without `remote.use` says why, and nothing switches it.
+            None => {
+                let reason = host
+                    .skipped(box_lane)
+                    .map_or_else(|| clean(&grey.reason), |skipped| skip_reason(app, skipped));
+                lines.extend(attention(
+                    &format!("Not mirrored here because {reason}."),
+                    &["Its ports and hostnames are mirrored once that changes.".to_owned()],
+                ));
+            }
+        }
     }
     lines
+}
+
+/// The first line of a grey lane's pane, what serves its hostnames instead
+/// and how to use this one, and the commands to run first, each on a line
+/// of its own so it copies whole. `None` from daemons without `remote.use`.
+pub(super) fn grey_note(grey: &Grey) -> Option<(String, Vec<String>)> {
+    let serving = clean(&grey.serving);
+    let note = match (grey.cause.as_deref()?, &grey.winner) {
+        // Only its own containers are up, which no devlanes command stops.
+        ("local_running", _) if grey.held_by_containers() => {
+            let note = format!("Not mirrored. {}", containers_run(&serving, &[]));
+            return Some((note, grey.containers.clone()));
+        }
+        ("local_running", _) => format!(
+            "Not mirrored. {serving} runs on this machine. Press m to stop it and use this one."
+        ),
+        // This machine's own lane, which a chosen box lane took over.
+        (_, Some(winner)) if grey.host.is_none() => format!(
+            "{}'s {serving} is in use instead. Press m to use this one.",
+            clean(winner)
+        ),
+        (_, Some(winner)) if grey.can_use => format!(
+            "Not mirrored. {}'s {serving} is in use. Press m to use this one.",
+            clean(winner)
+        ),
+        (_, None) if grey.can_use => {
+            format!("Not mirrored. This machine's {serving} is in use. Press m to use this one.")
+        }
+        _ => return None,
+    };
+    Some((note, Vec::new()))
+}
+
+/// A skipped lane's row in the boxes view, what serves its hostnames and
+/// what `m` on the row does, and the commands to run first, one per line.
+/// `None` from daemons without `remote.use`.
+fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<(String, Vec<String>)> {
+    let cause = skipped.cause.as_deref()?;
+    let lane = clean(&skipped.lane);
+    let serving = clean(skipped.serving());
+    let containers = skipped.holds.as_deref() == Some("containers");
+    let commands = skipped.containers_commands();
+    let words = match (cause, skipped.served_by()) {
+        ("local_running", _) if containers && serving == lane => {
+            return Some((containers_run(&lane, &[]), commands));
+        }
+        ("local_running", _) if containers => {
+            return Some((
+                format!("{lane}: {}", containers_run(&serving, &[])),
+                commands,
+            ));
+        }
+        // `acme@0: acme@0 runs on this machine` would name the lane twice.
+        ("local_running", _) if serving == lane => {
+            format!("{lane} also runs on this machine. Press m to stop it and use this one.")
+        }
+        ("local_running", _) => {
+            format!("{lane}: {serving} runs on this machine. Press m to stop it and use this one.")
+        }
+        (_, Some(winner)) if skipped.can_use => format!(
+            "{lane}: {}'s {serving} is in use. Press m to use this one.",
+            clean(winner)
+        ),
+        (_, None) if skipped.can_use => {
+            format!("{lane}: this machine's {serving} is in use. Press m to use this one.")
+        }
+        _ => return None,
+    };
+    Some((words, Vec::new()))
 }
 
 /// Why a box lane is skipped, naming the local lane that serves its
 /// hostnames when one does: local lanes win over every box, so that lane is
 /// the one to stop.
 fn skip_reason(app: &App, skipped: &crate::boxes::SkippedLane) -> String {
-    match local_owner(app, &skipped.hosts) {
+    match app.local_lane_serving(&skipped.hosts) {
         Some(local) if skipped.other.is_none() => {
-            format!("{} on this machine serves its hostnames", clean(&local))
+            format!("this machine's {} is in use", clean(&local))
         }
         _ => clean(&skipped.reason),
     }
-}
-
-/// The local lane that serves one of `hosts`: a unit URL naming it, or the
-/// lane's domain it falls under.
-fn local_owner(app: &App, hosts: &[String]) -> Option<String> {
-    let serves = |lane: &LaneSummary, host: &str| {
-        let host = host.to_ascii_lowercase();
-        let under = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
-        lane.units.iter().flat_map(|u| &u.urls).any(|url| {
-            url.strip_prefix("https://")
-                .and_then(|rest| rest.split([':', '/']).next())
-                .is_some_and(|named| named.eq_ignore_ascii_case(&host))
-        }) || lane.domain.as_deref().is_some_and(under)
-    };
-    app.lanes
-        .iter()
-        .find(|lane| hosts.iter().any(|host| serves(lane, host)))
-        .map(|lane| lane.reference.clone())
 }
 
 /// The last lines of a box pane: `Read-only here.` and where to act instead.
@@ -758,12 +824,20 @@ fn render_hosts(app: &App, frame: &mut Frame, area: Rect) {
             lines.push(Line::from(""));
         }
         let start = lines.len();
-        let mut block = host_lines(app, host, width);
+        let (mut block, skipped_rows) = host_lines(app, host, width);
+        // A wrapped skipped lane is one row for `j k` and `m`, so all of its
+        // lines show the selection.
+        let rows = match app.boxes.lane {
+            None => Some(0..1),
+            Some(lane) => skipped_rows.get(lane).cloned(),
+        };
         if focused
             && index == selected
-            && let Some(first) = block.first_mut()
+            && let Some(rows) = rows
         {
-            *first = highlight(theme, std::mem::take(first), width);
+            for line in block.iter_mut().take(rows.end).skip(rows.start) {
+                *line = highlight(theme, std::mem::take(line), width);
+            }
         }
         lines.extend(block);
         blocks.push((start, lines.len(), index));
@@ -1179,8 +1253,13 @@ fn when(app: &App, ms: u64) -> String {
         .to_string()
 }
 
-/// One box: its name and link state, then the facts that apply.
-fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
+/// One box: its name and link state, then the facts that apply. Also the
+/// lines each skipped lane takes, which the selection can be on.
+fn host_lines(
+    app: &App,
+    host: &BoxHost,
+    width: usize,
+) -> (Vec<Line<'static>>, Vec<std::ops::Range<usize>>) {
     let theme = &app.theme;
     let plain = Style::new();
     let quiet = theme.quiet();
@@ -1308,7 +1387,12 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
             .iter()
             .filter(|p| p.state.as_deref() == Some("bound"))
             .count();
-        let lanes = registry.lanes.len();
+        // A skipped lane is the box's but not mirrored. Its row below says why.
+        let lanes = registry
+            .lanes
+            .iter()
+            .filter(|lane| host.skipped(&lane.key.reference()).is_none())
+            .count();
         let routes = host.routes.len();
         let ports = match host.ports.len() {
             0 => "no ports bound here".to_owned(),
@@ -1316,26 +1400,39 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
             n => format!("{bound} of {n} ports bound here"),
         };
         let parts = [
-            format!("{lanes} {}", if lanes == 1 { "lane" } else { "lanes" }),
+            match lanes {
+                0 => "no lanes".to_owned(),
+                1 => "1 lane".to_owned(),
+                n => format!("{n} lanes"),
+            },
             ports,
-            format!(
-                "{routes} {} routed",
-                if routes == 1 { "hostname" } else { "hostnames" }
-            ),
+            match routes {
+                0 => "no hostnames routed".to_owned(),
+                1 => "1 hostname routed".to_owned(),
+                n => format!("{n} hostnames routed"),
+            },
         ];
         lines.extend(fact("mirror", &parts.join(" · "), plain));
     }
+    // Lanes `m` or `devlanes remote use` picked this box for.
+    if !host.chosen_lanes.is_empty() {
+        let chosen: Vec<String> = host.chosen_lanes.iter().map(|lane| clean(lane)).collect();
+        lines.extend(fact("chosen", &chosen.join(", "), plain));
+    }
+    let mut skipped_rows = Vec::new();
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
+        let start = lines.len();
         let label = if index == 0 { "skipped" } else { "" };
-        let lane = clean(&skipped.lane);
-        let reason = skip_reason(app, skipped);
-        // `acme@0: acme@0 on this machine …` would name the lane twice.
-        let reason = match reason.strip_prefix(&format!("{lane} on this machine ")) {
-            Some(rest) => format!("the same lane on this machine {rest}"),
-            None => reason,
-        };
-        let text = format!("{lane}: {reason}");
+        let (text, commands) = skipped_words(skipped).unwrap_or_else(|| {
+            let reason = skip_reason(app, skipped);
+            (format!("{}: {reason}", clean(&skipped.lane)), Vec::new())
+        });
         lines.extend(fact(label, &text, theme.tone(Tone::Attention)));
+        // One line each, so a command copies whole.
+        for command in &commands {
+            lines.extend(fact("", &format!("  {command}"), plain));
+        }
+        skipped_rows.push(start..lines.len());
     }
     for (index, refused) in host.skipped_hosts.iter().enumerate() {
         let label = if index == 0 && host.skipped_lanes.is_empty() {
@@ -1363,7 +1460,12 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
     }
     // The daemon's warnings mark commands with backticks; this page has no
     // code style for them.
-    for warning in host.warnings.iter().map(|w| w.replace('`', "")) {
+    // A port range overlap names this box first, which its block already does.
+    let warnings = host
+        .warnings
+        .iter()
+        .map(|w| host.range_overlap(w).unwrap_or(w).replace('`', ""));
+    for warning in warnings {
         let first = vec![
             Span::raw("  "),
             Span::styled(
@@ -1378,5 +1480,5 @@ fn host_lines(app: &App, host: &BoxHost, width: usize) -> Vec<Line<'static>> {
             theme.tone(Tone::Attention),
         ));
     }
-    lines
+    (lines, skipped_rows)
 }

@@ -562,6 +562,18 @@ pub trait DaemonApi: Send + Sync {
             2,
         )))
     }
+    /// `remote.use`: makes box `host`'s lane `lane` (`acme@0`) the one this
+    /// machine mirrors, or this machine's own lane when `host` is `None`.
+    /// Answers `{lane, host, previous, mirrored, pending}` once the mirrors
+    /// applied it. `pending` is true for a box that is not connected, which
+    /// gets the choice when it connects.
+    async fn use_lane(&self, _lane: String, _host: Option<String>) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "remote.use"}),
+            2,
+        )))
+    }
     /// `remote.pair`: a one-time code for another machine, with `valid_ms`,
     /// how long it is valid from the reply.
     async fn pair(&self) -> Result<Value, ApiError> {
@@ -1300,6 +1312,17 @@ impl DaemonApi for ClientApi {
         self.oneshot(
             Method::Disconnect,
             json!({"host": host}),
+            self.context(None, false),
+        )
+        .await
+    }
+
+    /// Calls `remote.use` on its own connection: the reply waits for the
+    /// mirrors to switch, which the shared connection should not wait behind.
+    async fn use_lane(&self, lane: String, host: Option<String>) -> Result<Value, ApiError> {
+        self.oneshot(
+            Method::RemoteUse,
+            json!({"lane": lane, "host": host}),
             self.context(None, false),
         )
         .await

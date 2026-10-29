@@ -790,7 +790,7 @@ fn unit(name: &str, state: &str) -> UnitSummary {
         exit_code: (state == "failed").then_some(1),
         ports: BTreeMap::new(),
         urls: if state == "ready" {
-            vec!["https://api.acme-2.localhost".into()]
+            vec!["https://api.acme2.localhost".into()]
         } else {
             vec![]
         },

@@ -1,16 +1,20 @@
 # Hostnames and HTTPS
 
-Every service with `hosts` is reachable at `https://<host>` through the daemon's proxy. The lane sits in the registrable label (`api.acme-2.localhost`, never `api.lane2.acme.localhost`), so each lane is its own site for cookies and storage, like `api.acme.com` and `app.acme.com` share `acme.com` in production.
+Every service with `hosts` is reachable at `https://<host>` through the daemon's proxy. The lane sits in the registrable label (`api.acme2.localhost`, never `api.lane2.acme.localhost`), so each lane is its own site for cookies and storage, like `api.acme.com` and `app.acme.com` share `acme.com` in production.
 
 ## The flow
 
-1. The browser resolves `api.acme-2.localhost`. Chrome, Firefox and the resolvers of macOS 26, systemd-resolved and Windows 11 answer `*.localhost` with loopback by themselves; nothing is configured. Older macOS versions and Windows Server do not ([programs that cannot resolve *.localhost](#programs-that-cannot-resolve-localhost)).
+1. The browser resolves `api.acme2.localhost`. Chrome, Firefox and the resolvers of macOS 26, systemd-resolved and Windows 11 answer `*.localhost` with loopback by themselves; nothing is configured. Older macOS versions and Windows Server do not ([programs that cannot resolve *.localhost](#programs-that-cannot-resolve-localhost)).
 2. It connects to port 443 (or 8443 when 443 could not be bound) and sends the hostname in the TLS handshake. The proxy looks the name up in its route table. An unknown name is refused at the handshake, so only registered hostnames ever get a certificate.
 3. The proxy signs a leaf certificate for that name with the devlanes CA, valid 30 days, cached for 24 hours, and completes the handshake with HTTP/2 or HTTP/1.1.
 4. The request goes to `127.0.0.1:<service port>` over HTTP/1.1 with `Host` preserved, `X-Forwarded-Proto: https`, `X-Forwarded-Host`, `X-Forwarded-For`, `X-Forwarded-Port` and `Forwarded`. WebSocket upgrades are bridged with no idle timeout.
 5. Plain `http://` on port 80 (or 8080) answers known hostnames with a 308 to https.
 
 A request to a starting service waits until it is ready. A hostname whose service is stopped or has failed gets a 503 page with the commands to diagnose it and, for failures, the end of the service's output. 404 means no route has that name; 508 means a service proxied a request back to devlanes without rewriting `Host`. [Proxy errors](../errors/README.md) lists every page.
+
+## Open services by hostname
+
+Open a service at its hostname, such as `https://api.acme2.localhost`, and not at `http://localhost:<port>`. The proxy gives the hostname HTTPS, HTTP/2, WebSockets and the lane's own site for cookies. Plain `http://` on port 80 only redirects known hostnames to HTTPS. A raw port skips all of that. The browser treats `localhost:<port>` as another origin, and cookies set there reach every port on `localhost`, every lane's included. Bookmarks, OAuth callbacks and CORS settings that name the hostname also keep working when the lane moves to another box ([several boxes with the same project](remote-multiple-boxes.md)).
 
 ## Trust the CA once
 
@@ -34,7 +38,7 @@ On Linux the system store does not reach browsers, so set `tls.trust: [system, c
 
 ### Programs started by devlanes
 
-Services do not need the system store. Each unit gets `DEVLANES_CA_CERT` and `DEVLANES_CA_BUNDLE`, and the platform sets the variable its runtime reads: `NODE_EXTRA_CA_CERTS` (Node, Bun), `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` (Python, Rust). A service calling `https://auth.acme-2.localhost` from its own code therefore works without any TLS workaround. Remove `NODE_TLS_REJECT_UNAUTHORIZED=0` and hand-rolled `NODE_EXTRA_CA_CERTS` from dev scripts; a script that overwrites the variable loses the CA.
+Services do not need the system store. Each unit gets `DEVLANES_CA_CERT` and `DEVLANES_CA_BUNDLE`, and the platform sets the variable its runtime reads: `NODE_EXTRA_CA_CERTS` (Node, Bun), `DENO_CERT`, `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` (Python, Rust). A service calling `https://auth.acme2.localhost` from its own code therefore works without any TLS workaround. Remove `NODE_TLS_REJECT_UNAUTHORIZED=0` and hand-rolled `NODE_EXTRA_CA_CERTS` from dev scripts; a script that overwrites the variable loses the CA.
 
 Other tools from your shell:
 
@@ -69,11 +73,36 @@ infra:
     minio: "s3.${{ lane.domain }}"   # a container's published port
 ```
 
-`lane.domain` is `acme.localhost` in lane 0 and `acme-<N>.localhost` elsewhere; keep every hostname under it or under a `lanes.vars` value built the same way, so lanes never share a name. That value must also end in `.localhost`, or in your `hostnames.tld` with the resolver strategy; anything else does not resolve to your machine. Matching is exact first, then wildcards (longest first), then fallbacks. A wildcard covers any depth below its parent but not the parent itself; list the apex too when you need it. A name claimed by two lanes goes to the one with running units and both get a `host_conflict` warning.
+`lane.domain` is `acme.localhost` in lane 0 and `acme<N>.localhost` elsewhere, such as `acme2.localhost`. Keep every hostname under it or under a name from [`domain()`](#a-site-of-its-own), so lanes never share a name. A domain you write yourself in `lanes.vars` must also end in `.localhost`, or in your `hostnames.tld` with the resolver strategy. Anything else does not resolve to your machine. Matching is exact first, then wildcards (longest first), then fallbacks. A wildcard covers any depth below its parent but not the parent itself; list the apex too when you need it. A name claimed by two lanes goes to the one with running units and both get a `host_conflict` warning.
 
 `hosts` also change the default readiness check to `tcp` on the service's port.
 
-Tenant-style subdomains (`*.pages-2.localhost`) are fine as long as the lane index is in the label: `"*.pages-${{ lane.index }}.localhost"` in the full example. Browsers reject a wildcard directly under a TLD (`*.localhost`), and devlanes refuses one that a [remote box](../remote.md) sends.
+Tenant-style subdomains (`*.acme-pages2.localhost`) are fine as long as the lane index is in the label: `"*.${{ domain('acme-pages') }}"` in the full example. Browsers reject a wildcard directly under a TLD (`*.localhost`), and devlanes refuses one that a [remote box](../remote.md) sends.
+
+### A site of its own
+
+A browser treats `app.acme2.localhost` and `api.acme2.localhost` as one site: `acme2.localhost`. A cookie the app sets with `Domain=acme2.localhost` reaches every name under it. That is what you want for the app and its API. It is wrong for names that serve content you don't control, such as user-generated pages, which must not read or set the app's cookies.
+
+`domain(name)` gives such a name a site of its own in every lane, by the rule `lane.domain` follows. `domain('pages')` is `pages.localhost` in lane 0 and `pages2.localhost` in lane 2. With the [resolver strategy](#programs-that-cannot-resolve-localhost) it is `pages2.test`, unless the project sets `lanes.vars.domain` or `lanes.matrix`. Those projects keep `.localhost`. Use it in `lanes.vars` to name the site once:
+
+```yaml
+lanes:
+  vars:
+    pages_domain: ${{ domain('acme-pages') }}
+services:
+  web:
+    hosts: app.${{ lane.domain }}            # app.acme2.localhost, the app's site
+  pages:
+    hosts: "*.${{ lane.pages_domain }}"      # alice.acme-pages2.localhost, a site apart
+    env:
+      PAGES_DOMAIN: ${{ lane.pages_domain }}
+```
+
+Write `pages.${{ lane.domain }}` instead when the name may share the app's cookies. Requests from such pages to the app count as same-site, so `SameSite` cookies don't keep them out.
+
+Pick a name only this project uses, such as `domain('acme-pages')`. Two projects that both call `domain('pages')` get the same names. `lane.domain` itself is `domain(project.name)` unless `lanes.vars.domain` sets it, so project names can meet too: lane 1 of `web2` and lane 0 of `web21` are both `web21.localhost`, and then both lanes get a `host_conflict` warning.
+
+The argument must be hostname labels, and anything else is a config error.
 
 ## Programs that cannot resolve *.localhost
 
@@ -96,7 +125,7 @@ hostnames:
 devlanes certs trust --resolver
 ```
 
-switches lane domains to `acme.test` and `acme-2.test`, answered by a DNS server the daemon runs on `127.0.0.1:15353`. `--resolver` writes `/etc/resolver/test` on macOS, or a systemd-resolved delegate on Linux (systemd 258 or newer; older versions could only add the server globally, so `--resolver` refuses them). On Windows it adds an NRPT rule after an administrator prompt, and the server listens on `127.53.0.1:53` instead, because an NRPT rule cannot name a port ([Windows](windows.md#hostnames)). The OS sends only that TLD there, and every other lookup keeps your existing DNS (VPN, corporate DNS, Pi-hole). The server answers every name under the TLD, so wildcard hostnames resolve for every program that uses the system resolver; on macOS `dig` and `nslookup` bypass it. The TLD must be `test`, `internal`, `home.arpa` or a name under one of them (or a name under `localhost`). The CA is constrained to the TLD it was created with; switching later needs the recreate command `doctor` prints. `.dev` is a real TLD with HSTS preloaded and `.local` is mDNS; neither is accepted.
+switches lane domains to `acme.test` and `acme2.test`, answered by a DNS server the daemon runs on `127.0.0.1:15353`. `--resolver` writes `/etc/resolver/test` on macOS, or a systemd-resolved delegate on Linux (systemd 258 or newer; older versions could only add the server globally, so `--resolver` refuses them). On Windows it adds an NRPT rule after an administrator prompt, and the server listens on `127.53.0.1:53` instead, because an NRPT rule cannot name a port ([Windows](windows.md#hostnames)). The OS sends only that TLD there, and every other lookup keeps your existing DNS (VPN, corporate DNS, Pi-hole). The server answers every name under the TLD, so wildcard hostnames resolve for every program that uses the system resolver; on macOS `dig` and `nslookup` bypass it. The TLD must be `test`, `internal`, `home.arpa` or a name under one of them (or a name under `localhost`). The CA is constrained to the TLD it was created with; switching later needs the recreate command `doctor` prints. `.dev` is a real TLD with HSTS preloaded and `.local` is mDNS; neither is accepted.
 
 ## Ports 443 and 80
 
@@ -108,7 +137,7 @@ sudo setcap cap_net_bind_service=+ep "$(command -v devlanes)"   # redo after upg
 sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80
 ```
 
-A fallback is a `doctor` warning, and public URLs then carry the port: `https://api.acme-2.localhost:8443`. `proxy.https_port` and `proxy.http_port` set other ports on purpose.
+A fallback is a `doctor` warning, and public URLs then carry the port: `https://api.acme2.localhost:8443`. `proxy.https_port` and `proxy.http_port` set other ports on purpose.
 
 Windows needs no privilege for the low ports and binds them on loopback. Port 80 there is often held by http.sys, and ports inside the ranges Hyper-V or WSL reserved cannot be bound; both fall back the same way ([Windows](windows.md#ports)).
 
@@ -130,8 +159,8 @@ proxy:
 
 ```sh
 devlanes url ls                                   # routed hostnames with lane, unit, port and state
-curl -sS https://api.acme-2.localhost/healthz     # works without -k once the CA is trusted
-curl -sS --cacert ~/.devlanes/ca/ca.pem https://api.acme-2.localhost/healthz
+curl -sS https://api.acme2.localhost/healthz     # works without -k once the CA is trusted
+curl -sS --cacert ~/.devlanes/ca/ca.pem https://api.acme2.localhost/healthz
 devlanes doctor                                   # proxy ports, CA, trust per store, hosts file
 ```
 

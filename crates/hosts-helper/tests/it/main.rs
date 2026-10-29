@@ -80,13 +80,13 @@ fn apply_status_clear_round_trip() {
     let applied = helper(
         &hosts,
         &["apply"],
-        b"web.acme-2.localhost\napi.acme-2.localhost\n",
+        b"web.acme2.localhost\napi.acme2.localhost\n",
     );
     assert_eq!(code(&applied), exit::OK, "{applied:?}");
     assert_eq!(stdout(&applied), "changed names=2\n");
     let block = format!(
-        "{BEGIN_MARKER}\n{NOTE}\n127.0.0.1 api.acme-2.localhost\n::1 api.acme-2.localhost\n\
-         127.0.0.1 web.acme-2.localhost\n::1 web.acme-2.localhost\n{END_MARKER}\n"
+        "{BEGIN_MARKER}\n{NOTE}\n127.0.0.1 api.acme2.localhost\n::1 api.acme2.localhost\n\
+         127.0.0.1 web.acme2.localhost\n::1 web.acme2.localhost\n{END_MARKER}\n"
     );
     let mut expected = STOCK.to_vec();
     expected.extend_from_slice(block.as_bytes());
@@ -99,7 +99,7 @@ fn apply_status_clear_round_trip() {
     let again = helper(
         &hosts,
         &["apply"],
-        b"api.acme-2.localhost\nweb.acme-2.localhost\n",
+        b"api.acme2.localhost\nweb.acme2.localhost\n",
     );
     assert_eq!(stdout(&again), "unchanged names=2\n");
 

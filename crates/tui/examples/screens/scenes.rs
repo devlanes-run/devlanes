@@ -414,10 +414,21 @@ fn idle(f: &mut Fake) {
     f.send(Msg::Status(Ok(data::idle_lanes())));
 }
 
-/// The scene `lanes-unit` in another color tier and glyph set.
-fn themed(f: &mut Fake, tier: Tier, glyphs: Glyphs) {
+/// This machine with `shop@0` stopped, and the forks `boxes` lists.
+fn forks(f: &mut Fake, boxes: fn() -> serde_json::Value) {
+    f.lanes = data::shop_stopped;
+    f.send(Msg::Status(Ok(data::shop_stopped())));
+    f.show_boxes(boxes());
+}
+
+/// The scene `lanes-unit`, or what `then` shows, in another color tier and
+/// glyph set.
+fn themed(f: &mut Fake, tier: Tier, glyphs: Glyphs, then: Option<fn(&mut Fake)>) {
     f.app.theme = Theme { tier, glyphs };
-    f.unit("acme@0", "api-gateway");
+    match then {
+        Some(then) => then(f),
+        None => f.unit("acme@0", "api-gateway"),
+    }
 }
 
 /// Selects acme@0's api-search, the busiest unit, on the open monitor and
@@ -585,7 +596,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "box-lane",
-            what: "a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the pane says what to run on the box",
+            what: "a connected box's lane in the tab of its project (@4 hetzner), selected: read-only, the pane says what to run on the box",
             setup: |f| {
                 f.connect_boxes();
                 f.lane("acme@4 @hetzner");
@@ -608,11 +619,79 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
-            name: "box-lane-skipped",
-            what: "a box lane that is not mirrored because a local lane serves its hostnames",
+            name: "lanes-boxes",
+            what: "two forks of one box run shop@0, chosen for fork-a: the lanes row goes by number, this machine's lane first, then the boxes by name; fork-b's lane and this machine's stopped one are grey",
             setup: |f| {
-                f.connect_boxes();
-                f.unit("acme@0 @hetzner", "api-gateway");
+                forks(f, data::forks);
+                f.lane("shop@0 @fork-a");
+            },
+        },
+        Scene {
+            name: "lanes-boxes-long",
+            what: "three forks with long names that share their start (acme-fork-a, -b, -c): the chips drop the shared start, so narrow screens still tell them apart",
+            setup: |f| {
+                forks(f, data::long_forks);
+                f.lane("shop@0 @acme-fork-b");
+            },
+        },
+        Scene {
+            name: "lane-box-grey",
+            what: "fork-b's grey shop@0: which lane is in use, and m to use this one",
+            setup: |f| {
+                forks(f, data::forks);
+                f.lane("shop@0 @fork-b");
+            },
+        },
+        Scene {
+            name: "lane-box-local-running",
+            what: "a box lane while this machine runs shop@0: grey, and m offers to stop the local lane and switch",
+            setup: |f| {
+                f.show_boxes(data::forks_local_running());
+                f.unit("shop@0 @fork-b", "storefront");
+            },
+        },
+        Scene {
+            name: "lane-box-containers",
+            what: "a box lane while only shop@0's own containers run on this machine: the pane names the commands that stop them, and m switches after that",
+            setup: |f| {
+                forks(f, data::forks_containers);
+                f.lane("shop@0 @fork-b");
+            },
+        },
+        Scene {
+            name: "dialog-stop-and-switch",
+            what: "m on fork-b's shop@0 while this machine runs shop@0: asks before stopping it, y stops it and switches",
+            setup: |f| {
+                f.show_boxes(data::forks_local_running());
+                f.lane("shop@0 @fork-b");
+                f.key(KeyCode::Char('m'));
+            },
+        },
+        Scene {
+            name: "dialog-stop-containers",
+            what: "m on fork-b's shop@0 while this machine runs shop@0 with its own containers: the stop leaves them holding the ports, so y only stops, and the dialog names their commands",
+            setup: |f| {
+                f.show_boxes(data::forks_processes_and_containers());
+                f.lane("shop@0 @fork-b");
+                f.key(KeyCode::Char('m'));
+            },
+        },
+        Scene {
+            name: "boxes-forks",
+            what: "the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one selected (j j), with the lane in use and m",
+            setup: |f| {
+                forks(f, data::forks);
+                f.shifted('B');
+                f.key(KeyCode::Char('j'));
+                f.key(KeyCode::Char('j'));
+            },
+        },
+        Scene {
+            name: "lane-local-yielded",
+            what: "this machine's stopped shop@0 after shop@0 was chosen for fork-a: grey, and m gives its hostnames back",
+            setup: |f| {
+                forks(f, data::forks);
+                f.lane("shop@0");
             },
         },
         Scene {
@@ -648,7 +727,8 @@ fn scenes() -> Vec<Scene> {
                 f.clients = data::clients();
                 f.connect_boxes();
                 f.shifted('B');
-                for _ in 0..3 {
+                // hetzner, its skipped lane, devbox and gpu come first.
+                for _ in 0..4 {
                     f.key(KeyCode::Char('j'));
                 }
             },
@@ -767,8 +847,10 @@ fn scenes() -> Vec<Scene> {
                 };
                 f.connect_boxes();
                 f.shifted('B');
-                f.key(KeyCode::Char('j'));
-                f.key(KeyCode::Char('j'));
+                // Past hetzner, its skipped lane and devbox.
+                for _ in 0..3 {
+                    f.key(KeyCode::Char('j'));
+                }
                 f.key(KeyCode::Enter);
                 f.type_text("hunter2");
             },
@@ -787,6 +869,8 @@ fn scenes() -> Vec<Scene> {
                 };
                 f.connect_boxes();
                 f.shifted('B');
+                // Past hetzner and its skipped lane.
+                f.key(KeyCode::Char('j'));
                 f.key(KeyCode::Char('j'));
                 f.key(KeyCode::Enter);
             },
@@ -950,22 +1034,37 @@ fn scenes() -> Vec<Scene> {
         Scene {
             name: "theme-dark",
             what: "true color on a dark background",
-            setup: |f| themed(f, Tier::Dark, Glyphs::Unicode),
+            setup: |f| themed(f, Tier::Dark, Glyphs::Unicode, None),
         },
         Scene {
             name: "theme-light",
             what: "true color on a light background",
-            setup: |f| themed(f, Tier::Light, Glyphs::Unicode),
+            setup: |f| themed(f, Tier::Light, Glyphs::Unicode, None),
         },
         Scene {
             name: "theme-no-color",
             what: "NO_COLOR: shapes, words, bold and reverse video",
-            setup: |f| themed(f, Tier::Plain, Glyphs::Unicode),
+            setup: |f| themed(f, Tier::Plain, Glyphs::Unicode, None),
         },
         Scene {
             name: "glyphs-ascii",
             what: "ASCII glyphs (ui.glyphs: ascii, or a locale without UTF-8)",
-            setup: |f| themed(f, Tier::Ansi, Glyphs::Ascii),
+            setup: |f| themed(f, Tier::Ansi, Glyphs::Ascii, None),
+        },
+        Scene {
+            name: "lanes-boxes-ascii",
+            what: "the scene lanes-boxes with ASCII glyphs and NO_COLOR: grey lanes are in parentheses, so they read without color",
+            setup: |f| {
+                themed(
+                    f,
+                    Tier::Plain,
+                    Glyphs::Ascii,
+                    Some(|f| {
+                        forks(f, data::forks);
+                        f.lane("shop@0 @fork-a");
+                    }),
+                );
+            },
         },
         Scene {
             name: "monitor",
@@ -1060,7 +1159,8 @@ fn scenes() -> Vec<Scene> {
                 f.clients = data::clients();
                 f.connect_boxes();
                 f.shifted('B');
-                for _ in 0..3 {
+                // hetzner, its skipped lane, devbox and gpu come first.
+                for _ in 0..4 {
                     f.key(KeyCode::Char('j'));
                 }
                 f.key(KeyCode::Char('x'));

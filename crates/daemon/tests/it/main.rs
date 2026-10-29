@@ -193,6 +193,19 @@ pub struct Setup {
     pub ci: bool,
 }
 
+/// A user config whose port pool is `range`, for [`Setup::user`]. A restart
+/// or an orphan's stop waits until the unit's old ports are free on this
+/// machine, so a test that does either takes a range of its own, outside the
+/// default pool other programs here may listen in.
+///
+/// Ranges: `engine.rs` 12000-12249, `orphans.rs` 12250-12499, `pacing.rs`
+/// 12500-12999. No other test in this binary uses 12000-12999.
+pub fn pool(range: &str) -> Option<devlanes_config::UserConfig> {
+    let mut user = devlanes_config::UserConfig::default();
+    user.ports.range = range.into();
+    Some(user)
+}
+
 /// Opens an engine over `home` (reusing its state.db when present).
 pub async fn harness(home: &Path, setup: Setup) -> Harness {
     let runner = FakeRunner::default();

@@ -20,7 +20,7 @@ async fn maintain(db: &Path) -> Result<PruneReport, Error> {
 
 ## API
 
-- `Store`: cloneable async handle for registry, lifecycle, history, remote-host and pairing queries (a box's `RemotePairing`s, a client's remote token per box). `Store::close` drains queued work and joins the database thread.
+- `Store`: cloneable async handle for registry, lifecycle, history, remote-host and pairing queries (a box's `RemotePairing`s, a client's remote token per box, and its `RemoteLaneChoice` of which box serves a lane several boxes run). `Store::close` drains queued work and joins the database thread.
 - `Error`: typed failures. `Conflict`, `ActiveRuns` and `Corrupt` are the ones a caller can act on; Diesel errors stay available as the `source`.
 - `AllocationRequest` and `Store::allocate`: transactional block allocation with stable project-wide offsets.
 - `UnitRunInput` and `Store::active_unit_runs`: persisted process identities and boot IDs for reconciliation. `Store::finish_other_boot_runs` ends runs from an earlier boot without probing their PIDs.
@@ -53,7 +53,7 @@ Paths are stored in their native form: raw bytes on Unix, UTF-16LE code units on
 
 Opening runs pending embedded Diesel migrations and configures WAL, foreign keys, and a five-second busy timeout. Old rusqlite development databases using `user_version` are refused with `STATE_LEGACY_SCHEMA`: run `devlanes daemon reset-state`. Newer Diesel schemas require an upgrade.
 
-Call retention periodically from the daemon with configuration-derived limits. Defaults are 7 days for finished runs, metrics and log segment rows, 90 days since a remote host's last connection, and a 512 MiB database budget. These defaults are exported as `DEFAULT_*` constants. Log files have separate retention; this store removes their metadata only.
+Call retention periodically from the daemon with configuration-derived limits. Defaults are 7 days for finished runs, metrics and log segment rows, 90 days since a remote host's last connection, and a 512 MiB database budget. A remote host's lane choices go with its row. These defaults are exported as `DEFAULT_*` constants. Log files have separate retention; this store removes their metadata only.
 
 Startup peaks (`record_startup_peak`, `startup_peaks`) keep the newest ten per metrics series and expire with metrics retention; the daemon's start gate uses them as each unit's memory need.
 

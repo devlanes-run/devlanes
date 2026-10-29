@@ -446,7 +446,7 @@ mod tests {
         let lanes: Vec<LaneSummary> = serde_json::from_value(json!([{
             "reference": "app@1", "project": "app", "index": 1, "branch": "x",
             "path": "/w", "state": "running", "config_changed": false,
-            "domain": "app-1.localhost",
+            "domain": "app1.localhost",
             "units": [
                 {"name": "web", "lane": "app@1", "state": "ready", "pid": 1, "exit_code": null,
                  "ports": {"default": 4100}, "urls": [], "actor": {"kind": "human"},
@@ -507,11 +507,12 @@ mod tests {
             remote: false,
             box_https_port: None,
             address: None,
+            upstream_box: None,
         };
         let routes = [
-            route("web.app-1.localhost", "web", 4100),
-            route("migrate.app-1.localhost", "migrate", 4104),
-            route("pgadmin.app-1.localhost", "pgadmin", 5050),
+            route("web.app1.localhost", "web", 4100),
+            route("migrate.app1.localhost", "migrate", 4104),
+            route("pgadmin.app1.localhost", "pgadmin", 5050),
         ];
         let addresses = ExternalAddresses::from([(
             ("app@1".to_owned(), "pgadmin".to_owned()),
@@ -533,7 +534,7 @@ mod tests {
             .find(|u| u.key.name == "pgadmin")
             .expect("pgadmin is listed");
         assert_eq!(pgadmin.state, "external", "its project runs a lane");
-        assert_eq!(pgadmin.hosts[0].host, "pgadmin.app-1.localhost");
+        assert_eq!(pgadmin.hosts[0].host, "pgadmin.app1.localhost");
         assert_eq!(
             pgadmin.ports[0].address,
             Some(std::net::Ipv6Addr::LOCALHOST.into()),

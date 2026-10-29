@@ -13,7 +13,7 @@ impl HostConn {
     /// mirrored port with its state, the skipped lanes and hostnames, this
     /// machine's HTTPS port (`https_port`) and whether it serves the box's own
     /// (`serves_box_port`). Reasons are worded for the box, which shows them
-    /// as this machine's.
+    /// as this machine's: a skipped lane names the lane in use instead.
     pub(super) fn mirror_report(
         &self,
         https_port: Option<u16>,
@@ -61,9 +61,11 @@ impl HostConn {
             .skipped
             .iter()
             .map(|skipped| {
-                let reason = match skipped.get("box").and_then(Value::as_str) {
-                    Some(other) => format!("box {other} already serves its hostnames there"),
-                    None => "a lane on that machine serves its hostnames".to_owned(),
+                let text = |key: &str| skipped.get(key).and_then(Value::as_str);
+                let winner_lane = text("winner_lane").unwrap_or_default();
+                let reason = match text("box") {
+                    Some(other) => format!("that machine uses {other}'s {winner_lane}"),
+                    None => format!("that machine uses its own {winner_lane}"),
                 };
                 SkippedLane {
                     lane: skipped
@@ -305,18 +307,18 @@ mod tests {
             https_port: Some(443),
             ..MirrorReport::default()
         };
-        let host = target(Some("web.acme-1.localhost"), Some(3000));
+        let host = target(Some("web.acme1.localhost"), Some(3000));
         let url = client_url(&client(), &report, &host, Some(8443));
-        assert_eq!(url["url"], "https://web.acme-1.localhost");
+        assert_eq!(url["url"], "https://web.acme1.localhost");
         assert_eq!(url["reachable"], true);
         assert_eq!(url["client"], "laptop");
         report.serves_box_port = true;
         let url = client_url(&client(), &report, &host, Some(8443));
-        assert_eq!(url["url"], "https://web.acme-1.localhost:8443");
+        assert_eq!(url["url"], "https://web.acme1.localhost:8443");
         report.https_port = Some(9443);
         report.serves_box_port = false;
         let url = client_url(&client(), &report, &host, Some(8443));
-        assert_eq!(url["url"], "https://web.acme-1.localhost:9443");
+        assert_eq!(url["url"], "https://web.acme1.localhost:9443");
     }
 
     /// A skipped lane or hostname, a busy port, a port not mirrored yet and
@@ -364,11 +366,11 @@ mod tests {
         let skipped = MirrorReport {
             skipped_lanes: vec![SkippedLane {
                 lane: "acme@1".into(),
-                reason: "a lane on that machine serves its hostnames".into(),
+                reason: "that machine uses its own acme@1".into(),
             }],
             ..MirrorReport::default()
         };
-        let routed = target(Some("web.acme-1.localhost"), None);
+        let routed = target(Some("web.acme1.localhost"), None);
         let lane = client_url(&client(), &skipped, &routed, None);
         assert_eq!(lane["reachable"], false);
         assert!(
@@ -400,14 +402,14 @@ mod tests {
     /// client skips.
     #[test]
     fn a_hostname_that_does_not_open_falls_back_to_the_port() {
-        let routed = target(Some("web.acme-1.localhost"), Some(3000));
+        let routed = target(Some("web.acme1.localhost"), Some(3000));
         let plain = MirrorReport::default();
         let url = client_url(&client(), &plain, &routed, Some(8443));
         assert_eq!(url["reachable"], false, "{url}");
         assert_eq!(url["reason"], "that machine's proxy serves no HTTPS");
         let bound = MirrorReport {
             ports: vec![mirrored("bound", Some("127.0.0.1"), None)],
-            skipped_hosts: vec!["web.acme-1.localhost".into()],
+            skipped_hosts: vec!["web.acme1.localhost".into()],
             https_port: Some(443),
             ..MirrorReport::default()
         };

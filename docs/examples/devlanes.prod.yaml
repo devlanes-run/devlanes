@@ -12,7 +12,7 @@ project: acme-prod
 lanes:
   vars:
     # devlanes.yaml fixes the domain to acme, so prod sets its own: acme-prod.localhost in lane 0.
-    domain: ${{ project.name }}${{ '' if lane.index == 0 else '-' ~ lane.index }}.localhost
+    domain: ${{ domain(project.name) }}
     # Values built only from lane.name are the same in both projects; this keeps prod's
     # database apart. The vhost, bucket and Redis DB are still shared.
     db_name: acme_prod_${{ lane.name }}

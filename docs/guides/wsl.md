@@ -21,11 +21,11 @@ WSL stops a distro some seconds after its last terminal closes, and with it the 
 
 ## Ports 443 and 80
 
-A normal user cannot bind ports below 1024 in the distro, so the proxy falls back to 8443 for HTTPS and 8080 for HTTP, and URLs carry the port (`https://web.acme-2.localhost:8443`). [Ports 443 and 80](https.md#ports-443-and-80) shows how to allow them.
+A normal user cannot bind ports below 1024 in the distro, so the proxy falls back to 8443 for HTTPS and 8080 for HTTP, and URLs carry the port (`https://web.acme2.localhost:8443`). [Ports 443 and 80](https.md#ports-443-and-80) shows how to allow them.
 
 ## Reaching the proxy from Windows
 
-Chrome, Edge and Firefox on Windows resolve `*.localhost` to loopback themselves, and WSL forwards loopback connections from Windows into the distro, so `https://web.acme-2.localhost:8443` opened on Windows reaches the proxy in the distro. Windows programs that resolve names through Windows itself never read the distro's `/etc/hosts`, so the [hosts file fallback](https.md#programs-that-cannot-resolve-localhost) does not help them; call those services by `127.0.0.1:<port>` instead.
+Chrome, Edge and Firefox on Windows resolve `*.localhost` to loopback themselves, and WSL forwards loopback connections from Windows into the distro, so `https://web.acme2.localhost:8443` opened on Windows reaches the proxy in the distro. Windows programs that resolve names through Windows itself never read the distro's `/etc/hosts`, so the [hosts file fallback](https.md#programs-that-cannot-resolve-localhost) does not help them; call those services by `127.0.0.1:<port>` instead.
 
 ## Trusting the CA in Windows
 

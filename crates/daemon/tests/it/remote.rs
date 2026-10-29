@@ -9,6 +9,8 @@
 
 #[path = "remote_boxes.rs"]
 mod boxes;
+#[path = "remote_choice.rs"]
+mod choice;
 #[path = "remote_sync.rs"]
 mod large_sync;
 #[path = "remote_lifecycle.rs"]
@@ -97,8 +99,11 @@ async fn engine_with(
 ) -> Harness {
     let runner = FakeRunner::default();
     let processes = FakeProcesses::default();
+    let infra = FakeInfra::default();
     let mut integ = Integrations::with_runner(Arc::new(runner.clone()));
     integ.processes = Arc::new(processes.clone());
+    // Only projects with `infra` reach it.
+    integ.infra = Arc::new(infra.clone());
     if let Some(remote) = remote {
         integ.remote = remote;
     }
@@ -119,7 +124,7 @@ async fn engine_with(
     Harness {
         engine,
         runner,
-        infra: FakeInfra::default(),
+        infra,
         processes,
         home: home.to_path_buf(),
         idle,
@@ -476,7 +481,12 @@ struct ProxyRoutes {
     tls: Option<(u16, Arc<CertificateAuthority>)>,
     box_ports: devlanes_proxy::ScopedPorts,
     shutdown: CancellationToken,
+    /// Every published table's box routes, as `(host, port)`, in order.
+    published: Published,
 }
+
+/// The box routes of each table a client published, oldest first.
+type Published = Arc<std::sync::Mutex<Vec<Vec<(String, u16)>>>>;
 
 impl ProxyRoutes {
     /// Feeds `proxy`, with HTTPS on `tls` when set; `shutdown` stops box ports.
@@ -484,12 +494,14 @@ impl ProxyRoutes {
         proxy: devlanes_proxy::Proxy,
         tls: Option<(u16, Arc<CertificateAuthority>)>,
         shutdown: CancellationToken,
+        published: Published,
     ) -> Self {
         Self {
             proxy,
             tls,
             box_ports: devlanes_proxy::ScopedPorts::default(),
             shutdown,
+            published,
         }
     }
 }
@@ -519,6 +531,12 @@ impl RouteSink for ProxyRoutes {
 
     /// Converts and swaps the route table.
     fn publish(&self, routes: Vec<RouteEntry>) {
+        let remote = routes
+            .iter()
+            .filter(|entry| entry.remote)
+            .map(|entry| (entry.host.clone(), entry.port))
+            .collect();
+        self.published.lock().expect("published").push(remote);
         let routes = routes
             .into_iter()
             .map(|entry| {
@@ -543,6 +561,7 @@ impl RouteSink for ProxyRoutes {
                 route.remote = entry.remote;
                 route.certificate_names = entry.certificate_names;
                 route.listen_port = entry.box_https_port;
+                route.pool_key = entry.upstream_box;
                 route
             })
             .collect();
@@ -560,6 +579,8 @@ struct ClientSide {
     controls: Arc<Controls>,
     /// Each box's engine by name, for the pairing codes [`ClientSide::connect`] uses.
     box_engines: BTreeMap<String, Engine>,
+    /// The box routes of every table the client published.
+    published: Published,
 }
 
 impl ClientSide {
@@ -621,11 +642,17 @@ impl ClientSide {
                 .collect(),
             controls: controls.clone(),
         });
+        let published = Published::default();
         let h = engine_with(
             &tmp.path.join(name),
             ports,
             Some(connector),
-            Some(Arc::new(ProxyRoutes::new(proxy, tls, proxy_stop.clone()))),
+            Some(Arc::new(ProxyRoutes::new(
+                proxy,
+                tls,
+                proxy_stop.clone(),
+                published.clone(),
+            ))),
         )
         .await;
         Self {
@@ -637,6 +664,7 @@ impl ClientSide {
                 .iter()
                 .map(|(name, side)| ((*name).to_owned(), side.h.engine.clone()))
                 .collect(),
+            published,
         }
     }
 

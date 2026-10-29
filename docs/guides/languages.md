@@ -32,7 +32,7 @@ services:
 
 The server must read `PORT` (and ideally `HOST`, which is `127.0.0.1`). With Fastify, Express, Hono or Koa that is `listen({ port: Number(process.env.PORT), host: process.env.HOST })`. If the script hardcodes a port, pass it: `run: node --watch server.mjs --port ${{ self.port }}`.
 
-Node reads `NODE_EXTRA_CA_CERTS` once at startup, so `fetch('https://auth.acme-2.localhost')` from a service works without `NODE_TLS_REJECT_UNAUTHORIZED`. Drop any `--use-system-ca` or custom CA setup from the dev scripts; a script that overwrites `NODE_EXTRA_CA_CERTS` loses the devlanes CA.
+Node reads `NODE_EXTRA_CA_CERTS` once at startup, so `fetch('https://auth.acme2.localhost')` from a service works without `NODE_TLS_REJECT_UNAUTHORIZED`. Drop any `--use-system-ca` or custom CA setup from the dev scripts; a script that overwrites `NODE_EXTRA_CA_CERTS` loses the devlanes CA.
 
 A debugger port is another named port: `run: node --inspect=127.0.0.1:${{ self.ports.inspect }} server.mjs`. See [ports and environment](ports-and-env.md#several-ports-for-one-service).
 

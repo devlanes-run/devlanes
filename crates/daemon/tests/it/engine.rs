@@ -198,7 +198,7 @@ async fn lane_indices_and_primary_moves() {
         assert_eq!(lane_at(&list, &b).reference, "demo@2");
         assert_eq!(
             lane_at(&list, &b).domain.as_deref(),
-            Some("demo-2.localhost")
+            Some("demo2.localhost")
         );
 
         git(&main, &["checkout", "-q", "-b", "other"]);
@@ -871,7 +871,12 @@ async fn start_result_ownership_stop_and_restart() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", BASIC);
-        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        // The restart waits for web's port, so it must be free on this machine.
+        let setup = Setup {
+            user: crate::pool("12000-12249"),
+            ..Setup::default()
+        };
+        let h = harness(&tmp.path.join("home"), setup).await;
         let first = start(&h, cx(&main), json!({"units": ["worker"]})).await;
         assert_eq!(first.started, ["demo@0:worker"]);
         assert!(first.whole_lane && first.ready);

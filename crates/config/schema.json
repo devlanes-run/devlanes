@@ -427,7 +427,7 @@
         "upstream"
       ],
       "enumDescriptions": [
-        "Send the hostname the client requested, such as `api.acme-2.localhost`.",
+        "Send the hostname the client requested, such as `api.acme2.localhost`.",
         "Send the local address and port the proxy connects to, such as `127.0.0.1:<port>`."
       ],
       "examples": [
@@ -436,7 +436,7 @@
       ],
       "markdownDescription": "Host header sent to the unit behind a hostname.",
       "markdownEnumDescriptions": [
-        "Send the hostname the client requested, such as `api.acme-2.localhost`.",
+        "Send the hostname the client requested, such as `api.acme2.localhost`.",
         "Send the local address and port the proxy connects to, such as `127.0.0.1:<port>`."
       ],
       "type": "string"
@@ -1399,7 +1399,7 @@
                 "port": 20000
               },
               {
-                "domain": "acme-1.localhost",
+                "domain": "acme1.localhost",
                 "port": 20100
               }
             ]
@@ -1420,7 +1420,7 @@
                 "port": 20000
               },
               {
-                "domain": "acme-1.localhost",
+                "domain": "acme1.localhost",
                 "port": 20100
               }
             ],
@@ -1504,20 +1504,20 @@
         "vars": {
           "additionalProperties": {
             "$ref": "#/$defs/Templated_Scalar",
-            "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`.",
+            "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`.",
             "examples": [
               "acme_${{ lane.name }}"
             ],
-            "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`."
+            "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`."
           },
           "default": {},
-          "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`.",
+          "description": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`.",
           "examples": [
             {
               "db_name": "acme_${{ lane.name }}"
             }
           ],
-          "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. Cannot be combined with `matrix`.",
+          "markdownDescription": "Values computed for each lane and read as `${{ lane.<name> }}`, such as a database name, vhost, bucket or Redis index per lane. A var named `domain` replaces the default lane domain, and one named `port` fixes where the lane's port block starts. `${{ domain('pages') }}` gives a name a site of its own in each lane, such as `pages2.localhost` in lane 2. Cannot be combined with `matrix`.",
           "type": "object"
         }
       },
@@ -3376,11 +3376,11 @@
       "type": "object"
     },
     "project": {
-      "description": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project>-<N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
+      "description": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project><N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
       "examples": [
         "acme"
       ],
-      "markdownDescription": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project>-<N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
+      "markdownDescription": "Project name, the same in every worktree of the repository. It builds each lane's default domain (`<project>.localhost` for lane 0, `<project><N>.localhost` for lane N), names lanes in commands (`acme@2`), the containers devlanes creates and `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`. Lowercase letters, digits, dots, underscores and dashes.",
       "type": "string"
     },
     "services": {

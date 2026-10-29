@@ -513,7 +513,7 @@ fn meter_row(
 const MEM_ROW_EXTRA: usize = 24;
 
 /// Width for lane and group names in the cpu and mem boxes: the longest
-/// (`clickmax (shared)`, `clickmax@1`), at least `available`, at most 22.
+/// (`acme (shared)`, `acme@1`), at least `available`, at most 22.
 fn group_name_width(page: &Page) -> usize {
     page.groups()
         .iter()
@@ -1106,7 +1106,7 @@ impl Layout {
             columns,
             bar: 8,
             name: longest.clamp(12, 28),
-            // `clickmax (shared)` and `clickmax@1` whole when they fit.
+            // `acme (shared)` and `acme@1` whole when they fit.
             lane: lane.clamp(6, 22),
             spark: 0,
         };

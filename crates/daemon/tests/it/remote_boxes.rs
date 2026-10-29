@@ -71,15 +71,18 @@ fn warns(host: &Value, text: &str) -> bool {
 
 // Port ranges: every test in this binary that binds real ports takes its own
 // fixed range, so concurrent tests never hand out the same number. The ones
-// here use 21000-21499, 22000-22999, 27500-27999 and 30000-32767.
+// here use 15800-15999, 21000-21499, 22000-22999, 27500-27999 and
+// 30000-32767, and
+// `remote_choice.rs` uses 13000-14999 and 26000-26999.
 
 #[tokio::test(flavor = "multi_thread")]
 /// Two boxes running the same project: the box connected later skips its lane
 /// with a warning naming the first, a port the first box's mirror holds is
 /// reported with that box, and both boxes learn that their `ports.range`
-/// overlap. The second box's lane is mirrored once the first one stops serving
-/// the hostname, and its port once the first box disconnects, which also
-/// clears the overlap warning.
+/// overlap. The second box's lane stays skipped when the first one stops
+/// serving the hostname, since the same lane on two boxes always clashes, and
+/// is mirrored once chosen. Its port is mirrored once the first box
+/// disconnects, which also clears the overlap warning.
 async fn two_boxes_with_one_project() {
     if !ipv6_loopback().await {
         eprintln!("skipping two_boxes_with_one_project: no IPv6 loopback");
@@ -142,12 +145,10 @@ async fn two_boxes_with_one_project() {
         .await
         .expect("beta's boxapp lane is skipped");
         assert_eq!(skipped["box"], "alpha", "{skipped}");
-        assert!(
-            skipped["reason"]
-                .as_str()
-                .is_some_and(|r| r.contains("box alpha")),
-            "{skipped}"
-        );
+        assert_eq!(skipped["winner"], "alpha", "{skipped}");
+        assert_eq!(skipped["cause"], "box_earlier", "{skipped}");
+        assert_eq!(skipped["can_use"], true, "{skipped}");
+        assert_eq!(skipped["reason"], "alpha's boxapp@0 is in use", "{skipped}");
         let held =
             format!("port {alpha_echo} is not mirrored because box alpha (boxapp@0:echo) uses it");
         let found = eventually(SOON, || async {
@@ -199,7 +200,8 @@ async fn two_boxes_with_one_project() {
             );
         }
 
-        // Alpha drops the hostname from its config: beta's lane is mirrored.
+        // Alpha drops the hostname from its config. The same lane on two
+        // boxes still clashes, so beta's lane stays skipped until chosen.
         tokio::fs::write(
             alpha_repo.join("devlanes.yaml"),
             BOX.replace("    hosts: [\"web.${{ lane.domain }}\"]\n", ""),
@@ -211,6 +213,29 @@ async fn two_boxes_with_one_project() {
             .call(Method::Start, json!({"units": ["web"]}), cx(&alpha_repo))
             .await
             .expect("alpha reload");
+        let unrouted = eventually(SOON, || async {
+            let response = http_get(client.proxy_port, "web.boxapp.localhost").await;
+            (!response.is_some_and(|r| r.contains("hello-from-box"))).then_some(())
+        })
+        .await;
+        assert!(unrouted.is_some(), "alpha no longer serves the hostname");
+        let host = client.host_named("beta").await;
+        assert!(
+            host["skipped_lanes"].as_array().is_some_and(|lanes| lanes
+                .iter()
+                .any(|lane| lane["lane"] == "boxapp@0" && lane["cause"] == "box_earlier")),
+            "beta's lane is still skipped: {host}"
+        );
+        assert!(warns(&host, &held), "alpha still mirrors the port");
+        client
+            .h
+            .call(
+                Method::RemoteUse,
+                json!({"lane": "boxapp@0", "host": "beta"}),
+                Context::default(),
+            )
+            .await
+            .expect("remote use");
         let regained = eventually(SOON, || async {
             http_get(client.proxy_port, "web.boxapp.localhost")
                 .await
@@ -219,12 +244,8 @@ async fn two_boxes_with_one_project() {
         .await;
         assert!(
             regained.is_some(),
-            "beta's lane is mirrored once alpha stopped serving the hostname: {}",
+            "beta's lane is mirrored once chosen: {}",
             client.host_named("beta").await
-        );
-        assert!(
-            warns(&client.host_named("beta").await, &held),
-            "alpha still mirrors the port"
         );
 
         // Without alpha, beta's port is mirrored and the ranges overlap no more.
@@ -341,10 +362,9 @@ async fn a_lane_this_machine_and_a_box_both_collide_with_names_this_machine() {
         .await
         .expect("beta's lane is skipped");
         assert!(skipped["box"].is_null(), "{skipped}");
-        assert_eq!(
-            skipped["reason"], "this machine serves its hostnames",
-            "{skipped}"
-        );
+        assert_eq!(skipped["reason"], "mixl@0 runs on this machine", "{skipped}");
+        assert_eq!(skipped["cause"], "local_running", "{skipped}");
+        assert_eq!(skipped["can_use"], false, "{skipped}");
         assert_eq!(
             skipped["hosts"],
             json!(["local.mix.localhost", "shared.mix.localhost"]),
@@ -445,7 +465,7 @@ async fn local_wildcards_and_names_win_over_overlapping_box_names() {
                 .find(|entry| entry["lane"] == lane)
                 .unwrap_or_else(|| panic!("{lane} skipped: {skipped:?}"));
             assert_eq!(entry["hosts"], json!([name]), "{entry}");
-            assert_eq!(entry["reason"], "this machine serves its hostnames");
+            assert_eq!(entry["reason"], "wildlocal@0 runs on this machine");
         }
         let routed = eventually(SOON, || async {
             http_get(client.proxy_port, "web.apart.localhost")
@@ -524,7 +544,7 @@ async fn tls_get(tls: &tokio_rustls::TlsConnector, port: u16, host: &str) -> Opt
 }
 
 /// Disconnects the box `name` from `client`.
-async fn disconnect(client: &ClientSide, name: &str) {
+pub(super) async fn disconnect(client: &ClientSide, name: &str) {
     client
         .h
         .call(

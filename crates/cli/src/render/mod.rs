@@ -206,6 +206,7 @@ pub(crate) fn result(method: Method, data: &Value, cx: &Ctx<'_>) -> Vec<String> 
         Method::DaemonShutdown => other::daemon_shutdown(data),
         Method::DaemonResetState => other::reset_state(data),
         Method::HostList => other::host_list(data),
+        Method::RemoteUse => other::remote_use(data, cx),
         Method::RemotePair => other::daemon_pair(data, cx),
         Method::RemoteClients => other::daemon_clients(data, cx),
         Method::RemoteRevoke => other::daemon_revoke(data, cx),
@@ -240,6 +241,10 @@ pub(crate) fn event(method: Method, event: &Event, cx: &Ctx<'_>) -> Vec<String> 
             } else {
                 cx.warning(&format!("{lane}: {line}"))
             }]
+        }
+        // A switch someone asked for is news, not a problem.
+        devlanes_proto::remote::WARNING_EVENT if text(&event.data, "code") == "lane_switched" => {
+            vec![words::remote_warning("lane_switched", &event.data)]
         }
         devlanes_proto::remote::WARNING_EVENT => vec![cx.warning(&words::remote_warning(
             &text(&event.data, "code"),

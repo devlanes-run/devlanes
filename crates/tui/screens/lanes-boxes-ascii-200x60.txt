@@ -1,0 +1,122 @@
+ devlanes  1 acme x   2 billing !   3 shop *                                                                                                                                     Monitor  Daemon  Boxes
+ lanes  1 (@0 main)  2 @0 fork-a *  3 (@0 fork-b)  4 @1 feat/gift-cards -                                                                                                       1-9 or [ ] switch lanes
++ @0 fork-a · 2/2 up --------------------------++ shop@0  running · 2 up ------------------------------------------------------------------------------------------------------------------- on fork-a +
+| v services                                 2 || box       fork-a · ssh · devlanes 1.0.0                                                                                                              |
+|   * storefront                               || domain    shop.localhost                                                                                                                             |
+|   * checkout-api                             || services  2 of 2 up                                                                                                                                  |
+|                                              || ports     2 of 2 mirrored here                                                                                                                       |
+|                                              || urls      https://storefront.shop.localhost:8443                                                                                                     |
+|                                              ||           https://checkout.shop.localhost:8443                                                                                                       |
+|                                              ||                                                                                                                                                      |
+|                                              || Read-only here. On fork-a: ssh fork-a, then devlanes status shop@0                                                                                   |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
+|                                              ||                                                                                                                                                      |
++----------------------------------------------++------------------------------------------------------------------------------------------------------------------------------------------------------+
+ o open in browser   [ ] switch lane   / filter   B boxes   read-only: manage it on fork-a (ssh fork-a)                                                                           ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-8 bold, 11-12 dim, 22-23 dim, 35-44 bold reversed, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
+1: 0-6 dim, 8-18 dim, 20-34 bold reversed, 36-48 dim, 51-70 dim, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
+2: 0 dim, 1-20 bold reversed, 21-49 dim, 50-55 bold dim, 56-199 dim
+3: 0 dim, 2-3 dim, 45 dim, 47-48 dim, 50-59 dim, 199 dim
+4: 0 dim, 47-48 dim, 50-59 dim, 199 dim
+5: 0 dim, 47-48 dim, 50-59 dim, 199 dim
+6: 0 dim, 47-48 dim, 50-59 dim, 199 dim
+7: 0 dim, 47-48 dim, 50-59 dim, 199 dim
+8: 0 dim, 47-48 dim, 50-59 dim, 199 dim
+9: 0 dim, 47-48 dim, 199 dim
+10: 0 dim, 47-48 dim, 50-115 dim, 199 dim
+11: 0 dim, 47-48 dim, 199 dim
+12: 0 dim, 47-48 dim, 199 dim
+13: 0 dim, 47-48 dim, 199 dim
+14: 0 dim, 47-48 dim, 199 dim
+15: 0 dim, 47-48 dim, 199 dim
+16: 0 dim, 47-48 dim, 199 dim
+17: 0 dim, 47-48 dim, 199 dim
+18: 0 dim, 47-48 dim, 199 dim
+19: 0 dim, 47-48 dim, 199 dim
+20: 0 dim, 47-48 dim, 199 dim
+21: 0 dim, 47-48 dim, 199 dim
+22: 0 dim, 47-48 dim, 199 dim
+23: 0 dim, 47-48 dim, 199 dim
+24: 0 dim, 47-48 dim, 199 dim
+25: 0 dim, 47-48 dim, 199 dim
+26: 0 dim, 47-48 dim, 199 dim
+27: 0 dim, 47-48 dim, 199 dim
+28: 0 dim, 47-48 dim, 199 dim
+29: 0 dim, 47-48 dim, 199 dim
+30: 0 dim, 47-48 dim, 199 dim
+31: 0 dim, 47-48 dim, 199 dim
+32: 0 dim, 47-48 dim, 199 dim
+33: 0 dim, 47-48 dim, 199 dim
+34: 0 dim, 47-48 dim, 199 dim
+35: 0 dim, 47-48 dim, 199 dim
+36: 0 dim, 47-48 dim, 199 dim
+37: 0 dim, 47-48 dim, 199 dim
+38: 0 dim, 47-48 dim, 199 dim
+39: 0 dim, 47-48 dim, 199 dim
+40: 0 dim, 47-48 dim, 199 dim
+41: 0 dim, 47-48 dim, 199 dim
+42: 0 dim, 47-48 dim, 199 dim
+43: 0 dim, 47-48 dim, 199 dim
+44: 0 dim, 47-48 dim, 199 dim
+45: 0 dim, 47-48 dim, 199 dim
+46: 0 dim, 47-48 dim, 199 dim
+47: 0 dim, 47-48 dim, 199 dim
+48: 0 dim, 47-48 dim, 199 dim
+49: 0 dim, 47-48 dim, 199 dim
+50: 0 dim, 47-48 dim, 199 dim
+51: 0 dim, 47-48 dim, 199 dim
+52: 0 dim, 47-48 dim, 199 dim
+53: 0 dim, 47-48 dim, 199 dim
+54: 0 dim, 47-48 dim, 199 dim
+55: 0 dim, 47-48 dim, 199 dim
+56: 0 dim, 47-48 dim, 199 dim
+57: 0 dim, 47-48 dim, 199 dim
+58: 0-199 dim
+59: 1 bold, 2-20 dim, 21-23 bold, 24-38 dim, 39 bold, 40-49 dim, 50 bold, 51-102 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

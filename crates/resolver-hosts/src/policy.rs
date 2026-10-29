@@ -303,7 +303,7 @@ mod tests {
                     Some(Always),
                     vec![
                         "Web.Workerd.localhost.",
-                        "*.pages-2.workerd.localhost",
+                        "*.pages2.localhost",
                         "api.workerd.test",
                         "web.workerd.localhost",
                         "example.com",
@@ -319,7 +319,7 @@ mod tests {
             desired.skipped,
             [
                 Skipped {
-                    name: "*.pages-2.workerd.localhost".into(),
+                    name: "*.pages2.localhost".into(),
                     reason: SkipReason::Wildcard
                 },
                 Skipped {

@@ -36,7 +36,9 @@ pub use expression::{
     references, resolve_lane_vars,
 };
 pub use extensions::{Extensions, OpaqueExtensions};
-pub use hostname::{check_host_header, normalize_host};
+pub use hostname::{
+    DEFAULT_DOMAIN_SUFFIX, check_host_header, checked_lane_domain, lane_domain, normalize_host,
+};
 pub use loader::{
     ConfigSources, LocalFallback, ProjectLoad, check, check_compose_files, is_local_overlay,
     load_lane_project_with, load_project, load_project_files, load_project_with,

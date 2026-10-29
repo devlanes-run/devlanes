@@ -14,6 +14,11 @@
 //! Client and box exchange [`report`]s of what the client mirrors: the client
 //! sends one after its mirror changed, and the box keeps the latest per client.
 //!
+//! Which lane serves hostnames that several lanes claim, local or on a box, is
+//! one decision for the whole client ([`assign`]), recomputed whenever a
+//! registry, a link, a local lane or a choice (`remote.use`, [`choice`])
+//! changes. The mirrors and the route publisher read it.
+//!
 //! A box that requires pairing serves a client only with the remote token it
 //! gave that client for a one-time code ([`pairing`]). The client keeps the
 //! token per box; without a valid one and nobody to type a code, its link
@@ -26,13 +31,17 @@
 //! the sync entries a tunnel may stream. `remote.pair`, `remote.pairing.*`,
 //! `remote.clients` and `remote.revoke` manage pairings.
 
+mod assign;
+mod choice;
 mod feed;
 mod identity;
+mod listeners;
 mod mirror;
 mod pairing;
 mod report;
 mod sync;
 
+pub(crate) use assign::Assignment;
 pub(crate) use report::{HIDDEN, UnitTarget};
 
 use std::{
@@ -94,8 +103,9 @@ pub(crate) struct Remotes {
     hosts: Mutex<BTreeMap<String, Arc<HostConn>>>,
     /// Serializes connects so a replaced connection is gone before its successor
     /// binds the same ports, and orders `disconnect` against the restore so a
-    /// box disconnected meanwhile is not opened again.
-    connecting: tokio::sync::Mutex<()>,
+    /// box disconnected meanwhile is not opened again. `remote.use` holds it
+    /// while it writes a choice ([`Inner::use_method`]).
+    connecting: Arc<tokio::sync::Mutex<()>>,
     /// Box side: tunnels currently serving a client, for `status`, each with
     /// the serial of the [`ClientGuard`] that listed it.
     clients: Mutex<BTreeMap<ClientKey, (u64, RemoteClient)>>,
@@ -123,6 +133,19 @@ pub(crate) struct Remotes {
     /// Why the restore could not open a wanted box, by name, shown by `remote
     /// ls` until the box connects or is disconnected.
     restore_errors: Mutex<BTreeMap<String, String>>,
+    /// Which box serves a lane several lanes clash on, lane reference to box,
+    /// as `remote_lane_choices` holds it.
+    choices: Arc<Mutex<BTreeMap<String, String>>>,
+    /// Set once `choices` was read from the store.
+    choices_loaded: tokio::sync::OnceCell<()>,
+    /// The latest [`assign::Assignment`] and its version, which goes up with
+    /// every change.
+    assignment: Mutex<(u64, Arc<assign::Assignment>)>,
+    /// Held while the assignment is computed and stored, so one computed
+    /// from older inputs never replaces a newer one.
+    assigning: Mutex<()>,
+    /// Every box port's listener and relay, whichever box they lead to.
+    listeners: listeners::Listeners,
 }
 
 /// How often box HTTPS ports that could not be opened are tried again: nothing
@@ -166,12 +189,77 @@ impl Remotes {
             && !lock(&self.codes).outstanding(std::time::Instant::now())
     }
 
-    /// Mirrored routes of every connected box, in connect order.
-    pub(crate) fn routes(&self) -> Vec<RouteEntry> {
+    /// Mirrored routes of every connected box, in connect order, of the lanes
+    /// `assignment` mirrors. A box that lost a lane may not have dropped its
+    /// routes yet, and the winner's come in only once it built them, so a
+    /// hostname is never routed to two boxes.
+    /// A box's routes kept ready for its skipped lanes count too: in a switch,
+    /// the lane's routes move to the new box in this one publish.
+    pub(crate) fn routes(&self, assignment: &assign::Assignment) -> Vec<RouteEntry> {
         self.all()
             .iter()
-            .flat_map(|conn| lock(&conn.view).routes.clone())
+            .flat_map(|conn| {
+                let view = lock(&conn.view);
+                view.routes
+                    .iter()
+                    .chain(&view.standby)
+                    .filter(|route| assignment.mirrors(&conn.name, &route.lane))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .collect()
+    }
+
+    /// The live connection of `owner`'s box as a listener target.
+    fn target(&self, owner: &assign::PortOwner) -> Option<listeners::Owner> {
+        let conn = lock(&self.hosts)
+            .get(&owner.host)
+            .filter(|conn| !conn.ended())
+            .cloned()?;
+        Some(listeners::Owner::new(
+            &conn,
+            owner.lane.clone(),
+            owner.unit.clone(),
+        ))
+    }
+
+    /// Serves `listener` for box port `port`, leading where the current
+    /// assignment says. Under the assignment lock, so it never points the
+    /// port at a box an assignment computed meanwhile took it from.
+    fn listen(
+        &self,
+        port: u16,
+        address: std::net::IpAddr,
+        listener: tokio::net::TcpListener,
+        engine: std::sync::Weak<Inner>,
+    ) {
+        let _assigning = lock(&self.assigning);
+        let owner = lock(&self.assignment)
+            .1
+            .listeners
+            .get(&port)
+            .and_then(|owner| self.target(owner));
+        self.listeners
+            .listen(port, address, listener, owner, engine);
+    }
+
+    /// The local port of the relay for box port `port` of lane `lane`, used
+    /// by the box with connect serial `serial`, leading where the current
+    /// assignment says.
+    fn relay(
+        &self,
+        lane: &str,
+        port: u16,
+        serial: u64,
+        engine: std::sync::Weak<Inner>,
+    ) -> std::io::Result<u16> {
+        let _assigning = lock(&self.assigning);
+        let owner = lock(&self.assignment)
+            .1
+            .relays
+            .get(&(lane.to_owned(), port))
+            .and_then(|owner| self.target(owner));
+        self.listeners.relay(lane, port, serial, owner, engine)
     }
 
     /// Ports of every live box's non-hidden units, idle ones included, which new
@@ -402,6 +490,8 @@ pub(crate) struct HostConn {
     /// Set once [`watch_link`] wrote a connection of this link to
     /// `remote_hosts`, which makes the box wanted.
     recorded: watch::Sender<bool>,
+    /// The assignment version the mirror last reconciled with.
+    applied: watch::Sender<u64>,
     /// When the live session started (Unix ms); `None` while not connected.
     connected_since: Mutex<Option<u64>>,
     /// Woken when the registry, the mirror view or a sync changed;
@@ -1102,6 +1192,7 @@ impl Inner {
         code: Option<String>,
     ) -> Result<(Arc<HostConn>, Option<WatchGuard>), RpcError> {
         let identity = self.client_identity().await?;
+        self.load_choices().await;
         let _connecting = self.remote.connecting.lock().await;
         self.replace_host(host, identity, watcher, connected_before, None, code)
             .await
@@ -1235,6 +1326,7 @@ impl Inner {
             label: Mutex::new(String::new()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
+            applied: watch::Sender::new(0),
             connected_since: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             announce_task: Mutex::new(None),
@@ -1302,11 +1394,13 @@ impl Inner {
             if let Err(error) = self.store.set_remote_host_wanted(name.clone(), false).await {
                 tracing::warn!(%error, host = %name, "a restarted daemon may connect this box again");
             }
+            self.forget_choices_of(name).await;
         }
         drop(connecting);
         let names: Vec<String> = names.into_iter().collect();
         self.refresh_range_overlaps();
         self.reconcile_box_ports().await;
+        self.reassign();
         self.publish_routes();
         Ok(json!({"disconnected": names}))
     }
@@ -1314,12 +1408,23 @@ impl Inner {
     /// `remote ls`: boxes known from `remote_hosts` plus live connection state,
     /// with each live box's registry and mirror view ([`HostConn::list_json`]).
     /// A wanted box the restore could not open is `failed` with its error.
+    /// Every box lists its `chosen_lanes`, and `yielded_local_lanes` names this
+    /// machine's stopped lanes whose hostnames a chosen box lane serves.
     pub(crate) async fn host_list(self: &Arc<Self>) -> Result<Value, RpcError> {
+        self.load_choices().await;
         let https_port = self.integ.routes.https_port();
         let suffixes = mirror::route_suffixes(self);
         let open_ports = self.remote.box_ports.lock().await.open.clone();
         let stored = self.store.remote_hosts().await.unwrap_or_default();
         let restore_errors = lock(&self.remote.restore_errors).clone();
+        let choices = lock(&self.remote.choices).clone();
+        let chosen = |host: &str| -> Vec<&String> {
+            choices
+                .iter()
+                .filter(|(_, chosen)| *chosen == host)
+                .map(|(lane, _)| lane)
+                .collect()
+        };
         let mut items: BTreeMap<String, Value> = BTreeMap::new();
         for host in stored {
             let mut item = json!({
@@ -1350,8 +1455,19 @@ impl Inner {
             }
             items.insert(conn.name.clone(), status);
         }
+        for (name, item) in &mut items {
+            item["chosen_lanes"] = json!(chosen(name));
+        }
+        let yielded: Vec<Value> = self
+            .remote
+            .assignment()
+            .yielded
+            .iter()
+            .map(|(lane, winner)| json!({"lane": lane, "winner": winner}))
+            .collect();
         Ok(json!({
             "items": items.into_values().collect::<Vec<_>>(),
+            "yielded_local_lanes": yielded,
             "truncated": false,
             "next_cursor": null,
         }))
@@ -1474,28 +1590,32 @@ impl Inner {
         }))
     }
 
-    /// Makes sure no box mirror holds one of `ports` before a local service binds
-    /// them. A mirror gives up ports inside a local block (local lanes win), so
-    /// this wakes the mirrors and waits up to [`RELEASE_WAIT`]; a port still held
-    /// then, such as a literal `PORT` the box also uses, fails with `port_mirrored`.
+    /// Makes sure no box listener holds one of `ports` before a local service
+    /// binds them. The lane counts as running from the start of its start, so
+    /// it took its hostnames back from every box lane it clashes with already
+    /// ([`Inner::reassign`]). A mirror gives up ports inside a local block, so
+    /// this wakes the mirrors and waits up to [`RELEASE_WAIT`], the only wait
+    /// for listeners there is. A port still held then, such as a literal
+    /// `PORT` the box also uses, fails with `port_mirrored`.
     pub(crate) async fn release_for_local(&self, ports: &BTreeSet<u16>) -> Result<(), RpcError> {
+        self.load_choices().await;
+        self.reassign();
         let deadline = tokio::time::Instant::now() + RELEASE_WAIT;
+        let mut woken = false;
         loop {
-            let held = self.remote.all().into_iter().find_map(|conn| {
-                let found = lock(&conn.view)
-                    .bound
-                    .iter()
-                    .find(|(port, _)| ports.contains(*port))
-                    .map(|(port, unit)| (*port, unit.clone()));
-                found.map(|(port, unit)| (conn, port, unit))
-            });
-            let Some((conn, port, unit)) = held else {
+            let Some((port, owner)) = self.remote.listeners.holder(ports) else {
                 return Ok(());
             };
             if tokio::time::Instant::now() >= deadline {
-                return Err(port_mirrored(&conn.name, port, &unit));
+                let (host, unit) = owner.unwrap_or_default();
+                return Err(port_mirrored(&host, port, &unit));
             }
-            conn.wake.notify_one();
+            if !woken {
+                woken = true;
+                for conn in self.remote.all() {
+                    conn.wake.notify_one();
+                }
+            }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
@@ -1519,6 +1639,8 @@ impl Inner {
     /// [`Inner::restore_remotes`]'s work. Stops opening boxes once a shutdown
     /// began, which waits for this before it closes the boxes opened so far.
     async fn restore_wanted(self: &Arc<Self>) {
+        // Before any box connects, so the first assignment has the choices.
+        self.load_choices().await;
         // Name order, so the restore order does not depend on the store.
         let wanted: BTreeMap<String, String> = match self.store.remote_hosts().await {
             Ok(hosts) => hosts
@@ -1803,8 +1925,9 @@ fn retry_box_ports(engine: std::sync::Weak<Inner>) -> futures_util::future::BoxF
 
 /// The `ports_range_overlap` finding for `conn` among the `live` boxes, as
 /// message and event fields: its box's `ports.range` overlaps another box's.
-/// Lanes allocated on both can then get the same ports, and only one box's
-/// can be mirrored.
+/// Forks of one image always share theirs, and a lane both run is mirrored
+/// from one box at a time anyway. Different lanes allocated on both can get
+/// the same ports, and only one box's can be mirrored.
 fn range_overlap(conn: &HostConn, live: &[Arc<HostConn>]) -> Option<(String, Value)> {
     let range = lock(&conn.info).ports_range.clone()?;
     let theirs = parse_range(&range)?;
@@ -1824,7 +1947,8 @@ fn range_overlap(conn: &HostConn, live: &[Arc<HostConn>]) -> Option<(String, Val
         return None;
     }
     let message = format!(
-        "the box's ports.range {range} overlaps {}, so their lanes can get the same ports. Give one box a different ports.range",
+        "box {}'s ports.range {range} overlaps {}. Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before such lanes get their ports.",
+        conn.name,
         overlaps.join(" and ")
     );
     Some((message, json!({"range": range, "overlaps": overlaps})))
@@ -2266,8 +2390,18 @@ mod tests {
 
     /// A connection to `box` whose link state is whatever the test sends.
     fn conn_with(state: watch::Receiver<LinkState>) -> Arc<HostConn> {
+        conn_named("box", 0, state)
+    }
+
+    /// A connection to box `name`, connected `serial`th, whose link state is
+    /// whatever the test sends.
+    pub(super) fn conn_named(
+        name: &str,
+        serial: u64,
+        state: watch::Receiver<LinkState>,
+    ) -> Arc<HostConn> {
         Arc::new(HostConn {
-            name: "box".into(),
+            name: name.into(),
             kind: "memory",
             state,
             registry: ClientRegistry::default(),
@@ -2281,11 +2415,12 @@ mod tests {
             syncs: Mutex::new(BTreeMap::new()),
             hashes: Mutex::new(HashMap::new()),
             warnings: Mutex::new(BTreeMap::new()),
-            serial: 0,
+            serial,
             info: Mutex::new(BoxInfo::default()),
             label: Mutex::new(String::new()),
             proxy_port: Mutex::new(None),
             recorded: watch::Sender::new(false),
+            applied: watch::Sender::new(0),
             connected_since: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             announce_task: Mutex::new(None),

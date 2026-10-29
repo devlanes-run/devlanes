@@ -298,9 +298,39 @@ pub struct InfraContainer {
     pub docker: String,
     /// Shared project infra rather than the lane's own container.
     pub shared: bool,
+    /// The Compose project the container belongs to, as `docker compose -p`
+    /// takes it, or `None` for a plain `infra.containers` container.
+    pub compose_project: Option<String>,
+    /// Whether it publishes a host port. Only such a container can hold a
+    /// port a box lane needs here.
+    pub publishes: bool,
     /// `ContainerSummary.state` as the provider last saw it; container events
     /// keep it current. `None` when the provider cannot tell.
     pub state: Option<String>,
+}
+
+impl InfraContainer {
+    /// Whether it holds a host port of its lane's block: the lane's own
+    /// container, publishing a port, in a state that binds it. A state
+    /// nobody reported counts as down, since a plain container listed from
+    /// its spec may never have run. `oom` counts as up, since running out of
+    /// memory doesn't stop it.
+    pub fn holds_port(&self) -> bool {
+        !self.shared
+            && self.publishes
+            && matches!(
+                self.state.as_deref(),
+                Some(
+                    "running"
+                        | "starting"
+                        | "healthy"
+                        | "unhealthy"
+                        | "restarting"
+                        | "paused"
+                        | "oom"
+                )
+            )
+    }
 }
 
 /// What [`InfraProvider::container_logs`] asks the engine for.
@@ -370,6 +400,11 @@ pub trait InfraProvider: Send + Sync {
     /// the containers' state from Docker; a lane that stored the result of
     /// [`InfraProvider::up`] for its run needs no call.
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError>;
+    /// Fills in the state of `containers` that [`InfraProvider::namespace`]
+    /// could not tell, such as plain containers it lists from their spec.
+    /// Only callers that keep the containers ask, since it may cost a Docker
+    /// call. A state it can't learn stays `None`.
+    async fn container_states(&self, _spec: &InfraSpec, _containers: &mut [InfraContainer]) {}
     /// Health and endpoints of a project's infra.
     async fn status(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
     /// Stops the project's shared containers, keeping their data (`infra down`).
@@ -525,6 +560,11 @@ pub struct RouteEntry {
     /// names it; otherwise the proxy tries `127.0.0.1`, then `::1`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address: Option<std::net::IpAddr>,
+    /// For a box route, the box that serves it now. The proxy keeps idle
+    /// upstream connections per box, so after a switch no request reuses a
+    /// connection that leads to the box the lane left.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_box: Option<String>,
 }
 
 /// Receives complete routing snapshots.

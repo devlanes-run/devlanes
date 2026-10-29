@@ -806,6 +806,12 @@ impl Executor {
                     deliver(&sender, Msg::Paired(api.pair().await)).await;
                 });
             }
+            Effect::UseLane { lane, host } => {
+                tokio::spawn(async move {
+                    let result = api.use_lane(lane.clone(), host.clone()).await;
+                    deliver(&sender, Msg::LaneUsed { lane, host, result }).await;
+                });
+            }
             Effect::FetchLogs {
                 generation,
                 lane,

@@ -445,13 +445,13 @@ async fn status_pages_loop_detection_and_redirect() -> Result {
 #[tokio::test]
 async fn unknown_host_suggests_routes() -> Result {
     tokio::time::timeout(Duration::from_secs(10), async {
-        let mut route = Route::new("app.acme-1.localhost", Upstream::Local(1));
+        let mut route = Route::new("app.acme1.localhost", Upstream::Local(1));
         route.owner = Some("acme@1".into());
         let proxy = Proxy::new(ProxyConfig::default(), RouteTable::new(vec![route])?);
         let running = run_proxy(proxy, None).await?;
         let response = request(
             TcpStream::connect(running.address).await?,
-            "app.acme-2.localhost",
+            "app.acme2.localhost",
             "/",
             &[],
         )
@@ -459,8 +459,8 @@ async fn unknown_host_suggests_routes() -> Result {
         assert_eq!(response.status(), 404);
         assert_eq!(response.headers()["x-devlanes-error"], "unknown-host");
         let markdown = text(response).await?;
-        assert!(markdown.contains("Did you mean `app.acme-1.localhost` (acme@1)?"));
-        assert!(markdown.contains("- `app.acme-1.localhost` (acme@1)"));
+        assert!(markdown.contains("Did you mean `app.acme1.localhost` (acme@1)?"));
+        assert!(markdown.contains("- `app.acme1.localhost` (acme@1)"));
         let response = request(
             TcpStream::connect(running.address).await?,
             "localhost",
@@ -478,7 +478,7 @@ async fn unknown_host_suggests_routes() -> Result {
         )
         .await?;
         assert_eq!(response.status(), 404);
-        assert!(!text(response).await?.contains("app.acme-1.localhost"));
+        assert!(!text(response).await?.contains("app.acme1.localhost"));
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await?
@@ -1190,6 +1190,42 @@ async fn upstream_connections_are_pooled_per_target() -> Result {
         }
         assert_eq!(a_connections.load(Ordering::SeqCst), 1);
         assert_eq!(b_connections.load(Ordering::SeqCst), 1);
+        Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+    })
+    .await?
+}
+
+/// A pooled connection serves only routes with its pool key: when the route
+/// to the same target names another key, as a box route does after a switch,
+/// the next request dials a new connection.
+#[tokio::test]
+async fn pooled_connections_stay_with_their_pool_key() -> Result {
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let (a, connections) = keepalive_fixture("a").await?;
+        let keyed = |key: &str| {
+            let mut route = Route::new("web.lane.localhost", a.address);
+            route.pool_key = Some(key.to_owned());
+            RouteTable::new(vec![route])
+        };
+        let proxy = Proxy::new(ProxyConfig::default(), keyed("fork-a")?);
+        let running = run_proxy(proxy.clone(), None).await?;
+        let get = || async {
+            let response = request(
+                TcpStream::connect(running.address).await?,
+                "web.lane.localhost",
+                "/",
+                &[],
+            )
+            .await?;
+            let body = text(response).await?;
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(body)
+        };
+        assert_eq!(get().await?, "a 1");
+        assert_eq!(get().await?, "a 1", "the same key reuses the connection");
+        proxy.replace_routes(keyed("fork-b")?);
+        assert_eq!(get().await?, "a 2", "another key dials anew");
+        assert_eq!(connections.load(Ordering::SeqCst), 2);
         Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
     })
     .await?

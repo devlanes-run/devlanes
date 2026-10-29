@@ -447,7 +447,7 @@ mod tests {
     fn suggests_close_hosts() {
         let known = [
             KnownHost {
-                host: "acme-1.localhost",
+                host: "acme1.localhost",
                 owner: Some("acme@1"),
             },
             KnownHost {
@@ -456,7 +456,7 @@ mod tests {
             },
         ];
         let hit = |host| closest(host, &known).map(|known| known.host);
-        assert_eq!(hit("acme-3.localhost"), Some("acme-1.localhost"));
+        assert_eq!(hit("acme3.localhost"), Some("acme1.localhost"));
         assert_eq!(hit("shpo.localhost"), Some("*.shop.localhost"));
         assert_eq!(hit("unrelated.example.invalid"), None);
     }

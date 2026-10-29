@@ -1044,6 +1044,22 @@ fn lane_lines(app: &App, lane: &LaneSummary, width: usize) -> Vec<Line<'static>>
         .reason
         .as_ref()
         .is_some_and(|r| r.code == "worktree_missing");
+    // A stopped lane whose hostnames a chosen box lane took.
+    if let Some((note, commands)) = app
+        .grey(&lane.reference)
+        .as_ref()
+        .and_then(super::boxes::grey_note)
+    {
+        lines.extend(banner(
+            theme,
+            Glyph::Attention,
+            Tone::Attention,
+            &note,
+            &commands,
+            width,
+        ));
+        lines.push(Line::from(""));
+    }
     if missing {
         lines.extend(banner(
             theme,
@@ -1482,15 +1498,35 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
         } else {
             " "
         };
-        let name = match lane.index {
-            Some(index) => format!("{} @{index}", lane_name(lane)),
-            None => format!("{} (no lane)", lane_name(lane)),
+        // A box lane has no branch here, so its box names it.
+        let name = match (app.lane_box(&lane.reference), lane.index) {
+            (Some(boxed), Some(index)) => format!("@{index} on {}", clean(&boxed.host)),
+            (None, Some(index)) => format!("{} @{index}", lane_name(lane)),
+            (_, None) => format!("{} (no lane)", lane_name(lane)),
         };
         let mut spans = vec![
             Span::styled(format!("{marker} "), theme.focus()),
             Span::raw(format!("{:<24} ", clip(&name, 24))),
         ];
         let mut summary = lane_summary(app, lane);
+        // Lanes that share hostnames look alike in this table. Only the
+        // mark tells which one a browser reaches.
+        let mark = match app.grey(&lane.reference) {
+            Some(grey) if grey.host.is_none() => Some(("not in use", theme.quiet())),
+            Some(_) => Some(("not mirrored", theme.quiet())),
+            None if app.in_use(&lane.reference) => Some(("in use", Style::new())),
+            None => None,
+        };
+        if let Some((mark, style)) = mark {
+            let mut marked = vec![Span::styled(mark, style)];
+            // The lane's state comes second and goes first where it would be cut.
+            let room = width.saturating_sub(super::spans_width(&spans));
+            if !summary.is_empty() && text::width(mark) + 3 + super::spans_width(&summary) <= room {
+                marked.push(Span::styled(" · ", theme.quiet()));
+                marked.extend(summary);
+            }
+            summary = marked;
+        }
         if lane.index.is_none() {
             summary = vec![Span::styled(
                 "devlanes start in its folder gives it one",

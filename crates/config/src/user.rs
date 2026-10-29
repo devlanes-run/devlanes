@@ -27,7 +27,7 @@ pub struct UserConfig {
     #[serde(skip)]
     #[schemars(skip)]
     warnings: Vec<crate::ConfigWarning>,
-    /// How lane hostnames such as `api.acme-2.localhost` resolve to this machine: the
+    /// How lane hostnames such as `api.acme2.localhost` resolve to this machine: the
     /// strategy (`resolver`), its `tld`, and whether names also go into `/etc/hosts`
     /// (`hosts_file`). The defaults need no setup for browsers that resolve `*.localhost`.
     pub hostnames: HostnamesConfig,
@@ -718,7 +718,7 @@ pub struct HostnamesConfig {
 /// Strategy that makes lane hostnames resolve to this machine.
 #[schemars(extend("examples" = ["localhost","hosts_file","resolver","public"]))]
 pub enum Resolver {
-    /// Lane domains end in `.localhost` (`acme.localhost`, `acme-2.localhost`), which
+    /// Lane domains end in `.localhost` (`acme.localhost`, `acme2.localhost`), which
     /// browsers and many system resolvers send to loopback by themselves. `hosts_file`
     /// covers programs that do not.
     #[default]
@@ -730,11 +730,12 @@ pub enum Resolver {
     /// `devlanes certs trust --hosts`.
     #[schemars(extend("examples" = ["hosts_file"]))]
     HostsFile,
-    /// Lane domains become `<project>.<tld>` and `<project>-<N>.<tld>`, answered by a DNS
-    /// server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for
-    /// programs that use the system resolver. Needs `tld` and a one-time
-    /// `devlanes certs trust --resolver`; projects that set `lanes.vars.domain` or
-    /// `lanes.matrix` keep their own domains.
+    /// Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the
+    /// names `domain()` returns. They are answered by a DNS server the daemon runs on
+    /// `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the
+    /// system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`.
+    /// Projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains,
+    /// and `domain()` gives them `.localhost` names.
     #[schemars(extend("examples" = ["resolver"]))]
     Resolver,
     /// Reserved for public DNS names with DNS-01 certificates; not supported yet, so the

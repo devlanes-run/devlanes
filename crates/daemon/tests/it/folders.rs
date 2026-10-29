@@ -87,7 +87,7 @@ async fn a_folder_can_hold_several_lanes() {
             .expect("lane new");
         assert_eq!(created["name"], "review");
         assert_eq!(created["lane"]["reference"], "demo@1", "{created}");
-        assert_eq!(created["lane"]["domain"], "demo-1.localhost");
+        assert_eq!(created["lane"]["domain"], "demo1.localhost");
         // Clients label it by its name: its branch is the folder's first lane's.
         assert_eq!(created["lane"]["name"], "review");
 

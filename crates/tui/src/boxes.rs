@@ -2,9 +2,11 @@
 //! lanes in the shape the project list draws. Box lanes are read-only here:
 //! the box runs them, this machine only mirrors their ports and hostnames.
 //!
-//! A box lane gets the project `<project> @<box>` and the reference
-//! `<lane> @<box>` (`acme@1 @hetzner`), so it never collides with a local lane
-//! of the same project. Units keep their box names.
+//! A box lane keeps its project, so it joins the tab of this machine's lane
+//! of the same project, and gets the reference `<lane> @<box>`
+//! (`acme@1 @hetzner`), so it never collides with a local lane. [`BoxLane`]
+//! names its box, and nothing reads the box back out of the reference. Units
+//! keep their box names.
 
 use std::collections::BTreeMap;
 
@@ -42,6 +44,8 @@ pub struct BoxHost {
     /// Name suffixes box hostnames must end in to be routed here.
     pub suffixes: Vec<String>,
     pub proxy: Option<ProxyInfo>,
+    /// Lanes chosen for this box with `remote.use` (`acme@0`), mirrored or not.
+    pub chosen_lanes: Vec<String>,
 }
 
 /// A box port the mirror tracks: a serving unit's port, bound here or not.
@@ -103,6 +107,106 @@ pub struct SkippedLane {
     #[serde(rename = "box")]
     pub other: Option<String>,
     pub reason: String,
+    /// What wins over it: `local_running`, `local_stopped`, `box_chosen` or
+    /// `box_earlier`. Absent from daemons without `remote.use`.
+    pub cause: Option<String>,
+    /// The box whose lane serves the hostnames. `None` when this machine's
+    /// lane does.
+    pub winner: Option<String>,
+    /// The reference of the lane in use, on `winner` or here. It differs from
+    /// `lane` when another project's lane clashes on a hostname.
+    pub winner_lane: Option<String>,
+    /// `remote.use` can make it the one in use: false while this machine's
+    /// lane runs, and from daemons without `remote.use`.
+    pub can_use: bool,
+    /// What keeps this machine's lane running for `local_running`:
+    /// `processes`, which a stop ends, or only `containers`. The daemon
+    /// sends it with every `local_running` entry.
+    pub holds: Option<String>,
+    /// The Compose project of that lane's own containers, when they count.
+    pub compose_project: Option<String>,
+    /// That lane's own plain containers that count, by Docker name.
+    pub containers: Vec<String>,
+}
+
+/// The commands that stop a local lane's own containers, one each:
+/// `docker compose -p acme-lane0 stop` for its Compose project and
+/// `docker stop <names>` for plain containers. Empty when neither is known.
+pub fn containers_commands(compose_project: Option<&str>, containers: &[String]) -> Vec<String> {
+    let mut commands = Vec::new();
+    if let Some(project) = compose_project.filter(|p| !p.is_empty()) {
+        commands.push(format!(
+            "docker compose -p {} stop",
+            crate::text::clean(project)
+        ));
+    }
+    if !containers.is_empty() {
+        let names: Vec<String> = containers.iter().map(|c| crate::text::clean(c)).collect();
+        commands.push(format!("docker stop {}", names.join(" ")));
+    }
+    commands
+}
+
+/// `acme@0's containers run on this machine. Stop them with docker compose
+/// -p acme-lane0 stop. Then press m.`, in the daemon's sentence shape, and
+/// `Stop them, then press m.` when it names no command. In the TUI `m`
+/// switches once they stopped, where the CLI's words end in
+/// `devlanes remote use`.
+pub fn containers_run(lane: &str, commands: &[String]) -> String {
+    let lane = crate::text::clean(lane);
+    if commands.is_empty() {
+        format!("{lane}'s containers run on this machine. Stop them, then press m.")
+    } else {
+        format!(
+            "{lane}'s containers run on this machine. Stop them with {}. Then press m.",
+            commands.join(" and ")
+        )
+    }
+}
+
+impl SkippedLane {
+    /// [`containers_commands`] for the local lane that keeps this one out.
+    pub fn containers_commands(&self) -> Vec<String> {
+        containers_commands(self.compose_project.as_deref(), &self.containers)
+    }
+
+    /// The lane in use instead: `winner_lane`, else this lane's own
+    /// reference, which the clashing lane shares unless another project's
+    /// lane clashes.
+    pub fn serving(&self) -> &str {
+        self.winner_lane.as_deref().unwrap_or(&self.lane)
+    }
+
+    /// The box that serves its hostnames instead, `None` for this machine:
+    /// `winner`, or `box` from daemons that send no `cause`.
+    pub fn served_by(&self) -> Option<&str> {
+        if self.cause.is_some() {
+            self.winner.as_deref()
+        } else {
+            self.other.as_deref()
+        }
+    }
+}
+
+/// One of this machine's stopped lanes whose hostnames a chosen box lane
+/// took: `{lane, winner}` of `host.list`'s `yielded_local_lanes`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(default)]
+pub struct YieldedLane {
+    pub lane: String,
+    /// The box that serves the lane's hostnames now.
+    pub winner: String,
+}
+
+/// A box lane as the list draws it, with the box it runs on.
+#[derive(Debug, Clone, Default)]
+pub struct BoxLane {
+    /// The box's name.
+    pub host: String,
+    /// The lane's own reference on the box: `acme@1`.
+    pub lane: String,
+    /// The lane in the list's shape, with the reference `acme@1 @hetzner`.
+    pub summary: LaneSummary,
 }
 
 /// A box hostname outside the names this machine routes.
@@ -235,14 +339,32 @@ pub fn parse(value: &Value) -> Vec<BoxHost> {
         .unwrap_or_default()
 }
 
-/// The project tab of a box project: `acme @hetzner`.
-pub fn project_label(project: &str, host: &str) -> String {
-    format!("{project} @{host}")
+/// `host.list`'s `yielded_local_lanes`, leniently like [`parse`]. Empty
+/// from daemons without `remote.use`.
+pub fn parse_yielded(value: &Value) -> Vec<YieldedLane> {
+    value
+        .get("yielded_local_lanes")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| serde_json::from_value::<YieldedLane>(item.clone()).ok())
+                .filter(|yielded| !yielded.lane.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The reference a box lane goes by in the TUI: `acme@1 @hetzner`.
 pub fn lane_reference(lane: &str, host: &str) -> String {
     format!("{lane} @{host}")
+}
+
+/// The box part of a reference [`lane_reference`] made, for a lane that is
+/// gone and so has no [`BoxLane`] left to ask. Box names may hold `@`
+/// (`user@host`), but the lane part never holds a space.
+pub fn host_of(reference: &str) -> Option<&str> {
+    reference.split_once(" @").map(|(_, host)| host)
 }
 
 impl BoxHost {
@@ -327,8 +449,23 @@ impl BoxHost {
         }
     }
 
+    /// The `ports_range_overlap` warning `warning`, without the
+    /// `box fork-a's ` its block already says. `None` for other warnings.
+    /// `host.list` sends warnings as text without their code, so the text
+    /// is all there is to go by.
+    pub fn range_overlap<'a>(&self, warning: &'a str) -> Option<&'a str> {
+        warning
+            .strip_prefix(&format!("box {}'s ", self.host))
+            .filter(|rest| rest.starts_with("ports.range ") && rest.contains(" overlaps "))
+    }
+
+    /// Whether box lane `lane` (`acme@0`) was chosen for this box.
+    pub fn chosen(&self, lane: &str) -> bool {
+        self.chosen_lanes.iter().any(|chosen| chosen == lane)
+    }
+
     /// The box's lanes as the list draws them, by project and index.
-    pub fn lanes(&self) -> Vec<LaneSummary> {
+    pub fn lanes(&self) -> Vec<BoxLane> {
         let Some(registry) = &self.registry else {
             return Vec::new();
         };
@@ -336,7 +473,11 @@ impl BoxHost {
         lanes.sort_by(|a, b| (&a.key.project, a.index).cmp(&(&b.key.project, b.index)));
         lanes
             .into_iter()
-            .map(|lane| self.lane_summary(registry, lane))
+            .map(|lane| BoxLane {
+                host: self.host.clone(),
+                lane: lane.key.reference(),
+                summary: self.lane_summary(registry, lane),
+            })
             .collect()
     }
 
@@ -404,9 +545,10 @@ impl BoxHost {
         };
         LaneSummary {
             reference,
-            project: project_label(&lane.key.project, &self.host),
+            project: lane.key.project.clone(),
             index: Some(lane.index),
-            // The chips name a box lane by its number; the tab names the project.
+            // The chips name a box lane by its number and box. The tab names
+            // the project.
             name: Some(format!("@{}", lane.index)),
             state: state.into(),
             units,
@@ -461,17 +603,17 @@ mod tests {
              "ports": [{"port": 20101, "lane": "acme@1", "unit": "web", "kind": "service",
                         "state": "bound", "addresses": ["127.0.0.1", "::1"], "conflicts": [],
                         "relay": null, "last_error": null}],
-             "routes": [{"host": "web.acme-1.localhost", "port": 20101, "lane": "acme@1",
-                         "unit": "web", "url": "https://web.acme-1.localhost:8443",
+             "routes": [{"host": "web.acme1.localhost", "port": 20101, "lane": "acme@1",
+                         "unit": "web", "url": "https://web.acme1.localhost:8443",
                          "state": "ready"}],
              "registry": {
                  "lanes": [{"key": {"project": "acme", "lane": "1"}, "index": 1,
-                            "domain": "acme-1.localhost"}],
+                            "domain": "acme1.localhost"}],
                  "units": [
                     {"key": {"lane": {"project": "acme", "lane": "1"}, "kind": "service", "name": "web"},
                      "hidden": false, "state": "ready",
                      "ports": [{"name": "default", "port": 20101}],
-                     "hosts": [{"host": "web.acme-1.localhost", "port": 20101}]},
+                     "hosts": [{"host": "web.acme1.localhost", "port": 20101}]},
                     {"key": {"lane": {"project": "acme", "lane": "1"}, "kind": "task", "name": "migrate"},
                      "hidden": false, "state": "exited", "ports": [], "hosts": []},
                     {"key": {"lane": {"project": "acme", "lane": "1"}, "kind": "container", "name": "db"},
@@ -493,6 +635,50 @@ mod tests {
         assert_eq!(parse(&json!({})), Vec::<BoxHost>::new());
     }
 
+    /// `remote.use`'s fields: the chosen lanes, what wins over a skipped
+    /// lane, and this machine's lanes not in use. Daemons without them
+    /// leave a skipped lane unusable and name the earlier box by `box`.
+    #[test]
+    fn choices_parse_with_what_wins_over_a_skipped_lane() {
+        let listed = json!({
+            "items": [{"host": "fork-b", "state": "connected", "chosen_lanes": ["acme@1"],
+                "skipped_lanes": [
+                    {"lane": "acme@0", "hosts": [], "box": "fork-a", "reason": "r",
+                     "cause": "box_chosen", "winner": "fork-a", "winner_lane": "shop@0",
+                     "can_use": true},
+                    {"lane": "acme@2", "hosts": [], "box": null, "reason": "r",
+                     "cause": "local_running", "winner": null, "can_use": false},
+                    {"lane": "acme@3", "hosts": [], "box": "old", "reason": "r"},
+                ]}],
+            "yielded_local_lanes": [{"lane": "acme@0", "winner": "fork-a"}, {"winner": "x"}],
+        });
+        let host = &parse(&listed)[0];
+        assert!(host.chosen("acme@1") && !host.chosen("acme@0"));
+        let chosen = host
+            .skipped("acme@0")
+            .map(|s| (s.served_by(), s.serving(), s.can_use));
+        assert_eq!(chosen, Some((Some("fork-a"), "shop@0", true)));
+        // Without `winner_lane`, the lane's own reference.
+        assert_eq!(
+            host.skipped("acme@2").map(SkippedLane::serving),
+            Some("acme@2")
+        );
+        let running = host.skipped("acme@2").map(|s| (s.served_by(), s.can_use));
+        assert_eq!(running, Some((None, false)));
+        let older = host.skipped("acme@3").map(|s| (s.served_by(), s.can_use));
+        assert_eq!(older, Some((Some("old"), false)));
+        assert_eq!(
+            parse_yielded(&listed),
+            [YieldedLane {
+                lane: "acme@0".into(),
+                winner: "fork-a".into()
+            }]
+        );
+        assert!(parse_yielded(&json!({"items": []})).is_empty());
+        assert_eq!(host_of("acme@1 @me@gpu"), Some("me@gpu"));
+        assert_eq!(host_of("acme@1"), None);
+    }
+
     /// A box lane is labelled with the box, lists services and tasks as
     /// units and containers as infra, and opens through the routed URL first.
     #[test]
@@ -500,28 +686,30 @@ mod tests {
         let boxes = parse(&listed());
         let lanes = boxes[0].lanes();
         assert_eq!(lanes.len(), 1);
-        let lane = &lanes[0];
+        assert_eq!(
+            (lanes[0].host.as_str(), lanes[0].lane.as_str()),
+            ("hetzner", "acme@1")
+        );
+        let lane = &lanes[0].summary;
         assert_eq!(lane.reference, "acme@1 @hetzner");
-        assert_eq!(lane.project, "acme @hetzner");
+        // The local project's own name, so the lane joins its tab.
+        assert_eq!(lane.project, "acme");
         assert_eq!(lane.name.as_deref(), Some("@1"));
         assert_eq!(lane.state, "running");
         let web = &lane.units[0];
         assert_eq!(
             web.urls,
-            [
-                "https://web.acme-1.localhost:8443",
-                "http://127.0.0.1:20101"
-            ]
+            ["https://web.acme1.localhost:8443", "http://127.0.0.1:20101"]
         );
         assert_eq!(
             web.public_url.as_deref(),
-            Some("https://web.acme-1.localhost:8443")
+            Some("https://web.acme1.localhost:8443")
         );
         assert_eq!(lane.units[1].kind, "task");
         // Held on 127.0.0.1 by something else, the port opens on ::1 only.
         let mut v6 = listed();
         v6["items"][0]["ports"][0]["addresses"] = json!(["::1"]);
-        let urls = &parse(&v6)[0].lanes()[0].units[0].urls;
+        let urls = &parse(&v6)[0].lanes()[0].summary.units[0].urls;
         assert_eq!(urls[1], "http://[::1]:20101");
         assert_eq!(lane.containers[0].name, "db");
         assert_eq!(

@@ -76,6 +76,11 @@ pub struct Route {
     /// A port whose scoped listeners ([`crate::Proxy::scoped`]) also serve this route,
     /// besides the shared ones: a box's own HTTPS port, which its URLs carry.
     pub listen_port: Option<u16>,
+    /// Idle upstream connections are reused only by routes with the same
+    /// key and target. A box route names its box, so when its lane moves to
+    /// another box behind the same local port, no request reuses a
+    /// connection to the old one.
+    pub pool_key: Option<String>,
 }
 
 impl Route {
@@ -95,6 +100,7 @@ impl Route {
             unit: None,
             remote: false,
             listen_port: None,
+            pool_key: None,
         }
     }
 

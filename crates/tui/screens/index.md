@@ -156,7 +156,7 @@ a project whose devlanes.yaml does not load (Shift+2)
 
 ## box-lane
 
-a connected box's project after the local ones (acme @hetzner), its lane selected: read-only, the pane says what to run on the box
+a connected box's lane in the tab of its project (@4 hetzner), selected: read-only, the pane says what to run on the box
 
 - 200x60: [txt](box-lane-200x60.txt) · [png](box-lane-200x60.png) · [ansi](box-lane-200x60.ansi)
 - 120x40: [txt](box-lane-120x40.txt) · [png](box-lane-120x40.png) · [ansi](box-lane-120x40.ansi)
@@ -178,13 +178,77 @@ a box service with a synced folder and a hostname this machine does not route
 - 120x40: [txt](box-unit-sync-120x40.txt) · [png](box-unit-sync-120x40.png) · [ansi](box-unit-sync-120x40.ansi)
 - 80x24: [txt](box-unit-sync-80x24.txt) · [png](box-unit-sync-80x24.png) · [ansi](box-unit-sync-80x24.ansi)
 
-## box-lane-skipped
+## lanes-boxes
 
-a box lane that is not mirrored because a local lane serves its hostnames
+two forks of one box run shop@0, chosen for fork-a: the lanes row goes by number, this machine's lane first, then the boxes by name; fork-b's lane and this machine's stopped one are grey
 
-- 200x60: [txt](box-lane-skipped-200x60.txt) · [png](box-lane-skipped-200x60.png) · [ansi](box-lane-skipped-200x60.ansi)
-- 120x40: [txt](box-lane-skipped-120x40.txt) · [png](box-lane-skipped-120x40.png) · [ansi](box-lane-skipped-120x40.ansi)
-- 80x24: [txt](box-lane-skipped-80x24.txt) · [png](box-lane-skipped-80x24.png) · [ansi](box-lane-skipped-80x24.ansi)
+- 200x60: [txt](lanes-boxes-200x60.txt) · [png](lanes-boxes-200x60.png) · [ansi](lanes-boxes-200x60.ansi)
+- 120x40: [txt](lanes-boxes-120x40.txt) · [png](lanes-boxes-120x40.png) · [ansi](lanes-boxes-120x40.ansi)
+- 80x24: [txt](lanes-boxes-80x24.txt) · [png](lanes-boxes-80x24.png) · [ansi](lanes-boxes-80x24.ansi)
+
+## lanes-boxes-long
+
+three forks with long names that share their start (acme-fork-a, -b, -c): the chips drop the shared start, so narrow screens still tell them apart
+
+- 200x60: [txt](lanes-boxes-long-200x60.txt) · [png](lanes-boxes-long-200x60.png) · [ansi](lanes-boxes-long-200x60.ansi)
+- 120x40: [txt](lanes-boxes-long-120x40.txt) · [png](lanes-boxes-long-120x40.png) · [ansi](lanes-boxes-long-120x40.ansi)
+- 80x24: [txt](lanes-boxes-long-80x24.txt) · [png](lanes-boxes-long-80x24.png) · [ansi](lanes-boxes-long-80x24.ansi)
+
+## lane-box-grey
+
+fork-b's grey shop@0: which lane is in use, and m to use this one
+
+- 200x60: [txt](lane-box-grey-200x60.txt) · [png](lane-box-grey-200x60.png) · [ansi](lane-box-grey-200x60.ansi)
+- 120x40: [txt](lane-box-grey-120x40.txt) · [png](lane-box-grey-120x40.png) · [ansi](lane-box-grey-120x40.ansi)
+- 80x24: [txt](lane-box-grey-80x24.txt) · [png](lane-box-grey-80x24.png) · [ansi](lane-box-grey-80x24.ansi)
+
+## lane-box-local-running
+
+a box lane while this machine runs shop@0: grey, and m offers to stop the local lane and switch
+
+- 200x60: [txt](lane-box-local-running-200x60.txt) · [png](lane-box-local-running-200x60.png) · [ansi](lane-box-local-running-200x60.ansi)
+- 120x40: [txt](lane-box-local-running-120x40.txt) · [png](lane-box-local-running-120x40.png) · [ansi](lane-box-local-running-120x40.ansi)
+- 80x24: [txt](lane-box-local-running-80x24.txt) · [png](lane-box-local-running-80x24.png) · [ansi](lane-box-local-running-80x24.ansi)
+
+## lane-box-containers
+
+a box lane while only shop@0's own containers run on this machine: the pane names the commands that stop them, and m switches after that
+
+- 200x60: [txt](lane-box-containers-200x60.txt) · [png](lane-box-containers-200x60.png) · [ansi](lane-box-containers-200x60.ansi)
+- 120x40: [txt](lane-box-containers-120x40.txt) · [png](lane-box-containers-120x40.png) · [ansi](lane-box-containers-120x40.ansi)
+- 80x24: [txt](lane-box-containers-80x24.txt) · [png](lane-box-containers-80x24.png) · [ansi](lane-box-containers-80x24.ansi)
+
+## dialog-stop-and-switch
+
+m on fork-b's shop@0 while this machine runs shop@0: asks before stopping it, y stops it and switches
+
+- 200x60: [txt](dialog-stop-and-switch-200x60.txt) · [png](dialog-stop-and-switch-200x60.png) · [ansi](dialog-stop-and-switch-200x60.ansi)
+- 120x40: [txt](dialog-stop-and-switch-120x40.txt) · [png](dialog-stop-and-switch-120x40.png) · [ansi](dialog-stop-and-switch-120x40.ansi)
+- 80x24: [txt](dialog-stop-and-switch-80x24.txt) · [png](dialog-stop-and-switch-80x24.png) · [ansi](dialog-stop-and-switch-80x24.ansi)
+
+## dialog-stop-containers
+
+m on fork-b's shop@0 while this machine runs shop@0 with its own containers: the stop leaves them holding the ports, so y only stops, and the dialog names their commands
+
+- 200x60: [txt](dialog-stop-containers-200x60.txt) · [png](dialog-stop-containers-200x60.png) · [ansi](dialog-stop-containers-200x60.ansi)
+- 120x40: [txt](dialog-stop-containers-120x40.txt) · [png](dialog-stop-containers-120x40.png) · [ansi](dialog-stop-containers-120x40.ansi)
+- 80x24: [txt](dialog-stop-containers-80x24.txt) · [png](dialog-stop-containers-80x24.png) · [ansi](dialog-stop-containers-80x24.ansi)
+
+## boxes-forks
+
+the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one selected (j j), with the lane in use and m
+
+- 200x60: [txt](boxes-forks-200x60.txt) · [png](boxes-forks-200x60.png) · [ansi](boxes-forks-200x60.ansi)
+- 120x40: [txt](boxes-forks-120x40.txt) · [png](boxes-forks-120x40.png) · [ansi](boxes-forks-120x40.ansi)
+- 80x24: [txt](boxes-forks-80x24.txt) · [png](boxes-forks-80x24.png) · [ansi](boxes-forks-80x24.ansi)
+
+## lane-local-yielded
+
+this machine's stopped shop@0 after shop@0 was chosen for fork-a: grey, and m gives its hostnames back
+
+- 200x60: [txt](lane-local-yielded-200x60.txt) · [png](lane-local-yielded-200x60.png) · [ansi](lane-local-yielded-200x60.ansi)
+- 120x40: [txt](lane-local-yielded-120x40.txt) · [png](lane-local-yielded-120x40.png) · [ansi](lane-local-yielded-120x40.ansi)
+- 80x24: [txt](lane-local-yielded-80x24.txt) · [png](lane-local-yielded-80x24.png) · [ansi](lane-local-yielded-80x24.ansi)
 
 ## box-reconnecting
 
@@ -481,6 +545,14 @@ ASCII glyphs (ui.glyphs: ascii, or a locale without UTF-8)
 - 200x60: [txt](glyphs-ascii-200x60.txt) · [png](glyphs-ascii-200x60.png) · [ansi](glyphs-ascii-200x60.ansi)
 - 120x40: [txt](glyphs-ascii-120x40.txt) · [png](glyphs-ascii-120x40.png) · [ansi](glyphs-ascii-120x40.ansi)
 - 80x24: [txt](glyphs-ascii-80x24.txt) · [png](glyphs-ascii-80x24.png) · [ansi](glyphs-ascii-80x24.ansi)
+
+## lanes-boxes-ascii
+
+the scene lanes-boxes with ASCII glyphs and NO_COLOR: grey lanes are in parentheses, so they read without color
+
+- 200x60: [txt](lanes-boxes-ascii-200x60.txt) · [png](lanes-boxes-ascii-200x60.png) · [ansi](lanes-boxes-ascii-200x60.ansi)
+- 120x40: [txt](lanes-boxes-ascii-120x40.txt) · [png](lanes-boxes-ascii-120x40.png) · [ansi](lanes-boxes-ascii-120x40.ansi)
+- 80x24: [txt](lanes-boxes-ascii-80x24.txt) · [png](lanes-boxes-ascii-80x24.png) · [ansi](lanes-boxes-ascii-80x24.ansi)
 
 ## monitor
 

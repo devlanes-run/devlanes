@@ -679,16 +679,17 @@ impl LanePhase for InfraPhase {
         let result = match &skip {
             Some(_) => {
                 engine
-                    .integ
-                    .infra
-                    .namespace(&spec)
+                    .infra_namespace_kept(&spec)
                     .instrument(tracing::debug_span!("infra namespace"))
                     .await
             }
             // A hung `up` must not keep a stop waiting for the lane.
             None => tokio::select! {
                 up = engine.with_container_progress(cx, &spec, &mut shown, engine.integ.infra.up(&spec)).instrument(tracing::debug_span!("infra up")) => up,
-                () = cx.cancel.cancelled() => return PhaseResult::Error(start_cancelled(cx)),
+                () = cx.cancel.cancelled() => {
+                    engine.store_after_failed_up(&cx.lane, &spec).await;
+                    return PhaseResult::Error(start_cancelled(cx));
+                }
             },
         };
         match result {
@@ -700,13 +701,16 @@ impl LanePhase for InfraPhase {
                     st.refresh_pending = true;
                 }
                 st.infra_ns = Some(up.namespace);
-                st.infra_containers = up.containers;
+                st.store_containers(up.containers);
                 st.setup_env = up.setup_env;
             }
             Err(error) if skip.is_some() => {
                 tracing::debug!(code = %error.code, "infra namespace unavailable");
             }
-            Err(error) => return PhaseResult::Error(infra_error(error)),
+            Err(error) => {
+                engine.store_after_failed_up(&cx.lane, &spec).await;
+                return PhaseResult::Error(infra_error(error));
+            }
         }
         if skip.is_none() {
             // Setup and services rely on the containers, so their `ready` checks
@@ -1604,6 +1608,80 @@ impl Drop for BringupMark {
     }
 }
 
+/// One start's or `infra up`'s share of the lane's `claiming` count.
+pub(crate) struct ClaimMark {
+    lane: Arc<LaneRt>,
+    engine: std::sync::Weak<Inner>,
+}
+
+impl Drop for ClaimMark {
+    /// Ends this share. The lane's units and containers count from then on.
+    /// Publishes, so a start that failed or left only containers up gives
+    /// box lanes back or reports what holds the ports, whichever way it
+    /// returned.
+    fn drop(&mut self) {
+        {
+            let mut st = self.lane.st();
+            st.claiming = st.claiming.saturating_sub(1);
+        }
+        if let Some(engine) = self.engine.upgrade() {
+            engine.publish_routes();
+        }
+    }
+}
+
+impl Inner {
+    /// Counts `lane` as running for box lanes it clashes with until the mark
+    /// drops, and waits until the mirrors gave those lanes up, so their ports
+    /// are free before infra or a service binds them.
+    pub(crate) async fn claim_ports(self: &Arc<Self>, lane: &Arc<LaneRt>) -> ClaimMark {
+        {
+            let mut st = lane.st();
+            // A claim that joins one under way keeps what that one ran.
+            if st.claiming == 0 {
+                st.claim_ran = false;
+            }
+            st.claiming += 1;
+        }
+        let mark = ClaimMark {
+            lane: lane.clone(),
+            engine: Arc::downgrade(self),
+        };
+        let (version, _) = self.reassign();
+        self.await_applied(version).await;
+        mark
+    }
+
+    /// The lane's infra as [`InfraProvider::namespace`] reports it, with the
+    /// state of every container filled in, for callers that store the
+    /// containers.
+    ///
+    /// [`InfraProvider::namespace`]: crate::integrations::InfraProvider::namespace
+    pub(crate) async fn infra_namespace_kept(
+        &self,
+        spec: &InfraSpec,
+    ) -> Result<crate::integrations::InfraUp, crate::integrations::InfraError> {
+        let mut up = self.integ.infra.namespace(spec).await?;
+        self.integ
+            .infra
+            .container_states(spec, &mut up.containers)
+            .await;
+        Ok(up)
+    }
+
+    /// After an `up` that failed, stores the containers of `lane` that run
+    /// anyway. An `up` can fail partway, and the containers it started
+    /// before then hold ports a box lane would need.
+    pub(crate) async fn store_after_failed_up(&self, lane: &Arc<LaneRt>, spec: &InfraSpec) {
+        match self.infra_namespace_kept(spec).await {
+            Ok(up) => lane.st().store_containers(up.containers),
+            Err(error) => {
+                tracing::debug!(code = %error.code, "infra namespace unavailable after a failed up");
+            }
+        }
+    }
+}
+
 /// One start's share of the lane's `starting` state.
 struct StartingMark {
     lane: Arc<LaneRt>,
@@ -1861,7 +1939,10 @@ impl Inner {
             }
             _ => None,
         };
-        lane.st().units.insert(
+        let mut st = lane.st();
+        let first_run = st.claiming > 0 && !st.claim_ran;
+        st.claim_ran = true;
+        st.units.insert(
             request.name.clone(),
             UnitRec {
                 host: host.clone(),
@@ -1889,6 +1970,12 @@ impl Inner {
                 fingerprint: request.fingerprint.map(Arc::new),
             },
         );
+        drop(st);
+        // Reassigns while the claim still holds the lane, so the choices it
+        // beats are cleared even when the unit exits before the claim ends.
+        if first_run {
+            self.publish_routes();
+        }
         if request.kind == Kind::Service {
             crate::local_sync::start(
                 lane.clone(),
@@ -2781,6 +2868,14 @@ impl Inner {
         .map_err(|error| fail(crate::resolve::resolve_error(&error)))?;
         // Kept only once valid, so a typo does not stick to the lane.
         lane.st().profiles = selection.profiles.clone();
+        // From here the lane counts as running for box lanes that clash with
+        // it, whatever it starts, so it takes their hostnames and ports and a
+        // choice of a box for them is cleared. Not before: a start its checks
+        // refuse takes nothing from a box.
+        let _claim = self
+            .claim_ports(lane)
+            .instrument(tracing::debug_span!("claim ports"))
+            .await;
         let infra_enabled = !matches!(
             selection
                 .profile_options
@@ -4261,10 +4356,10 @@ impl Inner {
     /// Settles a templated profile `infra` by planning the lane against what already
     /// runs. A planning failure keeps infra on; the resolve phase reports it.
     async fn profiles_enable_infra(self: &Arc<Self>, cx: &StartCx, spec: &InfraSpec) -> bool {
-        if let Ok(up) = self.integ.infra.namespace(spec).await {
+        if let Ok(up) = self.infra_namespace_kept(spec).await {
             let mut st = cx.lane.st();
             st.infra_ns = Some(up.namespace);
-            st.infra_containers = up.containers;
+            st.store_containers(up.containers);
             st.setup_env = up.setup_env;
         }
         self.resolve_config(&cx.project, &cx.lane, cx.config.clone(), None)

@@ -553,6 +553,29 @@ pub fn rpc(error: &RpcError) -> Worded {
             Vec::new(),
             Some("devlanes daemon clients".into()),
         ),
+        // `remote.use`: the daemon's message says what is wrong and what to do.
+        "box_unknown" | "lane_not_on_box" | "local_lane_running" | "local_lane_unknown" => {
+            let fallback = match code.as_str() {
+                "box_unknown" => "this machine knows no box by that name",
+                "lane_not_on_box" => "the box does not run that lane",
+                "local_lane_running" => {
+                    "the lane runs on this machine. Stop it first, then switch."
+                }
+                _ => "this machine has no such lane",
+            };
+            let summary = if message.is_empty() {
+                fallback.to_owned()
+            } else if let Some((head, _)) = message.split_once(". Then run devlanes remote use") {
+                // The CLI's next step. Here `m` does it.
+                format!("{head}. Then press m.")
+            } else if let Some((head, _)) = message.split_once(", then run devlanes remote use") {
+                // The same, as daemons before one sentence per command put it.
+                format!("{head}, then press m.")
+            } else {
+                message
+            };
+            (summary, rest, None)
+        }
         "unsupported" | "unsupported_method" => (
             format!(
                 "the daemon is too old for {}; upgrade and restart it",

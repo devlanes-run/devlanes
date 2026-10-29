@@ -40,8 +40,9 @@ async fn lane(h: &crate::Harness, cwd: &std::path::Path) -> LaneSummary {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// With `resolver: resolver` and a TLD, lane domains move under the TLD, the
-/// embedded server answers them over UDP, and an explicit domain still wins.
+/// With `resolver: resolver` and a TLD, lane domains move under the TLD, in
+/// lane 1 too, the embedded server answers them over UDP, and an explicit
+/// domain still wins. Such a project's `domain()` names keep `.localhost`.
 async fn resolver_strategy_serves_lane_hostnames() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -49,10 +50,16 @@ async fn resolver_strategy_serves_lane_hostnames() {
         let custom = repo(
             &tmp.path,
             "c",
-            &CONFIG.replace("project: demo", "project: other").replace(
-                "services:",
-                "lanes:\n  vars:\n    domain: other.localhost\nservices:",
-            ),
+            &CONFIG
+                .replace("project: demo", "project: other")
+                .replace(
+                    "services:",
+                    "lanes:\n  vars:\n    domain: other.localhost\n    pages_domain: \"${{ domain('pages') }}\"\nservices:",
+                )
+                .replace(
+                    "hosts: [\"web.${{ lane.domain }}\"]",
+                    "hosts: [\"web.${{ lane.domain }}\", \"${{ lane.pages_domain }}\"]",
+                ),
         );
         let mut user = UserConfig::default();
         user.hostnames.resolver = Resolver::Resolver;
@@ -74,10 +81,23 @@ async fn resolver_strategy_serves_lane_hostnames() {
             "{:?}",
             web.urls
         );
-        assert_eq!(
-            lane(&h, &custom).await.domain.as_deref(),
-            Some("other.localhost")
+        let other = lane(&h, &custom).await;
+        assert_eq!(other.domain.as_deref(), Some("other.localhost"));
+        let routed = h
+            .call(Method::Hosts, json!({}), cx(&custom))
+            .await
+            .expect("hosts");
+        assert!(
+            routed["items"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|i| i["host"] == "pages.localhost")),
+            "{routed}"
         );
+        let second = h
+            .call(Method::LaneNew, json!({"name": "review"}), cx(&main))
+            .await
+            .expect("lane new");
+        assert_eq!(second["lane"]["domain"], "demo1.test", "{second}");
         let hosts = h
             .call(Method::Hosts, json!({}), cx(&main))
             .await
@@ -127,8 +147,8 @@ async fn resolver_strategy_serves_lane_hostnames() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A TLD outside the special-use names starts no server, never reaches the
-/// lane domain expression, and `doctor` says why.
+/// A TLD outside the special-use names starts no server, leaves lane
+/// domains under `.localhost`, and `doctor` says why.
 async fn public_tld_is_refused() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();

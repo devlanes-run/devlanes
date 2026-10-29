@@ -39,6 +39,9 @@ pub const MIN_HEIGHT: u16 = 8;
 const STARTING_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 /// Notices stay this many one-second ticks; errors stay longer.
 const NOTICE_TICKS: u8 = 6;
+/// Seconds a stop and switch keeps asking for the box lane after the daemon
+/// answered the stop, while it still counts the local lane as running.
+const SWITCH_TICKS: u8 = 30;
 const ERROR_TICKS: u8 = 12;
 /// Errors kept for the error list (`e`).
 const MAX_ERRORS: usize = 50;
@@ -793,6 +796,12 @@ pub enum Msg {
     },
     /// [`Effect::Pair`] is done.
     Paired(Result<Value, ApiError>),
+    /// [`Effect::UseLane`] is done.
+    LaneUsed {
+        lane: String,
+        host: Option<String>,
+        result: Result<Value, ApiError>,
+    },
     /// A spinner frame passed; sent only while something spins.
     Spin,
     /// config.yaml as read for the options page.
@@ -914,6 +923,12 @@ pub enum Effect {
     },
     /// `remote.pair`, answered with [`Msg::Paired`].
     Pair,
+    /// `remote.use` for lane `lane` (`acme@0`) of box `host`, or of this
+    /// machine when `host` is `None`, answered with [`Msg::LaneUsed`].
+    UseLane {
+        lane: String,
+        host: Option<String>,
+    },
     /// Reads a page of a unit's log older than what its pane keeps,
     /// answered with [`Msg::Logs`].
     FetchLogs {
@@ -1033,9 +1048,12 @@ pub enum BoxPart {
 pub struct BoxesView {
     /// `host.list` as last fetched.
     pub hosts: Vec<crate::boxes::BoxHost>,
-    /// The connected boxes' lanes, read-only, as the list draws them; they
-    /// come after this machine's lanes and never mix with them.
-    pub lanes: Vec<LaneSummary>,
+    /// The connected boxes' lanes, read-only, as the list draws them. They
+    /// join the tab of this machine's project of the same name, after its
+    /// lanes in [`App::all_lanes`].
+    pub lanes: Vec<crate::boxes::BoxLane>,
+    /// This machine's stopped lanes whose hostnames a chosen box lane took.
+    pub yielded: Vec<crate::boxes::YieldedLane>,
     /// Seconds since `hosts` arrived, so a retry countdown can count down.
     pub age: u64,
     /// The clients of this machine as a box (`remote.clients`).
@@ -1044,6 +1062,9 @@ pub struct BoxesView {
     pub part: BoxPart,
     /// Index of the selected box in `hosts`.
     pub host: usize,
+    /// The selected row of that box's `skipped_lanes`, `None` while the box
+    /// itself is selected.
+    pub lane: Option<usize>,
     /// Each box's block in the last frame, with its index, for clicks.
     pub host_blocks: RefCell<Vec<(Rect, usize)>>,
     /// The boxes' and the clients' boxes in the last frame, borders included.
@@ -1072,12 +1093,68 @@ impl BoxesView {
             .get(self.host.min(self.hosts.len().saturating_sub(1)))
     }
 
+    /// The selected skipped lane row and its box, while one is selected.
+    pub fn selected_skipped(&self) -> Option<(&crate::boxes::BoxHost, &crate::boxes::SkippedLane)> {
+        let host = self.selected_host()?;
+        Some((host, host.skipped_lanes.get(self.lane?)?))
+    }
+
     /// The selected client, while the selection is on the clients.
     pub fn selected_client(&self) -> Option<&crate::clients::Client> {
         if self.part != BoxPart::Clients {
             return None;
         }
         self.clients.current()
+    }
+}
+
+/// A lane this machine does not mirror, drawn grey: a box lane the daemon
+/// skipped, or one of this machine's stopped lanes whose hostnames a chosen
+/// box lane took.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Grey {
+    /// The lane's reference where it runs, on the box or here: `acme@0`.
+    pub lane: String,
+    /// The box it runs on. `None` for this machine's lane.
+    pub host: Option<String>,
+    /// The box whose lane serves the hostnames. `None` when this machine's
+    /// lane does.
+    pub winner: Option<String>,
+    /// The reference of the lane that serves them, on `winner` or here. It
+    /// is `lane` unless another project's lane clashes on a hostname.
+    /// `yielded_local_lanes` names no lane, so for this machine's lane it
+    /// comes from the winner's routes.
+    pub serving: String,
+    /// `m` can make it the one in use: false while this machine's lane runs,
+    /// and on daemons without `remote.use`.
+    pub can_use: bool,
+    /// `local_running`, `local_stopped`, `box_chosen` or `box_earlier`.
+    /// `None` from daemons without `remote.use`.
+    pub cause: Option<String>,
+    /// For `local_running`, what of this machine's lane keeps running:
+    /// `processes`, which a stop ends, or only `containers`, which no
+    /// devlanes command stops alone.
+    pub holds: Option<String>,
+    /// The commands that stop that lane's own containers, when they count
+    /// for either `holds`. Empty otherwise.
+    pub containers: Vec<String>,
+    /// The daemon's words, for daemons that send no `cause`.
+    pub reason: String,
+}
+
+impl Grey {
+    /// Whether `m` does something: switches to it, or for a box lane this
+    /// machine's running lane keeps out, stops that lane first. With only
+    /// containers up, it asks the daemon, whose answer names the command
+    /// that stops them.
+    pub fn switchable(&self) -> bool {
+        self.can_use || (self.cause.as_deref() == Some("local_running") && self.host.is_some())
+    }
+
+    /// Whether only this machine's lane's own containers keep it running.
+    pub fn held_by_containers(&self) -> bool {
+        self.cause.as_deref() == Some("local_running")
+            && self.holds.as_deref() == Some("containers")
     }
 }
 
@@ -1217,6 +1294,29 @@ pub struct App {
     optimistic: HashMap<(String, String), Optimistic>,
     /// The id of the last [`Effect::Control`].
     last_action: u64,
+    /// A stop and switch `m` asked for, until `remote.use` takes it or the
+    /// switch gives up.
+    switch: Option<Switch>,
+}
+
+/// `m` on a box lane that this machine's running lane keeps out: stop that
+/// lane, then use the box's.
+#[derive(Debug, Clone)]
+struct Switch {
+    /// The stop's [`Effect::Control`] id.
+    action: u64,
+    /// This machine's lane being stopped.
+    local: String,
+    /// The box lane to use, by its reference on `host`.
+    lane: String,
+    host: String,
+    /// The stop answered, so `remote.use` is sent, and sent again while the
+    /// daemon still counts the lane as running.
+    stopped: bool,
+    /// A `remote.use` for it is on its way.
+    sent: bool,
+    /// Seconds left before the switch gives up.
+    ticks: u8,
 }
 
 /// A unit this TUI shows `queued` before the daemon reports it.
@@ -1307,6 +1407,7 @@ impl App {
             watched_units: HashMap::new(),
             optimistic: HashMap::new(),
             last_action: 0,
+            switch: None,
         }
     }
 
@@ -1865,7 +1966,20 @@ impl App {
                             });
                         }
                     }
-                    Err(error) => self.api_error(&label, Some(target), error, &mut effects),
+                    Err(error) => {
+                        // A switch that waited on this stop ends with it.
+                        if self.switch.as_ref().is_some_and(|s| s.action == action) {
+                            self.switch = None;
+                        }
+                        self.api_error(&label, Some(target), error, &mut effects);
+                    }
+                }
+                if let Some(switch) = self.switch.as_mut().filter(|s| s.action == action) {
+                    switch.stopped = true;
+                    // The daemon's `lane_switched` notice replaces it.
+                    let notice = format!("switching {} to {}…", switch.lane, switch.host);
+                    self.set_notice(notice);
+                    self.send_switch(&mut effects);
                 }
             }
             Msg::RunDone { lane, task, result } => self.run_done(lane, task, result, &mut effects),
@@ -2108,6 +2222,9 @@ impl App {
                 if let Some(Dialog::Pair(dialog)) = self.dialog.as_mut() {
                     dialog.answered(result);
                 }
+            }
+            Msg::LaneUsed { lane, host, result } => {
+                self.lane_used(&lane, host.as_deref(), result, &mut effects);
             }
             Msg::Spin => self.spin = self.spin.wrapping_add(1),
             Msg::DaemonRestarted(result) => self.daemon_answered("restart", result, &mut effects),
@@ -2524,6 +2641,40 @@ impl App {
         }
         match event.event.as_str() {
             events::RESYNC => effects.push(Effect::Refresh),
+            // A local lane that starts takes its hostnames back from the box
+            // chosen for it, which deletes that choice.
+            devlanes_proto::remote::WARNING_EVENT
+                if event.data.get("code").and_then(Value::as_str) == Some("choice_cleared") =>
+            {
+                let field = |key: &str| event.data.get(key).and_then(Value::as_str);
+                let message = warning_message(&event.data).or_else(|| {
+                    let (lane, host) = (field("lane")?, field("host")?);
+                    // Another project's lane may be the one that clashes.
+                    let local = field("local_lane").unwrap_or(lane);
+                    Some(format!(
+                        "{local} started on this machine, so {host}'s {lane} is no longer mirrored or chosen"
+                    ))
+                });
+                if let Some(message) = message {
+                    self.set_notice(message);
+                }
+            }
+            // The one notice of a switch, whichever client asked for it.
+            devlanes_proto::remote::WARNING_EVENT
+                if event.data.get("code").and_then(Value::as_str) == Some("lane_switched") =>
+            {
+                let field = |key: &str| event.data.get(key).and_then(Value::as_str);
+                let message = warning_message(&event.data).or_else(|| {
+                    let lane = field("lane")?;
+                    Some(format!(
+                        "{lane} now comes from {}",
+                        field("to").unwrap_or("this machine")
+                    ))
+                });
+                if let Some(message) = message {
+                    self.set_notice(message);
+                }
+            }
             events::DAEMON_STOPPING => {
                 // Every subscriber hears it, whoever asked; this TUI's own
                 // stop reports the same steps again, which changes nothing.
@@ -2719,13 +2870,15 @@ impl App {
         // Box lanes only when this machine has none of its own.
         running
             .or(self.lanes.first())
-            .or(self.boxes.lanes.first())
+            .or(self.boxes.lanes.first().map(|lane| &lane.summary))
             .map(|lane| lane.reference.clone())
     }
 
     /// Every lane the list can show: this machine's, then the boxes'.
     pub fn all_lanes(&self) -> impl Iterator<Item = &LaneSummary> {
-        self.lanes.iter().chain(&self.boxes.lanes)
+        self.lanes
+            .iter()
+            .chain(self.boxes.lanes.iter().map(|lane| &lane.summary))
     }
 
     /// A lane by reference, local or of a box.
@@ -2733,13 +2886,100 @@ impl App {
         self.all_lanes().find(|lane| lane.reference == reference)
     }
 
+    /// The box lane `reference` (`acme@1 @hetzner`). `None` for this
+    /// machine's lanes.
+    pub fn lane_box(&self, reference: &str) -> Option<&crate::boxes::BoxLane> {
+        self.boxes
+            .lanes
+            .iter()
+            .find(|lane| lane.summary.reference == reference)
+    }
+
     /// The box behind the box lane `reference`, with the lane's own reference
-    /// on the box (`acme@1`); `None` for this machine's lanes.
+    /// on the box (`acme@1`). `None` for this machine's lanes.
     pub fn box_lane(&self, reference: &str) -> Option<(&crate::boxes::BoxHost, String)> {
-        self.boxes.hosts.iter().find_map(|host| {
-            let lane = reference.strip_suffix(&format!(" @{}", host.host))?;
-            host.lane(lane).map(|_| (host, lane.to_owned()))
+        let lane = self.lane_box(reference)?;
+        let host = self
+            .boxes
+            .hosts
+            .iter()
+            .find(|host| host.host == lane.host)?;
+        Some((host, lane.lane.clone()))
+    }
+
+    /// Why lane `reference` is not mirrored here. `None` while it is, or
+    /// while no box lane clashes with it.
+    pub fn grey(&self, reference: &str) -> Option<Grey> {
+        if let Some((host, lane)) = self.box_lane(reference) {
+            let skipped = host.skipped(&lane)?;
+            return Some(Grey {
+                serving: skipped.serving().to_owned(),
+                winner: skipped.served_by().map(str::to_owned),
+                lane,
+                host: Some(host.host.clone()),
+                can_use: skipped.can_use,
+                cause: skipped.cause.clone(),
+                holds: skipped.holds.clone(),
+                containers: skipped.containers_commands(),
+                reason: skipped.reason.clone(),
+            });
+        }
+        let yielded = self.boxes.yielded.iter().find(|y| y.lane == reference)?;
+        // `yielded_local_lanes` names the box only: its lane is the route
+        // there for one of this lane's hostnames, else the lane chosen for it.
+        let winner = self.boxes.hosts.iter().find(|h| h.host == yielded.winner);
+        let serving = winner.and_then(|winner| {
+            let local = self.lanes.iter().find(|l| l.reference == reference);
+            winner
+                .routes
+                .iter()
+                .find(|route| local.is_some_and(|local| serves_host(local, &route.host)))
+                .map(|route| route.lane.clone())
+                .or_else(|| {
+                    (winner.chosen_lanes.len() == 1).then(|| winner.chosen_lanes[0].clone())
+                })
+        });
+        Some(Grey {
+            lane: yielded.lane.clone(),
+            host: None,
+            winner: Some(yielded.winner.clone()),
+            serving: serving.unwrap_or_else(|| yielded.lane.clone()),
+            can_use: true,
+            cause: Some("box_chosen".into()),
+            holds: None,
+            containers: Vec::new(),
+            reason: String::new(),
         })
+    }
+
+    /// Whether lane `reference` is the one in use for hostnames that a grey
+    /// lane also has, so the lanes table can say which one is live.
+    pub fn in_use(&self, reference: &str) -> bool {
+        if self.grey(reference).is_some() {
+            return false;
+        }
+        let (host, own) = match self.lane_box(reference) {
+            Some(lane) => (Some(lane.host.as_str()), lane.lane.as_str()),
+            None => (None, reference),
+        };
+        self.all_lanes()
+            .filter_map(|lane| self.grey(&lane.reference))
+            .any(|grey| grey.winner.as_deref() == host && grey.serving == own)
+    }
+
+    /// This machine's lane that serves one of `hosts`: a unit URL naming it,
+    /// or the lane's domain it falls under. Only for daemons without
+    /// `remote.use`, which name no lane in use.
+    pub fn local_lane_serving(&self, hosts: &[String]) -> Option<String> {
+        self.lanes
+            .iter()
+            .find(|lane| hosts.iter().any(|host| serves_host(lane, host)))
+            .map(|lane| lane.reference.clone())
+    }
+
+    /// The box lane `reference` runs on, `None` for this machine's lanes.
+    fn host_of_lane(&self, reference: &str) -> Option<&str> {
+        self.lane_box(reference).map(|lane| lane.host.as_str())
     }
 
     /// Whether a spinner is on screen somewhere, so the runtime redraws often.
@@ -2848,8 +3088,8 @@ impl App {
 
     // ---- tree -------------------------------------------------------------
 
-    /// Project names in tab order: this machine's, then the boxes'
-    /// (`acme @hetzner`).
+    /// Project names in tab order: this machine's, then those only boxes
+    /// run. A box lane joins the tab of the project with its name.
     pub fn projects(&self) -> Vec<String> {
         let mut projects: Vec<String> = Vec::new();
         for lane in self.all_lanes() {
@@ -2865,15 +3105,26 @@ impl App {
         self.selected_lane().map(|lane| lane.project.as_str())
     }
 
-    /// The lanes of the project shown, in chip order.
+    /// The lanes of the project shown, in chip order: by number, this
+    /// machine's lane first, then the boxes' by name.
     pub fn project_lanes(&self) -> Vec<&LaneSummary> {
         let Some(project) = self.project() else {
             return Vec::new();
         };
         // Lanes that exist; a worktree without one is not a lane to switch to.
-        self.all_lanes()
+        let mut lanes: Vec<&LaneSummary> = self
+            .all_lanes()
             .filter(|l| l.project == project && l.index.is_some())
-            .collect()
+            .collect();
+        // `None` sorts first, so this machine's lane leads its number.
+        lanes.sort_by_key(|lane| (lane.index, self.host_of_lane(&lane.reference)));
+        lanes
+    }
+
+    /// Whether lanes `a` and `b` run on the same machine: both here, or both
+    /// on one box.
+    fn same_machine(&self, a: &LaneSummary, b: &LaneSummary) -> bool {
+        self.host_of_lane(&a.reference) == self.host_of_lane(&b.reference)
     }
 
     /// The selected lane's rows as a tree, filtered.
@@ -2887,18 +3138,19 @@ impl App {
 
     /// A lane's tree with the project's shared containers.
     fn lane_tree(&self, lane: &LaneSummary, filter: Option<&str>) -> Vec<Node> {
-        let shared = self.shared_containers(&lane.project);
+        let shared = self.shared_containers(lane);
         tree::tree(lane, &shared, self.task_list(&lane.reference), filter)
     }
 
-    /// The project's shared containers, once each, from whichever of its
-    /// lanes reports them, so every lane lists them even when its own infra
-    /// is not up.
-    pub fn shared_containers(&self, project: &str) -> Vec<devlanes_proto::ContainerSummary> {
+    /// The shared containers of `lane`'s project, once each, from whichever
+    /// of its lanes reports them, so every lane lists them even when its own
+    /// infra is not up. Only lanes on `lane`'s machine count: a box lane in
+    /// the same tab shares nothing with this machine's.
+    pub fn shared_containers(&self, lane: &LaneSummary) -> Vec<devlanes_proto::ContainerSummary> {
         let mut shared: Vec<devlanes_proto::ContainerSummary> = Vec::new();
         for container in self
             .all_lanes()
-            .filter(|lane| lane.project == project)
+            .filter(|other| other.project == lane.project && self.same_machine(lane, other))
             .flat_map(|lane| lane.containers.iter())
             .filter(|c| c.shared)
         {
@@ -2922,7 +3174,7 @@ impl App {
             .find(|c| c.name == name)
             .cloned()
             .or_else(|| {
-                self.shared_containers(&lane.project)
+                self.shared_containers(lane)
                     .into_iter()
                     .find(|c| c.name == name)
             })
@@ -3193,28 +3445,27 @@ impl App {
     }
 
     /// A lane of the project `gone` belonged to, numbered closest to it (the
-    /// lower one on a tie); `None` when that project has no lanes left.
+    /// lower one on a tie), on the same machine when one is left there.
+    /// `None` when that project has no lanes left.
     fn neighbour_of(&self, gone: &str) -> Option<String> {
         let project = self
             .project_lane
             .iter()
             .find(|(_, lane)| lane.as_str() == gone)
             .map(|(project, _)| project.clone())?;
-        // A box lane is `acme@1 @<box>`, and box names may hold `@`
-        // (`user@host`); the lane part never holds a space.
-        let index = |reference: &str| {
-            let lane = reference
-                .split_once(" @")
-                .map_or(reference, |(lane, _)| lane);
-            lane.rsplit_once('@')
-                .and_then(|(_, n)| n.parse::<i64>().ok())
-        };
-        let target = index(gone).unwrap_or(0);
+        // The lane is gone, so its reference is all that says where it ran.
+        let host = crate::boxes::host_of(gone);
+        let lane = gone.split_once(" @").map_or(gone, |(lane, _)| lane);
+        let target = lane
+            .rsplit_once('@')
+            .and_then(|(_, n)| n.parse::<i64>().ok())
+            .unwrap_or(0);
         self.all_lanes()
             .filter(|lane| lane.project == project)
             .min_by_key(|lane| {
                 let n = lane.index.map_or(i64::MAX / 2, i64::from);
-                ((n - target).abs(), n)
+                let elsewhere = self.host_of_lane(&lane.reference) != host;
+                (elsewhere, (n - target).abs(), n)
             })
             .map(|lane| lane.reference.clone())
     }
@@ -3767,7 +4018,9 @@ impl App {
             KeyCode::PageUp => self.move_box_selection(-self.box_page()),
             KeyCode::Char('g') | KeyCode::Home => self.move_box_selection(isize::MIN),
             KeyCode::Char('G') | KeyCode::End => self.move_box_selection(isize::MAX),
+            KeyCode::Enter if self.boxes.selected_skipped().is_some() => self.box_use_lane(effects),
             KeyCode::Enter => self.box_enter(effects),
+            KeyCode::Char('m') if plain => self.box_use_lane(effects),
             KeyCode::Char('n') if plain => {
                 let mut dialog = Box::<crate::connect::ConnectDialog>::default();
                 dialog.form.live = self
@@ -3794,6 +4047,17 @@ impl App {
         }
     }
 
+    /// `m` or Enter on a skipped lane row of the boxes view: the same as `m`
+    /// on that lane in its tab.
+    fn box_use_lane(&mut self, effects: &mut Vec<Effect>) {
+        let Some((host, skipped)) = self.boxes.selected_skipped() else {
+            self.set_notice("select a skipped lane of a box to use it".into());
+            return;
+        };
+        let reference = crate::boxes::lane_reference(&skipped.lane, &host.host);
+        self.use_lane(&reference, effects);
+    }
+
     /// How many rows PageUp and PageDown move: the boxes or the clients the
     /// last frame showed of the list the selection is in.
     fn box_page(&self) -> isize {
@@ -3804,31 +4068,56 @@ impl App {
         isize::try_from(shown.max(1)).unwrap_or(1)
     }
 
-    /// Moves the boxes view's selection by `delta` rows over the boxes, then
-    /// the clients; `isize::MIN` and `MAX` go to the first and last row.
+    /// Moves the boxes view's selection by `delta` rows over each box and its
+    /// skipped lanes, then the clients. `isize::MIN` and `MAX` go to the
+    /// first and last row.
     fn move_box_selection(&mut self, delta: isize) {
-        let hosts = self.boxes.hosts.len();
+        // `(part, box or client, skipped lane)`, one per row the selection visits.
+        let mut rows: Vec<(BoxPart, usize, Option<usize>)> = Vec::new();
+        for (index, host) in self.boxes.hosts.iter().enumerate() {
+            rows.push((BoxPart::Hosts, index, None));
+            rows.extend(
+                (0..host.skipped_lanes.len()).map(|lane| (BoxPart::Hosts, index, Some(lane))),
+            );
+        }
         let clients = self.boxes.clients.count();
-        let total = hosts + clients;
-        if total == 0 {
+        rows.extend((0..clients).map(|client| (BoxPart::Clients, client, None)));
+        if rows.is_empty() {
             return;
         }
-        let at = match self.boxes.part {
-            BoxPart::Hosts if hosts > 0 => self.boxes.host.min(hosts - 1),
-            BoxPart::Hosts => 0,
-            BoxPart::Clients => hosts + self.boxes.clients.selected.min(clients.saturating_sub(1)),
+        let current = match self.boxes.part {
+            BoxPart::Hosts => (BoxPart::Hosts, self.boxes.host, self.boxes.lane),
+            BoxPart::Clients => (
+                BoxPart::Clients,
+                self.boxes.clients.selected.min(clients.saturating_sub(1)),
+                None,
+            ),
         };
+        // A skipped lane that went away leaves the selection on its box.
+        let at = rows
+            .iter()
+            .position(|row| *row == current)
+            .or_else(|| {
+                rows.iter()
+                    .position(|row| *row == (current.0, current.1, None))
+            })
+            .unwrap_or(0);
         let to = match delta {
             isize::MIN => 0,
-            isize::MAX => total - 1,
-            delta => at.saturating_add_signed(delta).min(total - 1),
+            isize::MAX => rows.len() - 1,
+            delta => at.saturating_add_signed(delta).min(rows.len() - 1),
         };
-        if to < hosts {
-            self.boxes.part = BoxPart::Hosts;
-            self.boxes.host = to;
-        } else {
-            self.boxes.part = BoxPart::Clients;
-            self.boxes.clients.selected = to - hosts;
+        match rows[to] {
+            (BoxPart::Hosts, host, lane) => {
+                self.boxes.part = BoxPart::Hosts;
+                self.boxes.host = host;
+                self.boxes.lane = lane;
+            }
+            (BoxPart::Clients, client, _) => {
+                self.boxes.part = BoxPart::Clients;
+                self.boxes.clients.selected = client;
+                self.boxes.lane = None;
+            }
         }
     }
 
@@ -4097,11 +4386,25 @@ impl App {
                     .hosts
                     .get(self.boxes.host)
                     .map(|host| host.host.clone());
+                let skipped = self
+                    .boxes
+                    .selected_skipped()
+                    .map(|(_, skipped)| skipped.lane.clone());
                 self.boxes.hosts = crate::boxes::parse(&value);
                 self.boxes.host = selected
                     .and_then(|name| self.boxes.hosts.iter().position(|h| h.host == name))
                     .unwrap_or(self.boxes.host)
                     .min(self.boxes.hosts.len().saturating_sub(1));
+                // A skipped lane row follows its lane. Once it is mirrored,
+                // the selection goes back to its box.
+                self.boxes.lane = skipped.and_then(|lane| {
+                    self.boxes
+                        .hosts
+                        .get(self.boxes.host)?
+                        .skipped_lanes
+                        .iter()
+                        .position(|s| s.lane == lane)
+                });
                 self.settle_box_part();
                 self.boxes.lanes = self
                     .boxes
@@ -4109,6 +4412,7 @@ impl App {
                     .iter()
                     .flat_map(crate::boxes::BoxHost::lanes)
                     .collect();
+                self.boxes.yielded = crate::boxes::parse_yielded(&value);
                 self.boxes.age = 0;
                 self.after_change(effects);
             }
@@ -4240,6 +4544,227 @@ impl App {
                 name,
             }),
         });
+    }
+
+    /// `m`: makes grey lane `reference` the one this machine mirrors, a box's
+    /// lane or this machine's own. When this machine's running lane keeps a
+    /// box lane out, it asks to stop that lane first. A lane in use already
+    /// only says so.
+    fn use_lane(&mut self, reference: &str, effects: &mut Vec<Effect>) {
+        let Some(grey) = self.grey(reference) else {
+            let notice = match self.box_lane(reference) {
+                Some((host, lane)) => {
+                    format!("{} is already in use", lane_of(Some(&host.host), &lane))
+                }
+                None if self.boxes.lanes.iter().any(|lane| lane.lane == reference) => {
+                    format!("{} is already in use", lane_of(None, reference))
+                }
+                None => format!("no box runs {reference}, so there is nothing to switch to"),
+            };
+            self.set_notice(notice);
+            return;
+        };
+        if !grey.can_use {
+            let containers = grey.held_by_containers();
+            match (grey.cause.as_deref(), grey.host) {
+                // No devlanes command stops only a lane's containers, so there
+                // is nothing to offer. The daemon's refusal names the command.
+                (Some("local_running"), Some(host)) if containers => {
+                    effects.push(Effect::UseLane {
+                        lane: grey.lane,
+                        host: Some(host),
+                    });
+                }
+                (Some("local_running"), Some(host)) => {
+                    self.switch_prompt(grey.serving, grey.lane, host, grey.containers);
+                }
+                _ => self.set_notice(
+                    "the daemon is too old to switch lanes. Upgrade it and restart it".to_owned(),
+                ),
+            }
+            return;
+        }
+        let from = grey.host.as_deref().unwrap_or("this machine");
+        self.set_notice(format!("switching {} to {from}…", grey.lane));
+        effects.push(Effect::UseLane {
+            lane: grey.lane,
+            host: grey.host,
+        });
+    }
+
+    /// Asks before stopping this machine's running lane `local`, which keeps
+    /// box `host`'s lane `lane` out. Confirmed, it stops `local` the way `x`
+    /// does, and [`App::send_switch`] sends `remote.use` once the stop
+    /// answered. When `containers` names commands, the lane's own
+    /// containers keep its ports after the stop, so the dialog only stops
+    /// and says how to stop them.
+    fn switch_prompt(
+        &mut self,
+        local: String,
+        lane: String,
+        host: String,
+        containers: Vec<String>,
+    ) {
+        let action = self.next_action();
+        let stop = Effect::Control {
+            action,
+            method: Method::Stop,
+            lane: local.clone(),
+            selection: Selection::default(),
+            label: format!("stop {local}"),
+            target: Target::Lane(local.clone()),
+        };
+        if !containers.is_empty() {
+            self.dialog = Some(Dialog::Confirm {
+                prompt: format!("{local} runs on this machine. Stop it?"),
+                detail: vec![format!(
+                    "{local}'s own containers keep its ports. Stop them with {}, then press m again.",
+                    containers.join(" and ")
+                )],
+                action: "stop",
+                strict: true,
+                effect: Box::new(stop),
+            });
+            // No switch follows this stop: the daemon would refuse it.
+            self.switch = None;
+            return;
+        }
+        self.dialog = Some(Dialog::Confirm {
+            prompt: format!("{local} runs on this machine. Stop it and use {host}'s {lane}?"),
+            detail: vec![
+                format!("It stops every unit of {local} here."),
+                format!("Then {host}'s {lane} serves its hostnames and ports."),
+            ],
+            action: "stop and switch",
+            strict: true,
+            effect: Box::new(stop),
+        });
+        // Only a confirmed dialog sends the stop, so an unanswered one leaves
+        // a switch whose action never comes back.
+        self.switch = Some(Switch {
+            action,
+            local,
+            lane,
+            host,
+            stopped: false,
+            sent: false,
+            ticks: SWITCH_TICKS,
+        });
+    }
+
+    /// Sends `remote.use` for the stop and switch in progress. Its own
+    /// status may still say the lane failed, which the daemon does not count
+    /// as running, so the daemon's answer decides instead of the list.
+    fn send_switch(&mut self, effects: &mut Vec<Effect>) {
+        let Some(switch) = self.switch.as_mut().filter(|s| s.stopped && !s.sent) else {
+            return;
+        };
+        switch.sent = true;
+        effects.push(Effect::UseLane {
+            lane: switch.lane.clone(),
+            host: Some(switch.host.clone()),
+        });
+    }
+
+    /// Ends the stop and switch in progress, which ran out of time while the
+    /// daemon still counted its local lane as running.
+    fn give_up_switch(&mut self) {
+        let Some(switch) = self.switch.take() else {
+            return;
+        };
+        let message = format!(
+            "{} is still running. Stop it, then press m again",
+            switch.local
+        );
+        self.report(
+            &format!("use {} from {}", switch.lane, switch.host),
+            None,
+            Worded::local(&message),
+        );
+    }
+
+    /// Takes the answer to `remote.use` for `lane` of `host` (`None` for this
+    /// machine): why it did not switch, or that it waits. A switch says so
+    /// in the daemon's `lane_switched` notice, for every client alike.
+    fn lane_used(
+        &mut self,
+        lane: &str,
+        host: Option<&str>,
+        result: Result<Value, ApiError>,
+        effects: &mut Vec<Effect>,
+    ) {
+        // A stop and switch asks again on the next tick while the daemon still
+        // counts the lane it stopped as running.
+        let ours = self
+            .switch
+            .as_ref()
+            .is_some_and(|s| s.sent && s.lane == lane && Some(s.host.as_str()) == host);
+        // `holds: containers`: the lane's units are down but its own
+        // containers still hold the ports, which no stop here ends.
+        let containers = matches!(&result, Err(ApiError::Rpc(error))
+            if error.code == "local_lane_running"
+                && error.data.get("holds").and_then(Value::as_str) == Some("containers"));
+        if ours {
+            if let Err(ApiError::Rpc(error)) = &result
+                && error.code == "local_lane_running"
+                && !containers
+                && let Some(switch) = self.switch.as_mut()
+            {
+                switch.sent = false;
+                if switch.ticks == 0 {
+                    self.give_up_switch();
+                }
+                return;
+            }
+            self.switch = None;
+        }
+        let from = host.unwrap_or("this machine");
+        match result {
+            Ok(reply) => {
+                let flag = |key: &str| reply.get(key).and_then(Value::as_bool);
+                let previous = reply.get("previous").and_then(Value::as_str);
+                // A box that is not connected gets the choice when it connects.
+                if flag("pending") == Some(true) {
+                    self.set_notice(format!("{lane} will come from {from} once it connects"));
+                } else if flag("mirrored") == Some(false) {
+                    let notice = format!("{} is chosen but not mirrored yet", lane_of(host, lane));
+                    self.set_notice(notice);
+                } else if previous == host {
+                    // Nothing switched, so no `lane_switched` follows.
+                    self.set_notice(format!("{} is already in use", lane_of(host, lane)));
+                }
+            }
+            // A local lane started meanwhile: offer the same stop and switch
+            // as `m` on a lane it keeps out, for the lane the daemon names.
+            // Containers alone get the daemon's words, which name the
+            // command that stops them.
+            Err(ApiError::Rpc(ref error))
+                if error.code == "local_lane_running"
+                    && !containers
+                    && let Some(host) = host
+                    && let Some(local) = error.data.get("local_lane").and_then(Value::as_str) =>
+            {
+                let commands = refusal_containers(error);
+                self.switch_prompt(local.to_owned(), lane.to_owned(), host.to_owned(), commands);
+            }
+            // In the TUI `m` switches once they stopped, so the words come
+            // from the data rather than the CLI's message.
+            Err(ApiError::Rpc(ref error)) if containers => {
+                let local = error
+                    .data
+                    .get("local_lane")
+                    .and_then(Value::as_str)
+                    .unwrap_or(lane);
+                let words = crate::boxes::containers_run(local, &refusal_containers(error));
+                self.report(
+                    &format!("use {lane} from {from}"),
+                    None,
+                    Worded::local(&words),
+                );
+            }
+            Err(error) => self.api_error(&format!("use {lane} from {from}"), None, error, effects),
+        }
+        self.fetch_boxes(effects);
     }
 
     /// Whether the shown lane is a box's, so actions on it belong to the box.
@@ -4556,6 +5081,18 @@ impl App {
     fn begin(&mut self, effect: &Effect, effects: &mut Vec<Effect>) {
         match effect {
             Effect::Run { lane, .. } => self.pending_begin(lane),
+            // Only a stop and switch asks before a stop.
+            Effect::Control { lane, action, .. } => {
+                self.pending_begin(lane);
+                self.clear_optimistic(lane, &[], None);
+                if let Some(switch) = self.switch.as_ref().filter(|s| s.action == *action) {
+                    let notice = format!(
+                        "stopping {} to use {}'s {}…",
+                        switch.local, switch.host, switch.lane
+                    );
+                    self.set_notice(notice);
+                }
+            }
             Effect::CleanLane { lane } => {
                 self.pending_begin(lane);
                 self.cleaning.insert(lane.clone());
@@ -5169,7 +5706,23 @@ impl App {
                     self.resize_pane(effects);
                 }
             }
+            // A grey lane's hostnames lead to the lane in use instead.
+            KeyCode::Char('o')
+                if self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|s| self.grey(&s.lane).is_some()) =>
+            {
+                self.set_notice(
+                    "this lane is not in use here, so it has nothing to open. m uses it".into(),
+                );
+            }
             KeyCode::Char('o') => self.open_url(effects),
+            KeyCode::Char('m') => {
+                if let Some(reference) = self.selected.as_ref().map(|s| s.lane.clone()) {
+                    self.use_lane(&reference, effects);
+                }
+            }
             KeyCode::Char('e') => self.open_errors(),
             KeyCode::Char('c') => self.enter_copy(),
             KeyCode::PageUp => {
@@ -6469,6 +7022,7 @@ impl App {
                 if let Some(index) = host {
                     self.boxes.part = BoxPart::Hosts;
                     self.boxes.host = index;
+                    self.boxes.lane = None;
                     return;
                 }
                 let (rows, first) = self.boxes.clients_rows.get();
@@ -6477,6 +7031,7 @@ impl App {
                     if index < self.boxes.clients.count() {
                         self.boxes.part = BoxPart::Clients;
                         self.boxes.clients.selected = index;
+                        self.boxes.lane = None;
                     }
                 }
             }
@@ -6774,6 +7329,14 @@ impl App {
     /// Ages the notice, polls metrics on the monitor and follows the daemon
     /// tab's facts and log and the boxes view's `host.list` while visible.
     fn tick(&mut self, effects: &mut Vec<Effect>) {
+        if let Some(switch) = self.switch.as_mut().filter(|s| s.stopped) {
+            switch.ticks = switch.ticks.saturating_sub(1);
+            // One on its way gets its answer first.
+            if switch.ticks == 0 && !switch.sent {
+                self.give_up_switch();
+            }
+        }
+        self.send_switch(effects);
         if self.notice_ticks > 0 {
             self.notice_ticks -= 1;
             if self.notice_ticks == 0 {
@@ -7172,6 +7735,55 @@ fn log_query(lane: &str, unit: &str, cursor: Option<String>) -> LogQuery {
         styled: true,
         ..LogQuery::default()
     }
+}
+
+/// The commands that stop the own containers a `local_lane_running`
+/// refusal names in `compose_project` and `containers`, for either `holds`.
+fn refusal_containers(error: &RpcError) -> Vec<String> {
+    let data = &error.data;
+    let containers: Vec<String> = data
+        .get("containers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    crate::boxes::containers_commands(
+        data.get("compose_project").and_then(Value::as_str),
+        &containers,
+    )
+}
+
+/// A `remote.warning`'s `message` as a header notice: without the
+/// `fork-b: ` the CLI prints it with, since the message names the box, and
+/// without the final period, as the TUI's notices go.
+fn warning_message(data: &Value) -> Option<String> {
+    let message = data.get("message").and_then(Value::as_str)?;
+    let message = data
+        .get("host")
+        .and_then(Value::as_str)
+        .and_then(|host| message.strip_prefix(&format!("{host}: ")))
+        .unwrap_or(message);
+    Some(message.trim_end_matches('.').to_owned())
+}
+
+/// `fork-b's shop@0`, or `this machine's shop@0` without a box: how every
+/// message names a lane that may run in more than one place.
+fn lane_of(host: Option<&str>, lane: &str) -> String {
+    format!("{}'s {lane}", host.unwrap_or("this machine"))
+}
+
+/// Whether `lane` serves hostname `host`: a unit URL names it, or it falls
+/// under the lane's domain.
+fn serves_host(lane: &LaneSummary, host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    let under = |domain: &str| host == domain || host.ends_with(&format!(".{domain}"));
+    lane.units.iter().flat_map(|u| &u.urls).any(|url| {
+        url.strip_prefix("https://")
+            .and_then(|rest| rest.split([':', '/']).next())
+            .is_some_and(|named| named.eq_ignore_ascii_case(&host))
+    }) || lane.domain.as_deref().is_some_and(under)
 }
 
 /// Projects by name, lanes by index, unassigned lanes last; units sorted

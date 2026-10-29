@@ -24,15 +24,24 @@ pub(crate) struct Connection {
     pub authority: String,
 }
 
+/// What an idle connection may be reused for: the dial target and the
+/// route's `pool_key`, such as the box a remote route leads to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PoolKey {
+    pub target: Upstream,
+    pub scope: Option<String>,
+}
+
 #[derive(Debug)]
 struct Idle {
     id: u64,
-    target: Upstream,
+    key: PoolKey,
     expires: Instant,
     connection: Connection,
 }
 
-/// Idle upstream connections keyed by the exact dial target, never shared across targets.
+/// Idle upstream connections keyed by the exact dial target and pool key,
+/// never shared across either.
 #[derive(Debug, Default)]
 pub(crate) struct Pool {
     idle: Mutex<Vec<Idle>>,
@@ -40,21 +49,21 @@ pub(crate) struct Pool {
 }
 
 impl Pool {
-    /// Takes an idle connection to `target`, discarding closed or expired ones first.
-    pub(crate) fn take(&self, target: &Upstream) -> Option<Connection> {
+    /// Takes an idle connection for `key`, discarding closed or expired ones first.
+    pub(crate) fn take(&self, key: &PoolKey) -> Option<Connection> {
         let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
         let now = Instant::now();
         idle.retain(|entry| entry.expires > now && !entry.connection.sender.is_closed());
         let index = idle
             .iter()
-            .position(|entry| &entry.target == target && entry.connection.sender.is_ready())?;
+            .position(|entry| &entry.key == key && entry.connection.sender.is_ready())?;
         Some(idle.swap_remove(index).connection)
     }
 
     /// Returns a connection once its response body is fully read; failed or upgraded ones are dropped.
     pub(crate) fn recycle(
         self: &Arc<Self>,
-        target: Upstream,
+        key: PoolKey,
         mut connection: Connection,
         shutdown: CancellationToken,
     ) {
@@ -68,13 +77,13 @@ impl Pool {
             {
                 let mut idle = pool.idle.lock().unwrap_or_else(PoisonError::into_inner);
                 if idle.len() >= TOTAL
-                    || idle.iter().filter(|entry| entry.target == target).count() >= PER_TARGET
+                    || idle.iter().filter(|entry| entry.key == key).count() >= PER_TARGET
                 {
                     return;
                 }
                 idle.push(Idle {
                     id,
-                    target,
+                    key,
                     expires: Instant::now() + IDLE_TTL,
                     connection,
                 });

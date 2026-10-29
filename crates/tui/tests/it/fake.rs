@@ -28,6 +28,8 @@ pub struct FakeApi {
     pub screen: Vec<u8>,
     /// When set, start/stop/restart fail with this daemon error.
     pub control_error: Option<RpcError>,
+    /// A whole-lane stop leaves the lane idle in what `status` answers next.
+    pub stops: bool,
     /// When set, `lane.clean` fails with this daemon error.
     pub clean_error: Option<RpcError>,
     /// The daemon log the TUI tails.
@@ -149,10 +151,21 @@ impl DaemonApi for FakeApi {
                 selection.units, selection.profiles
             ));
         }
-        match &self.control_error {
-            Some(error) => Err(ApiError::Rpc(error.clone())),
-            None => Ok(json!({})),
+        if let Some(error) = &self.control_error {
+            return Err(ApiError::Rpc(error.clone()));
         }
+        if self.stops
+            && method == Method::Stop
+            && selection.units.is_empty()
+            && let Ok(mut lanes) = self.lanes.lock()
+            && let Some(stopped) = lanes.iter_mut().find(|l| l.reference == lane)
+        {
+            stopped.state = "idle".into();
+            for unit in &mut stopped.units {
+                unit.state = "stopped".into();
+            }
+        }
+        Ok(json!({}))
     }
 
     async fn run_task(
@@ -343,6 +356,22 @@ impl DaemonApi for FakeApi {
     async fn disconnect(&self, host: String) -> Result<Value, ApiError> {
         self.record(format!("disconnect {host}"));
         Ok(json!({"disconnected": [host]}))
+    }
+
+    /// Records `remote.use <lane> <host>`, with `null` for this machine, and
+    /// answers as if the switch happened, with the daemon's `lane_switched`
+    /// notice first.
+    async fn use_lane(&self, lane: String, host: Option<String>) -> Result<Value, ApiError> {
+        let shown = host.as_deref().unwrap_or("null");
+        self.record(format!("remote.use {lane} {shown}"));
+        let to = host.as_deref().unwrap_or("this machine");
+        let notice = json!({"code": "lane_switched", "lane": lane, "to": host, "from": "fork-a",
+                            "host": host.as_deref().unwrap_or("fork-a"),
+                            "message": format!("{lane} now comes from {to}")});
+        self.emit(devlanes_proto::remote::WARNING_EVENT, notice)
+            .await;
+        Ok(json!({"lane": lane, "host": host, "previous": "fork-a",
+                  "mirrored": true, "pending": false}))
     }
 
     async fn pair(&self) -> Result<Value, ApiError> {

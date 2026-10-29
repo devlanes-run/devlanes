@@ -347,6 +347,15 @@ pub(crate) struct LaneSt {
     /// Starts between their decision to run and the end of their phases. The
     /// lane reads `starting` until the last of them is done.
     pub starting: usize,
+    /// Starts and `infra up`s that passed their checks and have not returned.
+    /// The lane counts as running for box lanes that clash with it while
+    /// one is, so a start that fails its checks takes nothing from a box.
+    pub claiming: usize,
+    /// Whether a unit spawned, or containers were stored, since `claiming`
+    /// last rose from zero. Until then a claim clears no lane choice, so a
+    /// start that fails before anything runs gives the box lane back. A flag
+    /// rather than what runs now, since a unit that exits at once still ran.
+    pub claim_ran: bool,
     /// Spawns in flight ([`SpawnGuard`]). A stop waits until none is left before
     /// it picks its targets, so no unit appears after it looked.
     pub spawning: usize,
@@ -516,6 +525,8 @@ impl LaneSt {
             waiting: BTreeMap::new(),
             bringup: None,
             starting: 0,
+            claiming: 0,
+            claim_ran: false,
             spawning: 0,
             spawned: Arc::new(Notify::new()),
             ports_pending: false,
@@ -568,6 +579,18 @@ impl LaneSt {
     /// True while a supervised unit or a previous daemon's orphan runs here.
     pub(crate) fn any_running(&self) -> bool {
         self.any_alive() || !self.orphans.is_empty()
+    }
+
+    /// Stores the lane's infra containers. A claim counts as having run
+    /// something once one of them holds a port of the lane.
+    pub(crate) fn store_containers(
+        &mut self,
+        containers: Vec<crate::integrations::InfraContainer>,
+    ) {
+        if self.claiming > 0 && containers.iter().any(|container| container.holds_port()) {
+            self.claim_ran = true;
+        }
+        self.infra_containers = containers;
     }
 
     /// `ports_pending` and `host_conflict` warnings for the lane's summary.

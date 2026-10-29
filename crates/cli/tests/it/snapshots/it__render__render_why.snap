@@ -15,7 +15,7 @@ idle acme@2:admin
   autostart is off; it only starts when named (devlanes start acme@2:admin)
   lane is unassigned: lanes.max is 4 (devlanes lane gc)
   this worktree has no devlanes.yaml (devlanes config check)
-  sudo will not run the /etc/hosts helper without a password, so admin.acme-2.localhost may not resolve (devlanes certs trust --hosts)
+  sudo will not run the /etc/hosts helper without a password, so admin.acme2.localhost may not resolve (devlanes certs trust --hosts)
   queued: 6 of 40 starting, CPU 93% (devlanes start --all-at-once --lane acme@2)
 --- plain (exit 0)
 idle acme@2:admin
@@ -30,7 +30,7 @@ idle acme@2:admin
   autostart is off; it only starts when named (devlanes start acme@2:admin)
   lane is unassigned: lanes.max is 4 (devlanes lane gc)
   this worktree has no devlanes.yaml (devlanes config check)
-  sudo will not run the /etc/hosts helper without a password, so admin.acme-2.localhost may not resolve (devlanes certs trust --hosts)
+  sudo will not run the /etc/hosts helper without a password, so admin.acme2.localhost may not resolve (devlanes certs trust --hosts)
   queued: 6 of 40 starting, CPU 93% (devlanes start --all-at-once --lane acme@2)
 --- agent (exit 0)
 idle acme@2:admin
@@ -45,5 +45,5 @@ idle acme@2:admin
   autostart is off; it only starts when named (devlanes start acme@2:admin)
   lane is unassigned: lanes.max is 4 (devlanes lane gc)
   this worktree has no devlanes.yaml (devlanes config check)
-  sudo will not run the /etc/hosts helper without a password, so admin.acme-2.localhost may not resolve (devlanes certs trust --hosts)
+  sudo will not run the /etc/hosts helper without a password, so admin.acme2.localhost may not resolve (devlanes certs trust --hosts)
   queued: 6 of 40 starting, CPU 93% (devlanes start --all-at-once --lane acme@2)

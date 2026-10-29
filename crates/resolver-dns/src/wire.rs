@@ -329,7 +329,7 @@ mod tests {
 
     #[test]
     fn answers_a_and_aaaa_in_zone() {
-        let q = query(7, "Crm.Lane-2.test", TYPE_A, None);
+        let q = query(7, "Crm.Lane2.test", TYPE_A, None);
         let r = answer(&q, &zone()).expect("response");
         assert_eq!(&r[..2], &7u16.to_be_bytes());
         let flags = u16::from_be_bytes([r[2], r[3]]);

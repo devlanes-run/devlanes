@@ -66,7 +66,7 @@ Replicas each get their own ports: `${{ self.port }}` differs per replica, named
 | --- | --- |
 | `${{ services.api.port }}` | the allocated port |
 | `${{ services.api.url }}` | `http://127.0.0.1:<port>`, for server-to-server calls inside the lane |
-| `${{ services.api.public_url }}` | `https://api.acme-2.localhost` (with `:8443` when the proxy fell back), for browsers and anything that must see the hostname |
+| `${{ services.api.public_url }}` | `https://api.acme2.localhost` (with `:8443` when the proxy fell back), for browsers and anything that must see the hostname |
 | `${{ services.api.hosts }}` | the list of hostnames |
 | `${{ lanes.main.services.api.url }}` | the same service in lane 0, for profiles that reuse one backend |
 | `${{ projects.billing.services.api.public_url \| default('https://billing.staging.example.invalid') }}` | a service of another running devlanes project |
@@ -132,6 +132,10 @@ A service that needs its own public URL, for OAuth callbacks or absolute links, 
 
 Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is exactly one expression keeps its type (`autostart: ${{ lane.index == 0 }}` is a boolean); mixed text is a string. Undefined names are errors; `| default('x')` makes them optional. Filters such as `upper`, `replace`, `join`, `int` and the `a if cond else b` form are available.
 
+| Function | Result |
+| --- | --- |
+| `domain(name)` | The domain of `name` in this lane, such as `pages.localhost` in lane 0 and `pages2.localhost` in lane 2. Use it for names that must not share the app's cookies ([a site of its own](https.md#a-site-of-its-own)). It works in `lanes.vars` too. |
+
 | Namespace | Contents |
 | --- | --- |
 | `project` | `name`, `primary_path` (the primary worktree, for files only it has) |
@@ -155,7 +159,7 @@ global_env:
   REDIS_URL: redis://127.0.0.1:${{ infra.redis.port }}/${{ lane.redis_db }}
 ```
 
-A var named `domain` replaces the default lane domain and `port` fixes where the block starts. `lanes.matrix` is the explicit alternative: entry N describes lane N.
+A var named `domain` replaces the default lane domain, which is `domain(project.name)`. A var named `port` fixes where the block starts. `lanes.matrix` is the explicit alternative: entry N describes lane N.
 
 Not every field sees every namespace. `lanes.vars` see `project`, `lane` and `env`. `infra.*` fields see `project`, `lane`, `infra` and `env`, but not `services`. Tasks and infra commands have an empty `self` apart from `name`.
 

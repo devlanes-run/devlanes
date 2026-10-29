@@ -257,7 +257,7 @@ fn starting() -> LaneSummary {
         unit(reference, "stub-stripe", "ready", "service"),
         unit(reference, "setup.db", "exited", "task"),
         unit(reference, "migrate", "running", "task"),
-        external(reference, "pgadmin", 5050, Some("pgadmin.acme-1.localhost")),
+        external(reference, "pgadmin", 5050, Some("pgadmin.acme1.localhost")),
     ];
     units[6].role = Some("setup".into());
     units[6].exit_code = Some(0);
@@ -509,12 +509,13 @@ pub fn boxes() -> Value {
                 db,
             ],
             "routes": [
-                route("gateway.acme-4.localhost", "api-gateway", "ready"),
-                route("app.acme-4.localhost", "web-app", "ready"),
-                route("docs.acme-4.localhost", "web-docs", "idle"),
+                route("gateway.acme4.localhost", "api-gateway", "ready"),
+                route("app.acme4.localhost", "web-app", "ready"),
+                route("docs.acme4.localhost", "web-docs", "idle"),
             ],
             "skipped_lanes": [{"lane": "acme@0", "hosts": ["gateway.acme.localhost"], "box": null,
-                               "reason": "this machine serves its hostnames"}],
+                               "reason": "acme@0 runs on this machine", "cause": "local_running",
+                               "winner": null, "winner_lane": "acme@0", "can_use": false}],
             "skipped_hosts": [{"host": "ext.example.com", "lane": "acme@4", "unit": "ext-build"}],
             "syncs": [{"lane": "acme@4", "unit": "ext-build", "index": 0,
                        "from": "/home/acme/acme/ext/dist",
@@ -529,16 +530,16 @@ pub fn boxes() -> Value {
             "registry": {
                 "lanes": [
                     {"key": key("acme", 0), "index": 0, "domain": "acme.localhost"},
-                    {"key": key("acme", 4), "index": 4, "domain": "acme-4.localhost"},
+                    {"key": key("acme", 4), "index": 4, "domain": "acme4.localhost"},
                 ],
                 "units": [
                     unit("acme", 0, "service", "api-gateway", "ready", port(24_000), host("gateway.acme.localhost", 24_000)),
                     unit("acme", 0, "service", "web-app", "ready", port(24_001), json!([])),
-                    unit("acme", 4, "service", "api-gateway", "ready", port(24_100), host("gateway.acme-4.localhost", 24_100)),
-                    unit("acme", 4, "service", "web-app", "ready", port(24_101), host("app.acme-4.localhost", 24_101)),
+                    unit("acme", 4, "service", "api-gateway", "ready", port(24_100), host("gateway.acme4.localhost", 24_100)),
+                    unit("acme", 4, "service", "web-app", "ready", port(24_101), host("app.acme4.localhost", 24_101)),
                     unit("acme", 4, "service", "wrk-email", "running", port(24_102), json!([])),
                     admin,
-                    unit("acme", 4, "service", "web-docs", "idle", port(24_104), host("docs.acme-4.localhost", 24_104)),
+                    unit("acme", 4, "service", "web-docs", "idle", port(24_104), host("docs.acme4.localhost", 24_104)),
                     unit("acme", 4, "service", "ext-build", "ready", port(24_105), host("ext.example.com", 24_105)),
                     unit("acme", 4, "task", "migrate", "exited", json!([]), json!([])),
                     unit("acme", 4, "container", "postgres", "running",
@@ -578,6 +579,193 @@ pub fn boxes() -> Value {
             "suffixes": ["localhost"],
         },
     ], "truncated": false, "next_cursor": null})
+}
+
+/// [`lanes`] with `shop@0` stopped, so a box lane chosen for it can take
+/// its hostnames.
+pub fn shop_stopped() -> Vec<LaneSummary> {
+    let mut lanes = lanes();
+    if let Some(shop) = lanes.iter_mut().find(|lane| lane.reference == "shop@0") {
+        shop.state = "idle".into();
+        shop.config_changed = false;
+        for unit in &mut shop.units {
+            unit.state = "idle".into();
+            unit.started_at_ms = None;
+            unit.drift = None;
+        }
+    }
+    lanes
+}
+
+/// `host.list` with two forks of one box image, `fork-a` and `fork-b`, both
+/// running `shop@0` with the same hostnames. `shop@0` was chosen for
+/// fork-a, so fork-a's lane is mirrored, and fork-b's and this machine's
+/// stopped one are not.
+pub fn forks() -> Value {
+    let key = json!({"project": "shop", "lane": "0"});
+    let unit = |name: &str, port: u16, host: &str| {
+        json!({"key": {"lane": key, "kind": "service", "name": name}, "hidden": false,
+               "state": "ready", "ports": [{"name": "default", "port": port}],
+               "hosts": [{"host": host, "port": port, "fallback": false, "host_header": "keep"}]})
+    };
+    let registry = json!({
+        "lanes": [{"key": key, "index": 0, "domain": "shop.localhost"}],
+        "units": [
+            unit("storefront", 31_000, "storefront.shop.localhost"),
+            unit("checkout-api", 31_001, "checkout.shop.localhost"),
+        ],
+    });
+    let bound = |port: u16, unit: &str| {
+        json!({"port": port, "lane": "shop@0", "unit": unit, "kind": "service", "state": "bound",
+               "addresses": ["127.0.0.1", "::1"], "conflicts": [], "relay": null, "last_error": null})
+    };
+    let route = |host: &str, unit: &str| {
+        json!({"host": host, "port": 0, "lane": "shop@0", "unit": unit,
+               "url": format!("https://{host}:8443"), "state": "ready"})
+    };
+    let fork = |host: &str| {
+        json!({
+            "host": host, "state": "connected", "transport": "ssh",
+            "connected_since_ms": NOW_MS - 3_600_000, "last_connected_ms": NOW_MS - 3_600_000,
+            "ports": [], "routes": [], "skipped_lanes": [], "skipped_hosts": [], "syncs": [],
+            "warnings": [], "chosen_lanes": [], "registry": registry,
+            "box": {"version": VERSION, "https_port": 8443, "ports_range": "31000-31999"},
+            "suffixes": ["localhost"],
+        })
+    };
+    let mut chosen = fork("fork-a");
+    chosen["chosen_lanes"] = json!(["shop@0"]);
+    chosen["ports"] = json!([bound(31_000, "storefront"), bound(31_001, "checkout-api")]);
+    chosen["routes"] = json!([
+        route("storefront.shop.localhost", "storefront"),
+        route("checkout.shop.localhost", "checkout-api"),
+    ]);
+    let mut other = fork("fork-b");
+    other["skipped_lanes"] = json!([{
+        "lane": "shop@0", "hosts": ["storefront.shop.localhost", "checkout.shop.localhost"],
+        "box": "fork-a", "reason": "fork-a's shop@0 is in use",
+        "cause": "box_chosen", "winner": "fork-a", "winner_lane": "shop@0", "can_use": true,
+    }]);
+    let mut list = json!({
+        "items": [chosen, other],
+        "yielded_local_lanes": [{"lane": "shop@0", "winner": "fork-a"}],
+        "truncated": false, "next_cursor": null,
+    });
+    range_overlaps(&mut list);
+    list
+}
+
+/// The `ports_range_overlap` warning each fork gets, in the daemon's words
+/// (`range_overlap` in `crates/daemon/src/remote/mod.rs`): every fork of
+/// one image has the same `ports.range`.
+fn range_overlaps(list: &mut Value) {
+    let Some(items) = list["items"].as_array_mut() else {
+        return;
+    };
+    let hosts: Vec<String> = items
+        .iter()
+        .filter_map(|item| item["host"].as_str().map(str::to_owned))
+        .collect();
+    for item in items.iter_mut() {
+        let Some(host) = item["host"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        let others: Vec<String> = hosts
+            .iter()
+            .filter(|other| **other != host)
+            .map(|other| format!("box {other} (31000-31999)"))
+            .collect();
+        item["warnings"] = json!([format!(
+            "box {host}'s ports.range 31000-31999 overlaps {}. Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before such lanes get their ports.",
+            others.join(" and ")
+        )]);
+    }
+}
+
+/// [`forks`] with a third fork and the long names VMs made from one image
+/// get: `acme-fork-a`, `-b` and `-c`. fork-a keeps the chosen lane.
+pub fn long_forks() -> Value {
+    let mut list = forks();
+    let rename = |value: &mut Value, from: &str, to: &str| {
+        if value.as_str() == Some(from) {
+            *value = json!(to);
+        }
+    };
+    let Some(items) = list["items"].as_array_mut() else {
+        return list;
+    };
+    let mut third = items[1].clone();
+    third["host"] = json!("fork-c");
+    items.push(third);
+    for item in items.iter_mut() {
+        for (from, to) in [
+            ("fork-a", "acme-fork-a"),
+            ("fork-b", "acme-fork-b"),
+            ("fork-c", "acme-fork-c"),
+        ] {
+            rename(&mut item["host"], from, to);
+            for skipped in item["skipped_lanes"].as_array_mut().into_iter().flatten() {
+                rename(&mut skipped["box"], from, to);
+                rename(&mut skipped["winner"], from, to);
+            }
+        }
+    }
+    for yielded in list["yielded_local_lanes"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+    {
+        rename(&mut yielded["winner"], "fork-a", "acme-fork-a");
+    }
+    range_overlaps(&mut list);
+    list
+}
+
+/// [`forks`] while this machine runs `shop@0`: its lane keeps the
+/// hostnames, both forks' lanes are skipped, and `m` cannot switch.
+pub fn forks_local_running() -> Value {
+    let mut list = forks();
+    for item in list["items"].as_array_mut().into_iter().flatten() {
+        item["chosen_lanes"] = json!([]);
+        item["ports"] = json!([]);
+        item["routes"] = json!([]);
+        item["skipped_lanes"] = json!([{
+            "lane": "shop@0", "hosts": ["storefront.shop.localhost", "checkout.shop.localhost"],
+            "box": null, "reason": "shop@0 runs on this machine",
+            "cause": "local_running", "winner": null, "winner_lane": "shop@0", "can_use": false,
+            "holds": "processes",
+        }]);
+    }
+    list["yielded_local_lanes"] = json!([]);
+    list
+}
+
+/// [`forks_local_running`] with `shop@0`'s own containers up beside its
+/// units: its Compose project and a plain container, which a stop of the
+/// lane leaves running.
+pub fn forks_processes_and_containers() -> Value {
+    let mut list = forks_local_running();
+    for item in list["items"].as_array_mut().into_iter().flatten() {
+        for skipped in item["skipped_lanes"].as_array_mut().into_iter().flatten() {
+            skipped["compose_project"] = json!("shop-lane0");
+            skipped["containers"] = json!(["devlanes-shop-lane0-cache"]);
+        }
+    }
+    list
+}
+
+/// [`forks_processes_and_containers`] after `shop@0` stopped here with its
+/// own containers left up: they keep the hostnames, which no devlanes
+/// command stops alone.
+pub fn forks_containers() -> Value {
+    let mut list = forks_processes_and_containers();
+    for item in list["items"].as_array_mut().into_iter().flatten() {
+        for skipped in item["skipped_lanes"].as_array_mut().into_iter().flatten() {
+            skipped["reason"] = json!("shop@0's containers run on this machine");
+            skipped["holds"] = json!("containers");
+        }
+    }
+    list
 }
 
 /// [`boxes`] after `hetzner` revoked this machine's pairing: its link waits

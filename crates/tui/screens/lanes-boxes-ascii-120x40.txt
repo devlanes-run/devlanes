@@ -1,0 +1,82 @@
+ devlanes  1 acme x   2 billing !   3 shop *                                                     Monitor  Daemon  Boxes
+ lanes  1 (@0 main)  2 @0 fork-a *  3 (@0 fork-b)  4 @1 feat/gift-cards -                       1-9 or [ ] switch lanes
++ @0 fork-a · 2/2 up --------------------------++ shop@0  running · 2 up ----------------------------------- on fork-a +
+| v services                                 2 || box       fork-a · ssh · devlanes 1.0.0                              |
+|   * storefront                               || domain    shop.localhost                                             |
+|   * checkout-api                             || services  2 of 2 up                                                  |
+|                                              || ports     2 of 2 mirrored here                                       |
+|                                              || urls      https://storefront.shop.localhost:8443                     |
+|                                              ||           https://checkout.shop.localhost:8443                       |
+|                                              ||                                                                      |
+|                                              || Read-only here. On fork-a: ssh fork-a, then devlanes status shop@0   |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
+|                                              ||                                                                      |
++----------------------------------------------++----------------------------------------------------------------------+
+ o open in browser   [ ] switch lane   / filter   B boxes   read-only: manage it on fork-a        ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-8 bold, 11-12 dim, 22-23 dim, 35-44 bold reversed, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
+1: 0-6 dim, 8-18 dim, 20-34 bold reversed, 36-48 dim, 51-70 dim, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
+2: 0 dim, 1-20 bold reversed, 21-49 dim, 50-55 bold dim, 56-119 dim
+3: 0 dim, 2-3 dim, 45 dim, 47-48 dim, 50-59 dim, 119 dim
+4: 0 dim, 47-48 dim, 50-59 dim, 119 dim
+5: 0 dim, 47-48 dim, 50-59 dim, 119 dim
+6: 0 dim, 47-48 dim, 50-59 dim, 119 dim
+7: 0 dim, 47-48 dim, 50-59 dim, 119 dim
+8: 0 dim, 47-48 dim, 50-59 dim, 119 dim
+9: 0 dim, 47-48 dim, 119 dim
+10: 0 dim, 47-48 dim, 50-115 dim, 119 dim
+11: 0 dim, 47-48 dim, 119 dim
+12: 0 dim, 47-48 dim, 119 dim
+13: 0 dim, 47-48 dim, 119 dim
+14: 0 dim, 47-48 dim, 119 dim
+15: 0 dim, 47-48 dim, 119 dim
+16: 0 dim, 47-48 dim, 119 dim
+17: 0 dim, 47-48 dim, 119 dim
+18: 0 dim, 47-48 dim, 119 dim
+19: 0 dim, 47-48 dim, 119 dim
+20: 0 dim, 47-48 dim, 119 dim
+21: 0 dim, 47-48 dim, 119 dim
+22: 0 dim, 47-48 dim, 119 dim
+23: 0 dim, 47-48 dim, 119 dim
+24: 0 dim, 47-48 dim, 119 dim
+25: 0 dim, 47-48 dim, 119 dim
+26: 0 dim, 47-48 dim, 119 dim
+27: 0 dim, 47-48 dim, 119 dim
+28: 0 dim, 47-48 dim, 119 dim
+29: 0 dim, 47-48 dim, 119 dim
+30: 0 dim, 47-48 dim, 119 dim
+31: 0 dim, 47-48 dim, 119 dim
+32: 0 dim, 47-48 dim, 119 dim
+33: 0 dim, 47-48 dim, 119 dim
+34: 0 dim, 47-48 dim, 119 dim
+35: 0 dim, 47-48 dim, 119 dim
+36: 0 dim, 47-48 dim, 119 dim
+37: 0 dim, 47-48 dim, 119 dim
+38: 0-119 dim
+39: 1 bold, 2-20 dim, 21-23 bold, 24-38 dim, 39 bold, 40-49 dim, 50 bold, 51-89 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

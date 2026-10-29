@@ -8,20 +8,20 @@ expression: lane_view(&lane)
     "name": "lane1",
     "label": "feature-login"
   },
-  "domain": "acme-1.localhost",
+  "domain": "acme1.localhost",
   "port": 21000,
   "vars": {},
   "profile": null,
   "infra_enabled": true,
   "routes": [
-    "api.acme-1.localhost -> api:21000",
-    "acme-1.localhost -> web:21001"
+    "api.acme1.localhost -> api:21000",
+    "acme1.localhost -> web:21001"
   ],
   "origins": [
-    "https://api.acme-1.localhost",
+    "https://api.acme1.localhost",
     "http://localhost:21000",
     "http://127.0.0.1:21000",
-    "https://acme-1.localhost",
+    "https://acme1.localhost",
     "http://localhost:21001",
     "http://127.0.0.1:21001"
   ],
@@ -32,8 +32,8 @@ expression: lane_view(&lane)
     "DEVLANES_LANE_DATA": "/home/dev/.devlanes/data/acme/11",
     "DEVLANES_LANE_NAME": "lane1",
     "DEVLANES_PROJECT": "acme",
-    "DEVLANES_PUBLIC_URL_API": "https://api.acme-1.localhost",
-    "DEVLANES_PUBLIC_URL_WEB": "https://acme-1.localhost"
+    "DEVLANES_PUBLIC_URL_API": "https://api.acme1.localhost",
+    "DEVLANES_PUBLIC_URL_WEB": "https://acme1.localhost"
   },
   "errors": {},
   "warnings": [],
@@ -43,9 +43,9 @@ expression: lane_view(&lane)
       "port": 21000,
       "ports": {},
       "url": "http://127.0.0.1:21000",
-      "public_url": "https://api.acme-1.localhost",
+      "public_url": "https://api.acme1.localhost",
       "hosts": [
-        "api.acme-1.localhost"
+        "api.acme1.localhost"
       ],
       "ready": "Tcp { port: 21000 } within 60s",
       "stop": "signal 15 after 10s",
@@ -98,9 +98,9 @@ expression: lane_view(&lane)
       "port": 21001,
       "ports": {},
       "url": "http://127.0.0.1:21001",
-      "public_url": "https://acme-1.localhost",
+      "public_url": "https://acme1.localhost",
       "hosts": [
-        "acme-1.localhost"
+        "acme1.localhost"
       ],
       "ready": "Tcp { port: 21001 } within 60s",
       "stop": "signal 15 after 10s",
@@ -145,7 +145,7 @@ expression: lane_view(&lane)
           "HOST": "Devlanes: 127.0.0.1",
           "PATH": "Client: /usr/bin:/bin",
           "PORT": "Devlanes: 21001",
-          "VITE_API_URL": "Service: https://api.acme-1.localhost"
+          "VITE_API_URL": "Service: https://api.acme1.localhost"
         }
       }
     }

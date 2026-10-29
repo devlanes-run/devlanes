@@ -6,14 +6,14 @@ expression: text
 acme
   LANE  BRANCH        STATE    SERVICES  CPU   MEM        URL
   0     main          running  1/1       4.5%  143.1 MiB  https://acme.localhost:8443
-  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme-2.localhost:8443
+  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme2.localhost:8443
 ! acme@2: config changed ports; devlanes reload --lane acme@2 restarts the lane with them
 ! acme@2: api.acme.localhost is routed by acme@0 and acme@2; acme@0 keeps it, so give one of them another hostname
 --- plain (exit 0)
 acme
   LANE  BRANCH        STATE    SERVICES  CPU   MEM        URL
   0     main          running  1/1       4.5%  143.1 MiB  https://acme.localhost:8443
-  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme-2.localhost:8443
+  2     feat/billing  running  1/1       4.5%  143.1 MiB  https://acme2.localhost:8443
 warn acme@2: config changed ports; devlanes reload --lane acme@2 restarts the lane with them
 warn acme@2: api.acme.localhost is routed by acme@0 and acme@2; acme@0 keeps it, so give one of them another hostname
 --- agent (exit 0)

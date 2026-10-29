@@ -32,7 +32,7 @@ pub struct LaneInfo {
     pub key: LaneKey,
     /// Persisted lane index; 0 is the primary worktree.
     pub index: u32,
-    /// Hostname suffix chosen by the box, such as `app-2.localhost`.
+    /// Hostname suffix chosen by the box, such as `app2.localhost`.
     pub domain: Option<String>,
 }
 

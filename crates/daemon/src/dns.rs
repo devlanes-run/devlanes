@@ -1,10 +1,11 @@
 //! The `resolver` hostname strategy: an embedded DNS server answering the user's
 //! TLD with loopback addresses, and lane domains under that TLD instead of
-//! `.localhost`. Installing the OS resolver file is the CLI's job (it needs sudo).
+//! `.localhost` ([`Inner::domain_suffix`]). Installing the OS resolver file is
+//! the CLI's job (it needs sudo).
 
 use std::sync::Arc;
 
-use devlanes_config::{Resolver, Templated};
+use devlanes_config::Resolver;
 use devlanes_resolver_dns::{DnsServer, Zone};
 use serde_json::{Value, json};
 
@@ -29,28 +30,22 @@ impl Inner {
         self.resolver_tld().and_then(|tld| Zone::new(&tld).ok())
     }
 
-    /// Makes `<project>[-N].<tld>` the default `lane.domain` under the resolver
-    /// strategy. An explicit `lanes.vars.domain` or a `matrix` keeps its own value.
-    /// An invalid TLD changes nothing, so the raw config value never reaches the
-    /// template expression.
-    pub(crate) fn with_resolver_domain(&self, state: ConfigState) -> ConfigState {
-        let (ConfigState::Loaded(config), Some(zone)) = (&state, self.resolver_zone()) else {
-            return state;
+    /// What the default `lane.domain` and `domain()` end in for a lane with
+    /// `config`: the TLD under the resolver strategy, else `localhost`. A
+    /// project that sets `lanes.vars.domain` or a `matrix` keeps `localhost`
+    /// for both, so its names stay in one mode. An invalid TLD changes
+    /// nothing, so the raw user value never reaches a hostname.
+    pub(crate) fn domain_suffix(&self, config: &ConfigState) -> String {
+        let explicit = match config {
+            ConfigState::Loaded(config) => {
+                config.lanes.matrix.is_some() || config.lanes.vars.contains_key("domain")
+            }
+            _ => false,
         };
-        let tld = zone.name();
-        if config.lanes.matrix.is_some() || config.lanes.vars.contains_key("domain") {
-            return state;
+        match self.resolver_zone() {
+            Some(zone) if !explicit => zone.name().to_owned(),
+            _ => devlanes_config::DEFAULT_DOMAIN_SUFFIX.to_owned(),
         }
-        let mut adapted = config.as_ref().clone();
-        // First, so other vars that read `lane.domain` see this value.
-        adapted.lanes.vars.shift_insert(
-            0,
-            "domain".into(),
-            Templated::Expression(format!(
-                "${{{{ project.name if lane.index == 0 else project.name ~ '-' ~ lane.index }}}}.{tld}"
-            )),
-        );
-        ConfigState::Loaded(Arc::new(adapted))
     }
 
     /// Starts the DNS server when the resolver strategy is configured. Failures are

@@ -81,7 +81,7 @@ services:
     run_script:
       file: api/package.json
       name: dev
-    # HTTPS hostnames routed by the proxy; lane.domain is acme.localhost or acme-<N>.localhost.
+    # HTTPS hostnames routed by the proxy. lane.domain is acme.localhost or acme<N>.localhost.
     hosts: "api.${{ lane.domain }}"
   web:
     # Adds Vite's port and host flags to the command.
@@ -95,7 +95,7 @@ services:
     hosts: "${{ lane.domain }}"
 ```
 
-In the worktree of lane 2 this serves `https://api.acme-2.localhost` and `https://acme-2.localhost`, each on its own allocated port. The excerpt comes from [minimal.yaml](docs/examples/minimal.yaml), which also has shared Postgres and a database per lane; [devlanes.yaml](docs/examples/devlanes.yaml) shows every form.
+In the worktree of lane 2 this serves `https://api.acme2.localhost` and `https://acme2.localhost`, each on its own allocated port. The excerpt comes from [minimal.yaml](docs/examples/minimal.yaml), which also has shared Postgres and a database per lane; [devlanes.yaml](docs/examples/devlanes.yaml) shows every form.
 
 ## License
 

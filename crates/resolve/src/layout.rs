@@ -29,6 +29,8 @@ pub(crate) struct Namespaces {
     pub services: Value,
     pub infra: Value,
     pub projects: Value,
+    /// What `domain()` ends domains in ([`LaneFacts::domain_suffix`]).
+    pub domain_suffix: String,
 }
 
 impl Namespaces {
@@ -44,6 +46,7 @@ impl Namespaces {
             env: env.clone(),
             projects: self.projects.clone(),
             replica,
+            domain_suffix: self.domain_suffix.clone(),
         }
     }
 
@@ -116,13 +119,10 @@ fn object_or_empty(value: &Value) -> Value {
     }
 }
 
-/// Default `lane.domain`: `<project>.localhost` for lane 0, else `<project>-<index>.localhost`.
-fn default_domain(project: &str, index: u32) -> String {
-    if index == 0 {
-        format!("{project}.localhost")
-    } else {
-        format!("{project}-{index}.localhost")
-    }
+/// Default `lane.domain`: `<project>.<suffix>` for lane 0, else
+/// `<project><index>.<suffix>`, as `domain(project.name)` gives it.
+fn default_domain(project: &str, facts: &LaneFacts) -> String {
+    devlanes_config::lane_domain(project, u64::from(facts.index), &facts.domain_suffix)
 }
 
 /// `project` and `lane` namespaces before `lanes.vars` are applied.
@@ -138,7 +138,7 @@ fn base_namespaces(project: &str, facts: &LaneFacts, port: Option<u16>) -> (Valu
         "path": facts.path.display().to_string(),
         // `/` on Windows too, so the path survives interpolation into `sh` strings.
         "data_path": devlanes_core::paths::forward_slashes(&facts.data_path),
-        "domain": default_domain(project, facts.index),
+        "domain": default_domain(project, facts),
     });
     if let (Some(port), Some(map)) = (port, lane.as_object_mut()) {
         map.insert("port".into(), port.into());
@@ -170,6 +170,7 @@ pub fn fixed_block_start<E: Extensions>(
         project,
         lane,
         env: env_namespace(client_env, dotenv),
+        domain_suffix: facts.domain_suffix.clone(),
         ..ExpressionContext::default()
     };
     let vars = devlanes_config::resolve_lane_vars(&config.lanes, &context)
@@ -222,6 +223,7 @@ pub(crate) fn build<E: Extensions>(
         services: json!({}),
         infra: object_or_empty(input.infra),
         projects: object_or_empty(input.projects),
+        domain_suffix: facts.domain_suffix.clone(),
     };
     let vars = devlanes_config::resolve_lane_vars(&config.lanes, &ns.lane_context(env))
         .map_err(|e| ResolveError::expression("lanes.vars", e))?;

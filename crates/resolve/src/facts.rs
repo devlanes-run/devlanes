@@ -26,6 +26,9 @@ pub struct LaneFacts {
     pub data_path: PathBuf,
     /// Checked-out branch; `None` on a detached HEAD or outside git.
     pub branch: Option<String>,
+    /// What the lane's default domain and `domain()` end in: `localhost`, or
+    /// the TLD under the `resolver` strategy.
+    pub domain_suffix: String,
 }
 
 impl LaneFacts {
@@ -51,6 +54,7 @@ impl LaneFacts {
             path,
             data_path: data_path.into(),
             branch,
+            domain_suffix: devlanes_config::DEFAULT_DOMAIN_SUFFIX.to_owned(),
         }
     }
 
@@ -58,6 +62,12 @@ impl LaneFacts {
     /// below the worktree.
     pub fn with_project_dir(mut self, relative: &std::path::Path) -> Self {
         self.project_dir = self.path.join(relative);
+        self
+    }
+
+    /// Sets [`LaneFacts::domain_suffix`], such as the `resolver` strategy's TLD.
+    pub fn with_domain_suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.domain_suffix = suffix.into();
         self
     }
 }

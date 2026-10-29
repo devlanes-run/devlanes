@@ -188,6 +188,13 @@ diesel::table! {
     }
 }
 diesel::table! {
+    remote_lane_choices (lane) {
+        lane -> Text,
+        host -> Text,
+        chosen_at -> BigInt,
+    }
+}
+diesel::table! {
     startup_peaks (id) {
         id -> BigInt,
         series -> Text,
@@ -213,5 +220,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     remote_hosts,
     remote_pairings,
     remote_tokens,
+    remote_lane_choices,
     startup_peaks,
 );

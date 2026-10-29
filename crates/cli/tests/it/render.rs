@@ -30,7 +30,7 @@ pub(crate) fn unit(name: &str, state: &str) -> Value {
     let port = 20100 + name.len() as u16;
     let mut urls = vec![json!(format!("http://127.0.0.1:{port}"))];
     if name != "worker" {
-        urls.push(json!(format!("https://{name}.acme-2.localhost:8443")));
+        urls.push(json!(format!("https://{name}.acme2.localhost:8443")));
     }
     json!({
         "name": name, "lane": "acme@2", "state": state,
@@ -76,7 +76,7 @@ pub(crate) fn lane(index: Option<u32>, branch: &str, state: &str, units: Vec<Val
         "path": format!("/work/acme-lanes/{}", branch.replace('/', "-")),
         "state": state, "config_changed": false, "units": units, "profile": null,
         "moves_to": null,
-        "domain": index.map(|i| if i == 0 { "acme.localhost".to_owned() } else { format!("acme-{i}.localhost") }),
+        "domain": index.map(|i| if i == 0 { "acme.localhost".to_owned() } else { format!("acme{i}.localhost") }),
         "port_block": index.map(|i| [20000 + i * 100, 20099 + i * 100]),
         "reason": null, "needs_env": false, "containers": [],
     })
@@ -303,7 +303,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             pgadmin["ports"] = json!({"default": 5050});
             pgadmin["urls"] = json!([
                 "http://127.0.0.1:5050",
-                "https://pgadmin.acme-2.localhost:8443"
+                "https://pgadmin.acme2.localhost:8443"
             ]);
             page(vec![lane(
                 Some(2),
@@ -473,7 +473,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                     {"code": "autostart_off", "data": {}},
                     {"code": "unassigned", "data": {"reason": "lanes_max", "max": 4}},
                     {"code": "no_config", "data": {}},
-                    {"code": "sudo_denied", "data": {"hosts": ["admin.acme-2.localhost"], "message": "sudo said no"}},
+                    {"code": "sudo_denied", "data": {"hosts": ["admin.acme2.localhost"], "message": "sudo said no"}},
                 {"code": "queued", "data": queued_reason["data"].clone()},
                 ],
             }),
@@ -495,15 +495,15 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
         (
             "url",
             Method::Url,
-            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost", "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost"]}),
+            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme2.localhost", "urls": ["http://127.0.0.1:20101", "https://web.acme2.localhost"]}),
         ),
         (
             "url_clients",
             Method::Url,
-            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme-2.localhost:8443",
-            "urls": ["http://127.0.0.1:20101", "https://web.acme-2.localhost:8443"],
+            json!({"lane": "acme@2", "unit": "web", "url": "https://web.acme2.localhost:8443",
+            "urls": ["http://127.0.0.1:20101", "https://web.acme2.localhost:8443"],
             "clients": [
-                {"client": "laptop", "id": "0123abcd", "alias": "hetzner", "url": "https://web.acme-2.localhost", "reachable": true, "reason": null},
+                {"client": "laptop", "id": "0123abcd", "alias": "hetzner", "url": "https://web.acme2.localhost", "reachable": true, "reason": null},
                 {"client": "desktop", "id": "4567ef01", "alias": "hetzner", "url": null, "reachable": false,
                  "reason": "port 20101 is in use there by postgres (pid 812)"},
             ]}),
@@ -513,9 +513,9 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Hosts,
             json!({
                 "items": [
-                    {"host": "api.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready",
-                     "clients": [{"client": "laptop", "url": "https://api.acme-2.localhost:9443", "reachable": true, "reason": null}]},
-                    {"host": "web.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": false, "state": "ready",
+                    {"host": "api.acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready",
+                     "clients": [{"client": "laptop", "url": "https://api.acme2.localhost:9443", "reachable": true, "reason": null}]},
+                    {"host": "web.acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": false, "state": "ready",
                      "clients": [{"client": "laptop", "url": null, "reachable": false, "reason": "the lane is not mirrored there"}]},
                 ],
                 "proxy": {"https": {"bound": true, "port": 443, "fallback_reason": null}},
@@ -527,8 +527,8 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
             Method::Hosts,
             json!({
                 "items": [
-                    {"host": "api.acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready"},
-                    {"host": "acme-2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": true, "state": "idle"},
+                    {"host": "api.acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "api", "port": 20101, "fallback": false, "state": "ready"},
+                    {"host": "acme2.localhost", "project": "acme", "lane": "acme@2", "unit": "web", "port": 20100, "fallback": true, "state": "idle"},
                 ],
                 "proxy": {"http": {"bound": true, "port": 80, "fallback_reason": null},
                           "https": {"bound": true, "port": 8443, "fallback_reason": "port 443 needs root"}},
@@ -692,7 +692,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                                     "message": "`web_app.localhost` contains `_`, which DNS names cannot; the route is left out"}}],
                 "ca_warnings": [{"code": "host_outside_ca", "data": {
                     "lane": "acme@2", "unit": "api", "host": "api.example.com",
-                    "permitted": ["localhost", "test"], "suggestion": "api.acme-2.localhost",
+                    "permitted": ["localhost", "test"], "suggestion": "api.acme2.localhost",
                 }}],
                 "projects": 2, "subscribers": 1,
                 "hosts": {"mode": "auto", "probe": "loopback", "state": "applied", "names": 3, "desired": 3, "skipped": 0,
@@ -1618,7 +1618,7 @@ fn leftover_processes_get_a_one_line_note() {
         {"name": "postgres", "ports": {"default": 20150}, "cpu_percent": 1.5, "memory_bytes": 52_000_000},
         {"name": "redis", "ports": {}, "shared": true, "cpu_percent": 0.5, "memory_bytes": 8_000_000},
         {"name": "s3mock", "ports": {"default": 19090}, "shared": true, "cpu_percent": 0.1,
-         "memory_bytes": 9_000_000, "urls": ["https://s3.acme-2.localhost"]},
+         "memory_bytes": 9_000_000, "urls": ["https://s3.acme2.localhost"]},
         {"name": "mail", "ports": {}},
     ]);
     let text = render_text(Method::Status, &json!({"items": [status]}));
@@ -1634,7 +1634,7 @@ fn leftover_processes_get_a_one_line_note() {
         .lines()
         .find(|line| line.contains("s3mock"))
         .unwrap_or_default();
-    assert!(s3.contains("https://s3.acme-2.localhost"), "{human}");
+    assert!(s3.contains("https://s3.acme2.localhost"), "{human}");
     assert!(
         !human.contains("mail"),
         "unsampled containers stay out\n{human}"
@@ -2413,8 +2413,8 @@ fn box_registries_stay_out_of_remote_ls() {
     let hosts = json!({"items": [{
         "host": "hetzner", "state": "connected", "transport": "ssh", "ports": [],
         "connected_since_ms": now - 5 * 60_000,
-        "routes": [{"host": "web.acme-1.localhost", "port": 20101, "lane": "acme@1",
-                    "unit": "web", "url": "https://web.acme-1.localhost", "state": "ready"}],
+        "routes": [{"host": "web.acme1.localhost", "port": 20101, "lane": "acme@1",
+                    "unit": "web", "url": "https://web.acme1.localhost", "state": "ready"}],
         "registry": {"lanes": [{"key": {"project": "acme", "lane": "1"}, "index": 1}],
                      "units": [{"key": {"lane": {"project": "acme", "lane": "1"},
                                         "kind": "service", "name": "registered-only"}}]},
@@ -2434,7 +2434,7 @@ fn box_registries_stay_out_of_remote_ls() {
     ] {
         assert!(!text.contains(hidden), "{hidden}: {text}");
     }
-    assert!(text.contains("https://web.acme-1.localhost"), "{text}");
+    assert!(text.contains("https://web.acme1.localhost"), "{text}");
     assert!(text.contains("connected_since: 5m ago"), "{text}");
 }
 
@@ -2814,6 +2814,262 @@ fn box_collision_warnings_name_the_other_box() {
             "overlaps": ["box alpha (20000-29999)", "box gamma (30000-32767)"],
             "message": "…"})
         ),
-        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767), so their lanes can get the same ports. Give one box a different ports.range\n"
+        "warn beta: the box's ports.range 20000-32767 overlaps box alpha (20000-29999) and box gamma (30000-32767). Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before such lanes get their ports.\n"
     );
+}
+
+/// A skipped lane's warning names the lane in use and the command that
+/// switches, or what to stop first. `choice_cleared` says which local lane
+/// took the hostnames back.
+#[test]
+fn lane_choice_warnings_say_how_to_switch() {
+    let line = |data: serde_json::Value| {
+        let event = Event {
+            seq: 1,
+            event: "remote.warning".into(),
+            data,
+        };
+        runtime(OutputMode::Agent)
+            .reporter()
+            .event(Method::Subscribe, &event)
+            .expect("event")
+            .stdout
+    };
+    let skipped = |cause: &str, winner: Value| {
+        json!({"host": "fork-b", "code": "lane_skipped", "lane": "acme@0",
+               "hosts": ["web.acme.localhost"], "box": winner, "local_lanes": [],
+               "cause": cause, "winner_lane": "acme@0"})
+    };
+    assert_eq!(
+        line(skipped("box_earlier", json!("fork-a"))),
+        "warn fork-b: lane acme@0 is not mirrored because fork-a's acme@0 is in use. devlanes remote use fork-b acme@0 switches\n"
+    );
+    assert_eq!(
+        line(skipped("local_stopped", Value::Null)),
+        "warn fork-b: lane acme@0 is not mirrored because this machine's acme@0 is in use. devlanes remote use fork-b acme@0 switches\n"
+    );
+    assert_eq!(
+        line(skipped("local_running", Value::Null)),
+        "warn fork-b: lane acme@0 is not mirrored because acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Then run devlanes remote use fork-b acme@0.\n"
+    );
+    // `devlanes stop` leaves containers up, so the commands stop exactly the
+    // lane's own ones.
+    let mut held = skipped("local_running", Value::Null);
+    held["holds"] = json!("containers");
+    held["compose_project"] = json!("acme-lane0");
+    held["containers"] = json!(["devlanes-acme-lane0-cerbos"]);
+    assert_eq!(
+        line(held),
+        "warn fork-b: lane acme@0 is not mirrored because acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then run devlanes remote use fork-b acme@0.\n"
+    );
+    // A switch someone asked for is a plain line, not a warning.
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "lane_switched", "lane": "acme@0",
+                    "to": "fork-b", "from": "fork-a", "message": "…"})
+        ),
+        "acme@0 now comes from fork-b\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "lane_switched", "lane": "acme@0",
+                    "to": null, "from": "fork-b", "message": "…"})
+        ),
+        "acme@0 now comes from this machine\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "choice_cleared", "lane": "acme@0",
+                    "local_lane": "acme@0", "message": "…"})
+        ),
+        "warn fork-b: acme@0 started on this machine, so fork-b's acme@0 is no longer mirrored or chosen.\n"
+    );
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "choice_cleared", "lane": "shop@0",
+                    "local_lane": "acme@1", "message": "…"})
+        ),
+        "warn fork-b: acme@1 started on this machine, so fork-b's shop@0 is no longer mirrored or chosen.\n"
+    );
+    // Containers that came back by themselves are no start.
+    assert_eq!(
+        line(
+            json!({"host": "fork-b", "code": "choice_cleared", "lane": "acme@0",
+                    "local_lane": "acme@0", "holds": "containers", "message": "…"})
+        ),
+        "warn fork-b: acme@0's containers run on this machine, so fork-b's acme@0 is no longer mirrored or chosen. Stop them, then run devlanes remote use fork-b acme@0 to switch back.\n"
+    );
+}
+
+/// `remote use` says where the lane comes from now and which lane stopped
+/// serving it. Agents get one line, and `--json` the daemon's reply.
+#[test]
+fn remote_use_says_where_the_lane_comes_from() {
+    let human = |data: Value| {
+        runtime(OutputMode::Human)
+            .reporter()
+            .result(&Report::new(Method::RemoteUse, &data))
+            .expect("render")
+            .stdout
+    };
+    let reply = |host: Value, previous: Value, mirrored: bool| json!({"lane": "acme@0", "host": host, "previous": previous, "mirrored": mirrored});
+    assert_eq!(
+        human(reply(json!("fork-b"), json!("fork-a"), true)),
+        "acme@0 now comes from fork-b. fork-a's lane is no longer mirrored.\n"
+    );
+    assert_eq!(
+        human(reply(json!("fork-b"), Value::Null, true)),
+        "acme@0 now comes from fork-b. This machine's lane gets the hostnames back when it starts.\n"
+    );
+    assert_eq!(
+        human(reply(Value::Null, json!("fork-b"), true)),
+        "acme@0 now comes from this machine. fork-b's lane is no longer mirrored.\n"
+    );
+    assert_eq!(
+        human(reply(json!("fork-b"), json!("fork-b"), true)),
+        "acme@0 already comes from fork-b.\n"
+    );
+    assert_eq!(
+        human(reply(json!("fork-b"), json!("fork-a"), false)),
+        "fork-b's acme@0 is chosen but not mirrored yet. devlanes remote ls shows why.\n"
+    );
+    let mut replacing = reply(Value::Null, json!("fork-a"), true);
+    replacing["replaced"] = json!([{"lane": "shop@0", "host": "fork-a"}]);
+    assert_eq!(
+        human(replacing),
+        "acme@0 now comes from this machine. fork-a's lane is no longer mirrored.\nThe choice of fork-a's shop@0 is deleted, since it clashes.\n"
+    );
+    let mut offline = reply(json!("fork-b"), json!("fork-a"), false);
+    offline["pending"] = json!(true);
+    assert_eq!(
+        human(offline),
+        "acme@0 will come from fork-b once it connects.\n"
+    );
+    let data = reply(json!("fork-b"), json!("fork-a"), true);
+    let agent = runtime(OutputMode::Agent)
+        .reporter()
+        .result(&Report::new(Method::RemoteUse, &data))
+        .expect("render")
+        .stdout;
+    assert_eq!(
+        agent,
+        "remote use lane=acme@0 from=fork-b previous=fork-a mirrored=true pending=false\n"
+    );
+    let json = runtime(OutputMode::Json)
+        .reporter()
+        .result(&Report::new(Method::RemoteUse, &data))
+        .expect("json")
+        .stdout;
+    assert_eq!(serde_json::from_str::<Value>(&json).expect("json"), data);
+}
+
+/// `remote ls` gives each skipped lane a note with the lane in use and the
+/// command that switches, marks the lanes chosen for a box, and lists this
+/// machine's lanes a box lane is in use instead of. `--json` keeps every
+/// field.
+#[test]
+fn remote_ls_names_the_lane_in_use() {
+    let hosts = json!({"items": [
+        {"host": "fork-a", "state": "connected", "transport": "ssh", "ports": [],
+         "chosen_lanes": [],
+         "skipped_lanes": [
+            {"lane": "acme@0", "hosts": ["web.acme.localhost"], "box": "fork-b",
+             "reason": "fork-b's acme@0 is in use", "cause": "box_chosen",
+             "winner": "fork-b", "winner_lane": "acme@0", "can_use": true},
+            {"lane": "shop@0", "hosts": ["shop.localhost"], "box": null,
+             "reason": "shop@0 runs on this machine", "cause": "local_running",
+             "winner": null, "winner_lane": "shop@0", "can_use": false,
+             "holds": "processes"},
+            {"lane": "blog@0", "hosts": ["blog.localhost"], "box": null,
+             "reason": "blog@0's containers run on this machine", "cause": "local_running",
+             "winner": null, "winner_lane": "blog@0", "can_use": false,
+             "holds": "containers", "compose_project": "blog-lane0", "containers": []}]},
+        {"host": "fork-b", "state": "connected", "transport": "ssh", "ports": [],
+         "chosen_lanes": ["acme@0"], "skipped_lanes": []},
+    ], "yielded_local_lanes": [{"lane": "acme@0", "winner": "fork-b"}],
+       "truncated": false, "next_cursor": null});
+    let text = render_text(Method::HostList, &hosts);
+    for expected in [
+        "note: not mirrored because fork-b's acme@0 is in use. devlanes remote use fork-a acme@0 switches.",
+        "note: not mirrored because shop@0 runs on this machine. Stop it with devlanes stop --lane shop@0. Then run devlanes remote use fork-a shop@0.",
+        "note: not mirrored because blog@0's containers run on this machine. Stop them with docker compose -p blog-lane0 stop. Then run devlanes remote use fork-a blog@0.",
+        "chosen: acme@0",
+        "note: fork-b's lane is in use instead. devlanes remote use --local acme@0 switches back.",
+    ] {
+        assert!(text.contains(expected), "{expected}: {text}");
+    }
+    for hidden in [
+        "cause:",
+        "can_use",
+        "winner_lane",
+        "chosen_lanes",
+        "yielded",
+        "holds",
+        "compose_project",
+    ] {
+        assert!(!text.contains(hidden), "{hidden}: {text}");
+    }
+    let json = runtime(OutputMode::Json)
+        .reporter()
+        .result(&Report::new(Method::HostList, &hosts))
+        .expect("json")
+        .stdout;
+    assert_eq!(serde_json::from_str::<Value>(&json).expect("json"), hosts);
+}
+
+/// Each `remote use` refusal says what is wrong and what to run.
+#[test]
+fn remote_use_refusals_say_what_to_do() {
+    let stderr = |code: &str, data: Value| {
+        runtime(OutputMode::Agent)
+            .reporter()
+            .error(&RpcError::new(code, data, 1), None)
+            .stderr
+    };
+    for (code, data, says, fix) in [
+        (
+            "box_unknown",
+            json!({"host": "fork-c", "message": "…"}),
+            "this machine knows no box called fork-c",
+            "devlanes remote ls",
+        ),
+        (
+            "lane_not_on_box",
+            json!({"host": "fork-b", "lane": "acme@9", "message": "…"}),
+            "box fork-b has no lane acme@9",
+            "devlanes remote ls",
+        ),
+        (
+            "local_lane_running",
+            json!({"host": "fork-b", "lane": "acme@0", "local_lane": "acme@0", "message": "…"}),
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Then run devlanes remote use fork-b acme@0.",
+            "devlanes stop --lane acme@0",
+        ),
+        (
+            "local_lane_running",
+            json!({"host": "fork-b", "lane": "acme@0", "local_lane": "acme@0",
+                   "holds": "containers", "compose_project": "acme-lane0",
+                   "containers": ["devlanes-acme-lane0-cerbos"], "message": "…"}),
+            "acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then run devlanes remote use fork-b acme@0.",
+            "docker compose -p acme-lane0 stop",
+        ),
+        (
+            "local_lane_running",
+            json!({"host": "fork-b", "lane": "acme@0", "local_lane": "acme@0",
+                   "holds": "processes", "compose_project": "acme-lane0",
+                   "containers": ["devlanes-acme-lane0-cerbos"], "message": "…"}),
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Stop its containers with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then run devlanes remote use fork-b acme@0.",
+            "docker compose -p acme-lane0 stop",
+        ),
+        (
+            "local_lane_unknown",
+            json!({"lane": "acme@4", "message": "…"}),
+            "this machine has no lane acme@4",
+            "devlanes remote use <box> acme@4",
+        ),
+    ] {
+        let text = stderr(code, data);
+        assert!(text.contains(says), "{code}: {text}");
+        assert!(text.contains(fix), "{code}: {text}");
+    }
 }

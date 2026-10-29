@@ -176,7 +176,7 @@ mod tests {
     fn matches_apex_and_subdomains_only() {
         let zone = Zone::new("test").expect("zone");
         assert!(zone.contains("test"));
-        assert!(zone.contains("api.acme-2.TEST."));
+        assert!(zone.contains("api.acme2.TEST."));
         assert!(!zone.contains("contest"));
         assert!(!zone.contains("test.com"));
         let deep = Zone::new("dev.internal").expect("zone");

@@ -1,12 +1,12 @@
- devlanes  1 acme   2 billing   3 shop   4 acme @hetzner   5 shop @devbox                                                                                             Monitor  Daemon  Boxes · 3 issues
- lanes  1 @0  2 @4                                                                                                                                                              1-9 or [ ] switch lanes
-┌ @4 · 6/7 up ─────────────────────────────────┐┌ web-app  ready · https://app.acme-4.localhost:8443 ────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
+ devlanes  1 acme   2 billing   3 shop                                                                                          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
+ lanes  1 @0 main  2 @0 hetzner ○  3 @1 feat/checkout 4/8  4 @2 fix/cache  5 @3 spike/old-search  6 @4 hetzner                                                                  1-9 or [ ] switch lanes
+┌ @4 hetzner · 6/7 up ─────────────────────────┐┌ web-app  ready · https://app.acme4.localhost:8443 ─────────────────────────────────────────────────────────────────────────────────────── on hetzner ┐
 │ ▾ services                                 6 ││ ! hetzner needs a new pairing code, so this is its last known state.                                                                                 │
 │   ● api-gateway                              ││   Run devlanes daemon pair on hetzner. Then press B and enter on hetzner.                                                                            │
 │   ● web-app                                  ││                                                                                                                                                      │
 │   ◉ wrk-email                                ││ state     ready on the box                                                                                                                           │
 │   ● api-admin                                ││ ports     default 24101  in use here by node (pid 9131), but its hostnames still open it                                                             │
-│   · web-docs                                 ││ hosts     https://app.acme-4.localhost:8443 (pairing needed)                                                                                         │
+│   · web-docs                                 ││ hosts     https://app.acme4.localhost:8443 (pairing needed)                                                                                          │
 │   ● ext-build                                ││                                                                                                                                                      │
 │                                              ││ Read-only here. On hetzner: ssh hetzner, then devlanes logs acme@4:web-app                                                                           │
 │ ▾ tasks                                    1 ││                                                                                                                                                      │
@@ -60,9 +60,9 @@
  o open in browser   z zoom   / filter   B boxes   read-only: manage it on hetzner (ssh hetzner)                                                                                  ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 40-56 bold black on yellow, 59-60 dim, 61-72 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold, 184-187 dim, 188-198 yellow
-1: 0-6 dim, 8-9 dim, 10-11 green, 13-18 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
-2: 0 darkgray, 2-3 bold, 4-12 dim, 14-48 darkgray, 50-56 bold, 57-58 dim, 59-63 green, 64-99 dim, 101-186 darkgray, 188-197 dim, 199 darkgray
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold, 184-187 dim, 188-198 yellow
+1: 0-6 dim, 8-9 dim, 10-16 red, 19-32 dim, 35-36 dim, 37-56 yellow, 59-72 dim, 75-76 dim, 77-95 yellow, 97-110 bold reversed, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
+2: 0 darkgray, 2-11 bold, 12-20 dim, 22-48 darkgray, 50-56 bold, 57-58 dim, 59-63 green, 64-98 dim, 100-186 darkgray, 188-197 dim, 199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 199 darkgray
 4: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 199 darkgray
 5: 0 darkgray, 1-46 reversed, 47-48 darkgray, 199 darkgray

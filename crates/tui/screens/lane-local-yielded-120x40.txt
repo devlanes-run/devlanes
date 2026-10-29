@@ -1,0 +1,82 @@
+ devlanes  1 acme   2 billing   3 shop                                                           Monitor  Daemon  Boxes
+ lanes  1 @0 main ○  2 @0 fork-a  3 @0 fork-b ○  4 @1 feat/gift-cards                           1-9 or [ ] switch lanes
+┌ @0 · not in use ─────────────────────────────┐┌ main @0 · not running ───────────────────────────────────────────────┐
+│ ▾ services                                 4 ││ ! fork-a's shop@0 is in use instead. Press m to use this one.        │
+│   · storefront                               ││                                                                      │
+│   · checkout-api                             ││ Not running. s starts the lane with its default profile, p picks     │
+│   · mailer                                   ││ profiles.                                                            │
+│   · admin                                    ││                                                                      │
+│                                              ││ branch    main                                                       │
+│                                              ││ worktree  /work/shop                                                 │
+│                                              ││ services  0 of 4 up                                                  │
+│                                              ││           · storefront       stopped                                 │
+│                                              ││           · checkout-api     stopped                                 │
+│                                              ││           · mailer           stopped                                 │
+│                                              ││           · admin            stopped                                 │
+│                                              ││                                                                      │
+│                                              ││ lanes in shop                                                        │
+│                                              ││ ▌ main @0                  not in use · not running                  │
+│                                              ││   @0 on fork-a             in use · running · 2 up                   │
+│                                              ││   @0 on fork-b             not mirrored · running · 2 up             │
+│                                              ││   feat/gift-cards @1       not running                               │
+│                                              ││                                                                      │
+│                                              ││ 1-9 (the lane's place in the bar), [ and ] or a click on a chip      │
+│                                              ││ switch lanes. devlanes start in a new git worktree adds one.         │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+│                                              ││                                                                      │
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
+ m use this one   s start lane   S start all   p start with profiles   C clean lane               ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
+1: 0-6 dim, 7-19 bold reversed, 21-22 dim, 23-31 green, 34-46 dim, 49-68 dim, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
+2: 0 darkgray, 1-17 bold reversed, 18-48 darkgray, 50-53 bold, 57-70 dim, 72-119 darkgray
+3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray
+4: 0 darkgray, 4-5 dim, 6-15 dim blue, 47-48 darkgray, 119 darkgray
+5: 0 darkgray, 4-5 dim, 6-17 dim blue, 47-48 darkgray, 119 darkgray
+6: 0 darkgray, 4-5 dim, 6-11 dim blue, 47-48 darkgray, 119 darkgray
+7: 0 darkgray, 4-5 dim, 6-10 dim lightmagenta, 47-48 darkgray, 119 darkgray
+8: 0 darkgray, 47-48 darkgray, 50-59 dim, 119 darkgray
+9: 0 darkgray, 47-48 darkgray, 50-59 dim, 119 darkgray
+10: 0 darkgray, 47-48 darkgray, 50-59 dim, 119 darkgray
+11: 0 darkgray, 47-48 darkgray, 60-61 dim, 79-85 dim, 119 darkgray
+12: 0 darkgray, 47-48 darkgray, 60-61 dim, 79-85 dim, 119 darkgray
+13: 0 darkgray, 47-48 darkgray, 60-61 dim, 79-85 dim, 119 darkgray
+14: 0 darkgray, 47-48 darkgray, 60-61 dim, 79-85 dim, 119 darkgray
+15: 0 darkgray, 47-48 darkgray, 119 darkgray
+16: 0 darkgray, 47-48 darkgray, 50-62 bold, 119 darkgray
+17: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-100 dim, 119 darkgray
+18: 0 darkgray, 47-48 darkgray, 50-51 bold, 83-99 dim, 119 darkgray
+19: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-105 dim, 119 darkgray
+20: 0 darkgray, 47-48 darkgray, 50-51 bold, 77-87 dim, 119 darkgray
+21: 0 darkgray, 47-48 darkgray, 119 darkgray
+22: 0 darkgray, 47-48 darkgray, 50-112 dim, 119 darkgray
+23: 0 darkgray, 47-48 darkgray, 50-109 dim, 119 darkgray
+24: 0 darkgray, 47-48 darkgray, 119 darkgray
+25: 0 darkgray, 47-48 darkgray, 119 darkgray
+26: 0 darkgray, 47-48 darkgray, 119 darkgray
+27: 0 darkgray, 47-48 darkgray, 119 darkgray
+28: 0 darkgray, 47-48 darkgray, 119 darkgray
+29: 0 darkgray, 47-48 darkgray, 119 darkgray
+30: 0 darkgray, 47-48 darkgray, 119 darkgray
+31: 0 darkgray, 47-48 darkgray, 119 darkgray
+32: 0 darkgray, 47-48 darkgray, 119 darkgray
+33: 0 darkgray, 47-48 darkgray, 119 darkgray
+34: 0 darkgray, 47-48 darkgray, 119 darkgray
+35: 0 darkgray, 47-48 darkgray, 119 darkgray
+36: 0 darkgray, 47-48 darkgray, 119 darkgray
+37: 0 darkgray, 47-48 darkgray, 119 darkgray
+38: 0-119 darkgray
+39: 1 bold, 2-17 dim, 18 bold, 19-32 dim, 33 bold, 34-46 dim, 47 bold, 48-70 dim, 71 bold, 72-85 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

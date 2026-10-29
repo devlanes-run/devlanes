@@ -59,6 +59,15 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         .as_ref()
         .map(|power| Span::styled(format!(" {}", clean(&power.level)), theme.quiet()));
     let on_box = app.box_lane(&lane.reference);
+    // This machine's own lane, whose hostnames a chosen box lane took, is
+    // not in use. A box's grey lane is not mirrored here.
+    let grey = app.grey(&lane.reference).map(|grey| {
+        if grey.host.is_none() {
+            " · not in use"
+        } else {
+            " · not mirrored"
+        }
+    });
     match lane.index {
         // A box lane goes by its reference on the box: `acme@1 on hetzner`.
         _ if on_box.is_some() && app.project_lanes().len() < 2 => {
@@ -72,12 +81,30 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
         }
         Some(index) if app.project_lanes().len() > 1 => {
             let counts = tree::counts(lane);
+            // Narrow lists cut the title, and what serves the lane matters more.
+            let after = match grey {
+                Some(grey) => grey.to_owned(),
+                None => format!(" · {}/{} up", counts.up, counts.total),
+            };
             name.push(Span::styled(format!("@{index}"), bold));
+            if let Some((host, _)) = &on_box {
+                // The whole name where it fits, else cut as the chip cuts it,
+                // so `not mirrored` still shows.
+                let hosts: Vec<&str> = app
+                    .project_lanes()
+                    .iter()
+                    .filter_map(|l| app.lane_box(&l.reference).map(|b| b.host.as_str()))
+                    .collect();
+                let room = usize::from(boxed.width)
+                    .saturating_sub(6 + text::width(&format!("@{index}")) + text::width(&after));
+                let shown =
+                    super::short_box(&host.host, &hosts, room.max(super::box_room(app.size.0)));
+                name.push(Span::styled(format!(" {shown}"), bold));
+            }
             name.extend(power);
-            name.push(Span::styled(
-                format!(" · {}/{} up", counts.up, counts.total),
-                theme.quiet(),
-            ));
+            if grey.is_none() {
+                name.push(Span::styled(after, theme.quiet()));
+            }
         }
         index => {
             name.push(Span::styled(lane_name(lane), bold));
@@ -99,6 +126,9 @@ pub fn render(app: &App, frame: &mut Frame, boxed: Rect, area: Rect) {
     };
     if let Some(word) = word {
         name.push(Span::styled(format!(" · {word}"), theme.tone(Tone::Busy)));
+    }
+    if let Some(grey) = grey {
+        name.push(Span::styled(grey, theme.quiet()));
     }
     name.push(Span::raw(" "));
     if app.selected_id() == Some(&RowId::WholeLane) {

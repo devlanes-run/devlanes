@@ -46,8 +46,10 @@ lanes:
   hosts_file: always
   # Values computed per lane and read as lane.<name>; lane.index is 0 for the primary worktree.
   vars:
-    # Replaces the default domain, <project>.localhost or <project>-<index>.localhost.
-    domain: ${{ 'acme' if lane.index == 0 else 'acme-' ~ lane.index }}.localhost
+    # Replaces the default domain, <project>.localhost or <project><index>.localhost.
+    # domain('acme') applies that rule to the name acme, so lane 2 is acme2.localhost.
+    # Setting it keeps .localhost even with the resolver strategy's TLD.
+    # domain: ${{ domain('acme') }}
     db_name: acme_${{ lane.name }}
     redis_db: ${{ lane.index }}
     vhost: acme_${{ lane.name }}
@@ -284,7 +286,9 @@ services:
     env:
       # http://127.0.0.1:<port> of another service in this lane.
       ACME_PAGES_SERVER_URL: ${{ services.pages_server.url }}
-    hosts: ["pages.${{ lane.domain }}", "*.pages-${{ lane.index }}.localhost"]
+    # pages.acme2.localhost stays on the app's site. User pages under *.acme-pages2.localhost
+    # get a site of their own, so they never share the app's cookies.
+    hosts: ["pages.${{ lane.domain }}", "*.${{ domain('acme-pages') }}"]
   pages-server:
     platform: node
     run: pnpm --silent -F @acme/pages-server dev

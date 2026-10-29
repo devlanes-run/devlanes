@@ -32,7 +32,7 @@ async fn main() -> Result<(), devlanes_tui::Error> {
 - `drive` runs the event loop on any ratatui backend with any event stream.
 - `app::App::update` turns messages into effects without I/O; `ui::render` draws an `App`.
 - `tree` builds a lane's rows; `monitor` sorts, filters and groups the monitor's rows; `graph` draws braille graphs, sparklines and meters in the load gradient.
-- `boxes` reads `host.list` and turns each connected box's registry into read-only lanes (`acme@1 @hetzner` in project `acme @hetzner`); `clients` reads `remote.clients`.
+- `boxes` reads `host.list` and turns each connected box's registry into read-only lanes (`acme@1 @hetzner` in project `acme`), each a `BoxLane` that names its box; `clients` reads `remote.clients`.
 - `connect` holds the boxes view's modals: the new connection form, the prompts of an attached `connect` and the pairing code.
 
 ## Config example
@@ -58,6 +58,8 @@ Moving through the list watches a unit without resizing its PTY. Enter, a double
 A unit's pane is one surface: the lines that left the unit's screen above the screen itself, both from the daemon's `attach.view` events, and above those the unit's log, read a page at a time as scrolling nears the top of what the pane keeps. Scrolling moves over all of it alike.
 
 Connecting a box from the boxes view sends `connect` on a connection of its own and stays attached while the link settles, so the daemon relays ssh's prompts and the box's pairing code to the TUI, as it does to `remote connect`. Answers go back as binary frames on that connection. Esc drops it, and the daemon keeps the connection to the box. A box reached by a command is first saved as `remote.boxes.<name>.command` in `config.yaml`, with the same edit `devlanes config set` makes.
+
+A box lane joins the tab of the project with its name, and a project only boxes run gets one tab. In a tab with box lanes the chips go by number, this machine's lane first, then the boxes by name: `@0  @0 fork-a  @0 fork-b  @1`. When lanes clash on hostnames, the daemon mirrors one of them, and the others are grey: dim, with a hollow dot, or in parentheses with ascii glyphs. `m` on a grey lane sends `remote.use` to make it the one in use. While this machine's lane runs, `m` asks first, stops that lane and switches once it stopped. In the boxes view, `m` works on a box's skipped lane row too.
 
 While lanes start, the terminal tab's progress bar shows ready services over the services starting, across every starting lane. A failed start shows red for three seconds. Quitting, a panic or `terminal.progress: never` clears it; see `devlanes-term` for where it is drawn.
 

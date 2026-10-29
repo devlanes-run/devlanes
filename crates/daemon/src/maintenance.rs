@@ -105,6 +105,10 @@ impl Inner {
         if deleted_any(&report) {
             tracing::info!(?report, "pruned state history");
         }
+        // A forgotten box's choices went with its row.
+        if report.remote_hosts > 0 {
+            self.reload_choices().await;
+        }
         if report.budget_exceeded {
             tracing::warn!(
                 bytes = report.bytes_after,

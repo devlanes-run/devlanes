@@ -1,0 +1,122 @@
+ devlanes  1 acme   2 billing   3 shop                                                                                                                                           Monitor  Daemon  Boxes
+ lanes  1 @0 main  2 @0 fork-a ○  3 @0 fork-b ○  4 @1 feat/gift-cards                                                                                                           1-9 or [ ] switch lanes
+┌ @0 fork-b · not mirrored ────────────────────┐┌ shop@0  running · 2 up ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────── on fork-b ┐
+│ ▾ services                                 2 ││ ! Not mirrored. shop@0's containers run on this machine. Stop them, then press m.                                                                    │
+│   ● storefront                               ││   docker compose -p shop-lane0 stop                                                                                                                  │
+│   ● checkout-api                             ││   docker stop devlanes-shop-lane0-cache                                                                                                              │
+│                                              ││                                                                                                                                                      │
+│                                              ││ box       fork-b · ssh · devlanes 1.0.0                                                                                                              │
+│                                              ││ domain    shop.localhost                                                                                                                             │
+│                                              ││ services  2 of 2 up                                                                                                                                  │
+│                                              ││                                                                                                                                                      │
+│                                              ││ Read-only here. On fork-b: ssh fork-b, then devlanes status shop@0                                                                                   │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+│                                              ││                                                                                                                                                      │
+└──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ m use this one   [ ] switch lane   / filter   B boxes   read-only: manage it on fork-b (ssh fork-b)                                                                              ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
+1: 0-6 dim, 8-16 dim, 19-31 dim, 33-47 bold reversed, 49-68 dim, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
+2: 0 darkgray, 1-26 bold reversed, 27-48 darkgray, 50-55 bold, 56-71 dim, 73-187 darkgray, 189-197 dim, 199 darkgray
+3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 199 darkgray
+4: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 199 darkgray
+5: 0 darkgray, 4-5 green, 6-17 blue, 47-48 darkgray, 199 darkgray
+6: 0 darkgray, 47-48 darkgray, 199 darkgray
+7: 0 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
+8: 0 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
+9: 0 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
+10: 0 darkgray, 47-48 darkgray, 199 darkgray
+11: 0 darkgray, 47-48 darkgray, 50-115 dim, 199 darkgray
+12: 0 darkgray, 47-48 darkgray, 199 darkgray
+13: 0 darkgray, 47-48 darkgray, 199 darkgray
+14: 0 darkgray, 47-48 darkgray, 199 darkgray
+15: 0 darkgray, 47-48 darkgray, 199 darkgray
+16: 0 darkgray, 47-48 darkgray, 199 darkgray
+17: 0 darkgray, 47-48 darkgray, 199 darkgray
+18: 0 darkgray, 47-48 darkgray, 199 darkgray
+19: 0 darkgray, 47-48 darkgray, 199 darkgray
+20: 0 darkgray, 47-48 darkgray, 199 darkgray
+21: 0 darkgray, 47-48 darkgray, 199 darkgray
+22: 0 darkgray, 47-48 darkgray, 199 darkgray
+23: 0 darkgray, 47-48 darkgray, 199 darkgray
+24: 0 darkgray, 47-48 darkgray, 199 darkgray
+25: 0 darkgray, 47-48 darkgray, 199 darkgray
+26: 0 darkgray, 47-48 darkgray, 199 darkgray
+27: 0 darkgray, 47-48 darkgray, 199 darkgray
+28: 0 darkgray, 47-48 darkgray, 199 darkgray
+29: 0 darkgray, 47-48 darkgray, 199 darkgray
+30: 0 darkgray, 47-48 darkgray, 199 darkgray
+31: 0 darkgray, 47-48 darkgray, 199 darkgray
+32: 0 darkgray, 47-48 darkgray, 199 darkgray
+33: 0 darkgray, 47-48 darkgray, 199 darkgray
+34: 0 darkgray, 47-48 darkgray, 199 darkgray
+35: 0 darkgray, 47-48 darkgray, 199 darkgray
+36: 0 darkgray, 47-48 darkgray, 199 darkgray
+37: 0 darkgray, 47-48 darkgray, 199 darkgray
+38: 0 darkgray, 47-48 darkgray, 199 darkgray
+39: 0 darkgray, 47-48 darkgray, 199 darkgray
+40: 0 darkgray, 47-48 darkgray, 199 darkgray
+41: 0 darkgray, 47-48 darkgray, 199 darkgray
+42: 0 darkgray, 47-48 darkgray, 199 darkgray
+43: 0 darkgray, 47-48 darkgray, 199 darkgray
+44: 0 darkgray, 47-48 darkgray, 199 darkgray
+45: 0 darkgray, 47-48 darkgray, 199 darkgray
+46: 0 darkgray, 47-48 darkgray, 199 darkgray
+47: 0 darkgray, 47-48 darkgray, 199 darkgray
+48: 0 darkgray, 47-48 darkgray, 199 darkgray
+49: 0 darkgray, 47-48 darkgray, 199 darkgray
+50: 0 darkgray, 47-48 darkgray, 199 darkgray
+51: 0 darkgray, 47-48 darkgray, 199 darkgray
+52: 0 darkgray, 47-48 darkgray, 199 darkgray
+53: 0 darkgray, 47-48 darkgray, 199 darkgray
+54: 0 darkgray, 47-48 darkgray, 199 darkgray
+55: 0 darkgray, 47-48 darkgray, 199 darkgray
+56: 0 darkgray, 47-48 darkgray, 199 darkgray
+57: 0 darkgray, 47-48 darkgray, 199 darkgray
+58: 0-199 darkgray
+59: 1 bold, 2-17 dim, 18-20 bold, 21-35 dim, 36 bold, 37-46 dim, 47 bold, 48-99 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

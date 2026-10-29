@@ -1584,7 +1584,8 @@ impl Inner {
             data_path,
             st.branch.clone(),
         )
-        .with_project_dir(&config_dir))
+        .with_project_dir(&config_dir)
+        .with_domain_suffix(self.domain_suffix(&st.config)))
     }
 
     /// `<data root>/<project>`, holding the data folders of the project's lanes.
@@ -1739,7 +1740,7 @@ impl Inner {
             ConfigState::Loaded(config) if config.project != project.name() => {
                 ConfigState::Elsewhere(config.project.clone())
             }
-            other => self.with_resolver_domain(other),
+            other => other,
         };
         // A load that read other files (an `extends` added or removed) stamps those.
         let stamp = if files == known {
@@ -2439,6 +2440,7 @@ pub(crate) fn lane_context(
             infra.clone()
         },
         env: Value::Object(env_ns),
+        domain_suffix: facts.domain_suffix.clone(),
         ..ExpressionContext::default()
     }
 }

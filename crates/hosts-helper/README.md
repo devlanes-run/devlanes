@@ -8,7 +8,7 @@ a block from an earlier run has to be replaced or removed.
 
 ## Background
 
-devlanes gives every lane hostnames such as `web.acme-2.localhost`. RFC 6761
+devlanes gives every lane hostnames such as `web.acme2.localhost`. RFC 6761
 reserves `localhost` and says resolvers should answer every name under it with a
 loopback address, but support is uneven:
 
@@ -26,9 +26,9 @@ loopback address, but support is uneven:
 
 `/etc/hosts` is read by every one of these. Its format maps an address to exact
 names, and no implementation (glibc `nss-files`, macOS, musl, Go) supports
-patterns, so a wildcard such as `*.acme-2.localhost` cannot be written there.
+patterns, so a wildcard such as `*.acme2.localhost` cannot be written there.
 devlanes writes every exact name it routes instead. Wildcard routes (for example
-`*.pages-2.acme.localhost`) are left out, so only the exact names devlanes knows
+`*.pages2.localhost`) are left out, so only the exact names devlanes knows
 about resolve through the file.
 
 `/etc/hosts` is owned by root. Writing it from the daemon would mean running the
@@ -163,10 +163,10 @@ The helper only touches the lines from `# devlanes begin` to `# devlanes end`:
 ```
 # devlanes begin
 # Managed by devlanes-hosts. Lines between these markers are replaced on every update.
-127.0.0.1 api.acme-2.localhost
-::1 api.acme-2.localhost
-127.0.0.1 web.acme-2.localhost
-::1 web.acme-2.localhost
+127.0.0.1 api.acme2.localhost
+::1 api.acme2.localhost
+127.0.0.1 web.acme2.localhost
+::1 web.acme2.localhost
 # devlanes end
 ```
 
@@ -262,8 +262,8 @@ ls -l /usr/local/libexec/devlanes-hosts /etc/sudoers.d/devlanes
 ```
 
 To check that a name resolves through the file, use
-`dscacheutil -q host -a name web.acme-2.localhost` on macOS or
-`getent hosts web.acme-2.localhost` on Linux. `dig` and `nslookup` query DNS
+`dscacheutil -q host -a name web.acme2.localhost` on macOS or
+`getent hosts web.acme2.localhost` on Linux. `dig` and `nslookup` query DNS
 directly and never read `/etc/hosts`.
 
 ## Removing

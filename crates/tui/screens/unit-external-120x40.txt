@@ -6,7 +6,7 @@
 │   ⠋ api-orders                      starting ││ Machines connected with devlanes remote connect mirror it while a    │
 │   ⠋ api-users                       starting ││ lane of the project runs.                                            │
 │   … web-app            queued · next in line ││                                                                      │
-│   … wrk-email           queued · 2nd in line ││ url       https://pgadmin.acme-1.localhost                           │
+│   … wrk-email           queued · 2nd in line ││ url       https://pgadmin.acme1.localhost                            │
 │   ● stub-stripe                              ││ url       http://127.0.0.1:5050                                      │
 │                                              ││                                                                      │
 │ ▾ tasks                                    7 ││                                                                      │
@@ -24,7 +24,7 @@
 │     ● postgres                               ││                                                                      │
 │     ● redis                                  ││                                                                      │
 │   ▾ external                               1 ││                                                                      │
-│     · pgadmin       pgadmin.acme-1.localhost ││                                                                      │
+│     · pgadmin        pgadmin.acme1.localhost ││                                                                      │
 │   ▸ setup                             1 done ││                                                                      │
 │                                              ││                                                                      │
 │                                              ││                                                                      │

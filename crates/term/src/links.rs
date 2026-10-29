@@ -195,8 +195,8 @@ mod tests {
     fn links_are_osc_8_with_encoded_targets() {
         let links = Links::new(false);
         assert_eq!(
-            links.url("api", "https://api.acme-0.localhost:8443/"),
-            "\x1b]8;;https://api.acme-0.localhost:8443/\x1b\\api\x1b]8;;\x1b\\"
+            links.url("api", "https://api.acme.localhost:8443/"),
+            "\x1b]8;;https://api.acme.localhost:8443/\x1b\\api\x1b]8;;\x1b\\"
         );
         // A control character or space in a URL could end the sequence early.
         assert_eq!(

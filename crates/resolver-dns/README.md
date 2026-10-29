@@ -39,7 +39,7 @@ hostnames:
   tld: test
 ```
 
-Lane domains then default to `<project>.test` and `<project>-<N>.test` unless a project sets `lanes.vars.domain`.
+Lane domains then default to `<project>.test` and `<project><N>.test` unless a project sets `lanes.vars.domain`.
 
 ## Behaviour
 
