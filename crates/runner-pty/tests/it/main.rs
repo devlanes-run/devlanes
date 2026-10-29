@@ -865,13 +865,29 @@ async fn frozen_unit_never_reports_exit() -> Result<(), Error> {
 #[tokio::test]
 async fn throttle_round_trip() -> Result<(), Error> {
     bounded(async {
-        let unit = runner().spawn_unit(shell("sleep 30", false)).await?;
+        // Run `sleep` directly. Through `sh -c` the leader would exec again after
+        // the spawn, or fork and never be named `sleep`.
+        let unit = runner()
+            .spawn_unit(spec("/bin/sleep", &["30"], false))
+            .await?;
         let mut cleanup = Cleanup::default();
         cleanup.unit(&unit);
         let leader = unit.identity().pid;
 
         #[cfg(target_os = "macos")]
         {
+            // Exec on macOS builds a new task, copies the band into it when exec
+            // starts and gives it the PID only when exec ends. A band change in
+            // between lands on the old task and is lost. The runner never applies
+            // it again, since exec keeps the PID and start time. `spawn_unit` can
+            // return before that switch, so wait until the PID shows `sleep`.
+            eventually(|| async {
+                devlanes_sys::process(leader)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|process| process.name == "sleep")
+            })
+            .await;
             // The base priority, not the one `ps` shows: that one subtracts a
             // CPU usage penalty that is only recomputed when the thread runs, so
             // a sleeping leader woken under load by the thaw could stay at or
