@@ -114,7 +114,7 @@ services:
         fallback: true  # only when nothing else matched
 ```
 
-Exact hostnames win over wildcards; a `fallback` wildcard loses to every other route. `*.acme2.localhost` covers `foo.acme2.localhost` and `a.b.acme2.localhost`, not `acme2.localhost` itself. For a product domain on a site of its own use a lane var: `pages_domain: ${{ domain('pages') }}` and `"*.${{ lane.pages_domain }}"` ([a site of its own](https.md#a-site-of-its-own)).
+Exact hostnames win over wildcards; a `fallback` wildcard loses to every other route. `*.acme2.localhost` covers `foo.acme2.localhost` and `a.b.acme2.localhost`, not `acme2.localhost` itself. For a product domain on a site of its own use a lane var: `pages_domain: ${{ domain('acme-pages') }}` and `"*.${{ lane.pages_domain }}"` ([a site of its own](https.md#a-site-of-its-own)).
 
 Quote wildcard entries: an unquoted leading `*` is a YAML alias. `/etc/hosts` takes only exact names, so programs that cannot resolve `*.localhost` reach wildcard hostnames only through the resolver strategy, and only under its `hostnames.tld`; a lane var hardcoded to `.localhost` stays out of their reach. See [Hostnames and HTTPS](https.md#programs-that-cannot-resolve-localhost).
 

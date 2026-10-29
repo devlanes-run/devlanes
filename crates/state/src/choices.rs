@@ -83,7 +83,7 @@ impl Store {
         .await
     }
 
-    /// Deletes every choice of box `host`; returns how many there were.
+    /// Deletes every choice of box `host` and returns how many there were.
     pub async fn delete_remote_lane_choices_of(&self, host: String) -> Result<usize, Error> {
         self.call(move |c| {
             Ok(diesel::delete(

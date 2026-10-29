@@ -6,13 +6,13 @@ This machine mirrors a box's lane: its proxy routes the lane's hostnames to the 
 
 Take two forks, `fork-a` and `fork-b`. Both run `acme@0`, with `web` at `https://web.acme.localhost` on port 20000 and Postgres on port 20012.
 
-A hostname goes through the proxy here, which picks the target by its name. Both forks serve `web.acme.localhost`, so the name alone can't pick a fork. A port number on this machine leads to exactly one place. Anything that uses a port reaches whatever holds it, such as `psql -p 20012` or a page here that calls `services.web.url` (`http://127.0.0.1:20000`). So only one of the forks can serve `acme@0` here.
+A hostname goes through the proxy here, which picks the target by its name. Both forks serve `web.acme.localhost`, so the name alone can't pick a fork. A port number on this machine leads to exactly one place. Anything that uses a port reaches whatever holds it, such as `psql -p 20012` or a page here that calls `http://127.0.0.1:20000`, the box's `services.web.url`. So only one of the forks can serve `acme@0` here.
 
 Giving each box its own domain, such as `web.acme.fork-b.localhost`, wouldn't help. The hostnames would differ, but anything that uses a port would still reach whichever box holds it, without any warning. Renaming hostnames or remapping ports here would break the URLs the box already handed out.
 
 ## Switching instead of renaming
 
-The box chose its hostnames and ports and gave them to its processes, which put them in URLs and cookies. A switch passes them through unchanged, so what the box generated keeps working here, and every reference to the lane reaches the same box. Nothing changes on the boxes, and the other boxes stay connected. The cost is that you see one box per lane at a time.
+The box chose its hostnames and ports and gave them to its processes, which put them in URLs and cookies. A switch passes them through unchanged, so what the box generated keeps working here. Every reference to the lane, by hostname or by port, reaches the same box. Nothing changes on the boxes. The other boxes stay connected. The cost is that you see one box per lane at a time.
 
 ## Clashing lanes
 
@@ -61,13 +61,13 @@ Every box serves the same origins, such as `https://web.acme.localhost`. The bro
 
 ## Lanes running on this machine
 
-A lane running here holds its ports, so it always keeps its hostnames. So does a lane whose own containers are up and publish a host port. Shared containers, and containers without a published port, hold nothing a box needs. Choosing a box for such a lane, or for a box lane it clashes with, is refused with the commands to run: `devlanes stop --lane acme@0`, then `devlanes remote use fork-b acme@0`. `devlanes stop` leaves containers running, so the message also names the commands that stop exactly the lane's own containers, such as `docker compose -p acme-lane0 stop` for its Compose project and `docker stop devlanes-acme-lane0-cerbos` for a plain container. When only containers are up, it names just those.
+A lane running here holds its ports, so it always keeps its hostnames. So does a lane whose own containers are up and publish a host port. Shared containers, and containers without a published port, hold nothing a box needs. A Compose service with `network_mode: host` publishes nothing, so it never counts. Choosing a box for such a lane, or for a box lane it clashes with, is refused with the commands to run: `devlanes stop --lane acme@0`, then `devlanes remote use fork-b acme@0`. `devlanes stop` leaves containers running, so the message also names the commands that stop exactly the lane's own containers, such as `docker compose -p acme-lane0 stop` for its Compose project and `docker stop devlanes-acme-lane0-cerbos` for a plain container. When only containers are up, it names just those.
 
-Starting a lane here takes its hostnames and ports back as soon as the start passed its checks, whatever it runs. Once a unit, a task or a container runs, it deletes the choice of a box lane it clashes with, and any choice of its own lane, whether or not its box is connected. A `choice_cleared` notice says so, such as `acme@0 started on this machine, so fork-b's acme@0 is no longer mirrored or chosen.` Containers that came back by themselves, after a reboot say, do the same, and the notice says the containers run. A start that fails before anything runs gives the box its lane back. Stopping the lane later doesn't bring the box back. Run `devlanes remote use` again.
+Starting a lane here takes its hostnames and ports back as soon as the start passed its checks, whatever it runs. Once a unit, a task or one of its own containers runs, it deletes the choice of a box lane it clashes with, and any choice of its own lane, whether or not its box is connected. A `choice_cleared` notice says so, such as `acme@0 started on this machine, so fork-b's acme@0 is no longer mirrored or chosen.` Containers that came back by themselves, such as after a reboot, do the same, also when the daemon restarted, and the notice says the containers run. A start that fails before anything runs gives the box its lane back. Stopping the lane later doesn't bring the box back. Run `devlanes remote use` again.
 
 ## Overlapping port ranges
 
-Forks of one image share their `ports.range`, so `remote connect` and `remote ls` warn on each of them that its range overlaps the other's. For the lanes both forks run, that is expected: one box serves each of them at a time. Different lanes on the two forks, such as lanes created after the fork, can get the same port numbers, and then only one of them gets the port here. If that matters, give each box its own `ports.range` in its user config before those lanes get their ports.
+Forks of one image share their `ports.range`, so `remote connect` and `remote ls` warn on each of them that its range overlaps the other's. For the lanes both forks run, that is expected: one box serves each of them at a time. Different lanes on the two forks, such as lanes created after the fork, can get the same port numbers, and then only one of them is mirrored here. Give each box its own `ports.range` in its user config before such lanes get their ports.
 
 ## Two boxes at the same time
 

@@ -49,7 +49,6 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
     "max": null,
     "hosts_file": "always",
     "vars": {
-      "domain": "${{ domain('acme') }}",
       "db_name": "acme_${{ lane.name }}",
       "redis_db": "${{ lane.index }}",
       "vhost": "acme_${{ lane.name }}",
@@ -490,7 +489,7 @@ expression: "parse_project(FULL, None).expect(\"full reference\")"
       "preset": "wrangler",
       "hosts": [
         "pages.${{ lane.domain }}",
-        "*.${{ domain('pages') }}"
+        "*.${{ domain('acme-pages') }}"
       ],
       "tags": [
         "worker"

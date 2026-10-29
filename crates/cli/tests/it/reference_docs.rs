@@ -111,14 +111,17 @@ fn usage(command: &Command) -> String {
         .join("\n")
 }
 
-/// Whether a usage line names `<value>` outside any `[...]`, as a required
-/// positional.
+/// Whether a usage line names `<value>` outside any `[...]` and not right
+/// after a flag, as a required positional.
 fn required_in(usage: &str, value: &str) -> bool {
     let wanted = format!("<{value}>");
     usage.lines().any(|line| {
         let mut depth = 0_i32;
+        let mut after_flag = false;
         line.split_whitespace().any(|word| {
-            let found = depth == 0 && word.trim_end_matches("...") == wanted;
+            // `--local <LANE>` is the flag's value, not the positional.
+            let found = depth == 0 && !after_flag && word.trim_end_matches("...") == wanted;
+            after_flag = word.trim_start_matches('[').starts_with('-');
             depth += i32::try_from(word.matches('[').count()).unwrap_or(0);
             depth -= i32::try_from(word.matches(']').count()).unwrap_or(0);
             found

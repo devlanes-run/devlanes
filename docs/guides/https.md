@@ -77,7 +77,7 @@ infra:
 
 `hosts` also change the default readiness check to `tcp` on the service's port.
 
-Tenant-style subdomains (`*.pages2.localhost`) are fine as long as the lane index is in the label: `"*.${{ domain('pages') }}"` in the full example. Browsers reject a wildcard directly under a TLD (`*.localhost`), and devlanes refuses one that a [remote box](../remote.md) sends.
+Tenant-style subdomains (`*.acme-pages2.localhost`) are fine as long as the lane index is in the label: `"*.${{ domain('acme-pages') }}"` in the full example. Browsers reject a wildcard directly under a TLD (`*.localhost`), and devlanes refuses one that a [remote box](../remote.md) sends.
 
 ### A site of its own
 
@@ -98,7 +98,11 @@ services:
       PAGES_DOMAIN: ${{ lane.pages_domain }}
 ```
 
-Write `pages.${{ lane.domain }}` instead when the name may share the app's cookies. Pick a name only this project uses, such as `domain('acme-pages')`. Two projects that both call `domain('pages')` get the same names. Requests from those pages to the app also count as same-site, so `SameSite` cookies don't keep them out. The argument must be hostname labels, and anything else is a config error. `lane.domain` itself is `domain(project.name)` unless `lanes.vars.domain` sets it. Names from different projects can meet: lane 1 of `web2` and lane 0 of `web21` are both `web21.localhost`, and then both lanes get a `host_conflict` warning.
+Write `pages.${{ lane.domain }}` instead when the name may share the app's cookies. Requests from such pages to the app count as same-site, so `SameSite` cookies don't keep them out.
+
+Pick a name only this project uses, such as `domain('acme-pages')`. Two projects that both call `domain('pages')` get the same names. `lane.domain` itself is `domain(project.name)` unless `lanes.vars.domain` sets it, so project names can meet too: lane 1 of `web2` and lane 0 of `web21` are both `web21.localhost`, and then both lanes get a `host_conflict` warning.
+
+The argument must be hostname labels, and anything else is a config error.
 
 ## Programs that cannot resolve *.localhost
 

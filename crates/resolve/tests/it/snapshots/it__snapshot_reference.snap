@@ -11,7 +11,6 @@ expression: lane_view(&lane)
   "domain": "acme2.localhost",
   "port": 21000,
   "vars": {
-    "domain": "acme2.localhost",
     "db_name": "acme_lane2",
     "redis_db": 2,
     "vhost": "acme_lane2",
@@ -32,7 +31,7 @@ expression: lane_view(&lane)
     "inspect-gateway.acme2.localhost -> api-gateway:21003",
     "funnels.acme2.localhost -> api-gateway:21002 (upstream host)",
     "pages.acme2.localhost -> pages-worker:21014",
-    "*.pages2.localhost -> pages-worker:21014",
+    "*.acme-pages2.localhost -> pages-worker:21014",
     "ai.acme2.localhost -> ai-gateway:21001",
     "sim.acme2.localhost -> ios-sim:21012"
   ],
@@ -643,7 +642,7 @@ expression: lane_view(&lane)
       "public_url": "https://pages.acme2.localhost",
       "hosts": [
         "pages.acme2.localhost",
-        "*.pages2.localhost"
+        "*.acme-pages2.localhost"
       ],
       "ready": "Tcp { port: 21014 } within 60s",
       "stop": "signal 15 after 10s",

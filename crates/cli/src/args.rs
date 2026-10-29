@@ -625,8 +625,8 @@ Lanes clash when their hostnames overlap. The same lane on two boxes always clas
 as on forks of one box image. This machine mirrors one of them. A lane running here\n\
 comes first, then the chosen box lane, then a stopped lane here, then the box connected\n\
 first. The latest choice wins and deletes the choices it clashes with. A choice stays\n\
-until another one replaces it, the box is disconnected, or a lane here that clashes\n\
-with it starts. A box that is not connected can be chosen too.\n\n\
+until another one replaces it, `devlanes remote disconnect` forgets the box, or a lane\n\
+here that clashes with it starts. A box that is not connected can be chosen too.\n\n\
 --local gives the hostnames back to this machine's lane.",
         after_help = "Examples:\n  devlanes remote use fork-b acme@0\n  devlanes remote use --local acme@0"
     )]

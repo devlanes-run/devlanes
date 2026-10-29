@@ -720,8 +720,8 @@ Lanes clash when their hostnames overlap. The same lane on two boxes always clas
 as on forks of one box image. This machine mirrors one of them. A lane running here
 comes first, then the chosen box lane, then a stopped lane here, then the box connected
 first. The latest choice wins and deletes the choices it clashes with. A choice stays
-until another one replaces it, the box is disconnected, or a lane here that clashes
-with it starts. A box that is not connected can be chosen too.
+until another one replaces it, `devlanes remote disconnect` forgets the box, or a lane
+here that clashes with it starts. A box that is not connected can be chosen too.
 
 --local gives the hostnames back to this machine's lane.
 
