@@ -20,7 +20,7 @@ pub const DEFAULT_DOMAIN_SUFFIX: &str = "localhost";
 /// The domain of `name` in lane `index`, ending in `suffix`: `pages.localhost`
 /// in lane 0 and `pages3.localhost` in lane 3. The index joins the last label
 /// of `name`, so every lane gets a site of its own for cookies. `name` is used
-/// as written; [`checked_lane_domain`] validates it first.
+/// as written, and [`checked_lane_domain`] validates it first.
 pub fn lane_domain(name: &str, index: u64, suffix: &str) -> String {
     if index == 0 {
         format!("{name}.{suffix}")
@@ -31,11 +31,12 @@ pub fn lane_domain(name: &str, index: u64, suffix: &str) -> String {
 
 /// [`lane_domain`] for a `name` that must be one or more hostname labels,
 /// lowercased. The result is checked too, since the index makes the last
-/// label longer. The error is the rule that breaks.
+/// label longer. The error is the rule that breaks, as a clause without a
+/// final period.
 pub fn checked_lane_domain(name: &str, index: u64, suffix: &str) -> Result<String, String> {
     let lowered = name.to_ascii_lowercase();
     if lowered.contains('*') {
-        return Err("a wildcard is not allowed here. Put `*.` before the call instead.".into());
+        return Err("a wildcard is not allowed here. Put `*.` before the call instead".into());
     }
     if let Some(why) = broken_rule(&lowered) {
         return Err(why);
@@ -81,31 +82,35 @@ pub fn check_host_header(host: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The first DNS rule a lowercase, dot-trimmed host breaks.
+/// The first DNS rule a lowercase, dot-trimmed host breaks, as a clause
+/// without a final period, so callers can go on with "; the route is left
+/// out" or end the sentence themselves.
 fn broken_rule(host: &str) -> Option<String> {
     let name = host.strip_prefix("*.").unwrap_or(host);
     if name.is_empty() {
-        return Some("not a hostname".into());
+        return Some("the name is empty".into());
     }
     if name.len() > 253 {
-        return Some("longer than 253 characters".into());
+        return Some("the name is longer than 253 characters".into());
     }
     for label in name.split('.') {
         if label.contains('*') {
             return Some("a wildcard is only allowed as a leading `*.` label".into());
         }
         if label.is_empty() {
-            return Some("empty label between dots".into());
+            return Some("a label between dots is empty".into());
         }
         if label.len() > 63 {
-            return Some(format!("label `{label}` is longer than 63 characters"));
+            return Some(format!(
+                "label `{label}` is longer than 63 characters. Shorten it"
+            ));
         }
         if let Some(bad) = label
             .chars()
             .find(|c| !c.is_ascii_alphanumeric() && *c != '-')
         {
             return Some(format!(
-                "`{bad}` is not allowed in a hostname label. Use letters, digits and hyphens."
+                "`{bad}` is not allowed in a hostname label. Use letters, digits and hyphens"
             ));
         }
         if label.starts_with('-') || label.ends_with('-') {
@@ -147,7 +152,7 @@ mod tests {
         assert_eq!(
             normalize_host("api_v2.acme.localhost"),
             Err(
-                "`api_v2.acme.localhost`: `_` is not allowed in a hostname label. Use letters, digits and hyphens."
+                "`api_v2.acme.localhost`: `_` is not allowed in a hostname label. Use letters, digits and hyphens"
                     .into()
             )
         );
@@ -164,11 +169,13 @@ mod tests {
         );
         assert_eq!(
             checked_lane_domain(&long, 2, "localhost"),
-            Err(format!("label `{long}2` is longer than 63 characters"))
+            Err(format!(
+                "label `{long}2` is longer than 63 characters. Shorten it"
+            ))
         );
         assert_eq!(
             checked_lane_domain("a_b", 1, "localhost"),
-            Err("`_` is not allowed in a hostname label. Use letters, digits and hyphens.".into())
+            Err("`_` is not allowed in a hostname label. Use letters, digits and hyphens".into())
         );
         assert_eq!(
             checked_lane_domain("Docs.Pages", 3, "test"),

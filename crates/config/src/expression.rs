@@ -177,17 +177,18 @@ const DOMAIN_FUNCTION: &str = "domain";
 /// `lane.index` and the suffix only, which are set before `lanes.vars`, so it
 /// works inside `lanes.vars` too.
 fn domain(state: &minijinja::State<'_, '_>, name: &str) -> Result<String, minijinja::Error> {
+    // A whole sentence, since it follows the setting's path as is.
     let fail = |message: String| {
         minijinja::Error::new(
             minijinja::ErrorKind::InvalidOperation,
-            format!("domain('{name}'): {message}"),
+            format!("in {DOMAIN_FUNCTION}('{name}'), {message}."),
         )
     };
     let index = state
         .lookup("lane")
         .and_then(|lane| lane.get_attr("index").ok())
         .and_then(|index| u64::try_from(index).ok())
-        .ok_or_else(|| fail("only works where a lane is known".into()))?;
+        .ok_or_else(|| fail("no lane is known here, so there is no index to add".into()))?;
     let suffix = state
         .lookup(SUFFIX_VARIABLE)
         .and_then(|suffix| suffix.as_str().map(str::to_owned))
@@ -199,7 +200,7 @@ fn domain(state: &minijinja::State<'_, '_>, name: &str) -> Result<String, miniji
 /// names the call and the rule, so it stands alone.
 fn failed(error: &minijinja::Error) -> String {
     match error.detail() {
-        Some(detail) if detail.starts_with(&format!("{DOMAIN_FUNCTION}(")) => detail.to_owned(),
+        Some(detail) if detail.starts_with(&format!("in {DOMAIN_FUNCTION}(")) => detail.to_owned(),
         _ => format!("expression failed: {}", describe(error)),
     }
 }
@@ -923,25 +924,31 @@ mod tests {
         );
         assert_eq!(
             eval("${{ domain('a_b') }}", &lane(1, "localhost")),
-            Err("domain('a_b'): `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into())
+            Err("in domain('a_b'), `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into())
         );
         assert_eq!(
             eval("web.${{ domain('a_b') }}", &lane(1, "localhost")),
-            Err("domain('a_b'): `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into()),
+            Err("in domain('a_b'), `_` is not allowed in a hostname label. Use letters, digits and hyphens.".into()),
             "mixed text gives the same error"
         );
         let long = format!("${{{{ domain('{}') }}}}", "a".repeat(63));
         let error = eval(&long, &lane(2, "localhost")).expect_err("too long with its index");
         assert!(
-            error.ends_with("2` is longer than 63 characters"),
+            error.ends_with("2` is longer than 63 characters. Shorten it."),
             "{error}"
         );
-        for bad in ["${{ domain('*.x') }}", "${{ domain('') }}"] {
-            let error = eval(bad, &lane(1, "localhost")).expect_err(bad);
-            assert!(error.starts_with("domain('"), "{bad}: {error}");
-        }
-        let error = eval(text, &ExpressionContext::default()).expect_err("no lane");
-        assert!(error.contains("where a lane is known"), "{error}");
+        assert_eq!(
+            eval("${{ domain('') }}", &lane(1, "localhost")),
+            Err("in domain(''), the name is empty.".into())
+        );
+        assert_eq!(
+            eval("${{ domain('*.x') }}", &lane(1, "localhost")),
+            Err("in domain('*.x'), a wildcard is not allowed here. Put `*.` before the call instead.".into())
+        );
+        assert_eq!(
+            eval(text, &ExpressionContext::default()),
+            Err("in domain('pages'), no lane is known here, so there is no index to add.".into())
+        );
     }
 
     #[test]

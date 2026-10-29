@@ -796,7 +796,7 @@ fn domain_refuses_names_that_are_not_labels() {
     assert!(error.contains("services.web.hosts"), "{error}");
     assert!(error.contains("domain('my_pages')"), "{error}");
     assert!(
-        error.contains("domain('my_pages'): `_` is not allowed in a hostname label."),
+        error.contains("in domain('my_pages'), `_` is not allowed in a hostname label."),
         "{error}"
     );
 }
@@ -1071,7 +1071,7 @@ fn evaluated_hosts_are_checked_and_normalised() {
         error,
         ResolveError::Invalid {
             path: "services.api.hosts".into(),
-            message: "`api_v2.acme.localhost`: `_` is not allowed in a hostname label. Use letters, digits and hyphens. (devlanes.yaml:5:25)".into(),
+            message: "`api_v2.acme.localhost`: `_` is not allowed in a hostname label. Use letters, digits and hyphens (devlanes.yaml:5:25)".into(),
         }
     );
 
