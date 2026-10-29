@@ -1,13 +1,13 @@
  devlanes  1 acme   2 billing   3 shop                                                                                                                                           Monitor  Daemon  Boxes
- lanes  1 @0 main ○  2 @0 clickmax-fork-a  3 @0 clickmax-fork-b ○  4 @0 clickmax-fork-c ○  5 @1 feat/gift-cards                                                                 1-9 or [ ] switch lanes
-┌ @0 clickmax-fork-b · not mirrored ───────────┐┌ shop@0  running · 2 up ────────────────────────────────────────────────────────────────────────────────────────────────────────── on clickmax-fork-b ┐
-│ ▾ services                                 2 ││ ! Not mirrored. clickmax-fork-a's shop@0 is in use. Press m to use this one.                                                                         │
+ lanes  1 @0 main ○  2 @0 acme-fork-a  3 @0 acme-fork-b ○  4 @0 acme-fork-c ○  5 @1 feat/gift-cards                                                                             1-9 or [ ] switch lanes
+┌ @0 acme-fork-b · not mirrored ───────────────┐┌ shop@0  running · 2 up ────────────────────────────────────────────────────────────────────────────────────────────────────────────── on acme-fork-b ┐
+│ ▾ services                                 2 ││ ! Not mirrored. acme-fork-a's shop@0 is in use. Press m to use this one.                                                                             │
 │   ● storefront                               ││                                                                                                                                                      │
-│   ● checkout-api                             ││ box       clickmax-fork-b · ssh · devlanes 1.0.0                                                                                                     │
+│   ● checkout-api                             ││ box       acme-fork-b · ssh · devlanes 1.0.0                                                                                                         │
 │                                              ││ domain    shop.localhost                                                                                                                             │
 │                                              ││ services  2 of 2 up                                                                                                                                  │
 │                                              ││                                                                                                                                                      │
-│                                              ││ Read-only here. On clickmax-fork-b: ssh clickmax-fork-b, then devlanes status shop@0                                                                 │
+│                                              ││ Read-only here. On acme-fork-b: ssh acme-fork-b, then devlanes status shop@0                                                                         │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
@@ -57,19 +57,19 @@
 │                                              ││                                                                                                                                                      │
 │                                              ││                                                                                                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
- m use this one   [ ] switch lane   / filter   B boxes   read-only: manage it on clickmax-fork-b (ssh clickmax-fork-b)                                                            ? all keys   q quit
+ m use this one   [ ] switch lane   / filter   B boxes   read-only: manage it on acme-fork-b (ssh acme-fork-b)                                                                    ? all keys   q quit
 
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold, 195-198 dim
-1: 0-6 dim, 8-18 dim, 21-22 dim, 23-40 green, 42-65 bold reversed, 67-88 dim, 91-110 dim, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
-2: 0 darkgray, 1-35 bold reversed, 36-48 darkgray, 50-55 bold, 56-71 dim, 73-178 darkgray, 180-197 dim, 199 darkgray
+1: 0-6 dim, 8-18 dim, 21-22 dim, 23-36 green, 38-57 bold reversed, 59-76 dim, 79-98 dim, 176-178 bold, 179-182 dim, 183-185 bold, 186-199 dim
+2: 0 darkgray, 1-31 bold reversed, 32-48 darkgray, 50-55 bold, 56-71 dim, 73-182 darkgray, 184-197 dim, 199 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 199 darkgray
 4: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 199 darkgray
 5: 0 darkgray, 4-5 green, 6-17 blue, 47-48 darkgray, 50-59 dim, 199 darkgray
 6: 0 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
 7: 0 darkgray, 47-48 darkgray, 50-59 dim, 199 darkgray
 8: 0 darkgray, 47-48 darkgray, 199 darkgray
-9: 0 darkgray, 47-48 darkgray, 50-133 dim, 199 darkgray
+9: 0 darkgray, 47-48 darkgray, 50-125 dim, 199 darkgray
 10: 0 darkgray, 47-48 darkgray, 199 darkgray
 11: 0 darkgray, 47-48 darkgray, 199 darkgray
 12: 0 darkgray, 47-48 darkgray, 199 darkgray
@@ -119,4 +119,4 @@
 56: 0 darkgray, 47-48 darkgray, 199 darkgray
 57: 0 darkgray, 47-48 darkgray, 199 darkgray
 58: 0-199 darkgray
-59: 1 bold, 2-17 dim, 18-20 bold, 21-35 dim, 36 bold, 37-46 dim, 47 bold, 48-117 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim
+59: 1 bold, 2-17 dim, 18-20 bold, 21-35 dim, 36 bold, 37-46 dim, 47 bold, 48-109 dim, 178 bold, 179-190 dim, 191 bold, 192-199 dim

@@ -683,7 +683,7 @@ fn range_overlaps(list: &mut Value) {
 }
 
 /// [`forks`] with a third fork and the long names VMs made from one image
-/// get: `clickmax-fork-a`, `-b` and `-c`. fork-a keeps the chosen lane.
+/// get: `acme-fork-a`, `-b` and `-c`. fork-a keeps the chosen lane.
 pub fn long_forks() -> Value {
     let mut list = forks();
     let rename = |value: &mut Value, from: &str, to: &str| {
@@ -699,9 +699,9 @@ pub fn long_forks() -> Value {
     items.push(third);
     for item in items.iter_mut() {
         for (from, to) in [
-            ("fork-a", "clickmax-fork-a"),
-            ("fork-b", "clickmax-fork-b"),
-            ("fork-c", "clickmax-fork-c"),
+            ("fork-a", "acme-fork-a"),
+            ("fork-b", "acme-fork-b"),
+            ("fork-c", "acme-fork-c"),
         ] {
             rename(&mut item["host"], from, to);
             for skipped in item["skipped_lanes"].as_array_mut().into_iter().flatten() {
@@ -715,7 +715,7 @@ pub fn long_forks() -> Value {
         .into_iter()
         .flatten()
     {
-        rename(&mut yielded["winner"], "fork-a", "clickmax-fork-a");
+        rename(&mut yielded["winner"], "fork-a", "acme-fork-a");
     }
     range_overlaps(&mut list);
     list

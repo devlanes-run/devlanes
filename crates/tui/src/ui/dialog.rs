@@ -199,7 +199,7 @@ fn legend_lines(legend: &[(&'static str, Style, &'static str)], max: usize) -> V
             })
             .collect()
     };
-    // Two cells of indent, then `glyph word` per entry; the ascii marker
+    // Two cells of indent, then `glyph word` per entry. The ascii marker
     // `()` takes two cells.
     let total =
         |widths: &[usize]| 2 + widths.iter().sum::<usize>() + GAP * widths.len().saturating_sub(1);

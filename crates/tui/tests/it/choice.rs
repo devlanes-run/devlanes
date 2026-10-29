@@ -139,7 +139,7 @@ async fn the_lanes_row_goes_by_number_with_this_machine_first_then_boxes_by_name
             "acme@2",
         ]
     );
-    // The branches that fit keep their name; the longest give way first.
+    // The branches that fit keep their name. The longest give way first.
     let bar = row(&app, 1)?;
     assert!(
         bar.contains(
@@ -155,21 +155,21 @@ async fn the_lanes_row_goes_by_number_with_this_machine_first_then_boxes_by_name
 #[tokio::test]
 async fn a_long_box_name_is_cut_in_the_chip_and_whole_in_the_title() -> TestResult {
     let mut listing = forks();
-    listing["items"][1]["host"] = json!("clickmax-fork-3f2a");
+    listing["items"][1]["host"] = json!("acme-dev-fork-3f2a");
     let api = FakeApi::with_lanes(mixed_lanes());
     let (mut app, _) = loaded(&api, 120, 30).await;
     app.update(Msg::Boxes(Ok(listing.clone())));
-    select(&mut app, Selected::lane("acme@1 @clickmax-fork-3f2a"));
+    select(&mut app, Selected::lane("acme@1 @acme-dev-fork-3f2a"));
     let title = row(&app, 2)?;
-    assert!(title.contains("@1 clickmax-fork-3f2a · 0/0 up"), "{title}");
+    assert!(title.contains("@1 acme-dev-fork-3f2a · 0/0 up"), "{title}");
     // At 80 columns the title has no room for all of it either.
     let (mut app, _) = loaded(&api, 80, 24).await;
     app.update(Msg::Boxes(Ok(listing)));
-    select(&mut app, Selected::lane("acme@1 @clickmax-fork-3f2a"));
+    select(&mut app, Selected::lane("acme@1 @acme-dev-fork-3f2a"));
     let bar = row(&app, 1)?;
-    assert!(bar.contains("@1 clickma…"), "{bar}");
+    assert!(bar.contains("@1 acme-de…"), "{bar}");
     let title = row(&app, 2)?;
-    assert!(title.contains("@1 clickmax-fork-… · 0/0 up"), "{title}");
+    assert!(title.contains("@1 acme-dev-fork-… · 0/0 up"), "{title}");
     Ok(())
 }
 
@@ -178,19 +178,19 @@ async fn a_long_box_name_is_cut_in_the_chip_and_whole_in_the_title() -> TestResu
 #[tokio::test]
 async fn the_title_cuts_a_long_fork_name_as_the_chip_does() -> TestResult {
     let mut listing = forks();
-    listing["items"][0]["host"] = json!("clickmax-fork-b");
-    listing["items"][1]["host"] = json!("clickmax-fork-a");
-    listing["items"][0]["skipped_lanes"][1]["winner"] = json!("clickmax-fork-a");
+    listing["items"][0]["host"] = json!("acme-dev-fork-b");
+    listing["items"][1]["host"] = json!("acme-dev-fork-a");
+    listing["items"][0]["skipped_lanes"][1]["winner"] = json!("acme-dev-fork-a");
     let api = FakeApi::with_lanes(mixed_lanes());
     let (mut app, _) = loaded(&api, 80, 24).await;
     app.update(Msg::Boxes(Ok(listing)));
-    select(&mut app, Selected::lane("acme@1 @clickmax-fork-b"));
+    select(&mut app, Selected::lane("acme@1 @acme-dev-fork-b"));
     let title = row(&app, 2)?;
     assert!(title.contains("@1 …fork-b · not mirrored "), "{title}");
     Ok(())
 }
 
-/// Grey chips are dim with a hollow dot; with ascii glyphs and no color the
+/// Grey chips are dim with a hollow dot. With ascii glyphs and no color the
 /// parentheses say it alone.
 #[tokio::test]
 async fn grey_chips_are_dim_and_marked_without_color() -> TestResult {
@@ -212,7 +212,7 @@ async fn grey_chips_are_dim_and_marked_without_color() -> TestResult {
             "cell {x} of {bar:?} is not dim"
         );
     }
-    // Idle lanes are dim too; only the dot tells the grey ones apart.
+    // Idle lanes are dim too, so only the dot tells the grey ones apart.
     assert!(bar.contains("5 @1 fork-a  6"), "{bar}");
 
     app.theme = Theme {
@@ -1125,7 +1125,7 @@ async fn m_on_a_skipped_lane_row_of_the_boxes_view_uses_it() -> TestResult {
         "{dialog}"
     );
     app.update(key(KeyCode::Char('n')));
-    // fork-b's acme@1, chosen for fork-a; Enter does the same as m.
+    // fork-b's acme@1, chosen for fork-a. Enter does the same as m.
     app.update(key(KeyCode::Char('j')));
     let terminal = draw(&app)?;
     let buffer = terminal.backend().buffer();

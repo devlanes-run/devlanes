@@ -5,7 +5,7 @@
 //! A box lane keeps its project, so it joins the tab of this machine's lane
 //! of the same project, and gets the reference `<lane> @<box>`
 //! (`acme@1 @hetzner`), so it never collides with a local lane. [`BoxLane`]
-//! names its box; nothing reads the box back out of the reference. Units
+//! names its box, and nothing reads the box back out of the reference. Units
 //! keep their box names.
 
 use std::collections::BTreeMap;
@@ -108,9 +108,9 @@ pub struct SkippedLane {
     pub other: Option<String>,
     pub reason: String,
     /// What wins over it: `local_running`, `local_stopped`, `box_chosen` or
-    /// `box_earlier`; absent from daemons without `remote.use`.
+    /// `box_earlier`. Absent from daemons without `remote.use`.
     pub cause: Option<String>,
-    /// The box whose lane serves the hostnames; `None` when this machine's
+    /// The box whose lane serves the hostnames. `None` when this machine's
     /// lane does.
     pub winner: Option<String>,
     /// The reference of the lane in use, on `winner` or here. It differs from
@@ -339,8 +339,8 @@ pub fn parse(value: &Value) -> Vec<BoxHost> {
         .unwrap_or_default()
 }
 
-/// `host.list`'s `yielded_local_lanes`, leniently like [`parse`]; empty from
-/// daemons without `remote.use`.
+/// `host.list`'s `yielded_local_lanes`, leniently like [`parse`]. Empty
+/// from daemons without `remote.use`.
 pub fn parse_yielded(value: &Value) -> Vec<YieldedLane> {
     value
         .get("yielded_local_lanes")
@@ -362,7 +362,7 @@ pub fn lane_reference(lane: &str, host: &str) -> String {
 
 /// The box part of a reference [`lane_reference`] made, for a lane that is
 /// gone and so has no [`BoxLane`] left to ask. Box names may hold `@`
-/// (`user@host`); the lane part never holds a space.
+/// (`user@host`), but the lane part never holds a space.
 pub fn host_of(reference: &str) -> Option<&str> {
     reference.split_once(" @").map(|(_, host)| host)
 }
@@ -547,7 +547,8 @@ impl BoxHost {
             reference,
             project: lane.key.project.clone(),
             index: Some(lane.index),
-            // The chips name a box lane by its number and box; the tab names the project.
+            // The chips name a box lane by its number and box. The tab names
+            // the project.
             name: Some(format!("@{}", lane.index)),
             state: state.into(),
             units,

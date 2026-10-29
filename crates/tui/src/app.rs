@@ -1115,9 +1115,9 @@ impl BoxesView {
 pub struct Grey {
     /// The lane's reference where it runs, on the box or here: `acme@0`.
     pub lane: String,
-    /// The box it runs on; `None` for this machine's lane.
+    /// The box it runs on. `None` for this machine's lane.
     pub host: Option<String>,
-    /// The box whose lane serves the hostnames; `None` when this machine's
+    /// The box whose lane serves the hostnames. `None` when this machine's
     /// lane does.
     pub winner: Option<String>,
     /// The reference of the lane that serves them, on `winner` or here. It
@@ -1128,7 +1128,7 @@ pub struct Grey {
     /// `m` can make it the one in use: false while this machine's lane runs,
     /// and on daemons without `remote.use`.
     pub can_use: bool,
-    /// `local_running`, `local_stopped`, `box_chosen` or `box_earlier`;
+    /// `local_running`, `local_stopped`, `box_chosen` or `box_earlier`.
     /// `None` from daemons without `remote.use`.
     pub cause: Option<String>,
     /// For `local_running`, what of this machine's lane keeps running:
@@ -2886,7 +2886,7 @@ impl App {
         self.all_lanes().find(|lane| lane.reference == reference)
     }
 
-    /// The box lane `reference` (`acme@1 @hetzner`); `None` for this
+    /// The box lane `reference` (`acme@1 @hetzner`). `None` for this
     /// machine's lanes.
     pub fn lane_box(&self, reference: &str) -> Option<&crate::boxes::BoxLane> {
         self.boxes
@@ -2896,7 +2896,7 @@ impl App {
     }
 
     /// The box behind the box lane `reference`, with the lane's own reference
-    /// on the box (`acme@1`); `None` for this machine's lanes.
+    /// on the box (`acme@1`). `None` for this machine's lanes.
     pub fn box_lane(&self, reference: &str) -> Option<(&crate::boxes::BoxHost, String)> {
         let lane = self.lane_box(reference)?;
         let host = self
@@ -2907,7 +2907,7 @@ impl App {
         Some((host, lane.lane.clone()))
     }
 
-    /// Why lane `reference` is not mirrored here; `None` while it is, or
+    /// Why lane `reference` is not mirrored here. `None` while it is, or
     /// while no box lane clashes with it.
     pub fn grey(&self, reference: &str) -> Option<Grey> {
         if let Some((host, lane)) = self.box_lane(reference) {
@@ -3445,7 +3445,7 @@ impl App {
     }
 
     /// A lane of the project `gone` belonged to, numbered closest to it (the
-    /// lower one on a tie), on the same machine when one is left there;
+    /// lower one on a tie), on the same machine when one is left there.
     /// `None` when that project has no lanes left.
     fn neighbour_of(&self, gone: &str) -> Option<String> {
         let project = self
@@ -4069,8 +4069,8 @@ impl App {
     }
 
     /// Moves the boxes view's selection by `delta` rows over each box and its
-    /// skipped lanes, then the clients; `isize::MIN` and `MAX` go to the first
-    /// and last row.
+    /// skipped lanes, then the clients. `isize::MIN` and `MAX` go to the
+    /// first and last row.
     fn move_box_selection(&mut self, delta: isize) {
         // `(part, box or client, skipped lane)`, one per row the selection visits.
         let mut rows: Vec<(BoxPart, usize, Option<usize>)> = Vec::new();
@@ -4395,8 +4395,8 @@ impl App {
                     .and_then(|name| self.boxes.hosts.iter().position(|h| h.host == name))
                     .unwrap_or(self.boxes.host)
                     .min(self.boxes.hosts.len().saturating_sub(1));
-                // A skipped lane row follows its lane; once it is mirrored the
-                // selection goes back to its box.
+                // A skipped lane row follows its lane. Once it is mirrored,
+                // the selection goes back to its box.
                 self.boxes.lane = skipped.and_then(|lane| {
                     self.boxes
                         .hosts

@@ -1387,7 +1387,7 @@ fn host_lines(
             .iter()
             .filter(|p| p.state.as_deref() == Some("bound"))
             .count();
-        // A skipped lane is the box's but not mirrored; its row below says why.
+        // A skipped lane is the box's but not mirrored. Its row below says why.
         let lanes = registry
             .lanes
             .iter()

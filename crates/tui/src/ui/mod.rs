@@ -1223,8 +1223,8 @@ fn lane_chip(
         ));
     }
     if app.grey(&lane.reference).is_some() {
-        // The marker says it without color; the selection's reverse video
-        // takes the dimming away.
+        // The marker says it without color, since the selection's reverse
+        // video takes the dimming away.
         let (open, close) = theme.unmirrored();
         spans.push(Span::styled(format!("{open}{label}{close}"), theme.quiet()));
     } else {
@@ -1833,26 +1833,27 @@ mod tests {
     /// Forks that share a long start keep what tells them apart.
     #[test]
     fn box_names_drop_the_start_they_share() {
-        let forks = ["clickmax-fork-a", "clickmax-fork-b", "clickmax-fork-c"];
-        assert_eq!(short_box("clickmax-fork-a", &forks, 8), "…fork-a");
-        assert_eq!(short_box("clickmax-fork-b", &forks, 16), "clickmax-fork-b");
-        assert_eq!(short_box("clickmax-fork-c", &forks, 12), "…fork-c");
+        let forks = ["acme-fork-a", "acme-fork-b", "acme-fork-c"];
+        assert_eq!(short_box("acme-fork-a", &forks, 8), "…fork-a");
+        assert_eq!(short_box("acme-fork-b", &forks, 16), "acme-fork-b");
+        assert_eq!(short_box("acme-fork-c", &forks, 10), "…fork-c");
         let vms = ["fan-fix-login-1a2b", "fan-fix-login-3c4d"];
         assert_eq!(short_box("fan-fix-login-1a2b", &vms, 8), "…1a2b");
         assert_eq!(short_box("fan-fix-login-3c4d", &vms, 12), "…login-3c4d");
         // Nothing shared: the end is cut, as for one box alone.
         assert_eq!(
-            short_box("clickmax-fork-3f2a", &["clickmax-fork-3f2a"], 8),
-            "clickma…"
+            short_box("acme-fork-3f2a", &["acme-fork-3f2a"], 8),
+            "acme-fo…"
         );
         assert_eq!(
-            short_box("clickmax-fork-a", &["clickmax-fork-a", "gpu"], 8),
-            "clickma…"
+            short_box("acme-fork-a", &["acme-fork-a", "gpu"], 8),
+            "acme-fo…"
         );
-        // A name that starts another one has no part of its own: never `…` alone.
-        let prefix = ["clickmaxfork", "clickmaxfork2"];
-        assert_eq!(short_box("clickmaxfork", &prefix, 8), "clickma…");
-        assert_eq!(short_box("clickmaxfork2", &prefix, 8), "…2");
+        // A name that starts another one has no part of its own. It never
+        // reads `…` alone.
+        let prefix = ["acmeforks", "acmeforks2"];
+        assert_eq!(short_box("acmeforks", &prefix, 8), "acmefor…");
+        assert_eq!(short_box("acmeforks2", &prefix, 8), "…2");
         // A distinct part longer than the room is cut at its end.
         let long = ["box-aaaaaaaaaaaa", "box-bbbbbbbbbbbb"];
         assert_eq!(short_box("box-aaaaaaaaaaaa", &long, 8), "…aaaaaa…");

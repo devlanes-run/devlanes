@@ -1498,7 +1498,7 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
         } else {
             " "
         };
-        // A box lane has no branch here; its box names it.
+        // A box lane has no branch here, so its box names it.
         let name = match (app.lane_box(&lane.reference), lane.index) {
             (Some(boxed), Some(index)) => format!("@{index} on {}", clean(&boxed.host)),
             (None, Some(index)) => format!("{} @{index}", lane_name(lane)),
@@ -1509,7 +1509,7 @@ fn lanes_table(app: &App, current: &LaneSummary, width: usize) -> Vec<Line<'stat
             Span::raw(format!("{:<24} ", clip(&name, 24))),
         ];
         let mut summary = lane_summary(app, lane);
-        // Lanes that share hostnames look alike in this table; only the
+        // Lanes that share hostnames look alike in this table. Only the
         // mark tells which one a browser reaches.
         let mark = match app.grey(&lane.reference) {
             Some(grey) if grey.host.is_none() => Some(("not in use", theme.quiet())),
