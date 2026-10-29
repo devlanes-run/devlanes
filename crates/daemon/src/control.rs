@@ -1376,11 +1376,18 @@ impl Inner {
         // The containers bind the lane's ports, so box lanes it clashes with
         // give them up first. Its own containers keep it counted once up.
         let claim = self.claim_ports(&lane).await;
-        let up = self.integ.infra.up(&spec).await.map_err(RpcError::from)?;
+        let up = match self.integ.infra.up(&spec).await {
+            Ok(up) => up,
+            Err(error) => {
+                // Before the claim drops, so what runs anyway keeps the lane.
+                self.store_after_failed_up(&lane, &spec).await;
+                return Err(RpcError::from(error));
+            }
+        };
         {
             let mut st = lane.st();
             st.infra_ns = Some(up.namespace.clone());
-            st.infra_containers = up.containers.clone();
+            st.store_containers(up.containers.clone());
             st.setup_env = up.setup_env.clone();
         }
         drop(claim);

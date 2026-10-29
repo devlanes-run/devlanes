@@ -1667,6 +1667,9 @@ impl ContainerInfra {
     ) {
         for (service, names) in containers {
             let state = health.get(service).map(compose_state);
+            // A `network_mode: host` service binds ports without publishing
+            // them, and Compose doesn't say which, so it counts as publishing
+            // none and never holds a lane.
             let publishes = endpoints
                 .get(service)
                 .is_some_and(|endpoint| endpoint.port.is_some() || !endpoint.ports.is_empty());
@@ -1965,15 +1968,9 @@ impl InfraProvider for ContainerInfra {
         }
         if let Ok(containers) = Self::containers(spec) {
             Self::container_namespace(&mut namespace, &containers);
+            // Their state costs a Docker call, which only callers that keep
+            // the containers make, through `container_states`.
             Self::plain_targets(&mut targets, &containers, None);
-            // Without it the daemon wouldn't know which run, and a lane whose
-            // containers hold its ports would let a box take them.
-            if !containers.is_empty()
-                && let Some(docker) = &self.docker
-                && let Ok(managed) = docker.list_managed(&spec.project).await
-            {
-                Self::plain_states(&mut targets, &managed);
-            }
         }
         Ok(InfraUp {
             namespace: Value::Object(namespace),
@@ -1981,6 +1978,39 @@ impl InfraProvider for ContainerInfra {
             report: Value::Null,
             containers: targets,
         })
+    }
+
+    /// The state of plain containers, from what Docker lists for the project
+    /// by name. Without it a restarted daemon wouldn't know which run, and a
+    /// lane whose containers hold its ports would let a box take them.
+    async fn container_states(&self, spec: &InfraSpec, containers: &mut [InfraContainer]) {
+        // A healthy engine lists a project's containers in milliseconds. 2 s
+        // leaves room for a busy one without holding a start or a reconcile
+        // behind an engine that hangs.
+        const LIST_TIMEOUT: Duration = Duration::from_secs(2);
+        // Said once per daemon, since every start and reconcile would repeat it.
+        static TIMED_OUT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        let plain = containers
+            .iter()
+            .any(|container| container.compose_project.is_none());
+        let Some(docker) = self.docker.as_ref().filter(|_| plain) else {
+            return;
+        };
+        match tokio::time::timeout(LIST_TIMEOUT, docker.list_managed(&spec.project)).await {
+            Ok(Ok(managed)) => Self::plain_states(containers, &managed),
+            Ok(Err(error)) => {
+                tracing::debug!(project = %spec.project, %error, "container states unavailable");
+            }
+            // Left unknown, so the containers count as down.
+            Err(_) => {
+                if !TIMED_OUT.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    tracing::warn!(
+                        project = %spec.project,
+                        "docker took over 2 s to list containers, so their state is unknown"
+                    );
+                }
+            }
+        }
     }
 
     /// Health and endpoints of shared, per-lane and plain containers.

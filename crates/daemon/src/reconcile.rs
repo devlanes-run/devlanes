@@ -66,9 +66,11 @@ impl Inner {
         let names: Vec<String> = self.all_projects().iter().map(|p| p.name()).collect();
         // The first Docker call waits for the engine to wake (Docker Desktop's
         // Resource Saver took 18 s once), which would outlast the spawning
-        // client's start timeout. Adoption only re-attaches event watchers, so
-        // no request needs it before readiness.
+        // client's start timeout. Adoption re-attaches event watchers and
+        // learns which lane containers run. Box lanes may hold those ports
+        // until then, as they would have without a restart.
         let infra = self.integ.infra.clone();
+        let engine = Arc::downgrade(self);
         let lanes: Vec<(String, u32)> = self
             .all_lanes()
             .iter()
@@ -95,11 +97,56 @@ impl Inner {
                     }
                 }
             }
+            if let Some(engine) = engine.upgrade() {
+                engine.learn_lane_containers().await;
+            }
         });
         self.start_dns().await;
         self.start_background();
         self.restore_remotes();
         Ok(())
+    }
+
+    /// Learns which containers each lane with a record runs, which a new
+    /// daemon doesn't know until a start or `infra up`. A lane whose own
+    /// containers hold ports keeps them from box lanes, also after a reboot
+    /// brought the containers back by themselves. Publishes once at the end.
+    async fn learn_lane_containers(self: &Arc<Self>) {
+        let mut learned = false;
+        for (project, lane) in self.all_lanes() {
+            if lane.st().index().is_none() {
+                continue;
+            }
+            let Ok(spec) = self.infra_spec(&project, &lane, &[]).await else {
+                continue;
+            };
+            if spec.is_empty() {
+                continue;
+            }
+            // Plain containers are only named with their ports allocated.
+            let needs = self.integ.infra.port_needs(&spec).await.unwrap_or_default();
+            let spec = match self.infra_spec(&project, &lane, &needs).await {
+                Ok(with_ports) => with_ports,
+                Err(_) => spec,
+            };
+            match self.infra_namespace_kept(&spec).await {
+                Ok(up) => {
+                    let mut st = lane.st();
+                    // A start or `infra up` that stored them meanwhile knows
+                    // better.
+                    if st.infra_containers.is_empty() {
+                        st.store_containers(up.containers);
+                        learned = true;
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(code = %error.code, "lane containers unknown after a restart");
+                }
+            }
+        }
+        if learned {
+            self.publish_routes();
+        }
     }
 
     /// Ends records no process can belong to any more: task runs of the previous

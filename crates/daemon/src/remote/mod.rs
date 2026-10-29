@@ -1947,7 +1947,7 @@ fn range_overlap(conn: &HostConn, live: &[Arc<HostConn>]) -> Option<(String, Val
         return None;
     }
     let message = format!(
-        "box {}'s ports.range {range} overlaps {}. Lanes the boxes share go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
+        "box {}'s ports.range {range} overlaps {}. Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before such lanes get their ports.",
         conn.name,
         overlaps.join(" and ")
     );

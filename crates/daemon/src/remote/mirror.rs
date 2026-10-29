@@ -8,8 +8,8 @@
 //! clear of the box's ports (`Remotes::advertised_ports`). A port something here
 //! holds on any loopback address, or on a wildcard address, is bound on none.
 //! Which box lane serves hostnames that several lanes claim is the
-//! [`assign`](super::assign) decision; a box lane it skips is skipped whole, and
-//! a port another box's lane owns is reported with that box. A stopped local
+//! [`assign`](super::assign) decision. A box lane it skips is skipped whole,
+//! and a port another box's lane owns is reported with that box. A stopped local
 //! lane a chosen box lane is in use instead of keeps no port either.
 //!
 //! The listeners are the daemon's, not this mirror's
@@ -527,7 +527,7 @@ impl Mirror {
             .filter(|port| !wanted.contains_key(port))
             .collect();
         // A port this box's lane lost to another box's stays bound for that
-        // box; `release` only closes what nobody else owns.
+        // box, since `release` only closes what nobody else owns.
         for port in &stale {
             self.ports.remove(port);
             listeners.release(*port, self.conn.serial).await;

@@ -2078,7 +2078,7 @@ fn skipped_note(host: &str, skipped: &Value) -> String {
         Some(false) => {
             let (_, stop) = super::words::local_hold(skipped, &text(skipped, "winner_lane"));
             format!(
-                "not mirrored because {reason}. {stop}, then run devlanes remote use {host} {lane}."
+                "not mirrored because {reason}. {stop} Then run devlanes remote use {host} {lane}."
             )
         }
         // A daemon from before lane choices.

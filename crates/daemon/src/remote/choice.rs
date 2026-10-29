@@ -47,9 +47,7 @@ pub(crate) fn hold(st: &LaneSt) -> Option<Hold> {
     let own: Vec<_> = st
         .infra_containers
         .iter()
-        .filter(|container| {
-            !container.shared && container.publishes && container_up(container.state.as_deref())
-        })
+        .filter(|container| container.holds_port())
         .collect();
     let compose_project = own
         .iter()
@@ -60,30 +58,20 @@ pub(crate) fn hold(st: &LaneSt) -> Option<Hold> {
         .map(|container| container.docker.clone())
         .collect();
     containers.sort();
-    let running = st.any_running();
-    let mut hold = Hold {
-        processes: st.claiming > 0 || running,
-        starting: false,
+    let hold = Hold {
+        processes: st.claiming > 0 || st.any_running(),
+        // Read from a flag rather than from what runs now, so a service that
+        // exits at once still counts as something that ran.
+        starting: st.claiming > 0 && !st.claim_ran,
         compose_project,
         containers,
     };
-    hold.starting = st.claiming > 0 && !running && !hold.has_containers();
     (hold.processes || hold.has_containers()).then_some(hold)
 }
 
-/// Whether a container in `state` binds its ports. A state nobody reported
-/// yet counts as down: a plain container listed from its spec may never have
-/// run, and refusing a choice for it would ask to stop what isn't there.
-/// `oom` counts as up, since running out of memory doesn't stop it.
-fn container_up(state: Option<&str>) -> bool {
-    matches!(
-        state,
-        Some("running" | "starting" | "healthy" | "unhealthy" | "restarting" | "paused" | "oom")
-    )
-}
-
 /// `local_lane_running`: this machine's `running`, held by `hold`, keeps
-/// box `host`'s `lane` from serving.
+/// box `host`'s `lane` from serving. The message ends in ". Then run
+/// devlanes remote use <box> <lane>.", which the TUI rewrites.
 fn local_running(host: &str, lane: &str, running: &str, hold: &Hold) -> RpcError {
     let mut data = json!({"host": host, "lane": lane, "local_lane": running});
     if let Some(fields) = data.as_object_mut() {
@@ -93,10 +81,9 @@ fn local_running(host: &str, lane: &str, running: &str, hold: &Hold) -> RpcError
         "local_lane_running",
         data,
         format!(
-            "{}. Stop {} with {}, then run devlanes remote use {host} {lane}.",
+            "{}. {} Then run devlanes remote use {host} {lane}.",
             hold.runs(running),
-            hold.them(),
-            hold.stop_command(running)
+            hold.stop_sentences(running)
         ),
         1,
     )
@@ -205,8 +192,8 @@ impl Inner {
                         let local = next
                             .skip(host, lane)
                             .map_or_else(|| lane.clone(), |skip| skip.winner_lane.clone());
-                        // Containers that came back by themselves, after a
-                        // reboot say, are no start.
+                        // Containers that came back by themselves, such as
+                        // after a reboot, are no start.
                         let containers = lanes
                             .iter()
                             .find(|candidate| candidate.lane == local)
@@ -341,12 +328,15 @@ impl Inner {
     /// from the store in the background, unless another choice replaced it.
     fn announce_cleared(&self, cleared: Vec<(String, String, String, bool)>) {
         for (lane, host, local, containers) in cleared {
-            let runs = if containers {
-                format!("{local}'s containers run on this machine")
+            let message = if containers {
+                format!(
+                    "{local}'s containers run on this machine, so {host}'s {lane} is no longer mirrored or chosen. Stop them, then run devlanes remote use {host} {lane} to switch back."
+                )
             } else {
-                format!("{local} started on this machine")
+                format!(
+                    "{local} started on this machine, so {host}'s {lane} is no longer mirrored or chosen."
+                )
             };
-            let message = format!("{runs}, so {host}'s {lane} is no longer mirrored or chosen.");
             tracing::info!(%host, %lane, %local, "a local lane cleared a lane choice");
             self.bus.emit(
                 wire::WARNING_EVENT,
@@ -696,7 +686,7 @@ mod tests {
         );
         assert_eq!(
             error.data["message"],
-            "acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos, then run devlanes remote use fork-b acme@0."
+            "acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then run devlanes remote use fork-b acme@0."
         );
 
         // Processes and containers both up: both commands, so one refusal
@@ -707,14 +697,14 @@ mod tests {
         assert_eq!(error.data["compose_project"], "acme-lane0");
         assert_eq!(
             error.data["message"],
-            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos, then run devlanes remote use fork-b acme@0."
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Stop its containers with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then run devlanes remote use fork-b acme@0."
         );
         st.infra_containers.clear();
         let error = local_running("fork-b", "acme@0", "acme@0", &hold(&st).expect("held"));
         assert!(error.data.get("compose_project").is_none());
         assert_eq!(
             error.data["message"],
-            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0, then run devlanes remote use fork-b acme@0."
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Then run devlanes remote use fork-b acme@0."
         );
     }
 }

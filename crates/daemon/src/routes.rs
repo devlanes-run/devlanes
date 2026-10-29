@@ -298,7 +298,7 @@ impl Inner {
         for (project, lane) in changed {
             self.emit_lane_event(&project, &lane);
         }
-        // Local routes or lane states may have changed what clashes; a change
+        // Local routes or lane states may have changed what clashes. A change
         // marks the snapshot dirty again, so the next pass publishes it.
         let (_, assignment) = self.reassign_with(&local.entries);
         let routes = self.with_remote_routes(local.entries, &assignment);

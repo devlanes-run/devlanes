@@ -208,6 +208,27 @@ fn none_of(seen: &[Value], codes: &[&str]) {
     }
 }
 
+/// Waits until none of `hosts` lists a port conflict. A mirror that gave a
+/// port up reports it a moment after the switch, so one look could be early.
+async fn settles_without_conflicts(client: &ClientSide, hosts: &[&str]) {
+    let settled = eventually(SOON, || async {
+        for host in hosts {
+            if !no_port_conflicts(client, host).await {
+                return None;
+            }
+        }
+        Some(())
+    })
+    .await;
+    if settled.is_none() {
+        let mut entries = Vec::new();
+        for host in hosts {
+            entries.push(client.host_named(host).await);
+        }
+        panic!("port conflicts stay: {entries:?}");
+    }
+}
+
 /// Whether no port box `host` lists has a conflict.
 async fn no_port_conflicts(client: &ClientSide, host: &str) -> bool {
     client.host_named(host).await["ports"]
@@ -540,6 +561,7 @@ async fn remote_use_switches_a_lane_between_boxes() {
             "{}",
             client.host_named("alpha").await
         );
+        settles_without_conflicts(&client, &["alpha", "beta"]).await;
         assert!(
             closes(&mut raw, Duration::from_secs(6)).await,
             "the raw connection to alpha closes"
@@ -588,6 +610,7 @@ async fn remote_use_switches_a_lane_between_boxes() {
             "{}",
             client.host_named("alpha").await
         );
+        settles_without_conflicts(&client, &["alpha", "beta"]).await;
 
         // `remote.use` announces a switch after the mirrors applied it, so
         // whatever they said about it came first.
@@ -1022,12 +1045,12 @@ async fn a_choice_and_this_machines_own_lane() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A local start whose infra fails holds the lane only while it runs: the
-/// chosen box lane is mirrored again afterwards, and its choice kept.
-/// Containers brought up by `infra up` clear the choice and say the
-/// containers did. A start that ends with only the lane's containers up gets
-/// a new choice refused with `holds: containers` and the Compose project that
-/// stops them.
+/// A local start whose infra fails before any container runs holds the lane
+/// only while it runs: the chosen box lane is mirrored again afterwards, and
+/// its choice kept. One that fails with a container of the lane up anyway
+/// clears the choice and says the containers did. A start that ends with
+/// only the lane's containers up gets a new choice refused with
+/// `holds: containers` and the Compose project that stops them.
 async fn a_failed_start_gives_the_box_lane_back() {
     if !ipv6_loopback().await {
         eprintln!("skipping a_failed_start_gives_the_box_lane_back: no IPv6 loopback");
@@ -1061,6 +1084,7 @@ async fn a_failed_start_gives_the_box_lane_back() {
         *client.h.infra.fail_up.lock().expect("lock") = Some(
             devlanes_daemon::integrations::InfraError::new("docker_failed", "docker is down"),
         );
+        *client.h.infra.namespace_db_state.lock().expect("lock") = Some("exited 1".into());
         let failed = client
             .h
             .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
@@ -1075,20 +1099,25 @@ async fn a_failed_start_gives_the_box_lane_back() {
         assert!(back.is_some(), "the box lane is mirrored again");
         assert_eq!(client.host().await["chosen_lanes"], json!(["boxapp@0"]));
 
+        // `infra up` fails partway, with the lane's db up anyway.
         let (session, mut frames, events) = subscribe(&client, 9_207).await;
-        *client.h.infra.fail_up.lock().expect("lock") = None;
-        client
+        *client.h.infra.namespace_db_state.lock().expect("lock") = None;
+        let failed = client
             .h
             .call(Method::InfraUp, json!({}), cx(&local_repo))
-            .await
-            .expect("infra up");
+            .await;
+        assert!(failed.is_err(), "{failed:?}");
         let seen = warnings_until_code(&mut frames, "choice_cleared", "boxapp@0").await;
         assert_eq!(
             seen.last().map(|w| w["message"].clone()),
             Some(json!(
-                "boxapp@0's containers run on this machine, so box's boxapp@0 is no longer mirrored or chosen."
+                "boxapp@0's containers run on this machine, so box's boxapp@0 is no longer mirrored or chosen. Stop them, then run devlanes remote use box boxapp@0 to switch back."
             ))
         );
+        assert_eq!(client.host().await["chosen_lanes"], json!([]));
+        assert!(!answers(&client, "web.boxapp.localhost", "hello-from-box").await);
+
+        *client.h.infra.fail_up.lock().expect("lock") = None;
         let ended = client
             .h
             .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
@@ -1109,11 +1138,87 @@ async fn a_failed_start_gives_the_box_lane_back() {
         assert_eq!(refused.data["compose_project"], "boxapp-lane0");
         assert_eq!(
             refused.data["message"],
-            "boxapp@0's containers run on this machine. Stop them with docker compose -p boxapp-lane0 stop, then run devlanes remote use box boxapp@0."
+            "boxapp@0's containers run on this machine. Stop them with docker compose -p boxapp-lane0 stop. Then run devlanes remote use box boxapp@0."
         );
 
         session.close();
         let _ = events.await;
+        client.stop().await;
+        side.stop().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A start whose only service exits at once still clears the choice it
+/// beats, and a daemon that restarts with the lane's container up knows it:
+/// a new choice is refused with `holds: containers`.
+async fn what_ran_counts_whatever_the_timing() {
+    if !ipv6_loopback().await {
+        eprintln!("skipping what_ran_counts_whatever_the_timing: no IPv6 loopback");
+        return;
+    }
+    tokio::time::timeout(LIMIT * 2, async {
+        let tmp = temp();
+        let box_repo = repo(&tmp.path, "boxrepo", BOX);
+        let side = BoxSide::start(&tmp, "box", "13400-13449").await;
+        side.h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&box_repo))
+            .await
+            .expect("box start");
+        let local_repo = repo(
+            &tmp.path,
+            "localrepo",
+            "project: boxapp\nservices:\n  web:\n    run: fail\n    hosts: [\"web.${{ lane.domain }}\"]\n",
+        );
+        let client = ClientSide::start(&tmp, "client", "13450-13499", &side).await;
+        client
+            .h
+            .call(Method::LaneList, json!({}), cx(&local_repo))
+            .await
+            .expect("local lane list");
+        client.connect("box").await;
+        let skip = eventually(SOON, || skipped(&client, "box", "boxapp@0")).await;
+        assert!(skip.is_some(), "the stopped local lane wins first");
+        assert!(use_lane(&client, "boxapp@0", Some("box")).await.is_ok());
+        let ended = client
+            .h
+            .call(Method::Start, json!({"units": ["web"]}), cx(&local_repo))
+            .await
+            .expect("a start whose service exits");
+        assert_eq!(ended["ready"], false, "{ended}");
+        assert_eq!(
+            client.host().await["chosen_lanes"],
+            json!([]),
+            "the service ran, so the choice is gone"
+        );
+
+        // The lane gets infra, whose container the next daemon finds up.
+        std::fs::write(
+            local_repo.join("devlanes.yaml"),
+            "project: boxapp\ninfra:\n  containers:\n    db: { image: \"postgres:16\", ports: { pg: 5432 }, per_lane: true }\nservices:\n  web:\n    run: fail\n    hosts: [\"web.${{ lane.domain }}\"]\n",
+        )
+        .expect("config");
+        client.stop().await;
+        let client = ClientSide::start(&tmp, "client", "13450-13499", &side).await;
+        let refused = eventually(SOON, || async {
+            client
+                .h
+                .call(
+                    Method::RemoteUse,
+                    json!({"lane": "boxapp@0", "host": "box"}),
+                    Context::default(),
+                )
+                .await
+                .err()
+                .filter(|error| error.code == "local_lane_running")
+        })
+        .await
+        .expect("the restarted daemon knows the container holds the lane");
+        assert_eq!(refused.data["holds"], "containers", "{:?}", refused.data);
+        assert_eq!(refused.data["compose_project"], "boxapp-lane0");
+
         client.stop().await;
         side.stop().await;
     })

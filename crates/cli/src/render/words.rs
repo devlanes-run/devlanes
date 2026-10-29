@@ -1034,12 +1034,12 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             ),
             Some(Hint::command(["remote", "ls"])),
         ),
-        // Both commands in one sentence, in the order to run them.
+        // The commands in the order to run them.
         "local_lane_running" => {
             let (runs, stop) = local_hold(data, &text(data, "local_lane"));
             (
                 format!(
-                    "{runs}. {stop}, then run devlanes remote use {} {}.",
+                    "{runs}. {stop} Then run devlanes remote use {} {}.",
                     crate::shell_quote(&text(data, "host")),
                     crate::shell_quote(&text(data, "lane"))
                 ),
@@ -1325,17 +1325,15 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
 
 /// What runs of this machine's lane `lane` and how to stop it, from the
 /// `holds`, `compose_project` and `containers` of `data`, as
-/// `("acme@0 runs on this machine", "Stop it with devlanes stop --lane acme@0")`.
-/// The container commands stop only the lane's own containers, and come
-/// after `devlanes stop` when processes run too, so one refusal is enough.
+/// `("acme@0 runs on this machine", "Stop it with devlanes stop --lane acme@0.")`.
+/// The stop part is whole sentences, one per kind of command, each ending in
+/// a period. The container commands stop only the lane's own containers, and
+/// follow `devlanes stop` when processes run too, so one refusal is enough.
 /// Without `holds`, from an older daemon, processes are meant.
 pub(crate) fn local_hold(data: &Value, lane: &str) -> (String, String) {
     let shown = super::clean(lane);
     let processes = text(data, "holds") != "containers";
     let mut commands = Vec::new();
-    if processes {
-        commands.push(format!("devlanes stop --lane {}", crate::shell_quote(lane)));
-    }
     let project = text(data, "compose_project");
     if !project.is_empty() {
         commands.push(format!(
@@ -1351,21 +1349,21 @@ pub(crate) fn local_hold(data: &Value, lane: &str) -> (String, String) {
     if !containers.is_empty() {
         commands.push(format!("docker stop {}", containers.join(" ")));
     }
-    let commands = match commands.split_last() {
-        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-        _ => commands.concat(),
-    };
-    if processes {
-        (
-            format!("{shown} runs on this machine"),
-            format!("Stop it with {commands}"),
-        )
-    } else {
-        (
+    let containers = commands.join(" and ");
+    if !processes {
+        return (
             format!("{shown}'s containers run on this machine"),
-            format!("Stop them with {commands}"),
-        )
+            format!("Stop them with {containers}."),
+        );
     }
+    let mut stop = format!(
+        "Stop it with devlanes stop --lane {}.",
+        crate::shell_quote(lane)
+    );
+    if !containers.is_empty() {
+        stop.push_str(&format!(" Stop its containers with {containers}."));
+    }
+    (format!("{shown} runs on this machine"), stop)
 }
 
 /// A `remote.warning` event (`{host, code, lane?, unit?, hosts?, port?,
@@ -1386,7 +1384,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
         "lane_skipped" if text(data, "cause") == "local_running" => {
             let (runs, stop) = local_hold(data, &text(data, "winner_lane"));
             format!(
-                "{host}: lane {lane} is not mirrored because {runs}. {stop}, then run devlanes remote use {} {}.",
+                "{host}: lane {lane} is not mirrored because {runs}. {stop} Then run devlanes remote use {} {}.",
                 crate::shell_quote(&text(data, "host")),
                 crate::shell_quote(&text(data, "lane"))
             )
@@ -1408,12 +1406,17 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             } else {
                 local
             };
-            let runs = if text(data, "holds") == "containers" {
-                format!("{local}'s containers run on this machine")
+            if text(data, "holds") == "containers" {
+                format!(
+                    "{host}: {local}'s containers run on this machine, so {host}'s {lane} is no longer mirrored or chosen. Stop them, then run devlanes remote use {} {} to switch back.",
+                    crate::shell_quote(&text(data, "host")),
+                    crate::shell_quote(&text(data, "lane"))
+                )
             } else {
-                format!("{local} started on this machine")
-            };
-            format!("{host}: {runs}, so {host}'s {lane} is no longer mirrored or chosen.")
+                format!(
+                    "{host}: {local} started on this machine, so {host}'s {lane} is no longer mirrored or chosen."
+                )
+            }
         }
         // A daemon from before lane choices. A stopped lane keeps its
         // hostnames, so the hint names the clean.
@@ -1464,7 +1467,7 @@ pub(crate) fn remote_warning(code: &str, data: &Value) -> String {
             field(data, "own_port")
         ),
         "ports_range_overlap" => format!(
-            "{host}: the box's ports.range {} overlaps {}. Lanes the boxes share go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range if that matters.",
+            "{host}: the box's ports.range {} overlaps {}. Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before such lanes get their ports.",
             field(data, "range"),
             list(data, "overlaps")
                 .iter()

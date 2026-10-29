@@ -309,6 +309,30 @@ pub struct InfraContainer {
     pub state: Option<String>,
 }
 
+impl InfraContainer {
+    /// Whether it holds a host port of its lane's block: the lane's own
+    /// container, publishing a port, in a state that binds it. A state
+    /// nobody reported counts as down, since a plain container listed from
+    /// its spec may never have run. `oom` counts as up, since running out of
+    /// memory doesn't stop it.
+    pub fn holds_port(&self) -> bool {
+        !self.shared
+            && self.publishes
+            && matches!(
+                self.state.as_deref(),
+                Some(
+                    "running"
+                        | "starting"
+                        | "healthy"
+                        | "unhealthy"
+                        | "restarting"
+                        | "paused"
+                        | "oom"
+                )
+            )
+    }
+}
+
 /// What [`InfraProvider::container_logs`] asks the engine for.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ContainerLogOptions {
@@ -376,6 +400,11 @@ pub trait InfraProvider: Send + Sync {
     /// the containers' state from Docker; a lane that stored the result of
     /// [`InfraProvider::up`] for its run needs no call.
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError>;
+    /// Fills in the state of `containers` that [`InfraProvider::namespace`]
+    /// could not tell, such as plain containers it lists from their spec.
+    /// Only callers that keep the containers ask, since it may cost a Docker
+    /// call. A state it can't learn stays `None`.
+    async fn container_states(&self, _spec: &InfraSpec, _containers: &mut [InfraContainer]) {}
     /// Health and endpoints of a project's infra.
     async fn status(&self, spec: &InfraSpec) -> Result<Value, InfraError>;
     /// Stops the project's shared containers, keeping their data (`infra down`).

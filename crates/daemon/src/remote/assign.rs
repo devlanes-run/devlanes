@@ -5,9 +5,9 @@
 //! routes that name a box port directly belong to the reference. Of a set of
 //! clashing lanes one is mirrored, by this order:
 //!
-//! 1. a running local lane;
-//! 2. the box lane chosen with `remote use`;
-//! 3. a stopped local lane;
+//! 1. a running local lane,
+//! 2. the box lane chosen with `remote use`,
+//! 3. a stopped local lane,
 //! 4. the box lane whose box connected first.
 //!
 //! The others are skipped whole. [`assign`] is pure, so the mirrors, the route
@@ -94,23 +94,27 @@ impl Hold {
         fields
     }
 
-    /// The commands that free the ports of local lane `lane`. Only the
-    /// lane's own containers: its Compose project holds no shared service,
-    /// and plain containers are named by Docker name.
-    pub(crate) fn stop_command(&self, lane: &str) -> String {
+    /// The sentences that free the ports of local lane `lane`, one per kind
+    /// of command, each ending in a period: "Stop it with devlanes stop
+    /// --lane acme@0." and "Stop its containers with …", or "Stop them with
+    /// …" when only containers run. Only the lane's own containers: its
+    /// Compose project holds no shared service, and plain containers are
+    /// named by Docker name.
+    pub(crate) fn stop_sentences(&self, lane: &str) -> String {
         let mut commands = Vec::new();
-        if self.processes {
-            commands.push(format!("devlanes stop --lane {lane}"));
-        }
         if let Some(project) = &self.compose_project {
             commands.push(format!("docker compose -p {project} stop"));
         }
         if !self.containers.is_empty() {
             commands.push(format!("docker stop {}", self.containers.join(" ")));
         }
-        match commands.split_last() {
-            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-            _ => commands.join(""),
+        let containers = commands.join(" and ");
+        match (self.processes, containers.is_empty()) {
+            (true, true) => format!("Stop it with devlanes stop --lane {lane}."),
+            (true, false) => format!(
+                "Stop it with devlanes stop --lane {lane}. Stop its containers with {containers}."
+            ),
+            (false, _) => format!("Stop them with {containers}."),
         }
     }
 
@@ -121,11 +125,6 @@ impl Hold {
         } else {
             format!("{lane}'s containers run on this machine")
         }
-    }
-
-    /// The pronoun for what runs: `it` for the lane, `them` for containers.
-    pub(crate) fn them(&self) -> &'static str {
-        if self.processes { "it" } else { "them" }
     }
 }
 
@@ -540,16 +539,16 @@ mod tests {
         let skip = got.skip("fork-b", "acme@0").expect("skipped");
         assert_eq!(skip.hold.as_ref(), Some(&hold));
         assert_eq!(
-            hold.stop_command("acme@0"),
-            "docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos"
+            hold.stop_sentences("acme@0"),
+            "Stop them with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos."
         );
         assert_eq!(
             hold.runs("acme@0"),
             "acme@0's containers run on this machine"
         );
         assert_eq!(
-            Hold::processes().stop_command("acme@0"),
-            "devlanes stop --lane acme@0"
+            Hold::processes().stop_sentences("acme@0"),
+            "Stop it with devlanes stop --lane acme@0."
         );
         assert!(!Hold::processes().fields().contains_key("compose_project"));
         let fields = hold.fields();
@@ -561,8 +560,8 @@ mod tests {
             ..Hold::default()
         };
         assert_eq!(
-            both.stop_command("acme@0"),
-            "devlanes stop --lane acme@0 and docker compose -p acme-lane0 stop"
+            both.stop_sentences("acme@0"),
+            "Stop it with devlanes stop --lane acme@0. Stop its containers with docker compose -p acme-lane0 stop."
         );
         assert_eq!(both.runs("acme@0"), "acme@0 runs on this machine");
         let fields = both.fields();

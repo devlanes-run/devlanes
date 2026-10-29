@@ -612,6 +612,10 @@ pub struct FakeInfra {
     pub started_at: Arc<Mutex<Option<String>>>,
     /// When set, `up` fails with this error.
     pub fail_up: Arc<Mutex<Option<InfraError>>>,
+    /// When set, the state `namespace` reports for the lane's `db`, such as
+    /// `exited 1` for one an `up` that failed never started. `healthy`
+    /// otherwise.
+    pub namespace_db_state: Arc<Mutex<Option<String>>>,
     /// Lines every container's log holds. Line `n` is stamped [`fake_timestamp`]`(n)`.
     pub logs: Arc<Mutex<Vec<String>>>,
     /// `<docker> tail=<tail> follow=<follow>` for every `container_logs` call.
@@ -679,9 +683,9 @@ impl FakeInfra {
         json!({"db": {"port": port, "ports": {"5432": port}}, "cache": {"port": 6379, "ports": {"6379": 6379}}})
     }
 
-    /// The lane's `db` container (one per replica) and a shared `cache`, named
-    /// like compose would.
-    fn containers(&self, spec: &InfraSpec) -> Vec<InfraContainer> {
+    /// The lane's `db` container (one per replica) in `db_state` and a shared
+    /// `cache`, named like compose would.
+    fn containers(&self, spec: &InfraSpec, db_state: &str) -> Vec<InfraContainer> {
         let replicas = self.db_replicas.lock().map_or(1, |r| (*r).max(1));
         let mut containers: Vec<InfraContainer> = (1..=replicas)
             .map(|replica| InfraContainer {
@@ -690,7 +694,7 @@ impl FakeInfra {
                 shared: false,
                 compose_project: Some(format!("{}-lane{}", spec.project, spec.lane)),
                 publishes: true,
-                state: Some("healthy".into()),
+                state: Some(db_state.to_owned()),
             })
             .collect();
         containers.push(InfraContainer {
@@ -729,7 +733,7 @@ impl InfraProvider for FakeInfra {
             namespace: Self::namespace(spec),
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
             report: json!({"services": ["db"]}),
-            containers: self.containers(spec),
+            containers: self.containers(spec, "healthy"),
         })
     }
     async fn namespace(&self, spec: &InfraSpec) -> Result<InfraUp, InfraError> {
@@ -738,7 +742,15 @@ impl InfraProvider for FakeInfra {
             namespace: Self::namespace(spec),
             // As Compose's provider: the same env `up` gives, nothing started.
             setup_env: BTreeMap::from([("COMPOSE_PROJECT_NAME".into(), "fake".into())]),
-            containers: self.containers(spec),
+            containers: self.containers(
+                spec,
+                &self
+                    .namespace_db_state
+                    .lock()
+                    .ok()
+                    .and_then(|state| state.clone())
+                    .unwrap_or_else(|| "healthy".into()),
+            ),
             ..InfraUp::default()
         })
     }

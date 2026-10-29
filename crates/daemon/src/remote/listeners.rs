@@ -118,7 +118,7 @@ impl Target {
     }
 
     /// Points at `owner`. A different box lane than before closes the
-    /// connections accepted for the old one; the same one keeps them.
+    /// connections accepted for the old one. The same one keeps them.
     fn point(&self, owner: Option<Owner>) {
         let mut current = lock(&self.0);
         match (current.as_mut(), owner) {
@@ -162,7 +162,7 @@ impl Listeners {
     /// with the assignment lock held, right after the assignment changed.
     pub(super) fn apply(&self, assignment: &Assignment, resolve: Resolve<'_>) {
         // Only lanes that moved to a box with other port numbers, or that no
-        // box serves now, find no owner; forks of one lane share the numbers
+        // box serves now, find no owner. Forks of one lane share the numbers
         // and are repointed. A retired port goes with the next sweep.
         for (port, slot) in lock(&self.ports).iter() {
             match assignment.listeners.get(port).and_then(resolve) {
@@ -180,7 +180,7 @@ impl Listeners {
 
     /// Serves `listener`, bound on `address` for box port `port`. The first
     /// listener of a port leads to `owner`, read from the current assignment
-    /// with its lock held; later ones share the port's target.
+    /// with its lock held. Later ones share the port's target.
     pub(super) fn listen(
         &self,
         port: u16,

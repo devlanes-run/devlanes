@@ -1346,8 +1346,9 @@ pub mod remote {
     /// busy port. `lane_skipped` carries `lane`, `hosts`, `box`, `local_lanes`
     /// and `cause` (as `host.list`'s `skipped_lanes`), and goes out when a
     /// lane stops being mirrored for another reason than a choice. With
-    /// cause `local_running` it also has `holds`, and for `containers`
-    /// `compose_project` and `containers`, as `local_lane_running` has.
+    /// cause `local_running` it also has `holds`, and `compose_project` and
+    /// `containers` while the lane's own containers count, as
+    /// `local_lane_running` has.
     /// `choice_cleared` carries `lane`, `host` (the box whose choice a local
     /// lane that holds its ports deleted, connected or not), `local_lane` and
     /// `holds`, `containers` when only that lane's containers run, such as
