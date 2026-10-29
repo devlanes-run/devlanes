@@ -129,10 +129,10 @@ pub struct SkippedLane {
     pub containers: Vec<String>,
 }
 
-/// The commands that stop a local lane's own containers:
+/// The commands that stop a local lane's own containers, one each:
 /// `docker compose -p acme-lane0 stop` for its Compose project and
-/// `docker stop <names>` for plain containers. `None` when neither is known.
-pub fn containers_command(compose_project: Option<&str>, containers: &[String]) -> Option<String> {
+/// `docker stop <names>` for plain containers. Empty when neither is known.
+pub fn containers_commands(compose_project: Option<&str>, containers: &[String]) -> Vec<String> {
     let mut commands = Vec::new();
     if let Some(project) = compose_project.filter(|p| !p.is_empty()) {
         commands.push(format!(
@@ -144,27 +144,30 @@ pub fn containers_command(compose_project: Option<&str>, containers: &[String]) 
         let names: Vec<String> = containers.iter().map(|c| crate::text::clean(c)).collect();
         commands.push(format!("docker stop {}", names.join(" ")));
     }
-    (!commands.is_empty()).then(|| commands.join(" and "))
+    commands
 }
 
 /// `acme@0's containers run on this machine. Stop them with docker compose
-/// -p acme-lane0 stop, then press m.`, without the command when the daemon
-/// sends none. In the TUI `m` switches once they stopped, where the CLI's
-/// words end in `devlanes remote use`.
-pub fn containers_run(lane: &str, command: Option<&str>) -> String {
+/// -p acme-lane0 stop. Then press m.`, in the daemon's sentence shape, and
+/// `Stop them, then press m.` when it names no command. In the TUI `m`
+/// switches once they stopped, where the CLI's words end in
+/// `devlanes remote use`.
+pub fn containers_run(lane: &str, commands: &[String]) -> String {
     let lane = crate::text::clean(lane);
-    match command {
-        Some(command) => format!(
-            "{lane}'s containers run on this machine. Stop them with {command}, then press m."
-        ),
-        None => format!("{lane}'s containers run on this machine. Stop them, then press m."),
+    if commands.is_empty() {
+        format!("{lane}'s containers run on this machine. Stop them, then press m.")
+    } else {
+        format!(
+            "{lane}'s containers run on this machine. Stop them with {}. Then press m.",
+            commands.join(" and ")
+        )
     }
 }
 
 impl SkippedLane {
-    /// [`containers_command`] for the local lane that keeps this one out.
-    pub fn containers_command(&self) -> Option<String> {
-        containers_command(self.compose_project.as_deref(), &self.containers)
+    /// [`containers_commands`] for the local lane that keeps this one out.
+    pub fn containers_commands(&self) -> Vec<String> {
+        containers_commands(self.compose_project.as_deref(), &self.containers)
     }
 
     /// The lane in use instead: `winner_lane`, else this lane's own
@@ -444,6 +447,16 @@ impl BoxHost {
         } else {
             command.to_owned()
         }
+    }
+
+    /// The `ports_range_overlap` warning `warning`, without the
+    /// `box fork-a's ` its block already says. `None` for other warnings.
+    /// `host.list` sends warnings as text without their code, so the text
+    /// is all there is to go by.
+    pub fn range_overlap<'a>(&self, warning: &'a str) -> Option<&'a str> {
+        warning
+            .strip_prefix(&format!("box {}'s ", self.host))
+            .filter(|rest| rest.starts_with("ports.range ") && rest.contains(" overlaps "))
     }
 
     /// Whether box lane `lane` (`acme@0`) was chosen for this box.

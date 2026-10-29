@@ -565,8 +565,11 @@ pub fn rpc(error: &RpcError) -> Worded {
             };
             let summary = if message.is_empty() {
                 fallback.to_owned()
-            } else if let Some((head, _)) = message.split_once(", then run devlanes remote use") {
+            } else if let Some((head, _)) = message.split_once(". Then run devlanes remote use") {
                 // The CLI's next step. Here `m` does it.
+                format!("{head}. Then press m.")
+            } else if let Some((head, _)) = message.split_once(", then run devlanes remote use") {
+                // The same, as daemons before one sentence per command put it.
                 format!("{head}, then press m.")
             } else {
                 message

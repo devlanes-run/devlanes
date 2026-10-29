@@ -668,6 +668,15 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "dialog-stop-containers",
+            what: "m on fork-b's shop@0 while this machine runs shop@0 with its own containers: the stop leaves them holding the ports, so y only stops, and the dialog names their commands",
+            setup: |f| {
+                f.show_boxes(data::forks_processes_and_containers());
+                f.lane("shop@0 @fork-b");
+                f.key(KeyCode::Char('m'));
+            },
+        },
+        Scene {
             name: "boxes-forks",
             what: "the boxes view with both forks: fork-a's chosen lane, and fork-b's skipped one selected (j j), with the lane in use and m",
             setup: |f| {

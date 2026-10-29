@@ -2,9 +2,9 @@
  lanes  1 @0  2 @0 fork-a ○  3 @0 fork-b ○  4 @1        1-9 or [ ] switch lanes
 ┌ @0 fork-b · not mirrored ────┐┌ shop@0  running · 2 up ─────────── on fork-b ┐
 │ ▾ services                 2 ││ ! Not mirrored. shop@0's containers run on   │
-│   ● storefront               ││   this machine. Stop them with docker compose│
-│   ● checkout-api             ││   -p shop-lane0 stop and docker stop         │
-│                              ││   shop-cache, then press m.                  │
+│   ● storefront               ││   this machine. Stop them, then press m.     │
+│   ● checkout-api             ││   docker compose -p shop-lane0 stop          │
+│                              ││   docker stop devlanes-shop-lane0-cache      │
 │                              ││                                              │
 │                              ││ box       fork-b · ssh · devlanes 1.0.0      │
 │                              ││ domain    shop.localhost                     │

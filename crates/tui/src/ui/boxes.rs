@@ -182,7 +182,7 @@ fn notes(
     }
     if let Some(grey) = app.grey(reference) {
         match grey_note(&grey) {
-            Some(note) => lines.extend(attention(&note, &[])),
+            Some((note, commands)) => lines.extend(attention(&note, &commands)),
             // A daemon without `remote.use` says why, and nothing switches it.
             None => {
                 let reason = host
@@ -198,67 +198,73 @@ fn notes(
     lines
 }
 
-/// The first line of a grey lane's pane: what serves its hostnames instead
-/// and how to use this one. `None` from daemons without `remote.use`.
-pub(super) fn grey_note(grey: &Grey) -> Option<String> {
+/// The first line of a grey lane's pane, what serves its hostnames instead
+/// and how to use this one, and the commands to run first, each on a line
+/// of its own so it copies whole. `None` from daemons without `remote.use`.
+pub(super) fn grey_note(grey: &Grey) -> Option<(String, Vec<String>)> {
     let serving = clean(&grey.serving);
-    match (grey.cause.as_deref()?, &grey.winner) {
+    let note = match (grey.cause.as_deref()?, &grey.winner) {
         // Only its own containers are up, which no devlanes command stops.
-        ("local_running", _) if grey.held_by_containers() => Some(format!(
-            "Not mirrored. {}",
-            containers_run(&serving, grey.containers.as_deref())
-        )),
-        ("local_running", _) => Some(format!(
+        ("local_running", _) if grey.held_by_containers() => {
+            let note = format!("Not mirrored. {}", containers_run(&serving, &[]));
+            return Some((note, grey.containers.clone()));
+        }
+        ("local_running", _) => format!(
             "Not mirrored. {serving} runs on this machine. Press m to stop it and use this one."
-        )),
+        ),
         // This machine's own lane, which a chosen box lane took over.
-        (_, Some(winner)) if grey.host.is_none() => Some(format!(
+        (_, Some(winner)) if grey.host.is_none() => format!(
             "{}'s {serving} is in use instead. Press m to use this one.",
             clean(winner)
-        )),
-        (_, Some(winner)) if grey.can_use => Some(format!(
+        ),
+        (_, Some(winner)) if grey.can_use => format!(
             "Not mirrored. {}'s {serving} is in use. Press m to use this one.",
             clean(winner)
-        )),
-        (_, None) if grey.can_use => Some(format!(
-            "Not mirrored. This machine's {serving} is in use. Press m to use this one."
-        )),
-        _ => None,
-    }
+        ),
+        (_, None) if grey.can_use => {
+            format!("Not mirrored. This machine's {serving} is in use. Press m to use this one.")
+        }
+        _ => return None,
+    };
+    Some((note, Vec::new()))
 }
 
-/// A skipped lane's row in the boxes view: what serves its hostnames and
-/// what `m` on the row does. `None` from daemons without `remote.use`.
-fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<String> {
+/// A skipped lane's row in the boxes view, what serves its hostnames and
+/// what `m` on the row does, and the commands to run first, one per line.
+/// `None` from daemons without `remote.use`.
+fn skipped_words(skipped: &crate::boxes::SkippedLane) -> Option<(String, Vec<String>)> {
     let cause = skipped.cause.as_deref()?;
     let lane = clean(&skipped.lane);
     let serving = clean(skipped.serving());
     let containers = skipped.holds.as_deref() == Some("containers");
-    let command = skipped.containers_command();
-    match (cause, skipped.served_by()) {
+    let commands = skipped.containers_commands();
+    let words = match (cause, skipped.served_by()) {
         ("local_running", _) if containers && serving == lane => {
-            Some(containers_run(&lane, command.as_deref()))
+            return Some((containers_run(&lane, &[]), commands));
         }
-        ("local_running", _) if containers => Some(format!(
-            "{lane}: {}",
-            containers_run(&serving, command.as_deref())
-        )),
+        ("local_running", _) if containers => {
+            return Some((
+                format!("{lane}: {}", containers_run(&serving, &[])),
+                commands,
+            ));
+        }
         // `acme@0: acme@0 runs on this machine` would name the lane twice.
-        ("local_running", _) if serving == lane => Some(format!(
-            "{lane} also runs on this machine. Press m to stop it and use this one."
-        )),
-        ("local_running", _) => Some(format!(
-            "{lane}: {serving} runs on this machine. Press m to stop it and use this one."
-        )),
-        (_, Some(winner)) if skipped.can_use => Some(format!(
+        ("local_running", _) if serving == lane => {
+            format!("{lane} also runs on this machine. Press m to stop it and use this one.")
+        }
+        ("local_running", _) => {
+            format!("{lane}: {serving} runs on this machine. Press m to stop it and use this one.")
+        }
+        (_, Some(winner)) if skipped.can_use => format!(
             "{lane}: {}'s {serving} is in use. Press m to use this one.",
             clean(winner)
-        )),
-        (_, None) if skipped.can_use => Some(format!(
-            "{lane}: this machine's {serving} is in use. Press m to use this one."
-        )),
-        _ => None,
-    }
+        ),
+        (_, None) if skipped.can_use => {
+            format!("{lane}: this machine's {serving} is in use. Press m to use this one.")
+        }
+        _ => return None,
+    };
+    Some((words, Vec::new()))
 }
 
 /// Why a box lane is skipped, naming the local lane that serves its
@@ -1416,9 +1422,15 @@ fn host_lines(
     for (index, skipped) in host.skipped_lanes.iter().enumerate() {
         let start = lines.len();
         let label = if index == 0 { "skipped" } else { "" };
-        let text = skipped_words(skipped)
-            .unwrap_or_else(|| format!("{}: {}", clean(&skipped.lane), skip_reason(app, skipped)));
+        let (text, commands) = skipped_words(skipped).unwrap_or_else(|| {
+            let reason = skip_reason(app, skipped);
+            (format!("{}: {reason}", clean(&skipped.lane)), Vec::new())
+        });
         lines.extend(fact(label, &text, theme.tone(Tone::Attention)));
+        // One line each, so a command copies whole.
+        for command in &commands {
+            lines.extend(fact("", &format!("  {command}"), plain));
+        }
         skipped_rows.push(start..lines.len());
     }
     for (index, refused) in host.skipped_hosts.iter().enumerate() {

@@ -313,21 +313,39 @@ fn screen(app: &devlanes_tui::app::App) -> Result<String, Box<dyn std::error::Er
 }
 
 /// Only its own containers keep this machine's lane running, which no stop
-/// here ends: the pane and the boxes view name the command, there is no
-/// stop and switch, and the daemon's refusal ends in `press m`.
+/// here ends: the pane and the boxes view name the commands, one per line,
+/// there is no stop and switch, and the daemon's refusal ends in `press m`.
 #[tokio::test]
-async fn a_lane_held_by_its_containers_names_the_command() -> TestResult {
+async fn a_lane_held_by_its_containers_names_the_commands() -> TestResult {
     let api = FakeApi::with_lanes(acme_stopped());
     let (mut app, _) = loaded(&api, 120, 40).await;
     app.update(Msg::Boxes(Ok(forks_held(
         "containers",
         json!("acme-lane0"),
-        json!(["acme-cache"]),
+        json!(["devlanes-acme-lane0-cache"]),
     ))));
     select(&mut app, Selected::lane("acme@0 @fork-b"));
-    let both = "acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop and docker stop acme-cache, then press m.";
+    let note = "acme@0's containers run on this machine. Stop them, then press m.";
+    let compose = "docker compose -p acme-lane0 stop";
+    let plain = "docker stop devlanes-acme-lane0-cache";
     let text = pane(&app)?;
-    assert!(text.contains(&format!("Not mirrored. {both}")), "{text}");
+    assert!(
+        text.contains(&format!("Not mirrored. {note} {compose} {plain}")),
+        "{text}"
+    );
+    // Each command is a line of its own, so it copies whole.
+    let terminal = draw(&app)?;
+    let buffer = terminal.backend().buffer();
+    let rows: Vec<String> = (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    for command in [compose, plain] {
+        assert!(rows.iter().any(|row| row.contains(command)), "{rows:#?}");
+    }
     let effects = app.update(key(KeyCode::Char('m')));
     assert!(app.dialog.is_none(), "no stop and switch");
     assert!(stops(&effects).is_empty(), "{effects:?}");
@@ -341,11 +359,14 @@ async fn a_lane_held_by_its_containers_names_the_command() -> TestResult {
     let shown = app.notice.as_ref().ok_or("no notice")?;
     assert_eq!(
         shown.text,
-        "use acme@0 from fork-b failed: acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop, then press m."
+        "use acme@0 from fork-b failed: acme@0's containers run on this machine. Stop them with docker compose -p acme-lane0 stop. Then press m."
     );
     app.update(crate::shifted('B'));
     let text = screen(&app)?;
-    assert!(text.contains(&format!("skipped {both}")), "{text}");
+    assert!(
+        text.contains(&format!("skipped {note} {compose} {plain}")),
+        "{text}"
+    );
     Ok(())
 }
 
@@ -370,10 +391,11 @@ async fn a_lane_held_by_unnamed_containers_says_to_stop_them() -> TestResult {
     Ok(())
 }
 
-/// Processes and containers both up: the stop ends the processes only, so
-/// the dialog says the containers keep running and names their command.
+/// Processes and containers both up: the stop ends the processes only, and
+/// the containers keep the ports. So `y` only stops, and the dialog names
+/// their commands.
 #[tokio::test]
-async fn the_dialog_names_the_containers_a_stop_leaves_running() -> TestResult {
+async fn the_dialog_only_stops_when_containers_keep_the_ports() -> TestResult {
     let mut app = with_forks(120, 40).await;
     app.update(Msg::Boxes(Ok(forks_held(
         "processes",
@@ -383,26 +405,39 @@ async fn the_dialog_names_the_containers_a_stop_leaves_running() -> TestResult {
     select(&mut app, Selected::lane("acme@0 @fork-b"));
     app.update(key(KeyCode::Char('m')));
     let dialog = pane_and_dialog(&app)?;
-    assert!(
-        dialog.contains(
-            "Its own containers keep running. Stop them too with docker compose -p acme-lane0 stop."
-        ),
-        "{dialog}"
+    assert_eq!(
+        dialog,
+        "acme@0 runs on this machine. Stop it? acme@0's own containers keep its ports. Stop them with docker compose -p acme-lane0 stop, then press m again. y stop"
     );
-    assert!(!dialog.contains("serves its hostnames"), "{dialog}");
+    let effects = app.update(key(KeyCode::Char('y')));
+    let [(action, lane)] = stops(&effects).try_into().map_err(|_| "one stop")?;
+    assert_eq!(lane, "acme@0");
+    // The stop answered: no switch follows, the daemon would refuse it.
+    let effects = app.update(stopped(action));
+    assert!(uses(&effects).is_empty(), "{effects:?}");
+    let effects = app.update(Msg::Tick);
+    assert!(uses(&effects).is_empty(), "{effects:?}");
     Ok(())
 }
 
-/// The CLI's next step in a daemon message reads as `press m` here.
+/// The CLI's next step in a daemon message reads as `press m` here, in the
+/// sentence shape of today's daemons and of older ones.
 #[test]
 fn a_refusal_ends_in_press_m() {
-    let error = RpcError::new(
-        "local_lane_running",
-        json!({"message": "acme@0's containers run on this machine. Stop them with docker stop acme-cache, then run devlanes remote use fork-b acme@0."}),
-        1,
+    let summary = |message: &str| {
+        let error = RpcError::new("local_lane_running", json!({"message": message}), 1);
+        devlanes_tui::words::rpc(&error).summary
+    };
+    assert_eq!(
+        summary(
+            "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Stop its containers with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then run devlanes remote use fork-b acme@0."
+        ),
+        "acme@0 runs on this machine. Stop it with devlanes stop --lane acme@0. Stop its containers with docker compose -p acme-lane0 stop and docker stop devlanes-acme-lane0-cerbos. Then press m."
     );
     assert_eq!(
-        devlanes_tui::words::rpc(&error).summary,
+        summary(
+            "acme@0's containers run on this machine. Stop them with docker stop acme-cache, then run devlanes remote use fork-b acme@0."
+        ),
         "acme@0's containers run on this machine. Stop them with docker stop acme-cache, then press m."
     );
 }
