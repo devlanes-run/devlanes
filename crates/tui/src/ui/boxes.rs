@@ -1406,10 +1406,11 @@ fn host_lines(
                 n => format!("{n} lanes"),
             },
             ports,
-            format!(
-                "{routes} {} routed",
-                if routes == 1 { "hostname" } else { "hostnames" }
-            ),
+            match routes {
+                0 => "no hostnames routed".to_owned(),
+                1 => "1 hostname routed".to_owned(),
+                n => format!("{n} hostnames routed"),
+            },
         ];
         lines.extend(fact("mirror", &parts.join(" · "), plain));
     }
@@ -1459,7 +1460,12 @@ fn host_lines(
     }
     // The daemon's warnings mark commands with backticks; this page has no
     // code style for them.
-    for warning in host.warnings.iter().map(|w| w.replace('`', "")) {
+    // A port range overlap names this box first, which its block already does.
+    let warnings = host
+        .warnings
+        .iter()
+        .map(|w| host.range_overlap(w).unwrap_or(w).replace('`', ""));
+    for warning in warnings {
         let first = vec![
             Span::raw("  "),
             Span::styled(

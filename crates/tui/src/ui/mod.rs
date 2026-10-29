@@ -772,9 +772,11 @@ fn boxes_badge(app: &App) -> Option<(String, Tone)> {
             "reconnecting" | "needs_auth" | "needs_pairing" | "failed"
         )
     };
+    // Forks of one image always share their ports.range, which the guide
+    // calls expected, so that warning alone is no issue.
     let issues = hosts
         .iter()
-        .filter(|h| down(&h.state) || !h.warnings.is_empty())
+        .filter(|h| down(&h.state) || h.warnings.iter().any(|w| h.range_overlap(w).is_none()))
         .count();
     let text = match issues {
         0 => return None,

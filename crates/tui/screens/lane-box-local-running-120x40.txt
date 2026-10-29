@@ -1,4 +1,4 @@
- devlanes  1 acme   2 billing   3 shop                                                Monitor  Daemon  Boxes · 2 issues
+ devlanes  1 acme   2 billing   3 shop                                                           Monitor  Daemon  Boxes
  lanes  1 @0 main  2 @0 fork-a ○  3 @0 fork-b ○  4 @1 feat/gift-cards                           1-9 or [ ] switch lanes
 ┌ @0 fork-b · not mirrored ────────────────────┐┌ storefront  ready ──────────────────────────────────────── on fork-b ┐
 │ ▾ services                                 2 ││ ! Not mirrored. shop@0 runs on this machine. Press m to stop it and  │
@@ -40,7 +40,7 @@
  m use this one   z zoom   / filter   B boxes   read-only: manage it on fork-b (ssh fork-b)       ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103 bold, 104-107 dim, 108-118 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 31-38 bold black on yellow, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold, 115-118 dim
 1: 0-6 dim, 8-9 dim, 10-16 green, 19-31 dim, 33-47 bold reversed, 49-68 dim, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
 2: 0 darkgray, 2-10 bold, 11-25 dim, 27-48 darkgray, 50-59 bold, 60-61 dim, 62-66 green, 68-107 darkgray, 109-117 dim, 119 darkgray
 3: 0 darkgray, 2-3 dim, 45 dim, 47-48 darkgray, 50-51 yellow, 119 darkgray

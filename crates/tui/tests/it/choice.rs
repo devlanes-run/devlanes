@@ -1033,6 +1033,42 @@ async fn the_boxes_view_names_what_serves_a_skipped_lane_and_the_chosen_ones() -
     Ok(())
 }
 
+/// Forks of one image share their `ports.range`, which is expected: the
+/// warning shows in the box's block without its name, and the boxes button
+/// counts no issue for it.
+#[tokio::test]
+async fn a_port_range_overlap_is_no_issue() -> TestResult {
+    let mut listing = forks();
+    let warning = |own: &str, other: &str| {
+        json!([format!(
+            "box {own}'s ports.range 31000-31999 overlaps box {other} (31000-31999). Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before such lanes get their ports."
+        )])
+    };
+    listing["items"][0]["warnings"] = warning("fork-b", "fork-a");
+    listing["items"][1]["warnings"] = warning("fork-a", "fork-b");
+    let mut app = with_forks(120, 40).await;
+    app.update(Msg::Boxes(Ok(listing.clone())));
+    let header = row(&app, 0)?;
+    assert!(!header.contains("issue"), "{header}");
+    app.update(crate::shifted('B'));
+    app.update(Msg::Boxes(Ok(listing)));
+    let text = screen(&app)?;
+    assert!(
+        text.contains(
+            "! ports.range 31000-31999 overlaps box fork-a (31000-31999). Lanes that only"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("box fork-b's ports.range"), "{text}");
+    // Another warning still counts.
+    let mut listing = forks();
+    listing["items"][0]["warnings"] = json!(["the box stops your processes at logout."]);
+    app.update(Msg::Boxes(Ok(listing)));
+    let header = row(&app, 0)?;
+    assert!(header.contains("Boxes · 1 issue"), "{header}");
+    Ok(())
+}
+
 /// A skipped lane row that wraps is selected on every line.
 #[tokio::test]
 async fn a_wrapped_skipped_lane_row_is_selected_whole() -> TestResult {

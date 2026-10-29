@@ -1,20 +1,20 @@
- devlanes  1 acme   2 billing   3 shop                                                                                          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 2 issues
+ devlanes  1 acme   2 billing   3 shop                                                                                                     starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── 2 of 2 connected ┐
 │ ● fork-a                                                                                                                                                                             connected · ssh │
 │   link      connected since 2026-10-14 16:46                                                                                                                                                         │
 │   box       devlanes 1.0.0 · proxy on 8443 · ports.range 31000-31999                                                                                                                                 │
 │   mirror    1 lane · 2 of 2 ports bound here · 2 hostnames routed                                                                                                                                    │
 │   chosen    shop@0                                                                                                                                                                                   │
-│   ! box fork-a's ports.range 31000-31999 overlaps box fork-b (31000-31999). Lanes the boxes share go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range  │
-│     if that matters.                                                                                                                                                                                 │
+│   ! ports.range 31000-31999 overlaps box fork-b (31000-31999). Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before │
+│     such lanes get their ports.                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │ ● fork-b                                                                                                                                                                             connected · ssh │
 │   link      connected since 2026-10-14 16:46                                                                                                                                                         │
 │   box       devlanes 1.0.0 · proxy on 8443 · ports.range 31000-31999                                                                                                                                 │
-│   mirror    no lanes · no ports bound here · 0 hostnames routed                                                                                                                                      │
+│   mirror    no lanes · no ports bound here · no hostnames routed                                                                                                                                     │
 │   skipped   shop@0: fork-a's shop@0 is in use. Press m to use this one.                                                                                                                              │
-│   ! box fork-b's ports.range 31000-31999 overlaps box fork-a (31000-31999). Lanes the boxes share go to one box at a time. Other lanes can get the same ports, so give each box its own ports.range  │
-│     if that matters.                                                                                                                                                                                 │
+│   ! ports.range 31000-31999 overlaps box fork-a (31000-31999). Lanes that only one of them runs can get the same ports, and then only one is mirrored here. Give each box its own ports.range before │
+│     such lanes get their ports.                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
@@ -60,23 +60,23 @@
  m use this one   n new box   p pairing code   j k select   esc back                                                                                                              ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194-198 bold underlined
 1: 0-180 bold, 181-198 bold dim, 199 bold
 2: 0 bold, 2-3 green, 4-9 bold, 183-191 green, 192-197 dim, 199 bold
 3: 0 bold, 4-13 dim, 199 bold
 4: 0 bold, 4-13 dim, 199 bold
 5: 0 bold, 4-13 dim, 199 bold
 6: 0 bold, 4-13 dim, 199 bold
-7: 0 bold, 4-196 yellow, 199 bold
-8: 0 bold, 6-21 yellow, 199 bold
+7: 0 bold, 4-197 yellow, 199 bold
+8: 0 bold, 6-32 yellow, 199 bold
 9: 0 bold, 199 bold
 10: 0 bold, 2-3 green, 4-9 bold, 183-191 green, 192-197 dim, 199 bold
 11: 0 bold, 4-13 dim, 199 bold
 12: 0 bold, 4-13 dim, 199 bold
 13: 0 bold, 4-13 dim, 199 bold
 14: 0 bold, 2-197 reversed, 199 bold
-15: 0 bold, 4-196 yellow, 199 bold
-16: 0 bold, 6-21 yellow, 199 bold
+15: 0 bold, 4-197 yellow, 199 bold
+16: 0 bold, 6-32 yellow, 199 bold
 17: 0 bold, 199 bold
 18: 0 bold, 199 bold
 19: 0 bold, 199 bold

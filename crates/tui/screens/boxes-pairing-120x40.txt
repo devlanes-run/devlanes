@@ -19,7 +19,7 @@
 │   error     docker exec exited 1: Error response from daemon: container devbox is not running                        │
 │   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767                                                 │
 │   proxy     this machine serves its hostnames on 8443 and on 9443, which its URLs use                                │
-│   mirror    1 lane · no ports bound here · 0 hostnames routed                                                        │
+│   mirror    1 lane · no ports bound here · no hostnames routed                                                       │
 │                                                                                                                      │
 │ ! gpu                                                                                          needs a sign-in · ssh │
 │   link      waiting for you to sign in again, with ports and hostnames kept                                          │
