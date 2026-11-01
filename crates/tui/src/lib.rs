@@ -7,8 +7,9 @@
 //! the user chooses to stop the project's lanes on the way out.
 //!
 //! The web demo (crates/tui-web) builds the app and its drawing for the
-//! browser; what needs a real terminal or the daemon's machine (the event
-//! loop, the exit summary, daemon.log) is left out of that build.
+//! browser; what needs a real terminal (the event loop, the exit summary,
+//! the inline step printing) is left out of that build, and what reads the
+//! daemon's machine (daemon.log, config.yaml) fails there at run time.
 
 #[cfg(not(target_family = "wasm"))]
 mod ansi;

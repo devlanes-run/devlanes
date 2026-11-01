@@ -4,6 +4,9 @@
 //! the app unchanged. crossterm does not build for the browser, so the web
 //! demo (crates/tui-web) gets copies with the same names, fields and values,
 //! covering what the demo's key mapping produces and the app matches on.
+//! One difference: crossterm's `KeyEvent` equality and hash ignore the case
+//! a Shift chord adds, while the copies compare fields as they are, so the
+//! app matches on `code` and `modifiers` rather than comparing events.
 
 #[cfg(not(target_family = "wasm"))]
 pub use crossterm::event::{

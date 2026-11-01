@@ -110,6 +110,7 @@ jobs:
       - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
         with:
           tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
+      # The same binaryen as ci.yml's web job, which builds this bundle on every pull request.
       - name: Install wasm-opt
         env:
           BINARYEN_VERSION: "133"

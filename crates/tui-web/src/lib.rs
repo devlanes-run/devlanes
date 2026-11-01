@@ -3,7 +3,7 @@
 //! drawn into the page with Ratzilla and driven by keys and a one-second tick
 //! from the page's script.
 //!
-//! The JavaScript API ([`Demo`], browser build only) is built with
+//! The JavaScript API (`Demo`, browser build only) is built with
 //! `packaging/scripts/tui-web.sh`, which the release workflow attaches to
 //! each release as `devlanes-tui-web.tar.gz`.
 

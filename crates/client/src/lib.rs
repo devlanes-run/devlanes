@@ -1,10 +1,6 @@
 //! Thin daemon client shared by CLI, completion, and TUI frontends, over the
 //! local endpoint of [`devlanes_ipc::local`].
 
-// The browser build (crates/tui-web) stubs the endpoint and the daemon spawn,
-// which leaves the helpers behind them unused there.
-#![cfg_attr(target_family = "wasm", allow(dead_code))]
-
 mod paths;
 pub mod restart;
 pub mod update;
@@ -681,7 +677,11 @@ pub fn sandbox_reason() -> Option<&'static str> {
         .find(|name| std::env::var_os(name).is_some())
 }
 
+// The environment allowlist, the readiness reader and the handover below serve
+// a daemon spawn, which the browser build (crates/tui-web) never makes.
+
 /// Variables an auto-spawned daemon inherits from the spawning shell, by exact name.
+#[cfg(not(target_family = "wasm"))]
 const DAEMON_ENV: &[&str] = &[
     "PATH",
     "HOME",
@@ -718,11 +718,11 @@ const DAEMON_ENV: &[&str] = &[
 
 /// Prefixes of further inherited variables: locale, XDG directories, the Docker
 /// CLI's settings and devlanes' own.
+#[cfg(not(target_family = "wasm"))]
 const DAEMON_ENV_PREFIXES: &[&str] = &["LC_", "XDG_", "DOCKER_", "DEVLANES_"];
 
-/// Nothing beyond the shared list on Unix (and in the browser build, which
-/// spawns no daemon).
-#[cfg(not(windows))]
+/// Nothing beyond the shared list on Unix.
+#[cfg(unix)]
 const PLATFORM_ENV: &[&str] = &[];
 
 /// What Windows programs the daemon runs expect: Winsock fails to start
@@ -758,6 +758,7 @@ const PLATFORM_ENV: &[&str] = &[
 /// The allowlisted part of `vars` for an auto-spawned daemon, minus `remove`.
 /// Anything else a shell carries (tokens, project variables) stays out of a
 /// process that serves every later shell.
+#[cfg(not(target_family = "wasm"))]
 fn daemon_env(
     vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     remove: &[&str],
@@ -780,8 +781,8 @@ fn daemon_env(
 }
 
 /// Whether two environment variable names are the same variable: by exact
-/// name on Unix (and in the browser build).
-#[cfg(not(windows))]
+/// name on Unix.
+#[cfg(unix)]
 fn same_name(name: &str, listed: &str) -> bool {
     name == listed
 }
@@ -799,9 +800,12 @@ fn same_name(name: &str, listed: &str) -> bool {
 type ReadyLines = tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>;
 
 /// Most lines the readiness reader holds before the client takes them.
+#[cfg(not(target_family = "wasm"))]
 const READY_LINES_QUEUED: usize = 16;
 
 /// A daemon that takes over from a running one ([`devlanes_proto::REPLACE_ENV`]).
+// The browser build's `start_daemon` refuses before it reads one.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) struct Replace {
     /// The pid of the daemon it replaces, or 0 when unknown.
     pub pid: u32,
@@ -828,6 +832,7 @@ impl Handover {
 
 /// The two lines a replacing daemon reads on stdin: the plan, and
 /// [`devlanes_proto::REPLACE_GO`] for when the old daemon is being stopped.
+#[cfg(not(target_family = "wasm"))]
 fn handover_lines(plan: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut first = plan.to_vec();
     first.push(b'\n');
@@ -913,6 +918,7 @@ async fn start_daemon(
 
 /// Whether the reader goes on after `read`: only a whole step line has more
 /// lines after it.
+#[cfg(not(target_family = "wasm"))]
 fn more_lines(read: &std::io::Result<Vec<u8>>) -> bool {
     read.as_ref().is_ok_and(|line| startup_step(line).is_some())
 }

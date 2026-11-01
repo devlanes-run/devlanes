@@ -9,14 +9,15 @@
 # version. wasm-opt (binaryen) shrinks the module when it is on PATH.
 set -eu
 
-if [ $# -ne 1 ]; then
+if [ $# -ne 1 ] || [ -z "$1" ]; then
 	echo "usage: $0 OUT_DIR" >&2
 	exit 2
 fi
 out=$1
 root=$(cd "$(dirname "$0")/../.." && pwd)
 
-# The first `version` after wasm-bindgen's own entry in the lock file.
+# The first `version` after wasm-bindgen's own entry in the lock file; the
+# `tui-web` jobs in .github/workflows read it the same way.
 locked=$(awk '/^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' "$root/Cargo.lock")
 if [ -z "$locked" ]; then
 	echo "wasm-bindgen is not in Cargo.lock" >&2
@@ -32,7 +33,7 @@ fi
 cargo build --manifest-path "$root/Cargo.toml" -p devlanes-tui-web \
 	--target wasm32-unknown-unknown --profile web --locked
 
-module=$root/target/wasm32-unknown-unknown/web/devlanes_tui_web.wasm
+module=${CARGO_TARGET_DIR:-$root/target}/wasm32-unknown-unknown/web/devlanes_tui_web.wasm
 staging=$out/devlanes-tui-web
 rm -rf "$staging"
 mkdir -p "$staging"

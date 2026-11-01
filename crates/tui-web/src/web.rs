@@ -6,7 +6,11 @@ use std::{cell::RefCell, rc::Rc};
 use devlanes_tui::ui;
 use ratzilla::{
     DomBackend,
-    ratatui::{Terminal, TerminalOptions, Viewport, backend::Backend, layout::Rect},
+    ratatui::{
+        Terminal, TerminalOptions, Viewport,
+        backend::Backend,
+        layout::{Rect, Size},
+    },
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
@@ -16,6 +20,8 @@ use crate::{palette, session::Session};
 #[wasm_bindgen]
 pub struct Demo {
     screen: Rc<RefCell<Screen>>,
+    /// The element the TUI is mounted into, emptied when the demo is freed.
+    element_id: String,
     /// Redraws everything after a window resize; removed when the demo is freed.
     on_resize: Closure<dyn FnMut()>,
 }
@@ -24,11 +30,22 @@ pub struct Demo {
 struct Screen {
     session: Session,
     terminal: Terminal<DomBackend>,
+    /// The grid's size in cells, which the viewport is pinned to.
+    size: Size,
+    /// The grid was rebuilt at another size; drawing would write past it.
+    resized: bool,
 }
 
 impl Screen {
-    /// Draws the TUI as it stands, in the demo's palette.
+    /// Draws the TUI as it stands, in the demo's palette. Fails once the
+    /// grid changed size, so the page's next call falls back instead of
+    /// the module panicking.
     fn draw(&mut self) -> Result<(), JsError> {
+        if self.resized {
+            return Err(JsError::new(
+                "the demo's element changed size; it must keep one size after mounting",
+            ));
+        }
         let app = self.session.app();
         self.terminal
             .draw(|frame| {
@@ -39,10 +56,22 @@ impl Screen {
             .map_err(error)
     }
 
-    /// Draws every cell again. Ratzilla rebuilds its grid empty on a window
-    /// resize, while the terminal would only send the cells that changed.
+    /// Draws every cell again after a window resize, when Ratzilla rebuilds
+    /// its grid empty while the terminal would only send changed cells.
     fn redraw(&mut self) -> Result<(), JsError> {
-        self.terminal.clear().map_err(error)?;
+        // An empty draw makes the backend rebuild and re-measure its grid
+        // now, so a grid that came out another size is caught before cells
+        // are written past its end, which would panic.
+        self.terminal
+            .backend_mut()
+            .draw(std::iter::empty())
+            .map_err(error)?;
+        let size = self.terminal.backend_mut().window_size().map_err(error)?;
+        self.resized = size.columns_rows != self.size;
+        // Forgets the last frame, so the next draw sends every cell. Not
+        // `Terminal::clear`: on a window exactly the viewport's width it asks
+        // the backend to clear a region, which Ratzilla 0.3 does not implement.
+        self.terminal.swap_buffers();
         self.draw()
     }
 }
@@ -50,8 +79,9 @@ impl Screen {
 #[wasm_bindgen]
 impl Demo {
     /// Mounts the TUI into the element with id `element_id`, which must be
-    /// empty: the backend replaces its content. The element's CSS size,
-    /// over the size of one cell in its font, gives the TUI's size.
+    /// empty and keep its size: the backend replaces its content. The
+    /// element's CSS size, over the size of one cell in its font, gives the
+    /// TUI's size.
     #[wasm_bindgen(constructor)]
     pub fn new(element_id: &str) -> Result<Demo, JsError> {
         console_error_panic_hook::set_once();
@@ -69,6 +99,8 @@ impl Demo {
         let screen = Rc::new(RefCell::new(Screen {
             session: Session::new(size.width, size.height),
             terminal,
+            size,
+            resized: false,
         }));
         screen.borrow_mut().draw()?;
         let weak = Rc::downgrade(&screen);
@@ -87,13 +119,18 @@ impl Demo {
         window()?
             .add_event_listener_with_callback("resize", on_resize.as_ref().unchecked_ref())
             .map_err(js_error)?;
-        Ok(Demo { screen, on_resize })
+        Ok(Demo {
+            screen,
+            element_id: element_id.to_owned(),
+            on_resize,
+        })
     }
 
     /// Sends a `KeyboardEvent.key` with its Ctrl, Alt and Shift flags and
     /// redraws. Returns false when the page should keep the key (Tab,
     /// modifiers alone, browser shortcuts), so the caller only prevents the
-    /// browser's default when this is true.
+    /// browser's default when this is true. There is no Meta flag: the
+    /// caller leaves Meta (Command) chords to the browser without calling.
     pub fn key(&mut self, key: &str, ctrl: bool, alt: bool, shift: bool) -> Result<bool, JsError> {
         let mut screen = self.screen.borrow_mut();
         let used = screen.session.key(key, ctrl, alt, shift);
@@ -113,13 +150,19 @@ impl Demo {
 }
 
 impl Drop for Demo {
-    /// Stops listening for resizes once the page frees the demo.
+    /// Unmounts when the page frees the demo: stops listening for resizes
+    /// and empties the element.
     fn drop(&mut self) {
-        if let Ok(window) = window() {
-            let _ = window.remove_event_listener_with_callback(
-                "resize",
-                self.on_resize.as_ref().unchecked_ref(),
-            );
+        let Ok(window) = window() else {
+            return;
+        };
+        let _ = window
+            .remove_event_listener_with_callback("resize", self.on_resize.as_ref().unchecked_ref());
+        if let Some(element) = window
+            .document()
+            .and_then(|document| document.get_element_by_id(&self.element_id))
+        {
+            element.set_inner_html("");
         }
     }
 }

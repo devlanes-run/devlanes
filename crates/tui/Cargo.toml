@@ -9,7 +9,8 @@ publish.workspace = true
 
 [features]
 # The fake daemon and mock data (`demo`) behind the `screens` example and the
-# web demo (crates/tui-web); never part of the devlanes binary.
+# web demo (crates/tui-web); never in release builds of the devlanes binary
+# (`cargo build -p devlanes`), though a whole-workspace build unifies it in.
 demo = []
 
 [dependencies]

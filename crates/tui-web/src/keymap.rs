@@ -4,17 +4,23 @@
 use devlanes_tui::keys::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Ctrl chords the demo passes to the TUI: copy and interrupt (`c`), the
-/// page keys (`d`, `u`) and the end of typing (`]`). Other Ctrl chords stay
-/// with the browser, so reload, find and new tab keep working on the page.
+/// page keys (`d`, `u`) and the end of typing (`]`). Other Ctrl chords,
+/// Ctrl+Shift ones included, stay with the browser, so reload, find, new
+/// tab and the inspector keep working on the page.
 const CTRL_KEYS: &[char] = &['c', 'd', 'u', ']'];
 
 /// The TUI's key event for a browser key, or `None` when the page should
 /// keep it: modifier keys alone, Tab (which moves focus out of the demo,
-/// so the keyboard never gets stuck in it), Alt chords and Ctrl chords
-/// outside [`CTRL_KEYS`].
+/// so the keyboard never gets stuck in it), Alt chords other than typed
+/// symbols, and Ctrl chords outside `CTRL_KEYS`.
 pub fn key_event(key: &str, ctrl: bool, alt: bool, shift: bool) -> Option<KeyEvent> {
     if alt {
-        return None;
+        // AltGr (Ctrl+Alt on Windows) and Option on macOS type symbols such
+        // as `[` or `@` on many layouts; like the native TUI's `altgr`, a
+        // printable symbol is text, and any other Alt chord is the page's.
+        let c = single_char(key)?;
+        let typed = !c.is_alphanumeric() && !c.is_control() && c != ' ';
+        return typed.then(|| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     let code = match key {
         "Enter" => KeyCode::Enter,
@@ -41,7 +47,7 @@ pub fn key_event(key: &str, ctrl: bool, alt: bool, shift: bool) -> Option<KeyEve
         let KeyCode::Char(c) = code else {
             return None;
         };
-        if !CTRL_KEYS.contains(&c.to_ascii_lowercase()) {
+        if !CTRL_KEYS.contains(&c) {
             return None;
         }
         modifiers |= KeyModifiers::CONTROL;
@@ -132,7 +138,22 @@ mod tests {
             event(KeyCode::Char(']'), KeyModifiers::CONTROL)
         );
         assert_eq!(key_event("r", true, false, false), None);
+        assert_eq!(key_event("C", true, false, true), None);
         assert_eq!(key_event("Enter", true, false, false), None);
+    }
+
+    #[test]
+    fn altgr_and_option_symbols_are_text_and_other_alt_chords_are_not() {
+        assert_eq!(
+            key_event("[", true, true, false),
+            event(KeyCode::Char('['), KeyModifiers::NONE)
+        );
+        assert_eq!(
+            key_event("@", false, true, false),
+            event(KeyCode::Char('@'), KeyModifiers::NONE)
+        );
         assert_eq!(key_event("j", false, true, false), None);
+        assert_eq!(key_event("ø", false, true, false), None);
+        assert_eq!(key_event("ArrowLeft", false, true, false), None);
     }
 }
