@@ -1,6 +1,6 @@
 # devlanes-tunnel
 
-## 0.11.0 — 2026-11-01
+## 0.11.0 ... 0.11.1 — 2026-11-01
 
 Version bump only, to follow other packages.
 
