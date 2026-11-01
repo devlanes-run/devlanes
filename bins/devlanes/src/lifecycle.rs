@@ -596,6 +596,7 @@ mod tests {
             &paths.home,
             devlanes_version::VERSION,
             false,
+            true,
             &crate::notes::embedded(),
         );
         assert!(shown.is_some(), "the next TUI shows what's new");

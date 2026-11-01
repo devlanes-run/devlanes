@@ -625,17 +625,13 @@ const UPDATE_AFTER: &str = "\
 Examples:
   devlanes update                      install the latest release, asking first
   devlanes update --yes                install it without asking
-  devlanes update --check              show the latest release and what changed
-  devlanes update --notes              show what changed in the running version";
+  devlanes update --check              show the latest release and what changed";
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
     /// Only check: show the install method, the running and latest versions and what changed
-    #[arg(long, conflicts_with_all = ["finish", "notes"])]
-    pub check: bool,
-    /// Only show the release notes of the running version; checks nothing
     #[arg(long, conflicts_with = "finish")]
-    pub notes: bool,
+    pub check: bool,
     /// Restart the daemon into this binary after an update (run by devlanes update)
     #[arg(long, hide = true)]
     pub finish: bool,
@@ -646,12 +642,10 @@ pub struct UpdateArgs {
 pub enum UpdateAction {
     /// Check now and show the release; installs nothing.
     Check,
-    /// Print the running version's release notes, from the binary.
-    Notes,
     /// Install the latest release when it is newer; `yes` skips the question.
     Install { yes: bool },
-    /// Run by the newly installed binary: restart the daemon into it and say
-    /// what changed.
+    /// Run by the newly installed binary: restart the daemon into it and
+    /// print a link to the release notes.
     Finish,
 }
 
@@ -1340,8 +1334,6 @@ impl Cli {
             Some(Command::Update(args)) => {
                 return Ok(Action::Update(if args.check {
                     UpdateAction::Check
-                } else if args.notes {
-                    UpdateAction::Notes
                 } else if args.finish {
                     UpdateAction::Finish
                 } else {

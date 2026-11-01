@@ -38,7 +38,7 @@ The TUI header shows `0.9.1 available · U update` (`available, breaking` for a 
 
 ## devlanes update
 
-`devlanes update` checks, then asks: `[Y/n]` for a patch release, while a minor release, which can break what worked before 1.0, lists its breaking changes and asks `[y/N]`. It installs the release, then the new binary restarts the daemon, which starts again the lanes that were running, and prints what changed. Without a terminal, pass `--yes`.
+`devlanes update` checks, then asks: `[Y/n]` for a patch release, while a minor release, which can break what worked before 1.0, lists its breaking changes and asks `[y/N]`. It installs the release, then the new binary restarts the daemon, which starts again the lanes that were running, and prints a link to the release notes. Without a terminal, pass `--yes`.
 
 devlanes installs and updates to the latest release only, and never to one older than the running build. Installing an older release is not recommended, since it may not open the state database a newer build migrated. If you need one, install the npm or PyPI package with that version: `npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z` or `pipx install devlanes==X.Y.Z`.
 
@@ -79,7 +79,7 @@ A TUI that is open while another one updates reconnects to the new daemon and sh
 
 ## What's new
 
-Each build carries the notes of its `CHANGELOG.md`. The first TUI opened on a newer stable release shows "What's new" after the welcome: every release since the version it last showed, breaking changes first. A fresh home records its version without showing anything, and `next` and local builds never show it. The Esc menu's `what's new` opens it again, and `devlanes update --notes` prints the running version's notes.
+Each build carries the notes of its `CHANGELOG.md`. The first TUI opened on a newer stable release shows "What's new" after the welcome: every release since the version it last showed, breaking changes first. A fresh home records its version without showing anything, and `next` and local builds never show it. The Esc menu's `what's new` opens it again.
 
 ## Windows
 
