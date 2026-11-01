@@ -1,5 +1,13 @@
 # devlanes-cli
 
+## 0.11.1 — 2026-11-01
+
+### Patch changes
+
+- [22d6f20](https://github.com/devlanes-run/devlanes/commit/22d6f2063df1696a4511831d010c63b4a5a0fa6a) Removed `devlanes update --notes`.
+  
+  Read the release notes on the release page, which `devlanes update` links to.
+
 ## 0.11.0 — 2026-11-01
 
 ### Minor changes

@@ -1,5 +1,14 @@
 # devlanes-tui
 
+## 0.11.1 — 2026-11-01
+
+### Patch changes
+
+- [22d6f20](https://github.com/devlanes-run/devlanes/commit/22d6f2063df1696a4511831d010c63b4a5a0fa6a) Changed the TUI's 16-color palette, which Windows Terminal gets, to draw dialog borders, the focused panel and inline code in the terminal's yellow.
+- [22d6f20](https://github.com/devlanes-run/devlanes/commit/22d6f2063df1696a4511831d010c63b4a5a0fa6a) Changed the dialog after an update to show breaking changes and up to five highlights.
+  
+  Press `o` in it to open the release notes. `devlanes update` and the install scripts now end with a link to them instead of the full text. Set `updates.highlights: false` in the user config to stop the dialog from opening by itself.
+
 ## 0.11.0 — 2026-11-01
 
 Version bump only, to follow other packages.
