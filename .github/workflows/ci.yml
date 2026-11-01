@@ -47,6 +47,33 @@ jobs:
           kache stats --full
           # Lets the daemon finish its queued uploads before the runner goes away.
           kache daemon stop
+  # The TUI web demo (crates/tui-web) builds devlanes-tui and the crates under it for
+  # the browser, where sockets, processes and crossterm do not compile; this keeps
+  # native-only code out of that build. release.yml builds the bundle itself.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+      - uses: ./.github/actions/kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-endpoint: ${{ vars.KACHE_S3_ENDPOINT }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-access-key: ${{ secrets.KACHE_S3_ACCESS_KEY }}
+          s3-secret-key: ${{ secrets.KACHE_S3_SECRET_KEY }}
+      - run: cargo clippy -p devlanes-tui-web --target wasm32-unknown-unknown --locked -- -D warnings
+      - name: kache stats
+        if: ${{ !cancelled() }}
+        run: |
+          kache stats --full
+          kache daemon stop
   rust:
     strategy:
       fail-fast: false
@@ -272,7 +299,7 @@ jobs:
   # this same run, so its build and publish jobs show in the commit's checks.
   next:
     if: github.event_name == 'push'
-    needs: [lint, rust, packaging, packaging-windows, e2e, ssh]
+    needs: [lint, web, rust, packaging, packaging-windows, e2e, ssh]
     uses: ./.github/workflows/next.yml
     secrets: inherit
     # The most next.yml's jobs may use: publish replaces release assets and attests them.
