@@ -79,9 +79,9 @@ A TUI that is open while another one updates reconnects to the new daemon and sh
 
 ## Release highlights
 
-Each build carries the highlights of its `CHANGELOG.md`. The first TUI opened on a newer stable release shows them after the welcome, for every release since the version it last showed. The dialog lists every breaking change, then at most five highlights that the release authors picked, and `o` opens the release page for the rest. A release with no breaking change and no highlight shows nothing, which is most patch releases. A fresh home records its version without showing anything, and `next` and local builds never show it. The Esc menu's `highlights` opens the dialog again, and `updates.highlights: false` in the user config stops it from opening by itself.
+Each build carries the highlights of its `CHANGELOG.md`. The first TUI opened on a newer stable release shows them after the welcome, for every release since the version it last showed. The dialog lists every breaking change, then at most five highlights that the release authors picked, and `o` opens the release notes on GitHub (the list of releases when several are shown) for the rest. A release with no breaking change and no highlight shows nothing, which is most patch releases. A fresh home records its version without showing anything, and `next` and local builds never show it. The Esc menu's `highlights` opens the dialog again, and `updates.highlights: false` in the user config stops it from opening by itself.
 
-After `devlanes update` and the install scripts restart the daemon, the terminal prints one line with the link to the release page. Agent, JSON, plain and CI output print nothing.
+After `devlanes update` or an install script restarts the daemon at a terminal, one line links to the release notes (for a `next` build, the `next` prerelease). `--quiet`, agent, JSON, plain and CI output print nothing, and an update started from the TUI shows the dialog instead.
 
 ## Windows
 

@@ -5,9 +5,10 @@ use std::path::Path;
 
 use devlanes_update::notes::{BODY_MAX, TITLE_MAX, split_highlight};
 
-/// Every pending change file with a `<!-- highlight` comment must hold a
-/// title and a body within the limits, so a mistake fails here instead of
-/// being cut or dropped at release time.
+/// Every pending change file with something that looks like a highlight
+/// comment must hold a closed `<!-- highlight` comment with a title and a
+/// body within the limits, so a mistake fails here instead of being cut,
+/// dropped or swallowing the rest of a release at release time.
 #[test]
 fn pending_change_files_hold_valid_highlights() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.sampo/changesets");
@@ -22,10 +23,18 @@ fn pending_change_files_hold_valid_highlights() {
         let name = file.file_name().expect("name").to_string_lossy();
         // Past the front matter, whose closing line is the second `---`.
         let body = text.splitn(3, "---").nth(2).unwrap_or_default();
-        let (_, highlight) = split_highlight(body);
-        if !body.contains("<!-- highlight") {
+        // Looser than the parser, so a typo such as `<!--highlights` is caught.
+        let looks_like_one = body
+            .lines()
+            .any(|line| line.trim_start().starts_with("<!--") && line.contains("highlight"));
+        if !looks_like_one {
             continue;
         }
+        let (rest, highlight) = split_highlight(body);
+        assert_ne!(
+            rest, body,
+            "{name}: the highlight comment must be `<!-- highlight`, then `title:` and `body:` lines, then `-->`"
+        );
         let highlight = highlight
             .unwrap_or_else(|| panic!("{name}: the highlight needs a `title:` and a `body:`"));
         assert!(

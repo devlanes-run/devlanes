@@ -145,8 +145,9 @@ async fn without_new_notes_it_opens_only_from_the_menu() -> TestResult {
     Ok(())
 }
 
+/// `o` asks for the release notes in the browser and the dialog stays open.
 #[tokio::test]
-async fn o_opens_the_release_page_and_keeps_the_dialog() -> TestResult {
+async fn o_opens_the_release_notes_and_keeps_the_dialog() -> TestResult {
     use devlanes_tui::app::Effect;
     let mut app = given(notes(1), true).await;
     app.update(notices(true));

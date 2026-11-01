@@ -180,7 +180,7 @@ fn lines(theme: &Theme, notes: Option<&WhatsNew>, width: usize) -> Vec<Line<'sta
         };
         lines.push(Line::from(""));
         lines.push(Line::styled(
-            format!("and {} more {noun} on the release page", summary.more),
+            format!("and {} more {noun} in the release notes", summary.more),
             theme.quiet(),
         ));
     }
@@ -210,15 +210,15 @@ pub fn render(
     let has_page = notes.is_some_and(|notes| !notes.is_empty());
     let hint = if max_scroll > 0 {
         // Short, so it still fits the border of the narrowest box.
-        let page = if has_page { "o page · " } else { "" };
+        let page = if has_page { "o notes · " } else { "" };
         format!(
-            " lines {}-{} of {} · j k scroll · {page}enter closes ",
+            " lines {}-{} of {} · j k · {page}enter closes ",
             scroll + 1,
             scroll + shown,
             text.len()
         )
     } else {
-        let page = if has_page { "o release page · " } else { "" };
+        let page = if has_page { "o release notes · " } else { "" };
         format!(" {page}enter or esc closes ")
     };
     // Wide enough for the title and the hint in the border too.
@@ -321,7 +321,7 @@ mod tests {
             "Reload a lane in 0.9.1",
             "Reload a lane in 0.9.0",
             "Run devlanes reload to apply project file edits.",
-            "o release page · enter or esc closes",
+            "o release notes · enter or esc closes",
         ] {
             assert!(screen.contains(wanted), "{wanted}\n{screen}");
         }
@@ -332,22 +332,44 @@ mod tests {
         assert!(breaking < screen.find("Reload a lane").expect("highlight"));
         let screen = draw(&WhatsNewDialog::default(), None, 80, 24);
         assert!(screen.contains("no release highlights"), "{screen}");
-        assert!(!screen.contains("release page"), "{screen}");
+        assert!(!screen.contains("release notes"), "{screen}");
     }
 
+    /// A release with only breaking entries, or only highlights, shows just
+    /// that part.
     #[test]
-    fn highlights_past_the_limit_point_to_the_release_page() {
+    fn either_part_shows_alone() {
+        let mut breaking_only = notes(&["0.9.1"]);
+        breaking_only.releases[0].entries.truncate(1);
+        let screen = draw(&WhatsNewDialog::default(), Some(&breaking_only), 100, 30);
+        assert!(
+            screen.contains("breaking Removed devlanes lane new"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Reload a lane"), "{screen}");
+
+        let mut highlights_only = notes(&["0.9.1"]);
+        highlights_only.releases[0].entries.remove(0);
+        let screen = draw(&WhatsNewDialog::default(), Some(&highlights_only), 100, 30);
+        assert!(screen.contains("Reload a lane in 0.9.1"), "{screen}");
+        assert!(!screen.contains("breaking"), "{screen}");
+    }
+
+    /// Highlights past the limit are counted on screen, not listed.
+    #[test]
+    fn highlights_past_the_limit_point_to_the_release_notes() {
         let versions = [
             "0.9.7", "0.9.6", "0.9.5", "0.9.4", "0.9.3", "0.9.2", "0.9.1",
         ];
         let screen = draw(&WhatsNewDialog::default(), Some(&notes(&versions)), 100, 60);
         assert!(
-            screen.contains("and 2 more highlights on the release page"),
+            screen.contains("and 2 more highlights in the release notes"),
             "{screen}"
         );
         assert!(!screen.contains("Reload a lane in 0.9.1"), "{screen}");
     }
 
+    /// A breaking entry with a highlight shows the highlight, not its line.
     #[test]
     fn a_highlight_that_breaks_is_listed_once_in_its_own_words() {
         let mut shown = notes(&["0.9.1"]);

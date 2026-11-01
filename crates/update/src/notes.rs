@@ -191,18 +191,28 @@ fn clamp(text: &str, max: usize) -> String {
 ///
 /// Returns the text without the comment and the highlight, with its fields
 /// as written. A comment missing its title or body is removed and gives
-/// `None`; a text without the comment comes back unchanged. The change file
+/// `None`; a text without the comment, or with one that never closes, comes
+/// back unchanged. The change file
 /// test and [`parse`] share this, so Sampo's copy of the comment into the
 /// changelog reads the same as the file.
 pub fn split_highlight(text: &str) -> (String, Option<Highlight>) {
     let lines: Vec<&str> = text.lines().collect();
-    let Some(start) = lines.iter().position(|line| opens_highlight(line)) else {
+    // A fenced example of the comment, as in the contributing guide, is text.
+    let mut fenced = false;
+    let start = lines.iter().position(|line| {
+        if line.trim_start().starts_with("```") {
+            fenced = !fenced;
+        }
+        !fenced && opens_highlight(line)
+    });
+    let Some(start) = start else {
         return (text.to_owned(), None);
     };
-    // An unclosed comment runs to the end of the text.
-    let end = (start..lines.len())
-        .find(|&index| lines[index].contains("-->"))
-        .unwrap_or(lines.len() - 1);
+    // Without a closing `-->` the comment would swallow what follows it, so
+    // the text is left alone and the change file test reports it.
+    let Some(end) = (start..lines.len()).find(|&index| lines[index].contains("-->")) else {
+        return (text.to_owned(), None);
+    };
     let inner = lines[start..=end].join("\n");
     let inner = inner
         .trim_start()
@@ -212,17 +222,24 @@ pub fn split_highlight(text: &str) -> (String, Option<Highlight>) {
     let inner = inner.split("-->").next().unwrap_or_default();
 
     let (mut title, mut body) = (String::new(), String::new());
-    // Whether the last key seen was `title` (`true`) or `body`.
-    let mut in_title: Option<bool> = None;
+    /// The key a continuation line belongs to.
+    enum Field {
+        Title,
+        Body,
+    }
+    let mut current: Option<Field> = None;
     for line in inner.lines().map(str::trim).filter(|line| !line.is_empty()) {
         if let Some(rest) = line.strip_prefix("title:") {
             title = rest.trim().to_owned();
-            in_title = Some(true);
+            current = Some(Field::Title);
         } else if let Some(rest) = line.strip_prefix("body:") {
             body = rest.trim().to_owned();
-            in_title = Some(false);
-        } else if let Some(is_title) = in_title {
-            let field = if is_title { &mut title } else { &mut body };
+            current = Some(Field::Body);
+        } else if let Some(field) = &current {
+            let field = match field {
+                Field::Title => &mut title,
+                Field::Body => &mut body,
+            };
             field.push(' ');
             field.push_str(line);
         }
@@ -238,11 +255,13 @@ pub fn split_highlight(text: &str) -> (String, Option<Highlight>) {
     (rest.trim().to_owned(), highlight)
 }
 
-/// Whether `line` starts a `<!-- highlight` comment.
+/// Whether `line` starts a `<!-- highlight` comment: the word on its own,
+/// not `highlights` or `highlighted`.
 fn opens_highlight(line: &str) -> bool {
     line.trim_start()
         .strip_prefix("<!--")
-        .is_some_and(|rest| rest.trim_start().starts_with("highlight"))
+        .and_then(|rest| rest.trim_start().strip_prefix("highlight"))
+        .is_some_and(|after| !after.starts_with(|next: char| next.is_alphanumeric()))
 }
 
 /// The releases newer than `after` and not newer than `up_to`, newest first.
@@ -260,8 +279,8 @@ pub fn between<'a>(releases: &'a [Release], after: &str, up_to: &str) -> Vec<&'a
     found.into_iter().map(|(_, release)| release).collect()
 }
 
-/// The releases the release highlights dialog draws from: one release, or
-/// every release since the version seen before.
+/// The releases the dialog draws from: one release, or every release since
+/// the version seen before.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WhatsNew {
     /// The version seen before; `None` when it shows one release's notes.
@@ -371,7 +390,7 @@ impl WhatsNew {
     }
 }
 
-/// One line of the release highlights dialog.
+/// One entry of the dialog: a breaking change or a highlight.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Item {
     /// Whether it may break what worked.
@@ -393,9 +412,16 @@ pub struct Summary {
     pub more: usize,
 }
 
-/// The GitHub release page of `version`.
+/// The GitHub release page of `version`. Builds of `main` share one rolling
+/// prerelease tagged `next`, so any prerelease version points there.
 pub fn release_url(version: &str) -> String {
-    format!("{}/releases/tag/v{version}", devlanes_version::REPOSITORY)
+    let rolling = Version::parse(version).is_some_and(|parsed| parsed.is_prerelease());
+    let tag = if rolling {
+        "next".to_owned()
+    } else {
+        format!("v{version}")
+    };
+    format!("{}/releases/tag/{tag}", devlanes_version::REPOSITORY)
 }
 
 /// `release` with its minor entries first, each group in file order.
@@ -549,6 +575,7 @@ mod tests {
         assert!(WhatsNew::latest(&releases, "0.1.0").is_empty());
     }
 
+    /// Ordinary entries alone leave the dialog empty; a breaking one does not.
     #[test]
     fn a_release_with_only_ordinary_entries_has_nothing_to_show() {
         let releases = parse(FIXTURE);
@@ -564,6 +591,7 @@ mod tests {
         assert!(breaking_only.summary().highlights.is_empty());
     }
 
+    /// Breaking entries come first and a highlighted one keeps its own words.
     #[test]
     fn the_summary_lists_breaking_entries_then_highlights() {
         let releases = parse(FIXTURE);
@@ -597,6 +625,7 @@ mod tests {
         assert_eq!(summary.more, 0);
     }
 
+    /// The newest releases fill the five places; the rest are only counted.
     #[test]
     fn highlights_past_the_limit_are_counted_not_listed() {
         let entry = |number: usize| Entry {
@@ -628,9 +657,15 @@ mod tests {
         assert_eq!(summary.more, 3);
     }
 
+    /// One release links to its tag, several to the list, a `next` build to
+    /// the rolling prerelease.
     #[test]
     fn the_release_page_follows_the_releases_shown() {
         let releases = parse(FIXTURE);
+        assert_eq!(
+            release_url("0.9.1-next.4"),
+            format!("{}/releases/tag/next", devlanes_version::REPOSITORY)
+        );
         assert_eq!(
             WhatsNew::of(&releases, "0.9.0").url(),
             format!("{}/releases/tag/v0.9.0", devlanes_version::REPOSITORY)
@@ -641,6 +676,8 @@ mod tests {
         );
     }
 
+    /// The comment's keys are read, continuation lines join and the comment
+    /// leaves the text.
     #[test]
     fn split_highlight_reads_keys_and_removes_the_comment() {
         let (rest, found) = split_highlight(
@@ -659,13 +696,20 @@ mod tests {
         // A comment missing its body is removed and yields nothing.
         let (rest, found) = split_highlight("Line.\n<!-- highlight\ntitle: Only a title\n-->");
         assert_eq!((rest.as_str(), found), ("Line.", None));
-        // Other comments stay.
-        assert_eq!(
-            split_highlight("<!-- note -->").0,
-            "<!-- note -->".to_owned()
-        );
+        // Other comments stay, and so do `highlights` and an unclosed one.
+        for text in [
+            "<!-- note -->",
+            "<!-- highlights\ntitle: T\nbody: B\n-->",
+            "Line.\n<!-- highlight\ntitle: T\nbody: B\nMore text.",
+        ] {
+            assert_eq!(split_highlight(text), (text.to_owned(), None), "{text}");
+        }
+        // A fenced example is not a highlight.
+        let fenced = "```markdown\n<!-- highlight\ntitle: T\nbody: B\n-->\n```";
+        assert_eq!(split_highlight(fenced), (fenced.to_owned(), None));
     }
 
+    /// Parsing cuts to the limits; the raw split keeps what was written.
     #[test]
     fn long_highlights_are_cut_when_the_changelog_is_parsed() {
         let long = "x".repeat(400);

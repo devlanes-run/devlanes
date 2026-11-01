@@ -245,12 +245,14 @@ The first line is the changelog entry, read by someone deciding whether to upgra
 - names the command, flag or config key in backticks;
 - says what changes for the user, not how the code changed. Leave out crate, module and type names unless a crate's API is the change.
 
-Keep the line to one clause, about 100 characters, with no `;` chains or lists of effects. If it needs more, the change is two entries or the second part belongs in a body. Two lines from the 0.10.0 changelog and what they should have been:
+Keep the line to one clause, about 100 characters, with no `;` chains or lists of effects. If it needs more, the change is two entries or the second part belongs in a body. Two entries from the 0.10.0 changelog, each followed by a shorter version:
 
 ```markdown
 Changed `devlanes daemon restart` to return as soon as the new daemon answers, listing the lanes that start again.
 Changed `devlanes daemon restart` to return once the new daemon is up.
+```
 
+```markdown
 Fixed `devlanes attach` and the TUI's unit pane on Windows showing a `pty: true` unit's lines with gaps, and missing later resizes, after a resize that came while the unit was printing.
 Fixed gaps in the output of `pty: true` units on Windows after a resize.
 ```
@@ -294,21 +296,19 @@ cargo/devlanes: patch
 cargo/devlanes-update: patch
 ---
 
-Added `devlanes update`, which installs the latest release and restarts the daemon.
+Added `devlanes update`, which installs the latest release.
 
 <!-- highlight
 title: Update in place
-body: Run `devlanes update`, or press U in the TUI, to install the latest release the way you installed devlanes.
+body: Run `devlanes update`, or press `U` in the TUI, to install the latest release the way you installed devlanes.
 -->
 ```
 
 Sampo copies the comment into `CHANGELOG.md`, and GitHub hides it on the release page. The title is at most 60 characters and the body at most 300, which a test over `.sampo/changesets/` checks; a longer one in a changelog is cut. A body can continue on the next line, indented. The comment adds to the changelog line and does not replace it. Write the title as a few plain words naming what the user can do, and the body as one or two sentences that name the command, flag, key or place in the TUI. Don't repeat the changelog line with fewer words.
 
-Most change files carry no highlight, including almost every fix. Add one only for a new command or workflow a user would try, or a fix for a problem many users hit. A breaking change that has a highlight is listed once, with the highlight's words, so give it one when the first line alone doesn't say what to do instead.
+Most change files carry no highlight, including almost every fix. Add one only for a new command or workflow a user would try, or a fix for a problem many users hit. A breaking change that has a highlight is listed once, with the highlight's words.
 
-A release lists at most five non-breaking highlights, newest release first, and counts the rest. Before adding one, read the highlights already in `.sampo/changesets/` and add yours only if it matters at least as much as those. When nothing in the pull request qualifies, add none and say nothing about it.
-
-To turn the dialog off for yourself, set `updates.highlights: false` in the user config.
+The dialog lists at most five non-breaking highlights across all releases since the last one the user saw, newest release first, and counts the rest. Before adding one, read the highlights already in `.sampo/changesets/` and add yours only if it matters at least as much as those. When nothing in the pull request qualifies, add none.
 
 ### Versions
 

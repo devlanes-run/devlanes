@@ -531,7 +531,7 @@ async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
             );
             take_over(&mut view);
             code = lifecycle::restart_in(runtime, paths, restart_context(runtime), view).await?;
-            if reopen.is_none() && runtime.mode == OutputMode::Human && !runtime.quiet {
+            if prints_release_link(reopen.is_some(), runtime.mode, runtime.quiet) {
                 print_release_link();
             }
         }
@@ -700,6 +700,13 @@ fn release_notes_line(version: &str) -> String {
         "Release notes: {}\n",
         devlanes_update::notes::release_url(version)
     )
+}
+
+/// Whether `update --finish` ends with the release link: only for a person
+/// at a terminal (human output, not `--quiet`), and not when the TUI asked
+/// for the update, since it reopens and shows the highlights itself.
+fn prints_release_link(from_tui: bool, mode: OutputMode, quiet: bool) -> bool {
+    !from_tui && mode == OutputMode::Human && !quiet
 }
 
 /// Prints the link to the release notes of this binary. It does not claim
@@ -978,9 +985,29 @@ mod tests {
         assert_eq!(lanes_word(3), "3 lanes");
     }
 
-    /// The line after an update links to the release page of the tag.
+    /// Only human output without `--quiet` and outside the TUI's update
+    /// prints the link.
+    #[test]
+    fn the_release_link_is_for_people_at_a_terminal() {
+        assert!(prints_release_link(false, OutputMode::Human, false));
+        assert!(!prints_release_link(true, OutputMode::Human, false));
+        assert!(!prints_release_link(false, OutputMode::Human, true));
+        for mode in [OutputMode::Json, OutputMode::Agent, OutputMode::Plain] {
+            assert!(!prints_release_link(false, mode, false), "{mode:?}");
+        }
+    }
+
+    /// The line after an update links to the release page of the tag, and
+    /// for a `next` build to the rolling prerelease.
     #[test]
     fn the_release_link_points_at_the_tag() {
+        assert_eq!(
+            release_notes_line("0.9.1-next.4"),
+            format!(
+                "Release notes: {}/releases/tag/next\n",
+                devlanes_version::REPOSITORY
+            )
+        );
         assert_eq!(
             release_notes_line("1.2.3"),
             format!(
