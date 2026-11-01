@@ -57,11 +57,11 @@ fn update_installs_the_release_and_restarts_the_daemon_with_its_lanes() -> Resul
     )?;
     // The daemon runs the real version, which is the latest, so its checks are
     // off and `devlanes update` reads the release itself, from the older
-    // version it pretends to run.
-    std::fs::write(
-        lab.home().join("config.yaml"),
-        "updates:\n  mode: disable\n",
-    )?;
+    // version it pretends to run. Appended, since the lab's ports are in it.
+    let config = lab.home().join("config.yaml");
+    let mut text = std::fs::read_to_string(&config)?;
+    text.push_str("updates:\n  mode: disable\n");
+    std::fs::write(&config, text)?;
 
     // The daemon starts from the installed copy, as it would after install.sh.
     let started = lab.run(
@@ -210,6 +210,8 @@ fn update_check_reads_the_registry_when_the_daemons_checks_are_off() -> Result<(
         json!({"version": "99.0.0"}).to_string(),
     )?;
     let config = lab.home().join("config.yaml");
+    // The lab's ports, which each mode below is appended to.
+    let ports = std::fs::read_to_string(&config)?;
     // The daemon reads the fake releases too, so only the config or CI turns
     // its checks off, not the debug build.
     let run = |args: &[&str], env: &[(&str, &str)]| -> Result<serde_json::Value> {
@@ -226,7 +228,7 @@ fn update_check_reads_the_registry_when_the_daemons_checks_are_off() -> Result<(
         ("disable", &[][..], "config"),
         ("notify", &[("CI", "true")][..], "ci"),
     ] {
-        std::fs::write(&config, format!("updates:\n  mode: {mode}\n"))?;
+        std::fs::write(&config, format!("{ports}updates:\n  mode: {mode}\n"))?;
         run(&["daemon", "start"], env)?;
         let status = run(&["daemon", "status"], &[])?;
         assert_eq!(status["release_check"]["reason"], reason, "{status}");
