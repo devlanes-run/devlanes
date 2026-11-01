@@ -6,7 +6,11 @@
 macro_rules! assert_screen {
     ($($arg:tt)*) => {{
         let version = format!(r"\b{}\b", devlanes_version::VERSION.replace('.', r"\."));
+        // A version longer than `X.Y.Z`, such as 0.10.0, takes padding from the rest of
+        // its line inside a box; giving it back before the border keeps the line's width.
+        let pad = " ".repeat(devlanes_version::VERSION.len().saturating_sub("X.Y.Z".len()));
         let mut settings = insta::Settings::clone_current();
+        settings.add_filter(&format!("{version}([^\n│]*)│"), format!("X.Y.Z${{1}}{pad}│"));
         settings.add_filter(&version, "X.Y.Z");
         let _bound = settings.bind_to_scope();
         insta::assert_snapshot!($($arg)*);
