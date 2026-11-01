@@ -10,7 +10,9 @@ use ratzilla::{
 };
 use wasm_bindgen::{JsCast, prelude::*};
 
-use crate::{palette, session::Session};
+use devlanes_tui::keys::{KeyModifiers, MouseButton, MouseEventKind};
+
+use crate::{mouse, palette, session::Session};
 
 /// Marks the elements a demo is mounted into, for [`STYLE`].
 const MARK: &str = "data-devlanes-tui-web";
@@ -30,7 +32,13 @@ pub struct Demo {
     element_id: String,
     /// Mounts again after a window resize; removed when the demo is freed.
     on_resize: Closure<dyn FnMut()>,
+    /// Pointer and wheel listeners on the element, by event type; on the
+    /// element rather than Ratzilla's grid, which every resize replaces.
+    on_pointer: Vec<Listener>,
 }
+
+/// An event listener and the event type it was added for.
+type Listener = (&'static str, Closure<dyn FnMut(web_sys::Event)>);
 
 /// The session and the terminal it draws on.
 struct Screen {
@@ -115,10 +123,12 @@ impl Demo {
         window()?
             .add_event_listener_with_callback("resize", on_resize.as_ref().unchecked_ref())
             .map_err(js_error)?;
+        let on_pointer = listen_pointer(&screen, element_id)?;
         let demo = Demo {
             screen,
             element_id: element_id.to_owned(),
             on_resize,
+            on_pointer,
         };
         let mut terminal = mount(element_id)?;
         let size = terminal.get_frame().area();
@@ -206,8 +216,8 @@ impl Demo {
 }
 
 impl Drop for Demo {
-    /// Unmounts when the page frees the demo: stops listening for resizes
-    /// and empties the element.
+    /// Unmounts when the page frees the demo: stops listening for resizes,
+    /// the pointer and the wheel, and empties the element.
     fn drop(&mut self) {
         let Ok(window) = window() else {
             return;
@@ -215,10 +225,137 @@ impl Drop for Demo {
         let _ = window
             .remove_event_listener_with_callback("resize", self.on_resize.as_ref().unchecked_ref());
         if let Ok(element) = element(&self.element_id) {
+            for (kind, listener) in &self.on_pointer {
+                let _ = element
+                    .remove_event_listener_with_callback(kind, listener.as_ref().unchecked_ref());
+            }
             element.set_inner_html("");
             let _ = element.remove_attribute(MARK);
         }
     }
+}
+
+/// Listens on the element for presses, releases and, while the element has
+/// focus, wheel turns, and sends them to the TUI at the cell under the
+/// pointer. Moves and drags stay with the browser, so text in the demo can
+/// be selected and copied as on any page; the right button keeps its menu.
+fn listen_pointer(
+    screen: &Rc<RefCell<Option<Screen>>>,
+    element_id: &str,
+) -> Result<Vec<Listener>, JsError> {
+    let target = element(element_id)?;
+    let mut listeners = Vec::new();
+    for kind in ["pointerdown", "pointerup", "wheel"] {
+        let weak = Rc::downgrade(screen);
+        let id = element_id.to_owned();
+        let mut wheel = mouse::Wheel::default();
+        let listener = Closure::<dyn FnMut(web_sys::Event)>::new(move |event: web_sys::Event| {
+            let Some(screen) = weak.upgrade() else {
+                return;
+            };
+            let Ok(mut screen) = screen.try_borrow_mut() else {
+                return;
+            };
+            let Some(screen) = screen.as_mut() else {
+                return;
+            };
+            if let Err(failure) = pointer(screen, &id, &event, &mut wheel) {
+                web_sys::console::error_1(&failure.into());
+            }
+        });
+        // Not passive: a wheel turn the TUI takes must not scroll the page.
+        let options = web_sys::AddEventListenerOptions::new();
+        options.set_passive(false);
+        target
+            .add_event_listener_with_callback_and_add_event_listener_options(
+                kind,
+                listener.as_ref().unchecked_ref(),
+                &options,
+            )
+            .map_err(js_error)?;
+        listeners.push((kind, listener));
+    }
+    Ok(listeners)
+}
+
+/// Sends one pointer or wheel `event` on the element `element_id` to the TUI
+/// and redraws.
+fn pointer(
+    screen: &mut Screen,
+    element_id: &str,
+    event: &web_sys::Event,
+    wheel: &mut mouse::Wheel,
+) -> Result<(), JsError> {
+    let Some(mouse_event) = event.dyn_ref::<web_sys::MouseEvent>() else {
+        return Ok(());
+    };
+    let target = element(element_id)?;
+    // Ratzilla's grid is the element's first child; the element itself can
+    // be a little larger than the cells.
+    let grid = target
+        .first_element_child()
+        .unwrap_or_else(|| target.clone());
+    let rect = grid.get_bounding_client_rect();
+    let bounds = mouse::Bounds {
+        left: rect.left(),
+        top: rect.top(),
+        width: rect.width(),
+        height: rect.height(),
+    };
+    let (columns, rows) = screen.session.size();
+    let Some((column, row)) = mouse::cell(
+        f64::from(mouse_event.client_x()),
+        f64::from(mouse_event.client_y()),
+        bounds,
+        columns,
+        rows,
+    ) else {
+        return Ok(());
+    };
+    let mut modifiers = KeyModifiers::NONE;
+    if mouse_event.ctrl_key() {
+        modifiers |= KeyModifiers::CONTROL;
+    }
+    if mouse_event.alt_key() {
+        modifiers |= KeyModifiers::ALT;
+    }
+    if mouse_event.shift_key() {
+        modifiers |= KeyModifiers::SHIFT;
+    }
+    let kinds = if let Some(turn) = event.dyn_ref::<web_sys::WheelEvent>() {
+        // Until the demo was clicked, the wheel scrolls the page past it.
+        let focused = document()?
+            .active_element()
+            .is_some_and(|active| active == target);
+        if !focused {
+            return Ok(());
+        }
+        event.prevent_default();
+        let steps = wheel.steps(turn.delta_y(), turn.delta_mode(), bounds.height);
+        let kind = if steps > 0 {
+            MouseEventKind::ScrollDown
+        } else {
+            MouseEventKind::ScrollUp
+        };
+        vec![kind; steps.unsigned_abs() as usize]
+    } else {
+        let button = match mouse_event.button() {
+            0 => MouseButton::Left,
+            1 => MouseButton::Middle,
+            _ => return Ok(()),
+        };
+        match event.type_().as_str() {
+            "pointerdown" => vec![MouseEventKind::Down(button)],
+            _ => vec![MouseEventKind::Up(button)],
+        }
+    };
+    if kinds.is_empty() {
+        return Ok(());
+    }
+    for kind in kinds {
+        screen.session.mouse(kind, column, row, modifiers);
+    }
+    screen.draw()
 }
 
 /// Adds [`STYLE`] to the page once.

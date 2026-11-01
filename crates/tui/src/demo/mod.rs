@@ -3,6 +3,7 @@
 //! web demo (crates/tui-web) runs the TUI in the browser on [`web`].
 
 pub mod data;
+pub mod live;
 pub mod web;
 
 use std::collections::VecDeque;
@@ -30,16 +31,21 @@ pub struct Scene {
     pub doctor: fn() -> Value,
     pub profiles: fn(&str) -> ProfileList,
     pub tasks: fn(&str) -> Vec<TaskInfo>,
-    /// A unit's terminal, by unit name.
-    pub screen: fn(&str) -> Vec<u8>,
+    /// A unit's terminal, by lane and unit name.
+    pub screen: fn(&str, &str) -> Vec<u8>,
     /// A unit's stored log, by unit name.
     pub log_page: fn(&str) -> Vec<LogLine>,
-    pub container_logs: fn(&str) -> Vec<u8>,
+    /// An infra container's Docker log, by the lane that shows it and the
+    /// container's name.
+    pub container_logs: fn(&str, &str) -> Vec<u8>,
     pub daemon_log: fn() -> Vec<String>,
     /// The TUI's version, against the daemon's in `daemon_status`.
     pub version: &'static str,
     /// The worktree the TUI was opened from, whose lane shows first.
     pub path: &'static str,
+    /// New output each second, task runs and lane controls; `None` keeps
+    /// the scene still.
+    pub live: Option<live::Live>,
 }
 
 impl Scene {
@@ -53,17 +59,18 @@ impl Scene {
             doctor: data::doctor,
             profiles: data::profiles,
             tasks: data::tasks,
-            screen: data::screen,
+            screen: |_, unit| data::screen(unit),
             log_page: data::log_page,
-            container_logs: data::container_logs,
+            container_logs: |_, container| data::container_logs(container),
             daemon_log: data::daemon_log,
             version: data::VERSION,
             path: "/work/acme",
+            live: None,
         }
     }
 
-    /// The website's `myapp`: four lanes, three services, shared infra, all
-    /// healthy, at this release's version.
+    /// The website's `myapp`: four lanes, three services, shared and per-lane
+    /// infra, all healthy, at this release's version, and live.
     pub fn web() -> Self {
         Self {
             lanes: web::lanes,
@@ -74,10 +81,15 @@ impl Scene {
             tasks: web::tasks,
             screen: web::screen,
             log_page: web::log_page,
-            container_logs: data::container_logs,
+            container_logs: web::container_logs,
             daemon_log: web::daemon_log,
             version: devlanes_version::VERSION,
             path: web::PATH,
+            live: Some(live::Live {
+                output: web::output,
+                container_output: web::container_output,
+                task: web::task,
+            }),
         }
     }
 }
@@ -117,6 +129,8 @@ pub struct Fake {
     pub step: u64,
     /// The rest of what the fake daemon answers.
     pub scene: Scene,
+    /// What a live scene changed since its lanes.
+    changes: live::State,
 }
 
 /// A `remote.state` or `remote.prompt` event of the `connect` `generation`.
@@ -165,6 +179,7 @@ impl Fake {
             connect: connecting,
             step: 0,
             scene,
+            changes: live::State::default(),
         };
         for effect in fake.app.start() {
             fake.answer(effect);
@@ -180,10 +195,17 @@ impl Fake {
     }
 
     /// One second later: the daemon's clock and the app's pinned clock move
-    /// on, then the app ticks, which refetches metrics on the monitor.
+    /// on, a live scene's units and runs move on, then the app ticks, which
+    /// refetches metrics on the monitor.
     pub fn tick(&mut self) {
         self.step += 1;
         self.later(1_000);
+        if let Some(live) = self.scene.live {
+            let msgs = self
+                .changes
+                .tick(&live, (self.lanes)(), self.step, &self.app);
+            self.queue.extend(msgs);
+        }
         self.send(Msg::Tick);
     }
 
@@ -278,10 +300,24 @@ impl Fake {
                 .to_owned()
         };
         let scene = self.scene;
-        let screen_view = |unit: &str, columns, rows| screen_view(scene, unit, columns, rows);
+        if let Some(live) = scene.live
+            && let Some(reply) = self
+                .changes
+                .answer(&live, (self.lanes)(), self.step, &effect)
+        {
+            self.queue.extend(reply);
+            return;
+        }
+        let changes = &self.changes;
+        let screen_view = |lane: &str, unit: &str, columns, rows| {
+            let screen = changes.run_screen(lane, unit).unwrap_or_else(|| {
+                String::from_utf8_lossy(&(scene.screen)(lane, unit)).into_owned()
+            });
+            screen_view(screen, unit, columns, rows)
+        };
         let reply = match effect {
             Effect::Subscribe => vec![Msg::Subscribed(Ok(()))],
-            Effect::Refresh => vec![Msg::Status(Ok((self.lanes)()))],
+            Effect::Refresh => vec![Msg::Status(Ok(self.changes.overlay((self.lanes)())))],
             Effect::Attach {
                 generation,
                 lane,
@@ -289,30 +325,34 @@ impl Fake {
                 columns,
                 rows,
                 ..
-            } => vec![
-                Msg::AttachOpened {
-                    generation,
-                    result: Ok(AttachResult {
-                        stream_id: 1,
-                        unit: unit.clone(),
-                        lane,
-                    }),
-                },
-                Msg::AttachView {
-                    generation,
-                    view: Box::new(screen_view(&unit_name(&unit), columns, rows)),
-                },
-            ],
+            } => {
+                let view = screen_view(&lane, &unit_name(&unit), columns, rows);
+                vec![
+                    Msg::AttachOpened {
+                        generation,
+                        result: Ok(AttachResult {
+                            stream_id: 1,
+                            unit: unit.clone(),
+                            lane,
+                        }),
+                    },
+                    Msg::AttachView {
+                        generation,
+                        view: Box::new(view),
+                    },
+                ]
+            }
             // The daemon redraws a unit's stream at its viewer's new size.
             Effect::ResizePty { columns, rows } => match &self.app.attached {
                 Some(attached) if !attached.container => vec![Msg::AttachView {
                     generation: attached.generation,
-                    view: Box::new(screen_view(&attached.unit, columns, rows)),
+                    view: Box::new(screen_view(&attached.lane, &attached.unit, columns, rows)),
                 }],
                 _ => Vec::new(),
             },
             Effect::FollowContainer {
                 generation,
+                lane,
                 container,
                 ..
             } => vec![
@@ -322,7 +362,7 @@ impl Fake {
                 },
                 Msg::AttachOutput {
                     generation,
-                    bytes: (scene.container_logs)(&container),
+                    bytes: (scene.container_logs)(&lane, &container),
                 },
             ],
             Effect::FetchLogs {
@@ -392,8 +432,8 @@ impl Fake {
 }
 
 /// The daemon's whole redraw of `unit`'s stream at `columns`x`rows`: its
-/// screen in `scene`, with older lines in the log as `log_page` has them.
-fn screen_view(scene: Scene, unit: &str, columns: u16, rows: u16) -> devlanes_proto::AttachView {
+/// `screen`, with older lines in the log as `log_page` has them.
+fn screen_view(screen: String, unit: &str, columns: u16, rows: u16) -> devlanes_proto::AttachView {
     devlanes_proto::AttachView {
         stream_id: 1,
         from: 0,
@@ -402,7 +442,7 @@ fn screen_view(scene: Scene, unit: &str, columns: u16, rows: u16) -> devlanes_pr
         before_seq: 60,
         columns,
         rows,
-        screen: String::from_utf8_lossy(&(scene.screen)(unit)).into_owned(),
+        screen,
         whole: true,
     }
 }

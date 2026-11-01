@@ -1,6 +1,6 @@
 # devlanes-tui-web
 
-The devlanes TUI running in a web page, for the demo on devlanes.run: the real `devlanes-tui` app and drawing compiled to WebAssembly, on the fake daemon in `devlanes_tui::demo` with its website scene (`Scene::web`: project `myapp`, four lanes, all healthy, at this release). Ratzilla's DOM backend draws it into an element, and the page's script sends keys and a one-second tick; nothing reaches a real daemon.
+The devlanes TUI running in a web page, for the demo on devlanes.run: the real `devlanes-tui` app and drawing compiled to WebAssembly, on the fake daemon in `devlanes_tui::demo` with its website scene (`Scene::web`: project `myapp`, four lanes, all healthy, at this release), whose services and containers print new lines every second and whose tasks, starts and stops play out. Ratzilla's DOM backend draws it into an element, and the page's script sends keys and a one-second tick; nothing reaches a real daemon.
 
 ## Usage
 
@@ -40,6 +40,11 @@ session.tick();
 - `Session`: the same without the page, with `resize(columns, rows)`.
 - `keymap::key_event`: a `KeyboardEvent.key` and its modifiers as the TUI's key event, or `None` for keys the page keeps (Tab, modifiers alone, Meta chords, Alt chords other than typed symbols, and most Ctrl chords).
 - `palette::apply`: the colors the demo gives the TUI's ANSI and default colors.
+- `mouse::cell`, `mouse::Wheel`: a point on the page as the cell under it, and wheel deltas as whole scroll steps.
+
+## Mouse
+
+Presses and releases on the element reach the TUI at the cell under the pointer, so rows, tabs and lane chips work with clicks and taps, and a double click types into a unit. The wheel scrolls the TUI only after the demo was clicked and has focus; before that it scrolls the page. Drags and the right button stay with the browser, so text in the demo can be selected and copied like any page text.
 
 ## Sizing
 

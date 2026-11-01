@@ -2,9 +2,10 @@
 //! the monitor's graphs, resizes keep the view, and every state draws.
 
 use devlanes_tui::{
-    app::View,
+    app::{RowId, View},
     demo::web,
     doctor::{self, CheckState},
+    keys::{KeyModifiers, MouseButton, MouseEventKind},
     ui,
 };
 use devlanes_tui_web::Session;
@@ -46,6 +47,19 @@ fn opens_on_the_website_project_at_this_release() {
     assert!(!screen.contains("acme"), "{screen}");
     // The daemon runs this release too, so nothing offers an update.
     assert!(!screen.contains("update"), "{screen}");
+}
+
+#[test]
+fn no_lane_of_the_website_scene_has_a_problem() {
+    for lane in web::lanes() {
+        let counts = devlanes_tui::tree::counts(&lane);
+        assert_eq!(
+            (counts.failed, counts.orphaned),
+            (0, 0),
+            "{}",
+            lane.reference
+        );
+    }
 }
 
 #[test]
@@ -122,4 +136,38 @@ fn every_key_of_the_hints_draws() {
         session.tick();
         draw(&session);
     }
+}
+
+#[test]
+fn a_click_on_a_row_selects_it_and_the_wheel_scrolls() {
+    let mut session = Session::new(COLUMNS, ROWS);
+    // The click lands on the row that shows `worker`, wherever the layout puts it.
+    let screen = text(&draw(&session));
+    let Some((row, line)) = screen
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains(" worker"))
+    else {
+        panic!("no worker row in\n{screen}");
+    };
+    let column = line.chars().take_while(|c| *c != 'w').count();
+    let (column, row) = (column as u16, row as u16);
+    session.mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        column,
+        row,
+        KeyModifiers::NONE,
+    );
+    session.mouse(
+        MouseEventKind::Up(MouseButton::Left),
+        column,
+        row,
+        KeyModifiers::NONE,
+    );
+    let selected = session.app().selected.as_ref().map(|s| s.row.clone());
+    assert_eq!(selected, Some(RowId::Unit("worker".into())));
+    for _ in 0..5 {
+        session.mouse(MouseEventKind::ScrollDown, column, row, KeyModifiers::NONE);
+    }
+    draw(&session);
 }

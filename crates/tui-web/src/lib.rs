@@ -8,6 +8,7 @@
 //! each release as `devlanes-tui-web.tar.gz`.
 
 pub mod keymap;
+pub mod mouse;
 pub mod palette;
 mod session;
 #[cfg(target_family = "wasm")]

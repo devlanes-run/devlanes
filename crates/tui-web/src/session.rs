@@ -4,6 +4,7 @@
 use devlanes_tui::{
     app::Msg,
     demo::{Fake, Scene},
+    keys::{KeyModifiers, MouseEvent, MouseEventKind},
     theme::{Glyphs, Theme, Tier},
 };
 
@@ -50,6 +51,17 @@ impl Session {
     /// TUI ticks (spinners, notices, the monitor's refetch).
     pub fn tick(&mut self) {
         self.fake.tick();
+    }
+
+    /// Sends a mouse event at cell (`column`, `row`) to the TUI: a press,
+    /// a release or a scroll step.
+    pub fn mouse(&mut self, kind: MouseEventKind, column: u16, row: u16, modifiers: KeyModifiers) {
+        self.fake.send(Msg::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers,
+        }));
     }
 
     /// The TUI's size in cells.
