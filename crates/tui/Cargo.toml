@@ -7,12 +7,6 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[features]
-# The fake daemon and mock data (`demo`) behind the `screens` example and the
-# web demo (crates/tui-web); never in release builds of the devlanes binary
-# (`cargo build -p devlanes`), though a whole-workspace build unifies it in.
-demo = []
-
 [dependencies]
 devlanes-version = { path = "../version" }
 async-trait.workspace = true
@@ -47,9 +41,9 @@ jiff = "0.2"
 ratatui = "0.30"
 tokio.workspace = true
 
-# The web demo (crates/tui-web) builds this crate for the browser: no terminal
-# backend (crossterm does not build there), tokio's browser features, and jiff
-# reading the clock and time zone from JavaScript.
+# The browser build (wasm32): no terminal backend (crossterm does not build
+# there), tokio's browser features, and jiff reading the clock and time zone
+# from JavaScript.
 [target.'cfg(target_family = "wasm")'.dependencies]
 bitflags = "2"
 jiff = { version = "0.2", features = ["js"] }
@@ -61,9 +55,6 @@ tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
-# The `screens` example and the `screens_are_current` test draw against the
-# fake daemon, so tests and examples build this crate with `demo` on.
-devlanes-tui = { path = ".", features = ["demo"] }
 # The `screens` example draws every TUI page to PNG for design review.
 ab_glyph = "0.2"
 insta = { version = "1", features = ["filters"] }

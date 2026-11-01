@@ -5,7 +5,7 @@
 //! `updates.mode: auto`, installs patch releases; `devlanes update` installs
 //! the latest release when it is newer.
 //!
-//! The browser build (crates/tui-web) keeps what the TUI shows (install
+//! The browser (wasm32) build keeps what the TUI shows (install
 //! methods, versions, notes, notices) and leaves out checking and installing
 //! releases, which need processes and files the browser does not have.
 

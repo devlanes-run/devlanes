@@ -3,11 +3,11 @@
 
 use devlanes_tui::{
     app::Msg,
-    demo::Fake,
+    keys::{KeyModifiers, MouseEvent, MouseEventKind},
     theme::{Glyphs, Theme, Tier},
 };
 
-use crate::keymap;
+use crate::{fake::Fake, keymap};
 
 /// The TUI running on the fake daemon.
 pub struct Session {
@@ -15,11 +15,10 @@ pub struct Session {
 }
 
 impl Session {
-    /// A TUI of `columns` x `rows` cells with the fake daemon's lanes loaded.
+    /// A TUI of `columns` x `rows` cells on the demo's scene (`myapp`,
+    /// healthy, at this release) with its lanes loaded.
     pub fn new(columns: u16, rows: u16) -> Self {
         let mut fake = Fake::new(columns, rows);
-        // The demo shows the release it was built from; the screens pin theirs.
-        fake.app.version = devlanes_version::VERSION;
         // The page is dark and the browser has no COLORTERM to detect from;
         // the ANSI tier would get Ratzilla's dim default palette.
         fake.app.theme = Theme {
@@ -50,5 +49,29 @@ impl Session {
     /// TUI ticks (spinners, notices, the monitor's refetch).
     pub fn tick(&mut self) {
         self.fake.tick();
+    }
+
+    /// Sends a mouse event at cell (`column`, `row`) to the TUI: a press,
+    /// a release or a scroll step.
+    pub fn mouse(&mut self, kind: MouseEventKind, column: u16, row: u16, modifiers: KeyModifiers) {
+        self.fake.send(Msg::Mouse(MouseEvent {
+            kind,
+            column,
+            row,
+            modifiers,
+        }));
+    }
+
+    /// The TUI's size in cells.
+    pub fn size(&self) -> (u16, u16) {
+        self.fake.app.size
+    }
+
+    /// The screen is now `columns` x `rows` cells; the TUI keeps its view,
+    /// selection and open unit and lays them out again.
+    pub fn resize(&mut self, columns: u16, rows: u16) {
+        if self.size() != (columns, rows) {
+            self.fake.send(Msg::Resize(columns, rows));
+        }
     }
 }

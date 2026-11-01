@@ -43,8 +43,8 @@ pub fn assemble(
 }
 
 /// An environment variable name as devlanes keeps it: unchanged on Unix,
-/// where names are case-sensitive. The browser build (crates/tui-web) keeps
-/// them as Unix does.
+/// where names are case-sensitive. The browser (wasm32) build keeps them as
+/// Unix does.
 #[cfg(not(windows))]
 pub fn fold_name(name: String) -> String {
     name

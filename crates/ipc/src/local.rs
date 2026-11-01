@@ -393,8 +393,8 @@ mod imp {
     }
 }
 
-/// The browser build (crates/tui-web) talks to a fake daemon in the page and
-/// never opens an endpoint; every call fails with [`io::ErrorKind::Unsupported`]
+/// The browser (wasm32) build has no daemon to reach and never opens an
+/// endpoint; every call fails with [`io::ErrorKind::Unsupported`]
 /// so the crates above it compile unchanged.
 #[cfg(target_family = "wasm")]
 mod imp {

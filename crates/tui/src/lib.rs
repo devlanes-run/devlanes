@@ -6,8 +6,8 @@
 //! Quitting closes connections and units keep running in the daemon, unless
 //! the user chooses to stop the project's lanes on the way out.
 //!
-//! The web demo (crates/tui-web) builds the app and its drawing for the
-//! browser; what needs a real terminal (the event loop, the exit summary,
+//! The crate also builds the app and its drawing for the browser (wasm32);
+//! what needs a real terminal (the event loop, the exit summary,
 //! the inline step printing) is left out of that build, and what reads the
 //! daemon's machine (daemon.log, config.yaml) fails there at run time.
 
@@ -21,8 +21,6 @@ pub mod boxes;
 pub mod clients;
 pub mod connect;
 pub mod daemonlog;
-#[cfg(feature = "demo")]
-pub mod demo;
 pub mod doctor;
 #[cfg(not(target_family = "wasm"))]
 pub mod exit_summary;

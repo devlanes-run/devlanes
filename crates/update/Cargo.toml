@@ -18,8 +18,8 @@ sha2.workspace = true
 thiserror.workspace = true
 
 # Release checks and installs run `curl`, `tar` and package managers from the
-# caller's runtime. The TUI web demo (crates/tui-web) builds this crate for the
-# browser without them, where tokio has no processes or files.
+# caller's runtime. The browser (wasm32) build leaves them out: tokio has no
+# processes or files there.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tokio.workspace = true
 

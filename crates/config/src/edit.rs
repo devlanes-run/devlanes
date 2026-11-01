@@ -84,8 +84,8 @@ fn rewrite(
     rename(&temporary, path).map_err(|error| ConfigError::io(path, error))
 }
 
-/// Applies `edit` to the file's text. The browser build (crates/tui-web)
-/// edits as Unix does.
+/// Applies `edit` to the file's text. The browser (wasm32) build edits as
+/// Unix does.
 #[cfg(not(windows))]
 fn edit_keeping_line_breaks(
     source: &str,

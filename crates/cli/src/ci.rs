@@ -185,7 +185,7 @@ impl CiProvider for GithubActions {
         file.flush().await
     }
 
-    /// The browser build (crates/tui-web) has no summary file to append to,
+    /// The browser (wasm32) build has no summary file to append to,
     /// and tokio has no `fs` there.
     #[cfg(target_family = "wasm")]
     async fn append_summary(&self, _markdown: &str) -> std::io::Result<()> {
