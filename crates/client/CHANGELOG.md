@@ -1,5 +1,11 @@
 # devlanes-client
 
+## 0.10.0 — 2026-11-01
+
+### Patch changes
+
+- [b620780](https://github.com/devlanes-run/devlanes/commit/b62078026d18be567d5e1d238f89840a8aa2778b) Fixed `devlanes daemon install` and restarts from a TUI that outlived an update starting a removed binary (a Homebrew Cellar path, or a replaced file on Linux); they now use the install's stable path.
+
 ## 0.7.1 ... 0.9.0 — 2026-10-29
 
 Version bump only, to follow other packages.

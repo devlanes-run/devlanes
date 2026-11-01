@@ -1,5 +1,11 @@
 # devlanes-runner-windows
 
+## 0.7.0 — 2026-11-01
+
+### Patch changes
+
+- [b620780](https://github.com/devlanes-run/devlanes/commit/b62078026d18be567d5e1d238f89840a8aa2778b) Fixed `devlanes attach` and the TUI's unit pane on Windows showing a `pty: true` unit's lines with gaps, and missing later resizes, after a resize that came while the unit was printing.
+
 ## 0.6.1 — 2026-10-28
 
 ### Patch changes
