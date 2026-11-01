@@ -72,7 +72,9 @@ fn rows(steps: &Steps) -> u16 {
 
 /// Draws the logo, `title` and the step rows into `area` of `buf`. `now`
 /// gives running rows their live time; `spin` is the spinner frame. Rows
-/// that do not fit `area` are left out; long text ends in an ellipsis.
+/// that do not fit `area` are left out; long text ends in an ellipsis. The
+/// logo bars are centred beside more rows than they have; the ASCII word
+/// stays on the title row.
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     buf: &mut Buffer,
@@ -87,7 +89,7 @@ pub fn draw(
     let area = area.intersection(buf.area);
     let ascii = theme.glyphs == Glyphs::Ascii;
     // ASCII has no bars: the word stands in for them, as in the exit summary.
-    let (logo_width, _) = if ascii {
+    let (logo_width, logo_rows) = if ascii {
         banner::Size::Plain.dimensions()
     } else {
         banner::logo_size()
@@ -97,7 +99,13 @@ pub fn draw(
         if ascii {
             banner::word(buf, area, |x| word_style(theme, logo, x));
         } else {
-            banner::logo(buf, area, |index| logo_style(theme, logo, index));
+            let offset = rows(steps).saturating_sub(logo_rows) / 2;
+            let bars = Rect {
+                y: area.y.saturating_add(offset),
+                height: area.height.saturating_sub(offset),
+                ..area
+            };
+            banner::logo(buf, bars, |index| logo_style(theme, logo, index));
         }
         left = logo_width + GAP;
     }
@@ -140,8 +148,9 @@ pub fn render(
 
 /// Redraws the block in place on a terminal: `update` erases what the
 /// previous call printed (cursor up + clear) and prints the new block;
-/// `finish` prints it a last time and leaves it on screen. Writes to the
-/// given writer so tests can capture it.
+/// `finish` prints it a last time and leaves it on screen. The block has a
+/// blank line above it and, once finished, one below, as the exit summary
+/// has. Writes to the given writer so tests can capture it.
 pub struct Live<W: Write> {
     out: W,
     theme: Theme,
@@ -176,16 +185,18 @@ impl<W: Write> Live<W> {
             let _ = MoveToPreviousLine(self.printed).write_ansi(&mut bytes);
             let _ = Clear(ClearType::FromCursorDown).write_ansi(&mut bytes);
         }
+        bytes.push('\n');
         bytes.push_str(&block);
         // One write per frame, so the terminal never shows the block half erased.
         self.out.write_all(bytes.as_bytes())?;
         self.out.flush()?;
-        self.printed = u16::try_from(block.matches('\n').count()).unwrap_or(u16::MAX);
+        // The blank line above counts: the next update erases it too.
+        self.printed = u16::try_from(block.matches('\n').count() + 1).unwrap_or(u16::MAX);
         Ok(())
     }
 
-    /// Replaces the block a last time and leaves it on screen: a later
-    /// [`Live::update`] prints below it.
+    /// Replaces the block a last time, adds the blank line below it and
+    /// leaves it on screen: a later [`Live::update`] prints below it.
     pub fn finish(
         &mut self,
         logo: LogoState,
@@ -196,7 +207,8 @@ impl<W: Write> Live<W> {
     ) -> io::Result<()> {
         self.update(logo, title, steps, now, spin)?;
         self.printed = 0;
-        Ok(())
+        self.out.write_all(b"\n")?;
+        self.out.flush()
     }
 }
 
@@ -253,17 +265,19 @@ fn detail(row: &Row) -> Option<String> {
 }
 
 /// One step row within `width` columns: glyph, text, detail, then the time,
-/// which is kept whole when the text has to be cut.
+/// which is kept whole when the text has to be cut. A row that took no time
+/// has none: it was added already finished, as a note of what comes next.
 fn row_line(theme: &Theme, row: &Row, now: Instant, spin: u64, width: usize) -> Line<'static> {
     let (glyph, glyph_style) = match row.state {
         RowState::Running => (theme.spinner(spin), theme.tone(Tone::Busy)),
         RowState::Done => (theme.glyph(Glyph::Done), theme.tone(Tone::Ok)),
         RowState::Failed => (theme.glyph(Glyph::Failed), theme.tone(Tone::Failure)),
     };
-    let elapsed = row
-        .elapsed
-        .unwrap_or_else(|| now.saturating_duration_since(row.started));
-    let time = time(elapsed);
+    let time = match row.elapsed {
+        Some(Duration::ZERO) => None,
+        Some(elapsed) => Some(time(elapsed)),
+        None => Some(time(now.saturating_duration_since(row.started))),
+    };
     let mut spans = vec![
         Span::styled(glyph, glyph_style),
         Span::raw(" "),
@@ -278,6 +292,9 @@ fn row_line(theme: &Theme, row: &Row, now: Instant, spin: u64, width: usize) -> 
         spans.push(Span::styled(", ", theme.quiet()));
         spans.push(Span::styled(detail, style));
     }
+    let Some(time) = time else {
+        return Line::from(clip(spans, width));
+    };
     let mut spans = clip(spans, width.saturating_sub(text::width(&time) + 1));
     spans.push(Span::raw(" "));
     spans.push(Span::styled(time, theme.quiet()));
@@ -454,6 +471,49 @@ mod tests {
     }
 
     #[test]
+    fn the_logo_is_centred_beside_more_rows_than_it_has() {
+        let begun = Instant::now();
+        let mut steps = restarted(begun);
+        steps.set(
+            "resuming",
+            "starting again: acme@1 (10 services)".into(),
+            RowState::Done,
+            Some("devlanes status".into()),
+            at(begun, 6000),
+        );
+        let unicode = theme(Tier::Ansi, Glyphs::Unicode);
+        assert_eq!(
+            text(&unicode, 80, title(" · "), &steps, at(begun, 9000)),
+            [
+                "           devlanes is restarting · 0.6.1",
+                "  ▀▀▀▀▀    ✓ stopped 26 processes in 1 lane 5.8s",
+                "   ▀▀▀▀▀   ✓ saved state 0.1s",
+                "    ▀▀▀▀▀  ✓ started devlanes 0.6.1, pid 4242 0.1s",
+                "           ✓ starting again: acme@1 (10 services), devlanes status",
+            ]
+        );
+        steps.set(
+            "lane",
+            "starting acme@2".into(),
+            RowState::Running,
+            None,
+            at(begun, 6000),
+        );
+        let rows = text(&unicode, 80, title(" · "), &steps, at(begun, 9000));
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[1].trim_start().chars().next(), Some('▀'));
+        assert_eq!(rows[4].trim_start().chars().next(), Some('✓'));
+        let ascii = text(
+            &theme(Tier::Plain, Glyphs::Ascii),
+            80,
+            title(" "),
+            &steps,
+            at(begun, 9000),
+        );
+        assert!(ascii[0].starts_with("  devlanes  devlanes"), "{ascii:?}");
+    }
+
+    #[test]
     fn ascii_puts_the_word_in_place_of_the_bars() {
         let begun = Instant::now();
         let ascii = theme(Tier::Plain, Glyphs::Ascii);
@@ -586,10 +646,12 @@ mod tests {
         live.finish(LogoState::Online, title(" · "), &done, at(begun, 9000), 2)
             .expect("last frame");
         let written = String::from_utf8(out).expect("UTF-8");
-        let erase = "\x1b[3F\x1b[J";
+        // Three rows and the blank line above them.
+        let erase = "\x1b[4F\x1b[J";
         let frames: Vec<&str> = written.split(erase).collect();
         assert_eq!(frames.len(), 3, "{written:?}");
         assert!(!frames[0].contains("\x1b[J"), "{written:?}");
+        assert!(frames[0].starts_with("\n  "), "{written:?}");
         let last = render(
             &theme,
             80,
@@ -599,7 +661,21 @@ mod tests {
             at(begun, 9000),
             2,
         );
-        assert_eq!(frames[2], last);
+        assert_eq!(frames[2], format!("\n{last}\n"));
+    }
+
+    #[test]
+    fn live_erases_the_blank_line_and_every_row_of_a_taller_block() {
+        let begun = Instant::now();
+        let mut out = Vec::new();
+        let mut live = Live::new(&mut out, theme(Tier::Plain, Glyphs::Ascii), 80);
+        let steps = restarted(begun);
+        live.update(LogoState::Busy, title(" "), &steps, begun, 0)
+            .expect("first frame");
+        live.update(LogoState::Busy, title(" "), &steps, begun, 1)
+            .expect("second frame");
+        let written = String::from_utf8(out).expect("UTF-8");
+        assert_eq!(written.matches("\x1b[5F\x1b[J").count(), 1, "{written:?}");
     }
 
     #[test]

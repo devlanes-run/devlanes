@@ -3,17 +3,21 @@
 //! finished step on plain output. Agents and JSON get only the result.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    io::Stdout,
+    collections::BTreeSet,
+    io::{IsTerminal, Stdout},
     time::{Duration, Instant},
 };
 
+use crossterm::{
+    cursor::MoveToPreviousLine,
+    terminal::{Clear, ClearType},
+};
 use devlanes_cli::{OutputMode, Rendered, Runtime};
 use devlanes_client::{
-    Client, Frame, Paths,
+    Client, Paths,
     restart::{self, Progress, RowState, Steps},
 };
-use devlanes_proto::{Context, Control, LaneSummary, Method, ResumeLane, RpcError, events};
+use devlanes_proto::{Context, Method, ResumeLane, RpcError};
 use devlanes_tui::{
     steps::{self, Live, LogoState},
     theme::{Theme, Tone},
@@ -28,8 +32,6 @@ use crate::{driver::rpc_error, output::emit};
 
 /// How often a running step's spinner and time move.
 const FRAME: Duration = Duration::from_millis(100);
-/// Longest a resumed lane may show no start before it counts as not started.
-const RESUME_SILENCE: Duration = Duration::from_secs(30);
 
 /// Where the steps go.
 enum Sink {
@@ -222,7 +224,8 @@ fn reporter() -> (
 
 /// Asks before stopping `processes` processes, unless `--yes` said so. Without
 /// a terminal to ask on, refuses with the count, so an agent sees what it
-/// would stop.
+/// would stop. A "y" on a terminal erases the question, so the step block
+/// takes its place; an "n" leaves it above the shell prompt.
 fn confirmed(
     runtime: &Runtime,
     context: &Context,
@@ -239,7 +242,13 @@ fn confirmed(
             2,
         ));
     }
-    crate::commands::confirm(runtime, question)
+    let yes = crate::commands::confirm(runtime, question)?;
+    let mut stderr = std::io::stderr();
+    if yes && stderr.is_terminal() {
+        // The answer's newline left the cursor on the line below the question.
+        let _ = crossterm::execute!(stderr, MoveToPreviousLine(1), Clear(ClearType::CurrentLine));
+    }
+    Ok(yes)
 }
 
 /// `daemon stop` with its steps, in every output mode; the report comes once
@@ -291,8 +300,8 @@ pub async fn stop(runtime: &Runtime, paths: &Paths, context: Context) -> Result<
     Ok(0)
 }
 
-/// `daemon restart`: asks first when processes run, restarts with its steps,
-/// then on a terminal follows the lanes coming back until they are up.
+/// `daemon restart`: asks first when processes run, restarts with its steps
+/// and returns once the new daemon answers, naming the lanes that start again.
 pub async fn restart(runtime: &Runtime, paths: &Paths, context: Context) -> Result<u8, RpcError> {
     // The new daemon refuses an invalid user config, after the old one stopped
     // every lane, so it fails here first.
@@ -343,199 +352,32 @@ pub async fn restart(runtime: &Runtime, paths: &Paths, context: Context) -> Resu
         }
         return Ok(code);
     }
-    follow(&mut view, paths, &restarted.resuming).await;
+    if !restarted.resuming.is_empty() {
+        view.steps.set(
+            "resuming",
+            resuming_text(&restarted.resuming),
+            RowState::Done,
+            Some("devlanes status".to_owned()),
+            Instant::now(),
+        );
+    }
     view.finish(Outcome::Done);
     Ok(0)
 }
 
-/// Shows each lane in `resuming` coming back as a row of the block, until all
-/// are up, failed or did not start. Ctrl-C ends the wait; the starts go on.
-/// The restart itself is done either way, so a lane that fails does not fail it.
-async fn follow(view: &mut View, paths: &Paths, resuming: &[ResumeLane]) {
-    let mut lanes: BTreeMap<String, Resumed> = resuming
+/// `starting again: acme@1 (10 services), web@2 (1 service)`.
+fn resuming_text(resuming: &[ResumeLane]) -> String {
+    let lanes: Vec<String> = resuming
         .iter()
-        .map(|lane| (lane.lane.clone(), Resumed::new(lane)))
+        .map(|lane| {
+            let services = match lane.units.len() {
+                1 => "1 service".to_owned(),
+                n => format!("{n} services"),
+            };
+            format!("{} ({services})", lane.lane)
+        })
         .collect();
-    for lane in lanes.values() {
-        lane.show(view);
-    }
-    watch(view, paths, &mut lanes).await;
-    // However the wait ended, no row is left spinning on the final block.
-    for lane in lanes.values_mut().filter(|lane| lane.pending()) {
-        lane.detached = true;
-        lane.show(view);
-    }
-}
-
-/// Updates the rows of `lanes` from the new daemon's events until none is
-/// pending, Ctrl-C, or the daemon stops answering.
-async fn watch(view: &mut View, paths: &Paths, lanes: &mut BTreeMap<String, Resumed>) {
-    let Ok(mut events) = Client::connect(paths).await else {
-        return;
-    };
-    if events
-        .begin_request(Method::Subscribe, json!({}), Context::default())
-        .await
-        .is_err()
-    {
-        return;
-    }
-    // The starts may be under way before the subscription: read where they are.
-    if let Ok(mut client) = Client::connect(paths).await
-        && let Ok(status) = client
-            .request(Method::Status, json!({"all": true}), Context::default())
-            .await
-        && let Ok(page) = serde_json::from_value::<devlanes_proto::Page<LaneSummary>>(status)
-    {
-        for summary in &page.items {
-            if let Some(lane) = lanes.get_mut(&summary.reference) {
-                lane.update(summary);
-                lane.show(view);
-            }
-        }
-    }
-    let mut tick = tokio::time::interval(FRAME);
-    // Created once: on Unix a new listener per pass would let a Ctrl-C between
-    // two passes go unnoticed.
-    let interrupted = tokio::signal::ctrl_c();
-    tokio::pin!(interrupted);
-    while lanes.values().any(Resumed::pending) {
-        tokio::select! {
-            frame = events.next_frame() => {
-                let event = match frame {
-                    Ok(Frame::Control(Control::Event(event))) => event,
-                    Ok(_) => continue,
-                    Err(_) => return,
-                };
-                if event.event != events::LANE_CHANGED {
-                    continue;
-                }
-                let Some(summary) = event
-                    .data
-                    .get("lane")
-                    .cloned()
-                    .and_then(|lane| serde_json::from_value::<LaneSummary>(lane).ok())
-                else {
-                    continue;
-                };
-                if let Some(lane) = lanes.get_mut(&summary.reference) {
-                    lane.update(&summary);
-                    lane.show(view);
-                }
-            }
-            _ = tick.tick() => {
-                for lane in lanes.values().filter(|lane| lane.silent()) {
-                    lane.show(view);
-                }
-                view.draw();
-            }
-            _ = &mut interrupted => return,
-        }
-    }
-}
-
-/// One lane a restart starts again, as the follow sees it.
-struct Resumed {
-    reference: String,
-    /// The services it starts again.
-    units: BTreeSet<String>,
-    up: usize,
-    failed: usize,
-    /// It reported a start, so a lane back to idle has finished starting.
-    started: bool,
-    finished: bool,
-    /// The wait ended while it still started.
-    detached: bool,
-    since: Instant,
-}
-
-impl Resumed {
-    /// A lane that has not reported anything yet.
-    fn new(lane: &ResumeLane) -> Self {
-        Self {
-            reference: lane.lane.clone(),
-            units: lane.units.iter().cloned().collect(),
-            up: 0,
-            failed: 0,
-            started: false,
-            finished: false,
-            detached: false,
-            since: Instant::now(),
-        }
-    }
-
-    /// Reads where its services are from `summary`.
-    fn update(&mut self, summary: &LaneSummary) {
-        let mine = summary
-            .units
-            .iter()
-            .filter(|unit| self.units.contains(&unit.name));
-        let (mut up, mut failed, mut busy) = (0, 0, 0);
-        for unit in mine {
-            match unit.state.as_str() {
-                "ready" | "running" => up += 1,
-                "failed" | "exited" => failed += 1,
-                "starting" | "queued" => busy += 1,
-                _ => {}
-            }
-        }
-        self.up = up;
-        self.failed = failed;
-        // A service that already failed also shows the start happened.
-        self.started |= busy > 0 || up > 0 || failed > 0 || summary.state == "starting";
-        self.finished = self.started && busy == 0 && summary.state != "starting";
-    }
-
-    /// Still worth waiting for.
-    fn pending(&self) -> bool {
-        !self.finished && !self.detached && !self.silent()
-    }
-
-    /// Nothing started within [`RESUME_SILENCE`].
-    fn silent(&self) -> bool {
-        !self.started && self.since.elapsed() >= RESUME_SILENCE
-    }
-
-    /// Its row in `view`.
-    fn show(&self, view: &mut View) {
-        let total = self.units.len();
-        let ready = format!("{} of {total} ready", self.up);
-        let (text, state, detail) = if self.detached {
-            (
-                format!("starting {}", self.reference),
-                RowState::Done,
-                Some(format!("{ready}, still starting; see devlanes status")),
-            )
-        } else if self.silent() {
-            // A lane the new daemon could not start is only in its log.
-            (
-                format!("{} did not start", self.reference),
-                RowState::Failed,
-                Some("see devlanes daemon logs".to_owned()),
-            )
-        } else if !self.finished {
-            (
-                format!("starting {}", self.reference),
-                RowState::Running,
-                Some(ready),
-            )
-        } else if self.failed > 0 || self.up < total {
-            (
-                format!("started {}", self.reference),
-                RowState::Failed,
-                Some(format!("{ready}, {} failed", self.failed)),
-            )
-        } else {
-            (
-                format!("started {}", self.reference),
-                RowState::Done,
-                Some(format!("{total} ready")),
-            )
-        };
-        view.steps
-            .set(&self.reference, text, state, detail, Instant::now());
-        view.draw();
-    }
+    format!("starting again: {}", lanes.join(", "))
 }
 
 /// `1 process`, `3 processes`.
@@ -544,5 +386,23 @@ fn processes_word(n: usize) -> String {
         "1 process".to_owned()
     } else {
         format!("{n} processes")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resuming_names_each_lane_with_its_services() {
+        let lane = |name: &str, units: &[&str]| ResumeLane {
+            lane: name.to_owned(),
+            units: units.iter().map(|unit| (*unit).to_owned()).collect(),
+            profiles: Vec::new(),
+        };
+        assert_eq!(
+            resuming_text(&[lane("acme@1", &["api", "web"]), lane("acme@2", &["api"])]),
+            "starting again: acme@1 (2 services), acme@2 (1 service)"
+        );
     }
 }
