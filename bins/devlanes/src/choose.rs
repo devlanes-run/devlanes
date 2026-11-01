@@ -42,9 +42,12 @@ pub async fn choose(
     args: &[String],
 ) -> Result<Chosen, RpcError> {
     let cwd = context.cwd.display().to_string();
-    // Without --lane, --project or --file the lane comes from the directory; with no
-    // devlanes.yaml above it there is nothing to ask the daemon.
-    let scoped = context.lane.is_some() || context.project.is_some() || context.file.is_some();
+    // Without --lane, --project, --file or a lane's project the lane comes from the
+    // directory; with no devlanes.yaml above it there is nothing to ask the daemon.
+    let scoped = context.lane.is_some()
+        || context.project.is_some()
+        || context.lane_project.is_some()
+        || context.file.is_some();
     if choice.kind != ChoiceKind::Lane && !scoped && !has_config(&context.cwd).await {
         emit(&no_options(choice, &NoOptions::NoConfig { cwd }, runtime));
         return Ok(Chosen::Exit(devlanes_cli::exit::NOT_FOUND));

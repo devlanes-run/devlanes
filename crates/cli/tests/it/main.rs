@@ -75,8 +75,8 @@ fn project_file_and_short_project_flags() {
 }
 
 #[test]
-/// The file names its project, so `-p` and an inherited `DEVLANES_PROJECT` (which
-/// clap reads into the same field) are left out instead of refused.
+/// The file names its project, so `-p`, an exported `DEVLANES_PROJECT` (which clap
+/// reads into the same field) and the lane's project are left out instead of refused.
 fn project_file_sends_only_the_file() {
     let mut cli = Cli::parse_from([
         "devlanes",
@@ -89,11 +89,27 @@ fn project_file_sends_only_the_file() {
     let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
     assert_eq!(req.context.project, None);
     assert!(req.context.file.is_some());
-    // What `DEVLANES_PROJECT` of the lane this command runs in would set.
     cli = Cli::parse_from(["devlanes", "--file", "devlanes.prod.yaml", "start"]);
     cli.project = Some("acme".into());
+    cli.lane_project = Some("acme".into());
     let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
     assert_eq!(req.context.project, None);
+    assert_eq!(req.context.lane_project, None);
+}
+
+#[test]
+/// `-p` and `DEVLANES_PROJECT` name the project; the lane's `DEVLANES_LANE_PROJECT`
+/// travels separately, so the daemon uses it only where the cwd can't decide.
+fn lane_project_is_sent_apart_from_the_project() {
+    let mut cli = Cli::parse_from(["devlanes", "status"]);
+    cli.lane_project = Some("acme".into());
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.project, None);
+    assert_eq!(req.context.lane_project.as_deref(), Some("acme"));
+    let mut cli = Cli::parse_from(["devlanes", "-p", "acme-prod", "status"]);
+    cli.lane_project = Some("acme".into());
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.project.as_deref(), Some("acme-prod"));
 }
 
 #[test]

@@ -39,7 +39,7 @@ Accepted by every command, before or after the command name.
 - `--json`: Print JSON: one document, or NDJSON for streams (same as --output json)
 - `--output <MODE>`: Output mode [default: agent when an AI agent runs devlanes, plain in CI or without a terminal, else human]
   Values: `human` (Colors and symbols, for a terminal), `plain` (The same information without color, one line per event), `agent` (Terse lines for AI agents: failures first, with next commands, size-capped), `json` (The daemon's data as JSON, or NDJSON for streams).
-- `-p, --project <PROJECT>`: Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
+- `-p, --project <PROJECT>`: Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT]
 - `--file <FILE>`: Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 - `--lane <LANE>`: Use this lane ([project@]lane) instead of the current worktree's
 - `--yes`: Confirm actions that would ask first; needed when no terminal can prompt

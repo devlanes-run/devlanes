@@ -18,7 +18,7 @@ pub struct ProjectConfig<E: Extensions = OpaqueExtensions> {
     /// Project name, the same in every worktree of the repository. It builds each lane's
     /// default domain (`<project>.localhost` for lane 0, `<project><N>.localhost` for lane N),
     /// names lanes in commands (`acme@2`), the containers devlanes creates and
-    /// `DEVLANES_PROJECT`, and other projects reach this one as `projects.<project>`.
+    /// `DEVLANES_LANE_PROJECT`, and other projects reach this one as `projects.<project>`.
     /// Lowercase letters, digits, dots, underscores and dashes.
     #[schemars(extend("examples" = ["acme"]))]
     pub project: String,

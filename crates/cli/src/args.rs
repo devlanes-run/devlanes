@@ -73,9 +73,14 @@ pub struct Cli {
     /// Output mode [default: agent when an AI agent runs devlanes, plain in CI or without a terminal, else human]
     #[arg(long, global = true, value_enum, value_name = "MODE", help_heading = GLOBAL)]
     pub output: Option<OutputMode>,
-    /// Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
+    /// Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT]
     #[arg(short = 'p', long, global = true, env = "DEVLANES_PROJECT", hide_env = true, value_name = "PROJECT", help_heading = GLOBAL)]
     pub project: Option<String>,
+    /// `DEVLANES_LANE_PROJECT`, which lanes set in the processes they start. Unlike
+    /// `DEVLANES_PROJECT` it is only a fallback: it also reaches later CI steps and
+    /// `devlanes with` shells, which may run in another project's folder.
+    #[arg(skip = std::env::var("DEVLANES_LANE_PROJECT").ok().filter(|name| !name.is_empty()))]
+    pub lane_project: Option<String>,
     /// Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
     // No `-f`: `logs -f` and the other `--follow` flags already take it.
     #[arg(long, global = true, value_name = "FILE", help_heading = GLOBAL)]
@@ -1040,18 +1045,18 @@ impl Cli {
         // The daemon resolves the file, so a relative one names a path below the cwd.
         let file = self.file.as_ref().map(|file| cwd.join(file));
         // The file names its project. `-p` is dropped rather than refused with clap's
-        // `conflicts_with`, which counts `DEVLANES_PROJECT` as given: inside a lane that
-        // env var names the lane's project and would point lookups at it instead.
-        let project = if file.is_some() {
-            None
+        // `conflicts_with`, which counts an exported `DEVLANES_PROJECT` as given.
+        let (project, lane_project) = if file.is_some() {
+            (None, None)
         } else {
-            self.project.clone()
+            (self.project.clone(), self.lane_project.clone())
         };
         let mut context = Context {
             cwd,
             file,
             actor: runtime.actor.clone(),
             project,
+            lane_project,
             lane: self.lane.clone(),
             yes: self.yes,
             env: None,

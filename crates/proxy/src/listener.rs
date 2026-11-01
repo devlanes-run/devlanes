@@ -40,7 +40,7 @@ pub fn bind_listeners(port: u16, fallback_port: u16, lan: bool) -> io::Result<Bo
 /// it never binds the wildcard address, so on macOS a port below 1024 fails with
 /// permission denied unless the daemon runs as root.
 pub(crate) fn bind_loopback(port: u16) -> io::Result<BoundListeners> {
-    bind_pair_at(port, false, &bind_reusable)
+    bind_pair_at(port, false, &bind)
 }
 
 /// `bind_listeners` with an injectable socket binder, so tests can simulate missing IPv6.
@@ -142,17 +142,44 @@ fn bind_pair_at(
     })
 }
 
-/// IPV6_V6ONLY prevents the IPv6 socket from competing with the IPv4 listener.
+/// Binds `address` even while connections a closed listener on that port
+/// accepted still linger (`TIME_WAIT` after the proxy closed them first, as
+/// every daemon restart does with browsers connected); without that, a
+/// restarted daemon moves to the fallback port for up to a minute. Linux sets
+/// `SO_REUSEADDR`, which still refuses a port another socket listens on.
+/// macOS would also let this listener shadow a wildcard listener with it, so
+/// it is set there only after a plain bind failed and nothing answers on the
+/// port. Windows binds past lingering connections without it.
 fn bind(address: SocketAddr) -> io::Result<TcpListener> {
-    bind_socket(address, false)
+    let bound = bind_socket(address, cfg!(target_os = "linux"));
+    #[cfg(target_os = "macos")]
+    if let Err(error) = &bound
+        && error.kind() == io::ErrorKind::AddrInUse
+        && !answers(address)
+    {
+        return bind_socket(address, true);
+    }
+    bound
 }
 
-/// [`bind`] with `SO_REUSEADDR` on Linux, where it merely skips `TIME_WAIT`, so
-/// a scoped port closed with connections still lingering can be opened again
-/// right away. Not on macOS, where it would let this listener shadow another
-/// process bound to the wildcard address instead of reporting the conflict.
-fn bind_reusable(address: SocketAddr) -> io::Result<TcpListener> {
-    bind_socket(address, cfg!(target_os = "linux"))
+/// Whether something accepts connections on the loopback address of
+/// `address`'s family at its port, which every listener that conflicts with a
+/// loopback bind and every wildcard one does. Only a refusal counts as nothing:
+/// a listener whose backlog is full lets the connection time out. A wildcard
+/// bind can still sit next to a listener on one LAN address, which serves that
+/// address's connections.
+#[cfg(target_os = "macos")]
+fn answers(address: SocketAddr) -> bool {
+    let loopback: std::net::IpAddr = if address.is_ipv4() {
+        Ipv4Addr::LOCALHOST.into()
+    } else {
+        Ipv6Addr::LOCALHOST.into()
+    };
+    let probe = std::net::TcpStream::connect_timeout(
+        &SocketAddr::new(loopback, address.port()),
+        std::time::Duration::from_millis(500),
+    );
+    !matches!(probe, Err(error) if error.kind() == io::ErrorKind::ConnectionRefused)
 }
 
 /// Binds and listens on `address`, with `SO_REUSEADDR` when `reuse` is set.
@@ -220,6 +247,42 @@ mod tests {
     #[tokio::test]
     async fn occupied_port_falls_back() -> io::Result<()> {
         let taken = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+        let port = taken.local_addr()?.port();
+        let bound = bind_listeners_with(port, 0, false, bind)?;
+        assert_ne!(bound.port, port);
+        let reason = bound.fallback_reason.unwrap_or_default();
+        assert!(reason.contains("in use"), "{reason}");
+        Ok(())
+    }
+
+    /// A port whose last listener closed its connections first, so they linger
+    /// in `FIN_WAIT_2` or `TIME_WAIT` as after a daemon restart, is bound again
+    /// instead of falling back.
+    #[tokio::test]
+    async fn port_with_lingering_connections_binds_again() -> io::Result<()> {
+        use std::io::Read;
+        let first = bind_listeners_with(0, 0, false, bind)?;
+        let port = first.port;
+        let mut client = std::net::TcpStream::connect((Ipv4Addr::LOCALHOST, port))?;
+        let (server, _) = first.ipv4.accept().await?;
+        drop(server);
+        client.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+        assert_eq!(client.read(&mut [0; 1])?, 0, "the server closed first");
+        drop(client);
+        drop(first);
+        let again = bind_listeners_with(port, 0, false, bind)?;
+        assert_eq!(again.port, port, "{:?}", again.fallback_reason);
+        assert!(again.fallback_reason.is_none());
+        Ok(())
+    }
+
+    /// A port another process listens on with the wildcard address still
+    /// falls back: getting past lingering connections must not shadow it.
+    /// Windows lets a loopback bind take such a port.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wildcard_listener_still_falls_back() -> io::Result<()> {
+        let taken = std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0))?;
         let port = taken.local_addr()?.port();
         let bound = bind_listeners_with(port, 0, false, bind)?;
         assert_ne!(bound.port, port);

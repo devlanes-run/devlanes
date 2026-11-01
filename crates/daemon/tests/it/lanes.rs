@@ -228,6 +228,128 @@ async fn a_subdirectory_project_is_its_own_project() {
     .expect("timeout");
 }
 
+/// `cx(cwd)` run by a process of a `project` lane (`DEVLANES_LANE_PROJECT`).
+fn inheriting(cwd: &Path, project: &str) -> Context {
+    Context {
+        lane_project: Some(project.into()),
+        ..cx(cwd)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// A lane's `DEVLANES_LANE_PROJECT` reaches later CI steps and `devlanes with`
+/// shells, so it names the project only inside that project's lanes: a second
+/// checkout of the repository holding another project, as the GitHub action's
+/// two-project job has, starts its own project, and so does a subdirectory project
+/// below it. Inside a lane, or outside every project, it still picks the project, as
+/// for a script a `devlanes.prod.yaml` service runs.
+async fn a_lane_project_gives_way_to_the_cwds_own() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let origin = tmp.path.join("origin");
+        for (dir, name) in [("basic", "alpha"), ("infra", "beta")] {
+            let folder = origin.join("test").join(dir);
+            std::fs::create_dir_all(&folder).expect("mkdir");
+            std::fs::write(
+                folder.join("devlanes.yaml"),
+                format!("project: {name}\nservices:\n  api: {{ run: sleep, ready: started }}\n"),
+            )
+            .expect("project file");
+        }
+        git(&tmp.path, &["init", "-q", "-b", "main", "origin"]);
+        git(&origin, &["add", "."]);
+        git(&origin, &["commit", "-q", "-m", "init"]);
+        git(&tmp.path, &["clone", "-q", "origin", "first"]);
+        git(&tmp.path, &["clone", "-q", "origin", "second"]);
+        let basic = tmp.path.join("first/test/basic");
+        let infra = tmp.path.join("second/test/infra");
+        let h = harness(&tmp.path.join("home"), Setup::default()).await;
+        h.call(Method::Start, json!({}), cx(&basic))
+            .await
+            .expect("first project");
+        h.call(Method::Start, json!({}), inheriting(&infra, "alpha"))
+            .await
+            .expect("second project");
+        let second = lanes(&h, &infra).await;
+        assert_eq!(second.len(), 1);
+        assert_eq!(second[0].reference, "beta@0");
+        assert_eq!(second[0].path, tmp.path.join("second"));
+        // The first checkout, after the second start exported its own variables.
+        h.call(Method::Stop, json!({}), inheriting(&basic, "beta"))
+            .await
+            .expect("first project stops");
+        let first = lanes(&h, &basic).await;
+        assert_eq!(first[0].reference, "alpha@0");
+        assert_eq!(first[0].units[0].state, "stopped", "{first:?}");
+        let second = lanes(&h, &infra).await;
+        assert_ne!(second[0].units[0].state, "stopped", "{second:?}");
+        let scoped = |value: Value| -> Vec<String> {
+            serde_json::from_value::<Page<LaneSummary>>(value)
+                .expect("page")
+                .items
+                .into_iter()
+                .map(|lane| lane.reference)
+                .collect()
+        };
+        // A subdirectory project below the inherited project's folder is its own.
+        let nested = basic.join("apps/shop");
+        std::fs::create_dir_all(&nested).expect("mkdir");
+        std::fs::write(
+            nested.join("devlanes.yaml"),
+            "project: shop\nservices:\n  api: { run: sleep, ready: started }\n",
+        )
+        .expect("shop file");
+        let status = h
+            .call(Method::Status, json!({}), inheriting(&nested, "alpha"))
+            .await
+            .expect("status in shop");
+        assert_eq!(scoped(status), ["shop@0"]);
+        // Inside the folder and outside every project the variable still decides.
+        let status = h
+            .call(Method::Status, json!({}), inheriting(&basic, "beta"))
+            .await
+            .expect("status in basic");
+        assert_eq!(scoped(status), ["alpha@0"]);
+        std::fs::write(
+            basic.join("devlanes.prod.yaml"),
+            "project: alpha-prod\nextends: devlanes.yaml\n",
+        )
+        .expect("prod file");
+        let with_file = Context {
+            file: Some(basic.join("devlanes.prod.yaml")),
+            ..cx(&basic)
+        };
+        h.call(Method::Status, json!({}), with_file)
+            .await
+            .expect("registers alpha-prod");
+        let status = h
+            .call(Method::Status, json!({}), inheriting(&basic, "alpha-prod"))
+            .await
+            .expect("status as alpha-prod");
+        assert_eq!(scoped(status), ["alpha-prod@0"]);
+        let outside = tmp.path.join("elsewhere");
+        std::fs::create_dir_all(&outside).expect("mkdir");
+        let status = h
+            .call(Method::Status, json!({}), inheriting(&outside, "beta"))
+            .await
+            .expect("status outside");
+        assert_eq!(scoped(status), ["beta@0"]);
+        // `-p` or an exported `DEVLANES_PROJECT` wins over the cwd and the lane's project.
+        let pinned = Context {
+            project: Some("alpha".into()),
+            ..inheriting(&infra, "beta")
+        };
+        let status = h
+            .call(Method::Status, json!({}), pinned)
+            .await
+            .expect("status pinned");
+        assert_eq!(scoped(status), ["alpha@0"]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// A worktree whose file sets the project-wide `lanes.max` or a shared container
 /// differently from the primary's says so: the primary's `lanes.max` applies, and the

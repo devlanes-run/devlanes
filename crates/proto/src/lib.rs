@@ -83,6 +83,11 @@ pub struct Context {
     pub actor: Actor,
     #[serde(default)]
     pub project: Option<String>,
+    /// The project of the lane that started the client (`DEVLANES_LANE_PROJECT`). It
+    /// applies only without `project` and `file`, when the cwd is in one of that
+    /// project's lane folders or in no project. Older daemons ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane_project: Option<String>,
     /// Absolute path of a project file given with `--file`, which registers the project
     /// it names; otherwise the nearest `devlanes.yaml` above the cwd is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -401,6 +406,9 @@ pub struct Event {
 }
 
 /// JSON control frames; PTY bytes use a separate binary frame kind.
+// Like `devlanes_ipc::Frame`: built and consumed once per message and never stored in
+// bulk, so boxing `Request` would add an allocation per request for no memory win.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Serialize)]
 #[serde(tag = "type", content = "body", rename_all = "snake_case")]
 pub enum Control {

@@ -22,29 +22,48 @@ pub(crate) fn processes() -> Result<Vec<ProcessInfo>, Error> {
     Ok(all_pids()?.into_iter().filter_map(bsd_info).collect())
 }
 
-/// Reads one process, falling back to sysctl for unreaped zombies.
+/// Reads one process, falling back to sysctl for exiting and unreaped processes.
 pub(crate) fn process(pid: u32) -> Result<Option<ProcessInfo>, Error> {
     let Ok(pid) = i32::try_from(pid) else {
         return Ok(None);
     };
-    Ok(bsd_info(pid).or_else(|| zombie_info(pid)))
+    Ok(bsd_info(pid).or_else(|| exited_info(pid)))
 }
 
 /// `sizeof(struct kinfo_proc)` on 64-bit macOS; the libc crate does not define it.
 const KINFO_PROC_SIZE: usize = 648;
 /// Offsets inside `kinfo_proc.kp_proc` (`struct extern_proc`), stable since 10.0:
-/// `p_un.__p_starttime` (timeval) at 0, `p_stat` at 36 and `p_pid` at 40.
+/// `p_un.__p_starttime` (timeval) at 0, `p_flag` at 32, `p_stat` at 36 and
+/// `p_pid` at 40.
 const STARTTIME_SEC: usize = 0;
 const STARTTIME_USEC: usize = 8;
+const P_FLAG: usize = 32;
 const P_STAT: usize = 36;
 const P_PID: usize = 40;
+/// `P_WEXIT` from `<sys/proc.h>`: XNU sets it in `p_flag` once the process
+/// started exiting, long before `p_stat` becomes `SZOMB`.
+const P_WEXIT: i32 = 0x2000;
 
-/// Reads identity fields of a zombie through `KERN_PROC_PID`, which libproc refuses
-/// once a process exited. Needed so a leader that exits instantly still gets an
-/// identity before it is reaped. Parent, group and name are not decoded.
-fn zombie_info(pid: libc::pid_t) -> Option<ProcessInfo> {
-    let (stat, start_time) = kinfo(pid)?;
-    if u32::from(stat) != libc::SZOMB {
+/// The `KERN_PROC_PID` fields this backend reads.
+struct Kinfo {
+    stat: u8,
+    flag: i32,
+    /// Microseconds since the epoch, as libproc reports it.
+    start_time: u64,
+}
+
+/// Reads identity fields through `KERN_PROC_PID` of a process that exited or is
+/// exiting, which libproc refuses from the start of the kernel's exit path.
+/// Parent, group and name are not decoded.
+///
+/// An exiting session leader with a controlling terminal stays in that state
+/// until its unread terminal output is drained (XNU's `ttywait` in
+/// `proc_exit`), which needs someone to read the PTY master. A leader that
+/// writes and exits right after exec can still be there when its parent asks
+/// for its identity, before the parent reads the master.
+fn exited_info(pid: libc::pid_t) -> Option<ProcessInfo> {
+    let info = kinfo(pid)?;
+    if u32::from(info.stat) != libc::SZOMB && info.flag & P_WEXIT == 0 {
         return None;
     }
     Some(ProcessInfo {
@@ -53,14 +72,16 @@ fn zombie_info(pid: libc::pid_t) -> Option<ProcessInfo> {
         pgid: 0,
         sid: None,
         uid: 0,
-        start_time,
+        start_time: info.start_time,
+        // An exiting process ignores signals and has closed its descriptors,
+        // so it counts as exited.
         zombie: true,
         name: String::new(),
     })
 }
 
-/// Returns `(p_stat, start time in microseconds)` from `KERN_PROC_PID`.
-fn kinfo(pid: libc::pid_t) -> Option<(u8, u64)> {
+/// Reads `p_stat`, `p_flag` and the start time from `KERN_PROC_PID`.
+fn kinfo(pid: libc::pid_t) -> Option<Kinfo> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
     let mut buffer = [0_u8; KINFO_PROC_SIZE];
     let mut len = buffer.len();
@@ -100,10 +121,11 @@ fn kinfo(pid: libc::pid_t) -> Option<(u8, u64)> {
     }
     let seconds = u64::try_from(read_i64(STARTTIME_SEC)?).ok()?;
     let micros = u64::try_from(read_i32(STARTTIME_USEC)?).ok()?;
-    Some((
-        *buffer.get(P_STAT)?,
-        seconds.saturating_mul(1_000_000).saturating_add(micros),
-    ))
+    Some(Kinfo {
+        stat: *buffer.get(P_STAT)?,
+        flag: read_i32(P_FLAG)?,
+        start_time: seconds.saturating_mul(1_000_000).saturating_add(micros),
+    })
 }
 
 /// Returns every PID, retrying when the table grew past the buffer between calls.
@@ -640,9 +662,10 @@ mod tests {
     fn kinfo_layout_matches_libproc() {
         let pid = i32::try_from(std::process::id()).expect("pid fits pid_t");
         let live = bsd_info(pid).expect("own bsd info");
-        let (stat, start_time) = kinfo(pid).expect("own kinfo");
-        assert_eq!(start_time, live.start_time);
-        assert_ne!(u32::from(stat), libc::SZOMB);
+        let info = kinfo(pid).expect("own kinfo");
+        assert_eq!(info.start_time, live.start_time);
+        assert_ne!(u32::from(info.stat), libc::SZOMB);
+        assert_eq!(info.flag & P_WEXIT, 0);
     }
 
     /// Whether `pid`'s base priority is at most 4 (`MAXPRI_THROTTLE`), the

@@ -414,7 +414,7 @@ fn literal<T: Clone + serde::de::DeserializeOwned>(value: &Option<Templated<T>>)
 
 impl Inner {
     /// The request's project: the one `--file` names (registering it), else the one
-    /// `--project` names, else the cwd's ([`Self::project_for_cwd`]).
+    /// `--project` names, else the cwd's ([`Self::project_here`]).
     pub(crate) async fn project_for(
         self: &Arc<Self>,
         context: &devlanes_proto::Context,
@@ -425,7 +425,56 @@ impl Inner {
         if let Some(name) = &context.project {
             return self.project_by_name(name).map(Some);
         }
-        self.project_for_cwd(&context.cwd).await
+        self.project_here(context).await
+    }
+
+    /// The cwd's project ([`Self::project_for_cwd`]), or the request's `lane_project`
+    /// when the cwd is in one of that project's lane folders or in no project. A
+    /// `devlanes.prod.yaml` project's services run where `devlanes.yaml` names another
+    /// project, so there the cwd alone would pick the wrong one.
+    pub(crate) async fn project_here(
+        self: &Arc<Self>,
+        context: &devlanes_proto::Context,
+    ) -> Result<Option<Arc<ProjectRt>>, RpcError> {
+        let Some(name) = &context.lane_project else {
+            return self.project_for_cwd(&context.cwd).await;
+        };
+        if let Some(project) = self.lane_folder_project(name, &context.cwd).await {
+            return Ok(Some(project));
+        }
+        match self.project_for_cwd(&context.cwd).await? {
+            Some(project) => Ok(Some(project)),
+            None => self.project_by_name(name).map(Some),
+        }
+    }
+
+    /// The project named `name` when `cwd` is in the folder of one of its lanes, unless
+    /// a nearer `devlanes.yaml` below that folder, such as a subdirectory project's,
+    /// holds `cwd`.
+    async fn lane_folder_project(&self, name: &str, cwd: &Path) -> Option<Arc<ProjectRt>> {
+        let (project, folder) = self.all_lanes().into_iter().find_map(|(project, lane)| {
+            if project.name() != name {
+                return None;
+            }
+            let (config_dir, _) = project.config_path();
+            let folder = {
+                let st = lane.st();
+                st.present.then(|| st.path.join(config_dir))
+            }?;
+            path_starts_with(cwd, &folder).then_some((project, folder))
+        })?;
+        let nearest = {
+            let cwd = cwd.to_path_buf();
+            tokio::task::spawn_blocking(move || devlanes_config::find_project_file(&cwd))
+                .await
+                .ok()?
+                .ok()?
+        };
+        nearest
+            .as_deref()
+            .and_then(Path::parent)
+            .is_none_or(|dir| path_starts_with(&folder, dir))
+            .then_some(project)
     }
 
     /// The registered project named `name`; `not_found` says how a project file other

@@ -126,7 +126,7 @@ impl LaneLayout {
     }
 
     /// Variables for `devlanes with` and `devlanes env show`: `DEVLANES`,
-    /// `DEVLANES_PROJECT`, `DEVLANES_LANE`, `DEVLANES_LANE_NAME`,
+    /// `DEVLANES_LANE_PROJECT`, `DEVLANES_LANE`, `DEVLANES_LANE_NAME`,
     /// `DEVLANES_PUBLIC_URL_<SERVICE>` for every service and the CA variables.
     pub fn lane_env(&self) -> &BTreeMap<String, String> {
         &self.lane_env

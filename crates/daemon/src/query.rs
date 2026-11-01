@@ -145,7 +145,7 @@ impl Inner {
         } else if context.cwd.as_os_str().is_empty() {
             None
         } else {
-            match self.project_for_cwd(&context.cwd).await {
+            match self.project_here(context).await {
                 Ok(project) => project,
                 // A name another file or repository holds is the answer, not every lane.
                 Err(error)

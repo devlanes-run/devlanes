@@ -140,7 +140,8 @@ pub fn processes() -> Result<Vec<ProcessInfo>, Error> {
 /// Looks up one process, returning `None` once it is fully gone.
 ///
 /// Unreaped zombies are still reported, so a parent can record a child's identity
-/// even if it exited immediately.
+/// even if it exited immediately. On macOS so is a process still in the kernel's
+/// exit path, reported as a zombie.
 pub fn process(pid: u32) -> Result<Option<ProcessInfo>, Error> {
     if pid == 0 {
         return Ok(None);

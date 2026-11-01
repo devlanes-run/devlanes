@@ -698,7 +698,10 @@ impl Inner {
         let board = &self.opts.idle;
         let reference = lane.st().reference(&project.name());
         if let Some(activity) = activity {
-            board.activity(&reference, activity);
+            // Without queueing a wake: this call thaws the lane itself, and a
+            // queued wake could take the lock first and leave this call
+            // answering that the lane was not idle.
+            board.record(&board.slot(&reference), activity);
         }
         // Always under the lock: a freeze in progress holds it until the lane's
         // state and the board agree, and the board is only written under it.

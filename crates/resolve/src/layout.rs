@@ -337,7 +337,7 @@ pub(crate) fn build<E: Extensions>(
 
     let mut lane_env = BTreeMap::from([
         ("DEVLANES".to_owned(), "1".to_owned()),
-        ("DEVLANES_PROJECT".to_owned(), config.project.clone()),
+        ("DEVLANES_LANE_PROJECT".to_owned(), config.project.clone()),
         ("DEVLANES_LANE".to_owned(), facts.index.to_string()),
         ("DEVLANES_LANE_NAME".to_owned(), facts.name.clone()),
         (
