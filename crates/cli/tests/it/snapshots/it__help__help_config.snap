@@ -60,7 +60,7 @@ Global options:
           Cap agent-mode output at this many bytes [default: 16384, minimum: 256]
 
   -v, --verbose...
-          Print timestamped diagnostics of the client and daemon to stderr; -vv for more [env: DEVLANES_VERBOSE=1|2]
+          Print timestamped diagnostics of the client and daemon to stderr; -vv for more. A bare devlanes -v prints the version [env: DEVLANES_VERBOSE=1|2]
 
 Examples:
   devlanes config check                     validate this worktree's devlanes.yaml

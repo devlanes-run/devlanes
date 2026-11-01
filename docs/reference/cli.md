@@ -47,7 +47,7 @@ Accepted by every command, before or after the command name.
 - `--env <KEY=VALUE>`: Set a variable for started processes (start, restart, run TASK, exec); repeatable
 - `--timeout <DURATION>`: Limit waits and streams, such as 30s, 5m or 1h [default for start and wait: 180s]
 - `--budget <BYTES>`: Cap agent-mode output at this many bytes [default: 16384, minimum: 256]
-- `-v, --verbose`: Print timestamped diagnostics of the client and daemon to stderr; -vv for more [env: DEVLANES_VERBOSE=1|2]
+- `-v, --verbose`: Print timestamped diagnostics of the client and daemon to stderr; -vv for more. A bare devlanes -v prints the version [env: DEVLANES_VERBOSE=1|2]
 
 ## Commands
 

@@ -416,7 +416,7 @@ impl UpdateMode {
 #[serde(default, deny_unknown_fields)]
 #[schemars(extend("examples" = [{"exit_when_idle":false}]))]
 pub struct DaemonConfig {
-    /// Stop the daemon about 30 seconds after the last TUI, or command that shows
+    /// Stop the daemon about 15 seconds after the last TUI, or command that shows
     /// progress, closes, once nothing runs or starts, no box or client is connected or
     /// waiting to reconnect, and no pairing code is outstanding. A daemon that nothing
     /// ever watched this way, such as one only scripts or agents used, waits about 5

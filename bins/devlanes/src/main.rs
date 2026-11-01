@@ -64,6 +64,13 @@ fn main() -> ExitCode {
     }
     // CompleteEnv must run before any thread exists; it exits when completing.
     completion::install();
+    // A bare `-v` is how most tools print their version, and the TUI it would
+    // open ignores `-v` anyway; `-v <command>` stays verbose.
+    if std::env::args_os().skip(1).eq(["-v"]) {
+        #[cfg(windows)]
+        cli_console();
+        return print_version();
+    }
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
@@ -71,10 +78,7 @@ fn main() -> ExitCode {
             cli_console();
             use devlanes_cli::clap::error::ErrorKind;
             if error.kind() == ErrorKind::DisplayVersion {
-                use std::io::Write as _;
-                let version = devlanes_update::version::running();
-                let _ = writeln!(std::io::stdout(), "devlanes {version}");
-                return ExitCode::SUCCESS;
+                return print_version();
             }
             // Help and similar displays are not errors.
             if matches!(
@@ -174,6 +178,14 @@ fn main() -> ExitCode {
     tokio.shutdown_background();
     verbose::finish(verbose, code);
     ExitCode::from(code)
+}
+
+/// Prints `devlanes <version>` for `-V`, `--version` and a bare `-v`.
+fn print_version() -> ExitCode {
+    use std::io::Write as _;
+    let version = devlanes_update::version::running();
+    let _ = writeln!(std::io::stdout(), "devlanes {version}");
+    ExitCode::SUCCESS
 }
 
 /// Gives the CLI a console without a window when it starts without one: the
