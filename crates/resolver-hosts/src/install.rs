@@ -11,7 +11,9 @@
 //! into place their contents are read back and compared with the checked bytes and
 //! the intended rule. sudo ignores `sudoers.d` entries containing a dot, so a staged
 //! rule is never read before it is renamed. A failure after activation starts puts
-//! the previous helper and rule back.
+//! the previous helper and rule back. When the sudo configuration already fails
+//! `visudo -c` before the install, the full check after the rule moves in only
+//! counts as a failure if its output changes.
 
 use std::io::{self, Read as _};
 use std::path::{Path, PathBuf};
@@ -215,6 +217,9 @@ pub struct Step {
     pub rollback: Vec<CommandSpec>,
     /// Keep going when the command fails (uninstall only).
     pub continue_on_failure: bool,
+    /// Stderr of a failure the command already had before anything changed. The
+    /// same failure again is a warning; any other failure still stops the plan.
+    pub known_failure: Option<String>,
 }
 
 impl Step {
@@ -225,6 +230,7 @@ impl Step {
             command,
             rollback: Vec::new(),
             continue_on_failure: false,
+            known_failure: None,
         }
     }
 
@@ -250,6 +256,11 @@ fn remove(paths: &[&str]) -> CommandSpec {
 /// `sudo /bin/mv -f -- <from> <to>`.
 fn rename(from: &str, to: &str) -> CommandSpec {
     sudo(MV, &["-f", "--", from, to])
+}
+
+/// `sudo /usr/sbin/visudo -c`: checks the whole sudo configuration.
+fn full_check() -> CommandSpec {
+    sudo(VISUDO, &["-c"])
 }
 
 /// Checks a user name before it goes into a sudoers rule.
@@ -303,6 +314,10 @@ pub struct InstallInputs {
     pub previous_helper: bool,
     /// Whether a rule is installed now; it is backed up and restored on failure.
     pub previous_rule: bool,
+    /// Stderr of `visudo -c` before the install when the configuration already
+    /// fails it; the full check after the rule moves in then only stops the install
+    /// on a different failure.
+    pub sudo_config_error: Option<String>,
 }
 
 /// The commands `devlanes setup` runs to install the helper, in order.
@@ -448,17 +463,16 @@ pub fn install_plan(inputs: &InstallInputs) -> Result<InstallPlan, InstallError>
             .rollback(backout.clone()),
         );
     }
+    let mut full = Step::new("validating the full sudo configuration", full_check())
+        .rollback(undo_rule.clone());
+    full.known_failure.clone_from(&inputs.sudo_config_error);
     activate.extend([
         Step::new(
             "moving the sudo rule into place",
             rename(SUDOERS_STAGING, SUDOERS_PATH),
         )
         .rollback(undo_rule.clone()),
-        Step::new(
-            "validating the full sudo configuration",
-            sudo(VISUDO, &["-c"]),
-        )
-        .rollback(undo_rule.clone()),
+        full,
         Step::new(
             "moving the helper into place",
             rename(HELPER_STAGING, INSTALL_PATH),
@@ -662,7 +676,8 @@ async fn check_binary(
 }
 
 /// Runs `steps`; a failing step runs its rollback and stops the plan unless it
-/// allows failure. Returns the messages of failures that were allowed.
+/// allows failure or fails exactly as it did before the install. Returns the
+/// messages of failures that were allowed.
 pub async fn run_steps(
     executor: &dyn Executor,
     steps: &[Step],
@@ -680,11 +695,19 @@ pub async fn run_steps(
         if output.success() {
             continue;
         }
+        let stderr = output.stderr.trim().to_owned();
+        if step.known_failure.as_deref() == Some(stderr.as_str()) {
+            warnings.push(format!(
+                "`{}` failed the same way before the install changed anything, so the problem is elsewhere and the install went ahead: {stderr}",
+                step.command
+            ));
+            continue;
+        }
         let failure = InstallError::StepFailed {
             purpose: step.purpose,
             command: step.command.to_string(),
             code: output.code,
-            stderr: output.stderr.trim().to_owned(),
+            stderr,
         };
         if step.continue_on_failure {
             warnings.push(failure.to_string());
@@ -741,6 +764,18 @@ async fn rule_exists(executor: &dyn Executor) -> Result<bool, InstallError> {
     }
 }
 
+/// What `visudo -c` reports about the sudo configuration before anything changes,
+/// `None` when it passes. Some machines ship a file that fails the check while
+/// sudo still works (GitHub's Ubuntu runners have a `0644` entry in
+/// `/etc/sudoers.d`), and that failure must not be blamed on the new rule.
+async fn sudo_config_error(executor: &dyn Executor) -> Result<Option<String>, InstallError> {
+    let output = executor
+        .run(&full_check())
+        .await
+        .map_err(|error| InstallError::io("checking the sudo configuration", error))?;
+    Ok((!output.success()).then(|| output.stderr.trim().to_owned()))
+}
+
 /// Compares the root-owned staged copies with the checked helper bytes and the
 /// intended rule. Both staged files are root-owned in root-owned directories, so
 /// what matches here is what gets activated.
@@ -773,12 +808,23 @@ async fn check_staged(
     Ok(())
 }
 
+/// What [`install`] put in place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Installed {
+    /// The installed helper's `version`.
+    pub version: HelperVersion,
+    /// Problems that did not stop the install, such as a sudo configuration that
+    /// already failed `visudo -c` before the rule was added.
+    pub warnings: Vec<String>,
+}
+
 /// Installs the helper and the rule for the current user.
 ///
 /// Order: user and directory checks; the source is read once into memory, copied to
 /// a private temp directory, and that copy is checked with `version`; the rule is
-/// written next to it; then the staging steps (sudo prompts once; its timestamp
-/// covers the rest), a comparison of both root-owned staged copies with the checked
+/// written next to it; a check for a previous rule (sudo prompts once; its
+/// timestamp covers the rest) and a `visudo -c` of the configuration as it is; then
+/// the staging steps, a comparison of both root-owned staged copies with the checked
 /// content, activation with backups, an ownership check, and a passwordless
 /// `sudo -n -k` run proving the rule works. Failures before activation leave the
 /// previous install untouched; failures during or right after activation restore it.
@@ -786,7 +832,7 @@ pub async fn install(
     executor: &dyn Executor,
     fs: &dyn FsProbe,
     helper_source: &Path,
-) -> Result<HelperVersion, InstallError> {
+) -> Result<Installed, InstallError> {
     let platform = Platform::current().ok_or(InstallError::Unsupported)?;
     let user = current_user(executor).await?;
     let install_dir_exists = check_install_dirs(fs)?;
@@ -817,13 +863,14 @@ pub async fn install(
         create_install_dir: !install_dir_exists,
         previous_helper,
         previous_rule,
+        sudo_config_error: sudo_config_error(executor).await?,
     })?;
     run_steps(executor, &plan.stage).await?;
     if let Err(error) = check_staged(executor, fs, &plan, &private.helper_bytes, &rule).await {
         run_best_effort(executor, &plan.discard).await;
         return Err(error);
     }
-    run_steps(executor, &plan.activate).await?;
+    let warnings = run_steps(executor, &plan.activate).await?;
     if let Err(error) = verify_installed(fs) {
         run_best_effort(executor, &plan.restore).await;
         return Err(error);
@@ -839,7 +886,7 @@ pub async fn install(
             stderr: output.stderr.trim().to_owned(),
         });
     }
-    Ok(version)
+    Ok(Installed { version, warnings })
 }
 
 /// Removes the block, the rule and the helper.
@@ -946,6 +993,7 @@ mod tests {
             create_install_dir,
             previous_helper: false,
             previous_rule: false,
+            sudo_config_error: None,
         }
     }
 
@@ -1302,6 +1350,72 @@ mod tests {
         );
     }
 
+    /// The full check is the only step that carries the failure seen before the
+    /// install, and only that exact failure lets activation go on.
+    #[tokio::test]
+    async fn a_full_check_that_already_failed_only_stops_on_a_new_failure() {
+        const BEFORE: &str = "/etc/sudoers.d/runner: bad permissions, should be mode 0440";
+        let plan = install_plan(&InstallInputs {
+            sudo_config_error: Some(BEFORE.into()),
+            ..inputs(Platform::Linux, false)
+        })
+        .expect("plan");
+        let carriers: Vec<&str> = plan
+            .stage
+            .iter()
+            .chain(&plan.activate)
+            .filter(|step| step.known_failure.is_some())
+            .map(|step| step.purpose)
+            .collect();
+        assert_eq!(carriers, ["validating the full sudo configuration"]);
+        let full_check_says = |stderr: &'static str| {
+            FakeExecutor::new(move |command| {
+                Ok(if command.argv() == [SUDO, VISUDO, "-c"] {
+                    CommandOutput::failed(1, stderr)
+                } else {
+                    CommandOutput::ok("")
+                })
+            })
+        };
+
+        let same = full_check_says(BEFORE);
+        let warnings = run_steps(&same, &plan.activate)
+            .await
+            .expect("the same failure goes on");
+        assert_eq!(
+            warnings,
+            [format!(
+                "`sudo /usr/sbin/visudo -c` failed the same way before the install changed anything, so the problem is elsewhere and the install went ahead: {BEFORE}"
+            )]
+        );
+        assert_eq!(
+            strings(&same.calls()).last().map(String::as_str),
+            Some(
+                "sudo /bin/mv -f -- /usr/local/libexec/.devlanes-hosts.new /usr/local/libexec/devlanes-hosts"
+            )
+        );
+
+        let new = full_check_says(
+            "/etc/sudoers.d/runner: bad permissions, should be mode 0440\n>>> /etc/sudoers.d/devlanes: syntax error near line 5 <<<",
+        );
+        let error = run_steps(&new, &plan.activate)
+            .await
+            .expect_err("a new failure stops");
+        assert!(
+            matches!(
+                error,
+                InstallError::StepFailed {
+                    purpose: "validating the full sudo configuration",
+                    ..
+                }
+            ),
+            "{error}"
+        );
+        let ran = strings(&new.calls());
+        assert!(ran.contains(&"sudo /bin/rm -f -- /etc/sudoers.d/devlanes".to_owned()));
+        assert!(!ran.iter().any(|command| command.ends_with(INSTALL_PATH)));
+    }
+
     #[tokio::test]
     async fn uninstall_continues_past_a_failed_clear() {
         let executor = FakeExecutor::new(|command| {
@@ -1332,8 +1446,12 @@ mod tests {
         tamper_helper: bool,
         /// Text appended to the staged rule, as if edited mid-install.
         tamper_rule: bool,
-        /// Makes the full `visudo -c` fail.
+        /// What `visudo -c` reports about files other than ours, before and after.
+        config_error: Option<&'static str>,
+        /// Makes the full `visudo -c` fail once the new rule is in place.
         full_check_fails: bool,
+        /// Whether the new rule has been moved into place.
+        rule_in_place: bool,
         /// Rewrites the private copy while `version` runs.
         tamper_private_copy: bool,
         /// Rewrites the original source while `version` runs.
@@ -1392,8 +1510,16 @@ mod tests {
                     [SUDO, CAT, "--", SUDOERS_STAGING] => {
                         CommandOutput::ok(world.staged_rule.clone())
                     }
-                    [SUDO, VISUDO, "-c"] if world.full_check_fails => {
-                        CommandOutput::failed(1, "parse error in /etc/sudoers")
+                    [SUDO, VISUDO, "-c"] => {
+                        let ours = (world.rule_in_place && world.full_check_fails)
+                            .then_some("parse error in /etc/sudoers.d/devlanes");
+                        let errors: Vec<&str> =
+                            world.config_error.into_iter().chain(ours).collect();
+                        if errors.is_empty() {
+                            CommandOutput::ok("")
+                        } else {
+                            CommandOutput::failed(1, errors.join("\n"))
+                        }
                     }
                     [SUDO, MV, "-f", "--", HELPER_STAGING, INSTALL_PATH] => {
                         fs.set(INSTALL_PATH, FileKind::File, 0, 0o755);
@@ -1401,6 +1527,7 @@ mod tests {
                     }
                     [SUDO, MV, "-f", "--", SUDOERS_STAGING, SUDOERS_PATH] => {
                         fs.fail(SUDOERS_PATH, io::ErrorKind::PermissionDenied);
+                        world.rule_in_place = true;
                         CommandOutput::ok("")
                     }
                     [SUDO, "-n", "-k", INSTALL_PATH, "version"] => {
@@ -1433,10 +1560,11 @@ mod tests {
         let world = Arc::new(Mutex::new(World::default()));
         let (executor, fs) = fake_install(world.clone());
         let (_dir, source) = source();
-        let version = install(&executor, fs.as_ref(), &source)
+        let installed = install(&executor, fs.as_ref(), &source)
             .await
             .expect("install");
-        assert_eq!(version.build, "release");
+        assert_eq!(installed.version.build, "release");
+        assert!(installed.warnings.is_empty(), "{:?}", installed.warnings);
         let world = world.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(
             world.staged_helper.as_deref(),
@@ -1458,6 +1586,7 @@ mod tests {
             ran[2..],
             [
                 &*format!("sudo {TEST} -e /etc/sudoers.d/devlanes"),
+                "sudo /usr/sbin/visudo -c",
                 &format!(
                     "sudo /usr/bin/install -d -o root -g {group} -m 0755 -- /usr/local/libexec"
                 ),
@@ -1615,6 +1744,81 @@ mod tests {
         assert!(!ran.iter().any(|command| {
             command.ends_with(".devlanes-hosts.new /usr/local/libexec/devlanes-hosts")
         }));
+        // The configuration passed before the install, so the failure is the new rule's.
+        assert_eq!(
+            ran.iter()
+                .filter(|command| *command == "sudo /usr/sbin/visudo -c")
+                .count(),
+            2
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_sudo_config_that_already_fails_still_gets_the_helper_with_a_warning() {
+        const RUNNER: &str = "/etc/sudoers.d/runner: bad permissions, should be mode 0440";
+        let world = Arc::new(Mutex::new(World {
+            config_error: Some(RUNNER),
+            ..World::default()
+        }));
+        let (executor, fs) = fake_install(world);
+        let (_dir, source) = source();
+        let installed = install(&executor, fs.as_ref(), &source)
+            .await
+            .expect("install goes ahead");
+        assert_eq!(installed.warnings.len(), 1, "{:?}", installed.warnings);
+        assert!(
+            installed.warnings[0].starts_with("`sudo /usr/sbin/visudo -c` failed the same way")
+                && installed.warnings[0].ends_with(RUNNER),
+            "{}",
+            installed.warnings[0]
+        );
+        let ran = ran(&executor);
+        assert!(ran.contains(
+            &"sudo /bin/mv -f -- /usr/local/libexec/.devlanes-hosts.new /usr/local/libexec/devlanes-hosts"
+                .to_owned()
+        ));
+        assert!(!ran.contains(&"sudo /bin/rm -f -- /etc/sudoers.d/devlanes".to_owned()));
+        assert_eq!(
+            ran.last().map(String::as_str),
+            Some("sudo -n -k /usr/local/libexec/devlanes-hosts version")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_rule_that_adds_a_failure_is_removed_even_when_the_config_already_failed() {
+        let world = Arc::new(Mutex::new(World {
+            config_error: Some("/etc/sudoers.d/runner: bad permissions, should be mode 0440"),
+            full_check_fails: true,
+            ..World::default()
+        }));
+        let (executor, fs) = fake_install(world);
+        let (_dir, source) = source();
+        let error = install(&executor, fs.as_ref(), &source)
+            .await
+            .expect_err("new failure");
+        assert!(
+            matches!(
+                &error,
+                InstallError::StepFailed {
+                    purpose: "validating the full sudo configuration",
+                    stderr,
+                    ..
+                } if stderr.contains("/etc/sudoers.d/devlanes")
+            ),
+            "{error}"
+        );
+        let ran = ran(&executor);
+        assert_eq!(
+            ran[ran.len() - 4..],
+            [
+                "sudo /usr/sbin/visudo -c",
+                "sudo /bin/rm -f -- /etc/sudoers.d/devlanes",
+                "sudo /bin/rm -f -- /usr/local/libexec/.devlanes-hosts.new /etc/sudoers.d/.devlanes.new",
+                "sudo /bin/rm -f -- /usr/local/libexec/.devlanes-hosts.old /etc/sudoers.d/.devlanes.old",
+            ]
+        );
     }
 
     #[cfg(unix)]

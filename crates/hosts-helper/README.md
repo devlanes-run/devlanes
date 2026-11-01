@@ -104,6 +104,7 @@ of `/bin/test`.
 
 ```sh
 sudo /bin/test -e /etc/sudoers.d/devlanes    # is there a rule to back up?
+sudo /usr/sbin/visudo -c    # does the configuration pass before anything changes?
 sudo /usr/bin/install -d -o root -g wheel -m 0755 -- /usr/local/libexec    # only if missing
 sudo /usr/bin/install -o root -g wheel -m 0755 -- <copy> /usr/local/libexec/.devlanes-hosts.new
 sudo /usr/bin/install -o root -g wheel -m 0440 -- <rule> /etc/sudoers.d/.devlanes.new
@@ -131,7 +132,12 @@ The rule moves into place before the helper, so the helper is only replaced
 after the full `visudo -c` passes. If that check or a later move fails, or the
 installed helper does not have the expected owner and mode, the previous rule
 and helper are restored from the `.old` copies (on a first install, the new
-files are removed). If everything is in place but `sudo -n` still asks for a
+files are removed). Some machines already fail `visudo -c` before the install,
+for example GitHub's Ubuntu runners, which ship a `0644` file in
+`/etc/sudoers.d`. sudo still works there, so when the check after the move fails
+with exactly the output it gave before, the install goes ahead and `devlanes
+setup` prints that output as a warning; any other failure restores the previous
+files as above. If everything is in place but `sudo -n` still asks for a
 password, the installer reports it and leaves the new files installed; see
 `sudo_denied` below.
 
