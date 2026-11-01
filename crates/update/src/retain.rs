@@ -15,6 +15,14 @@ pub struct Retained {
     link: PathBuf,
 }
 
+impl Retained {
+    /// The link, which the process's executable can be reached through
+    /// after its original name is deleted.
+    pub fn path(&self) -> &Path {
+        &self.link
+    }
+}
+
 impl Drop for Retained {
     /// Deletes the link.
     fn drop(&mut self) {

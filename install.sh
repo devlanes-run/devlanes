@@ -5,12 +5,16 @@
 #   curl -fsSL https://devlanes.run/install.sh | sh
 #   curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
 #   curl -fsSL https://devlanes.run/install.sh | sh -s -- --version 0.4.0
+#   curl -fsSL https://devlanes.run/install.sh | sh -s -- --uninstall
 #
 # -c, --channel stable (the default) installs the latest release, --channel next the
 # latest build of main from the rolling `next` prerelease, and -v, --version X.Y.Z one
 # release. -d, --dir DIR sets the target directory (default: ~/.local/bin).
 # DEVLANES_VERSION (X.Y.Z or next) and DEVLANES_INSTALL_DIR do the same when the
 # option isn't given.
+# --uninstall runs `devlanes uninstall` from that directory (or, without --dir and
+# DEVLANES_INSTALL_DIR, the devlanes on PATH) on the terminal; when there is none, it
+# deletes the files the script installs there and names the data directory.
 # DEVLANES_INSTALL_SUDO=1 allows sudo when that directory is not writable.
 # DEVLANES_INSTALL_BASE_URL replaces the release URL; it exists only so the
 # script can be tested against a local directory of fake releases.
@@ -21,13 +25,14 @@ proto='=https'
 if [ -n "${DEVLANES_INSTALL_BASE_URL:-}" ]; then proto='=https,file'; fi
 version=${DEVLANES_VERSION:-}
 dir=${DEVLANES_INSTALL_DIR:-$HOME/.local/bin}
+dir_set=${DEVLANES_INSTALL_DIR:+1}
 
 fail() {
 	printf 'devlanes install: %s\n' "$1" >&2
 	exit 1
 }
 
-usage='usage: sh install.sh [-c, --channel stable|next | -v, --version X.Y.Z] [-d, --dir DIR]'
+usage='usage: sh install.sh [-c, --channel stable|next | -v, --version X.Y.Z] [-d, --dir DIR] [--uninstall]'
 usage() {
 	printf '%s\n' "$usage" >&2
 	exit 2
@@ -35,8 +40,14 @@ usage() {
 
 channel_set=
 version_set=
+uninstall=
 while [ "$#" -gt 0 ]; do
 	case $1 in
+	--uninstall)
+		uninstall=1
+		shift
+		continue
+		;;
 	-c | --channel | -v | --version | -d | --dir)
 		[ "$#" -ge 2 ] || usage
 		option=$1 value=$2
@@ -61,11 +72,50 @@ while [ "$#" -gt 0 ]; do
 	-c:next | --channel:next) version=next channel_set=1 ;;
 	-c:* | --channel:*) fail "unknown channel $value; use stable or next" ;;
 	-v:* | --version:*) version=$value version_set=1 ;;
-	-d:* | --dir:*) dir=$value ;;
+	-d:* | --dir:*) dir=$value dir_set=1 ;;
 	esac
 done
 if [ -n "$channel_set" ] && [ -n "$version_set" ]; then
 	fail "--channel and --version can't be combined"
+fi
+
+case "$dir" in
+/*) ;;
+*) dir=$(pwd)/$dir ;;
+esac
+
+if [ -n "$uninstall" ]; then
+	[ -z "$channel_set$version_set" ] || fail "--uninstall takes no --channel or --version"
+	exe=
+	if [ -x "$dir/devlanes" ]; then
+		exe=$dir/devlanes
+	# An explicit directory is the only place looked at, so a devlanes on PATH that
+	# another installer put there is never removed by mistake.
+	elif [ -z "$dir_set" ]; then
+		exe=$(command -v devlanes 2>/dev/null || true)
+	fi
+	if [ -n "$exe" ]; then
+		# Under `curl | sh` stdin is the script; devlanes asks on the terminal.
+		# A subshell, since a failed redirection may end a shell running `:`.
+		if (: </dev/tty) 2>/dev/null; then
+			exec "$exe" uninstall </dev/tty
+		fi
+		exec "$exe" uninstall
+	fi
+	removed=
+	for bin in devlanes devlanes-hosts; do
+		if [ -e "$dir/$bin" ]; then
+			rm -f "$dir/$bin"
+			removed="$removed $dir/$bin"
+		fi
+	done
+	if [ -n "$removed" ]; then
+		printf 'No devlanes in %s; removed:%s\n' "$dir" "$removed"
+	else
+		printf 'No devlanes in %s and nothing install.sh left there.\n' "$dir"
+	fi
+	printf 'The devlanes data stays in %s; delete that directory to remove it.\n' "${DEVLANES_HOME:-$HOME/.devlanes}"
+	exit 0
 fi
 
 version=${version#v}
@@ -155,10 +205,6 @@ listed=$(tar -tzf "$tmp/$archive" | sed 's#/$##' | LC_ALL=C sort | tr '\n' ' ')
 	fail "unexpected entries in $archive: $listed"
 tar -xzf "$tmp/$archive" -C "$tmp"
 
-case "$dir" in
-/*) ;;
-*) dir=$(pwd)/$dir ;;
-esac
 sudo=
 if ! mkdir -p "$dir" 2>/dev/null || [ ! -w "$dir" ]; then
 	if [ "${DEVLANES_INSTALL_SUDO:-}" != 1 ]; then

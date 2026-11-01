@@ -84,11 +84,12 @@ impl StepKind {
         }
     }
 
-    /// Whether the step runs sudo on this OS, so `setup` asks for the
-    /// password once up front. Linux's system trust store goes through sudo.
-    fn sudo(self) -> bool {
+    /// Whether the step runs sudo on this OS with `config`, so `setup` asks
+    /// for the password once up front. The CA needs it only for Linux's
+    /// system trust store.
+    fn sudo(self, config: &UserConfig) -> bool {
         match self {
-            Self::Ca => cfg!(target_os = "linux"),
+            Self::Ca => ca::needs_root(config),
             Self::Hosts | Self::Resolver => cfg!(unix),
         }
     }
@@ -511,7 +512,7 @@ async fn run_in(runtime: &Runtime, paths: &Paths, action: SetupAction) -> Result
     if todo.is_empty() {
         return Ok(0);
     }
-    let password = todo.iter().any(|step| step.kind.sudo());
+    let password = todo.iter().any(|step| step.kind.sudo(&config));
     if !yes && !ask(runtime, todo.len(), password).await? {
         return Ok(1);
     }
@@ -542,11 +543,91 @@ async fn run_in(runtime: &Runtime, paths: &Paths, action: SetupAction) -> Result
     Ok(code)
 }
 
+/// One change `setup --remove` makes on this machine.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Removal {
+    /// `hosts`, `resolver` or `ca`.
+    pub(crate) step: &'static str,
+    /// What changes, or why the step will fail.
+    pub(crate) what: String,
+    /// Whether it runs sudo.
+    pub(crate) sudo: bool,
+}
+
+/// What `setup --remove` changes on this machine, without changing anything
+/// or prompting; steps with nothing to undo are left out.
+pub(crate) async fn removal_plan(paths: &Paths, keep_ca: bool) -> Vec<Removal> {
+    let config = crate::user_config::load(paths).await;
+    let item = |step: &'static str, what: String, sudo: bool| Removal { step, what, sudo };
+    let failed = |error: RpcError| {
+        error.data["message"]
+            .as_str()
+            .unwrap_or(&error.code)
+            .to_owned()
+    };
+    let mut plan = Vec::new();
+    #[cfg(unix)]
+    {
+        if let Some(what) = hosts::removal().await {
+            plan.push(item(StepKind::Hosts.name(), what, true));
+        }
+        let tld = config.as_ref().ok().and_then(resolver_tld);
+        match resolver::removal(paths, tld).await {
+            Ok(files) => plan.extend(files.into_iter().map(|file| {
+                item(
+                    StepKind::Resolver.name(),
+                    format!("remove {}", file.display()),
+                    true,
+                )
+            })),
+            Err(error) => plan.push(item(StepKind::Resolver.name(), failed(error), true)),
+        }
+    }
+    #[cfg(windows)]
+    match nrpt::removal().await {
+        Ok(keys) => plan.extend(
+            keys.into_iter()
+                .map(|key| item(StepKind::Resolver.name(), format!("remove {key}"), false)),
+        ),
+        Err(error) => plan.push(item(StepKind::Resolver.name(), failed(error), false)),
+    }
+    if !keep_ca {
+        match config {
+            Ok(config) => match ca::removal(paths, &config).await {
+                Ok(Some(what)) => {
+                    plan.push(item(StepKind::Ca.name(), what, ca::needs_root(&config)))
+                }
+                Ok(None) => {}
+                Err(error) => plan.push(item(StepKind::Ca.name(), failed(error), false)),
+            },
+            Err(error) => plan.push(item(
+                StepKind::Ca.name(),
+                format!("fails while config.yaml does not load: {}", failed(error)),
+                false,
+            )),
+        }
+    }
+    plan
+}
+
 /// `setup --remove`: the hosts helper and the resolver file (or NRPT rule)
 /// first, so a CA removal failure (a cancelled keychain prompt) still leaves
-/// them removed, then the CA unless `keep_ca`. A failed step is reported and
-/// the next one still runs.
-async fn remove(runtime: &Runtime, paths: &Paths, keep_ca: bool) -> Result<u8, RpcError> {
+/// them removed, then the CA unless `keep_ca`. sudo asks for the password
+/// once up front when a step needs it. A failed step is reported and the next
+/// one still runs.
+pub(crate) async fn remove(
+    runtime: &Runtime,
+    paths: &Paths,
+    keep_ca: bool,
+) -> Result<u8, RpcError> {
+    #[cfg(unix)]
+    if removal_plan(paths, keep_ca)
+        .await
+        .iter()
+        .any(|item| item.sudo)
+    {
+        sudo::refresh(runtime).await?;
+    }
     let config = crate::user_config::load(paths).await;
     let mut code = 0;
     #[cfg(unix)]

@@ -35,6 +35,7 @@ pub mod theme;
 pub mod tree;
 pub mod ui;
 pub mod welcome;
+pub mod whats_new;
 pub mod words;
 
 use std::{io::IsTerminal, sync::Arc};
@@ -130,6 +131,12 @@ pub struct Options {
     /// The setup steps only this user can check (the CA's trust), for the
     /// setup prompt; `None` checks nothing on this side.
     pub setup_check: Option<SetupCheck>,
+    /// The release notes "What's new" shows, from the binary's changelog:
+    /// those since the version seen before when this is the first TUI after
+    /// an update, else this version's own for the Esc menu.
+    pub whats_new: Option<devlanes_update::notes::WhatsNew>,
+    /// Whether "What's new" opens by itself, after the welcome.
+    pub show_whats_new: bool,
 }
 
 impl Options {

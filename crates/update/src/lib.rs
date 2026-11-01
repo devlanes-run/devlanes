@@ -19,8 +19,8 @@ pub use method::{
     InstallFacts, InstallMethod, Venv, binstall_lists_devlanes, running_exe, spawn_exe,
 };
 pub use notice::{
-    NoticeLog, now_ms, ready_key, ready_line, skew_key, skew_line, update_command, update_key,
-    update_line,
+    NoticeLog, WhatsNewStart, claim_whats_new, now_ms, ready_key, ready_line, skew_key, skew_line,
+    update_command, update_key, update_line, whats_new_on_start,
 };
 #[cfg(windows)]
 pub use old_copies::{OldCopies, remove_old_copies};

@@ -140,6 +140,84 @@ pub fn between<'a>(releases: &'a [Release], after: &str, up_to: &str) -> Vec<&'a
     found.into_iter().map(|(_, release)| release).collect()
 }
 
+/// What a "What's new" shows: one release's notes, or every release since
+/// the version seen before.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhatsNew {
+    /// The version seen before; `None` when it shows one release's notes.
+    pub since: Option<String>,
+    /// Newest first, the minor entries of each before its patch entries.
+    pub releases: Vec<Release>,
+}
+
+impl WhatsNew {
+    /// The releases newer than `after` up to `up_to` (see [`between`]).
+    pub fn since(releases: &[Release], after: &str, up_to: &str) -> Self {
+        Self {
+            since: Some(after.to_owned()),
+            releases: between(releases, after, up_to)
+                .into_iter()
+                .map(minor_first)
+                .collect(),
+        }
+    }
+
+    /// The notes of `version` alone; empty when `releases` has no section
+    /// for it.
+    pub fn of(releases: &[Release], version: &str) -> Self {
+        let wanted = Version::parse(version);
+        Self {
+            since: None,
+            releases: releases
+                .iter()
+                .filter(|release| wanted.is_some() && Version::parse(&release.version) == wanted)
+                .take(1)
+                .map(minor_first)
+                .collect(),
+        }
+    }
+
+    /// The notes of the newest release in `releases` not newer than
+    /// `version`: its own section, or for a `next` build the release it
+    /// builds on. Empty when there is none.
+    pub fn latest(releases: &[Release], version: &str) -> Self {
+        match between(releases, "0.0.0", version).first() {
+            Some(newest) => Self::of(releases, &newest.version),
+            None => Self {
+                since: None,
+                releases: Vec::new(),
+            },
+        }
+    }
+
+    /// Whether there is nothing to show.
+    pub fn is_empty(&self) -> bool {
+        self.releases
+            .iter()
+            .all(|release| release.entries.is_empty())
+    }
+
+    /// `What's new in 0.9.1` for one release, `What's new since 0.8.0` for
+    /// several.
+    pub fn title(&self) -> String {
+        match (self.releases.as_slice(), &self.since) {
+            ([only], _) => format!("What's new in {}", only.version),
+            ([_, _, ..], Some(since)) => format!("What's new since {since}"),
+            ([newest, ..], None) => format!("What's new in {}", newest.version),
+            ([], _) => "What's new".to_owned(),
+        }
+    }
+}
+
+/// `release` with its minor entries first, each group in file order.
+fn minor_first(release: &Release) -> Release {
+    let mut release = release.clone();
+    release
+        .entries
+        .sort_by_key(|entry| entry.level != Level::Minor);
+    release
+}
+
 /// The version in a `X.Y.Z — date` heading (an em dash, or `-` in hand-written
 /// files); `None` when the first word is not a version.
 fn heading_version(heading: &str) -> Option<String> {
@@ -218,6 +296,52 @@ mod tests {
         assert_eq!(versions("0.8.0", "0.8.1"), ["0.8.1"]);
         assert_eq!(versions("0.9.0", "0.9.0"), Vec::<String>::new());
         assert_eq!(versions("junk", "0.9.0"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn whats_new_puts_minor_entries_first_and_names_its_range() {
+        let mut releases = parse(FIXTURE);
+        // A patch entry above a minor one still shows below it.
+        releases[0].entries.rotate_right(1);
+        let levels = |shown: &WhatsNew| -> Vec<(String, Level)> {
+            shown
+                .releases
+                .iter()
+                .flat_map(|release| {
+                    release
+                        .entries
+                        .iter()
+                        .map(|entry| (release.version.clone(), entry.level))
+                })
+                .collect()
+        };
+
+        let since = WhatsNew::since(&releases, "0.8.0", "0.9.0");
+        assert_eq!(since.title(), "What's new since 0.8.0");
+        assert_eq!(
+            levels(&since),
+            [
+                ("0.9.0".into(), Level::Minor),
+                ("0.9.0".into(), Level::Minor),
+                ("0.9.0".into(), Level::Patch),
+                ("0.8.1".into(), Level::Patch),
+            ]
+        );
+        assert_eq!(
+            WhatsNew::since(&releases, "0.8.1", "0.9.0").title(),
+            "What's new in 0.9.0"
+        );
+
+        let one = WhatsNew::of(&releases, "0.8.1");
+        assert_eq!(one.title(), "What's new in 0.8.1");
+        assert_eq!(one.releases.len(), 1);
+        assert!(WhatsNew::of(&releases, "0.9.1").is_empty());
+        // A `next` build shows the release it builds on.
+        assert_eq!(
+            WhatsNew::latest(&releases, "0.9.1-next.4").title(),
+            "What's new in 0.9.0"
+        );
+        assert!(WhatsNew::latest(&releases, "0.1.0").is_empty());
     }
 
     #[test]

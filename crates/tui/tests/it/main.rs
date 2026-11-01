@@ -34,6 +34,7 @@ mod start;
 mod terminal;
 mod unavailable;
 mod units;
+mod whats_new;
 
 use std::{sync::Arc, time::Duration};
 

@@ -511,6 +511,7 @@ fn update_flags_pick_the_action() {
         ),
         (vec!["--check"], UpdateAction::Check),
         (vec!["--finish"], UpdateAction::Finish),
+        (vec!["--notes"], UpdateAction::Notes),
     ] {
         let cli = Cli::parse_from(["devlanes", "update"].into_iter().chain(args.clone()));
         match action(&cli, &runtime(&cli, OutputMode::Plain)) {
@@ -522,6 +523,8 @@ fn update_flags_pick_the_action() {
         &["update", "--check", "--version", "0.9.1"][..],
         &["update", "--finish", "--version", "0.9.1"],
         &["update", "--check", "--finish"],
+        &["update", "--notes", "--check"],
+        &["update", "--notes", "--version", "0.9.1"],
         &["update", "--version"],
     ] {
         assert!(
@@ -530,6 +533,35 @@ fn update_flags_pick_the_action() {
             "{refused:?}"
         );
     }
+}
+
+#[test]
+fn uninstall_flags_pick_the_action() {
+    for (args, data, dry_run, yes) in [
+        (vec![], DataChoice::Ask, false, false),
+        (vec!["--remove-data"], DataChoice::Remove, false, false),
+        (vec!["--keep-data", "--yes"], DataChoice::Keep, false, true),
+        (vec!["--dry-run"], DataChoice::Ask, true, false),
+        (
+            vec!["--dry-run", "--remove-data"],
+            DataChoice::Remove,
+            true,
+            false,
+        ),
+    ] {
+        let cli = Cli::parse_from(["devlanes", "uninstall"].into_iter().chain(args.clone()));
+        match action(&cli, &runtime(&cli, OutputMode::Plain)) {
+            Action::Uninstall(found) => {
+                assert_eq!(found.data, data, "{args:?}");
+                assert_eq!(found.dry_run, dry_run, "{args:?}");
+                assert_eq!(found.context.yes, yes, "{args:?}");
+            }
+            _ => panic!("expected an uninstall action for {args:?}"),
+        }
+    }
+    assert!(
+        Cli::try_parse_from(["devlanes", "uninstall", "--remove-data", "--keep-data"]).is_err()
+    );
 }
 
 #[test]

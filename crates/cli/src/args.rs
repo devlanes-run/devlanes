@@ -246,6 +246,9 @@ without the daemon.",
     /// Install the latest devlanes release the way devlanes was installed, then restart the daemon
     #[command(long_about = UPDATE_ABOUT, after_help = UPDATE_AFTER)]
     Update(UpdateArgs),
+    /// Remove devlanes from this machine: the daemon, its login service, devlanes setup and this install
+    #[command(long_about = UNINSTALL_ABOUT, after_help = UNINSTALL_AFTER)]
+    Uninstall(UninstallArgs),
     /// Connect to boxes and mirror their lanes here
     Remote {
         #[command(subcommand)]
@@ -616,13 +619,17 @@ const UPDATE_AFTER: &str = "\
 Examples:
   devlanes update                      install the latest release, asking first
   devlanes update --check              show the latest release and what changed
+  devlanes update --notes              show what changed in the running version
   devlanes update --version 0.9.1 --yes";
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
     /// Only check: show the install method, the running and latest versions and what changed
-    #[arg(long, conflicts_with_all = ["update_version", "finish"])]
+    #[arg(long, conflicts_with_all = ["update_version", "finish", "notes"])]
     pub check: bool,
+    /// Only show the release notes of the running version; checks nothing
+    #[arg(long, conflicts_with_all = ["update_version", "finish"])]
+    pub notes: bool,
     /// Install this release instead of the latest one
     // Own id: `version` is clap's `--version` flag, which the reference skips.
     #[arg(long = "version", id = "update_version", value_name = "VERSION")]
@@ -637,11 +644,68 @@ pub struct UpdateArgs {
 pub enum UpdateAction {
     /// Check now and show the release; installs nothing.
     Check,
+    /// Print the running version's release notes, from the binary.
+    Notes,
     /// Install `version` (the latest when `None`); `yes` skips the question.
     Install { version: Option<String>, yes: bool },
     /// Run by the newly installed binary: restart the daemon into it and say
     /// what changed.
     Finish,
+}
+
+const UNINSTALL_ABOUT: &str = "\
+Remove devlanes from this machine: the daemon, its login service, devlanes setup and this install.
+
+In order, and going on when a step fails:
+  1. stop the daemon, asking first when it runs processes
+  2. remove the login service (daemon install)
+  3. undo devlanes setup: the CA trust, the /etc/hosts helper and the resolver
+     file or NRPT rule; sudo asks for your password at most once
+  4. remove this install: install.sh and install.ps1 files (and the user PATH
+     entry on Windows), or the package manager's remove command. A project's
+     own dependency and a source build stay.
+  5. the devlanes home (~/.devlanes, or $DEVLANES_HOME) and lane data: listed
+     with their sizes, then asked about, no by default. Without a terminal and
+     without --remove-data they stay.";
+
+const UNINSTALL_AFTER: &str = "\
+Examples:
+  devlanes uninstall --dry-run         show what would be removed
+  devlanes uninstall                   remove devlanes, asking before deleting data
+  devlanes uninstall --yes --keep-data";
+
+#[derive(Debug, Args)]
+pub struct UninstallArgs {
+    /// Delete the devlanes home and lane data without asking
+    #[arg(long, conflicts_with = "keep_data")]
+    pub remove_data: bool,
+    /// Keep the devlanes home and lane data, and print where they are
+    #[arg(long)]
+    pub keep_data: bool,
+    /// Print what each step would remove; change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+/// What `devlanes uninstall` does with the devlanes home and lane data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataChoice {
+    /// Ask on a terminal; keep without one.
+    Ask,
+    /// `--remove-data`.
+    Remove,
+    /// `--keep-data`.
+    Keep,
+}
+
+/// What `devlanes uninstall` was asked to do.
+#[derive(Clone)]
+pub struct UninstallAction {
+    pub data: DataChoice,
+    /// Only print the plan.
+    pub dry_run: bool,
+    /// The actor, and `--yes` for stopping running processes.
+    pub context: Context,
 }
 
 /// What `devlanes setup` was asked to do.
@@ -894,6 +958,8 @@ pub enum Action {
     Setup(SetupAction),
     /// `devlanes update`: installs in the terminal, then restarts the daemon.
     Update(UpdateAction),
+    /// `devlanes uninstall`: runs in the terminal, never in the daemon.
+    Uninstall(UninstallAction),
     DaemonStart,
     DaemonRestart(Context),
     DaemonLogs {
@@ -1270,6 +1336,8 @@ impl Cli {
             Some(Command::Update(args)) => {
                 return Ok(Action::Update(if args.check {
                     UpdateAction::Check
+                } else if args.notes {
+                    UpdateAction::Notes
                 } else if args.finish {
                     UpdateAction::Finish
                 } else {
@@ -1277,6 +1345,20 @@ impl Cli {
                         version: args.version.clone(),
                         yes: self.yes,
                     }
+                }));
+            }
+            Some(Command::Uninstall(args)) => {
+                let data = if args.remove_data {
+                    DataChoice::Remove
+                } else if args.keep_data {
+                    DataChoice::Keep
+                } else {
+                    DataChoice::Ask
+                };
+                return Ok(Action::Uninstall(UninstallAction {
+                    data,
+                    dry_run: args.dry_run,
+                    context,
                 }));
             }
             Some(Command::Daemon { command }) => match command {

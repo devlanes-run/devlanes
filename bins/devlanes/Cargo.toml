@@ -60,6 +60,8 @@ devlanes-preset-vite = { path = "../../crates/preset-vite" }
 devlanes-preset-next = { path = "../../crates/preset-next" }
 devlanes-preset-wrangler = { path = "../../crates/preset-wrangler" }
 devlanes-preset-tauri = { path = "../../crates/preset-tauri" }
+# Parses CHANGELOG.md into the notes this binary shows after an update.
+devlanes-update = { path = "../../crates/update" }
 
 [dependencies]
 devlanes-version = { path = "../../crates/version" }

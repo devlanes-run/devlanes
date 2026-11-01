@@ -1,7 +1,8 @@
 //! `devlanes update`: checks for a newer release, asks, installs it the way
 //! devlanes was installed (`devlanes_update::install`), then runs the new
 //! binary with `update --finish`, which restarts the daemon into it in the
-//! same step block and says what changed. Also the interactive startup rule:
+//! same step block and says what changed, from the notes the new binary
+//! carries (`crate::notes`). Also the interactive startup rule:
 //! a TUI that opens over an older daemon, or over a release the daemon staged,
 //! switches to the new version first.
 
@@ -28,6 +29,7 @@ use devlanes_update::{
     InstallMethod,
     check::Channel,
     install::{self, InstallError, Lock, Plan, Release, Staged},
+    notes::{Level, WhatsNew},
     version::{Bump, Version, bump, is_newer},
 };
 use serde_json::{Value, json};
@@ -57,10 +59,11 @@ enum Installed {
     Nothing(u8),
 }
 
-/// `devlanes update` and its `--check` and `--finish` forms.
+/// `devlanes update` and its `--check`, `--notes` and `--finish` forms.
 pub async fn run(runtime: &Runtime, paths: &Paths, action: UpdateAction) -> Result<u8, RpcError> {
     match action {
         UpdateAction::Check => check(runtime, paths).await,
+        UpdateAction::Notes => Ok(notes(runtime)),
         UpdateAction::Install { version, yes } => {
             match install(runtime, paths, version, yes, None).await? {
                 Installed::Finished(code) | Installed::Nothing(code) => Ok(code),
@@ -128,8 +131,14 @@ pub async fn startup(runtime: &Runtime, paths: &Paths) -> Result<(), RpcError> {
         return Ok(());
     }
     if bump == Bump::Minor {
-        let notes = daemon_notes(&mut client, &daemon, OWN).await;
-        print_minor_notes(&notes);
+        let shown = WhatsNew::since(&crate::notes::embedded(), &daemon, OWN);
+        print_minor_notes(shown.releases.iter().flat_map(|release| {
+            release
+                .entries
+                .iter()
+                .filter(|entry| entry.level == Level::Minor)
+                .map(|entry| (release.version.as_str(), entry.line.as_str()))
+        }));
         let question = format!(
             "Restart the daemon from devlanes {daemon} into {OWN}? It stops and starts {} again.",
             lanes_word(lanes_running(&mut client).await)
@@ -451,19 +460,16 @@ async fn run_plan(
 }
 
 /// `devlanes update --finish`, run by the binary just installed: restarts
-/// the daemon into it in the block the old binary drew, prints what changed
-/// since the daemon's version, and opens the TUI again when the update came
-/// from it.
+/// the daemon into it in the block the old binary drew, and opens the TUI
+/// again when the update came from it, which shows what changed. Otherwise
+/// prints what changed since the daemon's version, from this binary's
+/// changelog, and records it as seen so the next TUI does not repeat it.
 async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     let mut code = 0;
+    let reopen = crate::relaunch::reopen();
     match Client::connect_any(paths).await {
-        Ok(mut client) => {
+        Ok(client) => {
             let from = client.peer.version.clone();
-            let notes = if client.compatible() {
-                daemon_notes(&mut client, &from, OWN).await
-            } else {
-                Vec::new()
-            };
             drop(client);
             crate::user_config::load(paths).await?;
             let mut view = View::new(
@@ -477,15 +483,8 @@ async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
             .await;
             take_over(&mut view);
             code = lifecycle::restart_in(runtime, paths, restart_context(runtime), view).await?;
-            if runtime.mode == OutputMode::Human && !runtime.quiet && !notes.is_empty() {
-                let mut out = format!("Changes since {from}:\n");
-                for note in sorted_notes(&notes) {
-                    out.push_str(&format!("  {}  {}\n", note.version, note.line));
-                }
-                emit(&Rendered {
-                    stdout: out,
-                    ..Rendered::default()
-                });
+            if reopen.is_none() && runtime.mode == OutputMode::Human && !runtime.quiet {
+                print_whats_new(paths, &from).await;
             }
         }
         Err(error) if error.is_not_running() => {
@@ -508,7 +507,7 @@ async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
         }
         Err(error) => return Err(rpc_error(error)),
     }
-    if let Some(reopen) = crate::relaunch::reopen() {
+    if let Some(reopen) = reopen {
         return tokio::task::spawn_blocking(move || crate::relaunch::exec_tui(&reopen))
             .await
             .map_err(|error| io_error(&error))?;
@@ -568,21 +567,54 @@ async fn latest(client: &mut Client) -> Result<Option<UpdateInfo>, RpcError> {
     Ok(serde_json::from_value(answer).ok())
 }
 
-/// The changelog lines the daemon has for the releases after `from` up to `to`.
-async fn daemon_notes(client: &mut Client, from: &str, to: &str) -> Vec<UpdateNote> {
-    let status = client
-        .request(Method::DaemonStatus, json!({}), Context::default())
-        .await
-        .unwrap_or(Value::Null);
-    status
-        .get("update")
-        .cloned()
-        .and_then(|update| serde_json::from_value::<UpdateInfo>(update).ok())
-        .map(|info| info.notes)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|note| is_newer(&note.version, from) && !is_newer(&note.version, to))
-        .collect()
+/// Prints what changed from `from` to this binary, from its changelog, and
+/// records it as seen in the notice log, as the TUI does when it shows it.
+async fn print_whats_new(paths: &Paths, from: &str) {
+    let releases = crate::notes::embedded();
+    let shown = WhatsNew::since(&releases, from, OWN);
+    if !shown.is_empty() {
+        emit(&Rendered {
+            stdout: format!("\n{}", crate::notes::render(&shown)),
+            ..Rendered::default()
+        });
+    }
+    let home = paths.home.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        devlanes_update::claim_whats_new(&home, OWN, crate::notes::local_build(), &releases)
+    })
+    .await;
+}
+
+/// `devlanes update --notes`: the notes of the running version, or for a
+/// `next` build of the release it builds on.
+fn notes(runtime: &Runtime) -> u8 {
+    let shown = WhatsNew::latest(&crate::notes::embedded(), OWN);
+    let stdout = match runtime.mode {
+        OutputMode::Json => {
+            let releases: Vec<Value> = shown
+                .releases
+                .iter()
+                .map(|release| {
+                    json!({
+                        "version": release.version,
+                        "entries": release.entries.iter().map(|entry| json!({
+                            "level": entry.level.as_str(),
+                            "line": entry.line,
+                        })).collect::<Vec<_>>(),
+                    })
+                })
+                .collect();
+            format!("{}\n", json!({"running": OWN, "releases": releases}))
+        }
+        _ if runtime.quiet => String::new(),
+        _ if shown.is_empty() => format!("devlanes {OWN} carries no release notes\n"),
+        _ => crate::notes::render(&shown),
+    };
+    emit(&Rendered {
+        stdout,
+        ..Rendered::default()
+    });
+    0
 }
 
 /// How many lanes run services, which a restart starts again.
@@ -604,13 +636,12 @@ fn sorted_notes(notes: &[UpdateNote]) -> Vec<&UpdateNote> {
     sorted
 }
 
-/// Prints the minor (possibly breaking) entries of `notes` to stderr, above
-/// a question.
-fn print_minor_notes(notes: &[UpdateNote]) {
-    let lines: String = notes
-        .iter()
-        .filter(|note| note.level == "minor")
-        .map(|note| format!("  {}  {}\n", note.version, note.line))
+/// Prints minor (possibly breaking) entries, as their version and line, to
+/// stderr above a question.
+fn print_minor_notes<'a>(minor: impl IntoIterator<Item = (&'a str, &'a str)>) {
+    let lines: String = minor
+        .into_iter()
+        .map(|(version, line)| format!("  {version}  {line}\n"))
         .collect();
     if !lines.is_empty() {
         emit(&Rendered {
@@ -631,7 +662,12 @@ fn confirm_update(
 ) -> Result<bool, RpcError> {
     let minor = bump(from, to) == Some(Bump::Minor);
     if minor {
-        print_minor_notes(notes);
+        print_minor_notes(
+            notes
+                .iter()
+                .filter(|note| note.level == "minor")
+                .map(|note| (note.version.as_str(), note.line.as_str())),
+        );
     }
     let restarts = match lanes {
         0 => "The daemon restarts.".to_owned(),

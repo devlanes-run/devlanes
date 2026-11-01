@@ -163,6 +163,31 @@ fn targets(config: &UserConfig) -> Vec<TrustTarget> {
     }
 }
 
+/// Whether trusting or untrusting the CA runs sudo: only Linux's system
+/// store needs root. The NSS databases of Firefox and Chrome belong to the
+/// user, and macOS and Windows confirm changes in their own dialogs.
+pub(super) fn needs_root(config: &UserConfig) -> bool {
+    cfg!(target_os = "linux") && targets(config).contains(&TrustTarget::System)
+}
+
+/// What `setup --remove` does to the CA, read-only: `None` when nothing
+/// changes (mkcert's CA stays trusted, or there is no devlanes CA).
+pub(super) async fn removal(
+    paths: &Paths,
+    config: &UserConfig,
+) -> Result<Option<String>, RpcError> {
+    if mkcert_selected(config) {
+        return Ok(None);
+    }
+    let stores: Vec<&str> = targets(config)
+        .into_iter()
+        .map(TrustTarget::as_str)
+        .collect();
+    Ok(certificate(paths, config, false)
+        .await?
+        .map(|_| format!("untrust the devlanes CA in {}", stores.join(", "))))
+}
+
 /// The OS decides the store implementation at compile time. `own_ca` lets the
 /// macOS keychain and the Windows root store also remove older devlanes CAs by
 /// label or subject; mkcert's CA is not ours.
@@ -369,13 +394,19 @@ async fn apply(
             }
         }
     }
-    // --quiet keeps only the failures.
+    // --quiet keeps only the failures, on stderr, so a command that prints
+    // JSON on stdout (`devlanes uninstall --json`) keeps it parseable.
     if runtime.quiet {
-        lines = lines
+        let failures = lines
             .lines()
             .filter(|line| line.starts_with("failed "))
             .map(|line| format!("{line}\n"))
             .collect();
+        emit(&Rendered {
+            stderr: failures,
+            ..Rendered::default()
+        });
+        return u8::from(failed);
     }
     emit(&Rendered {
         stdout: lines,
@@ -478,6 +509,23 @@ oA==
         .expect("ca");
         let new = CaCertificate::from_pem(new.certificate_pem(), CA_NAME).expect("parse");
         assert_eq!(unconstrained_ca_hint(&new, home), None);
+    }
+
+    #[test]
+    /// sudo is asked for only when the configured stores include Linux's
+    /// system store; Firefox and Chrome alone need none.
+    fn only_the_linux_system_store_needs_root() {
+        use devlanes_config::TrustTarget::{Chrome, Firefox, System};
+        let config = |trust: Vec<devlanes_config::TrustTarget>| {
+            let mut config = UserConfig::default();
+            config.tls.trust = trust;
+            config
+        };
+        let linux = cfg!(target_os = "linux");
+        // No `tls.trust` means the system store.
+        assert_eq!(needs_root(&config(Vec::new())), linux);
+        assert_eq!(needs_root(&config(vec![System, Firefox])), linux);
+        assert!(!needs_root(&config(vec![Firefox, Chrome])));
     }
 
     #[test]

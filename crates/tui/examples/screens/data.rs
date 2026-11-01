@@ -989,6 +989,87 @@ pub fn log_page(unit: &str) -> Vec<LogLine> {
 /// a release does not change the committed screens.
 pub const VERSION: &str = "1.0.0";
 
+/// The release notes since 0.9.0, as the binary hands them to the first TUI
+/// after an update to [`VERSION`].
+pub fn whats_new() -> devlanes_update::notes::WhatsNew {
+    use devlanes_update::notes::{Entry, Level, Release, WhatsNew};
+    let release = |version: &str, entries: &[(Level, &str)]| Release {
+        version: version.into(),
+        entries: entries
+            .iter()
+            .map(|(level, line)| Entry {
+                level: *level,
+                line: (*line).into(),
+                body: String::new(),
+            })
+            .collect(),
+    };
+    WhatsNew {
+        since: Some("0.9.0".into()),
+        releases: vec![
+            release(
+                VERSION,
+                &[
+                    (
+                        Level::Minor,
+                        "Changed `lanes.hosts_file` to default to `auto`, so lanes on `*.localhost` no longer write the hosts file.",
+                    ),
+                    (
+                        Level::Minor,
+                        "Removed the `--watch` flag of `devlanes logs`; use `devlanes logs -f`.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Added `devlanes url --copy`, which copies a service's address.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Fixed `devlanes logs` dropping the last line of a unit that exited.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Added a CPU column to `devlanes status --long`.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Fixed the monitor's memory box counting a frozen lane twice.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Changed `devlanes doctor` to name the config key behind each warning.",
+                    ),
+                ],
+            ),
+            release(
+                "0.9.2",
+                &[
+                    (
+                        Level::Patch,
+                        "Fixed the TUI's monitor showing a stopped lane's last CPU sample.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Added the `tui.on_quit` choice to the quit dialog.",
+                    ),
+                ],
+            ),
+            release(
+                "0.9.1",
+                &[
+                    (
+                        Level::Patch,
+                        "Fixed `devlanes start` waiting for a ready check of a service that already exited.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Fixed `devlanes stop` leaving a lane's containers running.",
+                    ),
+                ],
+            ),
+        ],
+    }
+}
+
 /// The fake's clock: every history ends here.
 pub const NOW_MS: u64 = 1_792_000_000_000;
 /// One sample a second for 15 minutes, the daemon's raw ring.

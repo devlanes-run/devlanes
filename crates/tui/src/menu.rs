@@ -1,5 +1,5 @@
 //! The Esc menu, after btop's: the devlanes banner and version over lane
-//! lines, then options, help and quit.
+//! lines, then options, what's new, help and quit.
 
 use std::cell::RefCell;
 
@@ -20,13 +20,15 @@ use crate::theme::{Glyph, Glyphs, Theme};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Item {
     Options,
+    WhatsNew,
     Help,
     Quit,
 }
 
 /// The items in order, with their key and label.
-pub const ITEMS: [(Item, char, &str); 3] = [
+pub const ITEMS: [(Item, char, &str); 4] = [
     (Item::Options, 'o', "options"),
+    (Item::WhatsNew, 'w', "what's new"),
     (Item::Help, 'h', "help"),
     (Item::Quit, 'q', "quit"),
 ];
@@ -149,10 +151,11 @@ pub fn render(theme: &Theme, menu: &Menu, version: &str, frame: &mut Frame, area
         area.height.saturating_sub(12),
     );
     let (art_width, art_height) = size.dimensions();
-    let spacious = area.height >= art_height + 12;
+    let count = u16::try_from(ITEMS.len()).unwrap_or(u16::MAX);
     // Banner, blank, version, blank, then the items with blank rows between
     // them when there is room.
-    let item_rows: u16 = if spacious { 5 } else { 3 };
+    let spacious = area.height >= art_height + 2 * count + 6;
+    let item_rows: u16 = if spacious { 2 * count - 1 } else { count };
     let inner_height = 1 + art_height + 2 + u16::from(spacious) + item_rows + 1;
     let width = art_width.max(ITEM_WIDTH + 8) + 12;
     let outer = centered(area, width, inner_height + 2);
@@ -168,7 +171,8 @@ pub fn render(theme: &Theme, menu: &Menu, version: &str, frame: &mut Frame, area
             .title_bottom(Line::from(Span::styled(" esc closes ", theme.quiet())).right_aligned()),
         outer,
     );
-    // The blank row above the banner goes first when the box is cut.
+    // The blank row above the banner goes first when the box is cut, then
+    // the one under it.
     let mut y = inner.y + u16::from(inner.height >= inner_height);
     let art = Rect::new(
         inner.x + inner.width.saturating_sub(art_width) / 2,
@@ -176,7 +180,7 @@ pub fn render(theme: &Theme, menu: &Menu, version: &str, frame: &mut Frame, area
         art_width.min(inner.width),
         art_height,
     );
-    y += art_height + 1;
+    y += art_height + u16::from(inner.height + 1 >= inner_height);
     let version = format!("v{version}");
     let version_width = u16::try_from(version.len()).unwrap_or(0);
     let version_rect = Rect::new(
@@ -242,14 +246,21 @@ mod tests {
             Action::Pick(Item::Options)
         );
         assert_eq!(press(&mut menu, KeyCode::Down), Action::Stay);
-        assert_eq!(press(&mut menu, KeyCode::Enter), Action::Pick(Item::Help));
+        assert_eq!(
+            press(&mut menu, KeyCode::Enter),
+            Action::Pick(Item::WhatsNew)
+        );
         // Up from the top wraps to quit.
         press(&mut menu, KeyCode::Up);
         press(&mut menu, KeyCode::Up);
-        assert_eq!(menu.index, 2);
+        assert_eq!(menu.index, 3);
         assert_eq!(
             press(&mut menu, KeyCode::Char('o')),
             Action::Pick(Item::Options)
+        );
+        assert_eq!(
+            press(&mut menu, KeyCode::Char('w')),
+            Action::Pick(Item::WhatsNew)
         );
         assert_eq!(
             press(&mut menu, KeyCode::Char('h')),
@@ -285,6 +296,12 @@ mod tests {
         app.update(key(KeyCode::Char('h')));
         assert!(matches!(app.dialog, Some(Dialog::Help)));
         app.update(key(KeyCode::Char('x')));
+
+        app.update(key(KeyCode::Esc));
+        app.update(key(KeyCode::Char('w')));
+        assert!(matches!(app.dialog, Some(Dialog::WhatsNew(_))));
+        app.update(key(KeyCode::Esc));
+        assert!(app.dialog.is_none());
 
         app.update(key(KeyCode::Esc));
         let effects = app.update(key(KeyCode::Char('o')));
@@ -354,7 +371,7 @@ mod tests {
                 .draw(|frame| render(&theme, &Menu::default(), "1.2.3", frame, frame.area()))
                 .expect("draw");
             let text = terminal.backend().to_string();
-            for wanted in [banner, "options", "help", "quit"] {
+            for wanted in [banner, "options", "what's new", "help", "quit"] {
                 assert!(text.contains(wanted), "{width}x{height}: {wanted}\n{text}");
             }
         }
@@ -370,7 +387,7 @@ mod tests {
             .draw(|frame| render(&theme, &menu.borrow(), "1.2.3", frame, frame.area()))
             .expect("draw");
         let mut menu = menu.into_inner();
-        let quit = menu.hits.borrow().1[2];
+        let quit = menu.hits.borrow().1[3];
         let click = |column, row| MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column,
@@ -381,7 +398,7 @@ mod tests {
             menu.mouse(click(quit.x + 3, quit.y)),
             Action::Pick(Item::Quit)
         );
-        assert_eq!(menu.index, 2);
+        assert_eq!(menu.index, 3);
         let outer = menu.hits.borrow().0.expect("box");
         assert_eq!(menu.mouse(click(outer.x + 1, outer.y + 1)), Action::Stay);
         assert_eq!(menu.mouse(click(0, 0)), Action::Close);

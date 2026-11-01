@@ -238,6 +238,8 @@ where
         .clone()
         .unwrap_or_else(jiff::tz::TimeZone::system);
     app.service_report = options.service.clone();
+    app.whats_new = options.whats_new.clone();
+    app.whats_new_pending = options.show_whats_new && options.whats_new.is_some();
     #[cfg(unix)]
     let user_home = options.var("HOME").map(std::path::PathBuf::from);
     #[cfg(windows)]

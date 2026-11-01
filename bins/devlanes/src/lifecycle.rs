@@ -371,25 +371,35 @@ fn confirmed(
     Ok(yes)
 }
 
-/// `daemon stop` with its steps, in every output mode; the report comes once
-/// everything stopped.
-pub async fn stop(runtime: &Runtime, paths: &Paths, context: Context) -> Result<u8, RpcError> {
+/// How [`stop_daemon`] ended.
+#[derive(Debug)]
+pub(crate) enum Stopped {
+    /// No daemon ran.
+    NotRunning,
+    /// The person said no; nothing stopped.
+    Declined,
+    /// The daemon stopped. `answer` is its report, `None` when it went away
+    /// before answering; `live` tells whether the step block showed it.
+    Done { answer: Option<Value>, live: bool },
+}
+
+/// Stops the daemon with its steps, asking first when processes run:
+/// `<question> 3 processes?` (`--yes` in `context` skips it; without a
+/// terminal it fails with `confirmation_required`). Renders no result.
+pub(crate) async fn stop_daemon(
+    runtime: &Runtime,
+    paths: &Paths,
+    context: &Context,
+    question: &str,
+) -> Result<Stopped, RpcError> {
     let processes = match Client::connect_any(paths).await {
         Ok(client) => client.peer.managed_processes,
-        Err(error) if error.is_not_running() => {
-            if !runtime.quiet {
-                emit(&Rendered {
-                    stderr: "daemon is not running\n".into(),
-                    ..Rendered::default()
-                });
-            }
-            return Ok(0);
-        }
+        Err(error) if error.is_not_running() => return Ok(Stopped::NotRunning),
         Err(error) => return Err(rpc_error(error)),
     };
-    let question = format!("stop the daemon and {}?", processes_word(processes));
-    if !confirmed(runtime, &context, &question, processes)? {
-        return Ok(devlanes_cli::exit::USAGE);
+    let question = format!("{question} {}?", processes_word(processes));
+    if !confirmed(runtime, context, &question, processes)? {
+        return Ok(Stopped::Declined);
     }
     let mut view = View::new(runtime, paths, Kind::Stop).await;
     let (mut report, reports) = reporter();
@@ -405,8 +415,30 @@ pub async fn stop(runtime: &Runtime, paths: &Paths, context: Context) -> Result<
         }
     };
     view.finish(Outcome::Done);
-    // Null: the daemon went away before it answered, so there is no report.
-    let Some(answer) = answer.filter(|answer| !answer.is_null()) else {
+    Ok(Stopped::Done {
+        // Null: the daemon went away before it answered, so there is no report.
+        answer: answer.filter(|answer| !answer.is_null()),
+        live: view.live(),
+    })
+}
+
+/// `daemon stop` with its steps, in every output mode; the report comes once
+/// everything stopped.
+pub async fn stop(runtime: &Runtime, paths: &Paths, context: Context) -> Result<u8, RpcError> {
+    let (answer, live) = match stop_daemon(runtime, paths, &context, "stop the daemon and").await? {
+        Stopped::NotRunning => {
+            if !runtime.quiet {
+                emit(&Rendered {
+                    stderr: "daemon is not running\n".into(),
+                    ..Rendered::default()
+                });
+            }
+            return Ok(0);
+        }
+        Stopped::Declined => return Ok(devlanes_cli::exit::USAGE),
+        Stopped::Done { answer, live } => (answer, live),
+    };
+    let Some(answer) = answer else {
         return Ok(0);
     };
     // The block says what stopped; a failed `lane.stop` task needs its line too.
@@ -414,7 +446,7 @@ pub async fn stop(runtime: &Runtime, paths: &Paths, context: Context) -> Result<
         .get("tasks")
         .and_then(Value::as_array)
         .is_some_and(|tasks| tasks.iter().any(|task| task["exit_code"] != json!(0)));
-    if !view.live() || failed_task {
+    if !live || failed_task {
         return crate::commands::render_result(runtime, Method::DaemonShutdown, &answer, None);
     }
     Ok(0)
@@ -513,7 +545,7 @@ fn resuming_text(resuming: &[ResumeLane]) -> String {
 }
 
 /// `1 process`, `3 processes`.
-fn processes_word(n: usize) -> String {
+pub(crate) fn processes_word(n: usize) -> String {
     if n == 1 {
         "1 process".to_owned()
     } else {

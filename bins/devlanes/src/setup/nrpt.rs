@@ -74,6 +74,26 @@ pub(super) async fn remove(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcEr
     Ok(0)
 }
 
+/// The registry keys of the rules [`remove`] deletes, read-only.
+pub(super) async fn removal() -> Result<Vec<String>, RpcError> {
+    let nrpt = Nrpt::default();
+    let change = {
+        let nrpt = nrpt.clone();
+        blocking(move || nrpt.plan_removal())
+            .await?
+            .map_err(nrpt_error)?
+    };
+    Ok(change
+        .map(|change| {
+            change
+                .removes()
+                .iter()
+                .map(|zone| nrpt.key_path(zone))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
 /// Applies `change` after the UAC prompt; a session that cannot answer it gets
 /// `terminal_required` first, unless it already runs elevated. `command` is
 /// what to run from a desktop terminal instead.

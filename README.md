@@ -39,6 +39,8 @@ iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
 
 [packaging](packaging/README.md) describes the release pipeline.
 
+`devlanes uninstall` stops the daemon, removes its login service and what `devlanes setup` changed, removes devlanes the way it was installed, and asks before deleting `~/.devlanes`; `--dry-run` shows the plan first.
+
 ### Shorter name
 
 devlanes ships no `dl` command. To type `dl`, add an alias to your shell config, after the line that loads devlanes completions, so the alias completes like `devlanes`:

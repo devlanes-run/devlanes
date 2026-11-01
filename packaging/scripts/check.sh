@@ -182,12 +182,27 @@ mv "$work/next" "$release/download/next"
 install_with -c next -d "$work/installed-short" >/dev/null
 [ "$("$work/installed-short/devlanes")" = "devlanes $version" ]
 [ "$(sh "$root/install.sh" --help)" = "$(sed -n "s/^usage='\(.*\)'$/\1/p" "$root/install.sh")" ]
-for wrong in '--channel dev' "--channel next --version $version" '--release 1' '--version'; do
+for wrong in '--channel dev' "--channel next --version $version" '--release 1' '--version' "--uninstall --version $version"; do
 	# shellcheck disable=SC2086 # each case is several words
 	if install_with $wrong >/dev/null 2>&1; then
 		echo "install.sh accepted $wrong" >&2
 		exit 1
 	fi
 done
+
+# --uninstall runs the devlanes in the target directory (the fake one prints its
+# version); without one it deletes what install.sh put there and names the data.
+[ "$(install_with --uninstall)" = "devlanes $version" ]
+mkdir "$work/leftover"
+: >"$work/leftover/devlanes-hosts"
+left=$(DEVLANES_INSTALL_DIR="$work/leftover" DEVLANES_HOME="$work/data" sh "$root/install.sh" --uninstall)
+[ ! -e "$work/leftover/devlanes-hosts" ]
+case $left in
+*"removed: $work/leftover/devlanes-hosts"*"stays in $work/data;"*) ;;
+*)
+	echo "install.sh --uninstall without devlanes: $left" >&2
+	exit 1
+	;;
+esac
 
 echo "packaging scripts: dry run passed"

@@ -41,6 +41,11 @@ impl Version {
         };
         Some(Self { core, pre })
     }
+
+    /// Whether this is a prerelease, such as a `next` build's `0.9.1-next.3`.
+    pub fn is_prerelease(&self) -> bool {
+        !self.pre.is_empty()
+    }
 }
 
 /// A numeric version component without leading zeros.

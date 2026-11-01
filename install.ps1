@@ -4,10 +4,14 @@
 #   irm https://devlanes.run/install.ps1 | iex
 #   iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 #   iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
+#   iex "& {$(irm https://devlanes.run/install.ps1)} -Uninstall"
 #
 # -Channel stable (the default) installs the latest release, -Channel next the latest
 # build of main from the rolling `next` prerelease, and -Version X.Y.Z one release.
 # -Dir DIR sets the target directory (default: %LOCALAPPDATA%\Programs\devlanes).
+# -Uninstall runs `devlanes uninstall` from that directory (or, without -Dir and
+# DEVLANES_INSTALL_DIR, the devlanes.exe on PATH); when there is none, it deletes
+# what the script left there and its user PATH entry, and names the data folder.
 # `irm | iex` passes no arguments, so $env:DEVLANES_VERSION (X.Y.Z or next) and
 # $env:DEVLANES_INSTALL_DIR, the names install.sh reads, do the same when the option
 # isn't given.
@@ -30,7 +34,8 @@
     param(
         [ValidateSet('stable', 'next')][string]$Channel,
         [string]$Version,
-        [string]$Dir
+        [string]$Dir,
+        [switch]$Uninstall
     )
     $ErrorActionPreference = 'Stop'
     # Windows PowerShell's progress bar slows Invoke-WebRequest down by an order of magnitude.
@@ -212,6 +217,93 @@
         return $true
     }
 
+    function Get-DevlanesPathWithoutEntry {
+        <# PathValue without its entries naming Directory (compared as Test-DevlanesPathEntry does), or $null when none does. #>
+        param([AllowEmptyString()][string]$PathValue, [string]$Directory)
+        if (-not (Test-DevlanesPathEntry $PathValue $Directory)) { return $null }
+        $wanted = $Directory.Trim().TrimEnd('\')
+        # The other entries stay byte for byte, %VARIABLE% references included.
+        $kept = @($PathValue -split ';' | Where-Object { (Get-DevlanesPathDirectory $_) -ine $wanted })
+        return $kept -join ';'
+    }
+
+    function Clear-DevlanesUserPath {
+        <# Removes Directory from the user PATH, keeping the value's kind; returns whether the value changed. #>
+        param([string]$Directory)
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        try {
+            if ($key.GetValueNames() -notcontains 'Path') { return $false }
+            $kind = $key.GetValueKind('Path')
+            $current = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+            $updated = Get-DevlanesPathWithoutEntry $current $Directory
+            if ($null -eq $updated) { return $false }
+            if ($updated.Trim(';')) {
+                $key.SetValue('Path', $updated, $kind)
+            } else {
+                $key.DeleteValue('Path')
+            }
+        } finally {
+            $key.Dispose()
+        }
+        # The same WM_SETTINGCHANGE broadcast as Add-DevlanesUserPath.
+        [Environment]::SetEnvironmentVariable('DEVLANES_INSTALL_PATH_CHANGED', '1', 'User')
+        [Environment]::SetEnvironmentVariable('DEVLANES_INSTALL_PATH_CHANGED', $null, 'User')
+        return $true
+    }
+
+    function Uninstall-DevlanesRelease {
+        <#
+        Runs `devlanes uninstall` from the target directory, or the devlanes on PATH when
+        no directory was given, in this console so it can ask. Without one, removes the
+        files install.ps1 puts in the directory and its user PATH entry.
+        #>
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'An installer reports to the console, not to the pipeline.')]
+        param([string]$Dir)
+        if (-not $Dir) { $Dir = [string]$env:DEVLANES_INSTALL_DIR }
+        # An explicit directory is the only place looked at, so a devlanes on PATH that
+        # another installer put there is never removed by mistake.
+        $explicit = [bool]$Dir
+        if (-not $Dir) {
+            if (-not $env:LOCALAPPDATA) { throw 'devlanes install: LOCALAPPDATA is not set; pass -Dir' }
+            $Dir = Join-Path $env:LOCALAPPDATA 'Programs\devlanes'
+        }
+        $Dir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Dir)
+        $exe = Join-Path $Dir 'devlanes.exe'
+        if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            $exe = $null
+            if (-not $explicit) {
+                $found = Get-Command devlanes.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($found) { $exe = $found.Source }
+            }
+        }
+        if ($exe) {
+            & $exe uninstall
+            return
+        }
+
+        $removed = @()
+        $files = @(Get-ChildItem -LiteralPath $Dir -Force -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like 'devlanes.exe.old-*' -or $_.Name -like '.devlanes.exe.new.*' })
+        foreach ($file in $files) {
+            Remove-Item -LiteralPath $file.FullName -Force
+            $removed += $file.FullName
+        }
+        if (Clear-DevlanesUserPath $Dir) { $removed += "$Dir in your user PATH" }
+        if ((Test-Path -LiteralPath $Dir -PathType Container) -and -not (Get-ChildItem -LiteralPath $Dir -Force)) {
+            Remove-Item -LiteralPath $Dir -Force
+            $removed += $Dir
+        }
+        if ($removed) {
+            Write-Host "No devlanes.exe in $Dir; removed what install.ps1 left:"
+            foreach ($item in $removed) { Write-Host "  $item" }
+        } else {
+            Write-Host "No devlanes.exe in $Dir and nothing install.ps1 left there."
+        }
+        $data = $env:DEVLANES_HOME
+        if (-not $data) { $data = Join-Path $env:USERPROFILE '.devlanes' }
+        Write-Host "The devlanes data stays in $data; delete that folder to remove it."
+    }
+
     function Clear-DevlanesOldCopy {
         <# Deletes the devlanes.exe.old-* files in Directory that nothing runs any more. #>
         param([string]$Directory)
@@ -365,6 +457,11 @@
 
     # Windows PowerShell 5.1 may not offer TLS 1.2, which GitHub requires, when the
     # .NET defaults were changed; the process-wide setting is restored afterwards.
+    if ($Uninstall) {
+        if ($Channel -or $Version) { throw "devlanes install: -Uninstall takes no -Channel or -Version" }
+        Uninstall-DevlanesRelease -Dir $Dir
+        return
+    }
     $protocols = [Net.ServicePointManager]::SecurityProtocol
     try {
         if ($PSVersionTable.PSVersion.Major -lt 6 -and $protocols -ne [Net.SecurityProtocolType]::SystemDefault) {

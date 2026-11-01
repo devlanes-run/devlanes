@@ -395,6 +395,27 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
             Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, $wrong left the installation alone"
         }
 
+        # -Uninstall runs the devlanes.exe in the directory: the fake one is cmd.exe,
+        # which reads the closed stdin and exits, leaving the file in place.
+        $run = Invoke-Child $shell (& $withOptions '-Uninstall') $environment
+        Assert-Equal $run.Code 0 "$label, -Uninstall with devlanes.exe: $($run.Output)"
+        Assert-True (Test-Path -LiteralPath $exe) "$label, -Uninstall left the removal to devlanes.exe"
+        Assert-True (-not $run.Output.Contains('No devlanes.exe')) "$label, -Uninstall ran devlanes.exe: $($run.Output)"
+        # Without devlanes.exe it deletes what install.ps1 left, the folder once empty,
+        # and the user PATH entry, and names the data folder.
+        Remove-Item -LiteralPath (Join-Path $elsewhere 'devlanes.exe') -Force
+        Set-Content -LiteralPath (Join-Path $elsewhere 'devlanes.exe.old-20260101000000') -Value 'old'
+        Assert-True ((Get-UserPath).Value.Contains($elsewhere)) "$label, -Dir added $elsewhere to the user PATH"
+        $uninstallEnvironment = $environment.Clone()
+        $uninstallEnvironment.DEVLANES_HOME = Join-Path $work 'data'
+        $run = Invoke-Child $shell (& $withOptions "-Uninstall -Dir '$elsewhere'") $uninstallEnvironment
+        Assert-Equal $run.Code 0 "$label, -Uninstall without devlanes.exe: $($run.Output)"
+        Assert-True (-not (Test-Path -LiteralPath $elsewhere)) "$label, -Uninstall removed ${elsewhere}: $($run.Output)"
+        Assert-True (-not (Get-UserPath).Value.Contains($elsewhere)) "$label, -Uninstall removed the user PATH entry"
+        Assert-True ($run.Output.Contains("stays in $(Join-Path $work 'data')")) "$label, -Uninstall names the data folder: $($run.Output)"
+        $run = Invoke-Child $shell (& $withOptions "-Uninstall -Version $($versions[0])") $environment
+        Assert-True ($run.Output.Contains('takes no -Channel or -Version')) "$label, -Uninstall with -Version: $($run.Output)"
+
         Restore-UserPath $pathBefore
     }
 

@@ -683,13 +683,46 @@ devlanes update [OPTIONS]
 ```
 
 - `--check`: Only check: show the install method, the running and latest versions and what changed
+- `--notes`: Only show the release notes of the running version; checks nothing
 - `--version <VERSION>`: Install this release instead of the latest one
 
 ```text
 Examples:
   devlanes update                      install the latest release, asking first
   devlanes update --check              show the latest release and what changed
+  devlanes update --notes              show what changed in the running version
   devlanes update --version 0.9.1 --yes
+```
+
+### devlanes uninstall
+
+Remove devlanes from this machine: the daemon, its login service, devlanes setup and this install.
+
+In order, and going on when a step fails:
+  1. stop the daemon, asking first when it runs processes
+  2. remove the login service (daemon install)
+  3. undo devlanes setup: the CA trust, the /etc/hosts helper and the resolver
+     file or NRPT rule; sudo asks for your password at most once
+  4. remove this install: install.sh and install.ps1 files (and the user PATH
+     entry on Windows), or the package manager's remove command. A project's
+     own dependency and a source build stay.
+  5. the devlanes home (~/.devlanes, or $DEVLANES_HOME) and lane data: listed
+     with their sizes, then asked about, no by default. Without a terminal and
+     without --remove-data they stay.
+
+```text
+devlanes uninstall [OPTIONS]
+```
+
+- `--remove-data`: Delete the devlanes home and lane data without asking
+- `--keep-data`: Keep the devlanes home and lane data, and print where they are
+- `--dry-run`: Print what each step would remove; change nothing
+
+```text
+Examples:
+  devlanes uninstall --dry-run         show what would be removed
+  devlanes uninstall                   remove devlanes, asking before deleting data
+  devlanes uninstall --yes --keep-data
 ```
 
 ### devlanes remote

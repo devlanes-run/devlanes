@@ -10,21 +10,21 @@
 |   * api-search                               || 2026-10-21T10:40:07Z INFO job done queue=default id=job_8121 took=53m|
 |   * api-catalog                              || s                                                                    |
 |   * api-inventory                            || 2026-10-21T10:40:14Z INFO job done queue=default id=job_8122 took=66m|
-|   * api-notify                               || s                                                                    |
-|   * api-reports                         +----------------------------------+b done queue=default id=job_8123 took=79m|
-|   * web-app                             | :       :       ||      :       :|                                         |
-|   * web-admin                           | :       :   devlanes    :       :|b done queue=default id=job_8124 took=92m|
-|   * web-docs                            | :       :       ||      :       :|                                         |
-|   - web-storybook                       | :       :    v1.0.0     :       :|b done queue=default id=job_8125 took=105|
-|   * web-landing                         | :       :       ||      :       :|                                         |
-|   o wrk-email                           | :       >  o  options           :|b done queue=default id=job_8126 took=118|
-|   o wrk-billing                         | :       :       ||      :       :|                                         |
-|   o wrk-index                           | :          h  help              :|b done queue=default id=job_8127 took=131|
-|   o wrk-thumbs                          | :       :       ||      :       :|                                         |
-|   x wrk-export               failed · ex| :          q  quit              :|b done queue=default id=job_8128 took=144|
-|   o wrk-cron                            | :       :       ||      :       :|                                         |
-|   o wrk-webhooks                        +---------------------- esc closes +b done queue=default id=job_8129 took=157|
-|   o wrk-ledger                               || ms                                                                   |
+|   * api-notify                          +----------------------------------+                                         |
+|   * api-reports                         | :       :       ||      :       :|b done queue=default id=job_8123 took=79m|
+|   * web-app                             | :       :   devlanes    :       :|                                         |
+|   * web-admin                           | :       :       ||      :       :|b done queue=default id=job_8124 took=92m|
+|   * web-docs                            | :       :    v1.0.0     :       :|                                         |
+|   - web-storybook                       | :       :       ||      :       :|b done queue=default id=job_8125 took=105|
+|   * web-landing                         | :       >  o  options           :|                                         |
+|   o wrk-email                           | :       :       ||      :       :|b done queue=default id=job_8126 took=118|
+|   o wrk-billing                         | :          w  what's new        :|                                         |
+|   o wrk-index                           | :       :       ||      :       :|b done queue=default id=job_8127 took=131|
+|   o wrk-thumbs                          | :          h  help              :|                                         |
+|   x wrk-export               failed · ex| :       :       ||      :       :|b done queue=default id=job_8128 took=144|
+|   o wrk-cron                            | :          q  quit              :|                                         |
+|   o wrk-webhooks                        | :       :       ||      :       :|b done queue=default id=job_8129 took=157|
+|   o wrk-ledger                          +---------------------- esc closes +                                         |
 |   * stub-stripe                              || 2026-10-21T10:41:10Z INFO job done queue=default id=job_8130 took=170|
 |   * stub-s3                                  || ms                                                                   |
 |   ! stub-twilio         orphaned · pid 48211 || 2026-10-21T10:41:17Z INFO job done queue=default id=job_8131 took=183|
@@ -52,21 +52,21 @@
 9: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray
 10: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 119 darkgray
 11: 0 darkgray, 4-5 green, 6-18 blue, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray
-12: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 119 darkgray
-13: 0 darkgray, 4-5 green, 6-16 blue, 42-77 bold, 119 darkgray
-14: 0 darkgray, 4-12 green, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-15: 0 darkgray, 4-14 green, 42 bold, 44 darkgray, 52 darkgray, 56-59 bold lightyellow, 60-63 bold yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-16: 0 darkgray, 4-13 green, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-17: 0 darkgray, 4-5 dim, 6-18 dim green, 42 bold, 44 darkgray, 52 darkgray, 57-62 dim, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-18: 0 darkgray, 4-16 green, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-19: 0 darkgray, 4-5 green, 6-14 magenta, 42 bold, 44 darkgray, 52 bold reversed, 53-54 reversed, 55 bold reversed, 56-67 reversed, 76 darkgray, 77 bold, 119 darkgray
-20: 0 darkgray, 4-5 green, 6-16 magenta, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-21: 0 darkgray, 4-5 green, 6-14 magenta, 42 bold, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 77 bold, 119 darkgray
-22: 0 darkgray, 4-5 green, 6-15 magenta, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-23: 0 darkgray, 1-41 reversed, 42 bold, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 77 bold, 119 darkgray
-24: 0 darkgray, 4-5 green, 6-13 magenta, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
-25: 0 darkgray, 4-5 green, 6-17 magenta, 42-64 bold, 65-76 bold dim, 77 bold, 119 darkgray
-26: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 119 darkgray
+12: 0 darkgray, 4-5 green, 6-15 blue, 42-77 bold, 119 darkgray
+13: 0 darkgray, 4-5 green, 6-16 blue, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+14: 0 darkgray, 4-12 green, 42 bold, 44 darkgray, 52 darkgray, 56-59 bold lightyellow, 60-63 bold yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+15: 0 darkgray, 4-14 green, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+16: 0 darkgray, 4-13 green, 42 bold, 44 darkgray, 52 darkgray, 57-62 dim, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+17: 0 darkgray, 4-5 dim, 6-18 dim green, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+18: 0 darkgray, 4-16 green, 42 bold, 44 darkgray, 52 bold reversed, 53-54 reversed, 55 bold reversed, 56-67 reversed, 76 darkgray, 77 bold, 119 darkgray
+19: 0 darkgray, 4-5 green, 6-14 magenta, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+20: 0 darkgray, 4-5 green, 6-16 magenta, 42 bold, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 77 bold, 119 darkgray
+21: 0 darkgray, 4-5 green, 6-14 magenta, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+22: 0 darkgray, 4-5 green, 6-15 magenta, 42 bold, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 77 bold, 119 darkgray
+23: 0 darkgray, 1-41 reversed, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+24: 0 darkgray, 4-5 green, 6-13 magenta, 42 bold, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 77 bold, 119 darkgray
+25: 0 darkgray, 4-5 green, 6-17 magenta, 42 bold, 44 darkgray, 52 darkgray, 60-61 dim yellow, 68 darkgray, 76 darkgray, 77 bold, 119 darkgray
+26: 0 darkgray, 4-5 green, 6-15 magenta, 42-64 bold, 65-76 bold dim, 77 bold, 119 darkgray
 27: 0 darkgray, 4-5 green, 6-16 darkgray, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray
 28: 0 darkgray, 4-5 green, 6-12 darkgray, 47-48 darkgray, 119 darkgray
 29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-45 dim, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray

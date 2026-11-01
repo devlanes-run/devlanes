@@ -261,6 +261,18 @@ pub(super) async fn remove(
     Ok(0)
 }
 
+/// The files [`remove`] deletes, read-only.
+pub(super) async fn removal(paths: &Paths, tld: Option<String>) -> Result<Vec<PathBuf>, RpcError> {
+    let server = devlanes_resolver_dns::default_listen();
+    let record = record(paths);
+    let change = blocking(move || {
+        let configured = tld.and_then(|tld| resolver_file(&tld, server).ok());
+        removal_change(configured, recorded(&record), occupant)
+    })
+    .await??;
+    Ok(change.remove.into_iter().map(|file| file.path).collect())
+}
+
 /// Runs `change` with sudo, then tells the OS to reload. `command` is what to
 /// run from a terminal when this session cannot use sudo.
 async fn apply(runtime: &Runtime, change: &Change, command: &str) -> Result<(), RpcError> {

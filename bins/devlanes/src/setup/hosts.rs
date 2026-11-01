@@ -163,6 +163,22 @@ pub(super) async fn remove(runtime: &Runtime) -> Result<u8, RpcError> {
     Ok(0)
 }
 
+/// What [`remove`] does, read-only: `None` when there is neither a helper nor
+/// a devlanes block in `/etc/hosts`.
+#[cfg(unix)]
+pub(super) async fn removal() -> Option<String> {
+    match (helper_present(), block_present().await) {
+        (false, false) => None,
+        (true, false) => Some(format!("remove {INSTALL_PATH} and its sudo rule")),
+        (true, true) => Some(format!(
+            "clear the devlanes block in /etc/hosts, then remove {INSTALL_PATH} and its sudo rule"
+        )),
+        (false, true) => {
+            Some("the devlanes block in /etc/hosts stays: the helper that clears it is gone".into())
+        }
+    }
+}
+
 /// The helper to install: `DEVLANES_HOSTS_HELPER` when set, else `devlanes-hosts`
 /// next to this binary (also next to the target of a symlinked `devlanes`).
 #[cfg(unix)]

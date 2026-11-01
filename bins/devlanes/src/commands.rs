@@ -322,6 +322,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
         } => crate::bundle::run(runtime, to, log_lines, args, context).await,
         Action::Setup(action) => crate::setup::run(runtime, action).await,
         Action::Update(action) => crate::update::run(runtime, &paths()?, action).await,
+        Action::Uninstall(action) => crate::uninstall::run(runtime, action).await,
         Action::DaemonInstall => crate::daemon::install(runtime).await,
         Action::DaemonUninstall => crate::daemon::uninstall(runtime).await,
         Action::DaemonRun => Err(RpcError::new(

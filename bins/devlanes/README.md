@@ -84,6 +84,8 @@ In human output, a command then prints one line on stderr, at most once a day pe
 
 `devlanes update` checks, asks (`[Y/n]` for a patch release; a minor release lists its breaking changes and asks `[y/N]`), installs and restarts the daemon, which starts the lanes that ran again. Script and standalone installs download the release archive into `~/.devlanes/update/`, check it against the release's `SHA256SUMS`, its exact entries and the version the new binary reports, and rename the binaries into place. npm, pnpm, Bun, Yarn, uv, pipx and Homebrew installs run their package manager, with its output in `~/.devlanes/logs/update.log`. One update runs at a time (`~/.devlanes/update/lock`). The installed binary then runs `devlanes update --finish`, which restarts the daemon and prints what changed.
 
+Each build carries the notes of its `CHANGELOG.md`. The first TUI opened on a newer stable release shows "What's new" after the welcome: every release since the version it last showed, breaking changes first. A fresh home records its version without showing anything, and `next` and local builds never show it. The Esc menu's `what's new` opens it again, and `devlanes update --notes` prints the running version's notes. The version last shown is kept in `notices.json`.
+
 With `updates.mode: auto`, the daemon installs patch releases in the background: script installs download and stage them, package managers install them. Nothing restarts; the next interactive `devlanes` (the TUI or a start that opens it) switches to the new version and restarts the daemon without asking. When the daemon runs an older minor version than the TUI opening, it asks first. A project's own devlanes never restarts the shared daemon; it prints a warning. A background install that failed shows in `devlanes update --check` and is tried again at the next check.
 
 On Windows, the daemon, the TUI and `devlanes update` keep a hard link to their executable in `~/.devlanes/run/exe/<pid>.exe` while they run, so a package manager can replace `devlanes.exe` meanwhile.
@@ -94,6 +96,15 @@ Checks are off in debug builds, when the daemon starts with CI variables set, wi
 updates:
   mode: disable # notify (the default) or auto
   channel: stable # or next; defaults to the running build's channel
+```
+
+## Uninstall
+
+`devlanes uninstall` stops the daemon (asking first when it runs processes), removes the login service, runs `devlanes setup --remove` with sudo asked for once, and removes this install: `install.sh` and `install.ps1` files and, on Windows, the user `PATH` entry; for npm, pnpm, Bun, Yarn, uv, pipx, pip, Homebrew and cargo installs, their remove command. A project's own dependency, `uvx`, `pipx run` and source builds stay, with a line saying why. A step that fails is reported and the rest still run. Last it lists `~/.devlanes`, lane data under a `lanes.data_dir` outside it and a daemon socket outside it, with their sizes, and asks before deleting them (no by default). `--remove-data` deletes them without asking, `--keep-data` keeps them, and without a terminal they stay. `--dry-run` prints the plan and changes nothing. On Windows a running `devlanes.exe` cannot delete itself, so a detached `cmd.exe` deletes it once the command exits. `install.sh --uninstall` and `install.ps1 -Uninstall` run it from the install directory.
+
+```sh
+devlanes uninstall --dry-run
+devlanes uninstall --yes --keep-data   # no questions, data kept
 ```
 
 ## License

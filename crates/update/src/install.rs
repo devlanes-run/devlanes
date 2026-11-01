@@ -162,27 +162,81 @@ impl Plan {
             });
         }
         Ok(match package_manager(method, version, exe) {
-            Some(commands) => Self::PackageManager(
-                commands
-                    .into_iter()
-                    .map(|mut argv| {
-                        // A derived path that does not exist falls back to `PATH`.
-                        if argv.program.is_absolute() && !argv.program.is_file() {
-                            argv.program = argv
-                                .program
-                                .file_name()
-                                .map(PathBuf::from)
-                                .unwrap_or(argv.program);
-                        }
-                        argv
-                    })
-                    .collect(),
-            ),
+            Some(commands) => Self::PackageManager(on_disk_or_path(commands)),
             None => Self::Manual {
                 command: method.upgrade_command(version),
             },
         })
     }
+}
+
+/// `commands` with every derived tool path that does not exist replaced by
+/// the tool's name, which `PATH` then resolves. Blocking filesystem work.
+fn on_disk_or_path(commands: Vec<Argv>) -> Vec<Argv> {
+    commands
+        .into_iter()
+        .map(|mut argv| {
+            if argv.program.is_absolute() && !argv.program.is_file() {
+                argv.program = argv
+                    .program
+                    .file_name()
+                    .map(PathBuf::from)
+                    .unwrap_or(argv.program);
+            }
+            argv
+        })
+        .collect()
+}
+
+/// The commands that remove `method`'s install of devlanes, whose running
+/// executable is `exe`, with the tool found as for an update (see
+/// [`Plan::new`]); `None` for methods no package manager removes: script and
+/// standalone installs (their files are deleted instead), cached runs
+/// (`uvx`, `pipx run`), project dependencies and source builds. Blocking
+/// filesystem work.
+pub fn removal_commands(method: &InstallMethod, exe: &Path) -> Option<Vec<Argv>> {
+    let argv = |program: PathBuf, args: &[&str]| Argv {
+        program,
+        args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+    };
+    let tool = |name: &str| tool_path(method, exe).unwrap_or_else(|| PathBuf::from(os::tool(name)));
+    let commands = match method {
+        InstallMethod::Npm => vec![argv(tool("npm"), &["uninstall", "-g", "devlanes"])],
+        InstallMethod::Pnpm => vec![argv(tool("pnpm"), &["remove", "-g", "devlanes"])],
+        InstallMethod::Bun => vec![argv(tool("bun"), &["remove", "-g", "devlanes"])],
+        InstallMethod::Yarn => vec![argv(tool("yarn"), &["global", "remove", "devlanes"])],
+        InstallMethod::Uv => vec![argv(tool("uv"), &["tool", "uninstall", "devlanes"])],
+        InstallMethod::Pipx => vec![argv(tool("pipx"), &["uninstall", "devlanes"])],
+        InstallMethod::Homebrew => vec![argv(
+            tool("brew"),
+            &["uninstall", "devlanes-run/tap/devlanes"],
+        )],
+        InstallMethod::CargoInstall | InstallMethod::CargoBinstall => {
+            let mut args = vec!["uninstall"];
+            args.extend(os::CARGO_PACKAGES);
+            vec![argv(PathBuf::from(os::tool("cargo")), &args)]
+        }
+        // The environment's own Python, since its `pip` may not be on `PATH`;
+        // never another Python from `PATH`, which would remove another install.
+        InstallMethod::Pip(venv) => {
+            return Some(vec![argv(
+                os::venv_python(venv),
+                &["-m", "pip", "uninstall", "-y", "devlanes"],
+            )]);
+        }
+        InstallMethod::UvPip(venv) => vec![Argv {
+            program: PathBuf::from(os::tool("uv")),
+            args: vec![
+                "pip".into(),
+                "uninstall".into(),
+                "--python".into(),
+                venv.display().to_string(),
+                "devlanes".into(),
+            ],
+        }],
+        _ => return None,
+    };
+    Some(on_disk_or_path(commands))
 }
 
 /// Whether devlanes can install a release over `method` itself, so notices
@@ -734,21 +788,32 @@ async fn blocking<T: Send + 'static>(
 /// appending their output to `log` (`$DEVLANES_HOME/logs/update.log`). The
 /// first that fails ends the run with its stderr's last lines.
 pub async fn run_package_manager(commands: &[Argv], log: &Path) -> Result<(), InstallError> {
+    run_commands(commands, log, "devlanes update").await
+}
+
+/// [`run_package_manager`] for any devlanes command that runs a package
+/// manager; a failure's hint says to retry with `retry`.
+pub async fn run_commands(commands: &[Argv], log: &Path, retry: &str) -> Result<(), InstallError> {
     for argv in commands {
-        run_one(argv, log, PACKAGE_MANAGER_TIMEOUT).await?;
+        run_one(argv, log, PACKAGE_MANAGER_TIMEOUT, retry).await?;
     }
     Ok(())
 }
 
-/// Runs one package-manager command for [`run_package_manager`].
-async fn run_one(argv: &Argv, log: &Path, timeout: Duration) -> Result<(), InstallError> {
+/// Runs one package-manager command for [`run_commands`].
+async fn run_one(
+    argv: &Argv,
+    log: &Path,
+    timeout: Duration,
+    retry: &str,
+) -> Result<(), InstallError> {
     let command = argv.display();
     let failure = |title: String, tail: String| {
         InstallError::Command(Box::new(CommandFailure {
             title,
             command: command.clone(),
             tail,
-            hint: format!("retry with devlanes update, or run {command} yourself"),
+            hint: format!("retry with {retry}, or run {command} yourself"),
         }))
     };
     if let Some(dir) = log.parent() {
@@ -835,6 +900,8 @@ mod os {
 
     /// The parent of npm's global `node_modules`: `<prefix>/lib`.
     pub(super) const NPM_LIB: &str = "lib";
+    /// The packages `cargo install` builds, which `cargo uninstall` removes.
+    pub(super) const CARGO_PACKAGES: &[&str] = &["devlanes", "devlanes-hosts-helper"];
     /// `tar` flags that list a gzip archive.
     pub(super) const TAR_LIST: &str = "-tzf";
     /// `tar` flags that extract a gzip archive.
@@ -845,9 +912,14 @@ mod os {
         name.to_owned()
     }
 
-    /// npm in the prefix that holds `lib/node_modules`.
-    pub(super) fn npm_in(prefix: &Path) -> Option<PathBuf> {
-        Some(prefix.join("bin/npm"))
+    /// npm in the prefix that holds `lib/node_modules`, given that `lib`.
+    pub(super) fn npm_in(lib: &Path) -> Option<PathBuf> {
+        Some(lib.parent()?.join("bin/npm"))
+    }
+
+    /// The Python of the environment at `venv`.
+    pub(super) fn venv_python(venv: &Path) -> PathBuf {
+        venv.join("bin/python")
     }
 
     /// The system `tar`.
@@ -878,6 +950,9 @@ mod os {
 
     /// The parent of npm's global `node_modules`: `%APPDATA%\npm`.
     pub(super) const NPM_LIB: &str = "npm";
+    /// The packages `cargo install` builds, which `cargo uninstall` removes;
+    /// `devlanes-hosts-helper` is Unix-only.
+    pub(super) const CARGO_PACKAGES: &[&str] = &["devlanes"];
     /// `tar` flags that list an archive (zip included).
     pub(super) const TAR_LIST: &str = "-tf";
     /// `tar` flags that extract an archive.
@@ -895,6 +970,11 @@ mod os {
     /// npm's shim in `%APPDATA%\npm`, which holds `node_modules`.
     pub(super) fn npm_in(prefix: &Path) -> Option<PathBuf> {
         Some(prefix.join("npm.cmd"))
+    }
+
+    /// The Python of the environment at `venv`.
+    pub(super) fn venv_python(venv: &Path) -> PathBuf {
+        venv.join("Scripts").join("python.exe")
     }
 
     /// System32's `tar.exe` (bsdtar, which reads zip); a Git Bash `tar` on
@@ -1168,6 +1248,100 @@ mod tests {
         assert_eq!(
             shown(&InstallMethod::Pipx, r"C:\Users\a\.local\bin\devlanes.exe"),
             ["pipx.exe | upgrade devlanes"]
+        );
+    }
+
+    /// Removal commands as `program | args`; tool paths derived from these
+    /// made-up prefixes do not exist, so they fall back to `PATH`.
+    fn removal(method: &InstallMethod, exe: &str) -> Option<Vec<String>> {
+        removal_commands(method, Path::new(exe)).map(|commands| {
+            commands
+                .iter()
+                .map(|argv| format!("{} | {}", argv.program.display(), argv.args.join(" ")))
+                .collect()
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn removal_commands_per_method() {
+        let exe = "/Users/a/.local/bin/devlanes";
+        for (method, expected) in [
+            (InstallMethod::Npm, "npm | uninstall -g devlanes"),
+            (InstallMethod::Pnpm, "pnpm | remove -g devlanes"),
+            (InstallMethod::Bun, "bun | remove -g devlanes"),
+            (InstallMethod::Yarn, "yarn | global remove devlanes"),
+            (InstallMethod::Uv, "uv | tool uninstall devlanes"),
+            (InstallMethod::Pipx, "pipx | uninstall devlanes"),
+            (
+                InstallMethod::Homebrew,
+                "brew | uninstall devlanes-run/tap/devlanes",
+            ),
+            (
+                InstallMethod::CargoInstall,
+                "cargo | uninstall devlanes devlanes-hosts-helper",
+            ),
+            (
+                InstallMethod::CargoBinstall,
+                "cargo | uninstall devlanes devlanes-hosts-helper",
+            ),
+            (
+                InstallMethod::Pip(PathBuf::from("/srv/acme/.venv")),
+                "/srv/acme/.venv/bin/python | -m pip uninstall -y devlanes",
+            ),
+            (
+                InstallMethod::UvPip(PathBuf::from("/srv/acme/.venv")),
+                "uv | pip uninstall --python /srv/acme/.venv devlanes",
+            ),
+        ] {
+            assert_eq!(
+                removal(&method, exe),
+                Some(vec![expected.to_owned()]),
+                "{method:?}"
+            );
+        }
+        for method in [
+            InstallMethod::Uvx,
+            InstallMethod::PipxRun,
+            InstallMethod::Source,
+            InstallMethod::Script(PathBuf::from("/Users/a/.local/bin")),
+            InstallMethod::Local {
+                manifest: PathBuf::from("package.json"),
+            },
+        ] {
+            assert_eq!(removal(&method, exe), None, "{method:?}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn removal_commands_per_method() {
+        let exe = r"C:\Users\a\.local\bin\devlanes.exe";
+        for (method, expected) in [
+            (InstallMethod::Npm, "npm.cmd | uninstall -g devlanes"),
+            (InstallMethod::Pnpm, "pnpm.cmd | remove -g devlanes"),
+            (InstallMethod::Bun, "bun.exe | remove -g devlanes"),
+            (InstallMethod::Yarn, "yarn.cmd | global remove devlanes"),
+            (InstallMethod::Uv, "uv.exe | tool uninstall devlanes"),
+            (InstallMethod::Pipx, "pipx.exe | uninstall devlanes"),
+            (
+                InstallMethod::CargoInstall,
+                "cargo.exe | uninstall devlanes",
+            ),
+            (
+                InstallMethod::Pip(PathBuf::from(r"D:\acme\.venv")),
+                r"D:\acme\.venv\Scripts\python.exe | -m pip uninstall -y devlanes",
+            ),
+        ] {
+            assert_eq!(
+                removal(&method, exe),
+                Some(vec![expected.to_owned()]),
+                "{method:?}"
+            );
+        }
+        assert_eq!(
+            removal(&InstallMethod::Script(PathBuf::from(r"C:\tools")), exe),
+            None
         );
     }
 

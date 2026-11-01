@@ -564,6 +564,8 @@ pub enum Dialog {
     Targets(TargetPicker),
     /// The first launch in a home (`crate::welcome`).
     Welcome(crate::welcome::Welcome),
+    /// The release notes since the version seen before (`crate::whats_new`).
+    WhatsNew(crate::whats_new::WhatsNewDialog),
     /// Every error this TUI kept, one at a time in full.
     Errors(ErrorsDialog),
     /// `n` or Enter in the boxes view: a new connection, then the attached
@@ -1326,6 +1328,10 @@ pub struct App {
     setup_missing: Option<Vec<String>>,
     /// The setup prompt showed in this session; it shows once.
     setup_offered: bool,
+    /// The release notes "What's new" shows ([`crate::Options::whats_new`]).
+    pub whats_new: Option<devlanes_update::notes::WhatsNew>,
+    /// "What's new" opens by itself once the welcome is gone.
+    pub whats_new_pending: bool,
     /// Lanes whose task list was fetched again after their config changed.
     tasks_refreshed: HashSet<String>,
     /// Lanes with a clean in flight; their rows say so.
@@ -1474,6 +1480,8 @@ impl App {
             reopen_lane: None,
             setup_missing: None,
             setup_offered: false,
+            whats_new: None,
+            whats_new_pending: false,
             tasks_refreshed: HashSet::new(),
             cleaning: HashSet::new(),
             target_errors: HashMap::new(),
@@ -6045,6 +6053,10 @@ impl App {
                 let action = welcome.key(key);
                 self.welcome_action(action, welcome, effects);
             }
+            Dialog::WhatsNew(mut dialog) => {
+                let action = dialog.key(key);
+                self.whats_new_action(action, dialog, effects);
+            }
             Dialog::Errors(state) => self.errors_key(key, state, effects),
             Dialog::Connect(dialog) => self.connect_key(key, dialog, effects),
             Dialog::Pair(dialog) => self.pair_key(key, dialog, effects),
@@ -6159,11 +6171,39 @@ impl App {
     }
 
     /// Opens the welcome once the first status and the dismissed notices are
-    /// both in, unless it was closed before in this home.
+    /// both in, unless it was closed before in this home. Once it is gone,
+    /// opens "What's new" when the binary asked for it; never over another
+    /// dialog.
     fn show_welcome(&mut self) {
+        if !self.loaded || self.release.0.is_none() || self.dialog.is_some() {
+            return;
+        }
         let dismissed = self.release.1.iter().any(|key| key == crate::welcome::KEY);
-        if self.loaded && self.release.0.is_some() && !dismissed && self.dialog.is_none() {
+        if !dismissed {
             self.dialog = Some(Dialog::Welcome(crate::welcome::Welcome::default()));
+        } else if std::mem::take(&mut self.whats_new_pending) {
+            self.dialog = Some(Dialog::WhatsNew(Default::default()));
+        }
+    }
+
+    /// What a key or click in "What's new" asked for. Closing it lets the
+    /// setup prompt show.
+    fn whats_new_action(
+        &mut self,
+        action: crate::whats_new::Action,
+        dialog: crate::whats_new::WhatsNewDialog,
+        effects: &mut Vec<Effect>,
+    ) {
+        use crate::whats_new::Action;
+        match action {
+            Action::Stay => self.dialog = Some(Dialog::WhatsNew(dialog)),
+            Action::Close => self.offer_setup(),
+            Action::Quit => {
+                self.global_key(
+                    KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
+                    effects,
+                );
+            }
         }
     }
 
@@ -6191,6 +6231,7 @@ impl App {
                         effects,
                     );
                 } else {
+                    self.show_welcome();
                     self.offer_setup();
                 }
             }
@@ -6209,6 +6250,9 @@ impl App {
             Action::Stay => self.dialog = Some(Dialog::Menu(menu)),
             Action::Close => {}
             Action::Pick(Item::Options) => self.open_options("", effects),
+            Action::Pick(Item::WhatsNew) => {
+                self.dialog = Some(Dialog::WhatsNew(Default::default()))
+            }
             Action::Pick(Item::Help) => self.dialog = Some(Dialog::Help),
             // The same path as q, so quitting asks what q asks.
             Action::Pick(Item::Quit) => {
@@ -7108,6 +7152,11 @@ impl App {
             Some(Dialog::Welcome(welcome)) => {
                 let action = welcome.mouse(mouse);
                 self.welcome_action(action, welcome, effects);
+                return;
+            }
+            Some(Dialog::WhatsNew(mut dialog)) => {
+                let action = dialog.mouse(mouse);
+                self.whats_new_action(action, dialog, effects);
                 return;
             }
             other => self.dialog = other,

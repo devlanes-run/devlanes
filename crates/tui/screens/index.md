@@ -514,6 +514,14 @@ the first launch in a home: banner, features, first keys and the docs link
 - 120x40: [txt](welcome-120x40.txt) · [png](welcome-120x40.png) · [ansi](welcome-120x40.ansi)
 - 80x24: [txt](welcome-80x24.txt) · [png](welcome-80x24.png) · [ansi](welcome-80x24.ansi)
 
+## whats-new
+
+the first TUI after an update: the releases since the one seen before, breaking changes first
+
+- 200x60: [txt](whats-new-200x60.txt) · [png](whats-new-200x60.png) · [ansi](whats-new-200x60.ansi)
+- 120x40: [txt](whats-new-120x40.txt) · [png](whats-new-120x40.png) · [ansi](whats-new-120x40.ansi)
+- 80x24: [txt](whats-new-80x24.txt) · [png](whats-new-80x24.png) · [ansi](whats-new-80x24.ansi)
+
 ## theme-dark
 
 true color on a dark background
@@ -716,7 +724,7 @@ the setup prompt after the welcome: the CA is not trusted and a lane needs the h
 
 ## menu
 
-the Esc menu: banner over lane lines, version, options, help, quit
+the Esc menu: banner over lane lines, version, options, what's new, help, quit
 
 - 200x60: [txt](menu-200x60.txt) · [png](menu-200x60.png) · [ansi](menu-200x60.ansi)
 - 120x40: [txt](menu-120x40.txt) · [png](menu-120x40.png) · [ansi](menu-120x40.ansi)
@@ -799,6 +807,12 @@ typing a duration on the storage tab (4, Enter)
 the Esc menu without room for the banner
 
 - 56x16: [txt](menu-narrow-56x16.txt) · [png](menu-narrow-56x16.png) · [ansi](menu-narrow-56x16.ansi)
+
+## whats-new-scrolled
+
+What's new from the Esc menu (w), scrolled to its end (G)
+
+- 80x24: [txt](whats-new-scrolled-80x24.txt) · [png](whats-new-scrolled-80x24.png) · [ansi](whats-new-scrolled-80x24.ansi)
 
 ## small-terminal
 

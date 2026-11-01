@@ -554,6 +554,29 @@ impl Manager {
         }
     }
 
+    /// The `DEVLANES_HOME` a definition from [`Self::definition`] sets;
+    /// `None` when it sets none.
+    fn home(self, contents: &str) -> Option<PathBuf> {
+        match self {
+            Self::Launchd => {
+                let (_, after) = contents.split_once("<key>DEVLANES_HOME</key>")?;
+                let value = after.trim_start().strip_prefix("<string>")?;
+                let (value, _) = value.split_once("</string>")?;
+                Some(PathBuf::from(
+                    value
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .replace("&amp;", "&"),
+                ))
+            }
+            Self::Systemd => contents.lines().find_map(|line| {
+                line.trim()
+                    .strip_prefix("Environment=DEVLANES_HOME=")
+                    .map(PathBuf::from)
+            }),
+        }
+    }
+
     /// Commands that make the manager run the definition at `path`. launchd reads
     /// a plist only when the job loads, so a `changed` definition of a `loaded`
     /// job is booted out and in again; systemd rereads its units on
@@ -834,26 +857,88 @@ pub async fn service_report() -> serde_json::Value {
 
 /// Removes the logon start (and Task Manager's record of it); the running
 /// daemon keeps running.
-#[cfg(windows)]
 pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
-    let location = logon(|logon| {
-        logon.uninstall()?;
-        Ok(logon.location())
-    })
-    .await?;
+    let location = remove_login_service().await?;
     let _ = runtime;
     println!("removed {location}");
     Ok(0)
 }
 
-/// Removes the per-user service definition (the running daemon keeps running).
+/// The login service, as `devlanes uninstall` finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum LoginService {
+    /// None is installed.
+    Absent,
+    /// It starts the daemon of this devlanes home; `location` is the file or
+    /// registry value.
+    Installed { location: String },
+    /// It starts the daemon of another devlanes home, `home`, so it stays.
+    OtherHome { location: String, home: PathBuf },
+}
+
+/// The login service and whose daemon it starts, read-only. A service whose
+/// definition names no home is taken as this home's.
 #[cfg(unix)]
-pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
+pub(crate) async fn login_service(paths: &Paths) -> Result<LoginService, RpcError> {
+    let manager = Manager::current();
+    let path = manager.path(&user_home()?);
+    let Ok(contents) = tokio::fs::read_to_string(&path).await else {
+        return Ok(LoginService::Absent);
+    };
+    let location = path.display().to_string();
+    Ok(match manager.home(&contents) {
+        Some(home) if !devlanes_core::paths::same_path(&home, &paths.home) => {
+            LoginService::OtherHome { location, home }
+        }
+        _ => LoginService::Installed { location },
+    })
+}
+
+/// The login service and whose daemon it starts, read-only. The Run key
+/// passes no environment, so its daemon always uses the default home.
+#[cfg(windows)]
+pub(crate) async fn login_service(paths: &Paths) -> Result<LoginService, RpcError> {
+    let (status, location) = logon(|logon| Ok((logon.status()?, logon.location()))).await?;
+    if status.command.is_none() {
+        return Ok(LoginService::Absent);
+    }
+    let default = devlanes_client::user_home()
+        .map(|home| home.join(".devlanes"))
+        .ok_or_else(|| RpcError::new("no_home", json!({}), 1))?;
+    let default = std::path::absolute(&default).map_err(io)?;
+    Ok(if devlanes_core::paths::same_path(&paths.home, &default) {
+        LoginService::Installed { location }
+    } else {
+        LoginService::OtherHome {
+            location,
+            home: default,
+        }
+    })
+}
+
+/// Removes the logon start (and Task Manager's record of it) and returns its
+/// location; the running daemon keeps running.
+#[cfg(windows)]
+pub(crate) async fn remove_login_service() -> Result<String, RpcError> {
+    logon(|logon| {
+        logon.uninstall()?;
+        Ok(logon.location())
+    })
+    .await
+}
+
+/// Stops the service manager from starting the daemon, removes the per-user
+/// service definition and returns its path; the running daemon keeps running.
+#[cfg(unix)]
+pub(crate) async fn remove_login_service() -> Result<String, RpcError> {
     let manager = Manager::current();
     let path = manager.path(&user_home()?);
     for command in manager.deactivate(&path, rustix::process::getuid().as_raw()) {
         let _ = tokio::process::Command::new(&command[0])
             .args(&command[1..])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .await;
     }
@@ -862,9 +947,7 @@ pub async fn uninstall(runtime: &Runtime) -> Result<u8, RpcError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(io(error)),
     }
-    let _ = runtime;
-    println!("removed {}", path.display());
-    Ok(0)
+    Ok(path.display().to_string())
 }
 
 /// Minimal escaping for plist string values.
@@ -1021,7 +1104,7 @@ fn move_failed(from: &Path, error: std::io::Error) -> RpcError {
 /// Names of the folders under `data_root` shaped like the daemon's project data
 /// folders: real directories holding only lane folders named by number. Anything
 /// else stays, since `lanes.data_dir` may name a folder shared with other files.
-fn project_data_folders(data_root: &Path) -> Result<Vec<std::ffi::OsString>, RpcError> {
+pub(crate) fn project_data_folders(data_root: &Path) -> Result<Vec<std::ffi::OsString>, RpcError> {
     let entries = match std::fs::read_dir(data_root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -1152,6 +1235,24 @@ mod tests {
         assert_eq!(Manager::Systemd.window("TimeoutStopSec=2min\n"), Some(120));
         assert_eq!(Manager::Systemd.window("TimeoutSec=45s\n"), Some(45));
         assert_eq!(Manager::Systemd.window("TimeoutStopSec=infinity\n"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    /// `devlanes uninstall` reads which home a definition's daemon uses, so it
+    /// leaves another home's service alone.
+    fn service_definitions_name_their_home() {
+        let exe = Path::new("/opt/devlanes");
+        let home = Path::new("/home/acme/a & b/.devlanes");
+        for manager in [Manager::Launchd, Manager::Systemd] {
+            let definition = manager.definition(exe, home);
+            assert_eq!(
+                manager.home(&definition).as_deref(),
+                Some(home),
+                "{definition}"
+            );
+            assert_eq!(manager.home("[Service]\nExecStart=/opt/devlanes\n"), None);
+        }
     }
 
     // launchd and systemd only; `daemon/logon.rs` tests the Run entry.
