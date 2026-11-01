@@ -11,9 +11,13 @@ const CTRL_KEYS: &[char] = &['c', 'd', 'u', ']'];
 
 /// The TUI's key event for a browser key, or `None` when the page should
 /// keep it: modifier keys alone, Tab (which moves focus out of the demo,
-/// so the keyboard never gets stuck in it), Alt chords other than typed
-/// symbols, and Ctrl chords outside `CTRL_KEYS`.
-pub fn key_event(key: &str, ctrl: bool, alt: bool, shift: bool) -> Option<KeyEvent> {
+/// so the keyboard never gets stuck in it), Meta chords (Command on macOS,
+/// where the browser's shortcuts live), Alt chords other than typed symbols,
+/// and Ctrl chords outside `CTRL_KEYS`.
+pub fn key_event(key: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) -> Option<KeyEvent> {
+    if meta {
+        return None;
+    }
     if alt {
         // AltGr (Ctrl+Alt on Windows) and Option on macOS type symbols such
         // as `[` or `@` on many layouts; like the native TUI's `altgr`, a
@@ -86,19 +90,19 @@ mod tests {
     #[test]
     fn letters_and_symbols_are_characters() {
         assert_eq!(
-            key_event("j", false, false, false),
+            key_event("j", false, false, false, false),
             event(KeyCode::Char('j'), KeyModifiers::NONE)
         );
         assert_eq!(
-            key_event("M", false, false, true),
+            key_event("M", false, false, true, false),
             event(KeyCode::Char('M'), KeyModifiers::SHIFT)
         );
         assert_eq!(
-            key_event("?", false, false, true),
+            key_event("?", false, false, true, false),
             event(KeyCode::Char('?'), KeyModifiers::SHIFT)
         );
         assert_eq!(
-            key_event(" ", false, false, false),
+            key_event(" ", false, false, false, false),
             event(KeyCode::Char(' '), KeyModifiers::NONE)
         );
     }
@@ -113,7 +117,7 @@ mod tests {
             ("F5", KeyCode::F(5)),
         ] {
             assert_eq!(
-                key_event(key, false, false, false),
+                key_event(key, false, false, false, false),
                 event(code, KeyModifiers::NONE)
             );
         }
@@ -122,38 +126,52 @@ mod tests {
     #[test]
     fn the_page_keeps_tab_modifiers_and_unknown_keys() {
         for key in ["Tab", "Shift", "Control", "Meta", "CapsLock", "F13", "Dead"] {
-            assert_eq!(key_event(key, false, false, false), None, "{key}");
+            assert_eq!(key_event(key, false, false, false, false), None, "{key}");
         }
-        assert_eq!(key_event("Tab", false, false, true), None);
+        assert_eq!(key_event("Tab", false, false, true, false), None);
     }
 
     #[test]
     fn only_listed_ctrl_chords_reach_the_tui() {
         assert_eq!(
-            key_event("c", true, false, false),
+            key_event("c", true, false, false, false),
             event(KeyCode::Char('c'), KeyModifiers::CONTROL)
         );
         assert_eq!(
-            key_event("]", true, false, false),
+            key_event("]", true, false, false, false),
             event(KeyCode::Char(']'), KeyModifiers::CONTROL)
         );
-        assert_eq!(key_event("r", true, false, false), None);
-        assert_eq!(key_event("C", true, false, true), None);
-        assert_eq!(key_event("Enter", true, false, false), None);
+        assert_eq!(key_event("r", true, false, false, false), None);
+        assert_eq!(key_event("C", true, false, true, false), None);
+        assert_eq!(key_event("Enter", true, false, false, false), None);
+    }
+
+    #[test]
+    fn meta_chords_stay_with_the_browser() {
+        for (key, shift) in [
+            ("r", false),
+            ("f", false),
+            ("c", false),
+            ("[", false),
+            ("Z", true),
+        ] {
+            assert_eq!(key_event(key, false, false, shift, true), None, "{key}");
+        }
+        assert_eq!(key_event("c", true, false, false, true), None);
     }
 
     #[test]
     fn altgr_and_option_symbols_are_text_and_other_alt_chords_are_not() {
         assert_eq!(
-            key_event("[", true, true, false),
+            key_event("[", true, true, false, false),
             event(KeyCode::Char('['), KeyModifiers::NONE)
         );
         assert_eq!(
-            key_event("@", false, true, false),
+            key_event("@", false, true, false, false),
             event(KeyCode::Char('@'), KeyModifiers::NONE)
         );
-        assert_eq!(key_event("j", false, true, false), None);
-        assert_eq!(key_event("ø", false, true, false), None);
-        assert_eq!(key_event("ArrowLeft", false, true, false), None);
+        assert_eq!(key_event("j", false, true, false, false), None);
+        assert_eq!(key_event("ø", false, true, false, false), None);
+        assert_eq!(key_event("ArrowLeft", false, true, false, false), None);
     }
 }

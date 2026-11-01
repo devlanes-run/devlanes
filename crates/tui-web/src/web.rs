@@ -126,14 +126,21 @@ impl Demo {
         })
     }
 
-    /// Sends a `KeyboardEvent.key` with its Ctrl, Alt and Shift flags and
-    /// redraws. Returns false when the page should keep the key (Tab,
-    /// modifiers alone, browser shortcuts), so the caller only prevents the
-    /// browser's default when this is true. There is no Meta flag: the
-    /// caller leaves Meta (Command) chords to the browser without calling.
-    pub fn key(&mut self, key: &str, ctrl: bool, alt: bool, shift: bool) -> Result<bool, JsError> {
+    /// Sends a `KeyboardEvent.key` with its Ctrl, Alt, Shift and Meta flags
+    /// and redraws. Returns false when the page should keep the key (Tab,
+    /// modifiers alone, Meta and other browser shortcuts), so the caller
+    /// only prevents the browser's default when this is true. A missing
+    /// `meta` from older callers reads as false.
+    pub fn key(
+        &mut self,
+        key: &str,
+        ctrl: bool,
+        alt: bool,
+        shift: bool,
+        meta: bool,
+    ) -> Result<bool, JsError> {
         let mut screen = self.screen.borrow_mut();
-        let used = screen.session.key(key, ctrl, alt, shift);
+        let used = screen.session.key(key, ctrl, alt, shift, meta);
         if used {
             screen.draw()?;
         }

@@ -41,7 +41,7 @@ fn opens_on_the_fake_lanes_with_this_release() {
 #[test]
 fn shift_m_opens_the_monitor_and_ticks_move_its_graphs() {
     let mut session = Session::new(COLUMNS, ROWS);
-    assert!(session.key("M", false, false, true));
+    assert!(session.key("M", false, false, true, false));
     assert_eq!(session.app().view, View::Monitor);
     let newest = |session: &Session| {
         session
@@ -64,9 +64,11 @@ fn shift_m_opens_the_monitor_and_ticks_move_its_graphs() {
 #[test]
 fn the_page_keeps_tab_and_browser_shortcuts() {
     let mut session = Session::new(COLUMNS, ROWS);
-    assert!(!session.key("Tab", false, false, false));
-    assert!(!session.key("r", true, false, false));
-    assert!(!session.key("Shift", false, false, true));
+    assert!(!session.key("Tab", false, false, false, false));
+    assert!(!session.key("r", true, false, false, false));
+    assert!(!session.key("Shift", false, false, true, false));
+    // Command+Shift+M on macOS: the browser's, so the monitor stays closed.
+    assert!(!session.key("M", false, false, true, true));
     assert_eq!(session.app().view, View::Project);
 }
 
@@ -84,7 +86,7 @@ fn every_key_of_the_hints_draws() {
         ("q", false),
         ("Escape", false),
     ] {
-        session.key(key, false, false, shift);
+        session.key(key, false, false, shift, false);
         session.tick();
         draw(&session);
     }

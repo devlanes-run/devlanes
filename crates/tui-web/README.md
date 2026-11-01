@@ -20,9 +20,8 @@ await init();
 const element = document.getElementById('tui-demo'); // empty, sized in its font's cells
 const demo = new Demo(element.id);
 element.addEventListener('keydown', (event) => {
-  // Command shortcuts belong to the browser; `key` has no Meta flag.
-  if (event.metaKey) return;
-  if (demo.key(event.key, event.ctrlKey, event.altKey, event.shiftKey)) event.preventDefault();
+  const { key, ctrlKey, altKey, shiftKey, metaKey } = event;
+  if (demo.key(key, ctrlKey, altKey, shiftKey, metaKey)) event.preventDefault();
 });
 setInterval(() => demo.tick(), 1000);
 ```
@@ -31,15 +30,15 @@ The same session runs natively, which is how the tests drive it:
 
 ```rust
 let mut session = devlanes_tui_web::Session::new(120, 40);
-session.key("M", false, false, true); // the monitor
+session.key("M", false, false, true, false); // Shift+M: the monitor
 session.tick();
 ```
 
 ## API
 
-- `Demo` (browser build): `new Demo(id)` mounts into an element, `key(key, ctrl, alt, shift)` returns whether the TUI took the key, `tick()` moves the fake daemon on a second, `free()` empties the element.
+- `Demo` (browser build): `new Demo(id)` mounts into an element, `key(key, ctrl, alt, shift, meta)` returns whether the TUI took the key, `tick()` moves the fake daemon on a second, `free()` empties the element.
 - `Session`: the same without the page.
-- `keymap::key_event`: a `KeyboardEvent.key` and its modifiers as the TUI's key event, or `None` for keys the page keeps (Tab, modifiers alone, Alt chords other than typed symbols, and most Ctrl chords).
+- `keymap::key_event`: a `KeyboardEvent.key` and its modifiers as the TUI's key event, or `None` for keys the page keeps (Tab, modifiers alone, Meta chords, Alt chords other than typed symbols, and most Ctrl chords).
 - `palette::apply`: the colors the demo gives the TUI's ANSI and default colors.
 
 ## Sizing

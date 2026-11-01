@@ -36,8 +36,8 @@ impl Session {
 
     /// Sends a browser key to the TUI; false when the page keeps the key
     /// (see [`keymap::key_event`]) and the TUI never saw it.
-    pub fn key(&mut self, key: &str, ctrl: bool, alt: bool, shift: bool) -> bool {
-        match keymap::key_event(key, ctrl, alt, shift) {
+    pub fn key(&mut self, key: &str, ctrl: bool, alt: bool, shift: bool, meta: bool) -> bool {
+        match keymap::key_event(key, ctrl, alt, shift, meta) {
             Some(event) => {
                 self.fake.send(Msg::Key(event));
                 true
