@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use crate::app::{App, DaemonState};
-use crate::exit_summary::INDENT;
+use crate::steps::INDENT;
 
 /// Draws the step block at the top of `area` and the log below it.
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {

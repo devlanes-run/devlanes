@@ -7,12 +7,17 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# The fake daemon and mock data (`demo`) behind the `screens` example and the
+# web demo (crates/tui-web); never in release builds of the devlanes binary
+# (`cargo build -p devlanes`), though a whole-workspace build unifies it in.
+demo = []
+
 [dependencies]
 devlanes-version = { path = "../version" }
 async-trait.workspace = true
 base64 = "0.22"
 bytes.workspace = true
-crossterm = { version = "0.29", features = ["event-stream"] }
 devlanes-client = { path = "../client" }
 # The daemon page words doctor checks exactly as `devlanes doctor` does.
 devlanes-cli = { path = "../cli" }
@@ -21,28 +26,44 @@ devlanes-config = { path = "../config" }
 # Path comparison for the lane that holds the working directory.
 devlanes-core = { path = "../core" }
 devlanes-proto = { path = "../proto" }
-# The `o` key opens URLs with the same opener as `devlanes url open`.
-devlanes-sys = { path = "../sys" }
 devlanes-term = { path = "../term" }
 devlanes-update = { path = "../update" }
 futures-util.workspace = true
-# daemon.log timestamps shown in local time.
-jiff = "0.2"
-ratatui = "0.30"
 serde.workspace = true
 serde_json.workspace = true
 strip-ansi-escapes = "0.2"
 thiserror.workspace = true
-tokio.workspace = true
 tui-term = { version = "0.3", default-features = false }
 unicode-width = "0.2"
 vt100 = "0.18"
+web-time.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+crossterm = { version = "0.29", features = ["event-stream"] }
+# The `o` key opens URLs with the same opener as `devlanes url open`.
+devlanes-sys = { path = "../sys" }
+# daemon.log timestamps shown in local time.
+jiff = "0.2"
+ratatui = "0.30"
+tokio.workspace = true
+
+# The web demo (crates/tui-web) builds this crate for the browser: no terminal
+# backend (crossterm does not build there), tokio's browser features, and jiff
+# reading the clock and time zone from JavaScript.
+[target.'cfg(target_family = "wasm")'.dependencies]
+bitflags = "2"
+jiff = { version = "0.2", features = ["js"] }
+ratatui = { version = "0.30", default-features = false, features = ["all-widgets", "layout-cache", "macros", "std", "underline-color"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 
 [target.'cfg(windows)'.dependencies]
 # File identity for following a rotated daemon.log.
 devlanes-sys-windows = { path = "../sys-windows" }
 
 [dev-dependencies]
+# The `screens` example and the `screens_are_current` test draw against the
+# fake daemon, so tests and examples build this crate with `demo` on.
+devlanes-tui = { path = ".", features = ["demo"] }
 # The `screens` example draws every TUI page to PNG for design review.
 ab_glyph = "0.2"
 insta = { version = "1", features = ["filters"] }

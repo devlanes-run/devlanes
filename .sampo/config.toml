@@ -80,6 +80,7 @@ linked = [[
   "cargo/devlanes-trust-macos",
   "cargo/devlanes-trust-windows",
   "cargo/devlanes-tui",
+  "cargo/devlanes-tui-web",
   "cargo/devlanes-tunnel",
   "cargo/devlanes-update",
   "cargo/devlanes-version",

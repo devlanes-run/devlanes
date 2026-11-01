@@ -1,12 +1,13 @@
 //! Release notices on the client side: their text, their keys, and when each
 //! was last shown or dismissed.
 
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(not(target_family = "wasm"))]
+use crate::InstallMethod;
 use crate::{
-    InstallMethod,
     notes::{Release, WhatsNew},
     version::{Bump, Version},
 };
@@ -19,6 +20,7 @@ const REPEAT_MS: u64 = 24 * 3600 * 1000;
 /// The command notices name for installing `latest`: `devlanes update` where
 /// devlanes installs releases itself, else the upgrade command of how this
 /// binary was installed.
+#[cfg(not(target_family = "wasm"))]
 pub fn update_command(method: &InstallMethod, latest: &str) -> String {
     if crate::install::installs_itself(method) {
         "devlanes update".into()
@@ -194,13 +196,14 @@ pub fn whats_new_on_start(
 /// several TUIs opening at once only one shows them: the others find the
 /// lock taken and show nothing, as does a TUI opening while an update
 /// installs; the next one shows them then. Blocking.
+#[cfg(not(target_family = "wasm"))]
 pub fn claim_whats_new(
     home: &Path,
     running: &str,
     local: bool,
     releases: &[Release],
 ) -> Option<WhatsNew> {
-    let _lock = crate::install::Lock::acquire(home, Duration::ZERO).ok()?;
+    let _lock = crate::install::Lock::acquire(home, std::time::Duration::ZERO).ok()?;
     let log = NoticeLog::read(home);
     let shown = match whats_new_on_start(log.as_ref(), running, local, releases) {
         WhatsNewStart::Nothing => return None,
@@ -224,6 +227,8 @@ pub fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]

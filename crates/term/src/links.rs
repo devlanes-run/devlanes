@@ -89,8 +89,9 @@ pub fn link(links: Option<&Links>, text: &str, url: &str) -> String {
 }
 
 /// `file://` and the absolute path, percent-encoded. The host is left out,
-/// which RFC 8089 reads as this machine.
-#[cfg(unix)]
+/// which RFC 8089 reads as this machine. The browser build (crates/tui-web)
+/// has Unix-style paths, so it takes this form too.
+#[cfg(not(windows))]
 pub fn file_url(path: &Path) -> String {
     let mut url = String::from("file://");
     for byte in path.to_string_lossy().bytes() {

@@ -4,8 +4,14 @@
 //! notices clients show. The daemon finds new releases and, with
 //! `updates.mode: auto`, installs patch releases; `devlanes update` installs
 //! the latest release when it is newer.
+//!
+//! The browser build (crates/tui-web) keeps what the TUI shows (install
+//! methods, versions, notes, notices) and leaves out checking and installing
+//! releases, which need processes and files the browser does not have.
 
+#[cfg(not(target_family = "wasm"))]
 pub mod check;
+#[cfg(not(target_family = "wasm"))]
 pub mod install;
 mod method;
 pub mod notes;
@@ -21,9 +27,11 @@ pub use method::{
     entry_or, installed_version, running_exe, script_install_command, spawn_exe, version_of,
 };
 pub use notice::{
-    NoticeLog, WhatsNewStart, claim_whats_new, now_ms, ready_key, ready_line, skew_key, skew_line,
-    update_command, update_key, update_line, whats_new_on_start,
+    NoticeLog, WhatsNewStart, now_ms, ready_key, ready_line, skew_key, skew_line, update_key,
+    update_line, whats_new_on_start,
 };
+#[cfg(not(target_family = "wasm"))]
+pub use notice::{claim_whats_new, update_command};
 #[cfg(windows)]
 pub use old_copies::{OldCopies, remove_old_copies};
 #[cfg(windows)]

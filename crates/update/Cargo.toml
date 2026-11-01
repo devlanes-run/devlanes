@@ -16,8 +16,11 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+
 # Release checks and installs run `curl`, `tar` and package managers from the
-# caller's runtime.
+# caller's runtime. The TUI web demo (crates/tui-web) builds this crate for the
+# browser without them, where tokio has no processes or files.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 tokio.workspace = true
 
 # Which processes still run, for the executables they keep.

@@ -12,8 +12,9 @@ use std::{
 
 /// Lane path spellings a selector may use. Unix knows `/`, `./` and `~/`;
 /// Windows adds drive letters, UNC paths and `\`, whose `C:` colon must not
-/// be read as the `lane:unit` separator.
-#[cfg(unix)]
+/// be read as the `lane:unit` separator. The browser build (crates/tui-web)
+/// takes the Unix forms.
+#[cfg(not(windows))]
 mod os {
     /// Bytes at the start of `input` that belong to a drive prefix: none on Unix.
     pub(super) fn drive_prefix_len(_input: &str) -> usize {

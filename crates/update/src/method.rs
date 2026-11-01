@@ -281,7 +281,7 @@ impl InstallMethod {
             Self::UvPip(venv) => os::uv_pip_upgrade(venv),
             Self::Local { manifest } => format!("update devlanes in {}", manifest.display()),
             Self::Source => format!("git pull, then cargo build --release (v{version})"),
-            #[cfg(unix)]
+            #[cfg(not(windows))]
             Self::Script(dir) => os::script_upgrade(dir, false),
             #[cfg(windows)]
             Self::Script(dir) => os::script_upgrade(dir),
@@ -584,8 +584,8 @@ fn uv_receipt_lists(receipt: &str, exe: &Path) -> bool {
 }
 
 /// macOS and Linux: `install.sh`, POSIX shell quoting, paths matched as they
-/// are.
-#[cfg(unix)]
+/// are. The browser build (crates/tui-web) words install methods as on Unix.
+#[cfg(not(windows))]
 mod os {
     use std::path::{Path, PathBuf};
 

@@ -1,7 +1,8 @@
 //! Encodes keys, paste and mouse events into the bytes a terminal program expects.
 
 use base64::Engine;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+use crate::keys::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 /// The vt100 modes that change how input is encoded.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

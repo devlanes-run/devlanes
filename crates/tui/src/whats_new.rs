@@ -6,7 +6,6 @@
 
 use std::cell::{Cell, RefCell};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_update::notes::{Level, WhatsNew};
 use ratatui::{
     Frame,
@@ -16,6 +15,7 @@ use ratatui::{
     widgets::{Clear, Paragraph},
 };
 
+use crate::keys::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use crate::menu::{centered, floating_box};
 use crate::text::{self, clean};
 use crate::theme::{Glyph, Theme, Tone};

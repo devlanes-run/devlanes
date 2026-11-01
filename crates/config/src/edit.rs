@@ -84,8 +84,9 @@ fn rewrite(
     rename(&temporary, path).map_err(|error| ConfigError::io(path, error))
 }
 
-/// Applies `edit` to the file's text.
-#[cfg(unix)]
+/// Applies `edit` to the file's text. The browser build (crates/tui-web)
+/// edits as Unix does.
+#[cfg(not(windows))]
 fn edit_keeping_line_breaks(
     source: &str,
     edit: impl FnOnce(&str) -> Result<String, ConfigError>,
@@ -109,7 +110,7 @@ fn edit_keeping_line_breaks(
 }
 
 /// Replaces the config with the edited file. Blocks.
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }

@@ -675,6 +675,7 @@ pub fn log_filename(unit: &str) -> String {
 }
 
 /// Atomically replaces each unit's artifact so repeated runs do not retain stale logs.
+#[cfg(not(target_family = "wasm"))]
 pub async fn write_log_artifacts(
     directory: &Path,
     logs: &[UnitLogs],
@@ -719,6 +720,16 @@ pub async fn write_log_artifacts(
     } else {
         Ok(files)
     }
+}
+
+/// The browser build (crates/tui-web) has no directory to write into, and
+/// tokio has no `fs` there.
+#[cfg(target_family = "wasm")]
+pub async fn write_log_artifacts(
+    _directory: &Path,
+    _logs: &[UnitLogs],
+) -> std::io::Result<Vec<PathBuf>> {
+    Err(std::io::ErrorKind::Unsupported.into())
 }
 
 /// Whether the peak table goes to stdout: in CI and when output is captured

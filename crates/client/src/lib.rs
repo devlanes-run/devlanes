@@ -132,7 +132,7 @@ pub enum Error {
     Rpc(RpcError),
     #[error("daemon v{version} (build {build_id}) runs {managed_processes} processes with protocol {protocol}; run devlanes daemon restart", version = .peer.version, build_id = .peer.build_id, managed_processes = .peer.managed_processes, protocol = .peer.protocol)]
     Incompatible { peer: Hello },
-    #[cfg_attr(unix, error("daemon peer uid does not match this user"))]
+    #[cfg_attr(not(windows), error("daemon peer uid does not match this user"))]
     #[cfg_attr(windows, error("the daemon's pipe belongs to another account"))]
     WrongPeer,
     #[error("expected {0} from daemon")]
@@ -677,7 +677,11 @@ pub fn sandbox_reason() -> Option<&'static str> {
         .find(|name| std::env::var_os(name).is_some())
 }
 
+// The environment allowlist, the readiness reader and the handover below serve
+// a daemon spawn, which the browser build (crates/tui-web) never makes.
+
 /// Variables an auto-spawned daemon inherits from the spawning shell, by exact name.
+#[cfg(not(target_family = "wasm"))]
 const DAEMON_ENV: &[&str] = &[
     "PATH",
     "HOME",
@@ -714,6 +718,7 @@ const DAEMON_ENV: &[&str] = &[
 
 /// Prefixes of further inherited variables: locale, XDG directories, the Docker
 /// CLI's settings and devlanes' own.
+#[cfg(not(target_family = "wasm"))]
 const DAEMON_ENV_PREFIXES: &[&str] = &["LC_", "XDG_", "DOCKER_", "DEVLANES_"];
 
 /// Nothing beyond the shared list on Unix.
@@ -753,6 +758,7 @@ const PLATFORM_ENV: &[&str] = &[
 /// The allowlisted part of `vars` for an auto-spawned daemon, minus `remove`.
 /// Anything else a shell carries (tokens, project variables) stays out of a
 /// process that serves every later shell.
+#[cfg(not(target_family = "wasm"))]
 fn daemon_env(
     vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     remove: &[&str],
@@ -794,9 +800,12 @@ fn same_name(name: &str, listed: &str) -> bool {
 type ReadyLines = tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>;
 
 /// Most lines the readiness reader holds before the client takes them.
+#[cfg(not(target_family = "wasm"))]
 const READY_LINES_QUEUED: usize = 16;
 
 /// A daemon that takes over from a running one ([`devlanes_proto::REPLACE_ENV`]).
+// The browser build's `start_daemon` refuses before it reads one.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) struct Replace {
     /// The pid of the daemon it replaces, or 0 when unknown.
     pub pid: u32,
@@ -823,6 +832,7 @@ impl Handover {
 
 /// The two lines a replacing daemon reads on stdin: the plan, and
 /// [`devlanes_proto::REPLACE_GO`] for when the old daemon is being stopped.
+#[cfg(not(target_family = "wasm"))]
 fn handover_lines(plan: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let mut first = plan.to_vec();
     first.push(b'\n');
@@ -834,6 +844,7 @@ fn handover_lines(plan: &[u8]) -> (Vec<u8>, Vec<u8>) {
 /// The executable to spawn as the daemon: this install's stable path (see
 /// [`devlanes_update::spawn_exe`]), so a client that outlived an upgrade
 /// starts the binary installed now. Reads the filesystem on a blocking thread.
+#[cfg(not(target_family = "wasm"))]
 async fn daemon_exe() -> Result<PathBuf> {
     Ok(tokio::task::spawn_blocking(devlanes_update::spawn_exe)
         .await
@@ -917,6 +928,7 @@ async fn start_daemon(
 
 /// Whether the reader goes on after `read`: only a whole step line has more
 /// lines after it.
+#[cfg(not(target_family = "wasm"))]
 fn more_lines(read: &std::io::Result<Vec<u8>>) -> bool {
     read.as_ref().is_ok_and(|line| startup_step(line).is_some())
 }
@@ -971,6 +983,17 @@ fn read_lines_blocking(pipe: impl std::io::Read + Send + 'static) -> std::io::Re
             }
         })?;
     Ok(lines)
+}
+
+/// The browser build cannot spawn a daemon; it talks to a fake one in the page.
+#[cfg(target_family = "wasm")]
+async fn start_daemon(
+    _paths: &Paths,
+    _remove_env: &[&str],
+    _begun: Instant,
+    _replace: Option<Replace>,
+) -> Result<(ReadyLines, bool, Option<Handover>)> {
+    Err(Error::Startup("no daemon in the browser".into()))
 }
 
 /// Spawns `devlanes daemon run` and returns the lines of its readiness pipe
@@ -1169,6 +1192,10 @@ async fn read_answer(paths: &Paths, mut lines: ReadyLines, begun: Instant) -> Re
 #[cfg(unix)]
 const PROBE_FAILED: &str = "Unix socket bind probe failed";
 
+/// What a failed endpoint probe says: the browser build has no endpoint.
+#[cfg(target_family = "wasm")]
+const PROBE_FAILED: &str = "no local endpoint in the browser";
+
 /// What a failed endpoint probe says.
 #[cfg(windows)]
 const PROBE_FAILED: &str = "named pipe probe failed";
@@ -1193,6 +1220,7 @@ const STALE_REPLACING: Duration = Duration::from_secs(1);
 
 /// The pid in the [`REPLACING_MARKER`] while that process runs. A marker
 /// left by a daemon that died counts as none.
+#[cfg(not(target_family = "wasm"))]
 async fn replacing(paths: &Paths) -> Option<u32> {
     let text = tokio::fs::read_to_string(paths.run.join(REPLACING_MARKER))
         .await
@@ -1202,6 +1230,12 @@ async fn replacing(paths: &Paths) -> Option<u32> {
         .await
         .unwrap_or(false)
         .then_some(pid)
+}
+
+/// The browser build has no filesystem and so no marker; tokio has no `fs` there.
+#[cfg(target_family = "wasm")]
+async fn replacing(_paths: &Paths) -> Option<u32> {
+    None
 }
 
 /// Whether a process with `pid` runs (blocking on Windows). A reused pid can
@@ -1223,10 +1257,17 @@ fn process_alive(pid: u32) -> bool {
 
 /// Whether the [`STARTING_MARKER`] exists. Alone it proves nothing: a daemon
 /// that died while starting leaves it behind with its lock free.
+#[cfg(not(target_family = "wasm"))]
 async fn marker_exists(paths: &Paths) -> bool {
     tokio::fs::try_exists(paths.run.join(STARTING_MARKER))
         .await
         .unwrap_or(false)
+}
+
+/// The browser build has no filesystem and so no marker; tokio has no `fs` there.
+#[cfg(target_family = "wasm")]
+async fn marker_exists(_paths: &Paths) -> bool {
+    false
 }
 
 /// Whether a daemon holds its lock and has not accepted a connection yet, so

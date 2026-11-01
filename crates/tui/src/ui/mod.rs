@@ -14,7 +14,6 @@ mod monitor;
 mod pane;
 mod unavailable;
 
-use crossterm::event::{KeyCode, KeyModifiers};
 use devlanes_proto::{LaneSummary, ORPHANED, UnitSummary};
 use ratatui::{
     Frame,
@@ -28,6 +27,7 @@ use crate::app::{
     App, AttachState, Click, Connection, DaemonState, Focus, MIN_HEIGHT, MIN_WIDTH, PaneMode,
     ReleaseNotice, Target, View,
 };
+use crate::keys::{KeyCode, KeyModifiers};
 use crate::steps::LogoState;
 use crate::text::{self, clean, clip};
 use crate::theme::{Glyph, Theme, Tier, Tone};
@@ -430,8 +430,8 @@ pub(crate) fn task_look(theme: &Theme, info: Option<&crate::api::TaskInfo>, spin
 
 /// `3m ago` for a Unix millisecond time.
 pub(crate) fn ago(ms: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let now = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
     let seconds = now.saturating_sub(ms) / 1000;
     match seconds {

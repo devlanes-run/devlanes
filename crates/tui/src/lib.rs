@@ -5,7 +5,13 @@
 //!
 //! Quitting closes connections and units keep running in the daemon, unless
 //! the user chooses to stop the project's lanes on the way out.
+//!
+//! The web demo (crates/tui-web) builds the app and its drawing for the
+//! browser; what needs a real terminal (the event loop, the exit summary,
+//! the inline step printing) is left out of that build, and what reads the
+//! daemon's machine (daemon.log, config.yaml) fails there at run time.
 
+#[cfg(not(target_family = "wasm"))]
 mod ansi;
 pub mod api;
 pub mod app;
@@ -15,16 +21,21 @@ pub mod boxes;
 pub mod clients;
 pub mod connect;
 pub mod daemonlog;
+#[cfg(feature = "demo")]
+pub mod demo;
 pub mod doctor;
+#[cfg(not(target_family = "wasm"))]
 pub mod exit_summary;
 pub mod graph;
 #[cfg(windows)]
 mod home;
 pub mod hyperlink;
 pub mod input;
+pub mod keys;
 pub mod logfile;
 pub mod menu;
 pub mod monitor;
+#[cfg(not(target_family = "wasm"))]
 mod runtime;
 pub mod screen;
 pub mod settings;
@@ -38,6 +49,7 @@ pub mod welcome;
 pub mod whats_new;
 pub mod words;
 
+#[cfg(not(target_family = "wasm"))]
 use std::{io::IsTerminal, sync::Arc};
 
 pub use api::{
@@ -46,6 +58,7 @@ pub use api::{
     SystemMetrics, UnitMetrics, Window,
 };
 pub use devlanes_client::Paths;
+#[cfg(not(target_family = "wasm"))]
 pub use runtime::{TerminalGuard, drive, drive_start};
 
 /// The variable a relaunched TUI reads its [`Reopen`] from, as JSON.
@@ -150,7 +163,7 @@ pub struct Options {
 /// calls it only once its terminal is set up: a TUI that does not open
 /// claims nothing. Blocking.
 pub type WhatsNewClaim =
-    Arc<dyn Fn() -> (Option<devlanes_update::notes::WhatsNew>, bool) + Send + Sync>;
+    std::sync::Arc<dyn Fn() -> (Option<devlanes_update::notes::WhatsNew>, bool) + Send + Sync>;
 
 impl Options {
     /// The colors and glyphs for this terminal, from the environment and
@@ -171,6 +184,7 @@ impl Options {
 }
 
 /// Opens the TUI for bare `devlanes` and `devlanes ui` with default options.
+#[cfg(not(target_family = "wasm"))]
 pub async fn run(paths: Paths) -> Result<Option<Relaunch>, Error> {
     run_with(paths, Options::default()).await
 }
@@ -181,6 +195,7 @@ pub async fn run(paths: Paths) -> Result<Option<Relaunch>, Error> {
 /// so connection errors print normally. Once the user quit, prints the
 /// [`exit_summary`]; a close for an [`ExitReason`] prints nothing and
 /// returns it with where to open again.
+#[cfg(not(target_family = "wasm"))]
 pub async fn run_with(paths: Paths, options: Options) -> Result<Option<Relaunch>, Error> {
     open(paths, options, None)
         .await
@@ -189,6 +204,7 @@ pub async fn run_with(paths: Paths, options: Options) -> Result<Option<Relaunch>
 
 /// Opens the TUI on a start the daemon already accepted (see [`start`]) and
 /// follows it until the user quits. Quitting never stops it.
+#[cfg(not(target_family = "wasm"))]
 pub async fn run_start(
     paths: Paths,
     options: Options,
@@ -204,6 +220,7 @@ pub async fn run_start(
 /// Runs the TUI on the real terminal, then prints the [`exit_summary`]
 /// unless it closed for an [`ExitReason`]; returns the app as it was when
 /// it closed, and that reason with where to open again.
+#[cfg(not(target_family = "wasm"))]
 async fn open(
     paths: Paths,
     options: Options,

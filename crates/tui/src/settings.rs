@@ -10,7 +10,6 @@
 
 use std::{cell::RefCell, collections::HashMap, path::PathBuf};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_config::Applies;
 use ratatui::{
     Frame,
@@ -23,6 +22,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::app::{Effect, Msg};
+use crate::keys::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use crate::menu::{centered, floating_box};
 use crate::text::{self, clip};
 use crate::theme::{Glyph, Glyphs, Theme, Tone};
@@ -1015,7 +1015,7 @@ pub fn perform(request: Request, home: Option<PathBuf>, sender: mpsc::Sender<Msg
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
             Err(error) => Err(format!("Cannot read {}: {error}.", path.display())),
         };
-        #[cfg(unix)]
+        #[cfg(not(windows))]
         let shown = match std::env::var_os("HOME").map(PathBuf::from) {
             Some(user) if path.starts_with(&user) => {
                 format!("~/{}", path.strip_prefix(&user).unwrap_or(&path).display())

@@ -35,6 +35,9 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 tokio-util = { version = "0.7", features = ["codec", "rt"] }
 tracing = "0.1"
 tempfile = "3"
+# `std::time::Instant` and `SystemTime` natively (re-exported, so the types are
+# std's); the browser's clock in the TUI web demo, where std's clock panics.
+web-time = "1"
 windows-sys = { version = "0.61", default-features = false }
 zstd = { version = "0.13", default-features = false }
 
@@ -59,3 +62,13 @@ lto = "thin"
 # The macOS runners have 3 cores, so more units than 4 gain little.
 codegen-units = 4
 strip = true
+
+# The TUI web demo (crates/tui-web, `packaging/scripts/tui-web.sh`): every visitor
+# downloads it, so size wins over build time and speed.
+[profile.web]
+inherits = "release"
+# `z` over `s`: measured on the first build, 1.04 MB gzipped instead of 1.24 MB.
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"

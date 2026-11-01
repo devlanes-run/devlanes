@@ -274,8 +274,8 @@ fn span(seconds: usize) -> String {
 
 /// The newest timestamp in the metrics, else the clock.
 fn newest(metrics: Option<&Metrics>) -> u64 {
-    let clock = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
+    let clock = web_time::SystemTime::now()
+        .duration_since(web_time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64);
     let Some(metrics) = metrics else {
         return clock;

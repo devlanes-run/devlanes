@@ -22,6 +22,7 @@ use crate::{
     ansi,
     api::{ApiError, DaemonApi},
     banner,
+    steps::INDENT,
     theme::{Theme, Tone},
     tree,
 };
@@ -29,9 +30,6 @@ use crate::{
 /// How long the daemon gets to answer `status` and `daemon.status` before
 /// the summary says it did not.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(1);
-/// Columns before the banner and each line; the step block of `daemon stop`
-/// and `daemon restart` uses it too, so both line up in the shell.
-pub(crate) const INDENT: u16 = 2;
 /// The banner's tallest font is too much for a shell: the medium and small
 /// ones fit in this many rows.
 const BANNER_ROWS: u16 = 5;
