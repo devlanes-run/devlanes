@@ -3,7 +3,7 @@
 
 use devlanes_tui::{
     app::Msg,
-    demo::Fake,
+    demo::{Fake, Scene},
     theme::{Glyphs, Theme, Tier},
 };
 
@@ -15,11 +15,11 @@ pub struct Session {
 }
 
 impl Session {
-    /// A TUI of `columns` x `rows` cells with the fake daemon's lanes loaded.
+    /// A TUI of `columns` x `rows` cells on the website's scene
+    /// ([`Scene::web`]: `myapp`, healthy, at this release) with its lanes
+    /// loaded.
     pub fn new(columns: u16, rows: u16) -> Self {
-        let mut fake = Fake::new(columns, rows);
-        // The demo shows the release it was built from; the screens pin theirs.
-        fake.app.version = devlanes_version::VERSION;
+        let mut fake = Fake::with_scene(columns, rows, Scene::web());
         // The page is dark and the browser has no COLORTERM to detect from;
         // the ANSI tier would get Ratzilla's dim default palette.
         fake.app.theme = Theme {
@@ -50,5 +50,18 @@ impl Session {
     /// TUI ticks (spinners, notices, the monitor's refetch).
     pub fn tick(&mut self) {
         self.fake.tick();
+    }
+
+    /// The TUI's size in cells.
+    pub fn size(&self) -> (u16, u16) {
+        self.fake.app.size
+    }
+
+    /// The screen is now `columns` x `rows` cells; the TUI keeps its view,
+    /// selection and open unit and lays them out again.
+    pub fn resize(&mut self, columns: u16, rows: u16) {
+        if self.size() != (columns, rows) {
+            self.fake.send(Msg::Resize(columns, rows));
+        }
     }
 }

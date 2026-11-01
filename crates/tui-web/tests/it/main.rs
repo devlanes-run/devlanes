@@ -1,17 +1,23 @@
 //! The web demo's session on the fake daemon: keys reach the TUI, ticks move
-//! the monitor's graphs, and every state draws at the website's size.
+//! the monitor's graphs, resizes keep the view, and every state draws.
 
-use devlanes_tui::{app::View, ui};
+use devlanes_tui::{
+    app::View,
+    demo::web,
+    doctor::{self, CheckState},
+    ui,
+};
 use devlanes_tui_web::Session;
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
-/// The size the website gives the demo.
+/// The size the website gives the demo on a wide screen.
 const COLUMNS: u16 = 120;
 const ROWS: u16 = 40;
 
-/// The session as the page shows it.
+/// The session as the page shows it, at the session's size.
 fn draw(session: &Session) -> Buffer {
-    let mut terminal = match Terminal::new(TestBackend::new(COLUMNS, ROWS)) {
+    let (columns, rows) = session.size();
+    let mut terminal = match Terminal::new(TestBackend::new(columns, rows)) {
         Ok(terminal) => terminal,
         Err(error) => panic!("test backend: {error}"),
     };
@@ -25,17 +31,43 @@ fn draw(session: &Session) -> Buffer {
 fn text(buffer: &Buffer) -> String {
     buffer
         .content()
-        .chunks(usize::from(COLUMNS))
+        .chunks(usize::from(buffer.area.width))
         .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>())
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 #[test]
-fn opens_on_the_fake_lanes_with_this_release() {
+fn opens_on_the_website_project_at_this_release() {
     let session = Session::new(COLUMNS, ROWS);
     assert_eq!(session.app().version, devlanes_version::VERSION);
-    assert!(text(&draw(&session)).contains("acme"));
+    let screen = text(&draw(&session));
+    assert!(screen.contains("myapp"), "{screen}");
+    assert!(!screen.contains("acme"), "{screen}");
+    // The daemon runs this release too, so nothing offers an update.
+    assert!(!screen.contains("update"), "{screen}");
+}
+
+#[test]
+fn the_website_daemon_passes_every_doctor_check() {
+    let failing: Vec<_> = doctor::checks(&web::doctor())
+        .into_iter()
+        .filter(|check| check.state != CheckState::Ok)
+        .collect();
+    assert!(failing.is_empty(), "{failing:?}");
+}
+
+#[test]
+fn a_resize_keeps_the_view_and_lays_it_out_again() {
+    let mut session = Session::new(COLUMNS, ROWS);
+    assert!(session.key("M", false, false, true, false));
+    session.resize(96, 32);
+    assert_eq!(session.size(), (96, 32));
+    assert_eq!(session.app().view, View::Monitor);
+    assert!(text(&draw(&session)).contains("units"));
+    session.resize(COLUMNS, ROWS);
+    assert_eq!(session.app().view, View::Monitor);
+    draw(&session);
 }
 
 #[test]

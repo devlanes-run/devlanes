@@ -34,7 +34,7 @@ async fn main() -> Result<(), devlanes_tui::Error> {
 - `tree` builds a lane's rows; `monitor` sorts, filters and groups the monitor's rows; `graph` draws braille graphs, sparklines and meters in the load gradient.
 - `boxes` reads `host.list` and turns each connected box's registry into read-only lanes (`acme@1 @hetzner` in project `acme`), each a `BoxLane` that names its box; `clients` reads `remote.clients`.
 - `connect` holds the boxes view's modals: the new connection form, the prompts of an attached `connect` and the pairing code.
-- `demo::Fake` (feature `demo`) is a fake daemon with mock data that answers the app's effects at once; the `screens` example and the web demo (`devlanes-tui-web`) run on it.
+- `demo::Fake` (feature `demo`) is a fake daemon that answers the app's effects at once from a `demo::Scene` of mock data: `Scene::screens` (the `acme` monorepo the `screens` example draws) or `Scene::web` (the healthy `myapp` the web demo, `devlanes-tui-web`, shows).
 - `keys` holds the key and mouse event types the app takes: crossterm's natively, copies of them in the browser build.
 
 ## Browser build

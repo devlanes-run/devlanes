@@ -1,21 +1,86 @@
-//! A fake daemon that answers every effect of the [`App`] at once, from the
-//! mock data in [`data`]. The `screens` example draws every page against it,
-//! and the web demo (crates/tui-web) runs the TUI in the browser on it.
+//! A fake daemon that answers every effect of the [`App`] at once, from mock
+//! data. The `screens` example draws every page against [`data`], and the
+//! web demo (crates/tui-web) runs the TUI in the browser on [`web`].
 
 pub mod data;
+pub mod web;
 
 use std::collections::VecDeque;
 
-use devlanes_proto::{AttachResult, Event, Page, RpcError};
-use serde_json::json;
+use devlanes_proto::{AttachResult, Event, LaneSummary, LogLine, Page, RpcError};
+use serde_json::{Value, json};
 
 use crate::{
-    ApiError,
+    ApiError, Metrics,
+    api::{ProfileList, TaskInfo},
     app::{App, Effect, Msg, RowId, Selected},
     keys::{KeyCode, KeyEvent, KeyModifiers},
     logfile::{LogChunk, LogPosition},
     settings,
 };
+
+/// The mock data one fake daemon answers with.
+#[derive(Clone, Copy)]
+pub struct Scene {
+    /// What `status` answers first.
+    pub lanes: fn() -> Vec<LaneSummary>,
+    /// `metrics` a number of seconds after the scene's clock.
+    pub metrics_at: fn(u64) -> Metrics,
+    pub daemon_status: fn() -> Value,
+    pub doctor: fn() -> Value,
+    pub profiles: fn(&str) -> ProfileList,
+    pub tasks: fn(&str) -> Vec<TaskInfo>,
+    /// A unit's terminal, by unit name.
+    pub screen: fn(&str) -> Vec<u8>,
+    /// A unit's stored log, by unit name.
+    pub log_page: fn(&str) -> Vec<LogLine>,
+    pub container_logs: fn(&str) -> Vec<u8>,
+    pub daemon_log: fn() -> Vec<String>,
+    /// The TUI's version, against the daemon's in `daemon_status`.
+    pub version: &'static str,
+    /// The worktree the TUI was opened from, whose lane shows first.
+    pub path: &'static str,
+}
+
+impl Scene {
+    /// The 45-unit `acme` monorepo and its neighbours, with every state the
+    /// committed screens show.
+    pub fn screens() -> Self {
+        Self {
+            lanes: data::lanes,
+            metrics_at: data::metrics_at,
+            daemon_status: data::daemon_status,
+            doctor: data::doctor,
+            profiles: data::profiles,
+            tasks: data::tasks,
+            screen: data::screen,
+            log_page: data::log_page,
+            container_logs: data::container_logs,
+            daemon_log: data::daemon_log,
+            version: data::VERSION,
+            path: "/work/acme",
+        }
+    }
+
+    /// The website's `myapp`: four lanes, three services, shared infra, all
+    /// healthy, at this release's version.
+    pub fn web() -> Self {
+        Self {
+            lanes: web::lanes,
+            metrics_at: web::metrics_at,
+            daemon_status: web::daemon_status,
+            doctor: web::doctor,
+            profiles: web::profiles,
+            tasks: web::tasks,
+            screen: web::screen,
+            log_page: web::log_page,
+            container_logs: data::container_logs,
+            daemon_log: web::daemon_log,
+            version: devlanes_version::VERSION,
+            path: web::PATH,
+        }
+    }
+}
 
 /// Messages one step may cause before the fake daemon stops answering.
 const STEP_BUDGET: usize = 2_000;
@@ -48,8 +113,10 @@ pub struct Fake {
     /// unless a scene has it ask something or fail.
     pub connect: fn(u64, &str) -> Vec<Msg>,
     /// Seconds the fake daemon's clock moved on from [`data::NOW_MS`];
-    /// `metrics` answers [`data::metrics_at`] this step.
+    /// `metrics` answers the scene's `metrics_at` this step.
     pub step: u64,
+    /// The rest of what the fake daemon answers.
+    pub scene: Scene,
 }
 
 /// A `remote.state` or `remote.prompt` event of the `connect` `generation`.
@@ -74,23 +141,30 @@ pub fn connecting(generation: u64, host: &str) -> Vec<Msg> {
 }
 
 impl Fake {
-    /// A TUI of `width` x `height` that subscribed and loaded the lanes.
+    /// A TUI of `width` x `height` on the screens' scene ([`Scene::screens`])
+    /// that subscribed and loaded the lanes.
     pub fn new(width: u16, height: u16) -> Self {
+        Self::with_scene(width, height, Scene::screens())
+    }
+
+    /// A TUI of `width` x `height` on `scene` that subscribed and loaded the
+    /// lanes.
+    pub fn with_scene(width: u16, height: u16, scene: Scene) -> Self {
         let mut app = App::new(width, height);
-        app.version = data::VERSION;
+        app.version = scene.version;
         // Step times count from here, so they draw the same on every run.
         app.clock = Some(web_time::Instant::now());
-        // Opened from the monorepo's main worktree.
-        app.prefer_path("/work/acme".into());
+        app.prefer_path(scene.path.into());
         let mut fake = Self {
             app,
             queue: VecDeque::new(),
-            lanes: data::lanes,
+            lanes: scene.lanes,
             boxes: json!({"items": []}),
             clients: data::no_clients(),
             pairing: Ok(data::pair_code()),
             connect: connecting,
             step: 0,
+            scene,
         };
         for effect in fake.app.start() {
             fake.answer(effect);
@@ -203,6 +277,8 @@ impl Fake {
                 .map_or(reference, |(_, unit)| unit)
                 .to_owned()
         };
+        let scene = self.scene;
+        let screen_view = |unit: &str, columns, rows| screen_view(scene, unit, columns, rows);
         let reply = match effect {
             Effect::Subscribe => vec![Msg::Subscribed(Ok(()))],
             Effect::Refresh => vec![Msg::Status(Ok((self.lanes)()))],
@@ -246,7 +322,7 @@ impl Fake {
                 },
                 Msg::AttachOutput {
                     generation,
-                    bytes: data::container_logs(&container),
+                    bytes: (scene.container_logs)(&container),
                 },
             ],
             Effect::FetchLogs {
@@ -259,16 +335,16 @@ impl Fake {
                     .unwrap_or_default();
                 vec![Msg::Logs {
                     generation,
-                    result: Ok(Page::complete(data::log_page(&unit))),
+                    result: Ok(Page::complete((scene.log_page)(&unit))),
                 }]
             }
-            Effect::FetchMetrics(_) => vec![Msg::Metrics(Ok(data::metrics_at(self.step)))],
+            Effect::FetchMetrics(_) => vec![Msg::Metrics(Ok((scene.metrics_at)(self.step)))],
             Effect::FetchDaemon => vec![Msg::DaemonInfo {
-                status: Ok(data::daemon_status()),
-                doctor: Ok(data::doctor()),
+                status: Ok((scene.daemon_status)()),
+                doctor: Ok((scene.doctor)()),
             }],
             Effect::ReadDaemonLog { .. } => vec![Msg::DaemonLog(Ok(LogChunk {
-                lines: data::daemon_log(),
+                lines: (scene.daemon_log)(),
                 position: LogPosition {
                     offset: 4_096,
                     file: (1, 1),
@@ -276,11 +352,11 @@ impl Fake {
                 reset: true,
             }))],
             Effect::FetchProfiles { lane } => vec![Msg::Profiles {
-                result: Ok(data::profiles(&lane)),
+                result: Ok((scene.profiles)(&lane)),
                 lane,
             }],
             Effect::FetchTasks { lane } => vec![Msg::Tasks {
-                result: Ok(data::tasks(&lane)),
+                result: Ok((scene.tasks)(&lane)),
                 lane,
             }],
             Effect::FetchBoxes => vec![Msg::Boxes(Ok(self.boxes.clone()))],
@@ -316,8 +392,8 @@ impl Fake {
 }
 
 /// The daemon's whole redraw of `unit`'s stream at `columns`x`rows`: its
-/// screen, with older lines in the log as `log_page` has them.
-fn screen_view(unit: &str, columns: u16, rows: u16) -> devlanes_proto::AttachView {
+/// screen in `scene`, with older lines in the log as `log_page` has them.
+fn screen_view(scene: Scene, unit: &str, columns: u16, rows: u16) -> devlanes_proto::AttachView {
     devlanes_proto::AttachView {
         stream_id: 1,
         from: 0,
@@ -326,7 +402,7 @@ fn screen_view(unit: &str, columns: u16, rows: u16) -> devlanes_proto::AttachVie
         before_seq: 60,
         columns,
         rows,
-        screen: String::from_utf8_lossy(&data::screen(unit)).into_owned(),
+        screen: String::from_utf8_lossy(&(scene.screen)(unit)).into_owned(),
         whole: true,
     }
 }

@@ -71,7 +71,7 @@ const TASKS: [&str; 11] = [
 
 /// A unit with the fields a daemon fills for every unit. Like most monorepos
 /// it has no tags, so the daemon colors it by the name's first segment.
-fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
+pub(super) fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
     let color = devlanes_core::color::unit_color(&[], name, None, &BTreeMap::new());
     // Running units started 2h 14m before the fake's clock.
     let live = matches!(state, "ready" | "running" | "starting" | "failed");
@@ -102,7 +102,7 @@ fn external(lane: &str, name: &str, port: u16, host: Option<&str>) -> UnitSummar
 }
 
 /// Containers by name, host port and whether they are shared project infra.
-fn containers(list: &[(&str, u16, bool)]) -> Vec<ContainerSummary> {
+pub(super) fn containers(list: &[(&str, u16, bool)]) -> Vec<ContainerSummary> {
     list.iter()
         .map(|(name, port, shared)| ContainerSummary {
             name: (*name).into(),
@@ -1009,7 +1009,13 @@ fn sample_ts(step: u64, i: u64) -> u64 {
 /// 15 minutes of `(ts, cpu, memory)` around `cpu` and `memory`, ending
 /// `step` seconds after [`NOW_MS`], with a spike in the last minute of every
 /// 15 when `spike`, so even a narrow graph shows one at step 0.
-fn history(seed: u64, cpu: f64, memory: u64, spike: bool, step: u64) -> Vec<(u64, f64, u64)> {
+pub(super) fn history(
+    seed: u64,
+    cpu: f64,
+    memory: u64,
+    spike: bool,
+    step: u64,
+) -> Vec<(u64, f64, u64)> {
     (0..POINTS)
         .map(|i| {
             // Counting samples from the start of time, not the window, makes
@@ -1095,6 +1101,13 @@ pub fn metrics_at(step: u64) -> Metrics {
             ..UnitMetrics::default()
         });
     }
+    metrics_with(units, step)
+}
+
+/// The `metrics` answer around the unit and container rows `units`, whose
+/// histories end `step` seconds after [`NOW_MS`]: lane totals, the machine
+/// and the daemon. Shared by every scene of the fake daemon.
+pub(super) fn metrics_with(units: Vec<UnitMetrics>, step: u64) -> Metrics {
     // Lane totals: their units and their own containers, never shared ones.
     let mut lane_names: Vec<String> = units
         .iter()

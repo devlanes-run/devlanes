@@ -8,7 +8,7 @@ If your change modified these files, that is expected, even when the change was 
 2. Read `git diff crates/tui/screens`. Every change there should follow from your code change. If a screen changed in a way you did not intend, fix the code instead of committing the screen.
 3. Commit the files together with the change, and mention visible TUI changes in the pull request.
 
-Never edit these files by hand. To add or change a state, edit `scenes()` in `crates/tui/examples/screens/scenes.rs` or the fake data in `crates/tui/src/demo/data.rs`, then regenerate. The web demo (`crates/tui-web`) runs on the same fake, so data changes show on devlanes.run too.
+Never edit these files by hand. To add or change a state, edit `scenes()` in `crates/tui/examples/screens/scenes.rs` or the fake data in `crates/tui/src/demo/data.rs`, then regenerate. The web demo (`crates/tui-web`) runs the same fake on its own scene, `crates/tui/src/demo/web.rs`, so these files do not follow it.
 
 The output must not depend on the machine, the date or the release. The fake pins the clock (`data::NOW_MS`), the version (`data::VERSION`, also set as `App::version`), pids, ports and paths. `ui::ago` reads the wall clock, so the fake data leaves `finished_at_ms` unset; keep it that way or pass the time in first. If the test passes on one OS and fails on the other, look for something read from the environment.
 
