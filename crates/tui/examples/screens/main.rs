@@ -8,7 +8,6 @@
 //! first argument replaces the directory; `DEVLANES_SCREENS_FONT` names a
 //! font file to draw with first.
 
-mod data;
 mod paint;
 mod scenes;
 

@@ -20,6 +20,8 @@ pub mod boxes;
 pub mod clients;
 pub mod connect;
 pub mod daemonlog;
+#[cfg(feature = "demo")]
+pub mod demo;
 pub mod doctor;
 #[cfg(not(target_family = "wasm"))]
 pub mod exit_summary;
