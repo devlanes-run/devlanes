@@ -13,6 +13,8 @@ workspace = true
 [dependencies]
 devlanes-testing = { path = "../crates/testing" }
 serde_json.workspace = true
+# Binds the slot's proxy ports without SO_REUSEADDR, as the daemon does.
+socket2 = "0.6"
 tempfile.workspace = true
 thiserror.workspace = true
 
