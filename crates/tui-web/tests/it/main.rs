@@ -1,14 +1,15 @@
 //! The web demo's session on the fake daemon: keys reach the TUI, ticks move
 //! the monitor's graphs, resizes keep the view, and every state draws.
 
+mod live;
+
 use devlanes_tui::{
     app::{RowId, View},
-    demo::web,
     doctor::{self, CheckState},
     keys::{KeyModifiers, MouseButton, MouseEventKind},
     ui,
 };
-use devlanes_tui_web::Session;
+use devlanes_tui_web::{Session, scene as web};
 use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
 /// The size the website gives the demo on a wide screen.
@@ -64,7 +65,7 @@ fn no_lane_of_the_website_scene_has_a_problem() {
 
 #[test]
 fn the_website_daemon_passes_every_doctor_check() {
-    let failing: Vec<_> = doctor::checks(&web::doctor())
+    let failing: Vec<_> = doctor::checks(&web::doctor(web::Daemon::default()))
         .into_iter()
         .filter(|check| check.state != CheckState::Ok)
         .collect();

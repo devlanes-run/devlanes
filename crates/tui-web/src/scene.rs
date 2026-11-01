@@ -1,20 +1,17 @@
-//! The website's scene: one small project, `myapp`, with four lanes of the
-//! same three services, shared Postgres and Redis and a mail catcher per
-//! lane, everything healthy. Each lane's output names its own database,
-//! Redis index and ports, as `lane.name` and `lane.index` give them, and
-//! new lines come in every second ([`super::live`]). The web demo
-//! (crates/tui-web) runs on it; the committed screens keep [`super::data`].
+//! What the demo's fake daemon reports: one small project, `myapp`, with four
+//! lanes of the same three services, shared Postgres and Redis and a mail
+//! catcher per lane, everything healthy and at this release. Each lane's
+//! output names its own database, Redis index and ports, as `lane.name` and
+//! `lane.index` give them, and new lines come in every second.
 
 use std::collections::BTreeMap;
 
-use devlanes_proto::{Actor, ActorKind, LaneSummary, LogLine};
-use serde_json::{Value, json};
-
-use super::data::{self, containers, history, metrics_with, unit};
-use crate::{
-    Metrics, UnitMetrics,
+use devlanes_proto::{Actor, ActorKind, ContainerSummary, LaneSummary, LogLine, UnitSummary};
+use devlanes_tui::{
+    DaemonMetrics, LaneMetrics, Metrics, SystemMetrics, UnitMetrics,
     api::{ProfileList, TaskInfo},
 };
+use serde_json::{Value, json};
 
 /// The project every lane belongs to.
 const PROJECT: &str = "myapp";
@@ -39,9 +36,16 @@ const LANE_CONTAINER: &str = "mailpit";
 /// The worktree the TUI opens on.
 pub const PATH: &str = "/work/myapp";
 
+/// The fake daemon's clock at the start: every history ends here.
+pub const NOW_MS: u64 = 1_792_000_000_000;
+
 /// Seconds after midnight of the last line on every unit's first screen;
 /// live lines carry this plus the fake's step.
 const CLOCK: u64 = 10 * 3600 + 42 * 60;
+
+/// One sample a second for 15 minutes, the daemon's raw ring.
+const STEP_MS: u64 = 1_000;
+const POINTS: u64 = 900;
 
 /// `myapp@<index>`.
 fn reference(index: u16) -> String {
@@ -84,6 +88,40 @@ fn host(index: u16, service: &str) -> String {
         "web" => domain,
         _ => format!("{service}.{domain}"),
     }
+}
+
+/// A unit with the fields a daemon fills for every unit, colored by its
+/// name as the daemon colors untagged units; live ones started 2h 14m
+/// before the fake's clock.
+pub fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
+    let color = devlanes_core::color::unit_color(&[], name, None, &BTreeMap::new());
+    let live = matches!(state, "ready" | "running" | "starting" | "failed");
+    UnitSummary {
+        name: name.into(),
+        lane: lane.into(),
+        state: state.into(),
+        kind: kind.into(),
+        autostart: kind == "service",
+        color: Some(color.into()),
+        started_at_ms: live.then_some(NOW_MS - 8_040_000),
+        ..UnitSummary::default()
+    }
+}
+
+/// Healthy containers by name, host port and whether they are shared.
+fn containers(list: &[(&str, u16, bool)]) -> Vec<ContainerSummary> {
+    list.iter()
+        .map(|(name, port, shared)| ContainerSummary {
+            name: (*name).into(),
+            ports: BTreeMap::from([("tcp".to_owned(), *port)]),
+            color: Some(devlanes_core::color::unit_color(&[], name, None, &BTreeMap::new()).into()),
+            shared: *shared,
+            state: Some("healthy".into()),
+            cpu_percent: Some(2.0),
+            memory_bytes: Some(180 << 20),
+            ..ContainerSummary::default()
+        })
+        .collect()
 }
 
 /// One lane of the project.
@@ -141,7 +179,7 @@ fn lane(index: u16, branch: &str, path: &str, running: bool) -> LaneSummary {
     }
 }
 
-/// Every lane the website's daemon reports.
+/// Every lane the daemon reports.
 pub fn lanes() -> Vec<LaneSummary> {
     LANES
         .iter()
@@ -149,10 +187,46 @@ pub fn lanes() -> Vec<LaneSummary> {
         .collect()
 }
 
+// ---- metrics --------------------------------------------------------------
+
+/// A deterministic wobble in 0..1 for sample `t` of series `seed`.
+fn wobble(seed: u64, t: u64) -> f64 {
+    let x = (seed * 7919 + t * 104_729) % 1000;
+    let wave = ((t as f64 + seed as f64 * 15.0) / 45.0).sin() * 0.5 + 0.5;
+    (wave * 0.7 + x as f64 / 1000.0 * 0.3).clamp(0.0, 1.0)
+}
+
+/// The timestamp of sample `i` of a history that ends `step` seconds after
+/// [`NOW_MS`].
+fn sample_ts(step: u64, i: u64) -> u64 {
+    NOW_MS + step * STEP_MS - (POINTS - 1 - i) * STEP_MS
+}
+
+/// 15 minutes of `(ts, cpu, memory)` around `cpu` and `memory`, ending
+/// `step` seconds after [`NOW_MS`], with a spike in the last minute of every
+/// 15 when `spike`.
+fn history(seed: u64, cpu: f64, memory: u64, spike: bool, step: u64) -> Vec<(u64, f64, u64)> {
+    (0..POINTS)
+        .map(|i| {
+            // Counting samples from the start of time, not the window, makes
+            // the curve move left as `step` grows instead of being redrawn.
+            let n = i + step;
+            let mut c = cpu * (0.4 + wobble(seed, n) * 0.9);
+            let phase = n % POINTS;
+            if spike && (820..860).contains(&phase) {
+                c += cpu * 2.5 * (1.0 - ((phase as f64 - 840.0) / 20.0).abs());
+            }
+            let growth = phase as f64 / POINTS as f64 * 0.08;
+            let m = memory as f64 * (0.92 + growth + wobble(seed + 1, n) * 0.02);
+            (sample_ts(step, i), c.max(0.0), m as u64)
+        })
+        .collect()
+}
+
 /// `metrics` `step` seconds on: the running lanes' services and mail
-/// catchers, the agent's api under load with a spike, and the shared
-/// Postgres and Redis.
-pub fn metrics_at(step: u64) -> Metrics {
+/// catchers, the agent's api under load with a spike, the shared Postgres
+/// and Redis, lane totals, the machine and `daemon`.
+pub fn metrics_at(step: u64, daemon: Daemon) -> Metrics {
     let mut units = Vec::new();
     for (seed, unit) in lanes()
         .iter()
@@ -222,8 +296,96 @@ pub fn metrics_at(step: u64) -> Metrics {
             ..UnitMetrics::default()
         });
     }
-    metrics_with(units, step)
+    Metrics {
+        range_ms: Some(900_000),
+        lanes: lane_totals(&units),
+        units,
+        system: Some(system(step)),
+        daemon: Some(Box::new(DaemonMetrics {
+            pid: Some(daemon.pid),
+            started_at_ms: Some(daemon.started_at_ms),
+            metrics: daemon_metrics(step),
+        })),
+    }
 }
+
+/// Each lane's totals: its units and its own containers, never shared ones.
+fn lane_totals(units: &[UnitMetrics]) -> Vec<LaneMetrics> {
+    let mut names: Vec<&str> = units
+        .iter()
+        .filter(|u| !u.shared)
+        .map(|u| u.lane.as_str())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|lane| {
+            let members: Vec<&UnitMetrics> = units
+                .iter()
+                .filter(|u| u.lane == lane && !u.shared)
+                .collect();
+            let history: Vec<(u64, f64, u64)> = (0..POINTS as usize)
+                .map(|i| {
+                    let ts = members.first().map_or(0, |m| m.history[i].0);
+                    let cpu = members.iter().map(|m| m.history[i].1).sum();
+                    let memory = members.iter().map(|m| m.history[i].2).sum();
+                    (ts, cpu, memory)
+                })
+                .collect();
+            LaneMetrics {
+                lane: lane.into(),
+                cpu_percent: history.last().map(|p| p.1),
+                memory_bytes: history.last().map(|p| p.2),
+                peak_cpu_percent: history.iter().map(|p| p.1).reduce(f64::max),
+                peak_memory_bytes: history.iter().map(|p| p.2).max(),
+                history,
+                ..LaneMetrics::default()
+            }
+        })
+        .collect()
+}
+
+/// The machine: 10 cores, 32 GiB, busy but not short of memory.
+fn system(step: u64) -> SystemMetrics {
+    SystemMetrics {
+        cpus: Some(10),
+        memory_total_bytes: Some(32 << 30),
+        available_memory_bytes: Some(9_800 << 20),
+        cpu_percent: Some(72.0),
+        memory_pressure: Some("normal".into()),
+        cpu_stall_percent: None,
+        core_percents: vec![88.0, 76.0, 64.0, 92.0, 41.0, 35.0, 18.0, 12.0, 7.0, 3.0],
+        history: (0..POINTS)
+            .map(|i| {
+                let cpu = 45.0 + wobble(500, i + step) * 35.0;
+                (sample_ts(step, i), cpu, 9_800 << 20)
+            })
+            .collect(),
+        available_history: (0..POINTS)
+            .map(|i| (sample_ts(step, i), 9_800 << 20))
+            .collect(),
+        pressure_history: (0..POINTS).map(|i| (sample_ts(step, i), 0.0)).collect(),
+    }
+}
+
+/// The daemon's own row.
+fn daemon_metrics(step: u64) -> UnitMetrics {
+    let history = history(300, 1.2, 46 << 20, false, step);
+    UnitMetrics {
+        lane: "devlanes".into(),
+        unit: "daemon".into(),
+        kind: "daemon".into(),
+        cpu_percent: history.last().map(|p| p.1),
+        memory_bytes: history.last().map(|p| p.2),
+        peak_cpu_percent: Some(4.0),
+        peak_memory_bytes: Some(52 << 20),
+        history,
+        ..UnitMetrics::default()
+    }
+}
+
+// ---- daemon facts ---------------------------------------------------------
 
 /// `task.list`: the project's tasks.
 pub fn tasks(_lane: &str) -> Vec<TaskInfo> {
@@ -246,23 +408,40 @@ pub fn profiles(lane: &str) -> ProfileList {
     }
 }
 
-/// `daemon.status`, from the release the demo was built from, so no update
-/// or version notice shows.
-pub fn daemon_status() -> Value {
+/// The daemon process: its pid and when it started.
+#[derive(Clone, Copy)]
+pub struct Daemon {
+    pub pid: u32,
+    pub started_at_ms: u64,
+}
+
+impl Default for Daemon {
+    /// The daemon the scene opens on, up for 3h 10m.
+    fn default() -> Self {
+        Self {
+            pid: 4242,
+            started_at_ms: NOW_MS - 11_400_000,
+        }
+    }
+}
+
+/// `daemon.status` of `daemon` at `now_ms`, from the release the demo was
+/// built from, so no update or version notice shows.
+pub fn daemon_status(daemon: Daemon, now_ms: u64) -> Value {
     json!({
         "version": devlanes_version::VERSION,
-        "pid": 4242,
-        "uptime_ms": 11_400_000,
+        "pid": daemon.pid,
+        "uptime_ms": now_ms.saturating_sub(daemon.started_at_ms),
         "managed_processes": 12,
         "socket": "/home/dev/.devlanes/run/daemon.sock",
     })
 }
 
-/// `doctor` facts with every check passing.
-pub fn doctor() -> Value {
+/// `doctor` facts of `daemon` with every check passing.
+pub fn doctor(daemon: Daemon) -> Value {
     json!({
         "version": devlanes_version::VERSION,
-        "pid": 4242,
+        "pid": daemon.pid,
         "home": "/home/dev/.devlanes",
         "db_path": "/home/dev/.devlanes/state.db",
         "schema_version": 7,
@@ -286,6 +465,50 @@ pub fn doctor() -> Value {
         "subscribers": 1,
         "hosts": {"mode": "auto", "probe": "localhost_resolves", "state": "applied", "names": 12}
     })
+}
+
+/// `remote.clients`: nobody paired with this machine.
+pub fn clients() -> Value {
+    json!({"items": [], "now_ms": NOW_MS, "require_pairing": true, "allow_connections": true})
+}
+
+/// `remote.pair`'s code, valid for 10 minutes.
+pub fn pair_code() -> Value {
+    let valid = devlanes_proto::remote::PAIRING_CODE_TTL_MS;
+    json!({"code": "K7QM-3XWD", "expires_at_ms": NOW_MS + valid, "valid_ms": valid})
+}
+
+/// The user config the options page reads.
+pub const USER_CONFIG: &str = "\
+# machine settings for devlanes
+tui:
+  theme: dark
+proxy:
+  https_port: 443
+history:
+  retention: 14d
+";
+
+/// The daemon's own log file: the running lanes' units getting ready.
+pub fn daemon_log() -> Vec<String> {
+    let running: Vec<u16> = LANES
+        .iter()
+        .filter(|lane| lane.3)
+        .map(|lane| lane.0)
+        .collect();
+    (0..40)
+        .map(|i| {
+            let lane = running[i % running.len()];
+            let service = SERVICES[i % 3];
+            format!(
+                "2026-10-21T10:{:02}:0{}.503Z  INFO devlanes_daemon::lifecycle: unit ready unit={}:{service} took=1.{}s",
+                i,
+                i % 10,
+                reference(lane),
+                i % 9
+            )
+        })
+        .collect()
 }
 
 // ---- output ---------------------------------------------------------------
@@ -369,7 +592,7 @@ fn job(index: u16, n: u64, seconds: u64) -> String {
 
 /// What a service's terminal shows when the TUI attaches: how it started
 /// in this lane, then its recent output.
-pub fn screen(lane: &str, unit: &str) -> Vec<u8> {
+pub fn screen(lane: &str, unit: &str) -> String {
     let index = index_of(lane);
     let first = CLOCK - 18 * 7;
     let lines: Vec<String> = match unit {
@@ -423,7 +646,7 @@ pub fn screen(lane: &str, unit: &str) -> Vec<u8> {
             lines
         }
     };
-    lines.join("\r\n").into_bytes()
+    lines.join("\r\n")
 }
 
 /// Lines service `unit` of `lane` prints at second `step`: requests most
@@ -617,29 +840,33 @@ pub fn task(lane: &str, task: &str) -> (Vec<String>, i32) {
     (lines, 0)
 }
 
-/// Stored log lines of a service, oldest first.
+/// Stored log lines of a service, oldest first, for scrolling back past its
+/// screen.
 pub fn log_page(unit: &str) -> Vec<LogLine> {
-    data::log_page(unit)
-}
-
-/// The daemon's own log file: the running lanes' units getting ready.
-pub fn daemon_log() -> Vec<String> {
-    let running: Vec<u16> = LANES
-        .iter()
-        .filter(|lane| lane.3)
-        .map(|lane| lane.0)
-        .collect();
-    (0..40)
-        .map(|i| {
-            let lane = running[i % running.len()];
-            let service = SERVICES[i % 3];
-            format!(
-                "2026-10-21T10:{:02}:0{}.503Z  INFO devlanes_daemon::lifecycle: unit ready unit={}:{service} took=1.{}s",
-                i,
-                i % 10,
-                reference(lane),
-                i % 9
-            )
+    (0..60)
+        .map(|seq| {
+            let warn = seq % 17 == 11;
+            let (level, color, rest) = if warn {
+                (
+                    "WARN",
+                    33,
+                    format!("slow query took {}ms: SELECT * FROM orders", 900 + seq),
+                )
+            } else {
+                (
+                    "INFO",
+                    32,
+                    format!("request id=req_{:05} status=200", 4_000 + seq),
+                )
+            };
+            LogLine {
+                unit: unit.into(),
+                seq,
+                timestamp_ms: 1_761_040_000_000 + seq * 2_500,
+                text: format!("{level} {rest}"),
+                level: Some(level.to_lowercase()),
+                styled: Some(format!("\x1b[{color}m{level}\x1b[0m {rest}\x1b[0m")),
+            }
         })
         .collect()
 }

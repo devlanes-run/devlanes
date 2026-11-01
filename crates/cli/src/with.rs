@@ -722,7 +722,7 @@ pub async fn write_log_artifacts(
     }
 }
 
-/// The browser build (crates/tui-web) has no directory to write into, and
+/// The browser (wasm32) build has no directory to write into, and
 /// tokio has no `fs` there.
 #[cfg(target_family = "wasm")]
 pub async fn write_log_artifacts(

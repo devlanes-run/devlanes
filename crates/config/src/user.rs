@@ -355,7 +355,7 @@ impl UserLanesConfig {
 }
 
 /// The part of a `~/...` folder below the user's home, on Unix and in the
-/// browser build (crates/tui-web).
+/// browser (wasm32) build.
 #[cfg(not(windows))]
 fn below_home(dir: &str) -> Option<&str> {
     dir.strip_prefix("~/")

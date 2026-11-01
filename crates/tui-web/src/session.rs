@@ -3,12 +3,11 @@
 
 use devlanes_tui::{
     app::Msg,
-    demo::{Fake, Scene},
     keys::{KeyModifiers, MouseEvent, MouseEventKind},
     theme::{Glyphs, Theme, Tier},
 };
 
-use crate::keymap;
+use crate::{fake::Fake, keymap};
 
 /// The TUI running on the fake daemon.
 pub struct Session {
@@ -16,11 +15,10 @@ pub struct Session {
 }
 
 impl Session {
-    /// A TUI of `columns` x `rows` cells on the website's scene
-    /// ([`Scene::web`]: `myapp`, healthy, at this release) with its lanes
-    /// loaded.
+    /// A TUI of `columns` x `rows` cells on the demo's scene (`myapp`,
+    /// healthy, at this release) with its lanes loaded.
     pub fn new(columns: u16, rows: u16) -> Self {
-        let mut fake = Fake::with_scene(columns, rows, Scene::web());
+        let mut fake = Fake::new(columns, rows);
         // The page is dark and the browser has no COLORTERM to detect from;
         // the ANSI tier would get Ratzilla's dim default palette.
         fake.app.theme = Theme {

@@ -1,4 +1,4 @@
-//! What the fake daemon answers: a 45-unit monorepo lane with containers, a
+//! A realistic fake daemon: a 45-unit monorepo lane with containers, a
 //! starting lane, an idle lane, a lane whose worktree is gone, a second
 //! project and a third whose config does not load; [`idle_lanes`] freezes
 //! and throttles the first two.
@@ -9,12 +9,11 @@ use devlanes_proto::{
     Actor, ActorKind, ContainerSummary, LanePower, LaneSummary, LogLine, ORPHANED, RpcError,
     UnitDrift, UnitSummary,
 };
-use serde_json::{Value, json};
-
-use crate::{
+use devlanes_tui::{
     DaemonMetrics, LaneMetrics, Metrics, SystemMetrics, UnitMetrics,
     api::{ProfileInfo, ProfileList, TaskInfo},
 };
+use serde_json::{Value, json};
 
 /// Services of the monorepo lane, by prefix family.
 const SERVICES: [&str; 34] = [
@@ -71,7 +70,7 @@ const TASKS: [&str; 11] = [
 
 /// A unit with the fields a daemon fills for every unit. Like most monorepos
 /// it has no tags, so the daemon colors it by the name's first segment.
-pub(super) fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
+fn unit(lane: &str, name: &str, state: &str, kind: &str) -> UnitSummary {
     let color = devlanes_core::color::unit_color(&[], name, None, &BTreeMap::new());
     // Running units started 2h 14m before the fake's clock.
     let live = matches!(state, "ready" | "running" | "starting" | "failed");
@@ -102,7 +101,7 @@ fn external(lane: &str, name: &str, port: u16, host: Option<&str>) -> UnitSummar
 }
 
 /// Containers by name, host port and whether they are shared project infra.
-pub(super) fn containers(list: &[(&str, u16, bool)]) -> Vec<ContainerSummary> {
+fn containers(list: &[(&str, u16, bool)]) -> Vec<ContainerSummary> {
     list.iter()
         .map(|(name, port, shared)| ContainerSummary {
             name: (*name).into(),
@@ -1000,35 +999,19 @@ fn wobble(seed: u64, t: u64) -> f64 {
     (wave * 0.7 + x as f64 / 1000.0 * 0.3).clamp(0.0, 1.0)
 }
 
-/// The timestamp of sample `i` of a history that ends `step` seconds after
-/// [`NOW_MS`].
-fn sample_ts(step: u64, i: u64) -> u64 {
-    NOW_MS + step * STEP_MS - (POINTS - 1 - i) * STEP_MS
-}
-
-/// 15 minutes of `(ts, cpu, memory)` around `cpu` and `memory`, ending
-/// `step` seconds after [`NOW_MS`], with a spike in the last minute of every
-/// 15 when `spike`, so even a narrow graph shows one at step 0.
-pub(super) fn history(
-    seed: u64,
-    cpu: f64,
-    memory: u64,
-    spike: bool,
-    step: u64,
-) -> Vec<(u64, f64, u64)> {
+/// 15 minutes of `(ts, cpu, memory)` around `cpu` and `memory`, with a
+/// spike a minute ago when `spike`, so even a narrow graph shows it.
+fn history(seed: u64, cpu: f64, memory: u64, spike: bool) -> Vec<(u64, f64, u64)> {
     (0..POINTS)
         .map(|i| {
-            // Counting samples from the start of time, not the window, makes
-            // the curve move left as `step` grows instead of being redrawn.
-            let n = i + step;
-            let mut c = cpu * (0.4 + wobble(seed, n) * 0.9);
-            let phase = n % POINTS;
-            if spike && (820..860).contains(&phase) {
-                c += cpu * 2.5 * (1.0 - ((phase as f64 - 840.0) / 20.0).abs());
+            let ts = NOW_MS - (POINTS - 1 - i) * STEP_MS;
+            let mut c = cpu * (0.4 + wobble(seed, i) * 0.9);
+            if spike && (820..860).contains(&i) {
+                c += cpu * 2.5 * (1.0 - ((i as f64 - 840.0) / 20.0).abs());
             }
-            let growth = phase as f64 / POINTS as f64 * 0.08;
-            let m = memory as f64 * (0.92 + growth + wobble(seed + 1, n) * 0.02);
-            (sample_ts(step, i), c.max(0.0), m as u64)
+            let m = memory as f64
+                * (0.92 + i as f64 / POINTS as f64 * 0.08 + wobble(seed + 1, i) * 0.02);
+            (ts, c.max(0.0), m as u64)
         })
         .collect()
 }
@@ -1036,12 +1019,6 @@ pub(super) fn history(
 /// `metrics` as a recent daemon answers it: units and containers with 15
 /// minutes of history, lane totals and the machine.
 pub fn metrics() -> Metrics {
-    metrics_at(0)
-}
-
-/// [`metrics`] `step` seconds later: every history ends `step` samples
-/// further on, so the web demo's graphs move one sample per second.
-pub fn metrics_at(step: u64) -> Metrics {
     let mut units = Vec::new();
     for (seed, unit) in lanes()
         .iter()
@@ -1062,7 +1039,7 @@ pub fn metrics_at(step: u64) -> Metrics {
                 (60 + (seed * 37) % 400) << 20,
             ),
         };
-        let history = history(seed, cpu, memory, unit.name == "api-search", step);
+        let history = history(seed, cpu, memory, unit.name == "api-search");
         units.push(UnitMetrics {
             lane: unit.lane.clone(),
             unit: unit.name.clone(),
@@ -1083,7 +1060,7 @@ pub fn metrics_at(step: u64) -> Metrics {
         ("acme@0", "minio", 4.0, 96 << 20, false),
     ];
     for (seed, (lane, name, cpu, memory, shared)) in containers.into_iter().enumerate() {
-        let history = history(100 + seed as u64, cpu, memory, false, step);
+        let history = history(100 + seed as u64, cpu, memory, false);
         units.push(UnitMetrics {
             lane: lane.into(),
             unit: name.into(),
@@ -1101,13 +1078,6 @@ pub fn metrics_at(step: u64) -> Metrics {
             ..UnitMetrics::default()
         });
     }
-    metrics_with(units, step)
-}
-
-/// The `metrics` answer around the unit and container rows `units`, whose
-/// histories end `step` seconds after [`NOW_MS`]: lane totals, the machine
-/// and the daemon. Shared by every scene of the fake daemon.
-pub(super) fn metrics_with(units: Vec<UnitMetrics>, step: u64) -> Metrics {
     // Lane totals: their units and their own containers, never shared ones.
     let mut lane_names: Vec<String> = units
         .iter()
@@ -1153,30 +1123,26 @@ pub(super) fn metrics_with(units: Vec<UnitMetrics>, step: u64) -> Metrics {
         core_percents: vec![88.0, 76.0, 64.0, 92.0, 41.0, 35.0, 18.0, 12.0, 7.0, 3.0],
         history: (0..POINTS)
             .map(|i| {
-                (
-                    sample_ts(step, i),
-                    45.0 + wobble(500, i + step) * 35.0,
-                    9_800 << 20,
-                )
+                let ts = NOW_MS - (POINTS - 1 - i) * STEP_MS;
+                (ts, 45.0 + wobble(500, i) * 35.0, 9_800 << 20)
             })
             .collect(),
         available_history: (0..POINTS)
-            .map(|i| (sample_ts(step, i), 9_800 << 20))
+            .map(|i| (NOW_MS - (POINTS - 1 - i) * STEP_MS, 9_800 << 20))
             .collect(),
-        // Fifteen seconds of `warn` in every 15 minutes that every memory
-        // graph reaches back to at step 0.
+        // Fifteen seconds of `warn` that every memory graph reaches back to.
         pressure_history: (0..POINTS)
             .map(|i| {
-                let level = if (POINTS - 50..POINTS - 35).contains(&((i + step) % POINTS)) {
+                let level = if (POINTS - 50..POINTS - 35).contains(&i) {
                     1.0
                 } else {
                     0.0
                 };
-                (sample_ts(step, i), level)
+                (NOW_MS - (POINTS - 1 - i) * STEP_MS, level)
             })
             .collect(),
     };
-    let daemon = history(300, 1.2, 46 << 20, false, step);
+    let daemon = history(300, 1.2, 46 << 20, false);
     Metrics {
         range_ms: Some(900_000),
         units,
@@ -1213,7 +1179,7 @@ pub fn metrics_with_ended() -> Metrics {
     ];
     let mut ended: Vec<UnitMetrics> = Vec::new();
     for (seed, (lane, name, id, gone_s, cpu, memory, removed)) in rows.into_iter().enumerate() {
-        let mut history = history(200 + seed as u64, cpu, memory, false, 0);
+        let mut history = history(200 + seed as u64, cpu, memory, false);
         history.truncate(history.len() - gone_s);
         ended.push(UnitMetrics {
             lane: lane.into(),

@@ -311,7 +311,7 @@ fn uv_receipt_lists(receipt: &str, exe: &Path) -> bool {
 
 /// macOS and Linux: `install.sh`, POSIX shell quoting, paths matched as they
 /// are, and installers that replace a running executable by renaming over it.
-/// The browser build (crates/tui-web) words install methods as on Unix.
+/// The browser (wasm32) build words install methods as on Unix.
 #[cfg(not(windows))]
 mod os {
     use std::path::{Path, PathBuf};

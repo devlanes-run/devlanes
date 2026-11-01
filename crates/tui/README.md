@@ -34,12 +34,11 @@ async fn main() -> Result<(), devlanes_tui::Error> {
 - `tree` builds a lane's rows; `monitor` sorts, filters and groups the monitor's rows; `graph` draws braille graphs, sparklines and meters in the load gradient.
 - `boxes` reads `host.list` and turns each connected box's registry into read-only lanes (`acme@1 @hetzner` in project `acme`), each a `BoxLane` that names its box; `clients` reads `remote.clients`.
 - `connect` holds the boxes view's modals: the new connection form, the prompts of an attached `connect` and the pairing code.
-- `demo::Fake` (feature `demo`) is a fake daemon that answers the app's effects at once from a `demo::Scene` of mock data: `Scene::screens` (the `acme` monorepo the `screens` example draws) or `Scene::web` (the healthy `myapp` the web demo, `devlanes-tui-web`, shows, which is live through `demo::live`: new output every second, task runs, starts and stops).
 - `keys` holds the key and mouse event types the app takes: crossterm's natively, copies of them in the browser build.
 
 ## Browser build
 
-The crate also builds for `wasm32-unknown-unknown`, for the web demo on devlanes.run. That build leaves out the event loop (`run*`, `drive*`), the exit summary and the inline step printing, which need a terminal; clocks come from `web-time`. Code that only works on a terminal or the daemon's machine goes behind `cfg(not(target_family = "wasm"))`; CI checks the browser build with `cargo clippy -p devlanes-tui-web --target wasm32-unknown-unknown`.
+The crate also builds for `wasm32-unknown-unknown`. That build leaves out the event loop (`run*`, `drive*`), the exit summary and the inline step printing, which need a terminal; clocks come from `web-time`. Code that only works on a terminal or the daemon's machine goes behind `cfg(not(target_family = "wasm"))`, and CI checks the browser build.
 
 ## Config example
 

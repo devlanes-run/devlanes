@@ -13,8 +13,17 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-devlanes-tui = { path = "../tui", features = ["demo"] }
+# The daemon stop and restart steps the TUI draws.
+devlanes-client = { path = "../client" }
+# The unit colors the daemon would give the scene's services.
+devlanes-core = { path = "../core" }
+# The options page's edits, applied to the scene's config.yaml as devlanes does.
+devlanes-config = { path = "../config" }
+devlanes-proto = { path = "../proto" }
+devlanes-tui = { path = "../tui" }
 devlanes-version = { path = "../version" }
+serde_json.workspace = true
+web-time.workspace = true
 # Only buffer and color types; devlanes-tui picks the backend features per target.
 ratatui = { version = "0.30", default-features = false }
 

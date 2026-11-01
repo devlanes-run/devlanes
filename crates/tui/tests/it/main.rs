@@ -33,7 +33,6 @@ mod start;
 mod terminal;
 mod unavailable;
 mod units;
-mod web_demo;
 
 use std::{sync::Arc, time::Duration};
 

@@ -1,6 +1,6 @@
 # devlanes-tui-web
 
-The devlanes TUI running in a web page, for the demo on devlanes.run: the real `devlanes-tui` app and drawing compiled to WebAssembly, on the fake daemon in `devlanes_tui::demo` with its website scene (`Scene::web`: project `myapp`, four lanes, all healthy, at this release), whose services and containers print new lines every second and whose tasks, starts and stops play out. Ratzilla's DOM backend draws it into an element, and the page's script sends keys and a one-second tick; nothing reaches a real daemon.
+The devlanes TUI running in a web page, for the demo on devlanes.run: the real `devlanes-tui` app and drawing compiled to WebAssembly, on a fake daemon of its own (`scene`: project `myapp`, four lanes, all healthy, at this release) whose services and containers print new lines every second and whose tasks, starts and stops play out. Everything the demo needs lives in this crate; `devlanes-tui` only builds for the browser. Ratzilla's DOM backend draws it into an element, and the page's script sends keys and a one-second tick; nothing reaches a real daemon.
 
 ## Usage
 
@@ -39,6 +39,7 @@ session.tick();
 - `Demo` (browser build): `new Demo(id)` mounts into an element, `key(key, ctrl, alt, shift, meta)` returns whether the TUI took the key, `tick()` moves the fake daemon on a second, `resize()` measures the element again, `columns` and `rows` give the size in cells, `free()` empties the element.
 - `Session`: the same without the page, with `resize(columns, rows)`.
 - `keymap::key_event`: a `KeyboardEvent.key` and its modifiers as the TUI's key event, or `None` for keys the page keeps (Tab, modifiers alone, Meta chords, Alt chords other than typed symbols, and most Ctrl chords).
+- `scene`: the mock data and output the fake daemon answers with.
 - `palette::apply`: the colors the demo gives the TUI's ANSI and default colors.
 - `mouse::cell`, `mouse::Wheel`: a point on the page as the cell under it, and wheel deltas as whole scroll steps.
 

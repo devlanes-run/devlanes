@@ -2,6 +2,8 @@
 //! The scenes and the file format come from the `screens` example; see
 //! `crates/tui/screens/AGENTS.md`.
 
+#[path = "../../examples/screens/data.rs"]
+mod data;
 #[path = "../../examples/screens/scenes.rs"]
 mod scenes;
 
