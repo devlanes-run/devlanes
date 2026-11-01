@@ -8,7 +8,6 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use devlanes_client::restart::{self, Steps};
 use devlanes_proto::{
     ActorKind, AttachResult, Event, LaneSummary, LogLine, LogQuery, Method, ORPHANED, Page,
@@ -22,6 +21,7 @@ use serde_json::Value;
 
 use crate::api::{ApiError, Metrics, MetricsQuery, TaskInfo};
 use crate::input::{self, InputModes};
+use crate::keys::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 pub use crate::monitor::{MonitorId, MonitorRow, MonitorView, SortKey};
 use crate::screen::TerminalScreen;
 use crate::text;
@@ -1188,7 +1188,7 @@ pub struct App {
     /// Groups folded to make the lane fit the first time it showed.
     auto_folds: HashMap<String, HashSet<RowId>>,
     /// The last press in the list, for double clicks.
-    last_click: Option<(std::time::Instant, RowId)>,
+    last_click: Option<(web_time::Instant, RowId)>,
     /// Where a press in the pane began: a release there types, a drag selects.
     pane_press: Option<(u16, u16)>,
     /// The open dialog's box, written by the last render.
@@ -1200,10 +1200,10 @@ pub struct App {
     pub daemon_state: DaemonState,
     /// When [`DaemonState::Starting`] began, to give up on a new daemon that
     /// never answers.
-    starting_since: Option<std::time::Instant>,
+    starting_since: Option<web_time::Instant>,
     /// The time step rows count from; `None` is the real clock. Tests and
     /// the screens example pin it so drawn times do not change.
-    pub clock: Option<std::time::Instant>,
+    pub clock: Option<web_time::Instant>,
     pub dialog: Option<Dialog>,
     pub attached: Option<Attached>,
     /// The latest `metrics` reply; `None` until one arrives or after an error.
@@ -1285,7 +1285,7 @@ pub struct App {
     /// A start must run this long before its end is worth a notification.
     pub notify_after: std::time::Duration,
     /// Each lane's state when last seen, and since when it is starting.
-    watched: HashMap<String, (String, Option<std::time::Instant>)>,
+    watched: HashMap<String, (String, Option<web_time::Instant>)>,
     /// Each service's state when last seen, by `(lane, unit)`.
     watched_units: HashMap<(String, String), String>,
     /// Units this TUI shows `queued` because it just sent their start, by
@@ -1468,7 +1468,7 @@ impl App {
     /// that ran at least [`App::notify_after`] ended, or a running service
     /// failed outside a start.
     fn watch(&mut self, effects: &mut Vec<Effect>) {
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let mut notes = Vec::new();
         let mut seen_units = HashMap::new();
         for lane in &self.lanes {
@@ -2416,8 +2416,8 @@ impl App {
     }
 
     /// Now, on [`App::clock`].
-    pub fn now(&self) -> std::time::Instant {
-        self.clock.unwrap_or_else(std::time::Instant::now)
+    pub fn now(&self) -> web_time::Instant {
+        self.clock.unwrap_or_else(web_time::Instant::now)
     }
 
     /// Reports a daemon-tab failure unless it repeats the last one.
@@ -7301,7 +7301,7 @@ impl App {
                 let Some(row) = rows.get(index).cloned() else {
                     return;
                 };
-                let now = std::time::Instant::now();
+                let now = web_time::Instant::now();
                 let double = self.last_click.as_ref().is_some_and(|(at, id)| {
                     *id == row.id && now.duration_since(*at).as_millis() <= DOUBLE_CLICK_MS
                 });

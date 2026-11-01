@@ -14,8 +14,9 @@ const FIRST_READ: u64 = 256 * 1024;
 /// Upper bound per read, so a burst of logging cannot stall the UI.
 const MAX_READ: u64 = 4 * 1024 * 1024;
 
-/// Which file a log is: `(device, inode)`.
-#[cfg(unix)]
+/// Which file a log is: `(device, inode)`. The browser build (crates/tui-web)
+/// reads no log and keeps the Unix shape.
+#[cfg(not(windows))]
 pub type FileKey = (u64, u64);
 
 /// Which file a log is: `(volume serial, file id)`.
@@ -51,6 +52,9 @@ pub fn read(path: &Path, from: LogPosition) -> io::Result<LogChunk> {
     let identity = (metadata.dev(), metadata.ino());
     #[cfg(windows)]
     let identity = file_key(&file)?;
+    // The browser has no files, so `File::open` above already failed there.
+    #[cfg(target_family = "wasm")]
+    let identity = (0, 0);
     let same_file = identity == from.file && from.offset > 0 && len >= from.offset;
     let (mut start, mut reset) = if same_file {
         (from.offset, false)

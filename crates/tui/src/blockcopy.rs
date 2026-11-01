@@ -2,11 +2,11 @@
 //! block per shown entry) and its checks box (a block per check), so both
 //! move, mark and copy the same way.
 
-use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::text::Line;
 
 use crate::app::LogCopy;
 use crate::daemonlog::{LogPos, LogView};
+use crate::keys::{KeyCode, KeyEvent};
 
 /// Blocks of drawn lines that copy mode moves over. Lines are drawn on demand:
 /// the log keeps up to 2000 entries and a key only moves through a few.

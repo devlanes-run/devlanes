@@ -1964,6 +1964,7 @@ dependencies = [
  "ab_glyph",
  "async-trait",
  "base64 0.22.1",
+ "bitflags 2.13.2",
  "bytes",
  "crossterm",
  "devlanes-cli",
@@ -1989,6 +1990,7 @@ dependencies = [
  "tui-term",
  "unicode-width 0.2.2",
  "vt100",
+ "web-time",
 ]
 
 [[package]]
@@ -3024,10 +3026,12 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb-platform",
+ "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "wasm-bindgen",
  "windows-link",
 ]
 

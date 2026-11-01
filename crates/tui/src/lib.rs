@@ -5,7 +5,12 @@
 //!
 //! Quitting closes connections and units keep running in the daemon, unless
 //! the user chooses to stop the project's lanes on the way out.
+//!
+//! The web demo (crates/tui-web) builds the app and its drawing for the
+//! browser; what needs a real terminal or the daemon's machine (the event
+//! loop, the exit summary, daemon.log) is left out of that build.
 
+#[cfg(not(target_family = "wasm"))]
 mod ansi;
 pub mod api;
 pub mod app;
@@ -16,15 +21,18 @@ pub mod clients;
 pub mod connect;
 pub mod daemonlog;
 pub mod doctor;
+#[cfg(not(target_family = "wasm"))]
 pub mod exit_summary;
 pub mod graph;
 #[cfg(windows)]
 mod home;
 pub mod hyperlink;
 pub mod input;
+pub mod keys;
 pub mod logfile;
 pub mod menu;
 pub mod monitor;
+#[cfg(not(target_family = "wasm"))]
 mod runtime;
 pub mod screen;
 pub mod settings;
@@ -37,6 +45,7 @@ pub mod ui;
 pub mod welcome;
 pub mod words;
 
+#[cfg(not(target_family = "wasm"))]
 use std::{io::IsTerminal, sync::Arc};
 
 pub use api::{
@@ -45,6 +54,7 @@ pub use api::{
     UnitMetrics, Window,
 };
 pub use devlanes_client::Paths;
+#[cfg(not(target_family = "wasm"))]
 pub use runtime::{TerminalGuard, drive, drive_start};
 
 /// Failures that end the TUI before or while it runs.
@@ -120,6 +130,7 @@ impl Options {
 }
 
 /// Opens the TUI for bare `devlanes` and `devlanes ui` with default options.
+#[cfg(not(target_family = "wasm"))]
 pub async fn run(paths: Paths) -> Result<(), Error> {
     run_with(paths, Options::default()).await
 }
@@ -129,12 +140,14 @@ pub async fn run(paths: Paths) -> Result<(), Error> {
 /// Connects (spawning the daemon when needed) before touching the terminal,
 /// so connection errors print normally. Once it closed, prints the
 /// [`exit_summary`].
+#[cfg(not(target_family = "wasm"))]
 pub async fn run_with(paths: Paths, options: Options) -> Result<(), Error> {
     open(paths, options, None).await.map(drop)
 }
 
 /// Opens the TUI on a start the daemon already accepted (see [`start`]) and
 /// follows it until the user quits. Quitting never stops it.
+#[cfg(not(target_family = "wasm"))]
 pub async fn run_start(
     paths: Paths,
     options: Options,
@@ -146,6 +159,7 @@ pub async fn run_start(
 
 /// Runs the TUI on the real terminal, then prints the [`exit_summary`];
 /// returns the app as it was when the user quit.
+#[cfg(not(target_family = "wasm"))]
 async fn open(
     paths: Paths,
     options: Options,
