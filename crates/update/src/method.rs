@@ -301,6 +301,21 @@ impl InstallMethod {
     }
 }
 
+/// `install.sh`, or `install.ps1` on Windows.
+pub const SCRIPT_NAME: &str = os::SCRIPT;
+
+/// The directory the install script installs into by default for this user:
+/// `~/.local/bin`, or `%LOCALAPPDATA%\Programs\devlanes` on Windows.
+pub fn default_script_dir() -> Option<PathBuf> {
+    os::default_script_dir(user_home().as_deref())
+}
+
+/// The command that installs the latest stable release into `dir` with the
+/// install script, for a person to run.
+pub fn script_install_command(dir: &Path) -> String {
+    os::script_install(dir)
+}
+
 /// The executable a process should start to run devlanes again, such as the
 /// daemon a client spawns or the one a login service names.
 ///
@@ -561,6 +576,14 @@ mod os {
         )
     }
 
+    /// `install.sh --dir <dir>`.
+    pub(super) fn script_install(dir: &Path) -> String {
+        format!(
+            "curl -fsSL {INSTALL_SCRIPT} | sh -s -- --dir {}",
+            shell_quote(&dir.to_string_lossy())
+        )
+    }
+
     /// pip upgrade through the environment's own Python, since its `pip` may
     /// not be on `PATH`.
     pub(super) fn pip_upgrade(venv: &Path) -> String {
@@ -668,6 +691,18 @@ mod os {
             "in PowerShell: $env:DEVLANES_INSTALL_DIR={}; irm {INSTALL_SCRIPT} | iex",
             powershell_quote(&dir.to_string_lossy())
         )
+    }
+
+    /// `install.ps1 -Dir <dir>`, as one PowerShell line. The directory sits in
+    /// a single-quoted string inside the double-quoted one `iex` reads, so
+    /// `` ` ``, `$` and `"` are escaped for the outer string and `'` for the
+    /// inner one.
+    pub(super) fn script_install(dir: &Path) -> String {
+        let dir = powershell_quote(&dir.to_string_lossy())
+            .replace('`', "``")
+            .replace('$', "`$")
+            .replace('"', "`\"");
+        format!("in PowerShell: iex \"& {{$(irm {INSTALL_SCRIPT})}} -Dir {dir}\"")
     }
 
     /// pip upgrade through the environment's own Python, since its `pip` may
@@ -1085,6 +1120,14 @@ entrypoints = [
             InstallMethod::UvPip(PathBuf::from("/Users/a/it's/.venv")).upgrade_command("0.3.0"),
             "uv pip install --upgrade --python '/Users/a/it'\\''s/.venv' devlanes"
         );
+        assert_eq!(
+            script_install_command(Path::new("/Users/a/.local/bin")),
+            "curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir /Users/a/.local/bin"
+        );
+        assert_eq!(
+            script_install_command(Path::new("/Users/a/My Tools")),
+            "curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir '/Users/a/My Tools'"
+        );
     }
 
     #[test]
@@ -1313,6 +1356,14 @@ entrypoints = [
             InstallMethod::Script(PathBuf::from(r"C:\Users\o'neil\Programs\devlanes"))
                 .upgrade_command("0.4.0"),
             "in PowerShell: $env:DEVLANES_INSTALL_DIR='C:\\Users\\o''neil\\Programs\\devlanes'; irm https://devlanes.run/install.ps1 | iex"
+        );
+        assert_eq!(
+            script_install_command(Path::new(r"C:\Users\a\AppData\Local\Programs\devlanes")),
+            r#"in PowerShell: iex "& {$(irm https://devlanes.run/install.ps1)} -Dir 'C:\Users\a\AppData\Local\Programs\devlanes'""#
+        );
+        assert_eq!(
+            script_install_command(Path::new(r"D:\o'neil\$tools")),
+            r#"in PowerShell: iex "& {$(irm https://devlanes.run/install.ps1)} -Dir 'D:\o''neil\`$tools'""#
         );
     }
 

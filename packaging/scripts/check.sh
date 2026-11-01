@@ -16,13 +16,41 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
+# A devlanes installed on this machine is not another installer's to install.sh here.
+clean_path=
+old_ifs=$IFS
+IFS=:
+for entry in $PATH; do
+	[ -e "$entry/devlanes" ] || clean_path=${clean_path:+$clean_path:}$entry
+done
+IFS=$old_ifs
+PATH=$clean_path
+export PATH
+
 # A prerelease that PyPI also takes, so the wheels come from the same archives.
 version=0.0.0-rc.1
 mkdir "$work/bin"
-for bin in devlanes devlanes-hosts; do
-	printf '#!/bin/sh\necho "%s %s"\n' "$bin" "$version" >"$work/bin/$bin"
-	chmod 755 "$work/bin/$bin"
-done
+printf '#!/bin/sh\necho "%s %s"\n' devlanes-hosts "$version" >"$work/bin/devlanes-hosts"
+# The fake devlanes prints its version. It has `update` and a running daemon only when
+# DEVLANES_CHECK_LOG is set: then it logs those calls there, answers the probes
+# (`update --help`, `daemon status`) and exits with DEVLANES_CHECK_EXIT (default 0)
+# otherwise. Without it, it fails them like a devlanes from before `devlanes update`
+# with no daemon.
+cat >"$work/bin/devlanes" <<EOF
+#!/bin/sh
+case \${1:-} in
+update | daemon)
+	[ -n "\${DEVLANES_CHECK_LOG:-}" ] || exit 2
+	printf '%s\n' "\$*" >>"\$DEVLANES_CHECK_LOG"
+	case "\$*" in
+	'update --help' | 'daemon status') exit 0 ;;
+	esac
+	exit "\${DEVLANES_CHECK_EXIT:-0}"
+	;;
+esac
+echo "devlanes $version"
+EOF
+chmod 755 "$work/bin/devlanes" "$work/bin/devlanes-hosts"
 
 for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
 	sh "$root/packaging/scripts/package.sh" "$version" "$target" "$work/dist" "$work/bin" >/dev/null
@@ -158,37 +186,74 @@ DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installe
 [ "$("$work/installed/devlanes")" = "devlanes $version" ]
 [ -x "$work/installed/devlanes-hosts" ]
 
-# The rolling `next` release keeps its archives under download/next, not download/vVERSION.
-mkdir -p "$release/download/next"
-cp "$work"/dist/*.tar.gz "$work/dist/SHA256SUMS" "$release/download/next/"
-DEVLANES_VERSION=next DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installed-next" \
-	sh "$root/install.sh" >/dev/null
-[ "$("$work/installed-next/devlanes")" = "devlanes $version" ]
-
-# The same through options, as `curl | sh -s -- ...` passes them. Each source is the
-# only one present, so a run that reads the wrong one fails.
+# The same through options, as `curl | sh -s -- ...` passes them. The pinned version's
+# folder is the only one present, so a run that reads latest/ fails.
 install_with() {
 	DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installed-opt" sh -s -- "$@" <"$root/install.sh"
 }
-mv "$release/download/v$version" "$work/versioned"
-install_with --channel next >/dev/null
-mv "$work/versioned" "$release/download/v$version"
-mv "$release/download/next" "$work/next"
+mv "$release/latest" "$work/latest"
 install_with --version "$version" >/dev/null
 install_with --version="v$version" >/dev/null
-DEVLANES_VERSION=next install_with --channel=stable >/dev/null
+DEVLANES_VERSION=0.0.0 install_with -v "$version" >/dev/null
 [ "$("$work/installed-opt/devlanes")" = "devlanes $version" ]
-mv "$work/next" "$release/download/next"
-install_with -c next -d "$work/installed-short" >/dev/null
+mv "$work/latest" "$release/latest"
+install_with -d "$work/installed-short" >/dev/null
 [ "$("$work/installed-short/devlanes")" = "devlanes $version" ]
 [ "$(sh "$root/install.sh" --help)" = "$(sed -n "s/^usage='\(.*\)'$/\1/p" "$root/install.sh")" ]
-for wrong in '--channel dev' "--channel next --version $version" '--release 1' '--version' "--uninstall --version $version"; do
+for wrong in '--channel next' '--channel=next' '-c next' '--version next' '--version 1.2' '--release 1' '--version' \
+	"--uninstall --version $version" '--uninstall --force'; do
 	# shellcheck disable=SC2086 # each case is several words
 	if install_with $wrong >/dev/null 2>&1; then
 		echo "install.sh accepted $wrong" >&2
 		exit 1
 	fi
 done
+# `next` comes from `devlanes update --next` now.
+case $(DEVLANES_VERSION=next install_with 2>&1 || true) in
+*'install a stable release, then run devlanes update --next'*) ;;
+*)
+	echo "install.sh accepted DEVLANES_VERSION=next" >&2
+	exit 1
+	;;
+esac
+
+# A devlanes in the target directory that has `update` updates itself; install.sh
+# passes its exit status on and installs nothing.
+log=$work/check.log
+status=0
+DEVLANES_CHECK_LOG=$log DEVLANES_CHECK_EXIT=7 install_with --version 9.9.9 >/dev/null 2>&1 || status=$?
+[ "$status" -eq 7 ]
+[ "$(cat "$log")" = "update --help
+update --yes --version 9.9.9" ]
+rm "$log"
+DEVLANES_CHECK_LOG=$log install_with >/dev/null
+[ "$(tail -n 1 "$log")" = "update --yes" ]
+rm "$log"
+
+# A fresh install while a daemon answers restarts it into the new version.
+DEVLANES_CHECK_LOG=$log install_with -d "$work/installed-finish" >/dev/null
+[ "$(cat "$log")" = "daemon status
+update --finish" ]
+[ "$("$work/installed-finish/devlanes")" = "devlanes $version" ]
+rm "$log"
+
+# The first devlanes on PATH is Homebrew's: install.sh names it and stops, unless --force.
+mkdir -p "$work/brew/Cellar/devlanes/1.0/bin" "$work/brew/bin"
+cp "$work/bin/devlanes" "$work/brew/Cellar/devlanes/1.0/bin/devlanes"
+ln -s ../Cellar/devlanes/1.0/bin/devlanes "$work/brew/bin/devlanes"
+refused=$(PATH="$work/brew/bin:$PATH" install_with -d "$work/installed-brew" 2>&1 || true)
+# The message names the link's target, symlinks resolved ($TMPDIR is one on macOS).
+cellar=$(cd "$work/brew/Cellar/devlanes/1.0/bin" && pwd -P)/devlanes
+case $refused in
+*"the devlanes on PATH, $cellar, comes from another installer; update it with: devlanes update"*) ;;
+*)
+	echo "install.sh with Homebrew's devlanes first on PATH: $refused" >&2
+	exit 1
+	;;
+esac
+[ ! -e "$work/installed-brew" ]
+PATH="$work/brew/bin:$PATH" install_with -d "$work/installed-brew" --force >/dev/null
+[ "$("$work/installed-brew/devlanes")" = "devlanes $version" ]
 
 # --uninstall runs the devlanes in the target directory (the fake one prints its
 # version); without one it deletes what install.sh put there and names the data.

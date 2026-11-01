@@ -512,6 +512,34 @@ fn update_flags_pick_the_action() {
         (vec!["--check"], UpdateAction::Check),
         (vec!["--finish"], UpdateAction::Finish),
         (vec!["--notes"], UpdateAction::Notes),
+        (
+            vec!["--next"],
+            UpdateAction::Switch {
+                channel: ChannelSwitch::Next,
+                yes: false,
+            },
+        ),
+        (
+            vec!["--next", "--yes"],
+            UpdateAction::Switch {
+                channel: ChannelSwitch::Next,
+                yes: true,
+            },
+        ),
+        (
+            vec!["--stable"],
+            UpdateAction::Switch {
+                channel: ChannelSwitch::Stable { force: false },
+                yes: false,
+            },
+        ),
+        (
+            vec!["--stable", "--force", "--yes"],
+            UpdateAction::Switch {
+                channel: ChannelSwitch::Stable { force: true },
+                yes: true,
+            },
+        ),
     ] {
         let cli = Cli::parse_from(["devlanes", "update"].into_iter().chain(args.clone()));
         match action(&cli, &runtime(&cli, OutputMode::Plain)) {
@@ -526,6 +554,17 @@ fn update_flags_pick_the_action() {
         &["update", "--notes", "--check"],
         &["update", "--notes", "--version", "0.9.1"],
         &["update", "--version"],
+        &["update", "--next", "--stable"],
+        &["update", "--next", "--version", "0.9.1"],
+        &["update", "--stable", "--version", "0.9.1"],
+        &["update", "--next", "--check"],
+        &["update", "--stable", "--notes"],
+        &["update", "--next", "--finish"],
+        &["update", "--force"],
+        &["update", "--next", "--force"],
+        &["update", "--force", "--version", "0.9.1"],
+        &["update", "--force", "--check"],
+        &["update", "--force", "--notes"],
     ] {
         assert!(
             Cli::try_parse_from(std::iter::once("devlanes").chain(refused.iter().copied()))

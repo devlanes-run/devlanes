@@ -3092,3 +3092,42 @@ fn remote_use_refusals_say_what_to_do() {
         assert!(text.contains(fix), "{code}: {text}");
     }
 }
+
+/// `update --next` on an install that only gets stable releases names the
+/// install script command, after removing the other install when there is
+/// one.
+#[test]
+fn next_channel_refusal_says_how_to_reinstall() {
+    let rendered = |data: Value| {
+        runtime(OutputMode::Plain)
+            .reporter()
+            .error(&RpcError::new("update_next_unsupported", data, 1), None)
+            .stderr
+    };
+    let install = "curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir /Users/a/.local/bin";
+    let text = rendered(json!({
+        "method": "Homebrew",
+        "script": "install.sh",
+        "install": install,
+        "remove": "brew uninstall devlanes-run/tap/devlanes",
+    }));
+    assert!(
+        text.contains("the next channel needs devlanes installed by install.sh in a directory you can write to, and this one is Homebrew"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "run brew uninstall devlanes-run/tap/devlanes, then {install}, then devlanes update --next"
+        )),
+        "{text}"
+    );
+    let text = rendered(json!({
+        "method": "a standalone binary in /usr/local/bin",
+        "script": "install.sh",
+        "install": install,
+    }));
+    assert!(
+        text.contains(&format!("run {install}, then devlanes update --next")),
+        "{text}"
+    );
+}

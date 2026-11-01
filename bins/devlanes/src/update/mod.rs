@@ -18,8 +18,9 @@ use crossterm::{
     cursor::MoveToPreviousLine,
     terminal::{Clear, ClearType},
 };
-use devlanes_cli::{OutputMode, Rendered, Runtime, UpdateAction};
+use devlanes_cli::{ChannelSwitch, OutputMode, Rendered, Runtime, UpdateAction};
 use devlanes_client::{Client, Paths, restart::RowState};
+use devlanes_config::UpdateChannel;
 use devlanes_proto::{
     Context, LaneSummary, Method, Page, RpcError,
     release::{UpdateInfo, UpdateNote},
@@ -27,8 +28,8 @@ use devlanes_proto::{
 use devlanes_tui::{REOPEN_ENV, Reopen};
 use devlanes_update::{
     InstallMethod,
-    check::Channel,
-    install::{self, InstallError, Lock, Plan, Release, Staged},
+    check::{Channel, Source, Urls},
+    install::{self, InstallError, Lock, Plan, Release, Staged, Target},
     notes::{Level, WhatsNew},
     version::{Bump, Version, bump, is_newer},
 };
@@ -59,7 +60,8 @@ enum Installed {
     Nothing(u8),
 }
 
-/// `devlanes update` and its `--check`, `--notes` and `--finish` forms.
+/// `devlanes update` and its `--check`, `--notes`, `--next`, `--stable` and
+/// `--finish` forms.
 pub async fn run(runtime: &Runtime, paths: &Paths, action: UpdateAction) -> Result<u8, RpcError> {
     match action {
         UpdateAction::Check => check(runtime, paths).await,
@@ -69,6 +71,7 @@ pub async fn run(runtime: &Runtime, paths: &Paths, action: UpdateAction) -> Resu
                 Installed::Finished(code) | Installed::Nothing(code) => Ok(code),
             }
         }
+        UpdateAction::Switch { channel, yes } => switch(runtime, paths, channel, yes).await,
         UpdateAction::Finish => finish(runtime, paths).await,
     }
 }
@@ -234,12 +237,11 @@ async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     Ok(0)
 }
 
-/// `devlanes update`: decides what to install, asks unless `yes`, installs
-/// it in the step block, then runs the new binary's `update --finish`, which
-/// opens the TUI on `reopen` when given. The latest release is skipped when
-/// the install already holds it (the daemon or a package manager put it
-/// there), so only the restart is left; a `version` asked for is always
-/// installed.
+/// `devlanes update`: decides what to install, then [`deliver`]s it. The
+/// latest release is skipped when the install already holds it (the daemon
+/// or a package manager put it there), so only the restart is left; a
+/// `version` asked for is always installed unless it is older than this
+/// build.
 async fn install(
     runtime: &Runtime,
     paths: &Paths,
@@ -259,40 +261,313 @@ async fn install(
     {
         return Err(failed(&InstallError::Version(version.clone())));
     }
-    let mut client = match Client::connect_any(paths).await {
-        Ok(client) if client.compatible() => Some(client),
-        Ok(_) => None,
-        Err(error) if error.is_not_running() => None,
-        Err(error) => return Err(rpc_error(error)),
-    };
+    let mut client = compatible_daemon(paths).await?;
     // Without a version the latest comes from the daemon, which may start for it.
     if version.is_none() && client.is_none() {
         client = Some(Client::connect_or_spawn(paths).await.map_err(rpc_error)?);
     }
-    let daemon = client.as_ref().map(|client| client.peer.version.clone());
-    let from = daemon.clone().unwrap_or_else(|| OWN.to_owned());
+    let from = client
+        .as_ref()
+        .map_or_else(|| OWN.to_owned(), |client| client.peer.version.clone());
     let info = match (&version, client.as_mut()) {
         (None, Some(client)) => latest(client).await?,
         _ => None,
     };
     let pinned = version.is_some();
     let to = match (version, &info) {
-        (Some(version), _) if is_newer(OWN, &version) => {
-            return Err(RpcError::new(
-                "update_older",
-                json!({"version": version, "running": OWN}),
-                1,
-            ));
-        }
-        (Some(version), _) => version,
+        (Some(version), _) => match install::target(OWN, &version, false) {
+            Target::Older => {
+                return Err(RpcError::new(
+                    "update_older",
+                    json!({"version": version, "running": OWN}),
+                    1,
+                ));
+            }
+            Target::Current | Target::Install { .. } => version,
+        },
         (None, Some(info)) if is_newer(&info.latest, OWN) || is_newer(&info.latest, &from) => {
             info.latest.clone()
         }
         (None, _) => return up_to_date(runtime, &from).map(Installed::Nothing),
     };
+    let channel = info.as_ref().map_or_else(
+        || Channel::of_version(&to),
+        |info| channel_of(&info.channel),
+    );
+    let delivery = Delivery {
+        method,
+        exe,
+        client,
+        from,
+        to,
+        reinstall: pinned,
+        older: false,
+        channel,
+        switched: false,
+        info,
+    };
+    deliver(runtime, paths, delivery, yes, reopen).await
+}
+
+/// `devlanes update --next` and `--stable [--force]`: records the channel in
+/// `updates.channel`, then installs its latest release when that is newer
+/// than this build, or older with `--force`. Otherwise it says this build
+/// stays. `--next` refuses before changing the config when the install
+/// cannot take release archives.
+async fn switch(
+    runtime: &Runtime,
+    paths: &Paths,
+    choice: ChannelSwitch,
+    yes: bool,
+) -> Result<u8, RpcError> {
+    let (channel, force) = match choice {
+        ChannelSwitch::Next => (Channel::Next, false),
+        ChannelSwitch::Stable { force } => (Channel::Stable, force),
+    };
+    let (method, exe) = current().await?;
+    if channel == Channel::Next {
+        let (planned, path) = (method.clone(), exe.clone());
+        // A script install in a directory it cannot write to is a manual one.
+        let archive = tokio::task::spawn_blocking(move || {
+            matches!(Plan::new(&planned, &path, OWN), Ok(Plan::Archive { .. }))
+        })
+        .await
+        .map_err(|error| io_error(&error))?;
+        if !install::follows(&method, channel) || !archive {
+            return Err(next_unsupported(&method, &exe).await);
+        }
+    }
+    let source = Source::for_method(&method, channel)
+        .map_err(|_| manual(&method, &method.upgrade_command(OWN)))?;
+    let before = effective_channel(&crate::user_config::lenient(paths).await);
+    let file = crate::user_config::write(paths, "updates.channel", json!(channel.as_str())).await?;
+    let latest = devlanes_update::check::latest(source, &Urls::from_env(), FETCH_TIMEOUT)
+        .await
+        .map_err(|error| {
+            RpcError::new(
+                "update_failed",
+                json!({
+                    "title": format!("cannot read the latest {} release: {error}", channel.as_str()),
+                    "hint": format!("retry with devlanes update --{}", channel.as_str()),
+                }),
+                1,
+            )
+        })?;
+    let (to, older) = match install::target(OWN, &latest, force) {
+        Target::Install { version, older } => (version, older),
+        decided => {
+            return Ok(stays(
+                runtime,
+                &Stay {
+                    channel,
+                    changed: before != channel,
+                    file: &file,
+                    latest: &latest,
+                    older: decided == Target::Older,
+                },
+            ));
+        }
+    };
+    if older {
+        emit(&Rendered {
+            stderr: format!(
+                "warning: devlanes {to} is older than this build ({OWN}). If its daemon refuses the state database the newer build migrated, devlanes daemon reset-state empties it; lanes then get new numbers and ports.\n"
+            ),
+            ..Rendered::default()
+        });
+    }
+    let client = compatible_daemon(paths).await?;
+    let from = client
+        .as_ref()
+        .map_or_else(|| OWN.to_owned(), |client| client.peer.version.clone());
+    let delivery = Delivery {
+        method,
+        exe,
+        client,
+        from,
+        to,
+        reinstall: false,
+        older,
+        channel,
+        switched: true,
+        info: None,
+    };
+    match deliver(runtime, paths, delivery, yes, None).await? {
+        Installed::Finished(code) | Installed::Nothing(code) => Ok(code),
+    }
+}
+
+/// What [`switch`] reports when nothing is installed.
+struct Stay<'a> {
+    channel: Channel,
+    /// Whether the config followed another channel before.
+    changed: bool,
+    /// The user config file.
+    file: &'a Path,
+    /// The channel's latest release.
+    latest: &'a str,
+    /// Whether `latest` is older than this build, which then stays.
+    older: bool,
+}
+
+/// Says that `updates.channel` now names the channel and why this build
+/// stays: it is the channel's latest release, or newer than it.
+fn stays(runtime: &Runtime, stay: &Stay<'_>) -> u8 {
+    let channel = stay.channel.as_str();
+    let rendered = match runtime.mode {
+        OutputMode::Json => Rendered {
+            stdout: format!(
+                "{}\n",
+                json!({
+                    "updated": false,
+                    "channel": channel,
+                    "file": stay.file,
+                    "running": OWN,
+                    "latest": stay.latest,
+                    "newer_than_latest": stay.older,
+                })
+            ),
+            ..Rendered::default()
+        },
+        _ if runtime.quiet => Rendered::default(),
+        _ => Rendered {
+            stdout: stay_text(stay),
+            ..Rendered::default()
+        },
+    };
+    emit(&rendered);
+    0
+}
+
+/// The human text of [`stays`].
+fn stay_text(stay: &Stay<'_>) -> String {
+    let (channel, latest) = (stay.channel.as_str(), stay.latest);
+    let what = match stay.channel {
+        Channel::Stable => "stable release",
+        Channel::Next => "next build",
+    };
+    let mut out = format!("updates.channel is {channel} in {}", stay.file.display());
+    if stay.changed {
+        out.push_str("; the daemon follows it from its next restart");
+    }
+    out.push('\n');
+    if !stay.older {
+        out.push_str(&format!("devlanes {OWN} is the latest {what}\n"));
+        return out;
+    }
+    out.push_str(&format!(
+        "devlanes {OWN} stays until a {what} newer than it ships; the latest is {latest}\n"
+    ));
+    if stay.channel == Channel::Stable {
+        out.push_str(&format!(
+            "devlanes update --stable --force installs {latest} now\n"
+        ));
+    }
+    out
+}
+
+/// The channel the user config `config` makes devlanes follow: its
+/// `updates.channel`, else the channel of this build.
+fn effective_channel(config: &devlanes_config::UserConfig) -> Channel {
+    match config.updates.channel {
+        Some(UpdateChannel::Stable) => Channel::Stable,
+        Some(UpdateChannel::Next) => Channel::Next,
+        None => Channel::of_version(OWN),
+    }
+}
+
+/// `update_next_unsupported` for `method`: how to reinstall with the install
+/// script in its default directory, after removing this install when a
+/// package manager owns it.
+async fn next_unsupported(method: &InstallMethod, exe: &Path) -> RpcError {
+    let (method, exe) = (method.clone(), exe.to_path_buf());
+    let found = tokio::task::spawn_blocking(move || {
+        let remove = install::removal_commands(&method, &exe).map(|commands| {
+            commands
+                .iter()
+                .map(install::Argv::display)
+                .collect::<Vec<_>>()
+                .join(" && ")
+        });
+        let home = devlanes_core::paths::user_home();
+        (method.describe(home.as_deref()), remove)
+    })
+    .await;
+    let (described, remove) = found.unwrap_or_else(|_| ("this install".into(), None));
+    let dir = devlanes_update::default_script_dir().unwrap_or_else(|| {
+        PathBuf::from(if cfg!(windows) {
+            r"%LOCALAPPDATA%\Programs\devlanes"
+        } else {
+            "~/.local/bin"
+        })
+    });
+    let mut data = json!({
+        "method": described,
+        "script": devlanes_update::SCRIPT_NAME,
+        "install": devlanes_update::script_install_command(&dir),
+    });
+    if let Some(remove) = remove {
+        data["remove"] = json!(remove);
+    }
+    RpcError::new("update_next_unsupported", data, 1)
+}
+
+/// The daemon when one runs and speaks this binary's protocol.
+async fn compatible_daemon(paths: &Paths) -> Result<Option<Client>, RpcError> {
+    match Client::connect_any(paths).await {
+        Ok(client) if client.compatible() => Ok(Some(client)),
+        Ok(_) => Ok(None),
+        Err(error) if error.is_not_running() => Ok(None),
+        Err(error) => Err(rpc_error(error)),
+    }
+}
+
+/// A release [`deliver`] installs, and what it knows around it.
+struct Delivery {
+    method: InstallMethod,
+    /// This binary's executable.
+    exe: PathBuf,
+    /// The daemon, when one runs on this protocol.
+    client: Option<Client>,
+    /// The daemon's version, else this binary's.
+    from: String,
+    to: String,
+    /// Install `to` even when the install already holds it (`--version`).
+    reinstall: bool,
+    /// `to` is older than this build (`update --stable --force`).
+    older: bool,
+    /// The channel `to` comes from.
+    channel: Channel,
+    /// `update --next` or `--stable` set `updates.channel` to `channel`.
+    switched: bool,
+    /// The daemon's report of `to`, whose notes the question lists.
+    info: Option<UpdateInfo>,
+}
+
+/// Asks unless `yes`, installs the release in the step block, then runs the
+/// new binary's `update --finish`, which opens the TUI on `reopen` when given.
+async fn deliver(
+    runtime: &Runtime,
+    paths: &Paths,
+    delivery: Delivery,
+    yes: bool,
+    reopen: Option<&Reopen>,
+) -> Result<Installed, RpcError> {
+    let Delivery {
+        method,
+        exe,
+        mut client,
+        from,
+        to,
+        reinstall,
+        older,
+        channel,
+        switched,
+        info,
+    } = delivery;
     let entry = method.entry(&exe);
     let installed = install::reported_version(&entry).await;
-    let plan = if !pinned && installed.as_deref() == Some(to.as_str()) {
+    let plan = if !reinstall && installed.as_deref() == Some(to.as_str()) {
         None
     } else {
         let (planned, exe, to) = (method.clone(), exe.clone(), to.clone());
@@ -314,7 +589,7 @@ async fn install(
             .as_ref()
             .map(|info| info.notes.as_slice())
             .unwrap_or_default();
-        if !confirm_update(runtime, &from, &to, lanes, notes)? {
+        if !confirm_update(runtime, &from, &to, lanes, notes, older)? {
             return Ok(Installed::Nothing(devlanes_cli::exit::USAGE));
         }
     }
@@ -328,15 +603,19 @@ async fn install(
         },
     )
     .await;
-    if let Some(plan) = plan {
-        let channel = info.as_ref().map_or_else(
-            || Channel::of_version(&to),
-            |info| channel_of(&info.channel),
+    if switched {
+        view.set(
+            "channel",
+            format!("following {} (updates.channel)", channel_words(channel)),
+            RowState::Done,
+            None,
         );
-        if let Err(error) = run_plan(&mut view, paths, &plan, &to, channel, &entry).await {
-            view.fail(&error);
-            return Err(error);
-        }
+    }
+    if let Some(plan) = plan
+        && let Err(error) = run_plan(&mut view, paths, &plan, &to, channel, &entry).await
+    {
+        view.fail(&error);
+        return Err(error);
     }
     let mut envs: Vec<(&str, String)> = Vec::new();
     if let Some(handoff) = view.handoff() {
@@ -652,13 +931,15 @@ fn print_minor_notes<'a>(minor: impl IntoIterator<Item = (&'a str, &'a str)>) {
 }
 
 /// Asks before updating from `from` to `to`: `[Y/n]` for a patch release, and
-/// `[y/N]` after the minor entries of `notes` for a minor one.
+/// `[y/N]` after the minor entries of `notes` for a minor one or for an
+/// `older` release than this build.
 fn confirm_update(
     runtime: &Runtime,
     from: &str,
     to: &str,
     lanes: usize,
     notes: &[UpdateNote],
+    older: bool,
 ) -> Result<bool, RpcError> {
     let minor = bump(from, to) == Some(Bump::Minor);
     if minor {
@@ -676,8 +957,16 @@ fn confirm_update(
     ask(
         runtime,
         &format!("Update devlanes {from} -> {to}? {restarts}"),
-        !minor,
+        !minor && !older,
     )
+}
+
+/// `next builds` or `stable releases`, as the channel row names them.
+fn channel_words(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Stable => "stable releases",
+        Channel::Next => "next builds",
+    }
 }
 
 /// `1 lane`, `3 lanes`.
@@ -885,5 +1174,52 @@ mod tests {
         assert_eq!(lanes_word(3), "3 lanes");
         assert_eq!(channel_of("next"), Channel::Next);
         assert_eq!(channel_of("stable"), Channel::Stable);
+    }
+
+    /// Without an install, a switch says the channel is recorded and why this
+    /// build stays.
+    #[test]
+    fn switches_that_install_nothing_say_why() {
+        let file = Path::new("/home/a/.devlanes/config.yaml");
+        let stay = |channel, changed, older| Stay {
+            channel,
+            changed,
+            file,
+            latest: "0.9.0",
+            older,
+        };
+        let text = stay_text(&stay(Channel::Stable, true, true));
+        assert_eq!(
+            text,
+            format!(
+                "updates.channel is stable in {}; the daemon follows it from its next restart\n\
+                 devlanes {OWN} stays until a stable release newer than it ships; the latest is 0.9.0\n\
+                 devlanes update --stable --force installs 0.9.0 now\n",
+                file.display()
+            )
+        );
+        let text = stay_text(&stay(Channel::Next, false, true));
+        assert!(
+            text.contains("stays until a next build newer than it ships"),
+            "{text}"
+        );
+        assert!(!text.contains("--force"), "{text}");
+        assert!(!text.contains("restart"), "{text}");
+        let text = stay_text(&stay(Channel::Next, false, false));
+        assert!(
+            text.ends_with(&format!("devlanes {OWN} is the latest next build\n")),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn the_config_channel_wins_over_the_build() {
+        let mut config = devlanes_config::UserConfig::default();
+        assert_eq!(effective_channel(&config), Channel::of_version(OWN));
+        config.updates.channel = Some(UpdateChannel::Next);
+        assert_eq!(effective_channel(&config), Channel::Next);
+        config.updates.channel = Some(UpdateChannel::Stable);
+        assert_eq!(effective_channel(&config), Channel::Stable);
+        assert_eq!(channel_words(Channel::Next), "next builds");
     }
 }

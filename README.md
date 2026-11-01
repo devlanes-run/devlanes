@@ -24,18 +24,18 @@ On Windows 11 24H2 or later, x64 or arm64, install from PowerShell; npm, uv and 
 irm https://devlanes.run/install.ps1 | iex
 ```
 
-Both scripts verify the archive against the release's `SHA256SUMS`. `install.sh` installs to `~/.local/bin`; `DEVLANES_INSTALL_SUDO=1` allows sudo for a directory you can't write. They take a channel, a version and a directory:
+Both scripts verify the archive against the release's `SHA256SUMS`. `install.sh` installs to `~/.local/bin`; `DEVLANES_INSTALL_SUDO=1` allows sudo for a directory you can't write. They take a version and a directory, and hand an existing install there to `devlanes update`:
 
 ```sh
-curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next    # latest build of main
 curl -fsSL https://devlanes.run/install.sh | sh -s -- --version 0.4.0   # one release
 curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir ~/bin
 ```
 
 ```powershell
-iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
 ```
+
+`devlanes update` installs new releases the way devlanes was installed. After a script install, `devlanes update --next` follows the latest build of `main`, and `devlanes update --stable` goes back to releases.
 
 [packaging](packaging/README.md) describes the release pipeline.
 

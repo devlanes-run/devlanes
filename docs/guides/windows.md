@@ -19,10 +19,10 @@ The script checks the archive against the release's `SHA256SUMS`, installs `devl
 
 ```powershell
 iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
-iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next -Dir D:\tools\devlanes"
+iex "& {$(irm https://devlanes.run/install.ps1)} -Dir D:\tools\devlanes"
 ```
 
-`-Channel next` installs the latest build of `main`. The script works in Windows PowerShell 5.1 and PowerShell 7.
+`devlanes update --next` then follows the latest build of `main`. The script works in Windows PowerShell 5.1 and PowerShell 7.
 
 cargo binstall downloads the same release build:
 

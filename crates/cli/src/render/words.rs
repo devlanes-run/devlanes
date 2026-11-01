@@ -1177,6 +1177,24 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             "another devlanes update is running; retry once it is done".into(),
             None,
         ),
+        // `{method, script, install, remove?}`: `update --next` on an install
+        // that only gets stable releases; the config is left as it was.
+        "update_next_unsupported" => {
+            let mut steps = Vec::new();
+            if let Some(remove) = data.get("remove").and_then(Value::as_str) {
+                steps.push(remove.to_owned());
+            }
+            steps.push(text(data, "install"));
+            steps.push("devlanes update --next".into());
+            (
+                format!(
+                    "the next channel needs devlanes installed by {} in a directory you can write to, and this one is {}",
+                    field(data, "script"),
+                    field(data, "method")
+                ),
+                Some(Hint(format!("run {}", steps.join(", then ")))),
+            )
+        }
         "update_older" => (
             format!(
                 "devlanes {} is older than this devlanes ({}), so update does not install it",

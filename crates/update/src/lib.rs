@@ -16,7 +16,8 @@ mod retain;
 pub mod version;
 
 pub use method::{
-    InstallFacts, InstallMethod, Venv, binstall_lists_devlanes, running_exe, spawn_exe,
+    InstallFacts, InstallMethod, SCRIPT_NAME, Venv, binstall_lists_devlanes, default_script_dir,
+    running_exe, script_install_command, spawn_exe,
 };
 pub use notice::{
     NoticeLog, WhatsNewStart, claim_whats_new, now_ms, ready_key, ready_line, skew_key, skew_line,

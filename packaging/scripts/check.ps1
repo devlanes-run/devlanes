@@ -6,16 +6,22 @@ in Windows PowerShell 5.1 and PowerShell 7, the npm launcher and the PyPI wheel.
 runs it on Windows.
 
 .DESCRIPTION
-The archives hold a fake devlanes.exe: a copy of cmd.exe with the version appended
-(Windows ignores bytes after the image), so it runs, can hold its own file locked,
-and tells the installed versions apart. No Rust build is needed.
+The archives hold a fake devlanes.exe with the version appended (Windows ignores
+bytes after the image), so it runs, can hold its own file locked, and tells the
+installed versions apart. No Rust build is needed. The first two versions are
+copies of ping.exe, which fails `update --help` and `daemon status` like a devlanes
+from before `devlanes update` with no daemon. The third is a copy of cmd.exe, which
+exits with 0 for both, so install.ps1 takes it for a devlanes that updates itself
+and whose daemon runs; fed `echo %CMDCMDLINE%` on stdin, it prints the arguments
+install.ps1 ran it with.
 
 Each PowerShell installs a pinned version, then the latest one while the installed
 devlanes.exe runs, which must be renamed to devlanes.exe.old-* and keep running,
 then once more after it ended, which deletes the old copy. install.ps1 always puts
 its directory in the user PATH, so the check saves the user PATH value and kind
-first and writes them back at the end. Every child process has a timeout, after
-which it is killed with its own children.
+first and writes them back at the end. The children get a PATH without any
+devlanes, so one installed on this machine does not count as another installer's.
+Every child process has a timeout, after which it is killed with its own children.
 
 Needs PSScriptAnalyzer (Install-Module PSScriptAnalyzer -Scope CurrentUser), both
 powershell.exe and pwsh, node and python.
@@ -47,6 +53,20 @@ function Assert-True {
     if (-not $Condition) { throw "check.ps1: $What" }
 }
 
+function Test-Say {
+    <#
+    Whether a child's Output holds Text, whitespace ignored: Windows PowerShell wraps
+    error text at the console width, inside CLIXML when stderr is redirected, and
+    PowerShell 7 wraps it behind `|` with colors.
+    #>
+    param([string]$Output, [string]$Text)
+    $flat = {
+        param([string]$Value)
+        $Value -replace "$([char]27)\[[0-9;]*m", '' -replace '_x000D__x000A_(</S><S S="Error">)?', '' -replace '\n\s*\|', '' -replace '\s', ''
+    }
+    return (& $flat $Output).Contains((& $flat $Text))
+}
+
 function ConvertTo-ProcessArgument {
     <# Quotes one argument for a Windows command line (CommandLineToArgvW rules). #>
     param([AllowEmptyString()][string]$Value)
@@ -58,10 +78,11 @@ function ConvertTo-ProcessArgument {
 
 function Invoke-Process {
     <#
-    Runs a program and returns its exit code and output (stdout, then stderr). After
-    TimeoutSeconds its process tree is killed and the call throws.
+    Runs a program with InputText on stdin and returns its exit code and output
+    (stdout, then stderr). After TimeoutSeconds its process tree is killed and the
+    call throws.
     #>
-    param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 300)
+    param([string]$FilePath, [string[]]$Arguments, [int]$TimeoutSeconds = 300, [string]$InputText = '')
     $start = New-Object Diagnostics.ProcessStartInfo $FilePath
     $start.Arguments = @($Arguments | ForEach-Object { ConvertTo-ProcessArgument $_ }) -join ' '
     $start.UseShellExecute = $false
@@ -71,6 +92,7 @@ function Invoke-Process {
     $start.RedirectStandardError = $true
     $process = [Diagnostics.Process]::Start($start)
     try {
+        $process.StandardInput.Write($InputText)
         $process.StandardInput.Close()
         # Both pipes drain in the background, so a child that fills one never blocks.
         $stdout = $process.StandardOutput.ReadToEndAsync()
@@ -93,8 +115,8 @@ function Invoke-Process {
 }
 
 function Invoke-Child {
-    <# Runs PowerShell code in a child powershell.exe or pwsh; returns exit code and output. #>
-    param([string]$Shell, [string]$Command, [hashtable]$Environment)
+    <# Runs PowerShell code in a child powershell.exe or pwsh, with InputText on stdin; returns exit code and output. #>
+    param([string]$Shell, [string]$Command, [hashtable]$Environment, [string]$InputText = '')
     $Environment = $Environment.Clone()
     # pwsh's module path would make Windows PowerShell load PowerShell 7 modules;
     # without the variable it builds its own. A test that passes one keeps it.
@@ -111,7 +133,7 @@ function Invoke-Child {
         # else an encoded command writes its host output and errors as CLIXML.
         $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Command))
         $arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-OutputFormat', 'Text', '-EncodedCommand', $encoded)
-        return Invoke-Process $Shell $arguments
+        return Invoke-Process $Shell $arguments -InputText $InputText
     } finally {
         foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name, $saved[$name]) }
     }
@@ -206,6 +228,20 @@ $ver = (& cmd.exe /d /c ver | Out-String).Trim()
 Assert-True ($ver -match '\[\D*\d+\.\d+\.(\d+)') "cmd ver output: $ver"
 Assert-Equal $build ([int]$Matches[1]) 'Windows build'
 
+foreach ($other in @('C:\Users\a\AppData\Roaming\npm\devlanes.cmd', 'C:\Users\a\AppData\Local\pnpm\devlanes.exe',
+        'C:\Users\a\.bun\bin\devlanes.exe', 'C:\Users\a\.cargo\bin\devlanes.exe', 'C:\Users\a\pipx\venvs\devlanes\Scripts\devlanes.exe',
+        'C:\Users\a\AppData\Roaming\uv\tools\devlanes\Scripts\devlanes.exe', 'D:/acme/node_modules/.bin/devlanes.cmd')) {
+    Assert-True (Test-DevlanesOtherInstaller $other) "$other belongs to another installer"
+}
+foreach ($own in @('C:\Users\a\AppData\Local\Programs\devlanes\devlanes.exe', 'C:\tools\devlanes.exe')) {
+    Assert-True (-not (Test-DevlanesOtherInstaller $own)) "$own belongs to no other installer"
+}
+$cmd = Join-Path $env:SystemRoot 'System32\cmd.exe'
+Assert-True (Test-DevlanesCommand $cmd @('/d', '/c', 'exit', '0')) 'a command that exits with 0'
+Assert-True (-not (Test-DevlanesCommand $cmd @('/d', '/c', 'exit', '3'))) 'a command that exits with 3'
+Assert-True (-not (Test-DevlanesCommand 'C:\nonexistent\devlanes.exe' @('update', '--help'))) 'a program that does not start'
+Assert-Equal (Resolve-DevlanesLink $cmd) $cmd 'a path without links'
+
 $sums = "$('a' * 64)  devlanes-1.2.3-x86_64-unknown-linux-gnu.tar.gz`n$('b' * 64)  devlanes-1.2.3-x86_64-pc-windows-msvc.zip`n"
 $found = Find-DevlanesArchive $sums 'x86_64-pc-windows-msvc' '' 'SHA256SUMS'
 Assert-Equal $found.Version '1.2.3' 'version from SHA256SUMS'
@@ -222,7 +258,12 @@ $shells = @(
     (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source
 )
 $target = Get-DevlanesTarget (Get-DevlanesArchitecture)
-$versions = @('0.0.1-check', '0.0.2-check')
+$versions = @('0.0.1-check', '0.0.2-check', '0.0.3-check')
+# The PATH children get: this one without the directories that hold a devlanes.
+$cleanPath = @($env:Path -split ';' | Where-Object {
+        $entry = $_
+        $entry -and -not @('.exe', '.cmd', '.bat', '.ps1' | Where-Object { [IO.File]::Exists("$entry\devlanes$_") })
+    }) -join ';'
 $pathBefore = Get-UserPath
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
@@ -235,7 +276,7 @@ try {
     Assert-True ($shadow -ieq "$shadowing\devlanes.cmd") "devlanes before the install directory: $shadow"
     Assert-Equal (Find-DevlanesShadow "$behind;$shadowing" $behind) $null 'devlanes after the install directory'
 
-    # The release layout install.ps1 downloads from, with two versions; latest is the second.
+    # The release layout install.ps1 downloads from, with three versions; latest is the second.
     $release = Join-Path $work 'release'
     $latest = Join-Path $release 'latest/download'
     New-Item -ItemType Directory -Force -Path $latest | Out-Null
@@ -243,7 +284,8 @@ try {
     foreach ($version in $versions) {
         $bin = Join-Path $work "bin-$version"
         New-Item -ItemType Directory -Path $bin | Out-Null
-        $fake = [IO.File]::ReadAllBytes((Join-Path $env:SystemRoot 'System32\cmd.exe')) +
+        $image = if ($version -eq $versions[2]) { 'cmd.exe' } else { 'PING.EXE' }
+        $fake = [IO.File]::ReadAllBytes((Join-Path $env:SystemRoot "System32\$image")) +
             [Text.Encoding]::ASCII.GetBytes("devlanes-check-version $version")
         [IO.File]::WriteAllBytes((Join-Path $bin 'devlanes.exe'), $fake)
         $name = "devlanes-$version-$target"
@@ -276,9 +318,6 @@ try {
         [IO.File]::WriteAllText((Join-Path $versioned 'SHA256SUMS'), $lines[$version])
     }
     [IO.File]::WriteAllText((Join-Path $latest 'SHA256SUMS'), $lines[$versions[1]])
-    # `next` holds the older version, so installing from it is visible as a downgrade.
-    $next = Join-Path $release 'download/next'
-    Copy-Item -LiteralPath (Join-Path $release "download/v$($versions[0])") -Destination $next -Recurse
 
     foreach ($shell in $shells) {
         $label = [IO.Path]::GetFileNameWithoutExtension($shell)
@@ -288,6 +327,7 @@ try {
             DEVLANES_INSTALL_BASE_URL = ([Uri]$release).AbsoluteUri
             DEVLANES_INSTALL_DIR = $installed
             DEVLANES_VERSION = "v$($versions[0])"
+            Path = $cleanPath
         }
 
         $run = Invoke-Child $shell "& '$installScript'" $environment
@@ -317,7 +357,7 @@ try {
 
         # The installed file runs and stays locked while it does, as a daemon would.
         $start = New-Object Diagnostics.ProcessStartInfo $exe
-        $start.Arguments = '/d /c ping -n 120 127.0.0.1 >nul'
+        $start.Arguments = '-n 120 127.0.0.1'
         $start.UseShellExecute = $false
         $start.CreateNoWindow = $true
         $running = [Diagnostics.Process]::Start($start)
@@ -366,37 +406,81 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, a failed install keeps the installed file"
         [IO.File]::WriteAllText($sumsFile, $lines[$versions[1]])
 
-        # The rolling `next` release keeps its archives under download/next.
+        # `next` is reached through `devlanes update --next`, not a version.
         $environment.DEVLANES_VERSION = 'next'
         $run = Invoke-Child $shell "& '$installScript'" $environment
-        Assert-Equal $run.Code 0 "$label, install.ps1 from next: $($run.Output)"
-        Assert-Equal (Get-FakeVersion $exe) $versions[0] "$label, version from next"
+        Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output 'install a stable release, then run devlanes update --next')) "$label, DEVLANES_VERSION=next must fail: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, DEVLANES_VERSION=next left the installation alone"
+        $environment.DEVLANES_VERSION = $null
 
-        # The same through options, as the documented `iex "& {$(irm ...)} -Channel next"`
+        # The same through options, as the documented `iex "& {$(irm ...)} -Version 0.4.0"`
         # passes them; an option wins over the environment variable.
         $withOptions = { param([string]$Options) "iex `"& {`$(Get-Content -Raw -LiteralPath '$installScript')} $Options`"" }
-        $run = Invoke-Child $shell (& $withOptions '-Channel stable') $environment
-        Assert-Equal $run.Code 0 "$label, -Channel stable: $($run.Output)"
-        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, -Channel stable over DEVLANES_VERSION=next"
-        $environment.DEVLANES_VERSION = $null
-        $run = Invoke-Child $shell (& $withOptions '-Channel next') $environment
-        Assert-Equal (Get-FakeVersion $exe) $versions[0] "$label, -Channel next: $($run.Output)"
+        $run = Invoke-Child $shell (& $withOptions "-Version $($versions[0])") $environment
+        Assert-Equal $run.Code 0 "$label, -Version: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $exe) $versions[0] "$label, -Version: $($run.Output)"
         # Running the text as a script block passes options the same way.
         $run = Invoke-Child $shell "& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '$installScript'))) -Version v$($versions[1])" $environment
-        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, -Version: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, -Version through a script block: $($run.Output)"
         $elsewhere = Join-Path $work "installed elsewhere by $label"
         $run = Invoke-Child $shell (& $withOptions "-Version $($versions[0]) -Dir '$elsewhere'") $environment
         Assert-Equal (Get-FakeVersion (Join-Path $elsewhere 'devlanes.exe')) $versions[0] "$label, -Dir: $($run.Output)"
-        # Windows PowerShell exits with 0 after a parameter validation error, so the check
-        # is the error text and an untouched installation.
-        foreach ($wrong in @('-Channel dev', "-Channel next -Version $($versions[0])")) {
-            $run = Invoke-Child $shell (& $withOptions $wrong) $environment
-            Assert-True ($run.Output -match 'Cannot validate argument|can''t be combined') "$label, install.ps1 accepted $($wrong): $($run.Output)"
-            Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, $wrong left the installation alone"
+        # The check is the error text and an untouched installation.
+        foreach ($wrong in @(
+                @('-Channel next', 'unknown option -Channel next'),
+                @('-Version next', 'next is no longer a version here'),
+                @('-Version 1.2', '1.2 is not a release version'))) {
+            $run = Invoke-Child $shell (& $withOptions $wrong[0]) $environment
+            Assert-True (Test-Say $run.Output $wrong[1]) "$label, install.ps1 accepted $($wrong[0]): $($run.Output)"
+            Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, $($wrong[0]) left the installation alone"
         }
 
-        # -Uninstall runs the devlanes.exe in the directory: the fake one is cmd.exe,
-        # which reads the closed stdin and exits, leaving the file in place.
+        # A devlanes.exe that has `update` (the cmd.exe fake) updates itself: install.ps1
+        # runs `devlanes update --yes --version X` from it, in this console, and passes its
+        # exit code on. Nothing is downloaded, so the release need not exist.
+        $delegating = Join-Path $work "delegating by $label"
+        New-Item -ItemType Directory -Path $delegating | Out-Null
+        $updater = Join-Path $delegating 'devlanes.exe'
+        Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[2])/devlanes.exe") -Destination $updater
+        $delegated = $environment.Clone()
+        $delegated.DEVLANES_INSTALL_DIR = $delegating
+        $run = Invoke-Child $shell "& '$installScript' -Version v9.9.9; exit `$LASTEXITCODE" $delegated "echo %CMDCMDLINE%`r`nexit 7`r`n"
+        Assert-Equal $run.Code 7 "$label, the exit code of devlanes update as a file: $($run.Output)"
+        Assert-True ($run.Output.Contains('" update --yes --version 9.9.9')) "$label, devlanes update --yes --version: $($run.Output)"
+        Assert-True (-not $run.Output.Contains('Installed devlanes')) "$label, a delegated update installs nothing itself: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $updater) $versions[2] "$label, delegation left the file to devlanes update"
+        $run = Invoke-Child $shell (& $withOptions '') $delegated "echo %CMDCMDLINE%`r`nexit 7`r`n"
+        Assert-True ($run.Output.Contains('" update --yes') -and (Test-Say $run.Output 'devlanes update exited with 7')) "$label, a failed devlanes update under iex: $($run.Output)"
+        $run = Invoke-Child $shell "& '$installScript'; exit `$LASTEXITCODE" $delegated "exit 0`r`n"
+        Assert-Equal $run.Code 0 "$label, a devlanes update that succeeds: $($run.Output)"
+
+        # A fresh install while a daemon answers (the cmd.exe fake says so) restarts it
+        # into the new version with `devlanes update --finish`.
+        $finishing = $environment.Clone()
+        $finishing.DEVLANES_INSTALL_DIR = Join-Path $work "finishing by $label"
+        $finishing.DEVLANES_VERSION = $versions[2]
+        $run = Invoke-Child $shell "& '$installScript'" $finishing "echo %CMDCMDLINE%`r`nexit 0`r`n"
+        Assert-Equal $run.Code 0 "$label, install with a daemon running: $($run.Output)"
+        Assert-True ($run.Output.Contains("Installed devlanes $($versions[2])") -and $run.Output.Contains('" update --finish')) "$label, devlanes update --finish after the install: $($run.Output)"
+        Assert-True (-not $run.Output.Contains('devlanes daemon restart')) "$label, no restart advice once the daemon restarted: $($run.Output)"
+
+        # A devlanes first on PATH that npm installed stops the install, which names it;
+        # -Force installs anyway.
+        $npmBin = Join-Path $work "npm by $label\npm"
+        New-Item -ItemType Directory -Path $npmBin | Out-Null
+        Set-Content -LiteralPath (Join-Path $npmBin 'devlanes.cmd') -Value '@exit /b 0'
+        $shadowed = $environment.Clone()
+        $shadowed.Path = "$npmBin;$cleanPath"
+        $shadowed.DEVLANES_INSTALL_DIR = Join-Path $work "shadowed by $label"
+        $run = Invoke-Child $shell "& '$installScript'" $shadowed
+        Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output "the devlanes on PATH, $npmBin\devlanes.cmd, comes from another installer; update it with: devlanes update")) "$label, a devlanes from npm first on PATH: $($run.Output)"
+        Assert-True (-not (Test-Path -LiteralPath $shadowed.DEVLANES_INSTALL_DIR)) "$label, nothing installed next to npm's devlanes"
+        $run = Invoke-Child $shell (& $withOptions '-Force') $shadowed
+        Assert-Equal (Get-FakeVersion (Join-Path $shadowed.DEVLANES_INSTALL_DIR 'devlanes.exe')) $versions[1] "$label, -Force: $($run.Output)"
+
+        # -Uninstall runs the devlanes.exe in the directory: the cmd.exe fake reads the
+        # closed stdin and exits, leaving the file in place.
+        Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[2])/devlanes.exe") -Destination $exe -Force
         $run = Invoke-Child $shell (& $withOptions '-Uninstall') $environment
         Assert-Equal $run.Code 0 "$label, -Uninstall with devlanes.exe: $($run.Output)"
         Assert-True (Test-Path -LiteralPath $exe) "$label, -Uninstall left the removal to devlanes.exe"
@@ -414,20 +498,21 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         Assert-True (-not (Get-UserPath).Value.Contains($elsewhere)) "$label, -Uninstall removed the user PATH entry"
         Assert-True ($run.Output.Contains("stays in $(Join-Path $work 'data')")) "$label, -Uninstall names the data folder: $($run.Output)"
         $run = Invoke-Child $shell (& $withOptions "-Uninstall -Version $($versions[0])") $environment
-        Assert-True ($run.Output.Contains('takes no -Channel or -Version')) "$label, -Uninstall with -Version: $($run.Output)"
+        Assert-True (Test-Say $run.Output '-Uninstall takes no -Version or -Force') "$label, -Uninstall with -Version: $($run.Output)"
 
         Restore-UserPath $pathBefore
     }
 
-    # The npm launcher finds the platform package's devlanes.exe and exits with its code.
+    # The npm launcher finds the platform package's devlanes.exe and exits with its code
+    # (the cmd.exe fake, which runs the command it is given).
     $arch = (& node -p 'process.arch' | Out-String).Trim()
     $modules = Join-Path $work 'npm/node_modules'
     $launcherDir = Join-Path $modules 'devlanes/bin'
     $platformDir = Join-Path $modules "@devlanes/win32-$arch"
     New-Item -ItemType Directory -Force -Path $launcherDir, (Join-Path $platformDir 'bin') | Out-Null
     Copy-Item -LiteralPath (Join-Path $root 'packaging/npm/devlanes/bin/devlanes') -Destination $launcherDir
-    [IO.File]::WriteAllText((Join-Path $platformDir 'package.json'), "{`"name`": `"@devlanes/win32-$arch`", `"version`": `"$($versions[1])`"}")
-    Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[1])/devlanes.exe") -Destination (Join-Path $platformDir 'bin')
+    [IO.File]::WriteAllText((Join-Path $platformDir 'package.json'), "{`"name`": `"@devlanes/win32-$arch`", `"version`": `"$($versions[2])`"}")
+    Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[2])/devlanes.exe") -Destination (Join-Path $platformDir 'bin')
     $node = (Get-Command node -CommandType Application | Select-Object -First 1).Source
     $launch = Invoke-Process $node @((Join-Path $launcherDir 'devlanes'), '/d', '/c', 'exit 7')
     Assert-Equal $launch.Code 7 "npm launcher exit code: $($launch.Output)"
@@ -440,7 +525,7 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
     # needs a PEP 440 form, which the -check ones above have not.
     $wheelVersion = '0.0.3-rc.1'
     $pypiDist = Join-Path $work 'pypi-dist'
-    $fakeExe = Join-Path $work "bin-$($versions[1])/devlanes.exe"
+    $fakeExe = Join-Path $work "bin-$($versions[2])/devlanes.exe"
     foreach ($windowsTarget in 'x86_64-pc-windows-msvc', 'aarch64-pc-windows-msvc') {
         $package = Invoke-Process (Get-Command pwsh -CommandType Application | Select-Object -First 1).Source @(
             '-NoProfile', '-NonInteractive', '-File', $packageScript, '-Version', $wheelVersion,

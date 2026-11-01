@@ -381,7 +381,8 @@ pub struct UpdatesConfig {
     /// Which releases to follow: `stable` or `next` (prereleases built from the main
     /// branch). Defaults to the channel of the running build, so a `next` build keeps
     /// following `next`. Only `install.sh`, `install.ps1` and standalone binaries can
-    /// follow `next`; package-manager installs always follow `stable`.
+    /// follow `next`; package-manager installs always follow `stable`. `devlanes update
+    /// --next` and `devlanes update --stable` set it and update on that channel.
     pub channel: Option<UpdateChannel>,
 }
 

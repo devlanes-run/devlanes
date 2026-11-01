@@ -2,39 +2,45 @@
 # against the release's SHA256SUMS.
 #
 #   irm https://devlanes.run/install.ps1 | iex
-#   iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 #   iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
 #   iex "& {$(irm https://devlanes.run/install.ps1)} -Uninstall"
 #
-# -Channel stable (the default) installs the latest release, -Channel next the latest
-# build of main from the rolling `next` prerelease, and -Version X.Y.Z one release.
+# It installs the latest stable release, or with -Version X.Y.Z that release.
 # -Dir DIR sets the target directory (default: %LOCALAPPDATA%\Programs\devlanes).
+# The latest build of main comes from `devlanes update --next` after installing.
 # -Uninstall runs `devlanes uninstall` from that directory (or, without -Dir and
 # DEVLANES_INSTALL_DIR, the devlanes.exe on PATH); when there is none, it deletes
 # what the script left there and its user PATH entry, and names the data folder.
-# `irm | iex` passes no arguments, so $env:DEVLANES_VERSION (X.Y.Z or next) and
+# `irm | iex` passes no arguments, so $env:DEVLANES_VERSION (X.Y.Z) and
 # $env:DEVLANES_INSTALL_DIR, the names install.sh reads, do the same when the option
 # isn't given.
 # DEVLANES_INSTALL_BASE_URL replaces the release URL; it exists only so the script
 # can be tested against a local directory of fake releases (file:// URLs).
 #
+# When that directory already holds a devlanes.exe with the `update` command, the
+# script runs `devlanes update --yes [--version X.Y.Z]` from it instead. When the first
+# devlanes on PATH comes from another installer (npm, pnpm, Bun, Yarn, uv, pipx or
+# cargo), it stops and names it, since that one would keep running; -Force installs
+# anyway.
+#
 # The directory goes first in the user PATH. A devlanes.exe that is running
 # (usually the daemon) is renamed to devlanes.exe.old-TIMESTAMP and keeps running;
-# `devlanes daemon restart` switches to the new version and `devlanes doctor`
-# deletes the old file afterwards. The script never stops the daemon. It works in
-# Windows PowerShell 5.1 and PowerShell 7, on Windows 11 24H2 (build 26100) or later.
+# when a daemon answers, `devlanes update --finish` restarts it into the new version,
+# and `devlanes doctor` deletes the old file afterwards. It works in Windows
+# PowerShell 5.1 and PowerShell 7, on Windows 11 24H2 (build 26100) or later.
 
 # `irm | iex` runs this text in the caller's session, so the body is a script block
 # called with `&`: its variables and functions end with it, and `exit` (which would
-# close the window) is never used. Failures throw, which ends a file run with exit
-# code 1 and leaves an iex session open. The options are the block's parameters, so
-# they never reach the caller's session either. `@args` forwards them by name from the
-# `& { ... } -Channel next` wrapper above, and is empty under plain `irm | iex`.
+# close the window) is used only when the script runs as a file. Failures throw, which
+# ends a file run with exit code 1 and leaves an iex session open. The options are the
+# block's parameters, so they never reach the caller's session either. `@args`
+# forwards them by name from the `& { ... } -Version 0.4.0` wrapper above, and is empty
+# under plain `irm | iex`.
 & {
     param(
-        [ValidateSet('stable', 'next')][string]$Channel,
         [string]$Version,
         [string]$Dir,
+        [switch]$Force,
         [switch]$Uninstall
     )
     $ErrorActionPreference = 'Stop'
@@ -304,6 +310,75 @@
         Write-Host "The devlanes data stays in $data; delete that folder to remove it."
     }
 
+    function Test-DevlanesCommand {
+        <#
+        Whether Exe exits with 0 for Arguments (single words), run without a window,
+        with stdin closed and its output discarded. A program that does not start or
+        takes over a minute counts as failing.
+        #>
+        param([string]$Exe, [string[]]$Arguments)
+        $start = New-Object Diagnostics.ProcessStartInfo $Exe
+        $start.Arguments = $Arguments -join ' '
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardInput = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        try {
+            $process = [Diagnostics.Process]::Start($start)
+        } catch {
+            return $false
+        }
+        try {
+            $process.StandardInput.Close()
+            # Both pipes drain in the background, so a full one never blocks the child.
+            $null = $process.StandardOutput.ReadToEndAsync()
+            $null = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(60000)) {
+                $process.Kill()
+                return $false
+            }
+            $process.WaitForExit()
+            return $process.ExitCode -eq 0
+        } finally {
+            $process.Dispose()
+        }
+    }
+
+    function Test-DevlanesOtherInstaller {
+        <# Whether a devlanes path, links followed, belongs to a package manager or cargo. #>
+        param([string]$Path)
+        $text = $Path.Replace('/', '\')
+        foreach ($pattern in @('*\npm\*', '*\pnpm\*', '*\.bun\*', '*node_modules*', '*\uv\tools\*', '*\pipx\venvs\*', '*.cargo\bin\*', '*\Cellar\devlanes\*')) {
+            if ($text -like $pattern) { return $true }
+        }
+        return $false
+    }
+
+    function Resolve-DevlanesLink {
+        <# Path with its symbolic links followed (pipx and Scoop-style installs link to their copy). #>
+        param([string]$Path)
+        for ($n = 0; $n -lt 16; $n++) {
+            $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+            if (-not $item -or -not $item.LinkType -or -not $item.Target) { break }
+            $target = @($item.Target)[0]
+            if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path $Path) $target }
+            $Path = $target
+        }
+        return $Path
+    }
+
+    function Invoke-DevlanesExit {
+        <#
+        Ends with Code from a devlanes the script ran: `exit` when this runs as a file,
+        else (under iex, where `exit` would close the window) a throw when it failed;
+        $LASTEXITCODE keeps the code either way.
+        #>
+        param([int]$Code, [string]$What)
+        if ($PSCommandPath) { exit $Code }
+        if ($Code -ne 0) { throw "devlanes install: $What exited with $Code" }
+    }
+
     function Clear-DevlanesOldCopy {
         <# Deletes the devlanes.exe.old-* files in Directory that nothing runs any more. #>
         param([string]$Directory)
@@ -346,8 +421,45 @@
     function Install-DevlanesRelease {
         <# Downloads, checks and installs a release; see the comment at the top for the settings. #>
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'An installer reports to the console, not to the pipeline.')]
-        param([string]$Channel, [string]$Version, [string]$Dir)
-        if ($Channel -and $Version) { throw "devlanes install: -Channel and -Version can't be combined" }
+        param([string]$Version, [string]$Dir, [switch]$Force)
+        # $version is the -Version parameter (PowerShell names are case-insensitive).
+        if (-not $version) { $version = [string]$env:DEVLANES_VERSION }
+        if ($version.StartsWith('v')) { $version = $version.Substring(1) }
+        if ($version -eq 'next') {
+            throw 'devlanes install: next is no longer a version here; install a stable release, then run devlanes update --next'
+        }
+        if ($version -and $version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$') {
+            throw "devlanes install: $version is not a release version (X.Y.Z)"
+        }
+        # $dir is the -Dir parameter.
+        if (-not $dir) { $dir = [string]$env:DEVLANES_INSTALL_DIR }
+        if (-not $dir) {
+            if (-not $env:LOCALAPPDATA) { throw 'devlanes install: LOCALAPPDATA is not set; pass -Dir' }
+            $dir = Join-Path $env:LOCALAPPDATA 'Programs\devlanes'
+        }
+        # Relative to PowerShell's location, which .NET's current directory does not follow.
+        $dir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dir)
+
+        # A devlanes that another installer manages keeps running from PATH and updates
+        # itself its own way, so a copy here would only shadow it or be shadowed.
+        $first = Get-Command devlanes -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $Force -and $first) {
+            $resolved = Resolve-DevlanesLink $first.Source
+            if (Test-DevlanesOtherInstaller $resolved) {
+                throw "devlanes install: the devlanes on PATH, $resolved, comes from another installer; update it with: devlanes update (or pass -Force to install here anyway)"
+            }
+        }
+
+        # A devlanes that can update itself does it, the same way `devlanes update` would.
+        $exe = Join-Path $dir 'devlanes.exe'
+        if ((Test-Path -LiteralPath $exe -PathType Leaf) -and (Test-DevlanesCommand $exe @('update', '--help'))) {
+            $arguments = @('update', '--yes')
+            if ($version) { $arguments += @('--version', $version) }
+            & $exe @arguments
+            Invoke-DevlanesExit $LASTEXITCODE 'devlanes update'
+            return
+        }
+
         Assert-DevlanesWindowsBuild (Get-DevlanesWindowsBuild)
         $target = Get-DevlanesTarget (Get-DevlanesArchitecture)
 
@@ -357,36 +469,12 @@
             $base = $env:DEVLANES_INSTALL_BASE_URL.TrimEnd('/')
             $schemes = @('https', 'file')
         }
-        if ($Channel -eq 'next') {
-            $version = 'next'
-        } elseif ($Channel -or $Version) {
-            $version = $Version
-        } else {
-            $version = [string]$env:DEVLANES_VERSION
-        }
-        if ($version.StartsWith('v')) { $version = $version.Substring(1) }
-        # `next` is the rolling prerelease with the latest build of main.
-        $channel = ''
-        if ($version -eq 'next') {
-            $channel = 'next'
-            $version = ''
-        }
-        # $dir is the -Dir parameter (PowerShell names are case-insensitive).
-        if (-not $dir) { $dir = [string]$env:DEVLANES_INSTALL_DIR }
-        if (-not $dir) {
-            if (-not $env:LOCALAPPDATA) { throw 'devlanes install: LOCALAPPDATA is not set; pass -Dir' }
-            $dir = Join-Path $env:LOCALAPPDATA 'Programs\devlanes'
-        }
-        # Relative to PowerShell's location, which .NET's current directory does not follow.
-        $dir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($dir)
 
         $temporary = Join-Path ([IO.Path]::GetTempPath()) ('devlanes-install-' + [Guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $temporary | Out-Null
         $staged = Join-Path $dir ".devlanes.exe.new.$PID"
         try {
-            if ($channel) {
-                $sumsUrl = "$base/download/$channel/SHA256SUMS"
-            } elseif ($version) {
+            if ($version) {
                 $sumsUrl = "$base/download/v$version/SHA256SUMS"
             } else {
                 $sumsUrl = "$base/latest/download/SHA256SUMS"
@@ -396,9 +484,8 @@
             $release = Find-DevlanesArchive -Sums ([IO.File]::ReadAllText($sumsFile)) -Target $target -Version $version -Source $sumsUrl
             $version = $release.Version
 
-            # The archive comes from that version's own release, or from `next`.
-            $folder = if ($channel) { $channel } else { "v$version" }
-            $url = "$base/download/$folder/$($release.Archive)"
+            # The archive comes from that version's own release.
+            $url = "$base/download/v$version/$($release.Archive)"
             $archive = Join-Path $temporary $release.Archive
             Get-DevlanesDownload -Url $url -OutFile $archive -Schemes $schemes
             $actual = Get-DevlanesFileHash $archive
@@ -434,8 +521,14 @@
         }
 
         Write-Host "Installed devlanes $version to $dir"
-        if ($inUse) {
-            Write-Host "The previous devlanes.exe is still running, probably as the daemon, and keeps running as $inUse."
+        # A daemon keeps running the binary it started from until it restarts into this one.
+        if (Test-DevlanesCommand $exe @('daemon', 'status')) {
+            & $exe update --finish
+            if ($LASTEXITCODE -ne 0) {
+                throw "devlanes install: the daemon did not restart into devlanes $version; run devlanes daemon restart"
+            }
+        } elseif ($inUse) {
+            Write-Host "The previous devlanes.exe is still running and keeps running as $inUse."
             Write-Host 'Run `devlanes daemon restart` when convenient (it stops services); `devlanes doctor` then deletes the old file.'
         }
 
@@ -455,10 +548,13 @@
         }
     }
 
+    # A script block without [CmdletBinding()] puts unknown options in $args instead of
+    # refusing them, and a removed one such as -Channel must not install silently.
+    if ($args) { throw "devlanes install: unknown option $($args -join ' ')" }
     # Windows PowerShell 5.1 may not offer TLS 1.2, which GitHub requires, when the
     # .NET defaults were changed; the process-wide setting is restored afterwards.
     if ($Uninstall) {
-        if ($Channel -or $Version) { throw "devlanes install: -Uninstall takes no -Channel or -Version" }
+        if ($Version -or $Force) { throw "devlanes install: -Uninstall takes no -Version or -Force" }
         Uninstall-DevlanesRelease -Dir $Dir
         return
     }
@@ -467,7 +563,7 @@
         if ($PSVersionTable.PSVersion.Major -lt 6 -and $protocols -ne [Net.SecurityProtocolType]::SystemDefault) {
             [Net.ServicePointManager]::SecurityProtocol = $protocols -bor [Net.SecurityProtocolType]::Tls12
         }
-        Install-DevlanesRelease -Channel $Channel -Version $Version -Dir $Dir
+        Install-DevlanesRelease -Version $Version -Dir $Dir -Force:$Force
     } finally {
         [Net.ServicePointManager]::SecurityProtocol = $protocols
     }
