@@ -2083,6 +2083,7 @@ dependencies = [
  "ratatui",
  "ratzilla",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
