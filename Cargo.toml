@@ -62,3 +62,12 @@ lto = "thin"
 # The macOS runners have 3 cores, so more units than 4 gain little.
 codegen-units = 4
 strip = true
+
+# The TUI web demo (crates/tui-web, `packaging/scripts/tui-web.sh`): every visitor
+# downloads it, so size wins over build time and speed.
+[profile.web]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
