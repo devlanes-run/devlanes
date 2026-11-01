@@ -79,8 +79,64 @@ jobs:
             exit 1
           fi
 
+  # The TUI web demo the website shows (crates/tui-web). Its archive is a release asset
+  # outside release-manifest.json and SHA256SUMS, which describe the binaries alone; the
+  # website downloads it for the tag it syncs.
+  tui-web:
+    needs: tag-version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain
+        run: |
+          rustup toolchain install
+          rustup target add wasm32-unknown-unknown
+      - uses: ./.github/actions/kache
+        with:
+          s3-bucket: ${{ vars.KACHE_S3_BUCKET }}
+          s3-endpoint: ${{ vars.KACHE_S3_ENDPOINT }}
+          s3-region: ${{ vars.KACHE_S3_REGION }}
+          s3-access-key: ${{ secrets.KACHE_S3_ACCESS_KEY }}
+          s3-secret-key: ${{ secrets.KACHE_S3_SECRET_KEY }}
+      # The CLI must be the version Cargo.lock pins for the wasm-bindgen crate.
+      - name: wasm-bindgen version
+        id: bindgen
+        run: |
+          version=$(awk '/^name = "wasm-bindgen"$/ { found = 1; next } found && /^version = / { gsub(/"/, "", $3); print $3; exit }' Cargo.lock)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: wasm-bindgen@${{ steps.bindgen.outputs.version }}
+      # The same binaryen as ci.yml's web job, which builds this bundle on every pull request.
+      - name: Install wasm-opt
+        env:
+          BINARYEN_VERSION: "133"
+          BINARYEN_SHA256: 2dc9c7813f5375db93d96ead4b78222fcc3e2677bbb832297af4797782a37489
+        run: |
+          set -euo pipefail
+          archive=$RUNNER_TEMP/binaryen.tar.gz
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/WebAssembly/binaryen/releases/download/version_$BINARYEN_VERSION/binaryen-version_$BINARYEN_VERSION-x86_64-linux.tar.gz"
+          echo "$BINARYEN_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_$BINARYEN_VERSION/bin" >> "$GITHUB_PATH"
+      - run: sh packaging/scripts/tui-web.sh web
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tui-web
+          path: web/devlanes-tui-web.tar.gz
+          if-no-files-found: error
+      - name: kache stats
+        if: ${{ !cancelled() }}
+        run: |
+          kache stats --full
+          kache daemon stop
+
   release:
-    needs: [build, npm-preflight]
+    needs: [build, npm-preflight, tui-web]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -103,6 +159,11 @@ jobs:
           pattern: dist-*
           path: dist
           merge-multiple: true
+      # Kept out of dist/, where manifest.sh counts the archives.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tui-web
+          path: web
       - name: Version
         id: version
         run: |
@@ -171,7 +232,7 @@ jobs:
           if-no-files-found: error
       - name: Upload to a draft release
         run: |
-          set -- dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/release-manifest.json dist/schema.json dist/user-schema.json dist/install.sh dist/install.ps1
+          set -- dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/release-manifest.json dist/schema.json dist/user-schema.json dist/install.sh dist/install.ps1 web/devlanes-tui-web.tar.gz
           if draft=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null); then
             # A rerun may refill a draft, but published assets are never replaced.
             if [ "$draft" != true ]; then
@@ -384,7 +445,7 @@ jobs:
   # Settles the `release` status that tag-version posted. Jobs skipped for a prerelease
   # count as passed; rerunning failed jobs runs this one again.
   status:
-    needs: [tag-version, build, npm-preflight, release, publish, website, homebrew-verify, homebrew-publish, npm, pypi]
+    needs: [tag-version, build, npm-preflight, tui-web, release, publish, website, homebrew-verify, homebrew-publish, npm, pypi]
     if: always() && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 5

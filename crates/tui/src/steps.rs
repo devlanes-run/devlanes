@@ -7,11 +7,11 @@
 //! with the same indent and colors; the TUI's "daemon unavailable" screen
 //! draws it into its own area with [`draw`].
 
-use std::{
-    io::{self, Write},
-    time::{Duration, Instant},
-};
+#[cfg(not(target_family = "wasm"))]
+use std::io::{self, Write};
+use std::time::Duration;
 
+#[cfg(not(target_family = "wasm"))]
 use crossterm::{
     Command,
     cursor::MoveToPreviousLine,
@@ -25,14 +25,19 @@ use ratatui::{
     text::{Line, Span},
 };
 use unicode_width::UnicodeWidthChar;
+use web_time::Instant;
 
+#[cfg(not(target_family = "wasm"))]
+use crate::ansi;
 use crate::{
-    ansi, banner, doctor,
-    exit_summary::INDENT,
-    text,
+    banner, doctor, text,
     theme::{Glyph, Glyphs, Theme, Tone},
 };
 
+/// Columns before the exit summary's banner and each of its lines, and before
+/// this block, so both line up in the shell; the "daemon unavailable" screen
+/// keeps the same margin.
+pub(crate) const INDENT: u16 = 2;
 /// Columns between the logo and the text beside it.
 const GAP: u16 = 2;
 /// Columns the text needs beside the logo; a narrower area drops the logo.
@@ -117,6 +122,7 @@ pub fn draw(
 /// (no surrounding blank lines). The last column stays empty: a line that
 /// fills it wraps early on some terminals, which would throw [`Live`]'s
 /// count of lines to erase off.
+#[cfg(not(target_family = "wasm"))]
 pub fn render(
     theme: &Theme,
     width: u16,
@@ -142,6 +148,7 @@ pub fn render(
 /// previous call printed (cursor up + clear) and prints the new block;
 /// `finish` prints it a last time and leaves it on screen. Writes to the
 /// given writer so tests can capture it.
+#[cfg(not(target_family = "wasm"))]
 pub struct Live<W: Write> {
     out: W,
     theme: Theme,
@@ -150,6 +157,7 @@ pub struct Live<W: Write> {
     printed: u16,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl<W: Write> Live<W> {
     /// A block that prints to `out`, a terminal `width` columns wide.
     pub fn new(out: W, theme: Theme, width: u16) -> Self {

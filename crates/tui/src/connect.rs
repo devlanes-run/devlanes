@@ -5,9 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
 
+use crate::keys::{KeyCode, KeyEvent, KeyModifiers};
 use crate::text;
 use crate::words::Worded;
 

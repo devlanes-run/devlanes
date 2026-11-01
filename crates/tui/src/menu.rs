@@ -3,7 +3,6 @@
 
 use std::cell::RefCell;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -14,6 +13,7 @@ use ratatui::{
 };
 
 use crate::banner::{self, Size};
+use crate::keys::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use crate::theme::{Glyph, Glyphs, Theme};
 
 /// What the menu offers.

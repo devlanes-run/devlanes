@@ -181,8 +181,8 @@ fn inside(area: Rect) -> Rect {
 }
 
 /// `/Users/acme/.devlanes` as `~/.devlanes` when `/Users/acme` is the
-/// user's home (`App::user_home`).
-#[cfg(unix)]
+/// user's home (`App::user_home`), on Unix and in the browser build.
+#[cfg(not(windows))]
 pub(crate) fn home_short(app: &App, path: &str) -> String {
     let home = app
         .user_home

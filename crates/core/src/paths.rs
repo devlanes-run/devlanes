@@ -18,7 +18,8 @@ pub use os::{
     user_home,
 };
 
-#[cfg(unix)]
+// Not only Unix: the browser build (crates/tui-web) has Unix-style paths too.
+#[cfg(not(windows))]
 mod os {
     use super::{Cow, Path};
     use std::path::PathBuf;

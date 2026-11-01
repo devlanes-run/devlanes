@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use devlanes_proto::{Event, Method, events};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+#[cfg(not(target_family = "wasm"))]
 use tokio::io::AsyncWriteExt;
 
 use crate::{OutputMode, PlainReporter, Rendered, Report, Reporter, Runtime};
@@ -167,6 +168,7 @@ impl CiProvider for GithubActions {
         )
     }
     /// Tokio keeps the summary-file append off the executor's blocking filesystem path.
+    #[cfg(not(target_family = "wasm"))]
     async fn append_summary(&self, markdown: &str) -> std::io::Result<()> {
         let Some(path) = &self.summary_path else {
             return Ok(());
@@ -181,6 +183,13 @@ impl CiProvider for GithubActions {
             file.write_all(b"\n").await?;
         }
         file.flush().await
+    }
+
+    /// The browser build (crates/tui-web) has no summary file to append to,
+    /// and tokio has no `fs` there.
+    #[cfg(target_family = "wasm")]
+    async fn append_summary(&self, _markdown: &str) -> std::io::Result<()> {
+        Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 

@@ -43,8 +43,9 @@ pub fn assemble(
 }
 
 /// An environment variable name as devlanes keeps it: unchanged on Unix,
-/// where names are case-sensitive.
-#[cfg(unix)]
+/// where names are case-sensitive. The browser build (crates/tui-web) keeps
+/// them as Unix does.
+#[cfg(not(windows))]
 pub fn fold_name(name: String) -> String {
     name
 }
@@ -59,7 +60,7 @@ pub fn fold_name(name: String) -> String {
 }
 
 /// `env` unchanged: Unix names are case-sensitive.
-#[cfg(unix)]
+#[cfg(not(windows))]
 pub fn fold_names(env: BTreeMap<String, String>) -> BTreeMap<String, String> {
     env
 }
