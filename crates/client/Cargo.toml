@@ -17,9 +17,18 @@ dunce.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
 tempfile.workspace = true
 tracing.workspace = true
+# The restart step rows' `Instant`, which the TUI web demo also creates.
+web-time.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio.workspace = true
+
+# The TUI web demo (crates/tui-web) builds this crate for the browser, where tokio
+# compiles only with these features.
+[target.'cfg(target_family = "wasm")'.dependencies]
+tokio = { version = "1", features = ["io-util", "macros", "rt", "sync", "time"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

@@ -9,10 +9,9 @@
 //!
 //! Both report [`Progress`]; [`Steps`] folds it into the rows clients draw.
 
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, time::Duration};
+
+use web_time::Instant;
 
 use devlanes_proto::{
     Actor, Context, Control, DaemonStopping, LaneSummary, Method, Outcome, Page, REPLACE_STEP,

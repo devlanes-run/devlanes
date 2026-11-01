@@ -393,6 +393,62 @@ mod imp {
     }
 }
 
+/// The browser build (crates/tui-web) talks to a fake daemon in the page and
+/// never opens an endpoint; every call fails with [`io::ErrorKind::Unsupported`]
+/// so the crates above it compile unchanged.
+#[cfg(target_family = "wasm")]
+mod imp {
+    use std::io;
+    use std::path::Path;
+
+    use super::{BindError, ConnectError, ProbeError};
+
+    /// Never constructed: no call below returns a stream.
+    pub(super) type Stream = tokio::io::DuplexStream;
+
+    pub(super) struct Listener;
+
+    /// The error every endpoint call answers with.
+    fn unsupported() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "no local endpoint in the browser",
+        )
+    }
+
+    /// Always fails.
+    pub(super) async fn bind(_path: &Path) -> Result<Listener, BindError> {
+        Err(unsupported().into())
+    }
+
+    impl Listener {
+        /// Always fails.
+        pub(super) async fn accept(&mut self) -> io::Result<Stream> {
+            Err(unsupported())
+        }
+    }
+
+    /// Always fails.
+    pub(super) async fn connect(_path: &Path) -> Result<Stream, ConnectError> {
+        Err(unsupported().into())
+    }
+
+    /// Always fails.
+    pub(super) fn peer_is_current_user(_stream: &Stream) -> io::Result<bool> {
+        Err(unsupported())
+    }
+
+    /// Nothing to remove.
+    pub(super) async fn remove(_path: &Path) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// Always fails.
+    pub(super) fn probe(_socket: &Path) -> Result<(), ProbeError> {
+        Err(ProbeError::Endpoint(unsupported()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

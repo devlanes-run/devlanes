@@ -1,6 +1,10 @@
 //! Thin daemon client shared by CLI, completion, and TUI frontends, over the
 //! local endpoint of [`devlanes_ipc::local`].
 
+// The browser build (crates/tui-web) stubs the endpoint and the daemon spawn,
+// which leaves the helpers behind them unused there.
+#![cfg_attr(target_family = "wasm", allow(dead_code))]
+
 mod paths;
 pub mod restart;
 pub mod update;
@@ -132,7 +136,7 @@ pub enum Error {
     Rpc(RpcError),
     #[error("daemon v{version} (build {build_id}) runs {managed_processes} processes with protocol {protocol}; run devlanes daemon restart", version = .peer.version, build_id = .peer.build_id, managed_processes = .peer.managed_processes, protocol = .peer.protocol)]
     Incompatible { peer: Hello },
-    #[cfg_attr(unix, error("daemon peer uid does not match this user"))]
+    #[cfg_attr(not(windows), error("daemon peer uid does not match this user"))]
     #[cfg_attr(windows, error("the daemon's pipe belongs to another account"))]
     WrongPeer,
     #[error("expected {0} from daemon")]
@@ -716,8 +720,9 @@ const DAEMON_ENV: &[&str] = &[
 /// CLI's settings and devlanes' own.
 const DAEMON_ENV_PREFIXES: &[&str] = &["LC_", "XDG_", "DOCKER_", "DEVLANES_"];
 
-/// Nothing beyond the shared list on Unix.
-#[cfg(unix)]
+/// Nothing beyond the shared list on Unix (and in the browser build, which
+/// spawns no daemon).
+#[cfg(not(windows))]
 const PLATFORM_ENV: &[&str] = &[];
 
 /// What Windows programs the daemon runs expect: Winsock fails to start
@@ -775,8 +780,8 @@ fn daemon_env(
 }
 
 /// Whether two environment variable names are the same variable: by exact
-/// name on Unix.
-#[cfg(unix)]
+/// name on Unix (and in the browser build).
+#[cfg(not(windows))]
 fn same_name(name: &str, listed: &str) -> bool {
     name == listed
 }
@@ -962,6 +967,17 @@ fn read_lines_blocking(pipe: impl std::io::Read + Send + 'static) -> std::io::Re
             }
         })?;
     Ok(lines)
+}
+
+/// The browser build cannot spawn a daemon; it talks to a fake one in the page.
+#[cfg(target_family = "wasm")]
+async fn start_daemon(
+    _paths: &Paths,
+    _remove_env: &[&str],
+    _begun: Instant,
+    _replace: Option<Replace>,
+) -> Result<(ReadyLines, bool, Option<Handover>)> {
+    Err(Error::Startup("no daemon in the browser".into()))
 }
 
 /// Spawns `devlanes daemon run` and returns the lines of its readiness pipe
@@ -1160,6 +1176,10 @@ async fn read_answer(paths: &Paths, mut lines: ReadyLines, begun: Instant) -> Re
 #[cfg(unix)]
 const PROBE_FAILED: &str = "Unix socket bind probe failed";
 
+/// What a failed endpoint probe says: the browser build has no endpoint.
+#[cfg(target_family = "wasm")]
+const PROBE_FAILED: &str = "no local endpoint in the browser";
+
 /// What a failed endpoint probe says.
 #[cfg(windows)]
 const PROBE_FAILED: &str = "named pipe probe failed";
@@ -1184,6 +1204,7 @@ const STALE_REPLACING: Duration = Duration::from_secs(1);
 
 /// The pid in the [`REPLACING_MARKER`] while that process runs. A marker
 /// left by a daemon that died counts as none.
+#[cfg(not(target_family = "wasm"))]
 async fn replacing(paths: &Paths) -> Option<u32> {
     let text = tokio::fs::read_to_string(paths.run.join(REPLACING_MARKER))
         .await
@@ -1193,6 +1214,12 @@ async fn replacing(paths: &Paths) -> Option<u32> {
         .await
         .unwrap_or(false)
         .then_some(pid)
+}
+
+/// The browser build has no filesystem and so no marker; tokio has no `fs` there.
+#[cfg(target_family = "wasm")]
+async fn replacing(_paths: &Paths) -> Option<u32> {
+    None
 }
 
 /// Whether a process with `pid` runs (blocking on Windows). A reused pid can
@@ -1214,10 +1241,17 @@ fn process_alive(pid: u32) -> bool {
 
 /// Whether the [`STARTING_MARKER`] exists. Alone it proves nothing: a daemon
 /// that died while starting leaves it behind with its lock free.
+#[cfg(not(target_family = "wasm"))]
 async fn marker_exists(paths: &Paths) -> bool {
     tokio::fs::try_exists(paths.run.join(STARTING_MARKER))
         .await
         .unwrap_or(false)
+}
+
+/// The browser build has no filesystem and so no marker; tokio has no `fs` there.
+#[cfg(target_family = "wasm")]
+async fn marker_exists(_paths: &Paths) -> bool {
+    false
 }
 
 /// Whether a daemon holds its lock and has not accepted a connection yet, so

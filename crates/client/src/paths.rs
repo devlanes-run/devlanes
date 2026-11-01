@@ -1,9 +1,10 @@
 //! Path discovery is read-only so shell completion never creates daemon state.
 
+#[cfg(not(target_family = "wasm"))]
+use std::fs;
 use std::{
     env,
     ffi::OsString,
-    fs,
     path::{Path, PathBuf},
 };
 #[cfg(unix)]
@@ -54,7 +55,7 @@ impl Paths {
         if home.as_os_str().is_empty() {
             return Err(Error::MissingHome);
         }
-        #[cfg(unix)]
+        #[cfg(not(windows))]
         let home = if home.is_absolute() {
             home.to_owned()
         } else {
@@ -71,6 +72,12 @@ impl Paths {
             .unwrap_or_else(|| run.join("daemon.sock"));
         #[cfg(all(unix, not(target_os = "linux")))]
         let mut socket = run.join("daemon.sock");
+        // The browser build never opens it; the name only fills `Paths`.
+        #[cfg(target_family = "wasm")]
+        let socket = {
+            let _ = temporary;
+            run.join("daemon.sock")
+        };
         #[cfg(windows)]
         let socket = {
             let _ = temporary;
@@ -227,6 +234,16 @@ fn private_directory(path: &Path) -> Result<()> {
         Ok(()) | Err(Problem::Acl(_)) => Ok(()),
         Err(_) => Err(Error::UnsafeDirectory(path.to_owned())),
     }
+}
+
+/// The browser build has no state directories to create.
+#[cfg(target_family = "wasm")]
+fn private_directory(_path: &Path) -> Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "no state directory in the browser",
+    )
+    .into())
 }
 
 #[cfg(all(test, windows))]
