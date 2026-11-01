@@ -443,6 +443,44 @@ history:
         assert_eq!(text, "updates:\n  mode: auto");
     }
 
+    /// `updates.highlights` defaults to true, parses from the file, and survives
+    /// `config set` and `config unset` next to `updates.mode`.
+    #[test]
+    fn updates_highlights_defaults_on_and_round_trips() {
+        assert!(crate::parse_user("").expect("valid").updates.highlights);
+        assert!(
+            crate::parse_user("updates:\n  mode: auto\n")
+                .expect("valid")
+                .updates
+                .highlights
+        );
+        let off = crate::parse_user("updates:\n  highlights: false\n").expect("valid");
+        assert!(!off.updates.highlights);
+        assert_eq!(off.updates.mode, crate::UpdateMode::Notify);
+
+        let text = set(
+            "updates:\n  mode: auto # background\n",
+            "updates.highlights",
+            json!(false),
+        );
+        assert!(text.contains("mode: auto # background"), "{text}");
+        let config = crate::parse_user(&text).expect("valid");
+        assert!(!config.updates.highlights);
+        assert_eq!(config.updates.mode, crate::UpdateMode::Auto);
+
+        let text = edit_user_source(&text, "updates.highlights", None).expect("edit");
+        assert_eq!(text, "updates:\n  mode: auto # background\n");
+        assert!(crate::parse_user(&text).expect("valid").updates.highlights);
+
+        let refused = edit_user_source("", "updates.highlights", Some(&json!("later")));
+        assert!(
+            refused
+                .expect_err("rejected")
+                .message
+                .starts_with("updates.highlights:")
+        );
+    }
+
     #[test]
     fn strings_that_look_like_other_types_are_quoted() {
         let text = set("", "terminal", json!("true"));

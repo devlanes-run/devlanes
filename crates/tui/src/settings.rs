@@ -1939,6 +1939,7 @@ mod tests {
             "terminal.notifications",
             "terminal.marks",
             "updates.mode",
+            "updates.highlights",
             "proxy.https_port",
             "hostnames.resolver",
             "hostnames.tld",
@@ -1980,6 +1981,14 @@ mod tests {
             .expect("remote.start_daemon");
         assert_eq!(start_daemon.kind, Kind::Bool);
         assert_eq!(start_daemon.applies, Applies::NextCommand);
+        // The TUI reads it when it opens, so no daemon restart.
+        let highlights = categories[0]
+            .items
+            .iter()
+            .find(|item| item.key == "updates.highlights")
+            .expect("updates.highlights");
+        assert_eq!(highlights.kind, Kind::Bool);
+        assert_eq!(highlights.applies, Applies::NextCommand);
         let pairing = categories[1]
             .items
             .iter()

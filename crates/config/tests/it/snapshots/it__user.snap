@@ -67,7 +67,8 @@ expression: user
     "marks": "auto"
   },
   "updates": {
-    "mode": "notify"
+    "mode": "notify",
+    "highlights": true
   },
   "tui": {
     "open_on_start": true,

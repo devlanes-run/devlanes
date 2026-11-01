@@ -64,7 +64,8 @@ pub struct UserConfig {
     /// progress bar during starts). A plain string, the terminal app name older versions
     /// used, is still accepted but ignored with a warning.
     pub terminal: Option<TerminalConfig>,
-    /// Release checks: whether the daemon looks for newer devlanes releases (`mode`).
+    /// Release checks: whether the daemon looks for newer devlanes releases (`mode`),
+    /// and whether the TUI shows release highlights after an update (`highlights`).
     pub updates: UpdatesConfig,
     /// Whether start commands open the terminal UI, how it looks, and what quitting it
     /// does with running lanes.
@@ -367,17 +368,35 @@ fn below_home(dir: &str) -> Option<&str> {
     dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\"))
 }
 
-/// Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes
-/// apply after `devlanes daemon restart`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+/// Release checks and notices: how the daemon looks for newer devlanes releases
+/// (`mode`) and whether the TUI shows release highlights after an update
+/// (`highlights`). `mode` changes apply after `devlanes daemon restart`; `highlights`
+/// applies the next time the TUI opens.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"mode":"disable"},{"mode":"auto"}]))]
+#[schemars(extend("examples" = [{"mode":"disable"},{"mode":"auto"},{"highlights":false}]))]
 pub struct UpdatesConfig {
     /// What devlanes does about newer releases: `notify` (the default) checks every 4
     /// hours and when the TUI opens, and shows the new version; `auto` also installs patch
     /// releases in the background where the install method allows it; `disable` never
     /// checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.
     pub mode: UpdateMode,
+    /// Show the release highlights dialog the first time the TUI opens after an update;
+    /// defaults to true. Set false to skip the dialog. The new version still counts as
+    /// seen, so turning this back on does not show the highlights of releases you
+    /// already skipped.
+    #[schemars(extend("examples" = [true,false]))]
+    pub highlights: bool,
+}
+
+impl Default for UpdatesConfig {
+    /// Notifies about releases and shows their highlights.
+    fn default() -> Self {
+        Self {
+            mode: UpdateMode::default(),
+            highlights: true,
+        }
+    }
 }
 
 /// What devlanes does about newer releases.
