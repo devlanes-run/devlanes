@@ -355,7 +355,19 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
                 body.push(Line::from(""));
             }
             for sentence in detail {
-                body.extend(wrapped(sentence, narrow, Style::new()));
+                if sentence.is_empty() {
+                    body.push(Line::from(""));
+                    continue;
+                }
+                // Inline code (release notes) as "What's new" shows it.
+                let mut in_code = false;
+                for row in text::wrap(&clean(sentence), narrow) {
+                    body.push(Line::from(crate::whats_new::code_spans(
+                        &row,
+                        &mut in_code,
+                        theme.focus(),
+                    )));
+                }
             }
             let tail = if *strict {
                 keys(theme, &[("y", action), ("n", "cancel")])

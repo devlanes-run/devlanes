@@ -193,7 +193,7 @@ async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     let mut client = compatible_daemon(paths).await?;
     let daemon = client.as_ref().map(|client| client.peer.version.clone());
     let from = daemon.clone().unwrap_or_else(|| OWN.to_owned());
-    let info = latest(client.as_mut(), &method, paths, &from).await?;
+    let info = latest(client.as_mut(), &method, paths, &from, true).await?;
     let channel = match &info {
         Some(info) => info.channel.clone(),
         None => effective_channel(&crate::user_config::lenient(paths).await)
@@ -288,7 +288,7 @@ async fn install(
         .as_ref()
         .map_or_else(|| OWN.to_owned(), |client| client.peer.version.clone());
     let info = match &version {
-        None => latest(client.as_mut(), &method, paths, &from).await?,
+        None => latest(client.as_mut(), &method, paths, &from, false).await?,
         Some(_) => None,
     };
     let pinned = version.is_some();
@@ -684,12 +684,27 @@ async fn run_plan(
                 None,
             );
             let home = home.clone();
-            view.spin(tokio::task::spawn_blocking(move || {
-                Lock::acquire(&home, LOCK_WAIT)
-            }))
-            .await
-            .map_err(|error| io_error(&error))?
-            .map_err(|error| failed(&error))?
+            let lock = view
+                .spin(tokio::task::spawn_blocking(move || {
+                    Lock::acquire(&home, LOCK_WAIT)
+                }))
+                .await
+                .map_err(|error| io_error(&error))?
+                .map_err(|error| failed(&error))?;
+            // The daemon's background install, or another `devlanes update`,
+            // may have run the package manager for this release meanwhile.
+            if matches!(plan, Plan::PackageManager(_))
+                && install::reported_version(entry).await.as_deref() == Some(to)
+            {
+                view.set(
+                    ROW,
+                    format!("devlanes {to} is installed"),
+                    RowState::Done,
+                    None,
+                );
+                return Ok(());
+            }
+            lock
         }
         Err(error) => return Err(failed(&error)),
     };
@@ -853,7 +868,9 @@ async fn current() -> Result<(InstallMethod, PathBuf), RpcError> {
 
 /// The release newer than `from` (the daemon's version, else this build's),
 /// if any. A daemon of this protocol checks it, forced, so its status and
-/// notes follow. Without an answer from one (none runs, its checks are off
+/// notes follow; it installs what it finds in the background only with
+/// `install`, which `devlanes update` turns off because it installs the
+/// release itself. Without an answer from one (none runs, its checks are off
 /// by `updates.mode: disable`, CI or the environment, or it predates
 /// `update.check`), this process reads the registry of `method` itself:
 /// an explicit `devlanes update` always checks.
@@ -862,12 +879,13 @@ async fn latest(
     method: &InstallMethod,
     paths: &Paths,
     from: &str,
+    install: bool,
 ) -> Result<Option<UpdateInfo>, RpcError> {
     if let Some(client) = client {
         let reply = client
             .request(
                 Method::UpdateCheck,
-                json!({"force": true}),
+                json!({"force": true, "install": install}),
                 Context::default(),
             )
             .await
@@ -891,6 +909,8 @@ async fn latest(
 /// What the daemon's `reply` to a forced `update.check` says: `Some` with
 /// the newer release or none, or `None` when it could not tell, because it
 /// does not know the method (`unknown_method`) or its checks are `off`.
+/// Other errors pass through, `update_failed` from a registry it could not
+/// read among them, so the command fails as when it reads one itself.
 fn daemon_answer(
     reply: Result<Value, RpcError>,
     off: bool,
@@ -1349,12 +1369,77 @@ mod tests {
             daemon_answer(Err(other), false).map_err(|error| error.code),
             Err("io".to_owned())
         );
+        // A forced check the daemon could not read fails here too.
+        let unread = check_failed(Channel::Stable, &"timed out", "devlanes update");
+        let passed = daemon_answer(Err(unread.clone()), false).expect_err("passes through");
+        assert_eq!((passed.code, passed.data), (unread.code, unread.data));
         assert_eq!(daemon_answer(Ok(Value::Null), true)?, None);
         assert_eq!(daemon_answer(Ok(Value::Null), false)?, Some(None));
         let info = found(Channel::Stable, "99.0.0".into(), OWN).expect("newer");
         let reply = serde_json::to_value(&info).map_err(|error| io_error(&error))?;
         assert_eq!(daemon_answer(Ok(reply), false)?, Some(Some(info)));
         Ok(())
+    }
+
+    /// A `devlanes` that reports `version`: a script on Unix, the prebuilt
+    /// `fake-tool` on Windows, which cannot run scripts as programs.
+    fn fake_devlanes(dir: &Path, version: &str) -> PathBuf {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let program = dir.join("devlanes");
+            std::fs::write(&program, format!("#!/bin/sh\necho 'devlanes {version}'\n"))
+                .expect("script");
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+                .expect("chmod");
+            program
+        }
+        #[cfg(windows)]
+        {
+            use devlanes_testing::fake_tool::{Behaviour, install};
+            install(
+                dir,
+                "devlanes",
+                &Behaviour::new().stdout(format!("devlanes {version}\n")),
+            )
+            .expect("install fake-tool")
+        }
+    }
+
+    /// A `devlanes update` that waited for another install to finish does
+    /// not run the package manager again when that one installed the release.
+    #[tokio::test]
+    async fn waiting_for_an_install_of_the_same_release_skips_the_package_manager() {
+        use devlanes_cli::clap::Parser;
+        let dir = tempfile::tempdir().expect("dir");
+        let paths = Paths::new(dir.path().join("home")).expect("paths");
+        paths.prepare().expect("directories");
+        let entry = fake_devlanes(dir.path(), "99.0.1");
+        let held = Lock::acquire(&paths.home, Duration::ZERO).expect("lock");
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            drop(held);
+        });
+        // Fails if it runs.
+        let plan = Plan::PackageManager(vec![install::Argv {
+            program: dir.path().join("no-such-npm"),
+            args: Vec::new(),
+        }]);
+        let cli = devlanes_cli::Cli::parse_from(["devlanes", "--output", "plain"]);
+        let runtime = Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime");
+        let kind = Kind::Update {
+            from: OWN.to_owned(),
+            to: "99.0.1".to_owned(),
+        };
+        let mut view = View::new(&runtime, &paths, kind);
+        let ran = tokio::time::timeout(
+            Duration::from_secs(30),
+            run_plan(&mut view, &paths, &plan, "99.0.1", Channel::Stable, &entry),
+        )
+        .await
+        .expect("in time");
+        assert!(ran.is_ok(), "{ran:?}");
+        release.join().expect("released");
     }
 
     /// A release read here is reported when it is newer than the daemon or

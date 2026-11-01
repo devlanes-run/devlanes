@@ -32,12 +32,12 @@ pub fn local_build() -> bool {
     devlanes_version::BUILD_ID == "local"
 }
 
-/// The notes a TUI opening from `home` gets, and whether it shows them by
-/// itself: the releases since the version seen before when this is the first
-/// TUI after an update ([`devlanes_update::claim_whats_new`]), else this
-/// version's own notes for the Esc menu.
-pub async fn for_tui(home: PathBuf) -> (Option<WhatsNew>, bool) {
-    tokio::task::spawn_blocking(move || {
+/// "What's new" for a TUI over `home`, which calls it once its terminal is
+/// set up: the releases since the version seen before when this is the first
+/// TUI after an update ([`devlanes_update::claim_whats_new`]), shown by
+/// itself, else this version's own notes for the Esc menu.
+pub fn for_tui(home: PathBuf) -> devlanes_tui::WhatsNewClaim {
+    std::sync::Arc::new(move || {
         let releases = embedded();
         let running = devlanes_version::VERSION;
         match devlanes_update::claim_whats_new(&home, running, local_build(), &releases) {
@@ -48,8 +48,6 @@ pub async fn for_tui(home: PathBuf) -> (Option<WhatsNew>, bool) {
             }
         }
     })
-    .await
-    .unwrap_or((None, false))
 }
 
 /// `shown` as terminal lines: the title, then each release's version and

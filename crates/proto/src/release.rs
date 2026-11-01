@@ -82,9 +82,29 @@ pub struct ReleaseCheck {
 }
 
 /// Params of `update.check`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateCheckParams {
     /// Check even when the last check is recent.
     #[serde(default)]
     pub force: bool,
+    /// Let the daemon install what the check found in the background
+    /// (`updates.mode: auto`). `devlanes update` sends `false`, since it
+    /// installs the release itself right after.
+    #[serde(default = "install_by_default")]
+    pub install: bool,
+}
+
+impl Default for UpdateCheckParams {
+    /// Not forced, and the daemon may install what it finds.
+    fn default() -> Self {
+        Self {
+            force: false,
+            install: true,
+        }
+    }
+}
+
+/// `update.check` without `install` lets the daemon install.
+fn install_by_default() -> bool {
+    true
 }

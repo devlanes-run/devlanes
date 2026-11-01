@@ -334,6 +334,8 @@ pub enum Method {
     /// `force` only when the last check is over an hour old. Replies once the
     /// check ended with the newer release as in `daemon.status.update`
     /// ([`release::UpdateInfo`]), or `null` when there is none or checks are off.
+    /// Errors `update_failed` (`{title, hint}`) when a forced check cannot
+    /// read the registry.
     #[serde(rename = "update.check")]
     UpdateCheck,
     /// Any method name this build does not know, so a request from a newer client

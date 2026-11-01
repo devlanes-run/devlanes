@@ -758,9 +758,12 @@ fn question(count: usize, sudo: bool) -> String {
 }
 
 /// After a `start` on a terminal: one stderr line when this machine misses a
-/// setup step the lane's hostnames need, at most once a day per set of
-/// missing steps. The daemon reports `hosts` and `resolver`; the trust stores
-/// belong to this user, so the CA is checked here, read-only and bounded.
+/// setup step that one of the lane's URLs needs, by the TUI's rules
+/// ([`devlanes_client::setup::needed`]): the CA for an `https://` address,
+/// the hosts helper or resolver for a hostname. At most once a day per set
+/// of those steps, shared with the TUI's prompt. The daemon reports `hosts`
+/// and `resolver`; the trust stores belong to this user, so the CA is
+/// checked here, read-only and bounded.
 pub(crate) async fn start_notice(
     client: &mut Client,
     runtime: &Runtime,
@@ -774,20 +777,19 @@ pub(crate) async fn start_notice(
     {
         return;
     }
-    let Some(subject) = notice_subject(data) else {
+    let urls = unit_urls(data);
+    if urls.is_empty() {
         return;
-    };
+    }
     let status = client
         .request(Method::DaemonStatus, json!({}), Context::default())
         .await
         .unwrap_or_default();
     let mut missing = client_missing(paths).await;
     missing.extend(missing_of(&status));
-    if missing.is_empty() {
+    let Some((key, line)) = notice(&missing, &urls) else {
         return;
-    }
-    let key = format!("setup:{}", missing.join(","));
-    let line = notice_line(&subject, &missing);
+    };
     let home = paths.home.clone();
     let due = tokio::task::spawn_blocking(move || {
         let mut log = devlanes_update::NoticeLog::load(&home);
@@ -831,26 +833,28 @@ pub(crate) async fn client_missing(paths: &Paths) -> Vec<String> {
     }
 }
 
-/// What the notice names: the host of the lane's first `https://` URL, `this
-/// machine` when the result lists no units, `None` when the lane serves no
-/// hostname and needs no setup.
-fn notice_subject(data: &Value) -> Option<String> {
-    let Some(units) = data.get("units").and_then(Value::as_array) else {
-        return Some("this machine".into());
-    };
-    units
-        .iter()
+/// The URLs of the units in a `start` result, in order.
+fn unit_urls(data: &Value) -> Vec<&str> {
+    data.get("units")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
         .filter_map(|unit| unit.get("urls").and_then(Value::as_array))
         .flatten()
         .filter_map(Value::as_str)
-        .find_map(|url| url.strip_prefix("https://"))
-        .map(|rest| {
-            let authority = rest.split('/').next().unwrap_or(rest);
-            authority
-                .rsplit_once(':')
-                .map_or(authority, |(host, _)| host)
-                .to_owned()
-        })
+        .collect()
+}
+
+/// The notice log key (`setup:<steps>`) and the line for the steps of
+/// `missing` that one of `urls` needs, naming the host of the first URL that
+/// needs one; `None` when none does.
+fn notice(missing: &[String], urls: &[&str]) -> Option<(String, String)> {
+    let (steps, subject) = devlanes_client::setup::needed(missing, urls.iter().copied());
+    let subject = subject?;
+    Some((
+        format!("setup:{}", steps.join(",")),
+        notice_line(subject, &steps),
+    ))
 }
 
 /// `acme.localhost needs devlanes setup (CA not trusted)`.
@@ -1159,31 +1163,44 @@ mod tests {
         assert!(question(1, false).starts_with("Do the 1 missing step?"));
     }
 
+    /// The start notice follows the TUI prompt's rules: it names only the
+    /// steps a URL of the lane needs, and the first URL that needs one.
     #[test]
-    fn the_start_notice_names_the_first_https_host() {
+    fn the_start_notice_names_the_steps_and_the_first_url_that_needs_them() {
         let data = json!({"units": [
             {"urls": ["http://127.0.0.1:20101"]},
             {"urls": ["http://127.0.0.1:20102", "https://web.acme.localhost:8443/path"]},
             {"urls": ["https://api.acme.localhost"]},
         ]});
-        assert_eq!(notice_subject(&data).as_deref(), Some("web.acme.localhost"));
+        let urls = unit_urls(&data);
+        let missing = |steps: &[&str]| steps.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
         assert_eq!(
-            notice_subject(&json!({"units": [{"urls": ["https://acme.localhost"]}]})).as_deref(),
-            Some("acme.localhost")
+            notice(&missing(&["ca", "hosts"]), &urls),
+            Some((
+                "setup:ca,hosts".into(),
+                "web.acme.localhost needs devlanes setup (CA not trusted, /etc/hosts helper missing)\n"
+                    .into()
+            ))
         );
+        // An http:// hostname with a missing helper gets a line; the CA,
+        // which it does not need, is left out of it and of the key.
+        let http =
+            json!({"units": [{"urls": ["http://127.0.0.1:1", "http://web.acme.localhost:20102"]}]});
         assert_eq!(
-            notice_subject(&json!({"units": [{"urls": ["http://127.0.0.1:1"]}]})),
+            notice(&missing(&["ca", "hosts"]), &unit_urls(&http)),
+            Some((
+                "setup:hosts".into(),
+                "web.acme.localhost needs devlanes setup (/etc/hosts helper missing)\n".into()
+            ))
+        );
+        assert_eq!(notice(&missing(&["ca"]), &unit_urls(&http)), None);
+        let plain = json!({"units": [{"urls": ["http://127.0.0.1:1", "http://localhost:2"]}]});
+        assert_eq!(
+            notice(&missing(&["ca", "hosts", "resolver"]), &unit_urls(&plain)),
             None
         );
-        assert_eq!(notice_subject(&json!({})).as_deref(), Some("this machine"));
-        assert_eq!(
-            notice_line("acme.localhost", &["ca".into()]),
-            "acme.localhost needs devlanes setup (CA not trusted)\n"
-        );
-        assert_eq!(
-            notice_line("this machine", &["ca".into(), "hosts".into()]),
-            "this machine needs devlanes setup (CA not trusted, /etc/hosts helper missing)\n"
-        );
+        assert_eq!(notice(&missing(&[]), &urls), None);
+        assert!(unit_urls(&json!({})).is_empty());
     }
 
     #[tokio::test]

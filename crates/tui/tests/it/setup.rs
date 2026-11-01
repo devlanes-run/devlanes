@@ -200,6 +200,24 @@ async fn it_shows_only_what_the_lanes_need() -> TestResult {
     Ok(())
 }
 
+/// The notice log key lists only the steps the lanes need, as the one
+/// `devlanes start` records, so either holds the other back.
+#[tokio::test]
+async fn the_key_names_only_the_steps_the_lanes_need() -> TestResult {
+    let http = ["http://api.acme.localhost:8080"];
+    let mut app = serving(&http, &[], &["ca"], &["hosts"]).await;
+    let effects = app.update(key(KeyCode::Esc));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::NoticeShown(key) if key == "setup:hosts")),
+        "{effects:?}"
+    );
+    let app = serving(&http, &["setup:hosts"], &["ca"], &["hosts"]).await;
+    assert!(app.dialog.is_none(), "{:?}", app.dialog);
+    Ok(())
+}
+
 /// Turned down, the same steps wait a day: the key goes to the notice log,
 /// which also holds it back when `devlanes start` named them.
 #[tokio::test]

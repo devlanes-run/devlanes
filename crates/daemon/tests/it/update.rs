@@ -128,8 +128,17 @@ async fn engine(
     engine
 }
 
-/// `method` with `params` on a fresh local session.
+/// `method` with `params` on a fresh local session, which must succeed.
 async fn call(engine: &Engine, method: Method, params: Value) -> Value {
+    try_call(engine, method, params).await.expect("call")
+}
+
+/// `method` with `params` on a fresh local session.
+async fn try_call(
+    engine: &Engine,
+    method: Method,
+    params: Value,
+) -> Result<Value, devlanes_proto::RpcError> {
     let (session, _frames) = Session::local(1);
     let request = Request {
         id: 1,
@@ -137,7 +146,7 @@ async fn call(engine: &Engine, method: Method, params: Value) -> Value {
         params,
         context: Context::default(),
     };
-    engine.handle(request, session).await.expect("call")
+    engine.handle(request, session).await
 }
 
 /// `daemon.status` on a fresh local session.
@@ -369,6 +378,46 @@ async fn failures_keep_the_cached_release() {
         let status = daemon_status(&engine).await;
         assert_eq!(status["update"]["latest"], "98.0.0", "{status}");
         assert_eq!(status["release_check"]["checked_at"], checked_at);
+    })
+    .await
+    .expect("timed out");
+}
+
+/// A forced `update.check` that cannot read the registry fails instead of
+/// answering with the cached release, or with none; an unforced one keeps
+/// the cache.
+#[tokio::test]
+async fn a_forced_check_that_cannot_read_the_registry_fails() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path()).expect("home");
+        std::fs::write(
+            dir.path().join("update-check.json"),
+            json!({"checked_at": hour_ago() - 1_000, "latest": "98.0.0", "channel": "stable", "source": "github"})
+                .to_string(),
+        )
+        .expect("cache");
+        let (base, hits) = release_server(&[]).await;
+        let mut options = checks(&base, script());
+        options.first_delay = Duration::from_secs(3600);
+        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+        status_until(&engine, |s| s.get("update").is_some()).await;
+
+        let error = try_call(&engine, Method::UpdateCheck, json!({"force": true}))
+            .await
+            .expect_err("a forced check fails");
+        assert_eq!(error.code, "update_failed", "{error:?}");
+        let title = error.data["title"].as_str().unwrap_or_default();
+        assert!(
+            title.starts_with("cannot read the latest stable release"),
+            "{title}"
+        );
+        assert_eq!(error.data["hint"], "retry with devlanes update");
+        assert_eq!(hits_of(&hits, "/stable.json"), 1);
+
+        let update = call(&engine, Method::UpdateCheck, json!({})).await;
+        assert_eq!(update["latest"], "98.0.0", "{update}");
+        assert_eq!(hits_of(&hits, "/stable.json"), 2);
     })
     .await
     .expect("timed out");
@@ -656,7 +705,8 @@ fn publish(site: &Path, home: &Path, version: &str) {
 /// `auto` mode stages a patch release of a script install in the background
 /// and reports it ready; a failed download is reported with its error. An
 /// `update.check` a TUI sends on open does not try it again, even when it
-/// reads the registry; a forced one does. The installed binary stays as it is.
+/// reads the registry, nor does a forced one with `install: false`; a forced
+/// one does. The installed binary stays as it is.
 #[tokio::test]
 async fn auto_mode_stages_a_patch_release_and_retries_a_failure() {
     tokio::time::timeout(LIMIT, async {
@@ -688,6 +738,15 @@ async fn auto_mode_stages_a_patch_release_and_retries_a_failure() {
         publish(&site, &home, &patch);
         let again = call(&engine, Method::UpdateCheck, json!({"force": false})).await;
         assert_eq!(again["state"], "failed", "{again}");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let status = daemon_status(&engine).await;
+        assert_eq!(status["update"]["state"], "failed", "{status}");
+        assert!(devlanes_update::install::Staged::load(&home).is_none());
+
+        // `devlanes update` checks with `install: false` and installs itself.
+        let forced = json!({"force": true, "install": false});
+        let held = call(&engine, Method::UpdateCheck, forced).await;
+        assert_eq!(held["state"], "failed", "{held}");
         tokio::time::sleep(Duration::from_secs(1)).await;
         let status = daemon_status(&engine).await;
         assert_eq!(status["update"]["state"], "failed", "{status}");

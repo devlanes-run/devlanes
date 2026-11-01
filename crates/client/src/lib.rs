@@ -3,6 +3,7 @@
 
 mod paths;
 pub mod restart;
+pub mod setup;
 
 #[cfg(unix)]
 use std::process::Stdio;

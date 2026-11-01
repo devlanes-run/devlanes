@@ -230,7 +230,8 @@ Assert-Equal $build ([int]$Matches[1]) 'Windows build'
 
 foreach ($other in @('C:\Users\a\AppData\Roaming\npm\devlanes.cmd', 'C:\Users\a\AppData\Local\pnpm\devlanes.exe',
         'C:\Users\a\.bun\bin\devlanes.exe', 'C:\Users\a\.cargo\bin\devlanes.exe', 'C:\Users\a\pipx\venvs\devlanes\Scripts\devlanes.exe',
-        'C:\Users\a\AppData\Roaming\uv\tools\devlanes\Scripts\devlanes.exe', 'D:/acme/node_modules/.bin/devlanes.cmd')) {
+        'C:\Users\a\AppData\Roaming\uv\tools\devlanes\Scripts\devlanes.exe', 'C:\Users\a\AppData\Roaming\uv\data\tools\devlanes\Scripts\devlanes.exe',
+        'C:\Users\a\AppData\Local\Yarn\bin\devlanes.cmd', 'D:/acme/node_modules/.bin/devlanes.cmd')) {
     Assert-True (Test-DevlanesOtherInstaller $other) "$other belongs to another installer"
 }
 foreach ($own in @('C:\Users\a\AppData\Local\Programs\devlanes\devlanes.exe', 'C:\tools\devlanes.exe')) {
@@ -299,6 +300,71 @@ try {
         Assert-True (-not (Test-DevlanesHandOff $handingExe $handing '')) 'install into an unwritable directory here'
     }
     Remove-Item -LiteralPath $handing -Recurse -Force
+
+    # An older release than the installed one is installed with the state database
+    # warning of `devlanes update --stable --force`.
+    & {
+        function Get-DevlanesInstalledVersion { param([string]$Exe) if ($Exe) { '9.9.9' } }
+        Assert-Equal (Get-DevlanesDowngradeWarning $cmd '') $null 'no downgrade warning for the latest release'
+        Assert-Equal (Get-DevlanesDowngradeWarning $cmd '9.9.9') $null 'no downgrade warning for the installed version'
+        Assert-Equal (Get-DevlanesDowngradeWarning (Join-Path $work 'missing.exe') '0.0.1') $null 'no downgrade warning without a devlanes.exe'
+        $warning = Get-DevlanesDowngradeWarning $cmd '0.0.1'
+        Assert-True ($warning -and $warning.StartsWith('devlanes 0.0.1 is older than the installed 9.9.9.') -and $warning.Contains('devlanes daemon reset-state')) "downgrade warning: $warning"
+    }
+
+    # After installing, a release without `update` restarts the daemon with `daemon
+    # restart --yes`, and a failed restart fails the install. The batch fake fails
+    # `update --help` and logs the other calls.
+    $restarting = Join-Path $work 'restarting'
+    New-Item -ItemType Directory -Path $restarting | Out-Null
+    $oldDevlanes = Join-Path $restarting 'devlanes.cmd'
+    $calls = Join-Path $restarting 'calls.txt'
+    [IO.File]::WriteAllText($oldDevlanes, "@if `"%1`"==`"update`" if `"%2`"==`"--help`" exit /b 2`r`n@echo %*>>`"%~dp0calls.txt`"`r`n@exit /b %DEVLANES_CHECK_EXIT%`r`n")
+    Invoke-DevlanesDaemonRestart -Exe $oldDevlanes -Version '0.0.1'
+    Assert-Equal ([IO.File]::ReadAllText($calls).Trim()) 'daemon restart --yes' 'a release without update restarts the daemon'
+    $env:DEVLANES_CHECK_EXIT = '7'
+    $refused = $null
+    try { Invoke-DevlanesDaemonRestart -Exe $oldDevlanes -Version '0.0.1' } catch { $refused = $_.Exception.Message } finally { $env:DEVLANES_CHECK_EXIT = $null }
+    Assert-Equal $refused 'devlanes install: the daemon did not restart into devlanes 0.0.1; run devlanes daemon restart' 'a failed restart'
+    Remove-Item -LiteralPath $restarting -Recurse -Force
+
+    # The copies uv and pipx put in their bin directory when they cannot link to their
+    # environment belong to them: uv's receipt lists the copy, and pipx's environment
+    # holds the same file.
+    $profileDir = Join-Path $work 'profile'
+    $copy = Join-Path $profileDir '.local\bin\devlanes.exe'
+    New-Item -ItemType Directory -Path (Split-Path $copy) | Out-Null
+    Copy-Item -LiteralPath $cmd -Destination $copy
+    $savedEnvironment = @{}
+    foreach ($name in 'UV_TOOL_DIR', 'PIPX_HOME', 'APPDATA', 'LOCALAPPDATA', 'USERPROFILE') {
+        $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+    }
+    try {
+        $env:UV_TOOL_DIR = $null
+        $env:PIPX_HOME = $null
+        $env:APPDATA = Join-Path $profileDir 'AppData\Roaming'
+        $env:LOCALAPPDATA = Join-Path $profileDir 'AppData\Local'
+        $env:USERPROFILE = $profileDir
+        Assert-True (-not (Test-DevlanesOtherInstaller $copy)) 'a copy no installer lists'
+        $receipt = Join-Path $env:APPDATA 'uv\tools\devlanes\uv-receipt.toml'
+        New-Item -ItemType Directory -Path (Split-Path $receipt) | Out-Null
+        [IO.File]::WriteAllText($receipt, "[tool]`nentrypoints = [`n    { name = `"devlanes`", install-path = `"$($copy.Replace('\', '\\'))`" },`n]`n")
+        Assert-True (Test-DevlanesOtherInstaller $copy) "uv's copy of devlanes.exe"
+        Remove-Item -LiteralPath $receipt
+        $venvExe = Join-Path $env:LOCALAPPDATA 'pipx\pipx\venvs\devlanes\Scripts\devlanes.exe'
+        New-Item -ItemType Directory -Path (Split-Path $venvExe) | Out-Null
+        Copy-Item -LiteralPath $cmd -Destination $venvExe
+        Assert-True (Test-DevlanesOtherInstaller $copy) "pipx's copy of devlanes.exe"
+        [IO.File]::WriteAllText($venvExe, 'another build')
+        Assert-True (-not (Test-DevlanesOtherInstaller $copy)) 'a copy that differs from the one in the pipx environment'
+        $ownHome = Join-Path $profileDir 'tools\venvs\devlanes'
+        New-Item -ItemType Directory -Path (Join-Path $ownHome 'Scripts') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $ownHome 'pipx_metadata.json'), '{}')
+        Assert-True (Test-DevlanesOtherInstaller (Join-Path $ownHome 'Scripts\devlanes.exe')) 'a pipx environment in a pipx home of its own'
+    } finally {
+        foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name]) }
+    }
+    Remove-Item -LiteralPath $profileDir -Recurse -Force
 
     # A devlanes.exe ahead of the install directory is reported; one behind it is not.
     $shadowing = Join-Path $work 'shadowing'
@@ -496,6 +562,10 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         Assert-Equal $run.Code 0 "$label, install with a daemon running: $($run.Output)"
         Assert-True ($run.Output.Contains("Installed devlanes $($versions[2])") -and $run.Output.Contains('" update --finish')) "$label, devlanes update --finish after the install: $($run.Output)"
         Assert-True (-not $run.Output.Contains('devlanes daemon restart')) "$label, no restart advice once the daemon restarted: $($run.Output)"
+        # A failed `update --finish` fails the install and says how to restart.
+        $finishing.DEVLANES_INSTALL_DIR = Join-Path $work "failing restart by $label"
+        $run = Invoke-Child $shell "& '$installScript'" $finishing "exit 7`r`n"
+        Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output "the daemon did not restart into devlanes $($versions[2]); run devlanes daemon restart")) "$label, a failed restart: $($run.Output)"
 
         # A devlanes first on PATH that npm installed stops the install, which names it;
         # -Force installs anyway.

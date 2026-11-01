@@ -35,12 +35,14 @@ printf '#!/bin/sh\necho "%s %s"\n' devlanes-hosts "$version" >"$work/bin/devlane
 # DEVLANES_CHECK_LOG is set: then it logs those calls there, answers the probes
 # (`update --help`, `daemon status`) and exits with DEVLANES_CHECK_EXIT (default 0)
 # otherwise. Without it, it fails them like a devlanes from before `devlanes update`
-# with no daemon.
+# with no daemon. DEVLANES_CHECK_NO_UPDATE=1 keeps the daemon but fails `update`
+# unlogged, like a release from before `devlanes update` whose daemon runs.
 cat >"$work/bin/devlanes" <<EOF
 #!/bin/sh
 case \${1:-} in
 update | daemon)
 	[ -n "\${DEVLANES_CHECK_LOG:-}" ] || exit 2
+	if [ "\$1" = update ] && [ -n "\${DEVLANES_CHECK_NO_UPDATE:-}" ]; then exit 2; fi
 	printf '%s\n' "\$*" >>"\$DEVLANES_CHECK_LOG"
 	case "\$*" in
 	'update --help' | 'daemon status') exit 0 ;;
@@ -231,15 +233,24 @@ DEVLANES_CHECK_LOG=$log install_with >/dev/null
 rm "$log"
 
 # Not for a release older than that devlanes, which `devlanes update` refuses:
-# install.sh installs it itself, then restarts the daemon into it.
+# install.sh warns about the state database, installs it itself, then restarts the
+# daemon into it.
 older=$work/installed-older
 mkdir "$older"
 sed "s/devlanes $version/devlanes 9.9.9/" "$work/bin/devlanes" >"$older/devlanes"
 chmod 755 "$older/devlanes"
-DEVLANES_CHECK_LOG=$log install_with -d "$older" --version "$version" >/dev/null
+warned=$(DEVLANES_CHECK_LOG=$log install_with -d "$older" --version "$version" 2>&1 >/dev/null)
 [ "$("$older/devlanes")" = "devlanes $version" ]
 [ "$(cat "$log")" = "daemon status
+update --help
 update --finish" ]
+case $warned in
+*"warning: devlanes $version is older than the installed 9.9.9."*"devlanes daemon reset-state empties it"*) ;;
+*)
+	echo "install.sh of an older release: $warned" >&2
+	exit 1
+	;;
+esac
 rm "$log"
 
 # Nor into a directory this user cannot write to, where only install.sh may use
@@ -266,8 +277,26 @@ fi
 # A fresh install while a daemon answers restarts it into the new version.
 DEVLANES_CHECK_LOG=$log install_with -d "$work/installed-finish" >/dev/null
 [ "$(cat "$log")" = "daemon status
+update --help
 update --finish" ]
 [ "$("$work/installed-finish/devlanes")" = "devlanes $version" ]
+rm "$log"
+# A release without `update` restarts it with `daemon restart`.
+DEVLANES_CHECK_LOG=$log DEVLANES_CHECK_NO_UPDATE=1 install_with -d "$work/installed-restart" >/dev/null
+[ "$(cat "$log")" = "daemon status
+daemon restart --yes" ]
+rm "$log"
+# A failed restart fails the install and says how to restart.
+status=0
+refused=$(DEVLANES_CHECK_LOG=$log DEVLANES_CHECK_EXIT=7 install_with -d "$work/installed-failed" 2>&1) || status=$?
+[ "$status" -ne 0 ]
+case $refused in
+*"the daemon did not restart into devlanes $version; run devlanes daemon restart"*) ;;
+*)
+	echo "install.sh with a failed restart: $refused" >&2
+	exit 1
+	;;
+esac
 rm "$log"
 
 # The first devlanes on PATH is Homebrew's: install.sh names it and stops, unless --force.
@@ -287,6 +316,20 @@ esac
 [ ! -e "$work/installed-brew" ]
 PATH="$work/brew/bin:$PATH" install_with -d "$work/installed-brew" --force >/dev/null
 [ "$("$work/installed-brew/devlanes")" = "devlanes $version" ]
+# pnpm puts a shell script on PATH that runs its copy, not a link to it.
+mkdir "$work/pnpm-home"
+# shellcheck disable=SC2016 # the shim expands them
+printf '#!/bin/sh\nbasedir=$(dirname "$0")\nexec "$basedir/global/5/node_modules/devlanes/bin/devlanes" "$@"\n' >"$work/pnpm-home/devlanes"
+chmod 755 "$work/pnpm-home/devlanes"
+refused=$(PATH="$work/pnpm-home:$PATH" install_with -d "$work/installed-pnpm" 2>&1 || true)
+case $refused in
+*"comes from another installer; update it with: devlanes update"*) ;;
+*)
+	echo "install.sh with pnpm's devlanes first on PATH: $refused" >&2
+	exit 1
+	;;
+esac
+[ ! -e "$work/installed-pnpm" ]
 
 # --uninstall runs the devlanes in the target directory (the fake one prints its
 # version); without one it deletes what install.sh put there and names the data.

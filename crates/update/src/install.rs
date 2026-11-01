@@ -696,7 +696,7 @@ pub async fn stage(
 pub struct Applied {
     /// Windows: replaced executables that still run (the daemon's, this
     /// process's), renamed to `devlanes.exe.old-<stamp>` and deleted later
-    /// by `doctor` or the next update.
+    /// by doctor or install.ps1.
     pub in_use: Vec<PathBuf>,
 }
 
@@ -732,27 +732,30 @@ pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
             return Err(failed(&target)(source));
         }
     }
-    // Each swapped target and the old file set aside for it.
-    let mut swapped: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    // Each swapped target and what was set aside for it.
+    let mut swapped: Vec<(PathBuf, Aside)> = Vec::new();
     for (temporary, target) in &placed {
-        let swap = os::set_aside(target).and_then(|old| {
+        let swap = os::set_aside(target).and_then(|aside| {
             std::fs::rename(temporary, target)
-                .map(|()| old.clone())
+                .map(|()| aside.clone())
                 .inspect_err(|_| {
-                    if let Some(old) = &old {
+                    if let Aside::Kept(old) = &aside {
                         restore(old, target);
                     }
                 })
         });
         match swap {
-            Ok(old) => swapped.push((target.clone(), old)),
+            Ok(aside) => swapped.push((target.clone(), aside)),
             Err(source) => {
-                for (target, old) in swapped.iter().rev() {
-                    match old {
-                        Some(old) => restore(old, target),
-                        None => {
+                for (target, aside) in swapped.iter().rev() {
+                    match aside {
+                        Aside::Kept(old) => restore(old, target),
+                        Aside::Missing => {
                             let _ = std::fs::remove_file(target);
                         }
+                        // The old file is gone; the new one stays.
+                        #[cfg(unix)]
+                        Aside::Replaced => {}
                     }
                 }
                 remove_new(&placed);
@@ -761,7 +764,11 @@ pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
         }
     }
     let mut applied = Applied::default();
-    for old in swapped.into_iter().filter_map(|(_, old)| old) {
+    let kept = swapped.into_iter().filter_map(|(_, aside)| match aside {
+        Aside::Kept(old) => Some(old),
+        _ => None,
+    });
+    for old in kept {
         // Windows keeps a running executable's file until it exits.
         if std::fs::remove_file(&old).is_err() {
             applied.in_use.push(old);
@@ -769,6 +776,21 @@ pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
     }
     clear(home);
     Ok(applied)
+}
+
+/// What [`os::set_aside`] did with a binary's old file before the new one
+/// is renamed over it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Aside {
+    /// There was none.
+    Missing,
+    /// It is kept at this path until the update is done, so a failure can
+    /// put it back.
+    Kept(PathBuf),
+    /// It could not be kept (a filesystem without hard links); the rename
+    /// replaces it for good.
+    #[cfg(unix)]
+    Replaced,
 }
 
 /// Puts `old`, which [`os::set_aside`] made of `target`, back in its place.
@@ -1008,6 +1030,8 @@ mod os {
         path::{Path, PathBuf},
     };
 
+    use super::Aside;
+
     /// The parent of npm's global `node_modules`: `<prefix>/lib`.
     pub(super) const NPM_LIB: &str = "lib";
     /// The packages `cargo install` builds, which `cargo uninstall` removes.
@@ -1045,10 +1069,18 @@ mod os {
 
     /// Keeps `target` as a second link, `.<name>.old.<pid>`, so a rename
     /// can replace `target` with no moment where it is missing and the old
-    /// file can still come back. `None` when there is no `target`.
-    pub(super) fn set_aside(target: &Path) -> io::Result<Option<PathBuf>> {
+    /// file can still come back.
+    pub(super) fn set_aside(target: &Path) -> io::Result<Aside> {
+        set_aside_with(target, |from, to| std::fs::hard_link(from, to))
+    }
+
+    /// [`set_aside`], making the second link with `link`.
+    pub(super) fn set_aside_with(
+        target: &Path,
+        link: impl FnOnce(&Path, &Path) -> io::Result<()>,
+    ) -> io::Result<Aside> {
         if target.symlink_metadata().is_err() {
-            return Ok(None);
+            return Ok(Aside::Missing);
         }
         let name = target
             .file_name()
@@ -1056,8 +1088,14 @@ mod os {
             .unwrap_or_default();
         let old = target.with_file_name(format!(".{name}.old.{}", std::process::id()));
         let _ = std::fs::remove_file(&old);
-        std::fs::hard_link(target, &old)?;
-        Ok(Some(old))
+        match link(target, &old) {
+            Ok(()) => Ok(Aside::Kept(old)),
+            // Some filesystems (FAT, exFAT, some network and FUSE mounts)
+            // have no hard links. The rename still replaces `target` in one
+            // step, as install.sh does; only a failure later in the same
+            // update cannot bring this file back.
+            Err(_) => Ok(Aside::Replaced),
+        }
     }
 }
 
@@ -1069,6 +1107,8 @@ mod os {
         io,
         path::{Path, PathBuf},
     };
+
+    use super::Aside;
 
     /// The parent of npm's global `node_modules`: `%APPDATA%\npm`.
     pub(super) const NPM_LIB: &str = "npm";
@@ -1113,11 +1153,10 @@ mod os {
     }
 
     /// Renames `target` to `<target>.old-<stamp>`, since a running
-    /// executable can be renamed but not replaced. `None` when there is no
-    /// `target`.
-    pub(super) fn set_aside(target: &Path) -> io::Result<Option<PathBuf>> {
+    /// executable can be renamed but not replaced.
+    pub(super) fn set_aside(target: &Path) -> io::Result<Aside> {
         if !target.exists() {
-            return Ok(None);
+            return Ok(Aside::Missing);
         }
         let stamp = devlanes_core::clock::utc_stamp(crate::now_ms() / 1000);
         let mut old = PathBuf::from(format!("{}.old-{stamp}", target.display()));
@@ -1127,13 +1166,33 @@ mod os {
             n += 1;
         }
         std::fs::rename(target, &old)?;
-        Ok(Some(old))
+        Ok(Aside::Kept(old))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Where the filesystem has no hard links, the old binary cannot be
+    /// kept, so the new one replaces it for good instead of the update
+    /// failing.
+    #[cfg(unix)]
+    #[test]
+    fn without_hard_links_the_new_binary_replaces_the_old_one() -> io::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let target = dir.path().join("devlanes");
+        std::fs::write(&target, "old")?;
+        let unsupported = |_: &Path, _: &Path| Err(io::Error::from(io::ErrorKind::Unsupported));
+        assert_eq!(os::set_aside_with(&target, unsupported)?, Aside::Replaced);
+        assert_eq!(std::fs::read(&target)?, b"old");
+        let Aside::Kept(old) = os::set_aside(&target)? else {
+            panic!("a second link is kept");
+        };
+        assert_eq!(std::fs::read(&old)?, b"old");
+        assert_eq!(os::set_aside(&dir.path().join("none"))?, Aside::Missing);
+        Ok(())
+    }
 
     #[test]
     fn sums_name_the_archive_and_version() {

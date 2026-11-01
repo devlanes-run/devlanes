@@ -2,7 +2,13 @@
 //! once, after the welcome and never stacked on it, scroll when long, and
 //! open again from the Esc menu.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use crossterm::event::{
     Event as TermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind,
@@ -188,9 +194,22 @@ async fn the_options_open_it_after_the_welcome() -> TestResult {
             keys_tx
         }
     };
+    // The binary records the notes as seen in the claim, so only a TUI that
+    // runs calls it, once.
+    let claims = Arc::new(AtomicUsize::new(0));
     let mut options = hermetic_options();
-    options.whats_new = Some(notes(1));
-    options.show_whats_new = true;
+    options.whats_new = Some({
+        let claims = claims.clone();
+        Arc::new(move || {
+            claims.fetch_add(1, Ordering::SeqCst);
+            (Some(notes(1)), true)
+        })
+    });
+    assert_eq!(
+        claims.load(Ordering::SeqCst),
+        0,
+        "options alone claim nothing"
+    );
     let run = devlanes_tui::drive(
         &mut terminal,
         driver,
@@ -201,5 +220,6 @@ async fn the_options_open_it_after_the_welcome() -> TestResult {
     let (result, _keys) =
         tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(run, script) }).await?;
     assert_eq!(result?, None);
+    assert_eq!(claims.load(Ordering::SeqCst), 1);
     Ok(())
 }

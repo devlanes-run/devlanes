@@ -139,24 +139,6 @@ impl ReleaseNotice {
     }
 }
 
-/// The scheme and host of `url` (`https`, `api.acme.localhost`), the host
-/// without its port or the brackets of an IPv6 address; `None` without a
-/// scheme or host.
-fn url_host(url: &str) -> Option<(&str, &str)> {
-    let (scheme, rest) = url.split_once("://")?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
-    let authority = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    let host = match authority.strip_prefix('[') {
-        Some(bracketed) => bracketed.split_once(']')?.0,
-        None => authority
-            .rsplit_once(':')
-            .map_or(authority, |(host, _)| host),
-    };
-    (!host.is_empty()).then_some((scheme, host))
-}
-
 /// What a click on a top-bar, lane-bar or footer item does. Rendering records
 /// these with the rectangles it drew, so hit tests match the screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7795,6 +7777,10 @@ impl App {
                 .chain(&patch)
                 .map(|note| format!("  {}", text::clean(&note.line))),
         );
+        // An empty sentence is a blank line between the notes and the rest.
+        if !minor.is_empty() || !patch.is_empty() {
+            detail.push(String::new());
+        }
         let running = self.lanes.iter().filter(|l| tree::lane_is_live(l)).count();
         detail.push(match running {
             0 => "The daemon restarts; no lanes run now.".to_owned(),
@@ -7820,11 +7806,19 @@ impl App {
     /// Reloads into the TUI installed now, once [`Msg::ReloadChecked`] says
     /// it is newer than this one; closing for an older or the same version
     /// would only open this TUI again. `lost`: the daemon on a newer
-    /// protocol that ended the connection.
+    /// protocol that ended the connection. A loss while a check runs (one
+    /// `U` started) is kept, so the TUI reconnects if it stays.
     fn reload(&mut self, lost: Option<devlanes_proto::Hello>, effects: &mut Vec<Effect>) {
-        if self.reload_pending.is_none() {
-            self.reload_pending = Some(lost);
-            effects.push(Effect::CheckReload);
+        match &mut self.reload_pending {
+            Some(pending) => {
+                if lost.is_some() {
+                    *pending = lost;
+                }
+            }
+            None => {
+                self.reload_pending = Some(lost);
+                effects.push(Effect::CheckReload);
+            }
         }
     }
 
@@ -7879,24 +7873,18 @@ impl App {
         {
             return;
         }
-        let mut missing: Vec<String> = local.clone();
-        let daemon = status
-            .pointer("/setup/missing")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str);
-        for step in daemon {
-            if !missing.iter().any(|known| known == step) {
-                missing.push(step.to_owned());
-            }
-        }
-        let (https, hostnames) = self.project_addresses();
-        missing.retain(|step| match step.as_str() {
-            "ca" => https,
-            "hosts" | "resolver" => hostnames,
-            _ => true,
-        });
+        let mut missing: Vec<&str> = local.iter().map(String::as_str).collect();
+        missing.extend(
+            status
+                .pointer("/setup/missing")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str),
+        );
+        let urls = self.project_urls();
+        let (missing, _) =
+            devlanes_client::setup::needed(&missing, urls.iter().map(String::as_str));
         if missing.is_empty() {
             return;
         }
@@ -7943,31 +7931,21 @@ impl App {
         }
     }
 
-    /// Whether a lane of the project on screen, on this machine, serves an
-    /// `https://` address, and whether one serves a hostname (anything but
-    /// an IP address or plain `localhost`).
-    fn project_addresses(&self) -> (bool, bool) {
-        let (mut https, mut hostnames) = (false, false);
-        let lanes = self
-            .project_lanes()
+    /// The addresses the lanes of the project on screen serve on this
+    /// machine, its units' and containers'.
+    fn project_urls(&self) -> Vec<String> {
+        self.project_lanes()
             .into_iter()
-            .filter(|lane| self.box_lane(&lane.reference).is_none());
-        for lane in lanes {
-            let urls = lane
-                .units
-                .iter()
-                .flat_map(|unit| &unit.urls)
-                .chain(lane.containers.iter().flat_map(|container| &container.urls));
-            for url in urls {
-                let Some((scheme, host)) = url_host(url) else {
-                    continue;
-                };
-                https |= scheme.eq_ignore_ascii_case("https");
-                hostnames |= !host.eq_ignore_ascii_case("localhost")
-                    && host.parse::<std::net::IpAddr>().is_err();
-            }
-        }
-        (https, hostnames)
+            .filter(|lane| self.box_lane(&lane.reference).is_none())
+            .flat_map(|lane| {
+                lane.units
+                    .iter()
+                    .flat_map(|unit| &unit.urls)
+                    .chain(lane.containers.iter().flat_map(|container| &container.urls))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect()
     }
 
     /// q, Ctrl+C or the menu's quit: closes at once unless lanes of the

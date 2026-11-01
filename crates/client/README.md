@@ -32,6 +32,7 @@ Auto-spawn is refused when sandbox markers are present or the socket-bind probe 
 - `Client::request` returns response data or a typed error, including `Error::Rpc`.
 - `begin_request`, `next_frame`, and `send_bytes` support events and raw terminal traffic.
 - `Client::peer` exposes the daemon hello; `Client::spawned` records whether this connection started the daemon.
+- `setup::needed` picks the missing `devlanes setup` steps a lane's URLs need, for the CLI's start notice and the TUI's setup prompt.
 
 ## Behaviour
 

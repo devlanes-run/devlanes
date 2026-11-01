@@ -13,8 +13,10 @@
 # When that directory already holds a devlanes with the `update` command, the script
 # runs `devlanes update --yes [--version X.Y.Z]` from it instead and exits with its
 # status, unless the directory is not writable (the script may use sudo there) or
-# X.Y.Z is older than that devlanes (`devlanes update` refuses it). After installing, a running daemon is restarted into the new version
-# (`devlanes update --finish`).
+# X.Y.Z is older than that devlanes (`devlanes update` refuses it; the script warns
+# about the state database and installs it). After installing, a running daemon is
+# restarted into the new version (`devlanes update --finish`, or `devlanes daemon
+# restart` for a release without it).
 # When the first devlanes on PATH comes from another installer (Homebrew, npm, pnpm,
 # Bun, Yarn, uv, pipx or cargo), the script stops and names it, since that one would
 # keep running; --force installs anyway.
@@ -162,11 +164,19 @@ resolve() {
 first=$(command -v devlanes 2>/dev/null || true)
 if [ -z "$force" ] && [ -n "$first" ]; then
 	resolved=$(resolve "$first")
+	other=
 	case $resolved in
-	*/Cellar/devlanes/* | *node_modules* | */uv/tools/* | */pipx/venvs/* | *.cargo/bin/*)
-		fail "the devlanes on PATH, $resolved, comes from another installer; update it with: devlanes update (or pass --force to install here anyway)"
+	*/Cellar/devlanes/* | *node_modules* | */uv/tools/* | */pipx/venvs/* | *.cargo/bin/*) other=1 ;;
+	*)
+		# pnpm puts a shell script on PATH that runs its copy, instead of a link to it.
+		if [ "$(dd if="$resolved" bs=2 count=1 2>/dev/null)" = '#!' ] &&
+			grep -Eq 'node_modules|\.pnpm' "$resolved" 2>/dev/null; then
+			other=1
+		fi
 		;;
 	esac
+	[ -z "$other" ] ||
+		fail "the devlanes on PATH, $resolved, comes from another installer; update it with: devlanes update (or pass --force to install here anyway)"
 fi
 
 # Whether release version $1 sorts before $2, by semver precedence.
@@ -224,6 +234,9 @@ if [ -x "$dir/devlanes" ] && [ -w "$dir" ] &&
 		on_tty "$dir/devlanes" update --yes || status=$?
 	fi
 	exit "$status"
+fi
+if [ -n "$version" ] && [ -n "$installed" ] && older_than "$version" "$installed"; then
+	printf 'devlanes install: warning: devlanes %s is older than the installed %s. If its daemon refuses the state database the newer build migrated, devlanes daemon reset-state empties it; lanes then get new numbers and ports.\n' "$version" "$installed" >&2
 fi
 
 for tool in curl tar uname mktemp awk; do
@@ -322,9 +335,13 @@ done
 
 printf 'Installed devlanes %s to %s\n' "$version" "$dir"
 # A daemon keeps running the binary it started from until it restarts into this one.
+# A release from before `devlanes update` has no `update --finish`.
 if "$dir/devlanes" daemon status >/dev/null 2>&1 </dev/null; then
-	on_tty "$dir/devlanes" update --finish ||
-		fail "the daemon did not restart into devlanes $version; run devlanes daemon restart"
+	if "$dir/devlanes" update --help >/dev/null 2>&1 </dev/null; then
+		on_tty "$dir/devlanes" update --finish
+	else
+		on_tty "$dir/devlanes" daemon restart --yes
+	fi || fail "the daemon did not restart into devlanes $version; run devlanes daemon restart"
 fi
 case ":${PATH:-}:" in
 *":$dir:"*)

@@ -3,19 +3,19 @@
 ┌ @0 · 34/38 up ───────────────┐┌ web-app  ready ────── watching · enter types ┐
 │   ● api-auth                 ││   VITE v6.0.3  ready in 412 ms               │
 │   ● api-users                ││                                              │
-│   ● api-billing              ││   ➜  Local:   https://app.acme.localhost/    │
-│   ● a┌───────────────────────────────────────────────────────────────┐       │
-│   ● a│ Update devlanes to 1.1.0?                                     │/checko│
-│   ● a│                                                               │       │
-│   ● a│   Changed `lanes.hosts_file` to default to `auto`.            │sx     │
-│   ● a│   Fixed `devlanes logs` dropping the last line of a unit that │       │
-│   ● a│   exited.                                                     │       │
-│   ● w│   Added `devlanes url --copy`.                                │       │
-│   ● w│ The daemon restarts and starts the 3 running lanes again.     │       │
-│   ● w│ This TUI closes and opens again on the same lane.             │       │
-│   · w│                                                               │       │
-│   ● w│ y update   n cancel                                           │       │
-│   ◉ w└───────────────────────────────────────────────────────────────┘       │
+│   ● ap┌─────────────────────────────────────────────────────────────┐ost/    │
+│   ● ap│ Update devlanes to 1.1.0?                                   │        │
+│   ● ap│                                                             │s/checko│
+│   ● ap│   Changed lanes.hosts_file to default to auto.              │        │
+│   ● ap│   Fixed devlanes logs dropping the last line of a unit that │tsx     │
+│   ● ap│   exited.                                                   │        │
+│   ● ap│   Added devlanes url --copy.                                │        │
+│   ● we│                                                             │        │
+│   ● we│ The daemon restarts and starts the 3 running lanes again.   │        │
+│   ● we│ This TUI closes and opens again on the same lane.           │        │
+│   · we│                                                             │        │
+│   ● we│ y update   n cancel                                         │        │
+│   ◉ wr└─────────────────────────────────────────────────────────────┘        │
 │   ◉ wrk-billing              ││                                              │
 │   ◉ wrk-index                ││                                              │
 │   ◉ wrk-thumbs               ││                                              │
@@ -29,19 +29,19 @@
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16-32 darkgray, 34-40 bold, 41-42 dim, 43-47 green, 49-54 darkgray, 56-77 dim, 79 darkgray
 3: 0 darkgray, 4-5 green, 6-13 blue, 31-32 darkgray, 34-46 color2, 58-60 bold, 79 darkgray
 4: 0 darkgray, 4-5 green, 6-14 blue, 31-32 darkgray, 79 darkgray
-5: 0 darkgray, 4-5 green, 6-16 blue, 31-32 darkgray, 36 color2, 48-74 color6, 79 darkgray
-6: 0 darkgray, 4-5 green, 6 blue, 7-71 bold, 79 darkgray
-7: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-33 bold, 71 bold, 79 darkgray
-8: 0 darkgray, 4-5 green, 6 blue, 7 bold, 71 bold, 79 darkgray
-9: 0 darkgray, 4-5 green, 6 blue, 7 bold, 71 bold, 79 darkgray
-10: 0 darkgray, 4-5 green, 6 blue, 7 bold, 71 bold, 79 darkgray
-11: 0 darkgray, 4-5 green, 6 blue, 7 bold, 71 bold, 79 darkgray
-12: 0 darkgray, 1-6 reversed, 7 bold, 71 bold, 79 darkgray
-13: 0 darkgray, 4-6 green, 7 bold, 71 bold, 79 darkgray
-14: 0 darkgray, 4-6 green, 7 bold, 71 bold, 79 darkgray
-15: 0 darkgray, 4-5 dim, 6 dim green, 7 bold, 71 bold, 79 darkgray
-16: 0 darkgray, 4-6 green, 7 bold, 9 bold, 10-16 dim, 20 bold, 21-27 dim, 71 bold, 79 darkgray
-17: 0 darkgray, 4-5 green, 6 magenta, 7-71 bold, 79 darkgray
+5: 0 darkgray, 4-5 green, 6-7 blue, 8-70 bold, 71-74 color6, 79 darkgray
+6: 0 darkgray, 4-5 green, 6-7 blue, 8 bold, 10-34 bold, 70 bold, 79 darkgray
+7: 0 darkgray, 4-5 green, 6-7 blue, 8 bold, 70 bold, 79 darkgray
+8: 0 darkgray, 4-5 green, 6-7 blue, 8 bold, 20-35 bold, 51-54 bold, 70 bold, 79 darkgray
+9: 0 darkgray, 4-5 green, 6-7 blue, 8 bold, 18-30 bold, 70 bold, 79 darkgray
+10: 0 darkgray, 4-5 green, 6-7 blue, 8 bold, 70 bold, 79 darkgray
+11: 0 darkgray, 4-5 green, 6-7 blue, 8 bold, 18-36 bold, 70 bold, 79 darkgray
+12: 0 darkgray, 1-7 reversed, 8 bold, 70 bold, 79 darkgray
+13: 0 darkgray, 4-7 green, 8 bold, 70 bold, 79 darkgray
+14: 0 darkgray, 4-7 green, 8 bold, 70 bold, 79 darkgray
+15: 0 darkgray, 4-5 dim, 6-7 dim green, 8 bold, 70 bold, 79 darkgray
+16: 0 darkgray, 4-7 green, 8 bold, 10 bold, 11-17 dim, 21 bold, 22-28 dim, 70 bold, 79 darkgray
+17: 0 darkgray, 4-5 green, 6-7 magenta, 8-70 bold, 79 darkgray
 18: 0 darkgray, 4-5 green, 6-16 magenta, 31-32 darkgray, 79 darkgray
 19: 0 darkgray, 4-5 green, 6-14 magenta, 31-32 darkgray, 79 darkgray
 20: 0 darkgray, 4-5 green, 6-15 magenta, 31-32 darkgray, 79 darkgray

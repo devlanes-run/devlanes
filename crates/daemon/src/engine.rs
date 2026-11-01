@@ -142,12 +142,13 @@ pub(crate) struct Inner {
     pub pacing: crate::pacing::Pacing,
     /// Embedded DNS server state for `doctor` (`null` without the resolver strategy).
     pub dns: Mutex<Value>,
-    /// Whether the resolver file (NRPT rule) does not route `hostnames.tld`,
-    /// as `daemon.status`'s `setup` last read it; `None` until read, and
-    /// again after `hosts.retry`, which `devlanes setup` sends once it
-    /// changed the file. The TLD comes from the user config, which a daemon
-    /// reads once, so nothing else makes the answer stale.
-    pub resolver_check: Mutex<Option<bool>>,
+    /// When `daemon.status`'s `setup` last read whether the resolver file
+    /// (NRPT rule) routes `hostnames.tld`, and whether it does not; `None`
+    /// until read, and again after `hosts.retry`, which `devlanes setup`
+    /// sends once it changed the file. The answer is read again after
+    /// `setup::RESOLVER_CHECK_TTL`, since a person or another tool
+    /// may change the file too.
+    pub resolver_check: Mutex<Option<(Instant, bool)>>,
     /// The latest state.db retention pass, for `doctor`.
     pub last_prune: Mutex<Option<crate::maintenance::LastPrune>>,
     /// The latest release the background check read.

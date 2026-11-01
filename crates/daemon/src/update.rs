@@ -184,8 +184,8 @@ pub(crate) struct UpdateState {
     cached: Mutex<Option<Cached>>,
     /// One check at a time: the background loop and `update.check` share it.
     checking: tokio::sync::Mutex<()>,
-    /// Told after an `update.check` read the registry, so the loop can
-    /// install what it found.
+    /// Told after an `update.check` with `install` read the registry, so the
+    /// loop can install what it found.
     checked: tokio::sync::Notify,
     /// Set with `checked` by a forced `update.check`, which tries a failed
     /// install of the same release again.
@@ -374,21 +374,39 @@ impl Inner {
 
     /// `update.check`: checks now when forced or when the last check is older
     /// than [`UpdateCheckOptions::recheck_after`], then replies with the newer
-    /// release, or `null`. Only a check that read the registry wakes the
-    /// background install, and only a forced one retries a failed install
-    /// of the same release, so opening a TUI never repeats a failure.
+    /// release, or `null`. A forced check that cannot read the registry fails
+    /// with `update_failed`, so `devlanes update` never takes a stale answer
+    /// for the latest. Only a check that read the registry, with `install`,
+    /// wakes the background install, and only a forced one retries a failed
+    /// install of the same release, so opening a TUI never repeats a failure.
     pub(crate) async fn update_check_method(&self, params: Value) -> Result<Value, RpcError> {
-        let UpdateCheckParams { force } = crate::engine::params(params)?;
+        let UpdateCheckParams { force, install } = crate::engine::params(params)?;
         if let Ok(source) = self.update_source().await {
             let recheck = self.opts.update_check.recheck_after;
-            let fetched = self
+            match self
                 .check_release(source, (!force).then_some(recheck))
-                .await;
-            if fetched {
-                if force {
-                    self.update.retry.store(true, Ordering::Relaxed);
+                .await
+            {
+                Checked::Read if install => {
+                    if force {
+                        self.update.retry.store(true, Ordering::Relaxed);
+                    }
+                    self.update.checked.notify_one();
                 }
-                self.update.checked.notify_one();
+                Checked::Failed(error) if force => {
+                    return Err(RpcError::new(
+                        "update_failed",
+                        serde_json::json!({
+                            "title": format!(
+                                "cannot read the latest {} release: {error}",
+                                source.channel().as_str()
+                            ),
+                            "hint": "retry with devlanes update",
+                        }),
+                        1,
+                    ));
+                }
+                _ => {}
             }
         }
         Ok(self
@@ -437,7 +455,7 @@ impl Inner {
                 wait = Duration::ZERO;
                 continue;
             }
-            if self.check_release(source, None).await {
+            if self.check_release(source, None).await == Checked::Read {
                 self.clone().install_in_background(true);
             }
             wait = options.interval;
@@ -552,13 +570,13 @@ impl Inner {
     /// Reads the latest version from `source`, and the release notes once per
     /// new stable release, then caches both on disk and in memory. With
     /// `fresh`, a cached answer younger than that is kept instead. A failure
-    /// keeps the cached answer. Returns whether it read the registry.
-    async fn check_release(&self, source: Source, fresh: Option<Duration>) -> bool {
+    /// keeps the cached answer.
+    async fn check_release(&self, source: Source, fresh: Option<Duration>) -> Checked {
         let _checking = self.update.checking.lock().await;
         if let Some(fresh) = fresh
             && !self.until_due(fresh).is_zero()
         {
-            return false;
+            return Checked::Fresh;
         }
         let options = &self.opts.update_check;
         let latest =
@@ -566,7 +584,7 @@ impl Inner {
                 Ok(latest) => latest,
                 Err(error) => {
                     tracing::debug!(%error, source = source.name(), "release check failed");
-                    return false;
+                    return Checked::Failed(error.to_string());
                 }
             };
         let previous = self
@@ -611,8 +629,19 @@ impl Inner {
             tracing::debug!(%error, "release check cache not written");
         }
         self.update.set(cached);
-        true
+        Checked::Read
     }
+}
+
+/// How [`Inner::check_release`] ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Checked {
+    /// It read the registry and cached the answer.
+    Read,
+    /// The cached answer was recent enough, so it read nothing.
+    Fresh,
+    /// The registry could not be read, for this reason.
+    Failed(String),
 }
 
 /// Whether the daemon installs a release `bump` away in the background under

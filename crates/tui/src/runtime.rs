@@ -238,8 +238,15 @@ where
         .clone()
         .unwrap_or_else(jiff::tz::TimeZone::system);
     app.service_report = options.service.clone();
-    app.whats_new = options.whats_new.clone();
-    app.whats_new_pending = options.show_whats_new && options.whats_new.is_some();
+    // The terminal is set up by now, so this TUI opens.
+    let (notes, show) = match options.whats_new.clone() {
+        Some(claim) => tokio::task::spawn_blocking(move || claim())
+            .await
+            .unwrap_or((None, false)),
+        None => (None, false),
+    };
+    app.whats_new_pending = show && notes.is_some();
+    app.whats_new = notes;
     #[cfg(unix)]
     let user_home = options.var("HOME").map(std::path::PathBuf::from);
     #[cfg(windows)]

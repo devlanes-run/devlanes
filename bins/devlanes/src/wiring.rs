@@ -50,8 +50,8 @@ pub fn tui_theme(paths: &Paths) -> devlanes_tui::theme::Theme {
 /// The TUI's progress bar, colors, glyphs and quit choice from the user config,
 /// the service definition the daemon page's doctor checks compare stop
 /// timeouts with, where a relaunch opens, the CA trust check of the setup
-/// prompt, and the release notes "What's new" shows. Only a TUI that opens
-/// calls this: it claims "What's new" ([`crate::notes::for_tui`]).
+/// prompt, and the release notes "What's new" shows, which the TUI claims
+/// once its terminal is set up ([`crate::notes::for_tui`]).
 pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
     use std::io::IsTerminal;
     // An invalid key leaves only that setting on its default, with a warning.
@@ -64,7 +64,6 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         std::io::stdout().is_terminal(),
         |key| std::env::var(key).ok(),
     );
-    let (whats_new, show_whats_new) = crate::notes::for_tui(paths.home.clone()).await;
     devlanes_tui::Options {
         progress: features.progress,
         title: features.title,
@@ -82,8 +81,7 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         cwd: None,
         reopen: crate::relaunch::reopen(),
         setup_check: Some(setup_check(paths.clone())),
-        whats_new,
-        show_whats_new,
+        whats_new: Some(crate::notes::for_tui(paths.home.clone())),
     }
 }
 

@@ -19,15 +19,17 @@
 #
 # When that directory already holds a devlanes.exe with the `update` command, the
 # script runs `devlanes update --yes [--version X.Y.Z]` from it instead, unless this
-# user cannot write to the directory or X.Y.Z is older than that devlanes. When the first
+# user cannot write to the directory or X.Y.Z is older than that devlanes (the
+# script then warns about the state database and installs it). When the first
 # devlanes on PATH comes from another installer (npm, pnpm, Bun, Yarn, uv, pipx or
 # cargo), it stops and names it, since that one would keep running; -Force installs
 # anyway.
 #
 # The directory goes first in the user PATH. A devlanes.exe that is running
 # (usually the daemon) is renamed to devlanes.exe.old-TIMESTAMP and keeps running;
-# when a daemon answers, `devlanes update --finish` restarts it into the new version,
-# and `devlanes doctor` deletes the old file afterwards. It works in Windows
+# when a daemon answers, `devlanes update --finish` (or `devlanes daemon restart` for
+# a release without it) restarts it into the new version, and `devlanes doctor` or
+# the next install.ps1 run deletes the old file afterwards. It works in Windows
 # PowerShell 5.1 and PowerShell 7, on Windows 11 24H2 (build 26100) or later.
 
 # `irm | iex` runs this text in the caller's session, so the body is a script block
@@ -440,11 +442,41 @@
     }
 
     function Test-DevlanesOtherInstaller {
-        <# Whether a devlanes path, links followed, belongs to a package manager or cargo. #>
+        <#
+        Whether a devlanes path, links followed, belongs to a package manager or cargo:
+        by its path, or for the copies uv and pipx put in their bin directory, by the
+        uv receipt that lists it or the pipx environment that holds the same file.
+        #>
         param([string]$Path)
         $text = $Path.Replace('/', '\')
-        foreach ($pattern in @('*\npm\*', '*\pnpm\*', '*\.bun\*', '*node_modules*', '*\uv\tools\*', '*\pipx\venvs\*', '*.cargo\bin\*', '*\Cellar\devlanes\*')) {
+        foreach ($pattern in @('*\npm\*', '*\pnpm\*', '*\.bun\*', '*\Yarn\bin\*', '*node_modules*', '*\uv\tools\*', '*\uv\data\tools\*',
+                '*\pipx\venvs\*', '*.cargo\bin\*', '*\Cellar\devlanes\*')) {
             if ($text -like $pattern) { return $true }
+        }
+        # A pipx environment outside the default pipx home.
+        $root = [IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($text))
+        if ($root -and [IO.File]::Exists((Join-Path $root 'pipx_metadata.json'))) { return $true }
+
+        $uvTools = @($env:UV_TOOL_DIR)
+        if ($env:APPDATA) { $uvTools += @((Join-Path $env:APPDATA 'uv\data\tools'), (Join-Path $env:APPDATA 'uv\tools')) }
+        foreach ($tools in @($uvTools | Where-Object { $_ })) {
+            $receipt = Join-Path $tools 'devlanes\uv-receipt.toml'
+            if (-not [IO.File]::Exists($receipt)) { continue }
+            # uv writes `install-path = "C:\\...\\devlanes.exe"` for each entry point.
+            foreach ($line in [IO.File]::ReadAllLines($receipt)) {
+                if ($line -match 'install-path\s*=\s*["'']([^"'']+)["'']' -and $Matches[1].Replace('\\', '\').Replace('/', '\') -ieq $text) { return $true }
+            }
+        }
+
+        $pipxHomes = @($env:PIPX_HOME)
+        if ($env:USERPROFILE) { $pipxHomes += Join-Path $env:USERPROFILE 'pipx' }
+        if ($env:LOCALAPPDATA) { $pipxHomes += Join-Path $env:LOCALAPPDATA 'pipx\pipx' }
+        $file = Get-Item -LiteralPath $text -Force -ErrorAction SilentlyContinue
+        foreach ($pipxHome in @($pipxHomes | Where-Object { $_ })) {
+            $venvExe = Get-Item -LiteralPath (Join-Path $pipxHome 'venvs\devlanes\Scripts\devlanes.exe') -Force -ErrorAction SilentlyContinue
+            # pipx copies the environment's devlanes.exe when it cannot link to it.
+            if ($file -and $venvExe -and $file.Length -eq $venvExe.Length -and
+                (Get-DevlanesFileHash $file.FullName) -eq (Get-DevlanesFileHash $venvExe.FullName)) { return $true }
         }
         return $false
     }
@@ -454,12 +486,43 @@
         param([string]$Path)
         for ($n = 0; $n -lt 16; $n++) {
             $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
-            if (-not $item -or -not $item.LinkType -or -not $item.Target) { break }
+            # Windows PowerShell also reports a file's other hard links as HardLink
+            # targets, which are no link to follow.
+            if (-not $item -or $item.LinkType -notin @('SymbolicLink', 'Junction') -or -not $item.Target) { break }
             $target = @($item.Target)[0]
             if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path $Path) $target }
             $Path = $target
         }
         return $Path
+    }
+
+    function Get-DevlanesDowngradeWarning {
+        <#
+        The state database warning when Version is older than the devlanes.exe Exe
+        runs, the one `devlanes update --stable --force` prints, else $null.
+        #>
+        param([string]$Exe, [string]$Version)
+        if (-not $Version -or -not (Test-Path -LiteralPath $Exe -PathType Leaf)) { return $null }
+        $installed = Get-DevlanesInstalledVersion $Exe
+        if (-not $installed -or -not (Test-DevlanesOlderVersion $Version $installed)) { return $null }
+        return "devlanes $Version is older than the installed $installed. If its daemon refuses the state database the newer build migrated, devlanes daemon reset-state empties it; lanes then get new numbers and ports."
+    }
+
+    function Invoke-DevlanesDaemonRestart {
+        <#
+        Restarts the running daemon into Exe, in this console: `devlanes update --finish`,
+        or `devlanes daemon restart --yes` for a release from before `devlanes update`.
+        Throws when the restart fails.
+        #>
+        param([string]$Exe, [string]$Version)
+        if (Test-DevlanesCommand $Exe @('update', '--help')) {
+            & $Exe update --finish
+        } else {
+            & $Exe daemon restart --yes
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "devlanes install: the daemon did not restart into devlanes $Version; run devlanes daemon restart"
+        }
     }
 
     function Invoke-DevlanesExit {
@@ -555,6 +618,8 @@
             Invoke-DevlanesExit $LASTEXITCODE 'devlanes update'
             return
         }
+        $downgrade = Get-DevlanesDowngradeWarning -Exe $exe -Version $version
+        if ($downgrade) { Write-Warning $downgrade }
 
         Assert-DevlanesWindowsBuild (Get-DevlanesWindowsBuild)
         $target = Get-DevlanesTarget (Get-DevlanesArchitecture)
@@ -619,10 +684,7 @@
         Write-Host "Installed devlanes $version to $dir"
         # A daemon keeps running the binary it started from until it restarts into this one.
         if (Test-DevlanesCommand $exe @('daemon', 'status')) {
-            & $exe update --finish
-            if ($LASTEXITCODE -ne 0) {
-                throw "devlanes install: the daemon did not restart into devlanes $version; run devlanes daemon restart"
-            }
+            Invoke-DevlanesDaemonRestart -Exe $exe -Version $version
         } elseif ($inUse) {
             Write-Host "The previous devlanes.exe is still running and keeps running as $inUse."
             Write-Host 'Run `devlanes daemon restart` when convenient (it stops services); `devlanes doctor` then deletes the old file.'

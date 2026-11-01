@@ -11,19 +11,19 @@
 │   ● api-catalog                              ││                                                                      │
 │   ● api-inventory                            ││                                                                      │
 │   ● api-notify                               ││                                                                      │
-│   ● api-reports                              ││                                                                      │
-│   ● web-app              ┌───────────────────────────────────────────────────────────────┐                           │
-│   ● web-admin            │ Update devlanes to 1.1.0?                                     │                           │
-│   ● web-docs             │                                                               │                           │
-│   · web-storybook        │   Changed `lanes.hosts_file` to default to `auto`.            │                           │
-│   ● web-landing          │   Fixed `devlanes logs` dropping the last line of a unit that │                           │
-│   ◉ wrk-email            │   exited.                                                     │                           │
-│   ◉ wrk-billing          │   Added `devlanes url --copy`.                                │                           │
-│   ◉ wrk-index            │ The daemon restarts and starts the 3 running lanes again.     │                           │
-│   ◉ wrk-thumbs           │ This TUI closes and opens again on the same lane.             │                           │
-│   ✕ wrk-export           │                                                               │                           │
-│   ◉ wrk-cron             │ y update   n cancel                                           │                           │
-│   ◉ wrk-webhooks         └───────────────────────────────────────────────────────────────┘                           │
+│   ● api-reports           ┌─────────────────────────────────────────────────────────────┐                            │
+│   ● web-app               │ Update devlanes to 1.1.0?                                   │                            │
+│   ● web-admin             │                                                             │                            │
+│   ● web-docs              │   Changed lanes.hosts_file to default to auto.              │                            │
+│   · web-storybook         │   Fixed devlanes logs dropping the last line of a unit that │                            │
+│   ● web-landing           │   exited.                                                   │                            │
+│   ◉ wrk-email             │   Added devlanes url --copy.                                │                            │
+│   ◉ wrk-billing           │                                                             │                            │
+│   ◉ wrk-index             │ The daemon restarts and starts the 3 running lanes again.   │                            │
+│   ◉ wrk-thumbs            │ This TUI closes and opens again on the same lane.           │                            │
+│   ✕ wrk-export            │                                                             │                            │
+│   ◉ wrk-cron              │ y update   n cancel                                         │                            │
+│   ◉ wrk-webhooks          └─────────────────────────────────────────────────────────────┘                            │
 │   ◉ wrk-ledger                               ││                                                                      │
 │   ● stub-stripe                              ││                                                                      │
 │   ● stub-s3                                  ││                                                                      │
@@ -53,19 +53,19 @@
 10: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 119 darkgray
 11: 0 darkgray, 4-5 green, 6-18 blue, 47-48 darkgray, 119 darkgray
 12: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 119 darkgray
-13: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 119 darkgray
-14: 0 darkgray, 1-26 reversed, 27-91 bold, 119 darkgray
-15: 0 darkgray, 4-14 green, 27 bold, 29-53 bold, 91 bold, 119 darkgray
-16: 0 darkgray, 4-13 green, 27 bold, 91 bold, 119 darkgray
-17: 0 darkgray, 4-5 dim, 6-18 dim green, 27 bold, 91 bold, 119 darkgray
-18: 0 darkgray, 4-16 green, 27 bold, 91 bold, 119 darkgray
-19: 0 darkgray, 4-5 green, 6-14 magenta, 27 bold, 91 bold, 119 darkgray
-20: 0 darkgray, 4-5 green, 6-16 magenta, 27 bold, 91 bold, 119 darkgray
-21: 0 darkgray, 4-5 green, 6-14 magenta, 27 bold, 91 bold, 119 darkgray
-22: 0 darkgray, 4-5 green, 6-15 magenta, 27 bold, 91 bold, 119 darkgray
-23: 0 darkgray, 4-5 red, 6-15 magenta, 27 bold, 91 bold, 119 darkgray
-24: 0 darkgray, 4-5 green, 6-13 magenta, 27 bold, 29 bold, 30-36 dim, 40 bold, 41-47 dim, 91 bold, 119 darkgray
-25: 0 darkgray, 4-5 green, 6-17 magenta, 27-91 bold, 119 darkgray
+13: 0 darkgray, 4-5 green, 6-16 blue, 28-90 bold, 119 darkgray
+14: 0 darkgray, 1-27 reversed, 28 bold, 30-54 bold, 90 bold, 119 darkgray
+15: 0 darkgray, 4-14 green, 28 bold, 90 bold, 119 darkgray
+16: 0 darkgray, 4-13 green, 28 bold, 40-55 bold, 71-74 bold, 90 bold, 119 darkgray
+17: 0 darkgray, 4-5 dim, 6-18 dim green, 28 bold, 38-50 bold, 90 bold, 119 darkgray
+18: 0 darkgray, 4-16 green, 28 bold, 90 bold, 119 darkgray
+19: 0 darkgray, 4-5 green, 6-14 magenta, 28 bold, 38-56 bold, 90 bold, 119 darkgray
+20: 0 darkgray, 4-5 green, 6-16 magenta, 28 bold, 90 bold, 119 darkgray
+21: 0 darkgray, 4-5 green, 6-14 magenta, 28 bold, 90 bold, 119 darkgray
+22: 0 darkgray, 4-5 green, 6-15 magenta, 28 bold, 90 bold, 119 darkgray
+23: 0 darkgray, 4-5 red, 6-15 magenta, 28 bold, 90 bold, 119 darkgray
+24: 0 darkgray, 4-5 green, 6-13 magenta, 28 bold, 30 bold, 31-37 dim, 41 bold, 42-48 dim, 90 bold, 119 darkgray
+25: 0 darkgray, 4-5 green, 6-17 magenta, 28-90 bold, 119 darkgray
 26: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 119 darkgray
 27: 0 darkgray, 4-5 green, 6-16 darkgray, 47-48 darkgray, 119 darkgray
 28: 0 darkgray, 4-5 green, 6-12 darkgray, 47-48 darkgray, 119 darkgray

@@ -181,7 +181,7 @@ Some terminals end every process they started when they close. `doctor` warns wh
 
 ## Updating
 
-`devlanes update` installs a release while the daemon runs, then restarts it into the new version and starts its lanes again. Windows refuses to overwrite a running executable, so an `install.ps1` install renames it to `devlanes.exe.old-<timestamp>` and installs next to it; `devlanes doctor` or the next update deletes the old file once nothing runs it. The daemon, the TUI and `devlanes update` keep a hard link to their executable in `%USERPROFILE%\.devlanes\run\exe` while they run, which lets npm, pnpm, Bun, Yarn, uv and pipx replace `devlanes.exe` too.
+`devlanes update` installs a release while the daemon runs, then restarts it into the new version and starts its lanes again. Windows refuses to overwrite a running executable, so an `install.ps1` install renames it to `devlanes.exe.old-<timestamp>` and installs next to it; `devlanes doctor`, or the next `install.ps1` run, deletes the old file once nothing runs it. The daemon, the TUI and `devlanes update` keep a hard link to their executable in `%USERPROFILE%\.devlanes\run\exe` while they run, which lets npm, pnpm, Bun, Yarn, uv and pipx replace `devlanes.exe` too.
 
 cargo binstall, `cargo install` and pip installs are left to you: `devlanes update`, the update notice and `doctor` print their command. The link can only be made when `devlanes.exe` is on the same drive as `%USERPROFILE%`; for an install on another drive, run `devlanes daemon stop` first, which stops every unit.
 

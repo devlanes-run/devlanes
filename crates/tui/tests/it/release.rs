@@ -161,10 +161,15 @@ async fn u_asks_with_the_notes_and_the_lanes_then_closes_to_update() -> TestResu
         &[
             "  Changed `start` to do more.",
             "  Fixed a thing.",
+            "",
             "The daemon restarts and starts the 2 running lanes again.",
             "This TUI closes and opens again on the same lane.",
         ]
     );
+    // Inline code is styled as "What's new" shows it, without the backticks.
+    let screen = draw(&app)?.backend().to_string();
+    assert!(screen.contains("Changed start to do more."), "{screen}");
+    assert!(!screen.contains("`start`"), "{screen}");
     // Enter does not confirm a restart of every lane; n keeps the TUI.
     app.update(key(KeyCode::Enter));
     assert!(app.dialog.is_some());
@@ -471,6 +476,37 @@ async fn a_daemon_on_a_newer_protocol_reloads_the_tui() -> TestResult {
     let effects = app.update(Msg::Subscribed(Err(ApiError::Incompatible { peer })));
     assert!(
         !effects.iter().any(|e| matches!(e, Effect::CheckReload)),
+        "{effects:?}"
+    );
+    Ok(())
+}
+
+/// A daemon that ends the connection while the reload `U` asked for still
+/// reads the installed version is not forgotten: when the TUI stays, it
+/// reconnects.
+#[tokio::test]
+async fn a_loss_during_a_reload_check_still_reconnects() -> TestResult {
+    let own = devlanes_version::VERSION;
+    let mut app = reported(status("99.0.0", None)).await;
+    let effects = app.update(shifted('U'));
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::CheckReload)),
+        "{effects:?}"
+    );
+    let peer = hello(devlanes_proto::PROTOCOL_VERSION + 1, "99.0.0");
+    let effects = app.update(Msg::Subscribed(Err(ApiError::Incompatible { peer })));
+    assert!(
+        !effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckReload | Effect::ScheduleReconnect { .. })),
+        "one check at a time: {effects:?}"
+    );
+    let effects = app.update(Msg::ReloadChecked(Some(own.into())));
+    assert_eq!(app.exit, None);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ScheduleReconnect { .. })),
         "{effects:?}"
     );
     Ok(())

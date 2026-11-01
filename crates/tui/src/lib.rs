@@ -137,13 +137,20 @@ pub struct Options {
     /// The setup steps only this user can check (the CA's trust), for the
     /// setup prompt; `None` checks nothing on this side.
     pub setup_check: Option<SetupCheck>,
-    /// The release notes "What's new" shows, from the binary's changelog:
-    /// those since the version seen before when this is the first TUI after
-    /// an update, else this version's own for the Esc menu.
-    pub whats_new: Option<devlanes_update::notes::WhatsNew>,
-    /// Whether "What's new" opens by itself, after the welcome.
-    pub show_whats_new: bool,
+    /// Reads the release notes "What's new" shows and claims them; `None`
+    /// has none.
+    pub whats_new: Option<WhatsNewClaim>,
 }
+
+/// The release notes "What's new" shows, from the binary's changelog, and
+/// whether they open by themselves after the welcome: those since the
+/// version seen before when this is the first TUI after an update, else
+/// this version's own for the Esc menu. The binary records them as seen in
+/// the call, under a lock so that one TUI shows them, which is why the TUI
+/// calls it only once its terminal is set up: a TUI that does not open
+/// claims nothing. Blocking.
+pub type WhatsNewClaim =
+    Arc<dyn Fn() -> (Option<devlanes_update::notes::WhatsNew>, bool) + Send + Sync>;
 
 impl Options {
     /// The colors and glyphs for this terminal, from the environment and

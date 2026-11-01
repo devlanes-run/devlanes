@@ -93,7 +93,7 @@ impl WhatsNewDialog {
 
 /// `text` as spans, the parts between backticks in `code` without the
 /// backticks. `in_code` carries an open span over to the next wrapped line.
-fn code_spans(text: &str, in_code: &mut bool, code: Style) -> Vec<Span<'static>> {
+pub(crate) fn code_spans(text: &str, in_code: &mut bool, code: Style) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
     for (index, part) in text.split('`').enumerate() {
         if index > 0 {
