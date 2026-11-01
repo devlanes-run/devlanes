@@ -82,13 +82,15 @@ pub(super) async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
     )
     .map_err(install_error)?;
     let executor = super::sudo::privileged(runtime, super::APPLY).await?;
-    let version = install::install(executor.as_ref(), &SystemFs, &source)
+    let installed = install::install(executor.as_ref(), &SystemFs, &source)
         .await
         .map_err(install_error)?;
     let mut stdout = format!(
         "installed devlanes-hosts {} at {INSTALL_PATH}\n",
-        version.version
+        installed.version.version
     );
+    // Shown even with --quiet, like the warnings of `remove`.
+    let stderr = warning_lines(&installed.warnings);
     let mut code = 0;
     if let Some(hosts) = retry_daemon().await {
         match hosts.get("state").and_then(Value::as_str) {
@@ -114,9 +116,19 @@ pub(super) async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
     }
     emit(&Rendered {
         stdout,
+        stderr,
         ..Rendered::default()
     });
     Ok(code)
+}
+
+/// The installer's warnings as stderr lines.
+#[cfg(unix)]
+fn warning_lines(warnings: &[String]) -> String {
+    warnings
+        .iter()
+        .map(|warning| format!("warning: {warning}\n"))
+        .collect()
 }
 
 /// Clears the block, removes the rule and the helper, and prints what could not
@@ -139,10 +151,7 @@ pub(super) async fn remove(runtime: &Runtime) -> Result<u8, RpcError> {
     let warnings = install::uninstall(executor.as_ref(), &SystemFs)
         .await
         .map_err(install_error)?;
-    let mut stderr: String = warnings
-        .iter()
-        .map(|warning| format!("warning: {warning}\n"))
-        .collect();
+    let mut stderr = warning_lines(&warnings);
     // Without the helper nothing can clear the block; the README says to edit it by hand.
     if !had_helper && block {
         stderr.push_str(
