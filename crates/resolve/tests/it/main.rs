@@ -213,7 +213,8 @@ async fn injected_variables() {
     let lane = plain(FULL, 2).await;
     let env = &lane.services["crm-api"].launch.env.values;
     assert_eq!(env["DEVLANES"], "1");
-    assert_eq!(env["DEVLANES_PROJECT"], "acme");
+    assert_eq!(env["DEVLANES_LANE_PROJECT"], "acme");
+    assert!(!env.contains_key("DEVLANES_PROJECT"));
     assert_eq!(env["DEVLANES_LANE"], "2");
     assert_eq!(env["DEVLANES_LANE_NAME"], "lane2");
     assert_eq!(env["DEVLANES_SERVICE"], "crm-api");

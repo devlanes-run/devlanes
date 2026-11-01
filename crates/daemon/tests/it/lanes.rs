@@ -228,23 +228,22 @@ async fn a_subdirectory_project_is_its_own_project() {
     .expect("timeout");
 }
 
-/// `cx(cwd)` carrying `project` as an inherited `DEVLANES_PROJECT`.
+/// `cx(cwd)` run by a process of a `project` lane (`DEVLANES_LANE_PROJECT`).
 fn inheriting(cwd: &Path, project: &str) -> Context {
     Context {
-        project: Some(project.into()),
-        project_inherited: true,
+        lane_project: Some(project.into()),
         ..cx(cwd)
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A lane's `DEVLANES_PROJECT` reaches later CI steps and `devlanes with` shells, so
-/// it names the project only inside that project's folder: a second checkout of the
-/// repository holding another project, as the GitHub action's two-project job has,
-/// starts its own project (devlanes 0.8 to 0.10 refused it as not found), and so does
-/// a subdirectory project below it. Inside the folder, or outside every project, the
-/// variable still picks the project, as for a script a `devlanes.prod.yaml` service runs.
-async fn an_inherited_project_gives_way_to_the_cwds_own() {
+/// A lane's `DEVLANES_LANE_PROJECT` reaches later CI steps and `devlanes with`
+/// shells, so it names the project only inside that project's lanes: a second
+/// checkout of the repository holding another project, as the GitHub action's
+/// two-project job has, starts its own project, and so does a subdirectory project
+/// below it. Inside a lane, or outside every project, it still picks the project, as
+/// for a script a `devlanes.prod.yaml` service runs.
+async fn a_lane_project_gives_way_to_the_cwds_own() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let origin = tmp.path.join("origin");
@@ -335,6 +334,16 @@ async fn an_inherited_project_gives_way_to_the_cwds_own() {
             .await
             .expect("status outside");
         assert_eq!(scoped(status), ["beta@0"]);
+        // `-p` or an exported `DEVLANES_PROJECT` wins over the cwd and the lane's project.
+        let pinned = Context {
+            project: Some("alpha".into()),
+            ..inheriting(&infra, "beta")
+        };
+        let status = h
+            .call(Method::Status, json!({}), pinned)
+            .await
+            .expect("status pinned");
+        assert_eq!(scoped(status), ["alpha@0"]);
         h.close().await;
     })
     .await

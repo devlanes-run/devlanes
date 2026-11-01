@@ -246,7 +246,7 @@ devlanes -p acme-prod status
 devlanes -p acme-prod logs api --tail 50
 ```
 
-Without `--project`, devlanes reads `DEVLANES_PROJECT`, which it sets in every process it starts, so a script run by an `acme-prod` task or service stays in `acme-prod`. The variable counts only inside the project's folder, or outside every project: in another checkout or below a nearer `devlanes.yaml`, such as a later CI step that inherited it, that directory's project is used. The file may have any name except one ending in `.local.yaml`, and its local file is `devlanes.prod.local.yaml` ([extending another project file](ports-and-env.md#extending-another-project-file) has the merge order). [examples/devlanes.prod.yaml](../examples/devlanes.prod.yaml) is a commented version.
+`--project` also reads `DEVLANES_PROJECT` when you export it. Every process a lane starts gets `DEVLANES_LANE_PROJECT` instead, which devlanes commands use when they run in one of that project's lanes or outside every project, so a script run by an `acme-prod` task or service stays in `acme-prod`. The file may have any name except one ending in `.local.yaml`, and its local file is `devlanes.prod.local.yaml` ([extending another project file](ports-and-env.md#extending-another-project-file) has the merge order). [examples/devlanes.prod.yaml](../examples/devlanes.prod.yaml) is a commented version.
 
 The two projects are separate in devlanes: their own lanes, port blocks, saved services and hostnames (`acme.localhost` and `acme-prod.localhost`), so both run side by side in one worktree. A `lanes.vars.domain` in `devlanes.yaml` that spells out `acme` applies to both; set it again in the prod file, for example with `${{ project.name }}`. Anything outside devlanes that both reach is shared:
 

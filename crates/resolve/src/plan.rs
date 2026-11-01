@@ -109,7 +109,7 @@ async fn plan_lane<E: Extensions>(
     contributors.sort_by_key(|c| c.priority());
     let mut devlanes = BTreeMap::from([
         ("DEVLANES".to_owned(), "1".to_owned()),
-        ("DEVLANES_PROJECT".to_owned(), config.project.clone()),
+        ("DEVLANES_LANE_PROJECT".to_owned(), config.project.clone()),
         ("DEVLANES_LANE".to_owned(), input.facts.index.to_string()),
         ("DEVLANES_LANE_NAME".to_owned(), input.facts.name.clone()),
         (

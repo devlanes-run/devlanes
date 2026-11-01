@@ -1163,7 +1163,7 @@ async fn lane_env_and_explain() {
             .await
             .expect("env");
         assert_eq!(env["env"]["DEVLANES_LANE"], "0");
-        assert_eq!(env["env"]["DEVLANES_PROJECT"], "demo");
+        assert_eq!(env["env"]["DEVLANES_LANE_PROJECT"], "demo");
         assert_eq!(
             env["env"]["DEVLANES_PUBLIC_URL_WEB"],
             "https://web.demo.localhost"

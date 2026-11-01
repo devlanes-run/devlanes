@@ -988,10 +988,7 @@ fn scoped(request: &Request, args: &[&str]) -> Hint {
     if let Some(lane) = &request.context.lane {
         all.extend(["--lane", lane.as_str()]);
     }
-    // An inherited `DEVLANES_PROJECT` applies to the hint the same way.
-    if let Some(project) = &request.context.project
-        && !request.context.project_inherited
-    {
+    if let Some(project) = &request.context.project {
         all.extend(["--project", project.as_str()]);
     }
     // Without it the hint would read the cwd's devlanes.yaml project instead.

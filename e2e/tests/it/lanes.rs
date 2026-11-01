@@ -264,9 +264,9 @@ fn ci_gives_a_detached_checkout_lane_zero() -> Result<()> {
 
 /// The GitHub action's two-project job: one repository checked out twice, a project
 /// in a subfolder of each, and the first lane's variables exported to every later
-/// step. They name the first project only inside its folder, so the second checkout
-/// starts its own project and the first stops from its own folder after the second
-/// start exported its variables in turn.
+/// step. Their `DEVLANES_LANE_PROJECT` names the first project only inside its lanes,
+/// so the second checkout starts its own project and the first stops from its own
+/// folder after the second start exported its variables in turn.
 #[test]
 fn exported_lane_variables_leave_another_checkouts_project_alone() -> Result<()> {
     let lab = Lab::without_config(BUDGET)?;
@@ -301,11 +301,23 @@ fn exported_lane_variables_leave_another_checkouts_project_alone() -> Result<()>
     let started = step(&basic, &["start"], &Value::Null)?.json()?;
     assert_eq!(started["ready"], true, "{started}");
     let exported = step(&basic, &["env", "show"], &Value::Null)?.json()?["env"].clone();
-    assert_eq!(exported["DEVLANES_PROJECT"], "e2e-basic", "{exported}");
+    assert_eq!(exported["DEVLANES_LANE_PROJECT"], "e2e-basic", "{exported}");
+    assert!(exported.get("DEVLANES_PROJECT").is_none(), "{exported}");
     let started = step(&infra, &["start"], &exported)?.json()?;
     assert_eq!(started["ready"], true, "{started}");
     let exported = step(&infra, &["env", "show"], &exported)?.json()?["env"].clone();
-    assert_eq!(exported["DEVLANES_PROJECT"], "e2e-infra", "{exported}");
+    assert_eq!(exported["DEVLANES_LANE_PROJECT"], "e2e-infra", "{exported}");
+    // A `DEVLANES_PROJECT` exported by hand pins the project in any folder.
+    let mut pinned = exported.clone();
+    pinned["DEVLANES_PROJECT"] = "e2e-basic".into();
+    let status = step(&infra, &["status", "--json"], &pinned)?.json()?;
+    let references: Vec<&str> = status["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|lane| lane["reference"].as_str())
+        .collect();
+    assert_eq!(references, ["e2e-basic@0"], "{status}");
     step(&basic, &["stop"], &exported)?;
     let lanes = lab.lanes(&basic)?;
     let first = need(lane(&lanes, "e2e-basic@0"), "lane e2e-basic@0")?;

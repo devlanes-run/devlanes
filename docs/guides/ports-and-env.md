@@ -87,7 +87,7 @@ Layers, lowest first. A later layer wins on the same key.
 
 1. The environment of the shell that ran `devlanes start` (or `restart`, `run`, `exec`, `lane resume`). The daemon keeps it in memory for the lane and reuses it for restarts from the TUI; it is never written to disk. `devlanes daemon restart` starts what ran again with the environment of the shell that ran it. After a reboot, a crash or `daemon stop`, a plain `devlanes start` brings its lane back with the current shell's environment and names the other lanes that ran; `devlanes lane resume` brings them all back.
 2. Contributors: mise, direnv, then the platform (`NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, …), `WRANGLER_REGISTRY_PATH`, `CLOUDFLARE_DEV_REGISTRY_PATH` and `MINIFLARE_REGISTRY_PATH` (set on every unit, read only by Wrangler and Miniflare) and the preset.
-3. [devlanes' own variables](#devlanes-variables): `DEVLANES=1`, `DEVLANES_PROJECT`, `DEVLANES_LANE`, `DEVLANES_LANE_NAME`, `DEVLANES_LANE_DATA`, `DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`; for services also `PORT`, `HOST`, `DEVLANES_SERVICE` and `DEVLANES_ORIGINS`.
+3. [devlanes' own variables](#devlanes-variables): `DEVLANES=1`, `DEVLANES_LANE_PROJECT`, `DEVLANES_LANE`, `DEVLANES_LANE_NAME`, `DEVLANES_LANE_DATA`, `DEVLANES_CA_CERT`, `DEVLANES_CA_BUNDLE`; for services also `PORT`, `HOST`, `DEVLANES_SERVICE` and `DEVLANES_ORIGINS`.
 4. `global_env`.
 5. The unit's own `env`.
 6. The profile's `env` (later `--profile` flags win).
@@ -106,7 +106,7 @@ Every process devlanes starts (services, tasks, infra commands) and every comman
 | Variable | Value |
 | --- | --- |
 | `DEVLANES` | `1` |
-| `DEVLANES_PROJECT` | `project` from the project file, such as `acme`. devlanes commands run by the process read it as `--project`, so they stay in this project, unless they run in another project's folder or checkout |
+| `DEVLANES_LANE_PROJECT` | `project` from the project file, such as `acme`. devlanes commands run by the process use this project when the current directory is in one of its lanes or in no project, so a script run by a `devlanes.prod.yaml` service stays in that project. In another project's folder or checkout that folder's project applies. To pin the project everywhere, set `DEVLANES_PROJECT` yourself, which works like `--project` |
 | `DEVLANES_LANE` | the lane index: `0` for the primary worktree, then `1`, `2`, … A lane whose branch becomes the primary one takes index 0, so key lasting state on `DEVLANES_LANE_DATA` instead |
 | `DEVLANES_LANE_NAME` | `main` for lane 0, `lane<N>` for the others |
 | `DEVLANES_LANE_DATA` | the [lane data folder](#lane-data-folder), `~/.devlanes/data/<project>/<lane id>`. The lane id is not the index |
