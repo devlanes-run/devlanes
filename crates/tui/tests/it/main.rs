@@ -3,10 +3,13 @@
 /// `insta::assert_snapshot!` with this build's version written as `X.Y.Z`:
 /// the fake daemon reports it, and a release bump must not change a
 /// snapshot. Versions a test sets on purpose must differ from it (`0.0.1`).
+/// The padding up to the row's right border goes too, since its width
+/// follows the version's length (0.9.0 and 0.10.0 differ by a column).
 macro_rules! assert_screen {
     ($($arg:tt)*) => {{
         let version = format!(r"\b{}\b", devlanes_version::VERSION.replace('.', r"\."));
         let mut settings = insta::Settings::clone_current();
+        settings.add_filter(&format!(r"{version}([^│\x22\n]*?) *│"), "X.Y.Z$1 │");
         settings.add_filter(&version, "X.Y.Z");
         let _bound = settings.bind_to_scope();
         insta::assert_snapshot!($($arg)*);
