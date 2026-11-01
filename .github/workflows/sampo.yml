@@ -1,8 +1,8 @@
 name: Sampo
 # Sampo's action keeps the release pull request (branch release/main) up to date while
-# change files are pending, and tags the new versions once it merges. The steps after it
-# cover what Sampo doesn't know about: the plugin manifests carry the version, and its
-# tags don't start release.yml. packaging/README.md has the details.
+# change files are pending, and tags the new devlanes version once it merges. The steps
+# after it cover what Sampo doesn't know about: the plugin manifests carry the version,
+# and its tags don't start release.yml. packaging/README.md has the details.
 on:
   push:
     branches: [main]
@@ -28,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Sampo reads the existing tags and links changelog entries to commits.
+          # Sampo links changelog entries to the commits that added their change files.
           fetch-depth: 0
       - name: Install pinned toolchain
         run: rustup toolchain install
@@ -38,7 +38,7 @@ jobs:
         with:
           tool: cargo-binstall@1.25.3
       - id: sampo
-        uses: bruits/sampo/crates/sampo-github-action@cbf64ba62bc12402634b872a0b0896cfde3584e7 # cargo-sampo-github-action-v0.21.0
+        uses: bruits/sampo/crates/sampo-github-action@01b484549021f6f458c5aa93820d4a63a39d9485 # cargo-sampo-github-action-v0.22.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
@@ -60,13 +60,15 @@ jobs:
           git commit --quiet -m "Version the plugin manifests for $version"
           git push origin "$BRANCH"
 
+      # `published` means publish created a tag, and `tag_unpublished` in
+      # .sampo/config.toml leaves the devlanes one as the only candidate.
       - name: Start the release
         if: steps.sampo.outputs.published == 'true'
         run: |
           tag=$(git tag --points-at HEAD --list 'v[0-9]*' | head -n 1)
           if [ -z "$tag" ]; then
-            echo "No new devlanes version tag on this commit"
-            exit 0
+            echo "::error::Sampo reported a publish but this commit has no vX.Y.Z tag"
+            exit 1
           fi
           gh workflow run release.yml --ref "$tag"
           echo "::notice::Started release.yml for $tag"
