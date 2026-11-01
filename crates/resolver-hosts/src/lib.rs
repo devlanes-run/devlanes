@@ -27,7 +27,7 @@ pub use devlanes_hosts_helper::{INSTALL_PATH, PROTOCOL, REVISION, SUDOERS_PATH};
 pub use exec::{
     CommandOutput, CommandSpec, Executor, FileInfo, FileKind, FsProbe, SystemExecutor, SystemFs,
 };
-pub use install::{InstallError, InstallInputs, InstallPlan, Platform, Step};
+pub use install::{InstallError, InstallInputs, InstallPlan, Installed, Platform, Step};
 pub use policy::{
     DesiredHosts, HostsFileMode, HostsFilePolicy, LocalhostResolution, SkipReason, Skipped,
     filter_names, probe_localhost,

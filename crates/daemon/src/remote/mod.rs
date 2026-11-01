@@ -1231,7 +1231,6 @@ impl Inner {
         let (conn, guard) = self
             .open_host(host, identity, watcher, connected_before, recorded, code)
             .await?;
-        lock(&self.remote.hosts).insert(host.to_owned(), conn.clone());
         lock(&self.remote.restore_errors).remove(host);
         Ok((conn, guard))
     }
@@ -1262,11 +1261,12 @@ impl Inner {
             .cloned()
     }
 
-    /// Starts the link and the host's watcher and mirror tasks, with
-    /// `watcher` registered for prompts and `code` kept for pairing before the
-    /// link's first attempt. A box `recorded` as reached by a command fails
-    /// with `box_command_missing` when the connector no longer has a command
-    /// for it, instead of trying the name as an ssh destination.
+    /// Starts the link, lists the connection in [`Remotes::hosts`] and starts
+    /// the host's watcher and mirror tasks, with `watcher` registered for
+    /// prompts and `code` kept for pairing before the link's first attempt.
+    /// A box `recorded` as reached by a command fails with
+    /// `box_command_missing` when the connector no longer has a command for
+    /// it, instead of trying the name as an ssh destination.
     async fn open_host(
         self: &Arc<Self>,
         host: &str,
@@ -1332,6 +1332,11 @@ impl Inner {
             announce_task: Mutex::new(None),
             code,
         });
+        // Listed before the mirror starts: the assignment only sees listed
+        // boxes, and a mirror that built its routes before the box was listed
+        // would wait for a change that never comes, its lanes neither
+        // mirrored nor skipped.
+        lock(&self.remote.hosts).insert(host.to_owned(), conn.clone());
         let watcher = tokio::spawn(watch_link(Arc::downgrade(self), conn.clone()));
         *lock(&conn.watch_task) = Some(watcher);
         let mirror = tokio::spawn(mirror::run(Arc::downgrade(self), conn.clone()));
