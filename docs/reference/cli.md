@@ -684,14 +684,12 @@ devlanes update [OPTIONS]
 ```
 
 - `--check`: Only check: show the install method, the running and latest versions and what changed
-- `--notes`: Only show the release notes of the running version; checks nothing
 
 ```text
 Examples:
   devlanes update                      install the latest release, asking first
   devlanes update --yes                install it without asking
   devlanes update --check              show the latest release and what changed
-  devlanes update --notes              show what changed in the running version
 ```
 
 ### devlanes uninstall

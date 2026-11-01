@@ -429,6 +429,7 @@ A project file builds on others with `extends`, one path or a list, relative to 
 
 | Path | Type | Description | Example |
 | --- | --- | --- | --- |
-| `updates` | object | Release checks: whether the daemon looks for newer devlanes releases (`mode`). | `{"mode":"disable"}` |
+| `updates` | object | Release checks: whether the daemon looks for newer devlanes releases (`mode`), and whether the TUI shows release highlights after an update (`highlights`). | `{"mode":"disable"}` |
+| `updates.highlights` | boolean | Show the release highlights dialog the first time the TUI opens after an update; defaults to true. Set false to skip the dialog. The new version still counts as seen, so turning this back on does not show the highlights of releases you already skipped. | `true` |
 | `updates.mode` | `disable` or `notify` or `auto` | What devlanes does about newer releases: `notify` (the default) checks every 4 hours and when the TUI opens, and shows the new version; `auto` also installs patch releases in the background where the install method allows it; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off. Values: `disable`: Never look for releases; nothing is read from the network. `notify`: Read the latest version from the registry devlanes was installed from, and show it in the TUI and in command output when it is newer. Nothing is installed. `auto`: Like `notify`, and also install patch releases in the background where the install method allows it; they apply the next time you start devlanes at a terminal. Minor releases, which can break things before 1.0, still wait for you to update. | `disable` |
 
