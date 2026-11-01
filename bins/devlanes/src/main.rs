@@ -70,12 +70,16 @@ fn main() -> ExitCode {
             #[cfg(windows)]
             cli_console();
             use devlanes_cli::clap::error::ErrorKind;
-            // Help, version and similar displays are not errors.
+            if error.kind() == ErrorKind::DisplayVersion {
+                use std::io::Write as _;
+                let version = devlanes_update::version::running();
+                let _ = writeln!(std::io::stdout(), "devlanes {version}");
+                return ExitCode::SUCCESS;
+            }
+            // Help and similar displays are not errors.
             if matches!(
                 error.kind(),
-                ErrorKind::DisplayHelp
-                    | ErrorKind::DisplayVersion
-                    | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
             ) {
                 error.exit();
             }

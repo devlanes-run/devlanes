@@ -619,44 +619,33 @@ terminal, pass --yes.
 that channel. next is the latest build of main, published only as release
 archives, so it needs an install.sh or install.ps1 install. --stable from a
 next build installs only a stable release newer than that build; until one
-ships, the build stays. --stable --force installs the latest stable release
-anyway; its daemon may not open the state database the newer build migrated,
-and devlanes daemon reset-state empties it.";
+ships, the build stays.";
 
 const UPDATE_AFTER: &str = "\
 Examples:
   devlanes update                      install the latest release, asking first
+  devlanes update --yes                install it without asking
   devlanes update --check              show the latest release and what changed
   devlanes update --notes              show what changed in the running version
   devlanes update --next               follow the latest build of main
-  devlanes update --stable             follow stable releases again
-  devlanes update --version 0.9.1 --yes";
+  devlanes update --stable             follow stable releases again";
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
     /// Only check: show the install method, the running and latest versions and what changed
-    #[arg(long, conflicts_with_all = ["update_version", "finish", "notes", "next", "stable"])]
+    #[arg(long, conflicts_with_all = ["finish", "notes", "next", "stable"])]
     pub check: bool,
     /// Only show the release notes of the running version; checks nothing
-    #[arg(long, conflicts_with_all = ["update_version", "finish", "next", "stable"])]
+    #[arg(long, conflicts_with_all = ["finish", "next", "stable"])]
     pub notes: bool,
-    /// Install this release instead of the latest one
-    // Own id: `version` is clap's `--version` flag, which the reference skips.
-    #[arg(long = "version", id = "update_version", value_name = "VERSION")]
-    pub version: Option<String>,
     /// Follow the latest build of main (updates.channel: next), then update to it
-    #[arg(long, conflicts_with_all = ["update_version", "finish", "stable"])]
+    #[arg(long, conflicts_with_all = ["finish", "stable"])]
     pub next: bool,
     /// Follow stable releases (updates.channel: stable), then update when one is newer
-    #[arg(long, conflicts_with_all = ["update_version", "finish"])]
+    #[arg(long, conflicts_with = "finish")]
     pub stable: bool,
-    /// With --stable, install the latest stable release even when it is older than this build
-    // clap skips `requires` when the required flag conflicts with one given, so
-    // the flags that rule out --stable are listed too.
-    #[arg(long, requires = "stable", conflicts_with_all = ["next", "check", "notes", "finish", "update_version"])]
-    pub force: bool,
     /// Restart the daemon into this binary after an update (run by devlanes update)
-    #[arg(long, hide = true, conflicts_with = "update_version")]
+    #[arg(long, hide = true)]
     pub finish: bool,
 }
 
@@ -665,9 +654,8 @@ pub struct UpdateArgs {
 pub enum ChannelSwitch {
     /// `--next`: the latest build of main.
     Next,
-    /// `--stable`; `force` installs the latest stable release even when it is
-    /// older than the running build.
-    Stable { force: bool },
+    /// `--stable`: stable releases.
+    Stable,
 }
 
 /// What `devlanes update` was asked to do.
@@ -677,10 +665,10 @@ pub enum UpdateAction {
     Check,
     /// Print the running version's release notes, from the binary.
     Notes,
-    /// Install `version` (the latest when `None`); `yes` skips the question.
-    Install { version: Option<String>, yes: bool },
+    /// Install the latest release when it is newer; `yes` skips the question.
+    Install { yes: bool },
     /// Follow `channel` from now on, then install its latest release when
-    /// that is newer (or older and forced); `yes` skips the question.
+    /// that is newer; `yes` skips the question.
     Switch { channel: ChannelSwitch, yes: bool },
     /// Run by the newly installed binary: restart the daemon into it and say
     /// what changed.
@@ -1383,14 +1371,11 @@ impl Cli {
                     }
                 } else if args.stable {
                     UpdateAction::Switch {
-                        channel: ChannelSwitch::Stable { force: args.force },
+                        channel: ChannelSwitch::Stable,
                         yes: self.yes,
                     }
                 } else {
-                    UpdateAction::Install {
-                        version: args.version.clone(),
-                        yes: self.yes,
-                    }
+                    UpdateAction::Install { yes: self.yes }
                 }));
             }
             Some(Command::Uninstall(args)) => {

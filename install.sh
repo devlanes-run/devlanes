@@ -3,20 +3,16 @@
 # archive against the release's SHA256SUMS.
 #
 #   curl -fsSL https://devlanes.run/install.sh | sh
-#   curl -fsSL https://devlanes.run/install.sh | sh -s -- --version 0.4.0
 #   curl -fsSL https://devlanes.run/install.sh | sh -s -- --uninstall
 #
-# It installs the latest stable release, or with -v, --version X.Y.Z that release.
-# -d, --dir DIR sets the target directory (default: ~/.local/bin). DEVLANES_VERSION
-# (X.Y.Z) and DEVLANES_INSTALL_DIR do the same when the option isn't given. The
+# It installs the latest stable release; there is no option for another one (npm
+# and PyPI install a given release). -d, --dir DIR sets the target directory
+# (default: ~/.local/bin), or DEVLANES_INSTALL_DIR when the option isn't given. The
 # latest build of main comes from `devlanes update --next` after installing.
 # When that directory already holds a devlanes with the `update` command, the script
-# runs `devlanes update --yes [--version X.Y.Z]` from it instead and exits with its
-# status, unless the directory is not writable (the script may use sudo there) or
-# X.Y.Z is older than that devlanes (`devlanes update` refuses it; the script warns
-# about the state database and installs it). After installing, a running daemon is
-# restarted into the new version (`devlanes update --finish`, or `devlanes daemon
-# restart` for a release without it).
+# runs `devlanes update --yes` from it instead and exits with its status, unless the
+# directory is not writable (the script may use sudo there). After installing, a
+# running daemon is restarted into the new version with `devlanes update --finish`.
 # When the first devlanes on PATH comes from another installer (Homebrew, npm, pnpm,
 # Bun, Yarn, uv, pipx or cargo), the script stops and names it, since that one would
 # keep running; --force installs anyway.
@@ -31,7 +27,6 @@ set -eu
 base=${DEVLANES_INSTALL_BASE_URL:-https://github.com/devlanes-run/devlanes/releases}
 proto='=https'
 if [ -n "${DEVLANES_INSTALL_BASE_URL:-}" ]; then proto='=https,file'; fi
-version=${DEVLANES_VERSION:-}
 dir=${DEVLANES_INSTALL_DIR:-$HOME/.local/bin}
 dir_set=${DEVLANES_INSTALL_DIR:+1}
 
@@ -40,7 +35,13 @@ fail() {
 	exit 1
 }
 
-usage='usage: sh install.sh [-v, --version X.Y.Z] [-d, --dir DIR] [--force] [--uninstall]'
+# Earlier versions of this script took a version to install.
+latest_only() {
+	fail "devlanes installs only the latest release; for a specific version use npm (npm install -g devlanes@X.Y.Z) or PyPI (uv tool install devlanes==X.Y.Z)"
+}
+[ -z "${DEVLANES_VERSION:-}" ] || latest_only
+
+usage='usage: sh install.sh [-d, --dir DIR] [--force] [--uninstall]'
 usage() {
 	printf '%s\n' "$usage" >&2
 	exit 2
@@ -57,7 +58,6 @@ on_tty() {
 	fi
 }
 
-version_set=
 uninstall=
 force=
 while [ "$#" -gt 0 ]; do
@@ -65,22 +65,22 @@ while [ "$#" -gt 0 ]; do
 	--uninstall)
 		uninstall=1
 		shift
-		continue
 		;;
 	--force)
 		force=1
 		shift
-		continue
 		;;
-	-v | --version | -d | --dir)
-		[ "$#" -ge 2 ] || usage
-		option=$1 value=$2
+	-d | --dir)
+		if [ "$#" -lt 2 ] || [ -z "$2" ]; then usage; fi
+		dir=$2 dir_set=1
 		shift 2
 		;;
-	--version=* | --dir=*)
-		option=${1%%=*} value=${1#*=}
+	--dir=*)
+		dir=${1#*=} dir_set=1
+		[ -n "$dir" ] || usage
 		shift
 		;;
+	-v | --version | --version=*) latest_only ;;
 	-h | --help)
 		printf '%s\n' "$usage"
 		exit 0
@@ -90,11 +90,6 @@ while [ "$#" -gt 0 ]; do
 		usage
 		;;
 	esac
-	[ -n "$value" ] || usage
-	case $option in
-	-v | --version) version=$value version_set=1 ;;
-	-d | --dir) dir=$value dir_set=1 ;;
-	esac
 done
 
 case "$dir" in
@@ -103,7 +98,7 @@ case "$dir" in
 esac
 
 if [ -n "$uninstall" ]; then
-	[ -z "$version_set$force" ] || fail "--uninstall takes no --version or --force"
+	[ -z "$force" ] || fail "--uninstall takes no --force"
 	exe=
 	if [ -x "$dir/devlanes" ]; then
 		exe=$dir/devlanes
@@ -134,15 +129,6 @@ if [ -n "$uninstall" ]; then
 	fi
 	printf 'The devlanes data stays in %s; delete that directory to remove it.\n' "${DEVLANES_HOME:-$HOME/.devlanes}"
 	exit 0
-fi
-
-version=${version#v}
-release_version='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-if [ "$version" = next ]; then
-	fail "next is no longer a version here; install a stable release, then run devlanes update --next"
-fi
-if [ -n "$version" ] && ! printf '%s\n' "$version" | grep -Eq "$release_version"; then
-	fail "$version is not a release version (X.Y.Z)"
 fi
 
 # Follows symlinks, as Homebrew, npm, uv and pipx put a link to their copy on PATH.
@@ -179,64 +165,13 @@ if [ -z "$force" ] && [ -n "$first" ]; then
 		fail "the devlanes on PATH, $resolved, comes from another installer; update it with: devlanes update (or pass --force to install here anyway)"
 fi
 
-# Whether release version $1 sorts before $2, by semver precedence.
-older_than() {
-	awk -v a="$1" -v b="$2" '
-	function split_version(v, core, pre,   at) {
-		at = index(v, "-")
-		if (at) { pre[0] = substr(v, at + 1); v = substr(v, 1, at - 1) } else { pre[0] = "" }
-		split(v, core, ".")
-	}
-	BEGIN {
-		split_version(a, ac, ap)
-		split_version(b, bc, bp)
-		for (i = 1; i <= 3; i++) {
-			if (ac[i] + 0 < bc[i] + 0) exit 0
-			if (ac[i] + 0 > bc[i] + 0) exit 1
-		}
-		# A prerelease sorts before its release.
-		if (ap[0] == "") exit 1
-		if (bp[0] == "") exit 0
-		n = split(ap[0], x, ".")
-		m = split(bp[0], y, ".")
-		for (i = 1; i <= n && i <= m; i++) {
-			xn = x[i] ~ /^[0-9]+$/
-			yn = y[i] ~ /^[0-9]+$/
-			if (xn && yn) {
-				if (x[i] + 0 < y[i] + 0) exit 0
-				if (x[i] + 0 > y[i] + 0) exit 1
-			} else if (xn) {
-				exit 0
-			} else if (yn) {
-				exit 1
-			} else if (x[i] != y[i]) {
-				exit (x[i] < y[i]) ? 0 : 1
-			}
-		}
-		exit (n < m) ? 0 : 1
-	}'
-}
-
 # A devlanes that can update itself does it, the same way `devlanes update` would,
-# unless this script has to: to install where this user cannot write (it may use
-# sudo), or an older release than that devlanes, which `devlanes update` refuses.
-installed=
-if [ -x "$dir/devlanes" ]; then
-	installed=$("$dir/devlanes" --version 2>/dev/null </dev/null | sed -n 's/^devlanes //p' || true)
-fi
+# unless this user cannot write to its directory, where only this script may use sudo.
 if [ -x "$dir/devlanes" ] && [ -w "$dir" ] &&
-	{ [ -z "$version" ] || [ -z "$installed" ] || ! older_than "$version" "$installed"; } &&
 	"$dir/devlanes" update --help >/dev/null 2>&1 </dev/null; then
 	status=0
-	if [ -n "$version" ]; then
-		on_tty "$dir/devlanes" update --yes --version "$version" || status=$?
-	else
-		on_tty "$dir/devlanes" update --yes || status=$?
-	fi
+	on_tty "$dir/devlanes" update --yes || status=$?
 	exit "$status"
-fi
-if [ -n "$version" ] && [ -n "$installed" ] && older_than "$version" "$installed"; then
-	printf 'devlanes install: warning: devlanes %s is older than the installed %s. If its daemon refuses the state database the newer build migrated, devlanes daemon reset-state empties it; lanes then get new numbers and ports.\n' "$version" "$installed" >&2
 fi
 
 for tool in curl tar uname mktemp awk; do
@@ -279,11 +214,7 @@ download() {
 	curl -fsSL --proto "$proto" --proto-redir "$proto" --tlsv1.2 "$1" -o "$2"
 }
 
-if [ -n "$version" ]; then
-	sums_url=$base/download/v$version/SHA256SUMS
-else
-	sums_url=$base/latest/download/SHA256SUMS
-fi
+sums_url=$base/latest/download/SHA256SUMS
 download "$sums_url" "$tmp/SHA256SUMS" || fail "cannot download $sums_url"
 
 # The latest release is found through its SHA256SUMS, which names the archive and
@@ -294,13 +225,9 @@ line=$(awk -v suffix="-$target.tar.gz" '
 [ -n "$line" ] || fail "no $target archive listed in $sums_url"
 expected=${line%% *}
 archive=${line##* }
-found=${archive#devlanes-}
-found=${found%"-$target.tar.gz"}
-if [ -n "$version" ] && [ "$found" != "$version" ]; then
-	fail "$sums_url lists version $found, expected $version"
-fi
-version=$found
-printf '%s\n' "$version" | grep -Eq "$release_version" ||
+version=${archive#devlanes-}
+version=${version%"-$target.tar.gz"}
+printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' ||
 	fail "unexpected version $version in $sums_url"
 printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail "malformed checksum for $archive"
 
@@ -335,13 +262,9 @@ done
 
 printf 'Installed devlanes %s to %s\n' "$version" "$dir"
 # A daemon keeps running the binary it started from until it restarts into this one.
-# A release from before `devlanes update` has no `update --finish`.
 if "$dir/devlanes" daemon status >/dev/null 2>&1 </dev/null; then
-	if "$dir/devlanes" update --help >/dev/null 2>&1 </dev/null; then
-		on_tty "$dir/devlanes" update --finish
-	else
-		on_tty "$dir/devlanes" daemon restart --yes
-	fi || fail "the daemon did not restart into devlanes $version; run devlanes daemon restart"
+	on_tty "$dir/devlanes" update --finish ||
+		fail "the daemon did not restart into devlanes $version; run devlanes daemon restart"
 fi
 case ":${PATH:-}:" in
 *":$dir:"*)

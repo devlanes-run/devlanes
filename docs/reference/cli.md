@@ -682,9 +682,7 @@ terminal, pass --yes.
 that channel. next is the latest build of main, published only as release
 archives, so it needs an install.sh or install.ps1 install. --stable from a
 next build installs only a stable release newer than that build; until one
-ships, the build stays. --stable --force installs the latest stable release
-anyway; its daemon may not open the state database the newer build migrated,
-and devlanes daemon reset-state empties it.
+ships, the build stays.
 
 ```text
 devlanes update [OPTIONS]
@@ -692,19 +690,17 @@ devlanes update [OPTIONS]
 
 - `--check`: Only check: show the install method, the running and latest versions and what changed
 - `--notes`: Only show the release notes of the running version; checks nothing
-- `--version <VERSION>`: Install this release instead of the latest one
 - `--next`: Follow the latest build of main (updates.channel: next), then update to it
 - `--stable`: Follow stable releases (updates.channel: stable), then update when one is newer
-- `--force`: With --stable, install the latest stable release even when it is older than this build
 
 ```text
 Examples:
   devlanes update                      install the latest release, asking first
+  devlanes update --yes                install it without asking
   devlanes update --check              show the latest release and what changed
   devlanes update --notes              show what changed in the running version
   devlanes update --next               follow the latest build of main
   devlanes update --stable             follow stable releases again
-  devlanes update --version 0.9.1 --yes
 ```
 
 ### devlanes uninstall

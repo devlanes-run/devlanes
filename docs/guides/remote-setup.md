@@ -10,11 +10,13 @@ devlanes on the box is an ordinary install. It needs:
 - `git`, and Docker if the project has `infra`.
 - The `devlanes` binary on the `PATH` that a non-interactive SSH session gets, or at `~/.devlanes/bin/devlanes`. `remote connect` finds it with `sh -c 'command -v devlanes'`, which does not read `.bashrc` or `.zshrc`. On a Windows box it asks PowerShell (`Get-Command`), with the `PATH` sshd builds from the registry.
 
-Install the same release as on the client, from an SSH shell on the box. `install.sh` can put it in `~/.devlanes/bin`, where `remote connect` always looks; replace `X.Y.Z` with the version `devlanes --version` prints on the client:
+Install the latest release from an SSH shell on the box, and keep the client on the latest release too (`devlanes update`), so both run the same one. `install.sh` can put it in `~/.devlanes/bin`, where `remote connect` always looks:
 
 ```sh
-curl -fsSL https://devlanes.run/install.sh | sh -s -- --version X.Y.Z --dir ~/.devlanes/bin
+curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir ~/.devlanes/bin
 ```
+
+`install.sh` installs only the latest release. To match a client that stays on an older one, install that version on the box with npm or PyPI (`npm install -g devlanes@X.Y.Z` or `uv tool install devlanes==X.Y.Z`, where `X.Y.Z` is what `devlanes --version` prints on the client), though staying on an older release is not recommended.
 
 Without `--dir` it installs to `~/.local/bin`, which a non-interactive SSH session may not have on its `PATH`; check with `ssh hetzner 'command -v devlanes'` from the client. Homebrew, npm and cargo binstall work too (the [README](../../README.md) lists them). When their directory is not on that `PATH`, as with Homebrew's `/opt/homebrew/bin` on macOS, link the binary into `~/.devlanes/bin` from an interactive shell on the box:
 
@@ -254,9 +256,9 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | `... failed because the box did not answer in time` or `the link dropped while it opened` | a slow or dropped link | try again; `remote ls` shows the link state |
 | `... failed because box hetzner is not connected: ...` | the link stayed down for 10 seconds | the error after the colon says why |
 | `the box runs devlanes 0.4.1 and this machine 0.4.3. Install the same release on both.` | different releases, same protocol | works; update the box when convenient |
-| `the box runs ... (protocol 5) but this client speaks protocol 4` | releases too far apart | install the same release on both machines, then `devlanes daemon restart` on the box |
-| `` `devlanes tunnel --stdio` did not answer within 20s. If the box runs an older devlanes release, ... `` | this client is newer than the box: the box's devlanes predates protocol 4, whose tunnel announces itself first | install the same release on both machines |
-| a mux or handshake error right after one machine was updated | this client predates protocol 4 and the box is newer: the client cannot read the line the box's tunnel starts with | install the same release on both machines |
+| `the box runs ... (protocol 5) but this client speaks protocol 4` | releases too far apart | `devlanes update` on both machines, then `devlanes daemon restart` on the box |
+| `` `devlanes tunnel --stdio` did not answer within 20s. If the box runs an older devlanes release, ... `` | this client is newer than the box: the box's devlanes predates protocol 4, whose tunnel announces itself first | `devlanes update` on both machines |
+| a mux or handshake error right after one machine was updated | this client predates protocol 4 and the box is newer: the client cannot read the line the box's tunnel starts with | `devlanes update` on both machines |
 | ``the box daemon runs an older devlanes than `devlanes tunnel` `` | the box's binary was updated but its daemon still runs the old one | `devlanes daemon restart` on the box |
 | ``the box closed the connection before `devlanes tunnel --stdio` started. The box printed: ...`` | the login shell exited or ran something else; its output follows | fix the shell's startup files, or the `ForceCommand` or `RemoteCommand` for this host |
 | ``the box printed more than 64 KiB before `devlanes tunnel --stdio` started`` | a profile file prints a lot on every login | make it quiet for non-interactive sessions |
@@ -283,7 +285,7 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 
 ## Updating
 
-devlanes never updates a box. Install the same release on both machines, then run `devlanes daemon restart` on the box, so its daemon matches `devlanes tunnel`, and on the client. Machines with different protocol versions do not connect ([checking](#checking)).
+devlanes never updates a box. Run `devlanes update` on both machines: it installs the latest release and restarts the daemon, so the box's daemon matches `devlanes tunnel`. Machines with different protocol versions do not connect ([checking](#checking)).
 
 ## Limits
 

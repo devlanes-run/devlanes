@@ -1,6 +1,31 @@
-//! Release versions and their semver ordering.
+//! Release versions and their semver ordering, and the version this binary
+//! runs.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, sync::OnceLock};
+
+/// Replaces the version [`running`] returns, in debug builds only. A fake
+/// release can only be built from the binary under test, which has the same
+/// version, and `devlanes update` installs only a newer release; the
+/// end-to-end test of `devlanes update` sets this on the install it updates,
+/// so that one reports an older version. The release it stages and the
+/// binary it then hands over to run without it and report their own.
+pub const RUNNING_ENV: &str = "DEVLANES_DEBUG_VERSION";
+
+/// The version this binary reports (`devlanes --version`) and updates from:
+/// [`devlanes_version::VERSION`], or in a debug build [`RUNNING_ENV`] when it
+/// holds a release version.
+pub fn running() -> &'static str {
+    if !cfg!(debug_assertions) {
+        return devlanes_version::VERSION;
+    }
+    static RUNNING: OnceLock<String> = OnceLock::new();
+    RUNNING.get_or_init(|| {
+        std::env::var(RUNNING_ENV)
+            .ok()
+            .filter(|version| Version::parse_release(version).is_some())
+            .unwrap_or_else(|| devlanes_version::VERSION.to_owned())
+    })
+}
 
 /// A parsed `MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]`, with an optional leading `v`.
 #[derive(Debug, Clone, PartialEq, Eq)]

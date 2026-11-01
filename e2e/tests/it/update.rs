@@ -1,8 +1,9 @@
 //! `devlanes update` against a fake release of this same binary, served from a
 //! directory through the debug-only `DEVLANES_UPDATE_BASE_URL`. A copy of the
 //! binary in its own directory stands in for an `install.sh` install. The
-//! release has the running version, so the test pins it with `--version`
-//! (a pinned version is installed even when it is the one running).
+//! release has the binary's own version, and `devlanes update` installs only a
+//! newer one, so the update runs with the debug-only `DEVLANES_DEBUG_VERSION`,
+//! which makes the installed copy report an older version.
 
 use std::{
     env::consts::EXE_SUFFIX,
@@ -15,6 +16,7 @@ use devlanes_e2e::{Error, Lab, Result, alive, bin_dir, lane, pid, start_time, un
 use devlanes_update::{
     check::BASE_URL_ENV,
     install::{TARGET, sha256_file},
+    version::RUNNING_ENV,
 };
 use serde_json::json;
 
@@ -47,6 +49,19 @@ fn update_installs_the_release_and_restarts_the_daemon_with_its_lanes() -> Resul
     let version = reported_version(&entry)?;
     let site = root.path().join("site");
     publish(&site, &built, &version)?;
+    let latest = site.join("releases/latest/download");
+    std::fs::create_dir_all(&latest)?;
+    std::fs::write(
+        latest.join("release-manifest.json"),
+        json!({"version": version}).to_string(),
+    )?;
+    // The daemon runs the real version, which is the latest, so its checks are
+    // off and `devlanes update` reads the release itself, from the older
+    // version it pretends to run.
+    std::fs::write(
+        lab.home().join("config.yaml"),
+        "updates:\n  mode: disable\n",
+    )?;
 
     // The daemon starts from the installed copy, as it would after install.sh.
     let started = lab.run(
@@ -65,12 +80,10 @@ fn update_installs_the_release_and_restarts_the_daemon_with_its_lanes() -> Resul
     #[cfg(windows)]
     let identity = devlanes_sys_windows::file::path_identity(&entry)?;
 
-    let mut update = lab.command_with(
-        &entry,
-        lab.repo(),
-        &["update", "--yes", "--version", &version],
-    )?;
-    update.env(BASE_URL_ENV, file_url(&site));
+    let mut update = lab.command_with(&entry, lab.repo(), &["update", "--yes"])?;
+    update
+        .env(BASE_URL_ENV, file_url(&site))
+        .env(RUNNING_ENV, "0.0.1");
     let output = lab.run(update, UPDATE_TIMEOUT)?;
     let restarted = output.expect_code(0)?.json()?;
     assert_eq!(

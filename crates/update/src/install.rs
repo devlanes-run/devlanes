@@ -192,9 +192,8 @@ impl Plan {
 /// What `devlanes update` installs over the running build.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    /// Install this release. `older` when it is older than the running build,
-    /// which only `update --stable --force` asks for.
-    Install { version: String, older: bool },
+    /// Install this release, which is newer than the running build.
+    Install { version: String },
     /// The running build is this release.
     Current,
     /// The release is older than the running build, so nothing is installed.
@@ -202,23 +201,16 @@ pub enum Target {
 }
 
 /// What `devlanes update` installs over the running build `running` when
-/// `wanted` is the release asked for or the latest one of the channel it
-/// follows. An older release is installed only with `allow_older` (`update
-/// --stable --force`), since its devlanes may refuse the state database a
-/// newer build migrated.
-pub fn target(running: &str, wanted: &str, allow_older: bool) -> Target {
+/// `wanted` is the latest release of the channel it follows. Only a newer
+/// release installs, since an older devlanes may refuse the state database
+/// a newer build migrated.
+pub fn target(running: &str, wanted: &str) -> Target {
     if is_newer(wanted, running) {
         Target::Install {
             version: wanted.to_owned(),
-            older: false,
         }
     } else if !is_newer(running, wanted) {
         Target::Current
-    } else if allow_older {
-        Target::Install {
-            version: wanted.to_owned(),
-            older: true,
-        }
     } else {
         Target::Older
     }
@@ -665,7 +657,10 @@ pub async fn stage(
     ])
     .await?;
     let files = folder.join(&top);
-    let reported = reported_version(&files.join(BINARIES[0])).await;
+    let mut probe = tokio::process::Command::new(files.join(BINARIES[0]));
+    // The release reports its own version, not the one this process pretends to run.
+    probe.env_remove(crate::version::RUNNING_ENV);
+    let reported = probe_version(probe).await;
     if reported.as_deref() != Some(entry.version.as_str()) {
         return Err(InstallError::Release(format!(
             "the {} archive's devlanes reports {}",
@@ -851,9 +846,15 @@ pub fn sha256_file(path: &Path) -> Result<String, InstallError> {
 /// The version `<exe> --version` prints after `devlanes `, or `None` when it
 /// does not run or prints something else.
 pub async fn reported_version(exe: &Path) -> Option<String> {
+    probe_version(tokio::process::Command::new(exe)).await
+}
+
+/// The version `command --version` prints after `devlanes `, as
+/// [`reported_version`] reads it.
+async fn probe_version(mut command: tokio::process::Command) -> Option<String> {
     let output = tokio::time::timeout(
         TOOL_TIMEOUT,
-        tokio::process::Command::new(exe)
+        command
             .arg("--version")
             .stdin(Stdio::null())
             .stderr(Stdio::null())
@@ -1274,19 +1275,18 @@ mod tests {
         );
     }
 
-    /// `update --next` and `update --stable [--force]` by install method,
-    /// running channel, target channel and whether the channel's latest
-    /// release is newer than the running build. `None` is a method that
-    /// cannot follow the channel.
+    /// `update --next` and `update --stable` by install method, running
+    /// channel, target channel and whether the channel's latest release is
+    /// newer than the running build. `None` is a method that cannot follow
+    /// the channel.
     #[test]
     fn channel_switches() {
-        let decide = |method: &InstallMethod, running, channel, latest, force| {
-            follows(method, channel).then(|| target(running, latest, force))
+        let decide = |method: &InstallMethod, running, channel, latest| {
+            follows(method, channel).then(|| target(running, latest))
         };
-        let install = |version: &str, older| {
+        let install = |version: &str| {
             Some(Target::Install {
                 version: version.into(),
-                older,
             })
         };
         let script = InstallMethod::Script(PathBuf::from("/opt/acme/bin"));
@@ -1303,62 +1303,34 @@ mod tests {
             InstallMethod::Source,
         ];
         let (stable, next) = (Channel::Stable, Channel::Next);
-        for (running, channel, latest, force, expected) in [
+        for (running, channel, latest, expected) in [
             // Stable to next: the next build of the coming release is newer.
-            (
-                "0.9.0",
-                next,
-                "0.9.1-next.14",
-                false,
-                install("0.9.1-next.14", false),
-            ),
+            ("0.9.0", next, "0.9.1-next.14", install("0.9.1-next.14")),
             // Next has not moved past the stable release yet.
-            ("0.9.1", next, "0.9.1-next.14", false, Some(Target::Older)),
+            ("0.9.1", next, "0.9.1-next.14", Some(Target::Older)),
             (
                 "0.9.1-next.14",
                 next,
                 "0.9.1-next.14",
-                false,
                 Some(Target::Current),
             ),
             (
                 "0.9.1-next.14",
                 next,
                 "0.9.1-next.15",
-                false,
-                install("0.9.1-next.15", false),
+                install("0.9.1-next.15"),
             ),
             // Next to stable once the release of that build shipped.
-            (
-                "0.9.1-next.14",
-                stable,
-                "0.9.1",
-                false,
-                install("0.9.1", false),
-            ),
-            (
-                "0.9.1-next.14",
-                stable,
-                "0.9.1",
-                true,
-                install("0.9.1", false),
-            ),
-            // Before it ships the build stays, unless forced.
-            ("0.9.1-next.14", stable, "0.9.0", false, Some(Target::Older)),
-            (
-                "0.9.1-next.14",
-                stable,
-                "0.9.0",
-                true,
-                install("0.9.0", true),
-            ),
+            ("0.9.1-next.14", stable, "0.9.1", install("0.9.1")),
+            // Before it ships the build stays.
+            ("0.9.1-next.14", stable, "0.9.0", Some(Target::Older)),
             // Stable to stable is a plain update.
-            ("0.9.0", stable, "0.9.1", false, install("0.9.1", false)),
-            ("0.9.1", stable, "0.9.1", true, Some(Target::Current)),
+            ("0.9.0", stable, "0.9.1", install("0.9.1")),
+            ("0.9.1", stable, "0.9.1", Some(Target::Current)),
         ] {
-            let case = format!("{running} -> {} {latest} force={force}", channel.as_str());
+            let case = format!("{running} -> {} {latest}", channel.as_str());
             assert_eq!(
-                decide(&script, running, channel, latest, force),
+                decide(&script, running, channel, latest),
                 expected,
                 "{case}"
             );
@@ -1369,7 +1341,7 @@ mod tests {
                     expected.clone()
                 };
                 assert_eq!(
-                    decide(method, running, channel, latest, force),
+                    decide(method, running, channel, latest),
                     expected,
                     "{method:?}: {case}"
                 );
@@ -1377,19 +1349,12 @@ mod tests {
         }
     }
 
-    /// Only a forced switch to stable installs an older release.
+    /// An older release never installs.
     #[test]
-    fn older_releases_need_force() {
-        assert_eq!(target("0.9.1", "0.9.0", false), Target::Older);
-        assert_eq!(target("0.9.1", "0.9.1-next.3", false), Target::Older);
-        assert_eq!(
-            target("0.9.1", "0.9.0", true),
-            Target::Install {
-                version: "0.9.0".into(),
-                older: true
-            }
-        );
-        assert_eq!(target("0.9.1", "v0.9.1", false), Target::Current);
+    fn older_releases_never_install() {
+        assert_eq!(target("0.9.1", "0.9.0"), Target::Older);
+        assert_eq!(target("0.9.1", "0.9.1-next.3"), Target::Older);
+        assert_eq!(target("0.9.1", "v0.9.1"), Target::Current);
     }
 
     #[test]

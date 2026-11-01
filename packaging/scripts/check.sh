@@ -35,14 +35,12 @@ printf '#!/bin/sh\necho "%s %s"\n' devlanes-hosts "$version" >"$work/bin/devlane
 # DEVLANES_CHECK_LOG is set: then it logs those calls there, answers the probes
 # (`update --help`, `daemon status`) and exits with DEVLANES_CHECK_EXIT (default 0)
 # otherwise. Without it, it fails them like a devlanes from before `devlanes update`
-# with no daemon. DEVLANES_CHECK_NO_UPDATE=1 keeps the daemon but fails `update`
-# unlogged, like a release from before `devlanes update` whose daemon runs.
+# with no daemon.
 cat >"$work/bin/devlanes" <<EOF
 #!/bin/sh
 case \${1:-} in
 update | daemon)
 	[ -n "\${DEVLANES_CHECK_LOG:-}" ] || exit 2
-	if [ "\$1" = update ] && [ -n "\${DEVLANES_CHECK_NO_UPDATE:-}" ]; then exit 2; fi
 	printf '%s\n' "\$*" >>"\$DEVLANES_CHECK_LOG"
 	case "\$*" in
 	'update --help' | 'daemon status') exit 0 ;;
@@ -188,69 +186,55 @@ DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installe
 [ "$("$work/installed/devlanes")" = "devlanes $version" ]
 [ -x "$work/installed/devlanes-hosts" ]
 
-# The same through options, as `curl | sh -s -- ...` passes them. The pinned version's
-# folder is the only one present, so a run that reads latest/ fails.
+# The same through options, as `curl | sh -s -- ...` passes them.
 install_with() {
 	DEVLANES_INSTALL_BASE_URL="file://$release" DEVLANES_INSTALL_DIR="$work/installed-opt" sh -s -- "$@" <"$root/install.sh"
 }
-mv "$release/latest" "$work/latest"
-install_with --version "$version" >/dev/null
-install_with --version="v$version" >/dev/null
-DEVLANES_VERSION=0.0.0 install_with -v "$version" >/dev/null
+install_with >/dev/null
 [ "$("$work/installed-opt/devlanes")" = "devlanes $version" ]
-mv "$work/latest" "$release/latest"
 install_with -d "$work/installed-short" >/dev/null
 [ "$("$work/installed-short/devlanes")" = "devlanes $version" ]
+install_with --dir="$work/installed-long" >/dev/null
+[ "$("$work/installed-long/devlanes")" = "devlanes $version" ]
 [ "$(sh "$root/install.sh" --help)" = "$(sed -n "s/^usage='\(.*\)'$/\1/p" "$root/install.sh")" ]
-for wrong in '--channel next' '--channel=next' '-c next' '--version next' '--version 1.2' '--release 1' '--version' \
-	"--uninstall --version $version" '--uninstall --force'; do
+for wrong in '--channel next' '--channel=next' '-c next' '--release 1' '--dir' '--uninstall --force'; do
 	# shellcheck disable=SC2086 # each case is several words
 	if install_with $wrong >/dev/null 2>&1; then
 		echo "install.sh accepted $wrong" >&2
 		exit 1
 	fi
 done
-# `next` comes from `devlanes update --next` now.
-case $(DEVLANES_VERSION=next install_with 2>&1 || true) in
-*'install a stable release, then run devlanes update --next'*) ;;
-*)
-	echo "install.sh accepted DEVLANES_VERSION=next" >&2
-	exit 1
-	;;
-esac
+# Only the latest release installs; a version, by option or variable, is refused
+# with where to get one.
+for pinned in "--version $version" "--version=$version" "-v $version" '--version' "DEVLANES_VERSION=$version"; do
+	status=0
+	if [ "$pinned" = "DEVLANES_VERSION=$version" ]; then
+		refused=$(DEVLANES_VERSION=$version install_with -d "$work/installed-pinned" 2>&1) || status=$?
+	else
+		# shellcheck disable=SC2086 # each case is several words
+		refused=$(install_with -d "$work/installed-pinned" $pinned 2>&1) || status=$?
+	fi
+	if [ "$status" -eq 0 ] || [ -e "$work/installed-pinned" ]; then
+		echo "install.sh accepted $pinned" >&2
+		exit 1
+	fi
+	case $refused in
+	"devlanes install: devlanes installs only the latest release; for a specific version use npm (npm install -g devlanes@X.Y.Z) or PyPI (uv tool install devlanes==X.Y.Z)") ;;
+	*)
+		echo "install.sh with $pinned: $refused" >&2
+		exit 1
+		;;
+	esac
+done
 
 # A devlanes in the target directory that has `update` updates itself; install.sh
 # passes its exit status on and installs nothing.
 log=$work/check.log
 status=0
-DEVLANES_CHECK_LOG=$log DEVLANES_CHECK_EXIT=7 install_with --version 9.9.9 >/dev/null 2>&1 || status=$?
+DEVLANES_CHECK_LOG=$log DEVLANES_CHECK_EXIT=7 install_with >/dev/null 2>&1 || status=$?
 [ "$status" -eq 7 ]
 [ "$(cat "$log")" = "update --help
-update --yes --version 9.9.9" ]
-rm "$log"
-DEVLANES_CHECK_LOG=$log install_with >/dev/null
-[ "$(tail -n 1 "$log")" = "update --yes" ]
-rm "$log"
-
-# Not for a release older than that devlanes, which `devlanes update` refuses:
-# install.sh warns about the state database, installs it itself, then restarts the
-# daemon into it.
-older=$work/installed-older
-mkdir "$older"
-sed "s/devlanes $version/devlanes 9.9.9/" "$work/bin/devlanes" >"$older/devlanes"
-chmod 755 "$older/devlanes"
-warned=$(DEVLANES_CHECK_LOG=$log install_with -d "$older" --version "$version" 2>&1 >/dev/null)
-[ "$("$older/devlanes")" = "devlanes $version" ]
-[ "$(cat "$log")" = "daemon status
-update --help
-update --finish" ]
-case $warned in
-*"warning: devlanes $version is older than the installed 9.9.9."*"devlanes daemon reset-state empties it"*) ;;
-*)
-	echo "install.sh of an older release: $warned" >&2
-	exit 1
-	;;
-esac
+update --yes" ]
 rm "$log"
 
 # Nor into a directory this user cannot write to, where only install.sh may use
@@ -277,14 +261,8 @@ fi
 # A fresh install while a daemon answers restarts it into the new version.
 DEVLANES_CHECK_LOG=$log install_with -d "$work/installed-finish" >/dev/null
 [ "$(cat "$log")" = "daemon status
-update --help
 update --finish" ]
 [ "$("$work/installed-finish/devlanes")" = "devlanes $version" ]
-rm "$log"
-# A release without `update` restarts it with `daemon restart`.
-DEVLANES_CHECK_LOG=$log DEVLANES_CHECK_NO_UPDATE=1 install_with -d "$work/installed-restart" >/dev/null
-[ "$(cat "$log")" = "daemon status
-daemon restart --yes" ]
 rm "$log"
 # A failed restart fails the install and says how to restart.
 status=0

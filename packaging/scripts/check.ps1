@@ -15,9 +15,9 @@ exits with 0 for both, so install.ps1 takes it for a devlanes that updates itsel
 and whose daemon runs; fed `echo %CMDCMDLINE%` on stdin, it prints the arguments
 install.ps1 ran it with.
 
-Each PowerShell installs a pinned version, then the latest one while the installed
-devlanes.exe runs, which must be renamed to devlanes.exe.old-* and keep running,
-then once more after it ended, which deletes the old copy. install.ps1 always puts
+Each PowerShell installs the first version as the latest one, then the second while
+the installed devlanes.exe runs, which must be renamed to devlanes.exe.old-* and keep
+running, then once more after it ended, which deletes the old copy. install.ps1 always puts
 its directory in the user PATH, so the check saves the user PATH value and kind
 first and writes them back at the end. The children get a PATH without any
 devlanes, so one installed on this machine does not count as another installer's.
@@ -242,26 +242,15 @@ Assert-True (Test-DevlanesCommand $cmd @('/d', '/c', 'exit', '0')) 'a command th
 Assert-True (-not (Test-DevlanesCommand $cmd @('/d', '/c', 'exit', '3'))) 'a command that exits with 3'
 Assert-True (-not (Test-DevlanesCommand 'C:\nonexistent\devlanes.exe' @('update', '--help'))) 'a program that does not start'
 Assert-Equal (Resolve-DevlanesLink $cmd) $cmd 'a path without links'
-Assert-Equal (Get-DevlanesInstalledVersion $cmd) $null 'the version of a program that is not devlanes'
-Assert-Equal (Get-DevlanesInstalledVersion 'C:\nonexistent\devlanes.exe') $null 'the version of a program that does not start'
-foreach ($case in @(
-        @('0.9.0', '0.9.1', $true), @('0.9.1', '0.9.0', $false), @('0.9.1', '0.9.1', $false),
-        @('0.9.9', '0.10.0', $true), @('1.0.0-rc.1', '1.0.0', $true), @('1.0.0', '1.0.0-rc.1', $false),
-        @('1.0.0-rc.2', '1.0.0-rc.10', $true), @('1.0.0-alpha', '1.0.0-alpha.1', $true),
-        @('1.0.0-1', '1.0.0-alpha', $true), @('1.0.0-beta', '1.0.0-alpha.1', $false))) {
-    Assert-Equal (Test-DevlanesOlderVersion $case[0] $case[1]) $case[2] "$($case[0]) before $($case[1])"
-}
 
 $sums = "$('a' * 64)  devlanes-1.2.3-x86_64-unknown-linux-gnu.tar.gz`n$('b' * 64)  devlanes-1.2.3-x86_64-pc-windows-msvc.zip`n"
-$found = Find-DevlanesArchive $sums 'x86_64-pc-windows-msvc' '' 'SHA256SUMS'
+$found = Find-DevlanesArchive $sums 'x86_64-pc-windows-msvc' 'SHA256SUMS'
 Assert-Equal $found.Version '1.2.3' 'version from SHA256SUMS'
 Assert-Equal $found.Hash ('b' * 64) 'checksum from SHA256SUMS'
 Assert-Equal $found.Archive 'devlanes-1.2.3-x86_64-pc-windows-msvc.zip' 'archive from SHA256SUMS'
-foreach ($case in @(@('x86_64-pc-windows-msvc', '1.2.4'), @('aarch64-pc-windows-msvc', ''))) {
-    $refused = $false
-    try { Find-DevlanesArchive $sums $case[0] $case[1] 'SHA256SUMS' | Out-Null } catch { $refused = $true }
-    Assert-True $refused "SHA256SUMS lookup of $($case -join ' ') must fail"
-}
+$refused = $false
+try { Find-DevlanesArchive $sums 'aarch64-pc-windows-msvc' 'SHA256SUMS' | Out-Null } catch { $refused = $true }
+Assert-True $refused 'SHA256SUMS lookup of a missing target must fail'
 
 $shells = @(
     (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'),
@@ -281,50 +270,31 @@ try {
     Assert-True (-not (Test-DevlanesWritable (Join-Path $work 'missing'))) 'a directory that does not exist'
     Assert-Equal @(Get-ChildItem -LiteralPath $work -Force).Count 0 'the write probe is deleted'
     # install.ps1 hands off to a devlanes.exe that has `update` (cmd.exe exits with 0
-    # for it) unless it must install itself: an older release than that devlanes, which
-    # `devlanes update` refuses, or a directory it cannot write to.
+    # for it) unless it cannot write to its directory.
     $handing = Join-Path $work 'handing'
     New-Item -ItemType Directory -Path $handing | Out-Null
     $handingExe = Join-Path $handing 'devlanes.exe'
     Copy-Item -LiteralPath $cmd -Destination $handingExe
-    Assert-True (Test-DevlanesHandOff $handingExe $handing '0.0.1') 'hand off when the installed version is unknown'
-    Assert-True (-not (Test-DevlanesHandOff (Join-Path $handing 'missing.exe') $handing '')) 'no devlanes.exe to hand off to'
+    Assert-True (Test-DevlanesHandOff $handingExe $handing) 'hand off to a devlanes.exe with update'
+    Assert-True (-not (Test-DevlanesHandOff (Join-Path $handing 'missing.exe') $handing)) 'no devlanes.exe to hand off to'
     & {
-        function Get-DevlanesInstalledVersion { param([string]$Exe) if ($Exe) { '9.9.9' } }
-        Assert-True (Test-DevlanesHandOff $handingExe $handing '') 'hand off for the latest release'
-        Assert-True (Test-DevlanesHandOff $handingExe $handing '9.9.9') 'hand off for the installed version'
-        Assert-True (Test-DevlanesHandOff $handingExe $handing '10.0.0') 'hand off for a newer version'
-        Assert-True (-not (Test-DevlanesHandOff $handingExe $handing '0.0.1')) 'install an older version here'
-        Assert-True (-not (Test-DevlanesHandOff $handingExe $handing '9.9.9-rc.1')) 'install an older prerelease here'
         function Test-DevlanesWritable { param([string]$Directory) -not $Directory }
-        Assert-True (-not (Test-DevlanesHandOff $handingExe $handing '')) 'install into an unwritable directory here'
+        Assert-True (-not (Test-DevlanesHandOff $handingExe $handing)) 'install into an unwritable directory here'
     }
     Remove-Item -LiteralPath $handing -Recurse -Force
 
-    # An older release than the installed one is installed with the state database
-    # warning of `devlanes update --stable --force`.
-    & {
-        function Get-DevlanesInstalledVersion { param([string]$Exe) if ($Exe) { '9.9.9' } }
-        Assert-Equal (Get-DevlanesDowngradeWarning $cmd '') $null 'no downgrade warning for the latest release'
-        Assert-Equal (Get-DevlanesDowngradeWarning $cmd '9.9.9') $null 'no downgrade warning for the installed version'
-        Assert-Equal (Get-DevlanesDowngradeWarning (Join-Path $work 'missing.exe') '0.0.1') $null 'no downgrade warning without a devlanes.exe'
-        $warning = Get-DevlanesDowngradeWarning $cmd '0.0.1'
-        Assert-True ($warning -and $warning.StartsWith('devlanes 0.0.1 is older than the installed 9.9.9.') -and $warning.Contains('devlanes daemon reset-state')) "downgrade warning: $warning"
-    }
-
-    # After installing, a release without `update` restarts the daemon with `daemon
-    # restart --yes`, and a failed restart fails the install. The batch fake fails
-    # `update --help` and logs the other calls.
+    # After installing, `update --finish` restarts the daemon, and a failed restart
+    # fails the install. The batch fake logs its calls.
     $restarting = Join-Path $work 'restarting'
     New-Item -ItemType Directory -Path $restarting | Out-Null
-    $oldDevlanes = Join-Path $restarting 'devlanes.cmd'
+    $newDevlanes = Join-Path $restarting 'devlanes.cmd'
     $calls = Join-Path $restarting 'calls.txt'
-    [IO.File]::WriteAllText($oldDevlanes, "@if `"%1`"==`"update`" if `"%2`"==`"--help`" exit /b 2`r`n@echo %*>>`"%~dp0calls.txt`"`r`n@exit /b %DEVLANES_CHECK_EXIT%`r`n")
-    Invoke-DevlanesDaemonRestart -Exe $oldDevlanes -Version '0.0.1'
-    Assert-Equal ([IO.File]::ReadAllText($calls).Trim()) 'daemon restart --yes' 'a release without update restarts the daemon'
+    [IO.File]::WriteAllText($newDevlanes, "@echo %*>>`"%~dp0calls.txt`"`r`n@exit /b %DEVLANES_CHECK_EXIT%`r`n")
+    Invoke-DevlanesDaemonRestart -Exe $newDevlanes -Version '0.0.1'
+    Assert-Equal ([IO.File]::ReadAllText($calls).Trim()) 'update --finish' 'the new release restarts the daemon'
     $env:DEVLANES_CHECK_EXIT = '7'
     $refused = $null
-    try { Invoke-DevlanesDaemonRestart -Exe $oldDevlanes -Version '0.0.1' } catch { $refused = $_.Exception.Message } finally { $env:DEVLANES_CHECK_EXIT = $null }
+    try { Invoke-DevlanesDaemonRestart -Exe $newDevlanes -Version '0.0.1' } catch { $refused = $_.Exception.Message } finally { $env:DEVLANES_CHECK_EXIT = $null }
     Assert-Equal $refused 'devlanes install: the daemon did not restart into devlanes 0.0.1; run devlanes daemon restart' 'a failed restart'
     Remove-Item -LiteralPath $restarting -Recurse -Force
 
@@ -375,7 +345,8 @@ try {
     Assert-True ($shadow -ieq "$shadowing\devlanes.cmd") "devlanes before the install directory: $shadow"
     Assert-Equal (Find-DevlanesShadow "$behind;$shadowing" $behind) $null 'devlanes after the install directory'
 
-    # The release layout install.ps1 downloads from, with three versions; latest is the second.
+    # The release layout install.ps1 downloads from, with three versions; the check
+    # writes the SHA256SUMS of the one that is latest at each step.
     $release = Join-Path $work 'release'
     $latest = Join-Path $release 'latest/download'
     New-Item -ItemType Directory -Force -Path $latest | Out-Null
@@ -416,7 +387,7 @@ try {
         $lines[$version] = "$('0' * 64)  devlanes-$version-x86_64-unknown-linux-gnu.tar.gz`n$($hashes[0])  $name.zip`n"
         [IO.File]::WriteAllText((Join-Path $versioned 'SHA256SUMS'), $lines[$version])
     }
-    [IO.File]::WriteAllText((Join-Path $latest 'SHA256SUMS'), $lines[$versions[1]])
+    $sumsFile = Join-Path $latest 'SHA256SUMS'
 
     foreach ($shell in $shells) {
         $label = [IO.Path]::GetFileNameWithoutExtension($shell)
@@ -425,9 +396,9 @@ try {
         $environment = @{
             DEVLANES_INSTALL_BASE_URL = ([Uri]$release).AbsoluteUri
             DEVLANES_INSTALL_DIR = $installed
-            DEVLANES_VERSION = "v$($versions[0])"
             Path = $cleanPath
         }
+        [IO.File]::WriteAllText($sumsFile, $lines[$versions[0]])
 
         $run = Invoke-Child $shell "& '$installScript'" $environment
         Assert-Equal $run.Code 0 "$label, install.ps1 as a file: $($run.Output)"
@@ -462,8 +433,8 @@ try {
         $running = [Diagnostics.Process]::Start($start)
 
         # `irm | iex` runs the text in the caller's session, which must keep its own
-        # variables and gain no functions or variables; the latest release this time.
-        $environment.DEVLANES_VERSION = $null
+        # variables and gain no functions or variables; a newer release is latest now.
+        [IO.File]::WriteAllText($sumsFile, $lines[$versions[1]])
         $before = '$version = $dir = ''mine''
 $names = @(Get-Variable | ForEach-Object Name) + @(Get-ChildItem Function: | ForEach-Object Name)'
         $after = '$left = @(Get-Variable | ForEach-Object Name) + @(Get-ChildItem Function: | ForEach-Object Name) | Where-Object { $names -notcontains $_ -and $_ -ne ''names'' }
@@ -498,54 +469,52 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         Assert-Equal $run.Code 0 "$label, install.ps1 after the old copy stopped: $($run.Output)"
         Assert-Equal @(Get-ChildItem -LiteralPath $installed -Filter 'devlanes.exe.old-*').Count 0 "$label, old copies are deleted"
 
-        $sumsFile = Join-Path $latest 'SHA256SUMS'
         [IO.File]::WriteAllText($sumsFile, $lines[$versions[1]].Replace(($lines[$versions[1]] -split '\s+')[2], 'f' * 64))
         $run = Invoke-Child $shell "& '$installScript'" $environment
         Assert-True ($run.Code -ne 0 -and $run.Output.Contains('checksum mismatch')) "$label, a wrong checksum must fail: $($run.Output)"
         Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, a failed install keeps the installed file"
         [IO.File]::WriteAllText($sumsFile, $lines[$versions[1]])
 
-        # `next` is reached through `devlanes update --next`, not a version.
-        $environment.DEVLANES_VERSION = 'next'
-        $run = Invoke-Child $shell "& '$installScript'" $environment
-        Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output 'install a stable release, then run devlanes update --next')) "$label, DEVLANES_VERSION=next must fail: $($run.Output)"
-        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, DEVLANES_VERSION=next left the installation alone"
-        $environment.DEVLANES_VERSION = $null
-
-        # The same through options, as the documented `iex "& {$(irm ...)} -Version 0.4.0"`
-        # passes them; an option wins over the environment variable.
+        # Options, as the documented `iex "& {$(irm ...)} -Uninstall"` passes them.
         $withOptions = { param([string]$Options) "iex `"& {`$(Get-Content -Raw -LiteralPath '$installScript')} $Options`"" }
-        $run = Invoke-Child $shell (& $withOptions "-Version $($versions[0])") $environment
-        Assert-Equal $run.Code 0 "$label, -Version: $($run.Output)"
-        Assert-Equal (Get-FakeVersion $exe) $versions[0] "$label, -Version: $($run.Output)"
-        # Running the text as a script block passes options the same way.
-        $run = Invoke-Child $shell "& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '$installScript'))) -Version v$($versions[1])" $environment
-        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, -Version through a script block: $($run.Output)"
         $elsewhere = Join-Path $work "installed elsewhere by $label"
-        $run = Invoke-Child $shell (& $withOptions "-Version $($versions[0]) -Dir '$elsewhere'") $environment
-        Assert-Equal (Get-FakeVersion (Join-Path $elsewhere 'devlanes.exe')) $versions[0] "$label, -Dir: $($run.Output)"
-        # The check is the error text and an untouched installation.
+        $run = Invoke-Child $shell (& $withOptions "-Dir '$elsewhere'") $environment
+        Assert-Equal (Get-FakeVersion (Join-Path $elsewhere 'devlanes.exe')) $versions[1] "$label, -Dir: $($run.Output)"
+        # Running the text as a script block passes options the same way.
+        $inBlock = Join-Path $work "installed by a script block by $label"
+        $run = Invoke-Child $shell "& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '$installScript'))) -Dir '$inBlock'" $environment
+        Assert-Equal (Get-FakeVersion (Join-Path $inBlock 'devlanes.exe')) $versions[1] "$label, -Dir through a script block: $($run.Output)"
+        # The check is the error text and an untouched installation. Only the latest
+        # release installs, so a version by option or variable is refused.
+        $latestOnly = 'devlanes install: devlanes installs only the latest release; for a specific version use npm (npm install -g devlanes@X.Y.Z) or PyPI (uv tool install devlanes==X.Y.Z)'
         foreach ($wrong in @(
                 @('-Channel next', 'unknown option -Channel next'),
-                @('-Version next', 'next is no longer a version here'),
-                @('-Version 1.2', '1.2 is not a release version'))) {
+                @("-Version $($versions[0])", $latestOnly),
+                @("-Version:$($versions[0])", $latestOnly),
+                @("-v $($versions[0])", $latestOnly),
+                @('-Uninstall -Force', '-Uninstall takes no -Force'))) {
             $run = Invoke-Child $shell (& $withOptions $wrong[0]) $environment
-            Assert-True (Test-Say $run.Output $wrong[1]) "$label, install.ps1 accepted $($wrong[0]): $($run.Output)"
+            Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output $wrong[1])) "$label, install.ps1 accepted $($wrong[0]): $($run.Output)"
             Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, $($wrong[0]) left the installation alone"
         }
+        $pinned = $environment.Clone()
+        $pinned.DEVLANES_VERSION = $versions[0]
+        $run = Invoke-Child $shell "& '$installScript'" $pinned
+        Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output $latestOnly)) "$label, DEVLANES_VERSION must fail: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, DEVLANES_VERSION left the installation alone"
 
         # A devlanes.exe that has `update` (the cmd.exe fake) updates itself: install.ps1
-        # runs `devlanes update --yes --version X` from it, in this console, and passes its
-        # exit code on. Nothing is downloaded, so the release need not exist.
+        # runs `devlanes update --yes` from it, in this console, and passes its exit code
+        # on. Nothing is downloaded.
         $delegating = Join-Path $work "delegating by $label"
         New-Item -ItemType Directory -Path $delegating | Out-Null
         $updater = Join-Path $delegating 'devlanes.exe'
         Copy-Item -LiteralPath (Join-Path $work "bin-$($versions[2])/devlanes.exe") -Destination $updater
         $delegated = $environment.Clone()
         $delegated.DEVLANES_INSTALL_DIR = $delegating
-        $run = Invoke-Child $shell "& '$installScript' -Version v9.9.9; exit `$LASTEXITCODE" $delegated "echo %CMDCMDLINE%`r`nexit 7`r`n"
+        $run = Invoke-Child $shell "& '$installScript'; exit `$LASTEXITCODE" $delegated "echo %CMDCMDLINE%`r`nexit 7`r`n"
         Assert-Equal $run.Code 7 "$label, the exit code of devlanes update as a file: $($run.Output)"
-        Assert-True ($run.Output.Contains('" update --yes --version 9.9.9')) "$label, devlanes update --yes --version: $($run.Output)"
+        Assert-True ($run.Output -match '" update --yes *(\r?\n|$)') "$label, devlanes update --yes: $($run.Output)"
         Assert-True (-not $run.Output.Contains('Installed devlanes')) "$label, a delegated update installs nothing itself: $($run.Output)"
         Assert-Equal (Get-FakeVersion $updater) $versions[2] "$label, delegation left the file to devlanes update"
         $run = Invoke-Child $shell (& $withOptions '') $delegated "echo %CMDCMDLINE%`r`nexit 7`r`n"
@@ -555,9 +524,9 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
 
         # A fresh install while a daemon answers (the cmd.exe fake says so) restarts it
         # into the new version with `devlanes update --finish`.
+        [IO.File]::WriteAllText($sumsFile, $lines[$versions[2]])
         $finishing = $environment.Clone()
         $finishing.DEVLANES_INSTALL_DIR = Join-Path $work "finishing by $label"
-        $finishing.DEVLANES_VERSION = $versions[2]
         $run = Invoke-Child $shell "& '$installScript'" $finishing "echo %CMDCMDLINE%`r`nexit 0`r`n"
         Assert-Equal $run.Code 0 "$label, install with a daemon running: $($run.Output)"
         Assert-True ($run.Output.Contains("Installed devlanes $($versions[2])") -and $run.Output.Contains('" update --finish')) "$label, devlanes update --finish after the install: $($run.Output)"
@@ -566,6 +535,7 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         $finishing.DEVLANES_INSTALL_DIR = Join-Path $work "failing restart by $label"
         $run = Invoke-Child $shell "& '$installScript'" $finishing "exit 7`r`n"
         Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output "the daemon did not restart into devlanes $($versions[2]); run devlanes daemon restart")) "$label, a failed restart: $($run.Output)"
+        [IO.File]::WriteAllText($sumsFile, $lines[$versions[1]])
 
         # A devlanes first on PATH that npm installed stops the install, which names it;
         # -Force installs anyway.
@@ -600,8 +570,6 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         Assert-True (-not (Test-Path -LiteralPath $elsewhere)) "$label, -Uninstall removed ${elsewhere}: $($run.Output)"
         Assert-True (-not (Get-UserPath).Value.Contains($elsewhere)) "$label, -Uninstall removed the user PATH entry"
         Assert-True ($run.Output.Contains("stays in $(Join-Path $work 'data')")) "$label, -Uninstall names the data folder: $($run.Output)"
-        $run = Invoke-Child $shell (& $withOptions "-Uninstall -Version $($versions[0])") $environment
-        Assert-True (Test-Say $run.Output '-Uninstall takes no -Version or -Force') "$label, -Uninstall with -Version: $($run.Output)"
 
         Restore-UserPath $pathBefore
     }

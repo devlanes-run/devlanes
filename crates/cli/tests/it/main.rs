@@ -497,18 +497,9 @@ fn setup_flags_pick_the_action() {
 
 #[test]
 fn update_flags_pick_the_action() {
-    let install = |version: Option<&str>, yes| UpdateAction::Install {
-        version: version.map(str::to_owned),
-        yes,
-    };
     for (args, expected) in [
-        (vec![], install(None, false)),
-        (vec!["--yes"], install(None, true)),
-        (vec!["--version", "0.9.1"], install(Some("0.9.1"), false)),
-        (
-            vec!["--version", "0.9.1", "--yes"],
-            install(Some("0.9.1"), true),
-        ),
+        (vec![], UpdateAction::Install { yes: false }),
+        (vec!["--yes"], UpdateAction::Install { yes: true }),
         (vec!["--check"], UpdateAction::Check),
         (vec!["--finish"], UpdateAction::Finish),
         (vec!["--notes"], UpdateAction::Notes),
@@ -529,14 +520,14 @@ fn update_flags_pick_the_action() {
         (
             vec!["--stable"],
             UpdateAction::Switch {
-                channel: ChannelSwitch::Stable { force: false },
+                channel: ChannelSwitch::Stable,
                 yes: false,
             },
         ),
         (
-            vec!["--stable", "--force", "--yes"],
+            vec!["--stable", "--yes"],
             UpdateAction::Switch {
-                channel: ChannelSwitch::Stable { force: true },
+                channel: ChannelSwitch::Stable,
                 yes: true,
             },
         ),
@@ -548,28 +539,31 @@ fn update_flags_pick_the_action() {
         }
     }
     for refused in [
-        &["update", "--check", "--version", "0.9.1"][..],
-        &["update", "--finish", "--version", "0.9.1"],
-        &["update", "--check", "--finish"],
+        &["update", "--check", "--finish"][..],
         &["update", "--notes", "--check"],
-        &["update", "--notes", "--version", "0.9.1"],
-        &["update", "--version"],
         &["update", "--next", "--stable"],
-        &["update", "--next", "--version", "0.9.1"],
-        &["update", "--stable", "--version", "0.9.1"],
         &["update", "--next", "--check"],
         &["update", "--stable", "--notes"],
         &["update", "--next", "--finish"],
-        &["update", "--force"],
-        &["update", "--next", "--force"],
-        &["update", "--force", "--version", "0.9.1"],
-        &["update", "--force", "--check"],
-        &["update", "--force", "--notes"],
+        &["update", "--stable", "--finish"],
     ] {
         assert!(
             Cli::try_parse_from(std::iter::once("devlanes").chain(refused.iter().copied()))
                 .is_err(),
             "{refused:?}"
+        );
+    }
+    // Only the latest release installs: no option picks another one.
+    for removed in [
+        &["update", "--version", "0.9.1"][..],
+        &["update", "--stable", "--force"],
+    ] {
+        let error = Cli::try_parse_from(std::iter::once("devlanes").chain(removed.iter().copied()))
+            .expect_err("removed option");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::UnknownArgument,
+            "{removed:?}"
         );
     }
 }

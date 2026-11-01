@@ -3,7 +3,7 @@
 //! notes, installing a release the way devlanes was installed, and the
 //! notices clients show. The daemon finds new releases and, with
 //! `updates.mode: auto`, installs patch releases; `devlanes update` installs
-//! any release.
+//! the latest release when it is newer.
 
 pub mod check;
 pub mod install;

@@ -1195,14 +1195,6 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
                 Some(Hint(format!("run {}", steps.join(", then ")))),
             )
         }
-        "update_older" => (
-            format!(
-                "devlanes {} is older than this devlanes ({}), so update does not install it",
-                field(data, "version"),
-                field(data, "running")
-            ),
-            None,
-        ),
         code @ ("client_not_found" | "client_ambiguous") => {
             let client = text(data, "client");
             let ids: Vec<String> = list(data, "candidates")

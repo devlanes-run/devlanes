@@ -28,7 +28,7 @@ let due = log.due(&update_key(latest), devlanes_update::now_ms());
 - `update_command` is the command a notice names: `devlanes update` where devlanes installs releases itself, else `InstallMethod::upgrade_command`, the install's own command for a person to run. `describe` names the install for `doctor`.
 - `InstallMethod::entry` is the path that runs this install after an update, and `spawn_exe()` is the executable to start for a daemon or a login service.
 - `InstallMethod::current_with_entry()` is the method and entry path of the running binary, for `doctor`.
-- `version::Version` and `version::is_newer` order release versions by semver; `version::bump` says whether a newer release is a patch or a minor one.
+- `version::Version` and `version::is_newer` order release versions by semver; `version::bump` says whether a newer release is a patch or a minor one. `version::running` is the version this binary reports and updates from.
 - `check::Source::for_method` picks the registry an install reads its latest version from (`GitHub`, `Npm`, `PyPi`, `Homebrew`), `check::latest` reads it with `curl`, and `check::release_notes` reads a release's `CHANGELOG.md`. `check::Urls` holds the addresses, which tests replace.
 - `notes::parse` reads devlanes' `CHANGELOG.md` into releases and entries, and `notes::between` picks the releases after one version up to another. It uses only the standard library, so the `devlanes` build script embeds the changelog with it. `notes::WhatsNew` is what a "What's new" shows, minor entries first.
 - `whats_new_on_start` decides whether opening devlanes shows "What's new" from the version `NoticeLog` saw last, and `claim_whats_new` applies it under the update lock so only one TUI shows it.
@@ -39,7 +39,7 @@ let due = log.due(&update_key(latest), devlanes_update::now_ms());
 
 ## Test releases
 
-Debug builds read every release address under `DEVLANES_UPDATE_BASE_URL` when it is set (`file://` included), laid out like GitHub's `releases/download/v<version>/`, and the daemon checks for releases there even though debug builds otherwise never check. Release builds ignore it.
+Debug builds read every release address under `DEVLANES_UPDATE_BASE_URL` when it is set (`file://` included), laid out like GitHub's `releases/download/v<version>/`, and the daemon checks for releases there even though debug builds otherwise never check. `DEVLANES_DEBUG_VERSION` makes a debug build report and update from that version instead of its own, so a test can publish a release of the same binary and have `devlanes update` install it, which takes only a newer release; the staged release and the binary `update` hands over to run without it. Release builds ignore both.
 
 ## Project dependencies
 

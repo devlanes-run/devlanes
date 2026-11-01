@@ -71,7 +71,7 @@ devlanes debug bundle -- start api
 
 ## Updates
 
-The daemon checks for new releases every 4 hours and when the TUI opens (`updates.mode` in `config.yaml`: `disable`, `notify` or `auto`). `devlanes update`, or `U` in the TUI, installs the latest release the way devlanes was installed and restarts the daemon. `devlanes uninstall` removes devlanes. [Updates](../../docs/guides/updates.md) covers channels, background installs, Windows and the install scripts.
+The daemon checks for new releases every 4 hours and when the TUI opens (`updates.mode` in `config.yaml`: `disable`, `notify` or `auto`). `devlanes update`, or `U` in the TUI, installs the latest release the way devlanes was installed and restarts the daemon; it never installs an older one, and `install.sh` and `install.ps1` take no version either (npm and PyPI install a given release: `npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z`). `devlanes update --next` follows the latest build of `main` after a script install, and `devlanes update --stable` goes back. `devlanes uninstall` removes devlanes. [Updates](../../docs/guides/updates.md) covers channels, background installs, Windows and the install scripts.
 
 ## License
 
