@@ -23,7 +23,7 @@ pub mod sync;
 
 pub use client::{Applied, HelperVersion, HostsClient, HostsError};
 pub use devlanes_hosts_helper::names::Suffixes;
-pub use devlanes_hosts_helper::{INSTALL_PATH, PROTOCOL, SUDOERS_PATH};
+pub use devlanes_hosts_helper::{INSTALL_PATH, PROTOCOL, REVISION, SUDOERS_PATH};
 pub use exec::{
     CommandOutput, CommandSpec, Executor, FileInfo, FileKind, FsProbe, SystemExecutor, SystemFs,
 };

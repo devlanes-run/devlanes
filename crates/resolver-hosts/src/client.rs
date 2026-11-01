@@ -116,12 +116,15 @@ pub struct HelperVersion {
     pub version: String,
     /// Protocol number.
     pub protocol: u32,
+    /// Behaviour revision; 1 for helpers that predate it.
+    pub revision: u32,
     /// `release` or `debug`.
     pub build: String,
 }
 
 impl HelperVersion {
-    /// Parses `devlanes-hosts <version> protocol=<n> build=<profile>`.
+    /// Parses `devlanes-hosts <version> protocol=<n> revision=<n> build=<profile>`.
+    /// Helpers from before revisions print no `revision=`; they are revision 1.
     pub fn parse(line: &str) -> Option<Self> {
         let mut parts = line.split_whitespace();
         if parts.next()? != "devlanes-hosts" {
@@ -129,10 +132,19 @@ impl HelperVersion {
         }
         let version = parts.next()?.to_owned();
         let protocol = parts.next()?.strip_prefix("protocol=")?.parse().ok()?;
-        let build = parts.next()?.strip_prefix("build=")?.to_owned();
+        let mut next = parts.next()?;
+        let revision = match next.strip_prefix("revision=") {
+            Some(revision) => {
+                next = parts.next()?;
+                revision.parse().ok()?
+            }
+            None => 1,
+        };
+        let build = next.strip_prefix("build=")?.to_owned();
         Some(Self {
             version,
             protocol,
+            revision,
             build,
         })
     }
@@ -592,14 +604,14 @@ mod tests {
         let executor = Arc::new(FakeExecutor::new(|command| {
             Ok(match command.args.first().map(String::as_str) {
                 Some("version") => CommandOutput::ok(format!(
-                    "devlanes-hosts 0.1.0 protocol={PROTOCOL} build=release\n"
+                    "devlanes-hosts 0.1.0 protocol={PROTOCOL} revision=3 build=release\n"
                 )),
                 _ => CommandOutput::ok("# devlanes begin\n# devlanes end\n"),
             })
         }));
         let client = client(executor.clone(), None);
         let version = client.version().await.expect("version");
-        assert_eq!(version.build, "release");
+        assert_eq!((version.revision, version.build.as_str()), (3, "release"));
         assert_eq!(
             client.status().await.expect("status"),
             "# devlanes begin\n# devlanes end\n"
@@ -611,6 +623,30 @@ mod tests {
                 vec!["/usr/local/libexec/devlanes-hosts", "status"],
             ]
         );
+    }
+
+    #[test]
+    fn version_lines_with_and_without_revision() {
+        let parsed = |line: &str| {
+            HelperVersion::parse(line).map(|v| (v.version, v.protocol, v.revision, v.build))
+        };
+        assert_eq!(
+            parsed("devlanes-hosts 0.9.0 protocol=1 revision=2 build=release"),
+            Some(("0.9.0".into(), 1, 2, "release".into()))
+        );
+        assert_eq!(
+            parsed("devlanes-hosts 0.8.0 protocol=1 build=release"),
+            Some(("0.8.0".into(), 1, 1, "release".into())),
+            "helpers from before revisions are revision 1"
+        );
+        for line in [
+            "devlanes-hosts 0.9.0 protocol=1 revision=x build=release",
+            "devlanes-hosts 0.9.0 protocol=1 revision=2",
+            "devlanes-hosts 0.9.0 revision=2 protocol=1 build=release",
+            "other 0.9.0 protocol=1 revision=2 build=release",
+        ] {
+            assert_eq!(parsed(line), None, "{line}");
+        }
     }
 
     #[tokio::test]

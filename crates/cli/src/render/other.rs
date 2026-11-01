@@ -1782,12 +1782,12 @@ fn native_hosts_check(hosts: &Value) -> Check {
     }
 }
 
-/// `hosts.helper` (`{state, level, installed, expected, fix}`, `null` before the
-/// daemon checked it). A failed write that already blames the helper version says
-/// the same, so it is not repeated.
+/// `hosts.helper` (`{state, level, installed, revision, required, fix}`, `null`
+/// before the daemon checked it). A failed write that already blames the outdated
+/// helper says the same, so it is not repeated.
 fn helper_check(hosts: &Value) -> Option<Check> {
     let helper = hosts.get("helper").filter(|helper| helper.is_object())?;
-    if text(&hosts["last_error"], "code") == "helper_version_mismatch" {
+    if text(&hosts["last_error"], "code") == "helper_revision_outdated" {
         return None;
     }
     if text(helper, "level") == "ok" {
@@ -1801,7 +1801,7 @@ fn helper_check(hosts: &Value) -> Option<Check> {
         .get("fix")
         .and_then(Value::as_str)
         .map_or_else(|| "devlanes certs trust --hosts".to_owned(), clean);
-    Some(Check::new("hosts", Outcome::Skip, words::helper_mismatch(helper)).fix(fix))
+    Some(Check::new("hosts", Outcome::Skip, words::helper_outdated(helper)).fix(fix))
 }
 
 /// `user_config` (`{path, valid, error {message, file, line, column}, warnings}`):

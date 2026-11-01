@@ -266,8 +266,7 @@ async fn hosts_file(
             installed,
             tld_error,
             sync: devlanes_resolver_hosts::SyncConfig::default(),
-            // Shipped together: the helper next to this binary has this version.
-            expected_version: env!("CARGO_PKG_VERSION").into(),
+            required_revision: devlanes_resolver_hosts::REVISION,
         },
     ))
 }

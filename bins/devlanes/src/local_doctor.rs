@@ -279,7 +279,7 @@ async fn ca(paths: &Paths) -> Value {
 /// installed; `null` otherwise (most machines never need it).
 async fn hosts_helper() -> Value {
     use devlanes_resolver_hosts::{
-        FileKind, FsProbe, HostsClient, INSTALL_PATH, SystemExecutor, SystemFs,
+        FileKind, FsProbe, HostsClient, INSTALL_PATH, REVISION, SystemExecutor, SystemFs,
     };
     let installed = matches!(
         SystemFs.lstat(Path::new(INSTALL_PATH)),
@@ -295,8 +295,7 @@ async fn hosts_helper() -> Value {
     ) else {
         return Value::Null;
     };
-    let check =
-        devlanes_daemon::hosts::helper_check(&client.version().await, env!("CARGO_PKG_VERSION"));
+    let check = devlanes_daemon::hosts::helper_check(&client.version().await, REVISION);
     json!({"helper": check})
 }
 

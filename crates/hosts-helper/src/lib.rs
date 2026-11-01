@@ -36,6 +36,15 @@ pub const SUDOERS_PATH: &str = "/etc/sudoers.d/devlanes";
 /// it with `devlanes-hosts version` and asks for a reinstall on mismatch.
 pub const PROTOCOL: u32 = 1;
 
+/// Revision of the helper's behaviour, independent of the devlanes release.
+///
+/// Bump it when an installed helper should be replaced: a security fix, or new
+/// behaviour the daemon relies on. The daemon asks for a reinstall only while the
+/// installed helper reports a lower revision, so a release that leaves the helper
+/// alone does not ask for sudo again. Incompatible command-line changes bump
+/// [`PROTOCOL`] instead.
+pub const REVISION: u32 = 1;
+
 /// Build profile reported by `version`; the installer refuses `debug` builds because
 /// they accept `--hosts-file`.
 pub const BUILD: &str = if cfg!(debug_assertions) {

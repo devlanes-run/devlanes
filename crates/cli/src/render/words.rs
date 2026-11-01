@@ -731,8 +731,8 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
             )
         }
         // The daemon's message already names the command; the hint carries it instead.
-        "helper_version_mismatch" => (
-            helper_mismatch(data.get("helper").unwrap_or(data)),
+        "helper_revision_outdated" => (
+            helper_outdated(data.get("helper").unwrap_or(data)),
             Some(Hint::command(["certs", "trust", "--hosts"])),
         ),
         "helper_missing"
@@ -1553,23 +1553,22 @@ fn protocol_mismatch(data: &Value) -> String {
 }
 
 /// The hosts helper against this devlanes, from doctor's `hosts.helper`
-/// (`{state, installed, expected}`); without versions, a general sentence.
-pub(crate) fn helper_mismatch(helper: &Value) -> String {
-    let expected = text(helper, "expected");
+/// (`{state, revision, required}`); without revisions, a general sentence.
+pub(crate) fn helper_outdated(helper: &Value) -> String {
     match (
-        helper.get("installed").and_then(Value::as_str),
+        int(helper, "revision"),
+        int(helper, "required"),
         helper.get("state").and_then(Value::as_str),
     ) {
-        (_, Some("missing")) => "the /etc/hosts helper is not installed".into(),
-        (_, Some("unrunnable")) => "the installed /etc/hosts helper cannot run".into(),
-        (_, Some("incompatible")) => format!(
-            "the installed /etc/hosts helper speaks another protocol than devlanes {expected}; /etc/hosts updates fail"
+        (_, _, Some("missing")) => "the /etc/hosts helper is not installed".into(),
+        (_, _, Some("unrunnable")) => "the installed /etc/hosts helper cannot run".into(),
+        (_, _, Some("incompatible")) => {
+            "the installed /etc/hosts helper speaks another protocol than this devlanes; /etc/hosts updates fail".into()
+        }
+        (Some(revision), Some(required), _) => format!(
+            "the installed /etc/hosts helper is revision {revision}, devlanes needs {required}"
         ),
-        (Some(installed), _) if !expected.is_empty() => format!(
-            "the installed /etc/hosts helper is version {}, devlanes is {expected}",
-            super::clean(installed)
-        ),
-        _ => "the installed /etc/hosts helper does not match this devlanes".into(),
+        _ => "the installed /etc/hosts helper is outdated".into(),
     }
 }
 
@@ -1839,14 +1838,11 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             format!("couldn't start: {}", spawn_cause(data)),
             Some(spawn_hint(data).unwrap_or_else(|| Hint::logs(lane, unit, 200))),
         ),
-        "helper_missing" | "sudo_denied" | "helper_outdated" | "helper_version_mismatch" => {
+        "helper_missing" | "sudo_denied" | "helper_outdated" | "helper_revision_outdated" => {
             let hosts: Vec<String> = list(data, "hosts").iter().map(display_value).collect();
             let problem = match code {
                 "helper_missing" => "the /etc/hosts helper is not installed",
                 "sudo_denied" => "sudo will not run the /etc/hosts helper without a password",
-                "helper_version_mismatch" => {
-                    "the installed /etc/hosts helper does not match this devlanes"
-                }
                 _ => "the installed /etc/hosts helper is outdated",
             };
             (

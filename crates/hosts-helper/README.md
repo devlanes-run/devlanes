@@ -256,7 +256,7 @@ socket, the CA and remote connections.
 
 ```sh
 /usr/local/libexec/devlanes-hosts status     # prints the block; no root needed
-/usr/local/libexec/devlanes-hosts version    # devlanes-hosts 0.1.0 protocol=1 build=release
+/usr/local/libexec/devlanes-hosts version    # devlanes-hosts 0.1.0 protocol=1 revision=1 build=release
 sudo -l                                      # lists your sudo rules, including this one
 ls -l /usr/local/libexec/devlanes-hosts /etc/sudoers.d/devlanes
 ```
@@ -329,6 +329,14 @@ retry at once.
 The installed helper speaks a different protocol version from this devlanes.
 Run `devlanes certs trust --hosts` again.
 
+### `helper_revision_outdated`
+
+The installed helper reports a lower revision than this devlanes needs, or
+cannot be run. `devlanes doctor` shows both revisions. Run
+`devlanes certs trust --hosts` again. Updating devlanes asks for this only when
+the helper itself changed; its release version may differ from devlanes'
+without any warning.
+
 ### `hosts_file_refused`
 
 `/etc/hosts` is a symlink or has broken markers. The message names the lines;
@@ -375,6 +383,14 @@ DEVLANES_HOSTS_HELPER=$PWD/target/release/devlanes-hosts \
 
 Bump `PROTOCOL` in `src/lib.rs` whenever arguments, input or output change in a
 way an older daemon or helper would misread.
+
+Bump `REVISION` when installed helpers should be replaced, for a security fix
+or new behaviour the daemon relies on. The daemon asks for a reinstall only when
+the installed helper's revision is lower, so releases that leave the helper
+alone do not ask for sudo again. A test in `tests/it/revision.rs` records a hash
+of `src/` next to the revision and fails when the code changes, so each change
+gets that decision; bump `REVISION` if needed, then record the new hash it
+prints.
 
 The helper is Unix only. devlanes writes no hosts file on Windows. Windows 11
 answers every `*.localhost` name itself; on Windows Server, which does not,

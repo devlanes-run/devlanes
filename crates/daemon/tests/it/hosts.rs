@@ -84,7 +84,7 @@ async fn engine(home: &Path, executor: Arc<FakeExecutor>) -> Engine {
                 max_delay: Duration::from_millis(200),
                 ..SyncConfig::default()
             },
-            expected_version: "0.1.0".into(),
+            required_revision: devlanes_resolver_hosts::REVISION,
         },
     );
     let mut integ = Integrations::with_runner(Arc::new(FakeRunner::default()));

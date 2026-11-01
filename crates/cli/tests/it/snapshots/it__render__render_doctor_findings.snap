@@ -28,7 +28,7 @@ tls
   ! api.example.com is outside the CA's names; HTTPS will fail; try api.acme2.localhost (acme@2:api)
 hosts
   ✓ /etc/hosts fallback auto, resolver loopback, 3 names written
-  ! the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0
+  ! the installed /etc/hosts helper is revision 1, devlanes needs 2
     fix: devlanes certs trust --hosts
 config
   ✗ user config /home/u/.devlanes/config.yaml:4:1: unknown field `proxyy`
@@ -62,7 +62,7 @@ tls
   warn api.example.com is outside the CA's names; HTTPS will fail; try api.acme2.localhost (acme@2:api)
 hosts
   ok /etc/hosts fallback auto, resolver loopback, 3 names written
-  warn the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0
+  warn the installed /etc/hosts helper is revision 1, devlanes needs 2
     fix: devlanes certs trust --hosts
 config
   fail user config /home/u/.devlanes/config.yaml:4:1: unknown field `proxyy`
@@ -84,7 +84,7 @@ warn tls: the devlanes CA has no name constraints (it predates them), so a leake
   fix: devlanes certs untrust && rm -r /home/u/.devlanes/ca && devlanes certs trust && devlanes daemon restart
 warn tls: api.example.com is outside the CA's names; HTTPS will fail; try api.acme2.localhost (acme@2:api)
 warn proxy: hostname web_app.localhost is invalid (acme@2:web): `web_app.localhost` contains `_`, which DNS names cannot; the route is left out
-warn hosts: the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0
+warn hosts: the installed /etc/hosts helper is revision 1, devlanes needs 2
   fix: devlanes certs trust --hosts
 warn config: user config tls.trust.1: mobile certificate trust is not supported yet; target ignored
 ok daemon: devlanes 0.2.0, pid 4242, socket /home/u/.devlanes/run/daemon.sock

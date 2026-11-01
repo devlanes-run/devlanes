@@ -104,48 +104,53 @@ pub struct HostsOptions {
     pub tld_error: Option<HostsError>,
     /// Debounce and backoff timing.
     pub sync: SyncConfig,
-    /// The running devlanes version; the installed helper should match it.
-    pub expected_version: String,
+    /// The helper revision this devlanes needs (`devlanes_hosts_helper::REVISION`);
+    /// an installed helper with a lower one is reported as outdated.
+    pub required_revision: u32,
 }
 
 /// The fix for an outdated, missing or broken helper.
 const REINSTALL: &str = "devlanes certs trust --hosts";
 
 /// `doctor`'s `helper` object from the installed helper's `version`:
-/// `{state, level, installed, expected, message?, fix?}` with `state` one of
-/// `ok`, `mismatch` (other version, same protocol), `incompatible` (another
-/// protocol: updates fail), `missing` or `unrunnable`; `level` is `ok` or `warning`.
-pub fn helper_check(result: &Result<HelperVersion, HostsError>, expected: &str) -> Value {
-    let warn = |state: &str, installed: Option<&str>, message: String| {
+/// `{state, level, installed, revision, required, message?, fix?}` with `state` one
+/// of `ok`, `outdated` (same protocol, lower revision than `required`),
+/// `incompatible` (another protocol: updates fail), `missing` or `unrunnable`;
+/// `level` is `ok` or `warning`. `installed` is the helper's release version, shown
+/// for information only: releases that leave the helper alone keep it working.
+pub fn helper_check(result: &Result<HelperVersion, HostsError>, required: u32) -> Value {
+    let warn = |state: &str, found: Option<&HelperVersion>, message: String| {
         json!({
             "state": state,
             "level": "warning",
-            "installed": installed,
-            "expected": expected,
+            "installed": found.map(|found| &found.version),
+            "revision": found.map(|found| found.revision),
+            "required": required,
             "message": message,
             "fix": REINSTALL,
         })
     };
     match result {
-        Ok(found) if found.version == expected => json!({
+        Ok(found) if found.revision >= required => json!({
             "state": "ok",
             "level": "ok",
             "installed": found.version,
-            "expected": expected,
+            "revision": found.revision,
+            "required": required,
         }),
         Ok(found) => warn(
-            "mismatch",
-            Some(&found.version),
+            "outdated",
+            Some(found),
             format!(
-                "The installed hosts helper is version {} and devlanes is {expected}. Run `{REINSTALL}` to reinstall it.",
-                found.version
+                "The installed hosts helper is revision {} and devlanes needs {required}. Run `{REINSTALL}` to reinstall it.",
+                found.revision
             ),
         ),
         Err(HostsError::Outdated { found }) => warn(
             "incompatible",
             None,
             format!(
-                "The installed hosts helper does not match devlanes {expected} (it reports {found}), so /etc/hosts updates fail. Run `{REINSTALL}` to reinstall it."
+                "The installed hosts helper speaks another protocol than this devlanes (it reports {found}), so /etc/hosts updates fail. Run `{REINSTALL}` to reinstall it."
             ),
         ),
         Err(HostsError::HelperMissing { path }) => warn(
@@ -216,7 +221,7 @@ pub struct HostsFile {
     /// Last computed set, for `doctor` and `why`.
     desired: Mutex<DesiredHosts>,
     client: HostsClient,
-    expected_version: String,
+    required_revision: u32,
     /// [`helper_check`] of the installed helper, read once per daemon run.
     helper: Arc<tokio::sync::OnceCell<Value>>,
     checking: AtomicBool,
@@ -236,7 +241,7 @@ impl HostsFile {
             armed: AtomicBool::new(options.installed),
             desired: Mutex::new(DesiredHosts::default()),
             client,
-            expected_version: options.expected_version,
+            required_revision: options.required_revision,
             helper: Arc::default(),
             checking: AtomicBool::new(false),
         };
@@ -252,13 +257,13 @@ impl HostsFile {
         if self.checking.swap(true, Ordering::SeqCst) {
             return;
         }
-        let (client, expected, cell) = (
+        let (client, required, cell) = (
             self.client.clone(),
-            self.expected_version.clone(),
+            self.required_revision,
             self.helper.clone(),
         );
         tokio::spawn(async move {
-            let check = helper_check(&client.version().await, &expected);
+            let check = helper_check(&client.version().await, required);
             if check["level"] == "warning" {
                 tracing::warn!(
                     state = %check["state"],
@@ -275,13 +280,14 @@ impl HostsFile {
         self.helper.get().cloned().unwrap_or(Value::Null)
     }
 
-    /// A failure's `{code, message}`; when the helper version is off, the version
-    /// is what the user needs to hear, not the generic failure.
+    /// A failure's `{code, message}`. When the installed helper needs replacing
+    /// (outdated, another protocol or unrunnable), that is what the user needs to
+    /// hear, not the generic failure, so the code is `helper_revision_outdated`.
     fn failure_value(&self, error: &HostsError) -> Value {
         let helper = self.helper_status();
         if helper["level"] == "warning" && helper["state"] != "missing" {
             return json!({
-                "code": "helper_version_mismatch",
+                "code": "helper_revision_outdated",
                 "message": helper["message"],
                 "fix": REINSTALL,
                 "cause": error_value(error),
@@ -302,7 +308,7 @@ impl HostsFile {
             return;
         }
         self.armed.store(true, Ordering::SeqCst);
-        // First use of the fallback: learn whether the helper matches this devlanes.
+        // First use of the fallback: learn whether the installed helper is recent enough.
         self.check_helper();
         self.sync.update(names);
     }
@@ -347,7 +353,7 @@ impl HostsFile {
 
     /// A `why` reason when `hosts` should be in the block but the helper cannot
     /// write it: `helper_missing`, `sudo_denied`, `helper_outdated` or (any failure
-    /// with an installed helper of another version) `helper_version_mismatch`,
+    /// with an installed helper that needs replacing) `helper_revision_outdated`,
     /// each fixed by `devlanes certs trust --hosts`.
     pub fn reason(&self, hosts: &[String]) -> Option<(&'static str, Value)> {
         let state = self.sync.state().borrow().clone();
@@ -355,8 +361,8 @@ impl HostsFile {
             return None;
         };
         let failure = self.failure_value(&error);
-        let mismatch = failure["code"] == "helper_version_mismatch";
-        if !mismatch
+        let outdated = failure["code"] == "helper_revision_outdated";
+        if !outdated
             && !matches!(
                 error,
                 HostsError::HelperMissing { .. }
@@ -374,9 +380,9 @@ impl HostsFile {
         if affected.is_empty() {
             return None;
         }
-        if mismatch {
+        if outdated {
             return Some((
-                "helper_version_mismatch",
+                "helper_revision_outdated",
                 json!({"hosts": affected, "message": failure["message"], "fix": REINSTALL, "helper": self.helper_status()}),
             ));
         }
@@ -588,7 +594,7 @@ mod tests {
         Arc::new(FakeExecutor::new(move |command| {
             if command.args.iter().any(|arg| arg == "version") {
                 return Ok(CommandOutput::ok(format!(
-                    "devlanes-hosts 0.1.0 protocol={PROTOCOL} build=release\n"
+                    "devlanes-hosts 0.1.0 protocol={PROTOCOL} revision=2 build=release\n"
                 )));
             }
             if deny.load(Ordering::SeqCst) {
@@ -617,7 +623,7 @@ mod tests {
                 installed,
                 tld_error: None,
                 sync: SyncConfig::default(),
-                expected_version: "0.1.0".into(),
+                required_revision: 2,
             },
         )
     }
@@ -720,33 +726,44 @@ mod tests {
     }
 
     #[test]
-    /// Matching, older, other-protocol, missing and unrunnable helpers.
-    fn helper_versions_are_judged() {
-        let found = |version: &str| HelperVersion {
+    /// Current, newer, older-revision, other-protocol, missing and unrunnable helpers.
+    fn helper_revisions_are_judged() {
+        let found = |version: &str, revision: u32| HelperVersion {
             version: version.into(),
             protocol: PROTOCOL,
+            revision,
             build: "release".into(),
         };
-        let ok = helper_check(&Ok(found("0.4.0")), "0.4.0");
-        assert_eq!(
-            (ok["state"].as_str(), ok["level"].as_str()),
-            (Some("ok"), Some("ok"))
-        );
-        let older = helper_check(&Ok(found("0.3.0")), "0.4.0");
-        assert_eq!(older["state"], "mismatch");
+        // An older release with the same revision is fine: releases that leave the
+        // helper alone must not ask for sudo again.
+        for (version, revision) in [("0.3.0", 2), ("0.5.0", 3)] {
+            let ok = helper_check(&Ok(found(version, revision)), 2);
+            assert_eq!(
+                (ok["state"].as_str(), ok["level"].as_str()),
+                (Some("ok"), Some("ok"))
+            );
+            assert_eq!(ok["installed"], version);
+            assert_eq!(ok["revision"], revision);
+        }
+        let older = helper_check(&Ok(found("0.4.0", 1)), 2);
+        assert_eq!(older["state"], "outdated");
         assert_eq!(older["level"], "warning");
         assert_eq!(older["fix"], "devlanes certs trust --hosts");
         assert_eq!(
-            older["message"],
-            "The installed hosts helper is version 0.3.0 and devlanes is 0.4.0. Run `devlanes certs trust --hosts` to reinstall it."
+            (&older["installed"], &older["revision"], &older["required"]),
+            (&json!("0.4.0"), &json!(1), &json!(2))
         );
-        let other = helper_check(&Err(HostsError::Outdated { found: "2".into() }), "0.4.0");
+        assert_eq!(
+            older["message"],
+            "The installed hosts helper is revision 1 and devlanes needs 2. Run `devlanes certs trust --hosts` to reinstall it."
+        );
+        let other = helper_check(&Err(HostsError::Outdated { found: "2".into() }), 2);
         assert_eq!(other["state"], "incompatible");
         let missing = helper_check(
             &Err(HostsError::HelperMissing {
                 path: INSTALL_PATH.into(),
             }),
-            "0.4.0",
+            2,
         );
         assert_eq!(missing["state"], "missing");
         let broken = helper_check(
@@ -754,7 +771,7 @@ mod tests {
                 code: None,
                 message: "permission denied".into(),
             }),
-            "0.4.0",
+            2,
         );
         assert_eq!(broken["state"], "unrunnable");
         assert!(
@@ -773,37 +790,43 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    /// An installed older helper is reported at startup without sudo, and a
-    /// later update failure is named as the version mismatch.
-    async fn an_older_installed_helper_is_named() {
+    /// An installed helper of an older revision is reported at startup without
+    /// sudo, and a later update failure is named as the outdated helper. Helpers
+    /// that print no revision are revision 1.
+    async fn an_outdated_installed_helper_is_named() {
         let executor = versioned(Some("devlanes-hosts 0.0.9 protocol=1 build=release"), true);
         let hosts = hosts_file(executor.clone(), Always, true);
         tokio::time::sleep(Duration::from_millis(50)).await;
         let helper = hosts.status()["helper"].clone();
-        assert_eq!(helper["state"], "mismatch", "{helper}");
+        assert_eq!(helper["state"], "outdated", "{helper}");
         assert_eq!(helper["installed"], "0.0.9");
-        assert_eq!(helper["expected"], "0.1.0");
+        assert_eq!(helper["revision"], 1);
+        assert_eq!(helper["required"], 2);
 
         hosts.update(&routes(), &hints());
         tokio::time::sleep(Duration::from_secs(1)).await;
         let status = hosts.status();
         assert_eq!(
-            status["last_error"]["code"], "helper_version_mismatch",
+            status["last_error"]["code"], "helper_revision_outdated",
             "{status}"
         );
         assert_eq!(status["last_error"]["cause"]["code"], "sudo_denied");
         let (code, data) = hosts
             .reason(&["web.acme2.localhost".into()])
             .expect("why reason");
-        assert_eq!(code, "helper_version_mismatch");
+        assert_eq!(code, "helper_revision_outdated");
         assert_eq!(data["fix"], "devlanes certs trust --hosts");
     }
 
     #[tokio::test(start_paused = true)]
-    /// A matching helper is fine; one that cannot be run is reported as such.
-    async fn matching_and_unrunnable_helpers() {
+    /// A helper of the required revision is fine whatever its release version; one
+    /// that cannot be run is reported as such.
+    async fn current_and_unrunnable_helpers() {
         let matching = hosts_file(
-            versioned(Some("devlanes-hosts 0.1.0 protocol=1 build=release"), false),
+            versioned(
+                Some("devlanes-hosts 0.0.9 protocol=1 revision=2 build=release"),
+                false,
+            ),
             Always,
             true,
         );

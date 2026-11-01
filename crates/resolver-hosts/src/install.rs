@@ -1230,7 +1230,10 @@ mod tests {
 
     #[cfg(unix)]
     fn version_line(build: &str) -> String {
-        format!("devlanes-hosts 0.1.0 protocol={PROTOCOL} build={build}\n")
+        format!(
+            "devlanes-hosts 0.1.0 protocol={PROTOCOL} revision={} build={build}\n",
+            devlanes_hosts_helper::REVISION
+        )
     }
 
     #[cfg(unix)]

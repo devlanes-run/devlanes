@@ -697,8 +697,8 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                 "projects": 2, "subscribers": 1,
                 "hosts": {"mode": "auto", "probe": "loopback", "state": "applied", "names": 3, "desired": 3, "skipped": 0,
                           "last_error": null, "tld_error": null,
-                          "helper": {"state": "mismatch", "level": "warning", "installed": "0.1.0", "expected": "0.2.0",
-                                     "message": "The installed hosts helper is version 0.1.0 and devlanes is 0.2.0.",
+                          "helper": {"state": "outdated", "level": "warning", "installed": "0.1.0", "revision": 1, "required": 2,
+                                     "message": "The installed hosts helper is revision 1 and devlanes needs 2.",
                                      "fix": "devlanes certs trust --hosts"}},
                 "user_config": {
                     "path": "/home/u/.devlanes/config.yaml", "valid": false,
@@ -826,7 +826,7 @@ fn doctor_without_a_daemon() {
                "trust": [{"store": "system", "state": "trusted"}]},
         "user_config": {"path": "/home/u/.devlanes/config.yaml", "valid": true, "error": null, "errors": [], "warnings": []},
         "port_holders": [{"listener": "https", "port": 443, "pid": 812, "command": "nginx"}],
-        "hosts": {"helper": {"state": "ok", "level": "ok", "installed": "0.3.0", "expected": "0.3.0"}},
+        "hosts": {"helper": {"state": "ok", "level": "ok", "installed": "0.3.0", "revision": 1, "required": 1}},
         "release": {"version": "0.3.0", "build": "local", "daemon_version": null, "install_method": "install.sh",
                     "check": null, "latest": null},
     });
@@ -1875,13 +1875,13 @@ fn start_progress_prints_finished_steps_once() {
     );
 }
 
-/// A matching helper and a valid user config show as ok; a failed /etc/hosts write
-/// that already blames the helper version is not repeated by the helper check.
+/// A current helper and a valid user config show as ok; a failed /etc/hosts write
+/// that already blames the outdated helper is not repeated by the helper check.
 #[test]
 fn doctor_helper_and_user_config_checks() {
     let data = json!({
         "hosts": {"mode": "auto", "probe": "loopback", "state": "applied", "names": 2, "last_error": null,
-                  "helper": {"state": "ok", "level": "ok", "installed": "0.2.0", "expected": "0.2.0"}},
+                  "helper": {"state": "ok", "level": "ok", "installed": "0.2.0", "revision": 1, "required": 1}},
         "user_config": {"path": "/home/u/.devlanes/config.yaml", "valid": true, "error": null, "warnings": []},
     });
     let text = render_text(Method::Doctor, &data);
@@ -1891,13 +1891,10 @@ fn doctor_helper_and_user_config_checks() {
         "{text}"
     );
     let failed = json!({"hosts": {"mode": "auto", "state": "failed",
-        "last_error": {"code": "helper_version_mismatch", "message": "The installed hosts helper is version 0.1.0 and devlanes is 0.2.0."},
-        "helper": {"state": "mismatch", "level": "warning", "installed": "0.1.0", "expected": "0.2.0"}}});
+        "last_error": {"code": "helper_revision_outdated", "message": "The installed hosts helper is revision 1 and devlanes needs 2."},
+        "helper": {"state": "outdated", "level": "warning", "installed": "0.1.0", "revision": 1, "required": 2}}});
     let text = render_text(Method::Doctor, &failed);
-    assert!(
-        !text.contains("helper is version 0.1.0, devlanes"),
-        "{text}"
-    );
+    assert!(!text.contains("helper is revision 1, devlanes"), "{text}");
     assert!(text.contains("fix: devlanes certs trust --hosts"), "{text}");
 }
 
@@ -2266,10 +2263,10 @@ fn daemon_errors_are_worded_with_hints() {
             1,
         ),
         RpcError::new(
-            "helper_version_mismatch",
-            json!({"message": "The installed hosts helper is version 0.1.0 and devlanes is 0.2.0. Run `devlanes certs trust --hosts` to reinstall it.",
+            "helper_revision_outdated",
+            json!({"message": "The installed hosts helper is revision 1 and devlanes needs 2. Run `devlanes certs trust --hosts` to reinstall it.",
                    "fix": "devlanes certs trust --hosts",
-                   "helper": {"state": "mismatch", "level": "warning", "installed": "0.1.0", "expected": "0.2.0"}}),
+                   "helper": {"state": "outdated", "level": "warning", "installed": "0.1.0", "revision": 1, "required": 2}}),
             1,
         ),
     ];
