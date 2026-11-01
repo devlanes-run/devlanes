@@ -13,8 +13,7 @@ bytes.workspace = true
 devlanes-core = { path = "../core" }
 devlanes-ipc = { path = "../ipc" }
 devlanes-proto = { path = "../proto" }
-dunce.workspace = true
-serde.workspace = true
+devlanes-update = { path = "../update" }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

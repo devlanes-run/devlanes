@@ -895,7 +895,7 @@ impl Executor {
             Effect::DismissNotice(key) => {
                 if let Some(home) = api.home() {
                     tokio::task::spawn_blocking(move || {
-                        let mut log = devlanes_client::update::NoticeLog::load(&home);
+                        let mut log = devlanes_update::NoticeLog::load(&home);
                         log.dismiss(&key);
                         // Losing a dismissal only shows the notice again.
                         let _ = log.save(&home);

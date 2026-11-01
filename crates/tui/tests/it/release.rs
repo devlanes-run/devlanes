@@ -3,9 +3,9 @@
 //! the first launch is kept with the same dismissals.
 
 use crossterm::event::KeyCode;
-use devlanes_client::update::InstallMethod;
 use devlanes_tui::app::{Dialog, Effect, Msg};
 use devlanes_tui::welcome::{DOCS_URL, KEY as WELCOME};
+use devlanes_update::InstallMethod;
 use serde_json::json;
 
 use super::{TestResult, draw, key, loaded};

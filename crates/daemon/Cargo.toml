@@ -26,6 +26,7 @@ devlanes-state = { path = "../state" }
 devlanes-sys = { path = "../sys" }
 devlanes-sync = { path = "../sync" }
 devlanes-transport = { path = "../transport" }
+devlanes-update = { path = "../update" }
 async-trait.workspace = true
 base64.workspace = true
 dunce.workspace = true

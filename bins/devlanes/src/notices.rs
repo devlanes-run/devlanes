@@ -3,13 +3,14 @@
 //! daemon finds releases; nothing here downloads, installs or restarts anything.
 
 use devlanes_cli::{OutputMode, Rendered, Runtime};
-use devlanes_client::{
-    Client, Paths,
-    update::{InstallMethod, NoticeLog, now_ms, skew_key, skew_line, update_key, update_line},
-};
+use devlanes_client::{Client, Paths};
 use devlanes_proto::{
     Context, Hello, Method,
-    release::{ReleaseCheck, UpdateInfo, is_newer},
+    release::{ReleaseCheck, UpdateInfo},
+};
+use devlanes_update::{
+    InstallMethod, NoticeLog, now_ms, skew_key, skew_line, update_key, update_line,
+    version::is_newer,
 };
 use serde_json::{Value, json};
 
@@ -152,7 +153,7 @@ async fn remove_old_copies(data: &mut Value) {
     let copies = tokio::task::spawn_blocking(|| {
         std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(devlanes_client::update::remove_old_copies))
+            .and_then(|exe| exe.parent().map(devlanes_update::remove_old_copies))
     })
     .await
     .ok()

@@ -1035,6 +1035,7 @@ dependencies = [
  "devlanes-trust-windows",
  "devlanes-tui",
  "devlanes-tunnel",
+ "devlanes-update",
  "devlanes-version",
  "futures-util",
  "ratatui",
@@ -1089,11 +1090,10 @@ dependencies = [
  "devlanes-ipc",
  "devlanes-proto",
  "devlanes-sys-windows",
+ "devlanes-update",
  "devlanes-version",
- "dunce",
  "fs2",
  "rustix",
- "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
@@ -1172,6 +1172,7 @@ dependencies = [
  "devlanes-transport",
  "devlanes-transport-ssh",
  "devlanes-tunnel",
+ "devlanes-update",
  "devlanes-version",
  "diesel",
  "dunce",
@@ -1262,6 +1263,7 @@ dependencies = [
 name = "devlanes-hosts-helper"
 version = "0.9.0"
 dependencies = [
+ "sha2",
  "tempfile",
 ]
 
@@ -1973,6 +1975,7 @@ dependencies = [
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-term",
+ "devlanes-update",
  "devlanes-version",
  "futures-util",
  "insta",
@@ -2011,6 +2014,18 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "devlanes-update"
+version = "0.1.0"
+dependencies = [
+ "devlanes-core",
+ "devlanes-version",
+ "dunce",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

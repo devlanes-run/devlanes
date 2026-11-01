@@ -111,6 +111,7 @@ devlanes-transport = { path = "../../crates/transport" }
 devlanes-transport-command = { path = "../../crates/transport-command" }
 devlanes-transport-ssh = { path = "../../crates/transport-ssh" }
 devlanes-tunnel = { path = "../../crates/tunnel" }
+devlanes-update = { path = "../../crates/update" }
 futures-util.workspace = true
 tokio-util.workspace = true
 anyhow.workspace = true

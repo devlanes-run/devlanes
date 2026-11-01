@@ -10,7 +10,8 @@ use std::{
     time::Duration,
 };
 
-use devlanes_proto::release::{ReleaseCheck, UpdateInfo, Version, is_newer};
+use devlanes_proto::release::{ReleaseCheck, UpdateInfo};
+use devlanes_update::version::{Version, is_newer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

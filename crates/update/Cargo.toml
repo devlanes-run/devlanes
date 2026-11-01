@@ -1,0 +1,22 @@
+[package]
+name = "devlanes-update"
+description = "How devlanes was installed, its stable path, release versions and update notices"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+devlanes-version = { path = "../version" }
+# The user's home, for cargo's and uv's default directories.
+devlanes-core = { path = "../core" }
+dunce.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

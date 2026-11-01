@@ -661,7 +661,7 @@ async fn run_step(step: &Step) -> Result<(), RpcError> {
 /// lanes, and the one the manager starts would refuse the file.
 #[cfg(unix)]
 pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
-    let exe = std::env::current_exe().map_err(io)?;
+    let exe = service_exe().await.map_err(io)?;
     let paths = Paths::discover()
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
     crate::user_config::load(&paths).await?;
@@ -774,7 +774,7 @@ async fn logon<T: Send + 'static>(
 /// installing a start for the wrong home.
 #[cfg(windows)]
 pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
-    let exe = std::env::current_exe().map_err(io)?;
+    let exe = service_exe().await.map_err(io)?;
     let paths = Paths::discover()
         .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))?;
     crate::user_config::load(&paths).await?;
@@ -815,7 +815,7 @@ pub async fn install(runtime: &Runtime) -> Result<u8, RpcError> {
 /// installed or not. `Null` when the registry cannot be read.
 #[cfg(windows)]
 pub async fn service_report() -> serde_json::Value {
-    let exe = std::env::current_exe().ok();
+    let exe = service_exe().await.ok();
     let read = logon(|logon| Ok((logon.status()?, logon.location()))).await;
     let Ok((status, location)) = read else {
         return serde_json::Value::Null;
@@ -885,6 +885,15 @@ pub async fn local_action(runtime: &Runtime, action: Action) -> Result<u8, RpcEr
 /// I/O errors keep their message as data.
 fn io(error: std::io::Error) -> RpcError {
     RpcError::new("io", json!({"message": error.to_string()}), 1)
+}
+
+/// The executable a login service runs: this install's stable path (see
+/// [`devlanes_update::spawn_exe`]), so a Homebrew upgrade and its cleanup of
+/// the old Cellar directory leave the service working.
+async fn service_exe() -> std::io::Result<PathBuf> {
+    tokio::task::spawn_blocking(devlanes_update::spawn_exe)
+        .await
+        .map_err(std::io::Error::other)?
 }
 
 /// SQLite's files for `db`: the database, its WAL and shared memory.

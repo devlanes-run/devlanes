@@ -12,7 +12,6 @@ use std::{
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use devlanes_client::update::InstallMethod;
 use devlanes_proto::{AttachResult, Event, Page, RpcError, events};
 use devlanes_tui::{
     ApiError,
@@ -23,6 +22,7 @@ use devlanes_tui::{
     theme::{Glyphs, Theme, Tier},
     ui,
 };
+use devlanes_update::InstallMethod;
 use ratatui::{
     Terminal,
     backend::TestBackend,

@@ -1,19 +1,10 @@
-//! Release notices on the client side: how this binary was installed, the
-//! command that upgrades it, and when a notice was last shown or dismissed. The
-//! daemon finds new releases; clients only print what it reports.
+//! How this devlanes binary was installed, the command that upgrades it, and
+//! the stable path that runs it.
 
-use std::{
-    collections::BTreeMap,
-    path::{Path, PathBuf},
-};
+use std::path::{Component, Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-
+use devlanes_core::paths::user_home;
 use devlanes_version::REPOSITORY;
-/// The notice log under `$DEVLANES_HOME`.
-const NOTICES_FILE: &str = "notices.json";
-/// A notice repeats at most once per day.
-const REPEAT_MS: u64 = 24 * 3600 * 1000;
 
 /// How this devlanes binary was installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +29,11 @@ pub enum InstallMethod {
     /// `pip install` into the Python environment uv created at this directory,
     /// which usually has no pip.
     UvPip(PathBuf),
+    /// A dependency of one project, which `manifest` (its `package.json`,
+    /// `pyproject.toml` or `requirements*.txt`) pins.
+    Local {
+        manifest: PathBuf,
+    },
     /// A `target/` directory of a checkout.
     Source,
     /// `install.sh` (`install.ps1` on Windows), or a copy placed by hand, in
@@ -47,7 +43,7 @@ pub enum InstallMethod {
 
 /// What [`InstallMethod::current`] reads from the filesystem for
 /// [`InstallMethod::detect`], which only looks at paths.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct InstallFacts {
     /// cargo binstall's `crates-v1.json` records devlanes.
     pub binstall_lists_devlanes: bool,
@@ -57,6 +53,11 @@ pub struct InstallFacts {
     /// The Python environment the executable's directory sits in: its parent
     /// has a `pyvenv.cfg`.
     pub venv: Option<Venv>,
+    /// The project that pins this executable: the nearest `package.json` above
+    /// the outermost `node_modules` it sits in when that file lists devlanes,
+    /// or the `pyproject.toml` or `requirements*.txt` in the directory that
+    /// holds its Python environment.
+    pub manifest: Option<PathBuf>,
 }
 
 /// Who made the Python environment around the executable.
@@ -80,12 +81,24 @@ impl InstallMethod {
             return Self::Homebrew;
         }
         if has("/node_modules/@devlanes/") || has("/node_modules/devlanes/") {
-            return if has("/.bun/install/global/") {
-                Self::Bun
-            } else if has("/.pnpm/") || has("/pnpm/global/") {
+            if has("/.bun/install/global/") {
+                return Self::Bun;
+            }
+            if has("/pnpm/global/") {
+                return Self::Pnpm;
+            }
+            if os::YARN_GLOBAL.iter().any(|needle| has(needle)) {
+                return Self::Yarn;
+            }
+            // A project's package.json may sit above a global prefix too (a
+            // home directory with one, say); the global layouts win.
+            if !os::NPM_GLOBAL.iter().any(|needle| has(needle))
+                && let Some(manifest) = facts.manifest
+            {
+                return Self::Local { manifest };
+            }
+            return if has("/.pnpm/") {
                 Self::Pnpm
-            } else if os::YARN_GLOBAL.iter().any(|needle| has(needle)) {
-                Self::Yarn
             } else {
                 Self::Npm
             };
@@ -116,10 +129,11 @@ impl InstallMethod {
         if let Some(venv) = facts.venv
             && let Some(root) = dir.parent()
         {
-            return match venv {
-                Venv::Pipx => Self::Pipx,
-                Venv::Uv => Self::UvPip(root.to_path_buf()),
-                Venv::Other => Self::Pip(root.to_path_buf()),
+            return match (venv, facts.manifest) {
+                (Venv::Pipx, _) => Self::Pipx,
+                (_, Some(manifest)) => Self::Local { manifest },
+                (Venv::Uv, None) => Self::UvPip(root.to_path_buf()),
+                (Venv::Other, None) => Self::Pip(root.to_path_buf()),
             };
         }
         if cargo_home.is_some_and(|home| os::same_dir(&dir, &home.join("bin"))) {
@@ -138,14 +152,34 @@ impl InstallMethod {
     /// The method of the running binary. Reads the filesystem, so async code
     /// calls it from a blocking task.
     pub fn current() -> Self {
-        let exe = std::env::current_exe()
-            .and_then(dunce::canonicalize)
-            .unwrap_or_else(|_| PathBuf::from("devlanes"));
+        Self::of(&running_exe().unwrap_or_else(|_| PathBuf::from("devlanes")))
+    }
+
+    /// The method of the canonical executable `exe`, with the facts
+    /// [`Self::detect`] needs read from the filesystem.
+    fn of(exe: &Path) -> Self {
         let cargo_home = std::env::var_os("CARGO_HOME")
             .filter(|home| !home.is_empty())
             .map(PathBuf::from)
-            .or_else(|| crate::user_home().map(|home| home.join(".cargo")));
+            .or_else(|| user_home().map(|home| home.join(".cargo")));
         let cargo_home = cargo_home.map(|home| dunce::canonicalize(&home).unwrap_or(home));
+        let venv = exe.parent().and_then(Path::parent).and_then(|root| {
+            let config = std::fs::read_to_string(root.join("pyvenv.cfg")).ok()?;
+            Some(if root.join("pipx_metadata.json").is_file() {
+                Venv::Pipx
+            } else if pyvenv_made_by_uv(&config) {
+                Venv::Uv
+            } else {
+                Venv::Other
+            })
+        });
+        let manifest = match outermost_node_modules(exe) {
+            Some(node_modules) => package_json_listing_devlanes(node_modules),
+            // The directory that holds the environment, such as `acme` for
+            // `acme/.venv/bin/devlanes`.
+            None if venv.is_some() => exe.ancestors().nth(3).and_then(python_project_manifest),
+            None => None,
+        };
         let facts = InstallFacts {
             binstall_lists_devlanes: cargo_home.as_deref().is_some_and(|home| {
                 std::fs::read_to_string(home.join("binstall/crates-v1.json"))
@@ -153,22 +187,14 @@ impl InstallMethod {
             }),
             uv_tool: uv_tool_dirs().into_iter().any(|dir| {
                 let tool = dunce::canonicalize(&dir).unwrap_or(dir).join("devlanes");
-                is_inside(&exe, &tool)
+                is_inside(exe, &tool)
                     || std::fs::read_to_string(tool.join("uv-receipt.toml"))
-                        .is_ok_and(|text| uv_receipt_lists(&text, &exe))
+                        .is_ok_and(|text| uv_receipt_lists(&text, exe))
             }),
-            venv: exe.parent().and_then(Path::parent).and_then(|root| {
-                let config = std::fs::read_to_string(root.join("pyvenv.cfg")).ok()?;
-                Some(if root.join("pipx_metadata.json").is_file() {
-                    Venv::Pipx
-                } else if pyvenv_made_by_uv(&config) {
-                    Venv::Uv
-                } else {
-                    Venv::Other
-                })
-            }),
+            venv,
+            manifest,
         };
-        Self::detect(&exe, cargo_home.as_deref(), facts)
+        Self::detect(exe, cargo_home.as_deref(), facts)
     }
 
     /// A short name for doctor.
@@ -187,6 +213,7 @@ impl InstallMethod {
             Self::PipxRun => "pipx run",
             Self::Pip(_) => "pip",
             Self::UvPip(_) => "uv pip",
+            Self::Local { .. } => "a project dependency",
             Self::Source => "a source checkout",
             Self::Script(_) => os::SCRIPT,
         }
@@ -196,11 +223,14 @@ impl InstallMethod {
     /// the install script's default directory (`~/.local/bin` under `home`, or
     /// `%LOCALAPPDATA%\Programs\devlanes` on Windows) is named by its directory,
     /// since nothing says the script put it there. pip installs also name their
-    /// environment.
+    /// environment, and project dependencies their manifest.
     pub fn describe(&self, home: Option<&Path>) -> String {
         match self {
             Self::Pip(venv) | Self::UvPip(venv) => {
                 format!("{}, in the environment at {}", self.label(), venv.display())
+            }
+            Self::Local { manifest } => {
+                format!("{}, in {}", self.label(), manifest.display())
             }
             Self::Script(dir) => {
                 let default = os::default_script_dir(home);
@@ -237,6 +267,7 @@ impl InstallMethod {
             Self::PipxRun => "pipx run --no-cache devlanes".into(),
             Self::Pip(venv) => os::pip_upgrade(venv),
             Self::UvPip(venv) => os::uv_pip_upgrade(venv),
+            Self::Local { manifest } => format!("update devlanes in {}", manifest.display()),
             Self::Source => format!("git pull, then cargo build --release (v{version})"),
             Self::Script(dir) => os::script_upgrade(dir),
         };
@@ -246,6 +277,100 @@ impl InstallMethod {
             command
         }
     }
+
+    /// The path that runs this install after an upgrade, for the canonical
+    /// executable `exe` of this method. Script installs keep `devlanes` in
+    /// their directory. Homebrew's Cellar path names the version, and `brew
+    /// cleanup` deletes it after an upgrade, so this is the `opt` link of the
+    /// prefix. pnpm's store path names the version too, so this is the global
+    /// `node_modules/devlanes` link when `exe` is the binary the package's
+    /// postinstall placed there. Every other method upgrades in place: `exe`.
+    pub fn entry(&self, exe: &Path) -> PathBuf {
+        let stable = match self {
+            Self::Script(dir) => {
+                Some(dir.join(format!("devlanes{}", std::env::consts::EXE_SUFFIX)))
+            }
+            Self::Homebrew => homebrew_entry(exe),
+            Self::Pnpm => pnpm_entry(exe),
+            _ => None,
+        };
+        stable.unwrap_or_else(|| exe.to_path_buf())
+    }
+}
+
+/// The executable a process should start to run devlanes again, such as the
+/// daemon a client spawns or the one a login service names.
+///
+/// That is this install's [`InstallMethod::entry`] when the file exists, else
+/// this process's executable. A long-running process (a TUI, the daemon)
+/// outlives upgrades: Homebrew's `brew cleanup` deletes the old Cellar
+/// directory it runs from, and Linux reports a replaced executable as
+/// `<path> (deleted)`. Starting the entry runs the binary installed now.
+/// Blocking filesystem work.
+pub fn spawn_exe() -> std::io::Result<PathBuf> {
+    let exe = running_exe()?;
+    let entry = InstallMethod::of(&exe).entry(&exe);
+    Ok(if entry.is_file() { entry } else { exe })
+}
+
+/// This process's executable, canonical when it still exists.
+fn running_exe() -> std::io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    // Linux reads `/proc/self/exe`, which names a replaced file
+    // `<path> (deleted)`; the path itself may hold the new binary.
+    #[cfg(target_os = "linux")]
+    let exe = if exe.exists() {
+        exe
+    } else {
+        without_deleted_suffix(exe)
+    };
+    Ok(dunce::canonicalize(&exe).unwrap_or(exe))
+}
+
+/// `exe` without the ` (deleted)` Linux appends to a replaced executable.
+#[cfg(any(target_os = "linux", test))]
+fn without_deleted_suffix(exe: PathBuf) -> PathBuf {
+    match exe
+        .to_str()
+        .and_then(|text| text.strip_suffix(" (deleted)"))
+    {
+        Some(path) => PathBuf::from(path),
+        None => exe,
+    }
+}
+
+/// `<prefix>/opt/devlanes/bin/devlanes` for an executable under
+/// `<prefix>/Cellar/devlanes/<version>/`.
+fn homebrew_entry(exe: &Path) -> Option<PathBuf> {
+    let (prefix, _) = exe.to_str()?.split_once("/Cellar/devlanes/")?;
+    Some(Path::new(prefix).join("opt/devlanes/bin/devlanes"))
+}
+
+/// `<node_modules>/devlanes/bin/<name>`, the link pnpm keeps to the current
+/// version, for `<node_modules>/.pnpm/devlanes@<version>/node_modules/devlanes/bin/<name>`.
+/// `None` for any other layout, such as the platform package's binary that the
+/// Node launcher runs.
+fn pnpm_entry(exe: &Path) -> Option<PathBuf> {
+    let parts: Vec<Component<'_>> = exe.components().collect();
+    let store = parts.iter().position(|part| part.as_os_str() == ".pnpm")?;
+    let (head, tail) = parts.split_at(store);
+    if head.last()?.as_os_str() != "node_modules" {
+        return None;
+    }
+    let [_, version, node_modules, package, bin, name] = tail else {
+        return None;
+    };
+    let laid_out = version.as_os_str().to_str()?.starts_with("devlanes@")
+        && node_modules.as_os_str() == "node_modules"
+        && package.as_os_str() == "devlanes"
+        && bin.as_os_str() == "bin";
+    laid_out.then(|| {
+        head.iter()
+            .collect::<PathBuf>()
+            .join("devlanes")
+            .join("bin")
+            .join(name)
+    })
 }
 
 /// Whether binstall's `crates-v1.json` (concatenated JSON objects) has a
@@ -255,6 +380,59 @@ pub fn binstall_lists_devlanes(text: &str) -> bool {
         .into_iter::<serde_json::Value>()
         .map_while(Result::ok)
         .any(|entry| entry.get("name").and_then(serde_json::Value::as_str) == Some("devlanes"))
+}
+
+/// The outermost `node_modules` directory `exe` sits in: the project's, when
+/// pnpm or a nested install puts more of them below it.
+fn outermost_node_modules(exe: &Path) -> Option<&Path> {
+    exe.ancestors()
+        .filter(|dir| dir.file_name().is_some_and(|name| name == "node_modules"))
+        .last()
+}
+
+/// The nearest `package.json` above `node_modules`, when it lists devlanes.
+/// Blocking filesystem work.
+fn package_json_listing_devlanes(node_modules: &Path) -> Option<PathBuf> {
+    let file = node_modules
+        .parent()?
+        .ancestors()
+        .map(|dir| dir.join("package.json"))
+        .find(|file| file.is_file())?;
+    let text = std::fs::read_to_string(&file).ok()?;
+    package_json_lists_devlanes(&text).then_some(file)
+}
+
+/// Whether a `package.json` has devlanes in its dependencies, dev dependencies
+/// or optional dependencies.
+fn package_json_lists_devlanes(text: &str) -> bool {
+    let Ok(package) = serde_json::from_str::<serde_json::Value>(text) else {
+        return false;
+    };
+    ["dependencies", "devDependencies", "optionalDependencies"]
+        .into_iter()
+        .any(|field| package.pointer(&format!("/{field}/devlanes")).is_some())
+}
+
+/// The `pyproject.toml` in `project`, else its `requirements.txt`, else its
+/// first other `requirements*.txt`. Blocking filesystem work.
+fn python_project_manifest(project: &Path) -> Option<PathBuf> {
+    let file = |name: &str| Some(project.join(name)).filter(|file| file.is_file());
+    file("pyproject.toml")
+        .or_else(|| file("requirements.txt"))
+        .or_else(|| {
+            let mut found: Vec<PathBuf> = std::fs::read_dir(project)
+                .ok()?
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    let name = entry.file_name().to_string_lossy().to_lowercase();
+                    name.starts_with("requirements") && name.ends_with(".txt")
+                })
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                .map(|entry| entry.path())
+                .collect();
+            found.sort();
+            found.into_iter().next()
+        })
 }
 
 /// Directories uv may keep tools in: `UV_TOOL_DIR` when set, then uv's
@@ -325,6 +503,8 @@ mod os {
     pub(super) const CARGO_PACKAGES: &str = "devlanes devlanes-hosts-helper";
     /// Path fragments of Yarn's global directory.
     pub(super) const YARN_GLOBAL: &[&str] = &["/yarn/global/"];
+    /// Path fragments of npm's global packages, `<prefix>/lib/node_modules`.
+    pub(super) const NPM_GLOBAL: &[&str] = &["/lib/node_modules/"];
     /// Path fragments of uv's devlanes tool environment.
     pub(super) const UV_TOOLS: &[&str] = &["/uv/tools/devlanes/"];
     /// Path fragments of the environments `uvx` caches, under `~/.cache/uv`.
@@ -354,7 +534,7 @@ mod os {
     pub(super) fn default_uv_tool_dirs() -> Vec<PathBuf> {
         uv_tool_dir_in(
             std::env::var_os("XDG_DATA_HOME").map(PathBuf::from),
-            crate::user_home().as_deref(),
+            devlanes_core::paths::user_home().as_deref(),
         )
         .into_iter()
         .collect()
@@ -434,6 +614,8 @@ mod os {
     /// Path fragments of Yarn's global directory: Yarn 1 keeps it under
     /// `%LOCALAPPDATA%\Yarn\Data\global` on Windows.
     pub(super) const YARN_GLOBAL: &[&str] = &["/yarn/global/", "/Yarn/Data/global/"];
+    /// Path fragments of npm's global packages, `%APPDATA%\npm\node_modules`.
+    pub(super) const NPM_GLOBAL: &[&str] = &["/npm/node_modules/"];
     /// Path fragments of uv's devlanes tool environment, including the legacy
     /// `%APPDATA%\uv\data\tools`.
     pub(super) const UV_TOOLS: &[&str] = &["/uv/tools/devlanes/", "/uv/data/tools/devlanes/"];
@@ -553,144 +735,6 @@ mod os {
     }
 }
 
-/// Copies of `devlanes.exe` that an upgrade left in a directory.
-#[cfg(windows)]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct OldCopies {
-    /// Deleted now.
-    pub removed: Vec<PathBuf>,
-    /// Still held by a running process (usually the daemon), so kept.
-    pub in_use: Vec<PathBuf>,
-}
-
-/// Deletes the `devlanes.exe.old-*` files `install.ps1` leaves next to an
-/// executable that was running during an upgrade. Windows refuses to delete
-/// one that still runs; it is reported in `in_use` and tried again next time.
-/// Blocking filesystem work.
-#[cfg(windows)]
-pub fn remove_old_copies(dir: &Path) -> OldCopies {
-    let mut copies = OldCopies::default();
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return copies;
-    };
-    let mut paths: Vec<PathBuf> = entries
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
-        .filter(|entry| {
-            let name = entry.file_name().to_string_lossy().to_lowercase();
-            name.strip_prefix("devlanes.exe.old-")
-                .is_some_and(|stamp| !stamp.is_empty())
-        })
-        .map(|entry| entry.path())
-        .collect();
-    paths.sort();
-    for path in paths {
-        match std::fs::remove_file(&path) {
-            Ok(()) => copies.removed.push(path),
-            Err(_) => copies.in_use.push(path),
-        }
-    }
-    copies
-}
-
-/// The notice for a newer release.
-pub fn update_line(latest: &str, current: &str, command: &str) -> String {
-    format!("devlanes {latest} is available (this is {current}): {command}")
-}
-
-/// The notice for a daemon that runs another version than this client.
-pub fn skew_line(daemon: &str, client: &str) -> String {
-    format!(
-        "daemon runs {daemon}, this CLI is {client}; run devlanes daemon restart when convenient (it stops services)"
-    )
-}
-
-/// Notice key for a release.
-pub fn update_key(latest: &str) -> String {
-    format!("update:{latest}")
-}
-
-/// Notice key for a version pair.
-pub fn skew_key(daemon: &str, client: &str) -> String {
-    format!("skew:{daemon}:{client}")
-}
-
-/// When each notice was last shown, and which ones the TUI dismissed, in
-/// `$DEVLANES_HOME/notices.json`.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NoticeLog {
-    /// Notice key to milliseconds since the epoch.
-    #[serde(default)]
-    pub shown: BTreeMap<String, u64>,
-    /// Keys the user dismissed in the TUI.
-    #[serde(default)]
-    pub dismissed: Vec<String>,
-}
-
-impl NoticeLog {
-    /// Reads the log under `home`; a missing or broken file is an empty log.
-    pub fn load(home: &Path) -> Self {
-        std::fs::read_to_string(home.join(NOTICES_FILE))
-            .ok()
-            .and_then(|text| serde_json::from_str(&text).ok())
-            .unwrap_or_default()
-    }
-
-    /// Writes the log through a temporary file and a rename.
-    pub fn save(&self, home: &Path) -> std::io::Result<()> {
-        let text = serde_json::to_string(self).map_err(std::io::Error::other)?;
-        let path = home.join(NOTICES_FILE);
-        let temporary = home.join(format!(".{NOTICES_FILE}.{}", std::process::id()));
-        std::fs::write(&temporary, text)?;
-        std::fs::rename(&temporary, path)
-    }
-
-    /// Whether `key` may be shown at `now`: never shown, or shown a day ago.
-    pub fn due(&self, key: &str, now: u64) -> bool {
-        self.shown
-            .get(key)
-            .is_none_or(|shown| now.saturating_sub(*shown) >= REPEAT_MS)
-    }
-
-    /// Records `key` as shown at `now`, keeping only the newest entries.
-    pub fn mark_shown(&mut self, key: &str, now: u64) {
-        self.shown.insert(key.into(), now);
-        while self.shown.len() > 32 {
-            let oldest = self
-                .shown
-                .iter()
-                .min_by_key(|(_, at)| **at)
-                .map(|(key, _)| key.clone());
-            match oldest {
-                Some(oldest) => self.shown.remove(&oldest),
-                None => break,
-            };
-        }
-    }
-
-    /// Whether the TUI user dismissed `key`.
-    pub fn is_dismissed(&self, key: &str) -> bool {
-        self.dismissed.iter().any(|dismissed| dismissed == key)
-    }
-
-    /// Dismisses `key`, keeping the most recent dismissals.
-    pub fn dismiss(&mut self, key: &str) {
-        if !self.is_dismissed(key) {
-            self.dismissed.push(key.into());
-        }
-        let excess = self.dismissed.len().saturating_sub(32);
-        self.dismissed.drain(..excess);
-    }
-}
-
-/// Milliseconds since the epoch.
-pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,6 +762,7 @@ mod tests {
         binstall_lists_devlanes: false,
         uv_tool: true,
         venv: None,
+        manifest: None,
     };
 
     #[test]
@@ -1293,58 +1338,100 @@ entrypoints = [
         );
     }
 
-    #[cfg(windows)]
     #[test]
-    fn old_copies_are_removed_unless_running() -> std::io::Result<()> {
-        let dir = tempfile::tempdir()?;
-        std::fs::write(dir.path().join("devlanes.exe"), "current")?;
-        std::fs::write(dir.path().join("devlanes.exe.old-20261023101500"), "old")?;
-        std::fs::write(dir.path().join("devlanes.exe.old-"), "no stamp")?;
-        std::fs::write(dir.path().join("other.exe.old-20261023101500"), "other")?;
-        // An open handle without delete sharing stands in for a running executable.
-        let held = dir.path().join("devlanes.exe.old-20261023101600");
-        std::fs::write(&held, "running")?;
-        let handle = {
-            use std::os::windows::fs::OpenOptionsExt;
-            std::fs::OpenOptions::new()
-                .read(true)
-                .share_mode(1)
-                .open(&held)?
-        };
-        let copies = remove_old_copies(dir.path());
+    fn deleted_suffix_is_stripped() {
         assert_eq!(
-            copies.removed,
-            vec![dir.path().join("devlanes.exe.old-20261023101500")]
+            without_deleted_suffix(PathBuf::from("/home/a/.local/bin/devlanes (deleted)")),
+            PathBuf::from("/home/a/.local/bin/devlanes")
         );
-        assert_eq!(copies.in_use, vec![held.clone()]);
-        drop(handle);
-        assert_eq!(remove_old_copies(dir.path()).removed, vec![held]);
-        for kept in [
-            "devlanes.exe",
-            "devlanes.exe.old-",
-            "other.exe.old-20261023101500",
-        ] {
-            assert!(dir.path().join(kept).exists(), "{kept}");
-        }
-        Ok(())
+        assert_eq!(
+            without_deleted_suffix(PathBuf::from("/home/a/.local/bin/devlanes")),
+            PathBuf::from("/home/a/.local/bin/devlanes")
+        );
+        assert_eq!(
+            without_deleted_suffix(PathBuf::from("/home/a/(deleted)/devlanes")),
+            PathBuf::from("/home/a/(deleted)/devlanes")
+        );
     }
 
     #[test]
-    fn notices_repeat_daily_and_persist() -> std::io::Result<()> {
-        let dir = tempfile::tempdir()?;
-        let mut log = NoticeLog::load(dir.path());
-        assert!(log.due("update:0.3.0", 1_000));
-        log.mark_shown("update:0.3.0", 1_000);
-        assert!(!log.due("update:0.3.0", 1_000 + REPEAT_MS - 1));
-        assert!(log.due("update:0.3.0", 1_000 + REPEAT_MS));
-        assert!(log.due("update:0.4.0", 1_001));
-        log.dismiss("update:0.3.0");
-        log.save(dir.path())?;
-        let loaded = NoticeLog::load(dir.path());
-        assert!(loaded.is_dismissed("update:0.3.0"));
-        assert_eq!(loaded.shown.get("update:0.3.0"), Some(&1_000));
-        std::fs::write(dir.path().join(NOTICES_FILE), "broken")?;
-        assert_eq!(NoticeLog::load(dir.path()), NoticeLog::default());
+    fn package_json_dependency_fields() {
+        assert!(package_json_lists_devlanes(
+            r#"{"dependencies":{"devlanes":"^0.9.0"}}"#
+        ));
+        assert!(package_json_lists_devlanes(
+            r#"{"devDependencies":{"vite":"7","devlanes":"0.9.0"}}"#
+        ));
+        assert!(package_json_lists_devlanes(
+            r#"{"optionalDependencies":{"devlanes":"*"}}"#
+        ));
+        assert!(!package_json_lists_devlanes(
+            r#"{"peerDependencies":{"devlanes":"*"}}"#
+        ));
+        assert!(!package_json_lists_devlanes(
+            r#"{"name":"devlanes","dependencies":{"@devlanes/linux-x64":"0.9.0"}}"#
+        ));
+        assert!(!package_json_lists_devlanes("garbage"));
+    }
+
+    #[test]
+    fn outermost_node_modules_is_the_projects() {
+        assert_eq!(
+            outermost_node_modules(Path::new(
+                "/p/acme/node_modules/.pnpm/devlanes@0.9.0/node_modules/devlanes/bin/devlanes"
+            )),
+            Some(Path::new("/p/acme/node_modules"))
+        );
+        assert_eq!(
+            outermost_node_modules(Path::new("/p/acme/bin/devlanes")),
+            None
+        );
+    }
+
+    /// The nearest package.json decides, and it must list devlanes.
+    #[test]
+    fn project_manifests_on_disk() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let project = root.path().join("acme");
+        let node_modules = project.join("node_modules");
+        std::fs::create_dir_all(node_modules.join("devlanes/bin"))?;
+        std::fs::write(
+            root.path().join("package.json"),
+            r#"{"dependencies":{"devlanes":"*"}}"#,
+        )?;
+        assert_eq!(
+            package_json_listing_devlanes(&node_modules),
+            Some(root.path().join("package.json"))
+        );
+        std::fs::write(project.join("package.json"), r#"{"dependencies":{}}"#)?;
+        assert_eq!(package_json_listing_devlanes(&node_modules), None);
+        std::fs::write(
+            project.join("package.json"),
+            r#"{"devDependencies":{"devlanes":"0.9.0"}}"#,
+        )?;
+        assert_eq!(
+            package_json_listing_devlanes(&node_modules),
+            Some(project.join("package.json"))
+        );
+
+        let python = root.path().join("tool");
+        std::fs::create_dir_all(&python)?;
+        assert_eq!(python_project_manifest(&python), None);
+        std::fs::write(python.join("requirements-dev.txt"), "devlanes\n")?;
+        assert_eq!(
+            python_project_manifest(&python),
+            Some(python.join("requirements-dev.txt"))
+        );
+        std::fs::write(python.join("requirements.txt"), "devlanes\n")?;
+        assert_eq!(
+            python_project_manifest(&python),
+            Some(python.join("requirements.txt"))
+        );
+        std::fs::write(python.join("pyproject.toml"), "[project]\n")?;
+        assert_eq!(
+            python_project_manifest(&python),
+            Some(python.join("pyproject.toml"))
+        );
         Ok(())
     }
 }

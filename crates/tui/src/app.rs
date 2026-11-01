@@ -751,7 +751,7 @@ pub enum Msg {
     DaemonStarted(Result<Value, ApiError>),
     /// How devlanes was installed, and the release notices dismissed earlier.
     Notices {
-        method: devlanes_client::update::InstallMethod,
+        method: devlanes_update::InstallMethod,
         dismissed: Vec<String>,
     },
     Profiles {
@@ -1235,7 +1235,7 @@ pub struct App {
     pub daemon: DaemonView,
     pub size: (u16, u16),
     /// How devlanes was installed (`None` until known) and dismissed release notices.
-    pub release: (Option<devlanes_client::update::InstallMethod>, Vec<String>),
+    pub release: (Option<devlanes_update::InstallMethod>, Vec<String>),
     /// Lanes whose task list was fetched again after their config changed.
     tasks_refreshed: HashSet<String>,
     /// Lanes with a clean in flight; their rows say so.
@@ -7422,7 +7422,7 @@ impl App {
     /// The release notice for the header and its key: the daemon runs another
     /// version than this TUI, or a newer release is out. `None` once dismissed.
     pub fn release_badge(&self) -> Option<(String, String)> {
-        use devlanes_client::update;
+        use devlanes_update as update;
         let status = self.daemon.status.as_ref()?;
         let own = self.version;
         let daemon = status.get("version").and_then(Value::as_str);
@@ -7435,7 +7435,7 @@ impl App {
         };
         let notice = notice.or_else(|| {
             let latest = status.pointer("/update/latest").and_then(Value::as_str)?;
-            if !devlanes_proto::release::is_newer(latest, own) {
+            if !update::version::is_newer(latest, own) {
                 return None;
             }
             let command = self.release.0.as_ref()?.upgrade_command(latest);

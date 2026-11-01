@@ -24,6 +24,7 @@ devlanes-proto = { path = "../proto" }
 # The `o` key opens URLs with the same opener as `devlanes url open`.
 devlanes-sys = { path = "../sys" }
 devlanes-term = { path = "../term" }
+devlanes-update = { path = "../update" }
 futures-util.workspace = true
 # daemon.log timestamps shown in local time.
 jiff = "0.2"

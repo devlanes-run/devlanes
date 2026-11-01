@@ -81,5 +81,6 @@ linked = [[
   "cargo/devlanes-trust-windows",
   "cargo/devlanes-tui",
   "cargo/devlanes-tunnel",
+  "cargo/devlanes-update",
   "cargo/devlanes-version",
 ]]

@@ -630,11 +630,11 @@ pub trait DaemonApi: Send + Sync {
     /// How this devlanes was installed and the release notices dismissed so
     /// far, for the update notice. Reads the binary's path and the home's
     /// notice log; called on a blocking thread.
-    fn notices(&self) -> (devlanes_client::update::InstallMethod, Vec<String>) {
-        let method = devlanes_client::update::InstallMethod::current();
+    fn notices(&self) -> (devlanes_update::InstallMethod, Vec<String>) {
+        let method = devlanes_update::InstallMethod::current();
         let dismissed = self
             .home()
-            .map(|home| devlanes_client::update::NoticeLog::load(&home).dismissed)
+            .map(|home| devlanes_update::NoticeLog::load(&home).dismissed)
             .unwrap_or_default();
         (method, dismissed)
     }

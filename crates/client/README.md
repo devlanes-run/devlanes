@@ -21,8 +21,9 @@ async fn main() -> devlanes_client::Result<()> {
 }
 ```
 
-`connect` never spawns or creates state. `connect_or_spawn` can launch the current
-executable as `daemon run`, so use it from a binary that implements that command.
+`connect` never spawns or creates state. `connect_or_spawn` can launch the install's
+stable path (`devlanes_update::spawn_exe`) as `daemon run`, so a client that outlived
+an upgrade starts the new binary. Use it from a binary that implements that command.
 Auto-spawn is refused when sandbox markers are present or the socket-bind probe fails.
 
 ## API
@@ -31,7 +32,6 @@ Auto-spawn is refused when sandbox markers are present or the socket-bind probe 
 - `Client::request` returns response data or a typed error, including `Error::Rpc`.
 - `begin_request`, `next_frame`, and `send_bytes` support events and raw terminal traffic.
 - `Client::peer` exposes the daemon hello; `Client::spawned` records whether this connection started the daemon.
-- `update::InstallMethod::current` tells how this binary was installed and `upgrade_command` gives the matching upgrade; `update::NoticeLog` records when release notices were shown or dismissed (`notices.json`).
 
 ## Behaviour
 
