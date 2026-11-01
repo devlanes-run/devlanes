@@ -1,9 +1,10 @@
 version = 1
 
 [git]
-# devlanes is tagged vX.Y.Z, which release.yml builds; the other crates keep the
-# default devlanes-<name>-vX.Y.Z.
+# devlanes is tagged vX.Y.Z, which release.yml builds. No other crate is published, so
+# none gets a tag; their versions and changelogs still move with each release.
 short_tags = "devlanes"
+tag_unpublished = ["cargo/devlanes"]
 
 [changelog]
 show_acknowledgments = false
