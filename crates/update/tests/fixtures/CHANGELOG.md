@@ -9,6 +9,12 @@
   A switch moves the lane's hostnames and ports to the other box at once.
   
   See the guide.
+  
+  <!-- highlight
+  title: Choose the box for a lane
+  body: Run `devlanes remote use` or press `m` in the TUI to move a lane's
+    hostnames and ports to another box.
+  -->
 - [31c5a3f](https://github.com/devlanes-run/devlanes/commit/31c5a3f75f97742e5b5f96d22567608c9929e1b3) Changed default lane domains to `<project><N>.localhost`, such as `acme2.localhost`.
   
   Lane 0 keeps `acme.localhost`.
@@ -16,6 +22,11 @@
 ### Patch changes
 
 - [31c5a3f](https://github.com/devlanes-run/devlanes/commit/31c5a3f75f97742e5b5f96d22567608c9929e1b3) Added the `domain(name)` expression function.
+  
+  <!-- highlight
+  title: Look up a lane's domain
+  body: Use `domain(name)` in an expression to read another service's hostname.
+  -->
 
 ## 0.8.1 — 2026-10-28
 
@@ -34,6 +45,11 @@
 ### Patch changes
 
 - [0befd1d](https://github.com/devlanes-run/devlanes/commit/0befd1d1c48705308b4dbd6c9759f8ee6d71d05c) Added `devlanes reload`, which applies project file edits to a running lane.
+  
+  <!-- highlight
+  title: Reload a running lane
+  body: Run `devlanes reload` to apply project file edits without a restart.
+  -->
 - [0befd1d](https://github.com/devlanes-run/devlanes/commit/0befd1d1c48705308b4dbd6c9759f8ee6d71d05c) Added a top-level `extends` key that builds a project file on others.
   
   ```yaml
