@@ -123,13 +123,16 @@ impl Demo {
         window()?
             .add_event_listener_with_callback("resize", on_resize.as_ref().unchecked_ref())
             .map_err(js_error)?;
-        let on_pointer = listen_pointer(&screen, element_id)?;
-        let demo = Demo {
+        // Built as soon as a listener is registered, so a failure below drops
+        // the demo, whose `Drop` removes every listener before its closure
+        // is freed; a freed closure left on the window throws on each resize.
+        let mut demo = Demo {
             screen,
             element_id: element_id.to_owned(),
             on_resize,
-            on_pointer,
+            on_pointer: Vec::new(),
         };
+        listen_pointer(&demo.screen, element_id, &mut demo.on_pointer)?;
         let mut terminal = mount(element_id)?;
         let size = terminal.get_frame().area();
         let mut mounted = Screen {
@@ -239,12 +242,14 @@ impl Drop for Demo {
 /// focus, wheel turns, and sends them to the TUI at the cell under the
 /// pointer. Moves and drags stay with the browser, so text in the demo can
 /// be selected and copied as on any page; the right button keeps its menu.
+/// Each listener goes into `listeners` as soon as it is registered, so the
+/// owner can remove the ones added before a failure.
 fn listen_pointer(
     screen: &Rc<RefCell<Option<Screen>>>,
     element_id: &str,
-) -> Result<Vec<Listener>, JsError> {
+    listeners: &mut Vec<Listener>,
+) -> Result<(), JsError> {
     let target = element(element_id)?;
-    let mut listeners = Vec::new();
     for kind in ["pointerdown", "pointerup", "wheel"] {
         let weak = Rc::downgrade(screen);
         let id = element_id.to_owned();
@@ -275,7 +280,7 @@ fn listen_pointer(
             .map_err(js_error)?;
         listeners.push((kind, listener));
     }
-    Ok(listeners)
+    Ok(())
 }
 
 /// Sends one pointer or wheel `event` on the element `element_id` to the TUI
