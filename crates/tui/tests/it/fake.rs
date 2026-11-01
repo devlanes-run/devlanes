@@ -53,6 +53,9 @@ pub struct FakeApi {
     pub daemon_setup: Vec<String>,
     /// The setup steps this side finds missing (the CA's trust); unset, none.
     pub setup: Vec<String>,
+    /// The version the install's entry runs, which a reload opens; unset,
+    /// unknown.
+    pub installed: Option<String>,
     /// What `remote.pair` answers; unset, a code valid for ten minutes.
     pub pairing: Mutex<Option<Result<Value, RpcError>>>,
     /// Shared, so a `connect` session records its answers after the call.
@@ -423,6 +426,10 @@ impl DaemonApi for FakeApi {
             devlanes_update::InstallMethod::Source,
             vec![devlanes_tui::welcome::KEY.into()],
         )
+    }
+
+    fn installed_version(&self) -> Option<String> {
+        self.installed.clone()
     }
 }
 

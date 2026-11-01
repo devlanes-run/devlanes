@@ -192,6 +192,54 @@ fn update_channel_switches_record_the_channel() -> Result<()> {
     Ok(())
 }
 
+/// `updates.mode: disable` and CI markers turn off the daemon's background
+/// checks, not an explicit `devlanes update --check`, which then reads the
+/// registry itself.
+#[test]
+fn update_check_reads_the_registry_when_the_daemons_checks_are_off() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let lab = Lab::with_config(CONFIG, BUDGET)?;
+    let install = root.path().join("bin");
+    std::fs::create_dir_all(&install)?;
+    let entry = install.join(format!("devlanes{EXE_SUFFIX}"));
+    std::fs::copy(bin_dir()?.join(format!("devlanes{EXE_SUFFIX}")), &entry)?;
+    let site = root.path().join("site");
+    let latest = site.join("releases/latest/download");
+    std::fs::create_dir_all(&latest)?;
+    std::fs::write(
+        latest.join("release-manifest.json"),
+        json!({"version": "99.0.0"}).to_string(),
+    )?;
+    let config = lab.home().join("config.yaml");
+    // The daemon reads the fake releases too, so only the config or CI turns
+    // its checks off, not the debug build.
+    let run = |args: &[&str], env: &[(&str, &str)]| -> Result<serde_json::Value> {
+        let mut command = lab.command_with(&entry, lab.repo(), args)?;
+        command.env(BASE_URL_ENV, file_url(&site));
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        lab.run(command, devlanes_e2e::COMMAND_TIMEOUT)?
+            .expect_code(0)?
+            .json()
+    };
+    for (mode, env, reason) in [
+        ("disable", &[][..], "config"),
+        ("notify", &[("CI", "true")][..], "ci"),
+    ] {
+        std::fs::write(&config, format!("updates:\n  mode: {mode}\n"))?;
+        run(&["daemon", "start"], env)?;
+        let status = run(&["daemon", "status"], &[])?;
+        assert_eq!(status["release_check"]["reason"], reason, "{status}");
+        let check = run(&["update", "--check"], &[])?;
+        assert_eq!(check["latest"], "99.0.0", "{mode}: {check}");
+        assert_eq!(check["state"], "available", "{mode}: {check}");
+        assert_eq!(check["channel"], "stable", "{mode}: {check}");
+        run(&["daemon", "stop", "--yes"], &[])?;
+    }
+    Ok(())
+}
+
 /// The PID of the lane's `api` service.
 fn api_pid(lab: &Lab) -> Result<i32> {
     let lanes = lab.lanes(lab.repo())?;

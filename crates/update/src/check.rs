@@ -295,7 +295,8 @@ pub async fn latest(source: Source, urls: &Urls, timeout: Duration) -> Result<St
     parse_latest(source, &body)
 }
 
-/// The release version in a `source`'s answer, as semver without a leading `v`.
+/// The release version in a `source`'s answer, which must be one exactly
+/// ([`Version::parse_release`]): no leading `v`, build metadata or whitespace.
 pub fn parse_latest(source: Source, body: &[u8]) -> Result<String, CheckError> {
     let invalid =
         |what: &str| CheckError::Invalid(format!("{} answer has no {what}", source.name()));
@@ -312,9 +313,8 @@ pub fn parse_latest(source: Source, body: &[u8]) -> Result<String, CheckError> {
         Source::Homebrew => formula_version(&String::from_utf8_lossy(body))
             .ok_or_else(|| invalid("download URL with a version"))?,
     };
-    let version = version.trim().trim_start_matches('v');
-    Version::parse(version)
-        .map(|_| version.to_owned())
+    Version::parse_release(&version)
+        .map(|_| version.clone())
         .ok_or_else(|| CheckError::Invalid(format!("{version:?} is not a release version")))
 }
 
@@ -342,7 +342,6 @@ fn json_string(body: &[u8], path: &[&str]) -> Option<String> {
 /// beta and `rc` is rc. A zero number has no suffix (`1.2.0rc0` is `1.2.0-rc`),
 /// since the wheels write devlanes' first prerelease of a series that way.
 pub fn pep440_to_semver(text: &str) -> Option<String> {
-    let text = text.trim();
     let split = text
         .find(|c: char| c.is_ascii_alphabetic())
         .unwrap_or(text.len());
@@ -423,7 +422,7 @@ mod tests {
     fn reads_each_registry() {
         let github = Source::GitHub(Channel::Stable);
         assert_eq!(
-            parse_latest(github, br#"{"version":"v0.9.1","assets":[]}"#).ok(),
+            parse_latest(github, br#"{"version":"0.9.1","assets":[]}"#).ok(),
             Some("0.9.1".into())
         );
         assert_eq!(
@@ -440,6 +439,26 @@ mod tests {
             Some("0.9.1".into())
         );
         assert!(parse_latest(Source::Npm, br#"{"version":"latest"}"#).is_err());
+        // Only exact release versions: they go into URLs and package specs.
+        for version in ["v0.9.1", "0.9.1+x", " 0.9.1", "0.9.1\n"] {
+            let body = serde_json::json!({ "version": version }).to_string();
+            assert!(
+                parse_latest(github, body.as_bytes()).is_err(),
+                "{version:?}"
+            );
+            assert!(
+                parse_latest(Source::Npm, body.as_bytes()).is_err(),
+                "{version:?}"
+            );
+            let pypi = serde_json::json!({ "info": { "version": version } }).to_string();
+            assert!(
+                parse_latest(Source::PyPi, pypi.as_bytes()).is_err(),
+                "{version:?}"
+            );
+        }
+        let tagged =
+            "  url \"https://example.invalid/releases/download/v0.9.1+x/devlanes.tar.gz\"\n";
+        assert!(parse_latest(Source::Homebrew, tagged.as_bytes()).is_err());
         assert!(parse_latest(Source::PyPi, b"not json").is_err());
         assert!(parse_latest(Source::Homebrew, b"class Devlanes < Formula\n").is_err());
     }

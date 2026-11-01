@@ -12,7 +12,8 @@
 # latest build of main comes from `devlanes update --next` after installing.
 # When that directory already holds a devlanes with the `update` command, the script
 # runs `devlanes update --yes [--version X.Y.Z]` from it instead and exits with its
-# status. After installing, a running daemon is restarted into the new version
+# status, unless the directory is not writable (the script may use sudo there) or
+# X.Y.Z is older than that devlanes (`devlanes update` refuses it). After installing, a running daemon is restarted into the new version
 # (`devlanes update --finish`).
 # When the first devlanes on PATH comes from another installer (Homebrew, npm, pnpm,
 # Bun, Yarn, uv, pipx or cargo), the script stops and names it, since that one would
@@ -168,8 +169,54 @@ if [ -z "$force" ] && [ -n "$first" ]; then
 	esac
 fi
 
-# A devlanes that can update itself does it, the same way `devlanes update` would.
-if [ -x "$dir/devlanes" ] && "$dir/devlanes" update --help >/dev/null 2>&1 </dev/null; then
+# Whether release version $1 sorts before $2, by semver precedence.
+older_than() {
+	awk -v a="$1" -v b="$2" '
+	function split_version(v, core, pre,   at) {
+		at = index(v, "-")
+		if (at) { pre[0] = substr(v, at + 1); v = substr(v, 1, at - 1) } else { pre[0] = "" }
+		split(v, core, ".")
+	}
+	BEGIN {
+		split_version(a, ac, ap)
+		split_version(b, bc, bp)
+		for (i = 1; i <= 3; i++) {
+			if (ac[i] + 0 < bc[i] + 0) exit 0
+			if (ac[i] + 0 > bc[i] + 0) exit 1
+		}
+		# A prerelease sorts before its release.
+		if (ap[0] == "") exit 1
+		if (bp[0] == "") exit 0
+		n = split(ap[0], x, ".")
+		m = split(bp[0], y, ".")
+		for (i = 1; i <= n && i <= m; i++) {
+			xn = x[i] ~ /^[0-9]+$/
+			yn = y[i] ~ /^[0-9]+$/
+			if (xn && yn) {
+				if (x[i] + 0 < y[i] + 0) exit 0
+				if (x[i] + 0 > y[i] + 0) exit 1
+			} else if (xn) {
+				exit 0
+			} else if (yn) {
+				exit 1
+			} else if (x[i] != y[i]) {
+				exit (x[i] < y[i]) ? 0 : 1
+			}
+		}
+		exit (n < m) ? 0 : 1
+	}'
+}
+
+# A devlanes that can update itself does it, the same way `devlanes update` would,
+# unless this script has to: to install where this user cannot write (it may use
+# sudo), or an older release than that devlanes, which `devlanes update` refuses.
+installed=
+if [ -x "$dir/devlanes" ]; then
+	installed=$("$dir/devlanes" --version 2>/dev/null </dev/null | sed -n 's/^devlanes //p' || true)
+fi
+if [ -x "$dir/devlanes" ] && [ -w "$dir" ] &&
+	{ [ -z "$version" ] || [ -z "$installed" ] || ! older_than "$version" "$installed"; } &&
+	"$dir/devlanes" update --help >/dev/null 2>&1 </dev/null; then
 	status=0
 	if [ -n "$version" ]; then
 		on_tty "$dir/devlanes" update --yes --version "$version" || status=$?

@@ -427,8 +427,11 @@ impl Inner {
             .collect()
     }
 
-    /// `hosts.retry`: recompute from the current routes and apply now.
+    /// `hosts.retry`: recompute from the current routes and apply now, and
+    /// read the resolver file again at the next `daemon.status`, since
+    /// `devlanes setup` sends this after changing either.
     pub(crate) async fn hosts_retry(&self) -> Result<Value, RpcError> {
+        *crate::model::lock(&self.resolver_check) = None;
         let Some(hosts) = &self.integ.hosts else {
             return Ok(json!({"retried": false, "hosts": null}));
         };

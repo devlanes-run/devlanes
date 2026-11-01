@@ -35,7 +35,7 @@ curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir ~/bin
 iex "& {$(irm https://devlanes.run/install.ps1)} -Version 0.4.0"
 ```
 
-`devlanes update` installs new releases the way devlanes was installed. After a script install, `devlanes update --next` follows the latest build of `main`, and `devlanes update --stable` goes back to releases.
+`devlanes update` installs new releases the way devlanes was installed. After a script install, `devlanes update --next` follows the latest build of `main`, and `devlanes update --stable` goes back to releases. [Updates](docs/guides/updates.md) has the details.
 
 [packaging](packaging/README.md) describes the release pipeline.
 

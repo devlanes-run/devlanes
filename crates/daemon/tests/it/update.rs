@@ -98,6 +98,7 @@ fn checks(base: &str, method: InstallMethod) -> UpdateCheckOptions {
         recheck_after: Duration::from_secs(3600),
         // Includes starting `curl`; see `CHECK_PATIENCE`.
         timeout: Duration::from_secs(30),
+        exe_retained: true,
     }
 }
 
@@ -243,7 +244,7 @@ async fn each_install_method_reads_its_registry() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         let formula = "class Devlanes < Formula\n  on_macos do\n    url \"https://github.com/devlanes-run/devlanes/releases/download/v97.0.0/devlanes-97.0.0-aarch64-apple-darwin.tar.gz\"\n";
-        let (base, _) = release_server(&[
+        let (base, hits) = release_server(&[
             ("/stable.json", json!({"version": "96.0.0"}).to_string()),
             ("/next.json", json!({"version": "99.0.0-next.3"}).to_string()),
             ("/npm", json!({"name": "devlanes", "version": "95.0.0"}).to_string()),
@@ -277,6 +278,9 @@ async fn each_install_method_reads_its_registry() {
             // No changelog at the server: the release shows without notes.
             assert_eq!(status["update"]["notes"], json!([]), "{name}: {status}");
         }
+        // A `next` build has no tag whose changelog could be read.
+        assert_eq!(hits_of(&hits, "/changelog/99.0.0-next.3"), 0);
+        assert_eq!(hits_of(&hits, "/changelog/96.0.0"), 1);
     })
     .await
     .expect("timed out");
@@ -650,8 +654,9 @@ fn publish(site: &Path, home: &Path, version: &str) {
 }
 
 /// `auto` mode stages a patch release of a script install in the background
-/// and reports it ready; a failed download is reported with its error and
-/// tried again at the next check. The installed binary stays as it is.
+/// and reports it ready; a failed download is reported with its error. An
+/// `update.check` a TUI sends on open does not try it again, even when it
+/// reads the registry; a forced one does. The installed binary stays as it is.
 #[tokio::test]
 async fn auto_mode_stages_a_patch_release_and_retries_a_failure() {
     tokio::time::timeout(LIMIT, async {
@@ -669,8 +674,9 @@ async fn auto_mode_stages_a_patch_release_and_retries_a_failure() {
             release_server(&[("/stable.json", json!({"version": patch}).to_string())]).await;
         let mut options = checks(&base, InstallMethod::Script(bin.clone()));
         options.urls.releases = format!("{}/releases", file_url(&site));
-        // Only `update.check` reads the server.
+        // Only `update.check` reads the server, every time it is called.
         options.first_delay = Duration::from_secs(3600);
+        options.recheck_after = Duration::ZERO;
         let engine = engine(&home, options, UpdateMode::Auto, None).await;
 
         let update = call(&engine, Method::UpdateCheck, json!({"force": true})).await;
@@ -680,6 +686,13 @@ async fn auto_mode_stages_a_patch_release_and_retries_a_failure() {
         assert!(error.contains("SHA256SUMS"), "{status}");
 
         publish(&site, &home, &patch);
+        let again = call(&engine, Method::UpdateCheck, json!({"force": false})).await;
+        assert_eq!(again["state"], "failed", "{again}");
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let status = daemon_status(&engine).await;
+        assert_eq!(status["update"]["state"], "failed", "{status}");
+        assert!(devlanes_update::install::Staged::load(&home).is_none());
+
         call(&engine, Method::UpdateCheck, json!({"force": true})).await;
         let status = status_until(&engine, |s| s["update"]["state"] == "ready").await;
         assert_eq!(status["update"]["installed"], patch.as_str(), "{status}");

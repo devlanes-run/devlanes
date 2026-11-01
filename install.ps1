@@ -18,7 +18,8 @@
 # can be tested against a local directory of fake releases (file:// URLs).
 #
 # When that directory already holds a devlanes.exe with the `update` command, the
-# script runs `devlanes update --yes [--version X.Y.Z]` from it instead. When the first
+# script runs `devlanes update --yes [--version X.Y.Z]` from it instead, unless this
+# user cannot write to the directory or X.Y.Z is older than that devlanes. When the first
 # devlanes on PATH comes from another installer (npm, pnpm, Bun, Yarn, uv, pipx or
 # cargo), it stops and names it, since that one would keep running; -Force installs
 # anyway.
@@ -345,6 +346,99 @@
         }
     }
 
+    function Get-DevlanesInstalledVersion {
+        <#
+        The version `Exe --version` prints after `devlanes `, run as Test-DevlanesCommand
+        runs it, or $null when it fails or prints anything else.
+        #>
+        param([string]$Exe)
+        $start = New-Object Diagnostics.ProcessStartInfo $Exe
+        $start.Arguments = '--version'
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardInput = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        try {
+            $process = [Diagnostics.Process]::Start($start)
+        } catch {
+            return $null
+        }
+        try {
+            $process.StandardInput.Close()
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $null = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit(60000)) {
+                $process.Kill()
+                return $null
+            }
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { return $null }
+            if ($stdout.Result.Trim() -match '^devlanes ([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$') { return $Matches[1] }
+            return $null
+        } finally {
+            $process.Dispose()
+        }
+    }
+
+    function Test-DevlanesOlderVersion {
+        <# Whether release version A sorts before B, by semver precedence. #>
+        param([string]$A, [string]$B)
+        $left = $A.Split([char[]]'-', 2)
+        $right = $B.Split([char[]]'-', 2)
+        $leftCore = $left[0].Split('.')
+        $rightCore = $right[0].Split('.')
+        for ($i = 0; $i -lt 3; $i++) {
+            if ([decimal]$leftCore[$i] -ne [decimal]$rightCore[$i]) { return [decimal]$leftCore[$i] -lt [decimal]$rightCore[$i] }
+        }
+        # A prerelease sorts before its release.
+        if ($left.Count -lt 2) { return $false }
+        if ($right.Count -lt 2) { return $true }
+        $leftIds = $left[1].Split('.')
+        $rightIds = $right[1].Split('.')
+        for ($i = 0; $i -lt [Math]::Min($leftIds.Count, $rightIds.Count); $i++) {
+            $leftNumber = $leftIds[$i] -match '^[0-9]+$'
+            $rightNumber = $rightIds[$i] -match '^[0-9]+$'
+            if ($leftNumber -and $rightNumber) {
+                if ([decimal]$leftIds[$i] -ne [decimal]$rightIds[$i]) { return [decimal]$leftIds[$i] -lt [decimal]$rightIds[$i] }
+            } elseif ($leftNumber -or $rightNumber) {
+                # Numeric identifiers sort before alphanumeric ones.
+                return $leftNumber
+            } elseif ($leftIds[$i] -cne $rightIds[$i]) {
+                return [string]::CompareOrdinal($leftIds[$i], $rightIds[$i]) -lt 0
+            }
+        }
+        return $leftIds.Count -lt $rightIds.Count
+    }
+
+    function Test-DevlanesWritable {
+        <# Whether this user can create and delete a file in Directory. #>
+        param([string]$Directory)
+        $probe = Join-Path $Directory ".devlanes-write-probe.$PID"
+        try {
+            [IO.File]::WriteAllText($probe, '')
+            Remove-Item -LiteralPath $probe -Force
+            return $true
+        } catch {
+            return $false
+        }
+    }
+
+    function Test-DevlanesHandOff {
+        <#
+        Whether to run `devlanes update` from Exe instead of installing here: Exe has
+        `update`, this user can write to Dir, and Version (when one is asked for) is not
+        older than the one Exe runs, which `devlanes update --version` refuses.
+        #>
+        param([string]$Exe, [string]$Dir, [string]$Version)
+        if (-not (Test-Path -LiteralPath $Exe -PathType Leaf) -or -not (Test-DevlanesWritable $Dir)) { return $false }
+        if ($Version) {
+            $installed = Get-DevlanesInstalledVersion $Exe
+            if ($installed -and (Test-DevlanesOlderVersion $Version $installed)) { return $false }
+        }
+        return Test-DevlanesCommand $Exe @('update', '--help')
+    }
+
     function Test-DevlanesOtherInstaller {
         <# Whether a devlanes path, links followed, belongs to a package manager or cargo. #>
         param([string]$Path)
@@ -450,9 +544,11 @@
             }
         }
 
-        # A devlanes that can update itself does it, the same way `devlanes update` would.
+        # A devlanes that can update itself does it, the same way `devlanes update` would,
+        # unless this script has to: to install where devlanes cannot write, or an older
+        # release than it runs.
         $exe = Join-Path $dir 'devlanes.exe'
-        if ((Test-Path -LiteralPath $exe -PathType Leaf) -and (Test-DevlanesCommand $exe @('update', '--help'))) {
+        if (Test-DevlanesHandOff -Exe $exe -Dir $dir -Version $version) {
             $arguments = @('update', '--yes')
             if ($version) { $arguments += @('--version', $version) }
             & $exe @arguments

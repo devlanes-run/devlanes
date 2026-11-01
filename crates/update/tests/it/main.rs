@@ -206,25 +206,99 @@ fn pnpm_entry_on_windows() {
     );
 }
 
+/// A script install runs the executable's own name in its directory, which
+/// a person may have renamed.
 #[cfg(unix)]
 #[test]
-fn script_entry_is_devlanes_in_its_directory() {
+fn script_entry_keeps_the_executable_name() {
+    let script = InstallMethod::Script(PathBuf::from("/Users/a/.local/bin"));
     assert_eq!(
-        InstallMethod::Script(PathBuf::from("/Users/a/.local/bin"))
-            .entry(Path::new("/Users/a/.local/bin/devlanes")),
+        script.entry(Path::new("/Users/a/.local/bin/devlanes")),
         PathBuf::from("/Users/a/.local/bin/devlanes")
+    );
+    assert_eq!(
+        script.entry(Path::new("/Users/a/.local/bin/dl")),
+        PathBuf::from("/Users/a/.local/bin/dl")
+    );
+}
+
+/// Linux names a replaced executable `<path> (deleted)`; the entry is the path.
+#[cfg(target_os = "linux")]
+#[test]
+fn script_entry_drops_the_deleted_suffix() {
+    assert_eq!(
+        InstallMethod::Script(PathBuf::from("/home/a/.local/bin"))
+            .entry(Path::new("/home/a/.local/bin/devlanes (deleted)")),
+        PathBuf::from("/home/a/.local/bin/devlanes")
     );
 }
 
 #[cfg(windows)]
 #[test]
-fn script_entry_is_devlanes_in_its_directory() {
+fn script_entry_keeps_the_executable_name() {
+    let dir = PathBuf::from(r"C:\Users\a\AppData\Local\Programs\devlanes");
+    let script = InstallMethod::Script(dir.clone());
     assert_eq!(
-        InstallMethod::Script(PathBuf::from(r"C:\Users\a\AppData\Local\Programs\devlanes")).entry(
-            Path::new(r"C:\Users\a\AppData\Local\Programs\devlanes\devlanes.exe.old-20261101")
-        ),
-        PathBuf::from(r"C:\Users\a\AppData\Local\Programs\devlanes\devlanes.exe")
+        script.entry(&dir.join("devlanes.exe")),
+        dir.join("devlanes.exe")
     );
+    assert_eq!(script.entry(&dir.join("dl.exe")), dir.join("dl.exe"));
+}
+
+/// A program at `dir/name` whose `--version` prints `stdout` after `sleep`.
+#[cfg(unix)]
+fn fake_program(dir: &Path, name: &str, stdout: &str, sleep: std::time::Duration) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let path = dir.join(name);
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nsleep {}\nprintf '%s\\n' '{stdout}'\n",
+            sleep.as_secs()
+        ),
+    )
+    .expect("script");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("mode");
+    path
+}
+
+#[cfg(windows)]
+fn fake_program(dir: &Path, name: &str, stdout: &str, sleep: std::time::Duration) -> PathBuf {
+    use devlanes_testing::fake_tool::{Behaviour, install};
+    install(
+        dir,
+        name,
+        &Behaviour::new().sleep(sleep).stdout(format!("{stdout}\n")),
+    )
+    .expect("fake-tool")
+}
+
+/// The entry is spawned only when it is there and says it is devlanes, in
+/// time; otherwise the running executable is.
+#[test]
+fn the_entry_is_spawned_only_when_it_runs_devlanes() {
+    use std::time::Duration;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let exe = dir.path().join("running");
+    let quick = Duration::ZERO;
+    let good = fake_program(dir.path(), "good", "devlanes 0.9.1", quick);
+    let other = fake_program(dir.path(), "other", "acme 0.9.1", quick);
+    let slow = fake_program(dir.path(), "slow", "devlanes 0.9.1", Duration::from_secs(3));
+    let patient = Duration::from_secs(30);
+    assert_eq!(
+        devlanes_update::version_of(&good, patient).as_deref(),
+        Some("0.9.1")
+    );
+    assert_eq!(devlanes_update::version_of(&other, patient), None);
+    assert_eq!(
+        devlanes_update::version_of(&slow, Duration::from_millis(300)),
+        None
+    );
+    let missing = dir.path().join("missing");
+    assert_eq!(devlanes_update::version_of(&missing, patient), None);
+    assert_eq!(devlanes_update::entry_or(good.clone(), exe.clone()), good);
+    assert_eq!(devlanes_update::entry_or(other, exe.clone()), exe);
+    assert_eq!(devlanes_update::entry_or(missing, exe.clone()), exe);
 }
 
 /// Methods that upgrade in place run from the same path.

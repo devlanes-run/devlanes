@@ -230,6 +230,39 @@ DEVLANES_CHECK_LOG=$log install_with >/dev/null
 [ "$(tail -n 1 "$log")" = "update --yes" ]
 rm "$log"
 
+# Not for a release older than that devlanes, which `devlanes update` refuses:
+# install.sh installs it itself, then restarts the daemon into it.
+older=$work/installed-older
+mkdir "$older"
+sed "s/devlanes $version/devlanes 9.9.9/" "$work/bin/devlanes" >"$older/devlanes"
+chmod 755 "$older/devlanes"
+DEVLANES_CHECK_LOG=$log install_with -d "$older" --version "$version" >/dev/null
+[ "$("$older/devlanes")" = "devlanes $version" ]
+[ "$(cat "$log")" = "daemon status
+update --finish" ]
+rm "$log"
+
+# Nor into a directory this user cannot write to, where only install.sh may use
+# sudo (root writes anywhere, so this needs another user).
+if [ "$(id -u)" -ne 0 ]; then
+	locked=$work/installed-locked
+	mkdir "$locked"
+	cp "$work/bin/devlanes" "$locked/devlanes"
+	chmod 555 "$locked"
+	status=0
+	refused=$(DEVLANES_CHECK_LOG=$log install_with -d "$locked" 2>&1) || status=$?
+	chmod 755 "$locked"
+	[ "$status" -ne 0 ]
+	case $refused in
+	*"$locked is not writable"*) ;;
+	*)
+		echo "install.sh into an unwritable directory: $refused" >&2
+		exit 1
+		;;
+	esac
+	[ ! -e "$log" ]
+fi
+
 # A fresh install while a daemon answers restarts it into the new version.
 DEVLANES_CHECK_LOG=$log install_with -d "$work/installed-finish" >/dev/null
 [ "$(cat "$log")" = "daemon status

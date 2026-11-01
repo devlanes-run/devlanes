@@ -22,7 +22,7 @@ Without `--dir` it installs to `~/.local/bin`, which a non-interactive SSH sessi
 mkdir -p ~/.devlanes/bin && ln -sf "$(command -v devlanes)" ~/.devlanes/bin/devlanes
 ```
 
-`remote connect` never installs or upgrades devlanes on a box. Without a binary the first connection fails with `devlanes is not installed on hetzner` and stops retrying.
+`remote connect` never installs or updates devlanes on a box. Without a binary the first connection fails with `devlanes is not installed on hetzner` and stops retrying.
 
 Then, on the box:
 
@@ -175,7 +175,7 @@ devlanes remote connect hetzner
 
 Case and the dash do not matter. `--background` asks for the code the same way before it returns; without a terminal, as for an agent, pass `--code`. The box gives this machine a token, kept in its state database, that every later connection presents, also the ones the daemon makes on its own after sleep or a restart. Without a code, as in a script with no terminal, or with a wrong one, the connection waits in `needs_pairing` and `remote connect` says why; run it again with a new code. The same happens when the box revoked this machine's pairing: its ports stay bound and its hostnames answer with a [pairing needed](../errors/box-pairing-needed.md) page until you pair again.
 
-The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an upgrade): the new daemon connects every box that connected since you last ran `remote disconnect` for it, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
+The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an update): the new daemon connects every box that connected since you last ran `remote disconnect` for it, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
 
 ### Unattended reconnects
 
@@ -253,11 +253,11 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | `... failed because nothing on the box accepted it (connection refused)` | the unit runs but does not listen on the box's loopback | make it listen on `127.0.0.1`, `::1` or a wildcard address |
 | `... failed because the box did not answer in time` or `the link dropped while it opened` | a slow or dropped link | try again; `remote ls` shows the link state |
 | `... failed because box hetzner is not connected: ...` | the link stayed down for 10 seconds | the error after the colon says why |
-| `the box runs devlanes 0.4.1 and this machine 0.4.3. Install the same release on both.` | different releases, same protocol | works; upgrade the box when convenient |
+| `the box runs devlanes 0.4.1 and this machine 0.4.3. Install the same release on both.` | different releases, same protocol | works; update the box when convenient |
 | `the box runs ... (protocol 5) but this client speaks protocol 4` | releases too far apart | install the same release on both machines, then `devlanes daemon restart` on the box |
 | `` `devlanes tunnel --stdio` did not answer within 20s. If the box runs an older devlanes release, ... `` | this client is newer than the box: the box's devlanes predates protocol 4, whose tunnel announces itself first | install the same release on both machines |
-| a mux or handshake error right after one machine was upgraded | this client predates protocol 4 and the box is newer: the client cannot read the line the box's tunnel starts with | install the same release on both machines |
-| ``the box daemon runs an older devlanes than `devlanes tunnel` `` | the box's binary was upgraded but its daemon still runs the old one | `devlanes daemon restart` on the box |
+| a mux or handshake error right after one machine was updated | this client predates protocol 4 and the box is newer: the client cannot read the line the box's tunnel starts with | install the same release on both machines |
+| ``the box daemon runs an older devlanes than `devlanes tunnel` `` | the box's binary was updated but its daemon still runs the old one | `devlanes daemon restart` on the box |
 | ``the box closed the connection before `devlanes tunnel --stdio` started. The box printed: ...`` | the login shell exited or ran something else; its output follows | fix the shell's startup files, or the `ForceCommand` or `RemoteCommand` for this host |
 | ``the box printed more than 64 KiB before `devlanes tunnel --stdio` started`` | a profile file prints a lot on every login | make it quiet for non-interactive sessions |
 | `port 5432 is not mirrored because postgres (pid 812) uses it here` | a local process holds the port | stop it, or mark the box container `hidden` |
@@ -281,9 +281,9 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | a box connects again after a daemon restart | you connected it and have not run `remote disconnect` for it since | `devlanes remote disconnect hetzner` when you no longer want it |
 | `no ssh client found` | Windows without OpenSSH Client | add the optional feature, or put `ssh.exe` on `PATH` |
 
-## Upgrading
+## Updating
 
-devlanes never upgrades a box. Install the same release on both machines, then run `devlanes daemon restart` on the box, so its daemon matches `devlanes tunnel`, and on the client. Machines with different protocol versions do not connect ([checking](#checking)).
+devlanes never updates a box. Install the same release on both machines, then run `devlanes daemon restart` on the box, so its daemon matches `devlanes tunnel`, and on the client. Machines with different protocol versions do not connect ([checking](#checking)).
 
 ## Limits
 

@@ -3,4 +3,4 @@ cargo/devlanes: patch
 cargo/devlanes-update: patch
 ---
 
-Changed the update notice for devlanes installed as a project dependency to say to update it in that project's package.json or pyproject.toml.
+Changed devlanes installed as a project dependency to skip release checks; `devlanes update` and `devlanes doctor` say to update it in the project's package.json, pyproject.toml or requirements file.

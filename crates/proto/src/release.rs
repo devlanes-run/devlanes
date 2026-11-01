@@ -18,11 +18,11 @@ pub struct UpdateInfo {
     /// break what worked, before 1.0).
     #[serde(default)]
     pub bump: String,
-    /// `available`: found, not installed; `downloading`: the daemon is
+    /// `available`: found, not installed; `installing`: the daemon is
     /// installing it in the background; `ready`: installed or downloaded
     /// (`installed`), waiting for the next interactive `devlanes` to switch
     /// to it; `failed`: the background install failed (`error`), and the
-    /// next check tries again.
+    /// next scheduled or forced check tries again.
     #[serde(default)]
     pub state: String,
     /// The version the background install put in place, in state `ready`.

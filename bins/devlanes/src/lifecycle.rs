@@ -85,7 +85,7 @@ struct HandoffRow {
 }
 
 /// The environment variable that carries a [`Handoff`].
-pub(crate) const STEPS_ENV: &str = "DEVLANES_UPDATE_STEPS";
+pub(crate) const STEPS_ENV: &str = devlanes_tui::UPDATE_STEPS_ENV;
 
 /// The steps of one stop, restart or update and how they are shown.
 pub(crate) struct View {
@@ -98,9 +98,10 @@ pub(crate) struct View {
 }
 
 impl View {
-    /// The view `runtime` asks for, for a `kind` of block.
-    pub(crate) async fn new(runtime: &Runtime, paths: &Paths, kind: Kind) -> Self {
-        let theme = crate::wiring::tui_options(paths).await.theme();
+    /// The view `runtime` asks for, for a `kind` of block, in the TUI's
+    /// colors ([`crate::wiring::tui_theme`]).
+    pub(crate) fn new(runtime: &Runtime, paths: &Paths, kind: Kind) -> Self {
+        let theme = crate::wiring::tui_theme(paths);
         let sink = if runtime.quiet || matches!(runtime.mode, OutputMode::Json | OutputMode::Agent)
         {
             Sink::Quiet
@@ -401,7 +402,7 @@ pub(crate) async fn stop_daemon(
     if !confirmed(runtime, context, &question, processes)? {
         return Ok(Stopped::Declined);
     }
-    let mut view = View::new(runtime, paths, Kind::Stop).await;
+    let mut view = View::new(runtime, paths, Kind::Stop);
     let (mut report, reports) = reporter();
     let result = view
         .drive(restart::stop(paths, &mut report), reports)
@@ -469,13 +470,15 @@ pub async fn restart(runtime: &Runtime, paths: &Paths, context: Context) -> Resu
         Err(error) if error.is_not_running() => {}
         Err(error) => return Err(rpc_error(error)),
     }
-    let view = View::new(runtime, paths, Kind::Restart).await;
+    let view = View::new(runtime, paths, Kind::Restart);
     restart_in(runtime, paths, context, view).await
 }
 
-/// Restarts the daemon with its steps in `view` (confirm and check the user
-/// config first) and returns once the new daemon answers, naming the lanes
-/// that start again: the rest of `daemon restart`, and of `devlanes update`.
+/// Restarts the daemon with its steps in `view` and returns once the new
+/// daemon answers, naming the lanes that start again: the rest of `daemon
+/// restart`, and of `devlanes update`. It neither asks nor checks the user
+/// config; callers do both first, since the new daemon refuses an invalid
+/// config after the old one stopped every lane.
 pub(crate) async fn restart_in(
     runtime: &Runtime,
     paths: &Paths,
@@ -556,6 +559,47 @@ pub(crate) fn processes_word(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stop, restart or update draws its block in the TUI's colors without
+    /// claiming "What's new": the next TUI still shows it.
+    #[test]
+    fn the_step_block_leaves_whats_new_to_the_next_tui() {
+        use devlanes_cli::clap::Parser;
+        let home = tempfile::tempdir().expect("home");
+        let paths = Paths::new(home.path().join("home")).expect("paths");
+        paths.prepare().expect("directories");
+        let log = devlanes_update::NoticeLog {
+            seen_version: Some("0.0.1".into()),
+            ..devlanes_update::NoticeLog::default()
+        };
+        log.save(&paths.home).expect("notices");
+        let before = std::fs::read(paths.home.join("notices.json")).expect("read");
+        let cli = devlanes_cli::Cli::parse_from(["devlanes", "--output", "plain"]);
+        let runtime = Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime");
+        for kind in [
+            Kind::Stop,
+            Kind::Restart,
+            Kind::Update {
+                from: "0.0.1".into(),
+                to: devlanes_version::VERSION.into(),
+            },
+        ] {
+            drop(View::new(&runtime, &paths, kind));
+        }
+        // Claiming takes the update lock and records the version.
+        assert!(!paths.home.join("update").exists(), "nothing claimed");
+        assert_eq!(
+            std::fs::read(paths.home.join("notices.json")).expect("read"),
+            before
+        );
+        let shown = devlanes_update::claim_whats_new(
+            &paths.home,
+            devlanes_version::VERSION,
+            false,
+            &crate::notes::embedded(),
+        );
+        assert!(shown.is_some(), "the next TUI shows what's new");
+    }
 
     #[test]
     fn resuming_names_each_lane_with_its_services() {

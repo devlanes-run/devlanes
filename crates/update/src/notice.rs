@@ -31,10 +31,10 @@ pub fn update_command(method: &InstallMethod, latest: &str) -> String {
 /// that installs it. A minor release says it may break what worked.
 pub fn update_line(latest: &str, current: &str, bump: Bump, command: &str) -> String {
     let breaking = match bump {
-        Bump::Minor => " (breaking changes)",
+        Bump::Minor => " with breaking changes",
         Bump::Patch => "",
     };
-    format!("devlanes {latest} is available (this is {current}): {command}{breaking}")
+    format!("devlanes {latest} is available{breaking} (this is {current}): {command}")
 }
 
 /// The notice for a release the daemon installed or downloaded in the
@@ -234,7 +234,7 @@ mod tests {
         );
         assert_eq!(
             update_line("0.10.0", "0.9.0", Bump::Minor, "devlanes update"),
-            "devlanes 0.10.0 is available (this is 0.9.0): devlanes update (breaking changes)"
+            "devlanes 0.10.0 is available with breaking changes (this is 0.9.0): devlanes update"
         );
     }
 

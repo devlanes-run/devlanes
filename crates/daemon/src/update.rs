@@ -9,7 +9,10 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -53,6 +56,10 @@ pub struct UpdateCheckOptions {
     pub recheck_after: Duration,
     /// Limit for one request, redirects included.
     pub timeout: Duration,
+    /// Whether a package manager may replace the daemon's executable while
+    /// it runs ([`devlanes_update::own_exe_retained`]); without it, Windows
+    /// package-manager installs are left to a person.
+    pub exe_retained: bool,
 }
 
 impl UpdateCheckOptions {
@@ -81,6 +88,7 @@ impl UpdateCheckOptions {
             interval: Duration::from_secs(4 * 3600),
             recheck_after: Duration::from_secs(3600),
             timeout: Duration::from_secs(10),
+            exe_retained: devlanes_update::own_exe_retained(),
         }
     }
 }
@@ -131,16 +139,39 @@ pub(crate) struct Cached {
 
 /// What the background install is at.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-enum Installing {
+enum Background {
     /// Nothing ran, or it gave way to a `devlanes update`.
     #[default]
     Idle,
     /// Installing this version now.
-    Downloading(String),
+    Installing(String),
     /// This version is installed, or staged for the next interactive start.
     Ready(String),
-    /// Installing `version` failed with `error`; the next check tries again.
+    /// Installing `version` failed with `error`; the next scheduled or
+    /// forced check tries again.
     Failed { version: String, error: String },
+}
+
+impl Background {
+    /// The state a background install task ended in for `version`: `Ready`
+    /// with what it installed, `Idle` when a `devlanes update` held the lock
+    /// (it installs the release itself), `Failed` otherwise, a panic too.
+    fn after(
+        version: &str,
+        ended: Result<Result<String, InstallError>, tokio::task::JoinError>,
+    ) -> Self {
+        let error = match ended {
+            Ok(Ok(installed)) => return Self::Ready(installed),
+            Ok(Err(InstallError::Busy)) => return Self::Idle,
+            Ok(Err(error)) => error.to_string(),
+            Err(error) => format!("the install stopped: {error}"),
+        };
+        tracing::info!(%error, version, "background update failed");
+        Self::Failed {
+            version: version.to_owned(),
+            error,
+        }
+    }
 }
 
 /// The daemon's view of the latest release.
@@ -153,23 +184,27 @@ pub(crate) struct UpdateState {
     cached: Mutex<Option<Cached>>,
     /// One check at a time: the background loop and `update.check` share it.
     checking: tokio::sync::Mutex<()>,
-    /// Told after every successful check, so the loop can install what it found.
+    /// Told after an `update.check` read the registry, so the loop can
+    /// install what it found.
     checked: tokio::sync::Notify,
-    installing: Mutex<Installing>,
+    /// Set with `checked` by a forced `update.check`, which tries a failed
+    /// install of the same release again.
+    retry: AtomicBool,
+    background: Mutex<Background>,
 }
 
 impl UpdateState {
     /// The background install's state.
-    fn installing(&self) -> Installing {
-        self.installing
+    fn background(&self) -> Background {
+        self.background
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
 
     /// Replaces the background install's state.
-    fn set_installing(&self, state: Installing) {
-        *self.installing.lock().unwrap_or_else(|e| e.into_inner()) = state;
+    fn set_background(&self, state: Background) {
+        *self.background.lock().unwrap_or_else(|e| e.into_inner()) = state;
     }
 
     /// The cached result.
@@ -266,14 +301,14 @@ impl Inner {
                 is_newer(&note.version, running) && !is_newer(&note.version, &cached.latest)
             })
             .collect();
-        let (state, installed, error) = match self.update.installing() {
-            Installing::Downloading(version) if version == cached.latest => {
-                ("downloading", None, None)
+        let (state, installed, error) = match self.update.background() {
+            Background::Installing(version) if version == cached.latest => {
+                ("installing", None, None)
             }
-            Installing::Ready(version) if is_newer(&version, running) => {
+            Background::Ready(version) if is_newer(&version, running) => {
                 ("ready", Some(version), None)
             }
-            Installing::Failed { version, error } if version == cached.latest => {
+            Background::Failed { version, error } if version == cached.latest => {
                 ("failed", None, Some(error))
             }
             _ => ("available", None, None),
@@ -339,15 +374,22 @@ impl Inner {
 
     /// `update.check`: checks now when forced or when the last check is older
     /// than [`UpdateCheckOptions::recheck_after`], then replies with the newer
-    /// release, or `null`.
+    /// release, or `null`. Only a check that read the registry wakes the
+    /// background install, and only a forced one retries a failed install
+    /// of the same release, so opening a TUI never repeats a failure.
     pub(crate) async fn update_check_method(&self, params: Value) -> Result<Value, RpcError> {
         let UpdateCheckParams { force } = crate::engine::params(params)?;
         if let Ok(source) = self.update_source().await {
             let recheck = self.opts.update_check.recheck_after;
-            self.check_release(source, (!force).then_some(recheck))
+            let fetched = self
+                .check_release(source, (!force).then_some(recheck))
                 .await;
-            // The loop installs what this found when the mode says so.
-            self.update.checked.notify_one();
+            if fetched {
+                if force {
+                    self.update.retry.store(true, Ordering::Relaxed);
+                }
+                self.update.checked.notify_one();
+            }
         }
         Ok(self
             .update_report()
@@ -373,7 +415,7 @@ impl Inner {
         }
         if let Some(staged) = staged.filter(|s| is_newer(&s.version, devlanes_version::VERSION)) {
             self.update
-                .set_installing(Installing::Ready(staged.version));
+                .set_background(Background::Ready(staged.version));
         }
         let options = self.opts.update_check.clone();
         let mut wait = options.first_delay;
@@ -385,7 +427,8 @@ impl Inner {
                 () = self.shutdown.cancelled() => return,
                 () = tokio::time::sleep(wait) => {}
                 () = self.update.checked.notified() => {
-                    self.clone().install_in_background();
+                    let retry = self.update.retry.swap(false, Ordering::Relaxed);
+                    self.clone().install_in_background(retry);
                     wait = Duration::ZERO;
                     continue;
                 }
@@ -394,16 +437,18 @@ impl Inner {
                 wait = Duration::ZERO;
                 continue;
             }
-            self.check_release(source, None).await;
-            self.clone().install_in_background();
+            if self.check_release(source, None).await {
+                self.clone().install_in_background(true);
+            }
             wait = options.interval;
         }
     }
 
     /// Starts installing the latest release in the background when
     /// [`installs_in_background`] says so and nothing installed it yet. A
-    /// failure stays in the state until the next check tries again.
-    fn install_in_background(self: Arc<Self>) {
+    /// failed install of the same release runs again only with `retry`: at
+    /// a scheduled check or a forced `update.check`.
+    fn install_in_background(self: Arc<Self>, retry: bool) {
         let Some(cached) = self.update.get() else {
             return;
         };
@@ -412,22 +457,25 @@ impl Inner {
             return;
         };
         let mode = self.opts.user.updates.mode;
-        let skip = match self.update.installing() {
-            Installing::Downloading(_) => true,
-            Installing::Ready(version) => !is_newer(&latest, &version),
-            Installing::Idle | Installing::Failed { .. } => false,
+        let skip = match self.update.background() {
+            Background::Installing(_) => true,
+            Background::Ready(version) => !is_newer(&latest, &version),
+            Background::Failed { version, .. } => version == latest && !retry,
+            Background::Idle => false,
         };
         if skip || mode != UpdateMode::Auto || bump != Bump::Patch {
             return;
         }
         let channel = source_channel(&cached.channel);
+        let retained = self.opts.update_check.exe_retained;
         tokio::spawn(async move {
             let (method, exe) = self.install_method().await.clone();
             let version = latest.clone();
-            let plan = tokio::task::spawn_blocking(move || Plan::new(&method, &exe, &version))
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|plan| plan.map_err(|error| error.to_string()));
+            let plan =
+                tokio::task::spawn_blocking(move || Plan::new(&method, &exe, &version, retained))
+                    .await
+                    .map_err(|error| error.to_string())
+                    .and_then(|plan| plan.map_err(|error| error.to_string()));
             let Ok(plan) = plan else {
                 return;
             };
@@ -435,20 +483,15 @@ impl Inner {
                 return;
             }
             self.update
-                .set_installing(Installing::Downloading(latest.clone()));
-            let state = match self.install_release(&plan, &latest, channel).await {
-                Ok(installed) => Installing::Ready(installed),
-                // A `devlanes update` holds the lock and installs it itself.
-                Err(InstallError::Busy) => Installing::Idle,
-                Err(error) => {
-                    tracing::info!(%error, version = %latest, "background update failed");
-                    Installing::Failed {
-                        version: latest,
-                        error: error.to_string(),
-                    }
-                }
+                .set_background(Background::Installing(latest.clone()));
+            // Its own task, so a panic ends as `Failed` instead of leaving
+            // `Installing` behind.
+            let task = {
+                let (this, latest) = (self.clone(), latest.clone());
+                tokio::spawn(async move { this.install_release(&plan, &latest, channel).await })
             };
-            self.update.set_installing(state);
+            self.update
+                .set_background(Background::after(&latest, task.await));
         });
     }
 
@@ -507,15 +550,15 @@ impl Inner {
     }
 
     /// Reads the latest version from `source`, and the release notes once per
-    /// new release, then caches both on disk and in memory. With `fresh`, a
-    /// cached answer younger than that is kept instead. A failure keeps the
-    /// cached answer.
-    async fn check_release(&self, source: Source, fresh: Option<Duration>) {
+    /// new stable release, then caches both on disk and in memory. With
+    /// `fresh`, a cached answer younger than that is kept instead. A failure
+    /// keeps the cached answer. Returns whether it read the registry.
+    async fn check_release(&self, source: Source, fresh: Option<Duration>) -> bool {
         let _checking = self.update.checking.lock().await;
         if let Some(fresh) = fresh
             && !self.until_due(fresh).is_zero()
         {
-            return;
+            return false;
         }
         let options = &self.opts.update_check;
         let latest =
@@ -523,16 +566,18 @@ impl Inner {
                 Ok(latest) => latest,
                 Err(error) => {
                     tracing::debug!(%error, source = source.name(), "release check failed");
-                    return;
+                    return false;
                 }
             };
         let previous = self
             .update
             .get()
             .filter(|previous| previous.notes_for.as_deref() == Some(latest.as_str()));
+        // A `next` build has no tag, so no changelog to read at it.
+        let tagged = Version::parse(&latest).is_some_and(|version| !version.is_prerelease());
         let (notes_for, notes) = match previous {
             Some(previous) => (previous.notes_for, previous.notes),
-            None if is_newer(&latest, devlanes_version::VERSION) => {
+            None if tagged && is_newer(&latest, devlanes_version::VERSION) => {
                 match devlanes_update::check::release_notes(&options.urls, &latest, options.timeout)
                     .await
                 {
@@ -566,6 +611,7 @@ impl Inner {
             tracing::debug!(%error, "release check cache not written");
         }
         self.update.set(cached);
+        true
     }
 }
 
@@ -654,6 +700,36 @@ mod tests {
         }
         assert_eq!(source_channel("next"), Channel::Next);
         assert_eq!(source_channel("stable"), Channel::Stable);
+    }
+
+    /// A background install ends ready, idle when a `devlanes update` took
+    /// over, or failed, a panic included, so `installing` never stays.
+    #[tokio::test]
+    async fn a_background_install_always_ends() {
+        let ended = |result: Result<String, InstallError>| Ok(result);
+        assert_eq!(
+            Background::after("0.9.1", ended(Ok("0.9.1".into()))),
+            Background::Ready("0.9.1".into())
+        );
+        assert_eq!(
+            Background::after("0.9.1", ended(Err(InstallError::Busy))),
+            Background::Idle
+        );
+        assert!(matches!(
+            Background::after("0.9.1", ended(Err(InstallError::Release("bad".into())))),
+            Background::Failed { version, error } if version == "0.9.1" && error == "bad"
+        ));
+        let panicked = tokio::spawn(async {
+            if true {
+                panic!("install task");
+            }
+            Ok::<String, InstallError>(String::new())
+        })
+        .await;
+        assert!(matches!(
+            Background::after("0.9.1", panicked),
+            Background::Failed { version, error } if version == "0.9.1" && error.contains("panic")
+        ));
     }
 
     #[test]

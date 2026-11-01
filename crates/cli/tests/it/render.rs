@@ -1538,7 +1538,7 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
     );
     assert!(
         text.contains(
-            "devlanes 0.3.0 is available (breaking changes), read from homebrew (stable), updates.mode: notify"
+            "devlanes 0.3.0 is available with breaking changes, read from homebrew (stable), updates.mode: notify"
         ),
         "{text}"
     );

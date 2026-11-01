@@ -111,7 +111,9 @@ impl InstallError {
 /// A program and its arguments, run without a shell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Argv {
+    /// The executable, by path or by name to look up on `PATH`.
     pub program: PathBuf,
+    /// Its arguments.
     pub args: Vec<String>,
 }
 
@@ -147,21 +149,38 @@ impl Plan {
     /// this user cannot write to, and methods devlanes does not drive (cargo,
     /// `uvx`, `pipx run`, pip, project dependencies, source builds), are
     /// manual. Package managers come from the install's own prefix when it
-    /// names one, else from `PATH`. Blocking filesystem work.
-    pub fn new(method: &InstallMethod, exe: &Path, version: &str) -> Result<Self, InstallError> {
-        if Version::parse(version).is_none() {
+    /// names one, else from `PATH`. `version` must be exactly a release
+    /// version ([`Version::parse_release`]). `retained` says whether the
+    /// running executable may be replaced ([`crate::own_exe_retained`]); on
+    /// Windows a package manager cannot replace it otherwise, so the plan
+    /// says to stop the daemon first and run it by hand. Blocking filesystem
+    /// work.
+    pub fn new(
+        method: &InstallMethod,
+        exe: &Path,
+        version: &str,
+        retained: bool,
+    ) -> Result<Self, InstallError> {
+        if Version::parse_release(version).is_none() {
             return Err(InstallError::Version(version.to_owned()));
         }
         if let InstallMethod::Script(dir) = method {
-            return Ok(if writable(dir) {
-                Self::Archive { dir: dir.clone() }
-            } else {
-                Self::Manual {
-                    command: method.upgrade_command(version),
-                }
-            });
+            if writable(dir) {
+                return Ok(Self::Archive { dir: dir.clone() });
+            }
+            #[cfg(unix)]
+            let command = crate::method::sudo_script_upgrade(dir);
+            #[cfg(windows)]
+            let command = method.upgrade_command(version);
+            return Ok(Self::Manual { command });
         }
         Ok(match package_manager(method, version, exe) {
+            Some(_) if cfg!(windows) && !retained => Self::Manual {
+                command: format!(
+                    "devlanes daemon stop, then {}",
+                    method.upgrade_command(version)
+                ),
+            },
             Some(commands) => Self::PackageManager(on_disk_or_path(commands)),
             None => Self::Manual {
                 command: method.upgrade_command(version),
@@ -681,36 +700,84 @@ pub struct Applied {
     pub in_use: Vec<PathBuf>,
 }
 
-/// Puts the binaries of `staged` into its target directory: each is copied
-/// next to its target as `.<name>.new.<pid>`, made executable and renamed
-/// into place, so a running devlanes keeps its open executable. On Windows
-/// the running executable is renamed to `<name>.old-<stamp>` first, as
-/// `install.ps1` does, and put back when the new one cannot take its place.
-/// The staged files are deleted afterwards. Hold [`Lock`]. Blocking.
+/// Puts the binaries of `staged` into its target directory, all or none:
+/// each is copied next to its target as `.<name>.new.<pid>` and made
+/// executable, then each old binary is set aside and the new one renamed
+/// into place, so a running devlanes keeps its open executable. When any
+/// step fails, the binaries already swapped get their old files back. On
+/// Windows the running executable is set aside as `<name>.old-<stamp>`, as
+/// `install.ps1` does. The staged files are deleted afterwards. Hold
+/// [`Lock`]. Blocking.
 pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
-    let mut applied = Applied::default();
+    let failed = |target: &Path| {
+        let what = format!("cannot install {}", target.display());
+        move |source| InstallError::Io { what, source }
+    };
+    let mut placed: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let remove_new = |placed: &[(PathBuf, PathBuf)]| {
+        for (temporary, _) in placed {
+            let _ = std::fs::remove_file(temporary);
+        }
+    };
     for name in BINARIES {
         let target = staged.target.join(name);
         let temporary = staged
             .target
             .join(format!(".{name}.new.{}", std::process::id()));
-        let placed = std::fs::copy(staged.files.join(name), &temporary)
-            .and_then(|_| os::make_executable(&temporary))
-            .and_then(|()| os::replace(&temporary, &target));
-        match placed {
-            Ok(Some(old)) => applied.in_use.push(old),
-            Ok(None) => {}
+        let copied = std::fs::copy(staged.files.join(name), &temporary)
+            .and_then(|_| os::make_executable(&temporary));
+        placed.push((temporary, target.clone()));
+        if let Err(source) = copied {
+            remove_new(&placed);
+            return Err(failed(&target)(source));
+        }
+    }
+    // Each swapped target and the old file set aside for it.
+    let mut swapped: Vec<(PathBuf, Option<PathBuf>)> = Vec::new();
+    for (temporary, target) in &placed {
+        let swap = os::set_aside(target).and_then(|old| {
+            std::fs::rename(temporary, target)
+                .map(|()| old.clone())
+                .inspect_err(|_| {
+                    if let Some(old) = &old {
+                        restore(old, target);
+                    }
+                })
+        });
+        match swap {
+            Ok(old) => swapped.push((target.clone(), old)),
             Err(source) => {
-                let _ = std::fs::remove_file(&temporary);
-                return Err(InstallError::Io {
-                    what: format!("cannot install {}", target.display()),
-                    source,
-                });
+                for (target, old) in swapped.iter().rev() {
+                    match old {
+                        Some(old) => restore(old, target),
+                        None => {
+                            let _ = std::fs::remove_file(target);
+                        }
+                    }
+                }
+                remove_new(&placed);
+                return Err(failed(target)(source));
             }
+        }
+    }
+    let mut applied = Applied::default();
+    for old in swapped.into_iter().filter_map(|(_, old)| old) {
+        // Windows keeps a running executable's file until it exits.
+        if std::fs::remove_file(&old).is_err() {
+            applied.in_use.push(old);
         }
     }
     clear(home);
     Ok(applied)
+}
+
+/// Puts `old`, which [`os::set_aside`] made of `target`, back in its place.
+/// On Unix `old` is a second link to the same file until `target` changed,
+/// and a rename between two links of one file does nothing, so the link
+/// left over is deleted.
+fn restore(old: &Path, target: &Path) {
+    let _ = std::fs::rename(old, target);
+    let _ = std::fs::remove_file(old);
 }
 
 /// Deletes the staged release and its record under `home`.
@@ -976,9 +1043,21 @@ mod os {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
     }
 
-    /// Renames `new` over `target`; a running process keeps the old file.
-    pub(super) fn replace(new: &Path, target: &Path) -> io::Result<Option<PathBuf>> {
-        std::fs::rename(new, target).map(|()| None)
+    /// Keeps `target` as a second link, `.<name>.old.<pid>`, so a rename
+    /// can replace `target` with no moment where it is missing and the old
+    /// file can still come back. `None` when there is no `target`.
+    pub(super) fn set_aside(target: &Path) -> io::Result<Option<PathBuf>> {
+        if target.symlink_metadata().is_err() {
+            return Ok(None);
+        }
+        let name = target
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let old = target.with_file_name(format!(".{name}.old.{}", std::process::id()));
+        let _ = std::fs::remove_file(&old);
+        std::fs::hard_link(target, &old)?;
+        Ok(Some(old))
     }
 }
 
@@ -1033,31 +1112,22 @@ mod os {
         Ok(())
     }
 
-    /// Renames `target` to `<target>.old-<stamp>` (a running executable can
-    /// be renamed, not replaced), then `new` to `target`, putting the old one
-    /// back when that fails. The old file is deleted when nothing runs it;
-    /// otherwise its path is returned.
-    pub(super) fn replace(new: &Path, target: &Path) -> io::Result<Option<PathBuf>> {
-        let old = if target.exists() {
-            let stamp = devlanes_core::clock::utc_stamp(crate::now_ms() / 1000);
-            let mut old = PathBuf::from(format!("{}.old-{stamp}", target.display()));
-            let mut n = 1;
-            while old.exists() {
-                old = PathBuf::from(format!("{}.old-{stamp}-{n}", target.display()));
-                n += 1;
-            }
-            std::fs::rename(target, &old)?;
-            Some(old)
-        } else {
-            None
-        };
-        if let Err(error) = std::fs::rename(new, target) {
-            if let Some(old) = &old {
-                let _ = std::fs::rename(old, target);
-            }
-            return Err(error);
+    /// Renames `target` to `<target>.old-<stamp>`, since a running
+    /// executable can be renamed but not replaced. `None` when there is no
+    /// `target`.
+    pub(super) fn set_aside(target: &Path) -> io::Result<Option<PathBuf>> {
+        if !target.exists() {
+            return Ok(None);
         }
-        Ok(old.filter(|old| std::fs::remove_file(old).is_err()))
+        let stamp = devlanes_core::clock::utc_stamp(crate::now_ms() / 1000);
+        let mut old = PathBuf::from(format!("{}.old-{stamp}", target.display()));
+        let mut n = 1;
+        while old.exists() {
+            old = PathBuf::from(format!("{}.old-{stamp}-{n}", target.display()));
+            n += 1;
+        }
+        std::fs::rename(target, &old)?;
+        Ok(Some(old))
     }
 }
 
@@ -1265,13 +1335,108 @@ mod tests {
 
     #[test]
     fn versions_are_checked_before_any_command() {
-        let error = Plan::new(
-            &InstallMethod::Npm,
-            Path::new("devlanes"),
-            "1.0.0; rm -rf /",
-        )
-        .expect_err("refused");
-        assert!(matches!(error, InstallError::Version(_)), "{error}");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = InstallMethod::Script(dir.path().to_path_buf());
+        for version in ["1.0.0; rm -rf /", "v0.9.1", "0.9.1+x", " 0.9.1", "0.9.1\n"] {
+            for method in [&InstallMethod::Npm, &script] {
+                let error =
+                    Plan::new(method, Path::new("devlanes"), version, true).expect_err("refused");
+                assert!(
+                    matches!(error, InstallError::Version(_)),
+                    "{version:?}: {error}"
+                );
+            }
+        }
+        assert!(Plan::new(&script, Path::new("devlanes"), "0.9.1-next.3", true).is_ok());
+    }
+
+    /// `devlanes` and `devlanes-hosts` change together: when the second
+    /// cannot take its place, the first gets its old file back, and nothing
+    /// of the attempt stays in the directory.
+    #[cfg(unix)]
+    #[test]
+    fn applying_is_all_or_nothing() -> std::io::Result<()> {
+        let root = tempfile::tempdir()?;
+        let (home, files, target) = (
+            root.path().join("home"),
+            root.path().join("files"),
+            root.path().join("bin"),
+        );
+        std::fs::create_dir_all(&files)?;
+        std::fs::create_dir_all(&target)?;
+        for name in BINARIES {
+            std::fs::write(files.join(name), format!("new {name}"))?;
+        }
+        std::fs::write(target.join("devlanes"), "old devlanes")?;
+        // A directory in the helper's place refuses the rename.
+        std::fs::create_dir_all(target.join("devlanes-hosts/busy"))?;
+        let staged = Staged {
+            version: "0.9.1".into(),
+            channel: "stable".into(),
+            sha256: "a".repeat(64),
+            target: target.clone(),
+            files: files.clone(),
+        };
+        let listing = |dir: &Path| -> std::io::Result<Vec<String>> {
+            let mut names: Vec<String> = std::fs::read_dir(dir)?
+                .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+                .collect::<Result<_, _>>()?;
+            names.sort();
+            Ok(names)
+        };
+        let error = apply(&home, &staged).expect_err("the helper cannot be replaced");
+        assert!(error.to_string().contains("devlanes-hosts"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(target.join("devlanes"))?,
+            "old devlanes"
+        );
+        assert_eq!(listing(&target)?, ["devlanes", "devlanes-hosts"]);
+
+        std::fs::remove_dir_all(target.join("devlanes-hosts"))?;
+        std::fs::write(target.join("devlanes-hosts"), "old helper")?;
+        let applied = apply(&home, &staged).expect("applied");
+        assert!(applied.in_use.is_empty(), "{applied:?}");
+        for name in BINARIES {
+            assert_eq!(
+                std::fs::read_to_string(target.join(name))?,
+                format!("new {name}")
+            );
+        }
+        assert_eq!(listing(&target)?, ["devlanes", "devlanes-hosts"]);
+        Ok(())
+    }
+
+    /// Windows refuses to replace a running executable without a second
+    /// link to it, so without one a package-manager install is manual and
+    /// says to stop the daemon first. macOS and Linux replace it either way.
+    #[test]
+    fn package_managers_need_the_running_exe_retained_on_windows() {
+        let unretained =
+            Plan::new(&InstallMethod::Npm, Path::new("devlanes"), "0.9.1", false).expect("plan");
+        if cfg!(windows) {
+            assert_eq!(
+                unretained,
+                Plan::Manual {
+                    command: "devlanes daemon stop, then npm install -g devlanes@latest".into()
+                }
+            );
+        } else {
+            assert!(
+                matches!(unretained, Plan::PackageManager(_)),
+                "{unretained:?}"
+            );
+        }
+        assert!(matches!(
+            Plan::new(&InstallMethod::Npm, Path::new("devlanes"), "0.9.1", true),
+            Ok(Plan::PackageManager(_))
+        ));
+        // Script installs rename the running executable aside instead.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let script = InstallMethod::Script(dir.path().to_path_buf());
+        assert!(matches!(
+            Plan::new(&script, Path::new("devlanes"), "0.9.1", false),
+            Ok(Plan::Archive { .. })
+        ));
     }
 
     #[test]
@@ -1287,7 +1452,7 @@ mod tests {
             },
         ] {
             assert_eq!(
-                Plan::new(&method, Path::new("devlanes"), "0.9.1").expect("plan"),
+                Plan::new(&method, Path::new("devlanes"), "0.9.1", true).expect("plan"),
                 Plan::Manual {
                     command: method.upgrade_command("0.9.1")
                 },
@@ -1296,15 +1461,24 @@ mod tests {
             assert!(!installs_itself(&method), "{method:?}");
         }
         let missing = InstallMethod::Script(PathBuf::from("/nonexistent/devlanes/bin"));
-        assert!(matches!(
-            Plan::new(&missing, Path::new("devlanes"), "0.9.1"),
-            Ok(Plan::Manual { .. })
-        ));
+        let Ok(Plan::Manual { command }) =
+            Plan::new(&missing, Path::new("devlanes"), "0.9.1", true)
+        else {
+            panic!("an unwritable directory is manual");
+        };
+        // install.sh may then use sudo there.
+        #[cfg(unix)]
+        assert_eq!(
+            command,
+            "curl -fsSL https://devlanes.run/install.sh | DEVLANES_INSTALL_DIR=/nonexistent/devlanes/bin DEVLANES_INSTALL_SUDO=1 sh"
+        );
+        #[cfg(windows)]
+        assert_eq!(command, missing.upgrade_command("0.9.1"));
         assert!(installs_itself(&missing));
         let dir = tempfile::tempdir().expect("tempdir");
         let script = InstallMethod::Script(dir.path().to_path_buf());
         assert_eq!(
-            Plan::new(&script, Path::new("devlanes"), "0.9.1").expect("plan"),
+            Plan::new(&script, Path::new("devlanes"), "0.9.1", true).expect("plan"),
             Plan::Archive {
                 dir: dir.path().to_path_buf()
             }

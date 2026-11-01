@@ -656,16 +656,33 @@ pub trait DaemonApi: Send + Sync {
     fn home(&self) -> Option<PathBuf> {
         None
     }
-    /// How this devlanes was installed and the release notices dismissed so
-    /// far, for the update notice. Reads the binary's path and the home's
-    /// notice log; called on a blocking thread.
+    /// How this devlanes was installed and the notices to hold back: the
+    /// dismissed dialogs (the welcome) and the notices shown in the last
+    /// day. Reads the binary's path and the home's notice log; called on a
+    /// blocking thread.
     fn notices(&self) -> (devlanes_update::InstallMethod, Vec<String>) {
         let method = devlanes_update::InstallMethod::current();
-        let dismissed = self
+        let held = self
             .home()
-            .map(|home| devlanes_update::NoticeLog::load(&home).dismissed)
+            .map(|home| {
+                let log = devlanes_update::NoticeLog::load(&home);
+                let now = devlanes_update::now_ms();
+                let recent = log
+                    .shown
+                    .keys()
+                    .filter(|key| !log.due(key, now))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                log.dismissed.into_iter().chain(recent).collect()
+            })
             .unwrap_or_default();
-        (method, dismissed)
+        (method, held)
+    }
+    /// The version the install's entry runs now
+    /// ([`devlanes_update::installed_version`]), which a reload would open;
+    /// `None` when it is unknown. Called on a blocking thread.
+    fn installed_version(&self) -> Option<String> {
+        None
     }
 }
 
@@ -831,6 +848,20 @@ pub fn is_unsupported(error: &ApiError) -> bool {
     )
 }
 
+/// The environment lanes started from the TUI get: `vars` with names folded
+/// as the CLI folds them (`Path` is `PATH` on Windows), without what a
+/// relaunch or `devlanes update` passed to this TUI alone.
+fn lane_env(vars: impl IntoIterator<Item = (String, String)>) -> BTreeMap<String, String> {
+    vars.into_iter()
+        .map(|(name, value)| (devlanes_core::env::fold_name(name), value))
+        .filter(|(name, _)| {
+            ![crate::REOPEN_ENV, crate::UPDATE_STEPS_ENV]
+                .iter()
+                .any(|own| devlanes_core::env::fold_name((*own).to_owned()) == *name)
+        })
+        .collect()
+}
+
 /// The real implementation over `devlanes-client`.
 ///
 /// Short requests share one connection. Subscriptions, attaches and long
@@ -859,12 +890,8 @@ impl ClientApi {
             paths,
             cwd: std::env::current_dir().unwrap_or_default(),
             // Captured once: start/run from the TUI use this shell's env as the lane
-            // base env. Names folded as the CLI folds them (`Path` is `PATH` on Windows).
-            // The reopen request was for this TUI alone, not for its lanes.
-            env: std::env::vars()
-                .filter(|(name, _)| name != crate::REOPEN_ENV)
-                .map(|(name, value)| (devlanes_core::env::fold_name(name), value))
-                .collect(),
+            // base env.
+            env: lane_env(std::env::vars()),
             shared: Mutex::new(Some(client)),
             cwd_seen: AtomicBool::new(false),
             setup_check,
@@ -1437,6 +1464,11 @@ impl DaemonApi for ClientApi {
     fn home(&self) -> Option<PathBuf> {
         Some(self.paths.home.clone())
     }
+
+    /// Runs the install's entry with `--version`.
+    fn installed_version(&self) -> Option<String> {
+        devlanes_update::installed_version()
+    }
 }
 
 /// The box settings of the user config at `path` as `devlanes tunnel` reads
@@ -1457,6 +1489,23 @@ fn box_settings(path: &std::path::Path) -> (devlanes_config::BoxSettings, bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a relaunch or `devlanes update` passed to this TUI never reaches
+    /// the lanes it starts.
+    #[test]
+    fn lanes_get_the_shell_env_without_the_relaunch_variables() {
+        let env = lane_env([
+            ("HOME".to_owned(), "/home/a".to_owned()),
+            (crate::REOPEN_ENV.to_owned(), "{}".to_owned()),
+            (crate::UPDATE_STEPS_ENV.to_owned(), "{}".to_owned()),
+        ]);
+        assert_eq!(
+            env.keys().cloned().collect::<Vec<_>>(),
+            [devlanes_core::env::fold_name("HOME".to_owned())]
+        );
+        #[cfg(windows)]
+        assert!(lane_env([("devlanes_update_steps".to_owned(), "{}".to_owned())]).is_empty());
+    }
 
     /// Read as the tunnel reads them: pairing is off and connections are
     /// off only when set so and valid.

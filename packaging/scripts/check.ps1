@@ -241,6 +241,15 @@ Assert-True (Test-DevlanesCommand $cmd @('/d', '/c', 'exit', '0')) 'a command th
 Assert-True (-not (Test-DevlanesCommand $cmd @('/d', '/c', 'exit', '3'))) 'a command that exits with 3'
 Assert-True (-not (Test-DevlanesCommand 'C:\nonexistent\devlanes.exe' @('update', '--help'))) 'a program that does not start'
 Assert-Equal (Resolve-DevlanesLink $cmd) $cmd 'a path without links'
+Assert-Equal (Get-DevlanesInstalledVersion $cmd) $null 'the version of a program that is not devlanes'
+Assert-Equal (Get-DevlanesInstalledVersion 'C:\nonexistent\devlanes.exe') $null 'the version of a program that does not start'
+foreach ($case in @(
+        @('0.9.0', '0.9.1', $true), @('0.9.1', '0.9.0', $false), @('0.9.1', '0.9.1', $false),
+        @('0.9.9', '0.10.0', $true), @('1.0.0-rc.1', '1.0.0', $true), @('1.0.0', '1.0.0-rc.1', $false),
+        @('1.0.0-rc.2', '1.0.0-rc.10', $true), @('1.0.0-alpha', '1.0.0-alpha.1', $true),
+        @('1.0.0-1', '1.0.0-alpha', $true), @('1.0.0-beta', '1.0.0-alpha.1', $false))) {
+    Assert-Equal (Test-DevlanesOlderVersion $case[0] $case[1]) $case[2] "$($case[0]) before $($case[1])"
+}
 
 $sums = "$('a' * 64)  devlanes-1.2.3-x86_64-unknown-linux-gnu.tar.gz`n$('b' * 64)  devlanes-1.2.3-x86_64-pc-windows-msvc.zip`n"
 $found = Find-DevlanesArchive $sums 'x86_64-pc-windows-msvc' '' 'SHA256SUMS'
@@ -267,6 +276,30 @@ $cleanPath = @($env:Path -split ';' | Where-Object {
 $pathBefore = Get-UserPath
 New-Item -ItemType Directory -Path $work | Out-Null
 try {
+    Assert-True (Test-DevlanesWritable $work) 'a directory this user writes to'
+    Assert-True (-not (Test-DevlanesWritable (Join-Path $work 'missing'))) 'a directory that does not exist'
+    Assert-Equal @(Get-ChildItem -LiteralPath $work -Force).Count 0 'the write probe is deleted'
+    # install.ps1 hands off to a devlanes.exe that has `update` (cmd.exe exits with 0
+    # for it) unless it must install itself: an older release than that devlanes, which
+    # `devlanes update` refuses, or a directory it cannot write to.
+    $handing = Join-Path $work 'handing'
+    New-Item -ItemType Directory -Path $handing | Out-Null
+    $handingExe = Join-Path $handing 'devlanes.exe'
+    Copy-Item -LiteralPath $cmd -Destination $handingExe
+    Assert-True (Test-DevlanesHandOff $handingExe $handing '0.0.1') 'hand off when the installed version is unknown'
+    Assert-True (-not (Test-DevlanesHandOff (Join-Path $handing 'missing.exe') $handing '')) 'no devlanes.exe to hand off to'
+    & {
+        function Get-DevlanesInstalledVersion { param([string]$Exe) if ($Exe) { '9.9.9' } }
+        Assert-True (Test-DevlanesHandOff $handingExe $handing '') 'hand off for the latest release'
+        Assert-True (Test-DevlanesHandOff $handingExe $handing '9.9.9') 'hand off for the installed version'
+        Assert-True (Test-DevlanesHandOff $handingExe $handing '10.0.0') 'hand off for a newer version'
+        Assert-True (-not (Test-DevlanesHandOff $handingExe $handing '0.0.1')) 'install an older version here'
+        Assert-True (-not (Test-DevlanesHandOff $handingExe $handing '9.9.9-rc.1')) 'install an older prerelease here'
+        function Test-DevlanesWritable { param([string]$Directory) -not $Directory }
+        Assert-True (-not (Test-DevlanesHandOff $handingExe $handing '')) 'install into an unwritable directory here'
+    }
+    Remove-Item -LiteralPath $handing -Recurse -Force
+
     # A devlanes.exe ahead of the install directory is reported; one behind it is not.
     $shadowing = Join-Path $work 'shadowing'
     $behind = Join-Path $work 'behind'

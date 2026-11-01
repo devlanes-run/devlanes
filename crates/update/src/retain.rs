@@ -5,7 +5,18 @@
 //! process keeps running from the link. Long-running devlanes processes keep
 //! such a link in `$DEVLANES_HOME/run/exe/<pid>.exe`.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+};
+
+/// How many [`Retained`] links this process holds.
+static HELD: AtomicUsize = AtomicUsize::new(0);
+
+/// Whether this process holds a link to its executable now.
+pub(crate) fn held() -> bool {
+    HELD.load(Ordering::Relaxed) > 0
+}
 
 /// A hard link to this process's executable, deleted when dropped. A link
 /// that is the last name of a running file cannot be deleted; the next
@@ -26,6 +37,7 @@ impl Retained {
 impl Drop for Retained {
     /// Deletes the link.
     fn drop(&mut self) {
+        HELD.fetch_sub(1, Ordering::Relaxed);
         let _ = std::fs::remove_file(&self.link);
     }
 }
@@ -48,6 +60,7 @@ fn retain(home: &Path, exe: &Path, pid: u32) -> Option<Retained> {
     // A link left by an earlier process that had this PID.
     let _ = std::fs::remove_file(&link);
     std::fs::hard_link(exe, &link).ok()?;
+    HELD.fetch_add(1, Ordering::Relaxed);
     Some(Retained { link })
 }
 

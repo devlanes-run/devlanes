@@ -42,6 +42,16 @@ impl Version {
         Some(Self { core, pre })
     }
 
+    /// `text` when it is a version exactly as a release names it,
+    /// `MAJOR.MINOR.PATCH[-PRERELEASE]`: no leading `v`, no build metadata,
+    /// no whitespace. Installs and registry answers accept only these, since
+    /// the version goes into package specs and download URLs as it is.
+    pub fn parse_release(text: &str) -> Option<Self> {
+        let plain =
+            !text.starts_with('v') && !text.contains('+') && !text.chars().any(char::is_whitespace);
+        plain.then(|| Self::parse(text)).flatten()
+    }
+
     /// Whether this is a prerelease, such as a `next` build's `0.9.1-next.3`.
     pub fn is_prerelease(&self) -> bool {
         !self.pre.is_empty()
@@ -190,5 +200,24 @@ mod tests {
         }
         assert!(!is_newer("latest", "0.1.0"));
         assert!(!is_newer("0.2.0", "local"));
+    }
+
+    #[test]
+    fn release_versions_are_exact() {
+        for text in ["0.9.1", "0.9.1-next.14", "1.0.0-rc.1"] {
+            assert!(Version::parse_release(text).is_some(), "{text}");
+        }
+        for text in [
+            "v0.9.1",
+            "0.9.1+x",
+            " 0.9.1",
+            "0.9.1 ",
+            "0.9.1\n",
+            "0.9.1-a b",
+            "0.9",
+            "",
+        ] {
+            assert_eq!(Version::parse_release(text), None, "{text:?}");
+        }
     }
 }

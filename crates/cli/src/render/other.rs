@@ -1925,7 +1925,7 @@ fn release_checks(release: &Value) -> Vec<Check> {
         ),
         Some("ok") if release.get("update_available").and_then(Value::as_bool) == Some(true) => {
             let breaking = match release.get("bump").and_then(Value::as_str) {
-                Some("minor") => " (breaking changes)",
+                Some("minor") => " with breaking changes",
                 _ => "",
             };
             Check::new(

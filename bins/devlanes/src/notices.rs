@@ -223,7 +223,7 @@ mod tests {
             lines,
             format!(
                 "daemon runs 0.0.1, this CLI is {OWN}; run devlanes daemon restart when convenient (it stops services)\n\
-                 devlanes 99.0.0 is available (this is {OWN}): devlanes update # 99.0.0 (breaking changes)\n"
+                 devlanes 99.0.0 is available with breaking changes (this is {OWN}): devlanes update # 99.0.0\n"
             )
         );
         assert_eq!(

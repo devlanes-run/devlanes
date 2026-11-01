@@ -1,7 +1,11 @@
 //! How this devlanes binary was installed, the command that upgrades it, and
 //! the stable path that runs it.
 
-use std::path::{Component, Path, PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Component, Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use devlanes_core::paths::user_home;
 use devlanes_version::REPOSITORY;
@@ -277,22 +281,24 @@ impl InstallMethod {
             Self::UvPip(venv) => os::uv_pip_upgrade(venv),
             Self::Local { manifest } => format!("update devlanes in {}", manifest.display()),
             Self::Source => format!("git pull, then cargo build --release (v{version})"),
+            #[cfg(unix)]
+            Self::Script(dir) => os::script_upgrade(dir, false),
+            #[cfg(windows)]
             Self::Script(dir) => os::script_upgrade(dir),
         }
     }
 
     /// The path that runs this install after an upgrade, for the canonical
-    /// executable `exe` of this method. Script installs keep `devlanes` in
-    /// their directory. Homebrew's Cellar path names the version, and `brew
+    /// executable `exe` of this method. Script installs keep `exe`'s file
+    /// name in their directory (without the ` (deleted)` Linux adds to a
+    /// replaced executable). Homebrew's Cellar path names the version, and `brew
     /// cleanup` deletes it after an upgrade, so this is the `opt` link of the
     /// prefix. pnpm's store path names the version too, so this is the global
     /// `node_modules/devlanes` link when `exe` is the binary the package's
     /// postinstall placed there. Every other method upgrades in place: `exe`.
     pub fn entry(&self, exe: &Path) -> PathBuf {
         let stable = match self {
-            Self::Script(dir) => {
-                Some(dir.join(format!("devlanes{}", std::env::consts::EXE_SUFFIX)))
-            }
+            Self::Script(dir) => file_name(exe).map(|name| dir.join(name)),
             Self::Homebrew => homebrew_entry(exe),
             Self::Pnpm => pnpm_entry(exe),
             _ => None,
@@ -316,19 +322,83 @@ pub fn script_install_command(dir: &Path) -> String {
     os::script_install(dir)
 }
 
+/// The command that upgrades the script install in `dir`, which this user
+/// cannot write to, with `install.sh` allowed to use sudo there.
+#[cfg(unix)]
+pub(crate) fn sudo_script_upgrade(dir: &Path) -> String {
+    os::script_upgrade(dir, true)
+}
+
+/// How long [`spawn_exe`] waits for `<entry> --version`.
+const ENTRY_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The executable a process should start to run devlanes again, such as the
 /// daemon a client spawns or the one a login service names.
 ///
-/// That is this install's [`InstallMethod::entry`] when the file exists, else
-/// this process's executable. A long-running process (a TUI, the daemon)
-/// outlives upgrades: Homebrew's `brew cleanup` deletes the old Cellar
-/// directory it runs from, and Linux reports a replaced executable as
-/// `<path> (deleted)`. Starting the entry runs the binary installed now.
-/// Blocking filesystem work.
+/// That is this install's [`InstallMethod::entry`] when it exists and its
+/// `--version` says it is devlanes ([`version_of`]), else this process's
+/// executable. A long-running process (a TUI, the daemon) outlives upgrades:
+/// Homebrew's `brew cleanup` deletes the old Cellar directory it runs from,
+/// and Linux reports a replaced executable as `<path> (deleted)`. Starting
+/// the entry runs the binary installed now. Blocking: it reads the
+/// filesystem and runs the entry for up to a few seconds.
 pub fn spawn_exe() -> std::io::Result<PathBuf> {
     let exe = running_exe()?;
-    let entry = InstallMethod::of(&exe).entry(&exe);
-    Ok(if entry.is_file() { entry } else { exe })
+    Ok(entry_or(InstallMethod::of(&exe).entry(&exe), exe))
+}
+
+/// `entry` when it is a file whose `--version` says it is devlanes
+/// ([`version_of`]), else `exe`. Blocking.
+pub fn entry_or(entry: PathBuf, exe: PathBuf) -> PathBuf {
+    if entry == exe || (entry.is_file() && version_of(&entry, ENTRY_CHECK_TIMEOUT).is_some()) {
+        entry
+    } else {
+        exe
+    }
+}
+
+/// The version of the devlanes the running install's entry runs now
+/// ([`InstallMethod::entry`]), which differs from this process's after an
+/// update; `None` when it does not answer as devlanes. Blocking.
+pub fn installed_version() -> Option<String> {
+    let (_, entry) = InstallMethod::current_with_entry();
+    version_of(&entry, ENTRY_CHECK_TIMEOUT)
+}
+
+/// The version `<exe> --version` prints after `devlanes `, when it succeeds
+/// within `timeout` with a release version; a program that takes longer is
+/// killed. Blocking.
+pub fn version_of(exe: &Path, timeout: Duration) -> Option<String> {
+    use std::{io::Read, process::Stdio};
+    let mut child = std::process::Command::new(exe)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            _ => break None,
+        }
+    };
+    let Some(status) = status else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    };
+    let mut out = String::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_string(&mut out);
+    }
+    let version = out.trim().strip_prefix("devlanes ")?;
+    (status.success() && crate::version::Version::parse(version).is_some())
+        .then(|| version.to_owned())
 }
 
 /// This process's executable, canonical when it still exists. Blocking.
@@ -355,6 +425,14 @@ fn without_deleted_suffix(exe: PathBuf) -> PathBuf {
         Some(path) => PathBuf::from(path),
         None => exe,
     }
+}
+
+/// `exe`'s file name; on Linux without the ` (deleted)` of a replaced
+/// executable.
+fn file_name(exe: &Path) -> Option<OsString> {
+    #[cfg(target_os = "linux")]
+    let exe = &without_deleted_suffix(exe.to_path_buf());
+    exe.file_name().map(ToOwned::to_owned)
 }
 
 /// `<prefix>/opt/devlanes/bin/devlanes` for an executable under
@@ -568,10 +646,11 @@ mod os {
             .map(|data| data.join("uv/tools"))
     }
 
-    /// `install.sh` into `dir`.
-    pub(super) fn script_upgrade(dir: &Path) -> String {
+    /// `install.sh` into `dir`, allowed to use sudo there with `sudo`.
+    pub(super) fn script_upgrade(dir: &Path, sudo: bool) -> String {
+        let sudo = if sudo { " DEVLANES_INSTALL_SUDO=1" } else { "" };
         format!(
-            "curl -fsSL {INSTALL_SCRIPT} | DEVLANES_INSTALL_DIR={} sh",
+            "curl -fsSL {INSTALL_SCRIPT} | DEVLANES_INSTALL_DIR={}{sudo} sh",
             shell_quote(&dir.to_string_lossy())
         )
     }
@@ -685,7 +764,8 @@ mod os {
     }
 
     /// `install.ps1` into `dir`, as one PowerShell line. Named as PowerShell,
-    /// since cmd.exe and Git Bash would fail on it.
+    /// since cmd.exe and Git Bash would fail on it. Windows has no sudo for
+    /// a directory this user cannot write to; an elevated shell runs it.
     pub(super) fn script_upgrade(dir: &Path) -> String {
         format!(
             "in PowerShell: $env:DEVLANES_INSTALL_DIR={}; irm {INSTALL_SCRIPT} | iex",

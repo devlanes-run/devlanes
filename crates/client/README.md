@@ -23,7 +23,7 @@ async fn main() -> devlanes_client::Result<()> {
 
 `connect` never spawns or creates state. `connect_or_spawn` can launch the install's
 stable path (`devlanes_update::spawn_exe`) as `daemon run`, so a client that outlived
-an upgrade starts the new binary. Use it from a binary that implements that command.
+an update starts the new binary. Use it from a binary that implements that command.
 Auto-spawn is refused when sandbox markers are present or the socket-bind probe fails.
 
 ## API

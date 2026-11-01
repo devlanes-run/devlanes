@@ -246,7 +246,7 @@ without the daemon.",
     /// Install the latest devlanes release the way devlanes was installed, then restart the daemon
     #[command(long_about = UPDATE_ABOUT, after_help = UPDATE_AFTER)]
     Update(UpdateArgs),
-    /// Remove devlanes from this machine: the daemon, its login service, devlanes setup and this install
+    /// Remove devlanes from this machine: stop the daemon, then remove its login service, what devlanes setup changed and this install
     #[command(long_about = UNINSTALL_ABOUT, after_help = UNINSTALL_AFTER)]
     Uninstall(UninstallArgs),
     /// Connect to boxes and mirror their lanes here
@@ -608,11 +608,11 @@ Install the latest devlanes release the way devlanes was installed, then restart
 
 Checks for a newer release, asks once (a minor release before 1.0 may break
 what worked, so it lists those changes and defaults to no), installs it, and
-restarts the daemon, which starts the lanes that ran again. install.sh,
-install.ps1 and standalone binaries download the release archive and check it
-against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx and Homebrew
-installs run their package manager. Other installs, such as cargo or a
-project's own dependency, print the command to run instead. Without a
+restarts the daemon, which starts again the lanes that were running.
+install.sh, install.ps1 and standalone binaries download the release archive
+and check it against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx
+and Homebrew installs run their package manager. Other installs, such as cargo
+or a project's own dependency, print the command to run instead. Without a
 terminal, pass --yes.
 
 --next and --stable set updates.channel in the user config, then update on
@@ -688,7 +688,7 @@ pub enum UpdateAction {
 }
 
 const UNINSTALL_ABOUT: &str = "\
-Remove devlanes from this machine: the daemon, its login service, devlanes setup and this install.
+Remove devlanes from this machine: stop the daemon, then remove its login service, what devlanes setup changed and this install.
 
 In order, and going on when a step fails:
   1. stop the daemon, asking first when it runs processes
@@ -699,8 +699,8 @@ In order, and going on when a step fails:
      entry on Windows), or the package manager's remove command. A project's
      own dependency and a source build stay.
   5. the devlanes home (~/.devlanes, or $DEVLANES_HOME) and lane data: listed
-     with their sizes, then asked about, no by default. Without a terminal and
-     without --remove-data they stay.";
+     with their sizes and deleted only if you answer yes. Without a terminal
+     and without --remove-data they stay.";
 
 const UNINSTALL_AFTER: &str = "\
 Examples:
@@ -735,6 +735,7 @@ pub enum DataChoice {
 /// What `devlanes uninstall` was asked to do.
 #[derive(Clone)]
 pub struct UninstallAction {
+    /// What to do with the devlanes home and lane data.
     pub data: DataChoice,
     /// Only print the plan.
     pub dry_run: bool,

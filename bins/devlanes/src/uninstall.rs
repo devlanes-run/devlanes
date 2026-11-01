@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use devlanes_cli::{DataChoice, OutputMode, Rendered, Runtime, UninstallAction};
 use devlanes_client::{Client, Paths};
 use devlanes_core::paths::path_starts_with;
-use devlanes_proto::RpcError;
+use devlanes_proto::{Context, RpcError};
 use devlanes_update::{
     InstallMethod,
     install::{self, Argv},
@@ -716,6 +716,45 @@ fn show(runtime: &Runtime, step: &Step) {
     });
 }
 
+/// `Uninstall devlanes?`, naming the processes the daemon stops when some run.
+fn question(processes: usize) -> String {
+    match processes {
+        0 => "Uninstall devlanes?".to_owned(),
+        n => format!(
+            "Uninstall devlanes and stop {}?",
+            lifecycle::processes_word(n)
+        ),
+    }
+}
+
+/// Asks once before anything changes, unless `yes` (`--yes`); without a
+/// terminal to ask on it refuses with `confirmation_required`, whether or not
+/// processes run. A yes on a terminal erases the question.
+async fn confirmed(runtime: &Runtime, yes: bool, processes: usize) -> Result<bool, RpcError> {
+    if yes {
+        return Ok(true);
+    }
+    if !runtime.can_prompt() {
+        return Err(RpcError::new(
+            "confirmation_required",
+            json!({"flag": "--yes", "processes": processes}),
+            2,
+        ));
+    }
+    let (asking, question) = (runtime.clone(), question(processes));
+    let yes = blocking(move || crate::commands::confirm(&asking, &question)).await??;
+    let mut stderr = std::io::stderr();
+    if yes && std::io::IsTerminal::is_terminal(&stderr) {
+        // The answer's newline left the cursor on the line below the question.
+        let _ = crossterm::execute!(
+            stderr,
+            crossterm::cursor::MoveToPreviousLine(1),
+            crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine)
+        );
+    }
+    Ok(yes)
+}
+
 /// Runs blocking work off the async threads.
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> T + Send + 'static,
@@ -770,6 +809,21 @@ pub(crate) async fn run(runtime: &Runtime, action: UninstallAction) -> Result<u8
         return Ok(0);
     }
 
+    let processes = match Client::connect_any(&paths).await {
+        Ok(client) => client.peer.managed_processes,
+        Err(_) => 0,
+    };
+    // Nothing has changed yet, so an agent refused here can rerun with --yes.
+    if !confirmed(runtime, action.context.yes, processes).await? {
+        if !runtime.quiet {
+            emit(&Rendered {
+                stderr: "nothing was changed\n".into(),
+                ..Rendered::default()
+            });
+        }
+        return Ok(devlanes_cli::exit::USAGE);
+    }
+
     let mut steps = Vec::new();
     // Steps run quietly: each prints one line when it ends.
     let quiet = Runtime {
@@ -777,23 +831,14 @@ pub(crate) async fn run(runtime: &Runtime, action: UninstallAction) -> Result<u8
         ..runtime.clone()
     };
 
-    let stopped = lifecycle::stop_daemon(
-        runtime,
-        &paths,
-        &action.context,
-        "uninstall devlanes and stop",
-    )
-    .await;
+    // Asked above, once for everything.
+    let context = Context {
+        yes: true,
+        ..action.context.clone()
+    };
+    let stopped =
+        lifecycle::stop_daemon(runtime, &paths, &context, "uninstall devlanes and stop").await;
     let (daemon, drawn) = match stopped {
-        Ok(Stopped::Declined) => {
-            if !runtime.quiet {
-                emit(&Rendered {
-                    stderr: "nothing was changed\n".into(),
-                    ..Rendered::default()
-                });
-            }
-            return Ok(devlanes_cli::exit::USAGE);
-        }
         Ok(Stopped::NotRunning) => (
             Step::new("daemon", State::Skip, ["the daemon was not running".into()]),
             false,
@@ -802,8 +847,14 @@ pub(crate) async fn run(runtime: &Runtime, action: UninstallAction) -> Result<u8
             Step::new("daemon", State::Done, ["stopped the daemon".into()]),
             live,
         ),
-        // Nothing has changed yet, so an agent can rerun with --yes.
-        Err(error) if error.code == "confirmation_required" => return Err(error),
+        Ok(Stopped::Declined) => (
+            Step::new(
+                "daemon",
+                State::Skip,
+                ["the daemon was left running".into()],
+            ),
+            false,
+        ),
         Err(error) => (Step::new("daemon", State::Failed, [message(&error)]), false),
     };
     // The step block already showed the stop.
@@ -1327,6 +1378,28 @@ mod tests {
             ..AfterExit::default()
         };
         assert_eq!(after_exit_script(&odd), None);
+    }
+
+    /// The whole uninstall asks once, with or without processes running, and
+    /// only `--yes` goes on without a terminal to ask on.
+    #[tokio::test]
+    async fn uninstalling_asks_once_whatever_runs() {
+        use devlanes_cli::clap::Parser;
+        assert_eq!(question(0), "Uninstall devlanes?");
+        assert_eq!(question(1), "Uninstall devlanes and stop 1 process?");
+        assert_eq!(question(3), "Uninstall devlanes and stop 3 processes?");
+        let cli = devlanes_cli::Cli::parse_from(["devlanes", "--output", "plain"]);
+        let mut runtime =
+            Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime");
+        runtime.stdin_tty = false;
+        for processes in [0, 3] {
+            let error = confirmed(&runtime, false, processes)
+                .await
+                .expect_err("no terminal");
+            assert_eq!(error.code, "confirmation_required");
+            assert_eq!(error.data["processes"], processes);
+            assert!(confirmed(&runtime, true, processes).await.expect("--yes"));
+        }
     }
 
     #[test]

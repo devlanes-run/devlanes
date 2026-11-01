@@ -51,11 +51,17 @@ pub use runtime::{TerminalGuard, drive, drive_start};
 /// The variable a relaunched TUI reads its [`Reopen`] from, as JSON.
 pub const REOPEN_ENV: &str = "DEVLANES_TUI_REOPEN";
 
+/// The variable `devlanes update` hands its step block to the new binary
+/// in. Like [`REOPEN_ENV`] it is for one process, never for lanes.
+pub const UPDATE_STEPS_ENV: &str = "DEVLANES_UPDATE_STEPS";
+
 /// Where a TUI that closed to update, reload or set up opens again: the lane
 /// it showed and its view (`project`, `monitor`, `daemon` or `boxes`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Reopen {
+    /// The selected lane's id, if any.
     pub lane: Option<String>,
+    /// The view's name.
     pub view: Option<String>,
 }
 

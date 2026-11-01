@@ -1,6 +1,7 @@
 //! The setup prompt: once per session, after the welcome and never over
 //! another dialog, when the daemon reports a setup step missing or this side
-//! finds the CA untrusted. Confirming closes the TUI to run `devlanes setup`.
+//! finds the CA untrusted, and a lane on screen needs it. Confirming closes
+//! the TUI to run `devlanes setup`; turning it down waits a day.
 
 use std::{sync::Arc, time::Duration};
 
@@ -17,7 +18,7 @@ use serde_json::json;
 use tokio::sync::mpsc;
 
 use super::{SharedBackend, TestResult, draw, hermetic_options, key, loaded};
-use crate::fake::{FakeApi, daemon_status, mixed_lanes};
+use crate::fake::{FakeApi, daemon_status, lane, mixed_lanes, unit};
 
 /// Sends `daemon.status` with `missing` as its `setup.missing`.
 fn daemon_reports(app: &mut App, missing: &[&str]) {
@@ -142,6 +143,89 @@ async fn it_never_opens_over_another_dialog() -> TestResult {
     // The next second brings it.
     app.update(Msg::Tick);
     assert!(confirm(&app).is_some(), "{:?}", app.dialog);
+    Ok(())
+}
+
+/// A loaded app over one acme lane whose api serves `urls`, with the
+/// welcome gone and `missing` reported by this side and the daemon.
+async fn serving(urls: &[&str], held: &[&str], missing: &[&str], daemon: &[&str]) -> App {
+    let mut api_unit = unit("acme@0", "api", "ready");
+    api_unit.urls = urls.iter().map(|url| (*url).to_owned()).collect();
+    let fake = FakeApi::with_lanes(vec![lane(
+        "acme",
+        Some(0),
+        "main",
+        "running",
+        vec![api_unit],
+    )]);
+    let (mut app, _) = loaded(&fake, 140, 40).await;
+    app.update(Msg::Notices {
+        method: InstallMethod::Npm,
+        dismissed: std::iter::once(WELCOME)
+            .chain(held.iter().copied())
+            .map(str::to_owned)
+            .collect(),
+    });
+    app.update(Msg::SetupMissing(
+        missing.iter().map(|step| (*step).to_owned()).collect(),
+    ));
+    daemon_reports(&mut app, daemon);
+    app.update(Msg::Tick);
+    app
+}
+
+/// The prompt names only what the project on screen needs: the CA for an
+/// `https://` address, the hosts helper or resolver for a hostname.
+#[tokio::test]
+async fn it_shows_only_what_the_lanes_need() -> TestResult {
+    let plain = ["http://127.0.0.1:20102", "http://localhost:3000"];
+    let app = serving(&plain, &[], &["ca"], &["hosts", "resolver"]).await;
+    assert!(app.dialog.is_none(), "{:?}", app.dialog);
+
+    let app = serving(&["https://127.0.0.1:8443"], &[], &["ca"], &["hosts"]).await;
+    let (_, detail) = confirm(&app).ok_or("no setup prompt")?;
+    assert!(detail[0].starts_with("HTTPS:"), "{detail:?}");
+    assert!(!detail.iter().any(|line| line.starts_with("Hostnames:")));
+
+    let app = serving(
+        &["http://api.acme.localhost:8080/x"],
+        &[],
+        &["ca"],
+        &["hosts"],
+    )
+    .await;
+    let (_, detail) = confirm(&app).ok_or("no setup prompt")?;
+    assert!(detail[0].starts_with("Hostnames:"), "{detail:?}");
+    assert!(!detail.iter().any(|line| line.starts_with("HTTPS:")));
+    Ok(())
+}
+
+/// Turned down, the same steps wait a day: the key goes to the notice log,
+/// which also holds it back when `devlanes start` named them.
+#[tokio::test]
+async fn turning_it_down_waits_a_day() -> TestResult {
+    let https = ["https://api.acme.localhost"];
+    let mut app = serving(&https, &[], &["ca"], &["hosts"]).await;
+    assert!(confirm(&app).is_some());
+    let effects = app.update(key(KeyCode::Esc));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::NoticeShown(key) if key == "setup:ca,hosts")),
+        "{effects:?}"
+    );
+    let app = serving(&https, &["setup:ca,hosts"], &["ca"], &["hosts"]).await;
+    assert!(app.dialog.is_none(), "{:?}", app.dialog);
+    // Other missing steps are another notice.
+    let app = serving(&https, &["setup:ca,hosts"], &["ca"], &[]).await;
+    assert!(confirm(&app).is_some());
+    // Confirming records nothing: setup runs.
+    let mut app = serving(&https, &[], &["ca"], &[]).await;
+    let effects = app.update(key(KeyCode::Char('y')));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::NoticeShown(_))),
+        "{effects:?}"
+    );
     Ok(())
 }
 

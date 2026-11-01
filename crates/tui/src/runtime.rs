@@ -926,6 +926,21 @@ impl Executor {
                     });
                 }
             }
+            Effect::NoticeShown(key) => {
+                if let Some(home) = api.home() {
+                    tokio::task::spawn_blocking(move || {
+                        let mut log = devlanes_update::NoticeLog::load(&home);
+                        log.mark_shown(&key, devlanes_update::now_ms());
+                        // Losing the record only shows the notice sooner.
+                        let _ = log.save(&home);
+                    });
+                }
+            }
+            Effect::CheckReload => {
+                tokio::task::spawn_blocking(move || {
+                    deliver_blocking(&sender, Msg::ReloadChecked(api.installed_version()));
+                });
+            }
             Effect::Settings(request) => crate::settings::perform(request, api.home(), sender),
             Effect::ReadDaemonLog { from } => {
                 if self.log.as_ref().is_some_and(|task| !task.is_finished()) {

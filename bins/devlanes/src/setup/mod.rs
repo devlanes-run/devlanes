@@ -530,17 +530,32 @@ async fn run_in(runtime: &Runtime, paths: &Paths, action: SetupAction) -> Result
             // The plan never needs the helper on Windows.
             #[cfg(windows)]
             StepKind::Hosts => Ok(0),
-            StepKind::Resolver => match &facts.dns {
-                #[cfg(unix)]
-                Dns::Unrouted { tld, .. } => resolver::install(runtime, paths, tld).await,
-                #[cfg(windows)]
-                Dns::Unrouted { tld, .. } => nrpt::install(runtime, paths, tld).await,
-                _ => Ok(0),
-            },
+            StepKind::Resolver => {
+                let result = match &facts.dns {
+                    #[cfg(unix)]
+                    Dns::Unrouted { tld, .. } => resolver::install(runtime, paths, tld).await,
+                    #[cfg(windows)]
+                    Dns::Unrouted { tld, .. } => nrpt::install(runtime, paths, tld).await,
+                    _ => Ok(0),
+                };
+                recheck_resolver(paths).await;
+                result
+            }
         };
         fold(runtime, &mut code, result);
     }
     Ok(code)
+}
+
+/// Has a running daemon read the resolver file (NRPT rule on Windows)
+/// again, which `daemon.status` otherwise keeps from its first read; the
+/// existing `hosts.retry` is that signal. Never starts a daemon.
+async fn recheck_resolver(paths: &Paths) {
+    if let Ok(mut client) = Client::connect(paths).await {
+        let _ = client
+            .request(Method::HostsRetry, json!({}), Context::default())
+            .await;
+    }
 }
 
 /// One change `setup --remove` makes on this machine.
@@ -643,6 +658,7 @@ pub(crate) async fn remove(
     }
     #[cfg(windows)]
     fold(runtime, &mut code, nrpt::remove(runtime, paths).await);
+    recheck_resolver(paths).await;
     if !keep_ca {
         let result = match config {
             Ok(config) => ca::remove(runtime, paths, &config).await,
@@ -728,9 +744,9 @@ async fn ask(runtime: &Runtime, count: usize, sudo: bool) -> Result<bool, RpcErr
     .map_err(|error| RpcError::new("io", json!({"message": error.to_string()}), 1))
 }
 
-/// `Set up 2 things? sudo may ask for your password once. [Y/n] `.
+/// `Do the 2 missing steps? sudo may ask for your password once. [Y/n] `.
 fn question(count: usize, sudo: bool) -> String {
-    let things = if count == 1 { "thing" } else { "things" };
+    let steps = if count == 1 { "step" } else { "steps" };
     let note = if sudo {
         " sudo may ask for your password once."
     } else if cfg!(windows) {
@@ -738,7 +754,7 @@ fn question(count: usize, sudo: bool) -> String {
     } else {
         ""
     };
-    format!("Set up {count} {things}?{note} [Y/n] ")
+    format!("Do the {count} missing {steps}?{note} [Y/n] ")
 }
 
 /// After a `start` on a terminal: one stderr line when this machine misses a
@@ -1138,9 +1154,9 @@ mod tests {
     fn the_question_counts_and_mentions_sudo() {
         assert_eq!(
             question(2, true),
-            "Set up 2 things? sudo may ask for your password once. [Y/n] "
+            "Do the 2 missing steps? sudo may ask for your password once. [Y/n] "
         );
-        assert!(question(1, false).starts_with("Set up 1 thing?"));
+        assert!(question(1, false).starts_with("Do the 1 missing step?"));
     }
 
     #[test]

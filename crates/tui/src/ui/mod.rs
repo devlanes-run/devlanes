@@ -880,7 +880,7 @@ fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
     // nothing else says a version is waiting.
     if let Some(notice) = app.release_notice() {
         let tone = match &notice {
-            ReleaseNotice::Update { state, .. } if state == "downloading" => Tone::Busy,
+            ReleaseNotice::Update { state, .. } if state == "installing" => Tone::Busy,
             ReleaseNotice::Update { state, .. } if state == "failed" => Tone::Failure,
             _ => Tone::Attention,
         };

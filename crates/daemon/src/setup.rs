@@ -4,12 +4,14 @@
 
 use serde_json::{Value, json};
 
-use crate::engine::Inner;
+use crate::{engine::Inner, model::lock};
 
 impl Inner {
     /// `{"missing": [..]}`: `hosts` when the hosts helper cannot write
     /// `/etc/hosts` until setup runs, `resolver` when the resolver strategy's
-    /// TLD does not reach the DNS server.
+    /// TLD does not reach the DNS server. Every `daemon.status` asks, so the
+    /// resolver check, which reads the OS's files or registry, is cached
+    /// (`Inner::resolver_check`).
     pub(crate) async fn setup_status(&self) -> Value {
         let mut missing = Vec::new();
         if self
@@ -20,7 +22,16 @@ impl Inner {
         {
             missing.push("hosts");
         }
-        if self.resolver_unrouted().await {
+        let cached = *lock(&self.resolver_check);
+        let unrouted = match cached {
+            Some(unrouted) => unrouted,
+            None => {
+                let unrouted = self.resolver_unrouted().await;
+                *lock(&self.resolver_check) = Some(unrouted);
+                unrouted
+            }
+        };
+        if unrouted {
             missing.push("resolver");
         }
         json!({"missing": missing})

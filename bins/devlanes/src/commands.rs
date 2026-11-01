@@ -147,11 +147,14 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
         }
         Action::Rpc(request) => rpc(cli, runtime, request).await,
         Action::RpcThenUi(request) => {
+            let paths = paths()?;
+            // Before the request: switching to an installed update restarts the daemon.
+            crate::update::startup(runtime, &paths).await;
             let code = rpc(cli, runtime, request).await?;
             if code != 0 {
                 return Ok(code);
             }
-            ui(runtime).await
+            crate::wiring::open_ui(runtime, &paths).await
         }
         Action::RpcThenOfferStart(request) => {
             let data = match call(request.clone()).await {

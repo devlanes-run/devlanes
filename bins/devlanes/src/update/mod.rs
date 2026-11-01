@@ -96,15 +96,35 @@ pub async fn from_tui(runtime: &Runtime, paths: &Paths, reopen: Reopen) -> Resul
 /// and this command runs again from it. A daemon older than this binary is
 /// restarted into it: at once for a patch release, after asking for a minor
 /// one. A project's own devlanes never restarts the shared daemon and warns
-/// instead. Agent, JSON, CI and plain output never restart.
-pub async fn startup(runtime: &Runtime, paths: &Paths) -> Result<(), RpcError> {
+/// instead. Agent, JSON, CI and plain output never restart. Nothing here
+/// keeps the TUI from opening: a daemon that cannot be restarted (an invalid
+/// config, a failed connection or restart) gets a warning on stderr.
+pub async fn startup(runtime: &Runtime, paths: &Paths) {
     let interactive = runtime.mode == OutputMode::Human
         && runtime.stdout_tty
         && runtime.stdin_tty
         && runtime.ci.is_none();
     if !interactive {
-        return Ok(());
+        return;
     }
+    if let Err(error) = switch_on_start(runtime, paths).await {
+        let detail = error
+            .data
+            .get("message")
+            .or_else(|| error.data.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or(&error.code);
+        emit(&Rendered {
+            stderr: format!(
+                "warning: the daemon was not switched to devlanes {OWN}: {detail}; devlanes daemon restart tries again\n"
+            ),
+            ..Rendered::default()
+        });
+    }
+}
+
+/// The work of [`startup`], whose failures it reports as warnings.
+async fn switch_on_start(runtime: &Runtime, paths: &Paths) -> Result<(), RpcError> {
     let (method, exe) = current().await?;
     if let Some(staged) = apply_staged(paths, &method).await {
         tracing::info!(version = staged, "applied the staged update");
@@ -146,7 +166,7 @@ pub async fn startup(runtime: &Runtime, paths: &Paths) -> Result<(), RpcError> {
             "Restart the daemon from devlanes {daemon} into {OWN}? It stops and starts {} again.",
             lanes_word(lanes_running(&mut client).await)
         );
-        if !ask(runtime, &question, false)? {
+        if !ask(runtime, &question, false).await? {
             return Ok(());
         }
     }
@@ -159,8 +179,7 @@ pub async fn startup(runtime: &Runtime, paths: &Paths) -> Result<(), RpcError> {
             from: daemon,
             to: OWN.to_owned(),
         },
-    )
-    .await;
+    );
     take_over(&mut view);
     lifecycle::restart_in(runtime, paths, restart_context(runtime), view)
         .await
@@ -171,13 +190,16 @@ pub async fn startup(runtime: &Runtime, paths: &Paths) -> Result<(), RpcError> {
 /// and latest versions and what changed.
 async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     let (method, _) = current().await?;
-    let mut client = Client::connect_or_spawn(paths).await.map_err(rpc_error)?;
-    let daemon = client.peer.version.clone();
-    let info = latest(&mut client).await?;
-    let channel = info.as_ref().map_or_else(
-        || Channel::of_version(OWN).as_str().to_owned(),
-        |info| info.channel.clone(),
-    );
+    let mut client = compatible_daemon(paths).await?;
+    let daemon = client.as_ref().map(|client| client.peer.version.clone());
+    let from = daemon.clone().unwrap_or_else(|| OWN.to_owned());
+    let info = latest(client.as_mut(), &method, paths, &from).await?;
+    let channel = match &info {
+        Some(info) => info.channel.clone(),
+        None => effective_channel(&crate::user_config::lenient(paths).await)
+            .as_str()
+            .to_owned(),
+    };
     let command = info
         .as_ref()
         .map(|info| devlanes_update::update_command(&method, &info.latest));
@@ -204,8 +226,12 @@ async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     if runtime.quiet {
         return Ok(0);
     }
+    let daemon = match &daemon {
+        Some(version) => format!("daemon {version}"),
+        None => "no daemon of this protocol runs".to_owned(),
+    };
     let mut out = format!(
-        "devlanes {OWN} ({}), daemon {daemon}, channel {channel}\n",
+        "devlanes {OWN} ({}), {daemon}, channel {channel}\n",
         data["method"].as_str().unwrap_or_default()
     );
     match &info {
@@ -213,7 +239,7 @@ async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
         Some(info) => {
             out.push_str(&format!("latest: {} ({} release)", info.latest, info.bump));
             match info.state.as_str() {
-                "downloading" => out.push_str(", downloading in the background"),
+                "installing" => out.push_str(", installing in the background"),
                 "ready" => out.push_str(", ready: run devlanes to switch to it"),
                 "failed" => out.push_str(&format!(
                     ", the background install failed: {}",
@@ -249,6 +275,7 @@ async fn install(
     yes: bool,
     reopen: Option<&Reopen>,
 ) -> Result<Installed, RpcError> {
+    let version = version.as_deref().map(release_version).transpose()?;
     let (method, exe) = current().await?;
     if matches!(method, InstallMethod::Local { .. } | InstallMethod::Source) {
         return Err(manual(
@@ -256,22 +283,13 @@ async fn install(
             &method.upgrade_command(version.as_deref().unwrap_or(OWN)),
         ));
     }
-    if let Some(version) = &version
-        && Version::parse(version).is_none()
-    {
-        return Err(failed(&InstallError::Version(version.clone())));
-    }
     let mut client = compatible_daemon(paths).await?;
-    // Without a version the latest comes from the daemon, which may start for it.
-    if version.is_none() && client.is_none() {
-        client = Some(Client::connect_or_spawn(paths).await.map_err(rpc_error)?);
-    }
     let from = client
         .as_ref()
         .map_or_else(|| OWN.to_owned(), |client| client.peer.version.clone());
-    let info = match (&version, client.as_mut()) {
-        (None, Some(client)) => latest(client).await?,
-        _ => None,
+    let info = match &version {
+        None => latest(client.as_mut(), &method, paths, &from).await?,
+        Some(_) => None,
     };
     let pinned = version.is_some();
     let to = match (version, &info) {
@@ -329,7 +347,11 @@ async fn switch(
         let (planned, path) = (method.clone(), exe.clone());
         // A script install in a directory it cannot write to is a manual one.
         let archive = tokio::task::spawn_blocking(move || {
-            matches!(Plan::new(&planned, &path, OWN), Ok(Plan::Archive { .. }))
+            let retained = devlanes_update::own_exe_retained();
+            matches!(
+                Plan::new(&planned, &path, OWN, retained),
+                Ok(Plan::Archive { .. })
+            )
         })
         .await
         .map_err(|error| io_error(&error))?;
@@ -344,13 +366,10 @@ async fn switch(
     let latest = devlanes_update::check::latest(source, &Urls::from_env(), FETCH_TIMEOUT)
         .await
         .map_err(|error| {
-            RpcError::new(
-                "update_failed",
-                json!({
-                    "title": format!("cannot read the latest {} release: {error}", channel.as_str()),
-                    "hint": format!("retry with devlanes update --{}", channel.as_str()),
-                }),
-                1,
+            check_failed(
+                channel,
+                &error,
+                &format!("devlanes update --{}", channel.as_str()),
             )
         })?;
     let (to, older) = match install::target(OWN, &latest, force) {
@@ -571,10 +590,12 @@ async fn deliver(
         None
     } else {
         let (planned, exe, to) = (method.clone(), exe.clone(), to.clone());
-        let plan = tokio::task::spawn_blocking(move || Plan::new(&planned, &exe, &to))
-            .await
-            .map_err(|error| io_error(&error))?
-            .map_err(|error| failed(&error))?;
+        let plan = tokio::task::spawn_blocking(move || {
+            Plan::new(&planned, &exe, &to, devlanes_update::own_exe_retained())
+        })
+        .await
+        .map_err(|error| io_error(&error))?
+        .map_err(|error| failed(&error))?;
         if let Plan::Manual { command } = &plan {
             return Err(manual(&method, command));
         }
@@ -589,7 +610,7 @@ async fn deliver(
             .as_ref()
             .map(|info| info.notes.as_slice())
             .unwrap_or_default();
-        if !confirm_update(runtime, &from, &to, lanes, notes, older)? {
+        if !confirm_update(runtime, &from, &to, lanes, notes, older).await? {
             return Ok(Installed::Nothing(devlanes_cli::exit::USAGE));
         }
     }
@@ -601,8 +622,7 @@ async fn deliver(
             from,
             to: to.clone(),
         },
-    )
-    .await;
+    );
     if switched {
         view.set(
             "channel",
@@ -758,8 +778,7 @@ async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
                     from: from.clone(),
                     to: OWN.to_owned(),
                 },
-            )
-            .await;
+            );
             take_over(&mut view);
             code = lifecycle::restart_in(runtime, paths, restart_context(runtime), view).await?;
             if reopen.is_none() && runtime.mode == OutputMode::Human && !runtime.quiet {
@@ -778,8 +797,7 @@ async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
                         from: OWN.to_owned(),
                         to: OWN.to_owned(),
                     },
-                )
-                .await;
+                );
                 view.take_over(handoff);
                 view.finish(Outcome::Done);
             }
@@ -833,17 +851,103 @@ async fn current() -> Result<(InstallMethod, PathBuf), RpcError> {
     .map_err(|error| io_error(&error))
 }
 
-/// The daemon's answer to a forced `update.check`: the newer release, if any.
-async fn latest(client: &mut Client) -> Result<Option<UpdateInfo>, RpcError> {
-    let answer = client
-        .request(
-            Method::UpdateCheck,
-            json!({"force": true}),
-            Context::default(),
-        )
+/// The release newer than `from` (the daemon's version, else this build's),
+/// if any. A daemon of this protocol checks it, forced, so its status and
+/// notes follow. Without an answer from one (none runs, its checks are off
+/// by `updates.mode: disable`, CI or the environment, or it predates
+/// `update.check`), this process reads the registry of `method` itself:
+/// an explicit `devlanes update` always checks.
+async fn latest(
+    client: Option<&mut Client>,
+    method: &InstallMethod,
+    paths: &Paths,
+    from: &str,
+) -> Result<Option<UpdateInfo>, RpcError> {
+    if let Some(client) = client {
+        let reply = client
+            .request(
+                Method::UpdateCheck,
+                json!({"force": true}),
+                Context::default(),
+            )
+            .await
+            .map_err(rpc_error);
+        let off = matches!(reply, Ok(Value::Null)) && checks_off(client).await;
+        if let Some(answer) = daemon_answer(reply, off)? {
+            return Ok(answer);
+        }
+    }
+    let channel = effective_channel(&crate::user_config::lenient(paths).await);
+    // Project dependencies and source builds have no registry to read.
+    let Ok(source) = Source::for_method(method, channel) else {
+        return Ok(None);
+    };
+    let latest = devlanes_update::check::latest(source, &Urls::from_env(), FETCH_TIMEOUT)
         .await
-        .map_err(rpc_error)?;
-    Ok(serde_json::from_value(answer).ok())
+        .map_err(|error| check_failed(source.channel(), &error, "devlanes update"))?;
+    Ok(found(source.channel(), latest, from))
+}
+
+/// What the daemon's `reply` to a forced `update.check` says: `Some` with
+/// the newer release or none, or `None` when it could not tell, because it
+/// does not know the method (`unknown_method`) or its checks are `off`.
+fn daemon_answer(
+    reply: Result<Value, RpcError>,
+    off: bool,
+) -> Result<Option<Option<UpdateInfo>>, RpcError> {
+    match reply {
+        Err(error) if error.code == "unknown_method" => Ok(None),
+        Err(error) => Err(error),
+        Ok(Value::Null) if off => Ok(None),
+        Ok(answer) => Ok(Some(serde_json::from_value(answer).ok())),
+    }
+}
+
+/// Whether the daemon's release checks are off (`daemon.status` says
+/// `release_check.state: off`).
+async fn checks_off(client: &mut Client) -> bool {
+    client
+        .request(Method::DaemonStatus, json!({}), Context::default())
+        .await
+        .is_ok_and(|status| status.pointer("/release_check/state") == Some(&json!("off")))
+}
+
+/// `latest` of `channel` as the report a daemon would give, when it is newer
+/// than `from` or this build: without notes, which only the daemon reads.
+fn found(channel: Channel, latest: String, from: &str) -> Option<UpdateInfo> {
+    let bump = bump(from, &latest).or_else(|| bump(OWN, &latest))?;
+    Some(UpdateInfo {
+        latest,
+        channel: channel.as_str().into(),
+        bump: bump.as_str().into(),
+        state: "available".into(),
+        installed: None,
+        error: None,
+        checked_at: devlanes_update::now_ms(),
+        notes: Vec::new(),
+    })
+}
+
+/// `update_failed` for a registry of `channel` that could not be read, with
+/// `retry` as the command to run again.
+fn check_failed(channel: Channel, error: &dyn std::fmt::Display, retry: &str) -> RpcError {
+    RpcError::new(
+        "update_failed",
+        json!({
+            "title": format!("cannot read the latest {} release: {error}", channel.as_str()),
+            "hint": format!("retry with {retry}"),
+        }),
+        1,
+    )
+}
+
+/// `--version` as a release version: one leading `v` is dropped, then it
+/// must be exactly `MAJOR.MINOR.PATCH[-PRERELEASE]`.
+fn release_version(text: &str) -> Result<String, RpcError> {
+    let bare = text.strip_prefix('v').unwrap_or(text);
+    Version::parse_release(bare)
+        .map(|_| bare.to_owned())
+        .ok_or_else(|| failed(&InstallError::Version(text.to_owned())))
 }
 
 /// Prints what changed from `from` to this binary, from its changelog, and
@@ -933,7 +1037,7 @@ fn print_minor_notes<'a>(minor: impl IntoIterator<Item = (&'a str, &'a str)>) {
 /// Asks before updating from `from` to `to`: `[Y/n]` for a patch release, and
 /// `[y/N]` after the minor entries of `notes` for a minor one or for an
 /// `older` release than this build.
-fn confirm_update(
+async fn confirm_update(
     runtime: &Runtime,
     from: &str,
     to: &str,
@@ -959,6 +1063,7 @@ fn confirm_update(
         &format!("Update devlanes {from} -> {to}? {restarts}"),
         !minor && !older,
     )
+    .await
 }
 
 /// `next builds` or `stable releases`, as the channel row names them.
@@ -978,10 +1083,11 @@ fn lanes_word(n: usize) -> String {
     }
 }
 
-/// Asks `question` on the terminal, with `default` for an empty answer.
-/// Without a terminal to ask on, refuses with `confirmation_required`. A yes
-/// erases the question, so the step block takes its place.
-fn ask(runtime: &Runtime, question: &str, default: bool) -> Result<bool, RpcError> {
+/// Asks `question` on the terminal, with `default` for an empty answer,
+/// reading the answer off the async threads. Without a terminal to ask on,
+/// refuses with `confirmation_required`. A yes erases the question, so the
+/// step block takes its place.
+async fn ask(runtime: &Runtime, question: &str, default: bool) -> Result<bool, RpcError> {
     if !runtime.can_prompt() {
         return Err(RpcError::new(
             "confirmation_required",
@@ -991,10 +1097,13 @@ fn ask(runtime: &Runtime, question: &str, default: bool) -> Result<bool, RpcErro
     }
     let choices = if default { "[Y/n]" } else { "[y/N]" };
     eprint!("{question} {choices} ");
-    let mut answer = String::new();
-    std::io::stdin()
-        .read_line(&mut answer)
-        .map_err(|error| io_error(&error))?;
+    let answer = tokio::task::spawn_blocking(|| {
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).map(|_| answer)
+    })
+    .await
+    .map_err(|error| io_error(&error))?
+    .map_err(|error| io_error(&error))?;
     let yes = match answer.trim() {
         "" => default,
         answer => matches!(answer, "y" | "Y" | "yes"),
@@ -1210,6 +1319,93 @@ mod tests {
             text.ends_with(&format!("devlanes {OWN} is the latest next build\n")),
             "{text}"
         );
+    }
+
+    /// `--version` takes one leading `v`; anything else must be an exact
+    /// release version.
+    #[test]
+    fn requested_versions_are_normalised_once() {
+        assert_eq!(release_version("0.9.1").ok().as_deref(), Some("0.9.1"));
+        assert_eq!(release_version("v0.9.1").ok().as_deref(), Some("0.9.1"));
+        assert_eq!(
+            release_version("v0.9.1-next.3").ok().as_deref(),
+            Some("0.9.1-next.3")
+        );
+        for refused in ["vv0.9.1", "0.9.1+x", "v0.9.1+x", " 0.9.1", "0.9.1 ", "0.9"] {
+            let error = release_version(refused).expect_err(refused);
+            assert_eq!(error.code, "update_failed", "{refused:?}");
+        }
+    }
+
+    /// The daemon's answer counts unless it could not tell: a daemon that
+    /// does not know `update.check`, or whose checks are off, leaves the
+    /// check to this process.
+    #[test]
+    fn the_daemon_answers_unless_it_cannot_tell() -> Result<(), RpcError> {
+        let unknown = RpcError::new("unknown_method", json!({}), 2);
+        assert_eq!(daemon_answer(Err(unknown), false)?, None);
+        let other = RpcError::new("io", json!({}), 1);
+        assert_eq!(
+            daemon_answer(Err(other), false).map_err(|error| error.code),
+            Err("io".to_owned())
+        );
+        assert_eq!(daemon_answer(Ok(Value::Null), true)?, None);
+        assert_eq!(daemon_answer(Ok(Value::Null), false)?, Some(None));
+        let info = found(Channel::Stable, "99.0.0".into(), OWN).expect("newer");
+        let reply = serde_json::to_value(&info).map_err(|error| io_error(&error))?;
+        assert_eq!(daemon_answer(Ok(reply), false)?, Some(Some(info)));
+        Ok(())
+    }
+
+    /// A release read here is reported when it is newer than the daemon or
+    /// this build, as the daemon would report it, without notes.
+    #[test]
+    fn releases_read_here_are_reported_like_the_daemons() {
+        let info = found(Channel::Next, "99.0.0-next.1".into(), OWN).expect("newer");
+        assert_eq!(
+            (
+                info.channel.as_str(),
+                info.bump.as_str(),
+                info.state.as_str()
+            ),
+            ("next", "minor", "available")
+        );
+        assert!(info.notes.is_empty());
+        assert_eq!(found(Channel::Stable, OWN.into(), OWN), None);
+        // This build is newer than the daemon, and the latest release.
+        assert!(found(Channel::Stable, OWN.into(), "0.0.1").is_some());
+    }
+
+    /// A daemon that cannot be reached is a warning, never a reason for the
+    /// TUI not to open.
+    #[tokio::test]
+    async fn an_unreachable_daemon_does_not_keep_the_tui_closed() {
+        use devlanes_cli::clap::Parser;
+        let home = tempfile::tempdir().expect("home");
+        let paths = Paths::new(home.path().join("home")).expect("paths");
+        paths.prepare().expect("directories");
+        // Every connection closes before the hello.
+        let mut listener = devlanes_ipc::local::LocalListener::bind(&paths.socket)
+            .await
+            .expect("listener");
+        let server = tokio::spawn(async move {
+            while let Ok(stream) = listener.accept().await {
+                drop(stream);
+            }
+        });
+        let cli = devlanes_cli::Cli::parse_from(["devlanes", "--output", "human"]);
+        let mut runtime =
+            Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime");
+        (runtime.stdout_tty, runtime.stdin_tty, runtime.ci) = (true, true, None);
+        let limit = Duration::from_secs(30);
+        let failed = tokio::time::timeout(limit, switch_on_start(&runtime, &paths))
+            .await
+            .expect("in time");
+        assert!(failed.is_err(), "the connection fails");
+        tokio::time::timeout(limit, startup(&runtime, &paths))
+            .await
+            .expect("startup returns, so the TUI opens");
+        server.abort();
     }
 
     #[test]

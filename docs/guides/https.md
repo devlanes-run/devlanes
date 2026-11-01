@@ -128,7 +128,7 @@ switches lane domains to `acme.test` and `acme2.test`, answered by a DNS server 
 macOS lets a user process bind the low ports on the wildcard address; devlanes does so and accepts only loopback peers unless `proxy.lan: true`. On Linux the daemon falls back to 8443 and 8080 unless it may bind low ports:
 
 ```sh
-sudo setcap cap_net_bind_service=+ep "$(command -v devlanes)"   # redo after upgrades
+sudo setcap cap_net_bind_service=+ep "$(command -v devlanes)"   # redo after updates
 # or
 sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80
 ```

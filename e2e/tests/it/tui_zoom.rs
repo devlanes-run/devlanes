@@ -471,7 +471,7 @@ fn tui_shows_the_steps_through_restarts() -> Result<()> {
 }
 
 /// On a terminal `daemon restart` draws its steps as one block that ends with
-/// the lane started again on the new daemon.
+/// the lanes the new daemon starts again.
 #[test]
 fn daemon_restart_draws_its_steps_on_a_terminal() -> Result<()> {
     let lab = Lab::with_config(SLOW_STOP, BUDGET)?;
@@ -488,7 +488,7 @@ fn daemon_restart_draws_its_steps_on_a_terminal() -> Result<()> {
         "ran 1 lane.stop task",
         "stopped 1 process in 1 lane",
         "started devlanes",
-        "started fixture-tui-restart@0",
+        "starting again: fixture-tui-restart@0 (1 service)",
     ] {
         assert!(screen.contains(expected), "{expected}:\n{screen}");
     }

@@ -101,7 +101,7 @@ impl View {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReleaseNotice {
     /// A newer release than this TUI, as the daemon's `update` reports it:
-    /// `state` is `available`, `downloading`, `ready` or `failed`, and
+    /// `state` is `available`, `installing`, `ready` or `failed`, and
     /// `breaking` a minor bump. `U` asks, then closes to update.
     Update {
         latest: String,
@@ -120,8 +120,8 @@ impl ReleaseNotice {
     /// The header's words: `0.9.1 available · U update`.
     pub fn text(&self, own: &str) -> String {
         match self {
-            Self::Update { latest, state, .. } if state == "downloading" => {
-                format!("{latest} downloading…")
+            Self::Update { latest, state, .. } if state == "installing" => {
+                format!("{latest} installing…")
             }
             Self::Update { latest, state, .. } if state == "ready" => {
                 format!("{latest} ready · U restart")
@@ -137,6 +137,24 @@ impl ReleaseNotice {
             Self::Reload { daemon } => format!("daemon {daemon}, TUI {own} · U reload"),
         }
     }
+}
+
+/// The scheme and host of `url` (`https`, `api.acme.localhost`), the host
+/// without its port or the brackets of an IPv6 address; `None` without a
+/// scheme or host.
+fn url_host(url: &str) -> Option<(&str, &str)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match authority.strip_prefix('[') {
+        Some(bracketed) => bracketed.split_once(']')?.0,
+        None => authority
+            .rsplit_once(':')
+            .map_or(authority, |(host, _)| host),
+    };
+    (!host.is_empty()).then_some((scheme, host))
 }
 
 /// What a click on a top-bar, lane-bar or footer item does. Rendering records
@@ -819,11 +837,15 @@ pub enum Msg {
     /// again as `resuming`.
     DaemonRestarted(Result<Value, ApiError>),
     DaemonStarted(Result<Value, ApiError>),
-    /// How devlanes was installed, and the release notices dismissed earlier.
+    /// How devlanes was installed, and the notices held back: dismissed
+    /// dialogs (the welcome) and notices shown in the last day.
     Notices {
         method: devlanes_update::InstallMethod,
         dismissed: Vec<String>,
     },
+    /// The version the install's entry runs now, for a reload
+    /// ([`Effect::CheckReload`]); `None` when it did not answer.
+    ReloadChecked(Option<String>),
     /// What `update.check` answered: the newer release, or `null`.
     ReleaseChecked(Result<Value, ApiError>),
     /// The setup steps missing that only this side can see
@@ -1031,6 +1053,11 @@ pub enum Effect {
     CheckSetup,
     /// Remembers that the notice `key` was dismissed.
     DismissNotice(String),
+    /// Records the notice `key` as shown now, so it waits a day.
+    NoticeShown(String),
+    /// Asks which version the install's entry runs, answered with
+    /// [`Msg::ReloadChecked`].
+    CheckReload,
     ReadDaemonLog {
         from: crate::logfile::LogPosition,
     },
@@ -1316,7 +1343,8 @@ pub struct App {
     pub errors: VecDeque<ErrorEntry>,
     pub daemon: DaemonView,
     pub size: (u16, u16),
-    /// How devlanes was installed (`None` until known) and dismissed notices.
+    /// How devlanes was installed (`None` until known) and the notices held
+    /// back: dismissed ones (the welcome) and those shown in the last day.
     pub release: (Option<devlanes_update::InstallMethod>, Vec<String>),
     /// Why the TUI closed, when the binary has something to do before it
     /// opens again; `None` for a plain quit.
@@ -1328,6 +1356,16 @@ pub struct App {
     setup_missing: Option<Vec<String>>,
     /// The setup prompt showed in this session; it shows once.
     setup_offered: bool,
+    /// The notice key of the setup prompt on screen (`setup:<steps>`),
+    /// recorded as shown when it is turned down.
+    setup_key: Option<String>,
+    /// A reload waits for the installed version ([`Effect::CheckReload`]),
+    /// with the daemon on a newer protocol that ended the connection, if
+    /// that is why.
+    reload_pending: Option<Option<devlanes_proto::Hello>>,
+    /// The installed devlanes was not newer than this TUI, so a daemon on a
+    /// newer protocol is a plain loss from then on.
+    reload_refused: bool,
     /// The release notes "What's new" shows ([`crate::Options::whats_new`]).
     pub whats_new: Option<devlanes_update::notes::WhatsNew>,
     /// "What's new" opens by itself once the welcome is gone.
@@ -1480,6 +1518,9 @@ impl App {
             reopen_lane: None,
             setup_missing: None,
             setup_offered: false,
+            setup_key: None,
+            reload_pending: None,
+            reload_refused: false,
             whats_new: None,
             whats_new_pending: false,
             tasks_refreshed: HashSet::new(),
@@ -2163,6 +2204,7 @@ impl App {
                 self.setup_missing = Some(missing);
                 self.offer_setup();
             }
+            Msg::ReloadChecked(installed) => self.reload_checked(installed, &mut effects),
             // A failed check changes nothing: the next `daemon.status` still
             // carries what the daemon knew.
             Msg::ReleaseChecked(Ok(update)) => {
@@ -2655,7 +2697,8 @@ impl App {
     /// announced stop or restart moves on to its next state instead.
     ///
     /// A daemon on another protocol is no loss: a newer one closes the TUI
-    /// so the binary runs the TUI installed now, an older one shows the
+    /// so the binary runs the TUI installed now (when that one is newer than
+    /// this TUI; otherwise it is a loss after all), an older one shows the
     /// unavailable screen with what fixes it, and retries in case someone
     /// else restarts it.
     fn lost_connection(&mut self, reason: Option<&ApiError>, effects: &mut Vec<Effect>) {
@@ -2663,8 +2706,11 @@ impl App {
             Some(ApiError::Incompatible { peer })
                 if peer.protocol > devlanes_proto::PROTOCOL_VERSION =>
             {
-                self.close_for(crate::ExitReason::Reload, effects);
-                return;
+                if !self.reload_refused {
+                    self.reload(Some(peer.clone()), effects);
+                    return;
+                }
+                None
             }
             Some(ApiError::Incompatible { peer }) => Some(text::clean(&peer.version)),
             _ => None,
@@ -6032,8 +6078,11 @@ impl App {
                 self.begin(&effect, effects);
                 effects.push(*effect);
             }
-            Dialog::Confirm { .. }
-                if matches!(key.code, KeyCode::Char('n' | 'q') | KeyCode::Esc) => {}
+            Dialog::Confirm { effect, .. }
+                if matches!(key.code, KeyCode::Char('n' | 'q') | KeyCode::Esc) =>
+            {
+                self.setup_declined(&effect, effects);
+            }
             dialog @ Dialog::Confirm { .. } => self.dialog = Some(dialog),
             Dialog::Profiles { lane, state } => self.profiles_key(key, lane, state, effects),
             Dialog::Menu(mut menu) => {
@@ -7186,6 +7235,7 @@ impl App {
                         let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
                         self.connect_key(esc, dialog, effects);
                     }
+                    Some(Dialog::Confirm { effect, .. }) => self.setup_declined(&effect, effects),
                     _ => self.dialog = None,
                 }
             }
@@ -7698,7 +7748,7 @@ impl App {
         };
         let (prompt, action, version) = match &notice {
             ReleaseNotice::Reload { .. } => {
-                self.close_for(crate::ExitReason::Reload, effects);
+                self.reload(None, effects);
                 return;
             }
             ReleaseNotice::Update { latest, state, .. } if state == "ready" => (
@@ -7767,9 +7817,50 @@ impl App {
         effects.push(Effect::Exit(reason));
     }
 
+    /// Reloads into the TUI installed now, once [`Msg::ReloadChecked`] says
+    /// it is newer than this one; closing for an older or the same version
+    /// would only open this TUI again. `lost`: the daemon on a newer
+    /// protocol that ended the connection.
+    fn reload(&mut self, lost: Option<devlanes_proto::Hello>, effects: &mut Vec<Effect>) {
+        if self.reload_pending.is_none() {
+            self.reload_pending = Some(lost);
+            effects.push(Effect::CheckReload);
+        }
+    }
+
+    /// The answer to [`Self::reload`]: closes for [`crate::ExitReason::Reload`]
+    /// when the installed devlanes is newer than this TUI, else stays with a
+    /// notice, reconnecting when the daemon ended the connection.
+    fn reload_checked(&mut self, installed: Option<String>, effects: &mut Vec<Effect>) {
+        let lost = self.reload_pending.take().flatten();
+        if installed
+            .as_deref()
+            .is_some_and(|version| devlanes_update::version::is_newer(version, self.version))
+        {
+            self.close_for(crate::ExitReason::Reload, effects);
+            return;
+        }
+        self.reload_refused = true;
+        // The loss goes to the error list; the notice says why the TUI stays.
+        if let Some(peer) = lost {
+            self.lost_connection(Some(&ApiError::Incompatible { peer }), effects);
+        }
+        self.set_notice(match installed {
+            Some(version) => format!(
+                "the installed devlanes is {}, not newer than this TUI; update it to reload",
+                text::clean(&version)
+            ),
+            None => "the installed devlanes does not answer; reinstall it to reload".into(),
+        });
+    }
+
     /// Offers `devlanes setup` once per session, when the daemon or this
-    /// side found a step missing: after both answered and the welcome is
-    /// gone, never over another dialog, the unavailable screen or typing.
+    /// side found a step missing that a lane of the project on screen needs:
+    /// the CA for an `https://` address, the hosts helper or resolver for a
+    /// hostname. Only after both answered and the welcome is gone, never
+    /// over another dialog, the unavailable screen or typing, and not within
+    /// a day of the same steps being turned down here or named after a
+    /// `devlanes start` (both record `setup:<steps>` in the notice log).
     fn offer_setup(&mut self) {
         let welcomed = self.release.1.iter().any(|key| key == crate::welcome::KEY);
         let Some(local) = self.setup_missing.as_ref() else {
@@ -7800,10 +7891,21 @@ impl App {
                 missing.push(step.to_owned());
             }
         }
+        let (https, hostnames) = self.project_addresses();
+        missing.retain(|step| match step.as_str() {
+            "ca" => https,
+            "hosts" | "resolver" => hostnames,
+            _ => true,
+        });
         if missing.is_empty() {
             return;
         }
+        let key = format!("setup:{}", missing.join(","));
+        if self.release.1.contains(&key) {
+            return;
+        }
         self.setup_offered = true;
+        self.setup_key = Some(key);
         let mut detail: Vec<String> = missing
             .iter()
             .map(|step| {
@@ -7828,6 +7930,44 @@ impl App {
             strict: false,
             effect: Box::new(Effect::Exit(crate::ExitReason::Setup)),
         });
+    }
+
+    /// A turned-down setup prompt (the confirm whose `effect` closes for
+    /// setup) waits a day: its key is recorded as shown.
+    fn setup_declined(&mut self, effect: &Effect, effects: &mut Vec<Effect>) {
+        if matches!(effect, Effect::Exit(crate::ExitReason::Setup))
+            && let Some(key) = self.setup_key.take()
+        {
+            self.release.1.push(key.clone());
+            effects.push(Effect::NoticeShown(key));
+        }
+    }
+
+    /// Whether a lane of the project on screen, on this machine, serves an
+    /// `https://` address, and whether one serves a hostname (anything but
+    /// an IP address or plain `localhost`).
+    fn project_addresses(&self) -> (bool, bool) {
+        let (mut https, mut hostnames) = (false, false);
+        let lanes = self
+            .project_lanes()
+            .into_iter()
+            .filter(|lane| self.box_lane(&lane.reference).is_none());
+        for lane in lanes {
+            let urls = lane
+                .units
+                .iter()
+                .flat_map(|unit| &unit.urls)
+                .chain(lane.containers.iter().flat_map(|container| &container.urls));
+            for url in urls {
+                let Some((scheme, host)) = url_host(url) else {
+                    continue;
+                };
+                https |= scheme.eq_ignore_ascii_case("https");
+                hostnames |= !host.eq_ignore_ascii_case("localhost")
+                    && host.parse::<std::net::IpAddr>().is_err();
+            }
+        }
+        (https, hostnames)
     }
 
     /// q, Ctrl+C or the menu's quit: closes at once unless lanes of the

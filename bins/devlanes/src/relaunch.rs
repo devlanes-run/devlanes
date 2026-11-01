@@ -57,10 +57,20 @@ async fn tui(reopen: Reopen) -> Result<u8, RpcError> {
 /// start`, `restart` or `lane new --start` would send that request again.
 pub fn exec_tui(reopen: &Reopen) -> Result<u8, RpcError> {
     let exe = devlanes_update::spawn_exe().map_err(|error| failed(&error))?;
+    run(tui_command(&exe, reopen)?)
+}
+
+/// `<exe> ui` with [`REOPEN_ENV`] set to `reopen`, and without the step
+/// block `devlanes update` handed this process, which the TUI's lanes must
+/// not inherit.
+fn tui_command(exe: &std::path::Path, reopen: &Reopen) -> Result<std::process::Command, RpcError> {
     let reopen = serde_json::to_string(reopen).map_err(|error| failed(&error))?;
-    let mut command = std::process::Command::new(&exe);
-    command.arg("ui").env(REOPEN_ENV, reopen);
-    run(command)
+    let mut command = std::process::Command::new(exe);
+    command
+        .arg("ui")
+        .env(REOPEN_ENV, reopen)
+        .env_remove(crate::lifecycle::STEPS_ENV);
+    Ok(command)
 }
 
 /// Replaces this process with `command`.
@@ -93,4 +103,37 @@ fn failed(error: &dyn std::fmt::Display) -> RpcError {
         json!({"message": format!("could not open the TUI again: {error}")}),
         1,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The new TUI gets where to open, never the update's step block.
+    #[test]
+    fn the_new_tui_gets_the_reopen_request_alone() {
+        let reopen = Reopen {
+            lane: Some("acme@1".into()),
+            view: None,
+        };
+        let command = tui_command(std::path::Path::new("devlanes"), &reopen).expect("command");
+        let envs: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(envs.contains(&(
+            REOPEN_ENV.to_owned(),
+            Some(r#"{"lane":"acme@1","view":null}"#.to_owned())
+        )));
+        assert!(envs.contains(&(crate::lifecycle::STEPS_ENV.to_owned(), None)));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [std::ffi::OsStr::new("ui")]
+        );
+    }
 }

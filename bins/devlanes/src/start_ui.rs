@@ -52,7 +52,7 @@ pub async fn run(
     hint: impl Fn(&RpcError) -> Option<Hint>,
 ) -> Result<u8, RpcError> {
     // Before connecting: applying an update restarts the daemon.
-    crate::update::startup(runtime, paths).await?;
+    crate::update::startup(runtime, paths).await;
     let mut client = Client::connect_or_spawn(paths).await.map_err(rpc_error)?;
     let mut params = request.params.clone();
     params["events"] = json!(true);

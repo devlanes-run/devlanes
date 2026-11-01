@@ -118,7 +118,7 @@ async fn a_newer_release_shows_in_the_header_by_its_state() -> TestResult {
             "available",
             "99.0.1 available, breaking · U update",
         ),
-        ("patch", "downloading", "99.0.1 downloading…"),
+        ("patch", "installing", "99.0.1 installing…"),
         ("patch", "ready", "99.0.1 ready · U restart"),
         ("minor", "failed", "update failed · U retry"),
     ] {
@@ -141,7 +141,7 @@ async fn the_daemon_page_leaves_versions_to_the_header() -> TestResult {
     assert!(!page.contains("brew upgrade"), "{page}");
     let footer = footer(&app)?;
     assert!(footer.starts_with(" U update"), "{footer}");
-    // `u` hides nothing any more.
+    // `u` leaves the release notice in place.
     app.update(key(KeyCode::Char('u')));
     assert!(app.release_notice().is_some());
     Ok(())
@@ -354,8 +354,31 @@ async fn a_newer_daemon_reloads_the_tui_without_asking() -> TestResult {
         "{top}"
     );
     app.update(shifted('M'));
+    // It reads the installed version first: the same one stays open.
     let effects = app.update(shifted('U'));
     assert!(app.dialog.is_none());
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::CheckReload))
+            && !effects.iter().any(|e| matches!(e, Effect::Exit(_))),
+        "{effects:?}"
+    );
+    let effects = app.update(Msg::ReloadChecked(Some(own.into())));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::Exit(_))),
+        "{effects:?}"
+    );
+    assert_eq!(app.exit, None);
+    let notice = app
+        .notice
+        .as_ref()
+        .map(|n| n.text.clone())
+        .unwrap_or_default();
+    assert!(
+        notice.contains(&format!("the installed devlanes is {own}, not newer")),
+        "{notice}"
+    );
+    app.update(shifted('U'));
+    let effects = app.update(Msg::ReloadChecked(Some("99.0.0".into())));
     assert!(
         effects
             .iter()
@@ -400,11 +423,11 @@ async fn a_daemon_on_a_newer_protocol_reloads_the_tui() -> TestResult {
     let api = FakeApi::with_lanes(mixed_lanes());
     let (mut app, _) = loaded(&api, 140, 24).await;
     let peer = hello(devlanes_proto::PROTOCOL_VERSION + 1, "99.0.0");
-    let effects = app.update(Msg::Subscribed(Err(ApiError::Incompatible { peer })));
+    let effects = app.update(Msg::Subscribed(Err(ApiError::Incompatible {
+        peer: peer.clone(),
+    })));
     assert!(
-        effects
-            .iter()
-            .any(|e| matches!(e, Effect::Exit(ExitReason::Reload))),
+        effects.iter().any(|e| matches!(e, Effect::CheckReload)),
         "{effects:?}"
     );
     assert!(
@@ -413,8 +436,43 @@ async fn a_daemon_on_a_newer_protocol_reloads_the_tui() -> TestResult {
             .any(|e| matches!(e, Effect::ScheduleReconnect { .. })),
         "{effects:?}"
     );
+    let effects = app.update(Msg::ReloadChecked(Some("99.0.0".into())));
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::Exit(ExitReason::Reload))),
+        "{effects:?}"
+    );
     assert_eq!(app.exit, Some(ExitReason::Reload));
     assert!(app.errors.is_empty(), "nothing to report: {:?}", app.errors);
+
+    // An install no newer than this TUI would only open it again: it stays,
+    // says so and keeps trying to reach the daemon.
+    let (mut app, _) = loaded(&api, 140, 24).await;
+    app.update(Msg::Subscribed(Err(ApiError::Incompatible {
+        peer: peer.clone(),
+    })));
+    let effects = app.update(Msg::ReloadChecked(None));
+    assert_eq!(app.exit, None);
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ScheduleReconnect { .. })),
+        "{effects:?}"
+    );
+    let notice = app
+        .notice
+        .as_ref()
+        .map(|n| n.text.clone())
+        .unwrap_or_default();
+    assert!(notice.contains("does not answer"), "{notice}");
+    // The next loss to that daemon asks no more.
+    app.update(Msg::Reconnect);
+    let effects = app.update(Msg::Subscribed(Err(ApiError::Incompatible { peer })));
+    assert!(
+        !effects.iter().any(|e| matches!(e, Effect::CheckReload)),
+        "{effects:?}"
+    );
     Ok(())
 }
 
@@ -540,7 +598,9 @@ async fn drive_returns_the_exit_reason_and_skips_nothing_else() -> TestResult {
     use crossterm::event::Event as TermEvent;
     use std::sync::Arc;
 
-    let api = Arc::new(FakeApi::with_lanes(mixed_lanes()));
+    let mut fake = FakeApi::with_lanes(mixed_lanes());
+    fake.installed = Some("99.0.0".into());
+    let api = Arc::new(fake);
     let (keys_tx, keys_rx) = tokio::sync::mpsc::channel::<std::io::Result<TermEvent>>(8);
     let events = Box::pin(futures_util::stream::unfold(keys_rx, |mut rx| async move {
         rx.recv().await.map(|event| (event, rx))

@@ -98,8 +98,9 @@ reports `build=debug` or another protocol. From then on only the private copy
 is used, so rebuilding or replacing the original file mid-install has no effect.
 
 `devlanes setup` asks for your password once with `sudo -v` (sudo caches it for
-the remaining commands), and the installer runs the commands below, shown for macOS. Linux uses group `root` instead
-of `wheel` and `/usr/bin/test` instead of `/bin/test`.
+the remaining commands), and the installer runs the commands below, shown for
+macOS. Linux uses group `root` instead of `wheel` and `/usr/bin/test` instead
+of `/bin/test`.
 
 ```sh
 sudo /bin/test -e /etc/sudoers.d/devlanes    # is there a rule to back up?
@@ -339,9 +340,8 @@ Run `devlanes setup` again.
 
 The installed helper reports a lower revision than this devlanes needs, or
 cannot be run. `devlanes doctor` shows both revisions. Run `devlanes setup`
-again. Updating devlanes asks for this only when
-the helper itself changed; its release version may differ from devlanes'
-without any warning.
+again. Updating devlanes asks for this only when the helper itself changed;
+its release version may differ from devlanes' without any warning.
 
 ### `hosts_file_refused`
 

@@ -33,10 +33,25 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+/// The colors and glyphs the TUI would use, from the user config and the
+/// environment, for output drawn outside it (the step block of `daemon
+/// stop`, `restart` and `update`). Reads nothing else and records nothing.
+pub fn tui_theme(paths: &Paths) -> devlanes_tui::theme::Theme {
+    let user = crate::user_config::display(paths);
+    let tui = &user.tui;
+    devlanes_tui::Options {
+        theme: Some(tui.theme.as_str().to_owned()),
+        glyphs: Some(tui.glyphs.as_str().to_owned()),
+        ..devlanes_tui::Options::default()
+    }
+    .theme()
+}
+
 /// The TUI's progress bar, colors, glyphs and quit choice from the user config,
 /// the service definition the daemon page's doctor checks compare stop
 /// timeouts with, where a relaunch opens, the CA trust check of the setup
-/// prompt, and the release notes "What's new" shows.
+/// prompt, and the release notes "What's new" shows. Only a TUI that opens
+/// calls this: it claims "What's new" ([`crate::notes::for_tui`]).
 pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
     use std::io::IsTerminal;
     // An invalid key leaves only that setting on its default, with a warning.
@@ -94,7 +109,13 @@ pub fn tui_error(error: devlanes_tui::Error) -> RpcError {
 /// anything. A TUI that closed to update, reload or set up opens again once
 /// that is done.
 pub async fn ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
-    crate::update::startup(runtime, paths).await?;
+    crate::update::startup(runtime, paths).await;
+    open_ui(runtime, paths).await
+}
+
+/// [`ui`] for a caller that ran [`crate::update::startup`] itself, before a
+/// request of its own.
+pub async fn open_ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     let relaunch = devlanes_tui::run_with(paths.clone(), tui_options(paths).await)
         .await
         .map_err(tui_error)?;
