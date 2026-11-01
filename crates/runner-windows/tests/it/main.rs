@@ -448,6 +448,43 @@ async fn pty_repaints_after_colors_are_marked() {
     .await;
 }
 
+/// A resize while the unit prints without pause: the console host's repaint
+/// then first scrolls the window by what was printed since its last one, and
+/// it is still marked, so the next resize goes out too.
+#[tokio::test]
+async fn pty_repaints_while_output_streams_are_marked() {
+    bounded(async {
+        let shell = devlanes_shell_windows::windows_shell()
+            .await
+            .expect("Git for Windows' sh.exe");
+        let dir = tempfile::tempdir().expect("tempdir");
+        let unit = runner()
+            .with_shell(Some(shell))
+            .spawn_unit(pty_spec(
+                "/bin/sh",
+                &["-c", "i=0; while :; do i=$((i+1)); echo line $i; done"],
+                dir.path(),
+                env(&[]),
+            ))
+            .await
+            .expect("spawn");
+        let _cleanup = Cleanup(unit.clone());
+        let mut output = unit.output();
+        // Far enough that the window scrolls between repaints.
+        read_until(&mut output, "line 500").await;
+        for (columns, rows) in [(200, 45), (152, 45)] {
+            unit.resize(TerminalSize { columns, rows })
+                .await
+                .expect("resize");
+            let marker = format!("\x1b[8;{rows};{columns}t");
+            tokio::time::timeout(GRACE, read_until(&mut output, &marker))
+                .await
+                .unwrap_or_else(|_| panic!("the repaint at {columns}x{rows} was not marked"));
+        }
+    })
+    .await;
+}
+
 /// SIGINT is the Ctrl-C key in a pseudo console; the fixture shuts down on
 /// it without escalation.
 #[tokio::test]
