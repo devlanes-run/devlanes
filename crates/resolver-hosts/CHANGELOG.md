@@ -1,5 +1,11 @@
 # devlanes-resolver-hosts
 
+## 0.11.0 — 2026-11-01
+
+### Patch changes
+
+- [e52b808](https://github.com/devlanes-run/devlanes/commit/e52b8085584cd0224b93fb3dc97642ba299e9ef2) Fixed `devlanes setup` failing to install the /etc/hosts helper on machines whose sudo configuration already had an unrelated problem, such as GitHub's Ubuntu runners; it now installs the helper and warns about the other file.
+
 ## 0.10.0 — 2026-11-01
 
 ### Patch changes

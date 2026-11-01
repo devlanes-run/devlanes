@@ -1,5 +1,11 @@
 # devlanes-proxy
 
+## 0.7.0 — 2026-11-01
+
+### Patch changes
+
+- [9d7557c](https://github.com/devlanes-run/devlanes/commit/9d7557cf5829274623142c4393958b76b536d5a2) Fixed the proxy moving to its fallback port (8443 or 8080) on macOS and Linux when the daemon restarted shortly after the proxy had closed connections, such as a browser's after `devlanes daemon restart`.
+
 ## 0.6.0 — 2026-10-29
 
 ### Patch changes
