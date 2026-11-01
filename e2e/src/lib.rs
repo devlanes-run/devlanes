@@ -16,7 +16,7 @@ use std::{
     fmt,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    net::{SocketAddr, TcpStream},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Mutex, OnceLock, mpsc},
@@ -31,6 +31,7 @@ pub use windows::{alive, kill, kill_tree, start_time, system32};
 
 use devlanes_testing::{TestHome, TestRepo};
 use serde_json::Value;
+use socket2::{Domain, Socket, Type};
 
 /// Result type of the harness.
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -75,6 +76,9 @@ const LOG_AFTER_STOP: usize = 40;
 const SLOT_BASE: u16 = 26000;
 const SLOT_SIZE: u16 = 100;
 const SLOTS: u16 = 60;
+/// Offsets of the proxy's HTTPS and HTTP ports in a slot, above the lane pool.
+const HTTPS_OFFSET: u16 = 90;
+const HTTP_OFFSET: u16 = 91;
 
 /// Root of the workspace this crate belongs to.
 pub fn workspace_root() -> &'static Path {
@@ -181,7 +185,8 @@ struct PortSlot {
 }
 
 impl PortSlot {
-    /// Takes the first free slot; the lock is released when the file closes, even on a crash.
+    /// Takes the first free slot whose proxy ports can be bound; the lock is released
+    /// when the file closes, even on a crash.
     fn acquire() -> Result<Self> {
         #[cfg(unix)]
         let dir = Path::new("/tmp").join(format!(
@@ -212,7 +217,9 @@ impl PortSlot {
                     let base = SLOT_BASE + slot * SLOT_SIZE;
                     // An earlier run that died before its cleanup may have left these.
                     reap_fixture_listeners(base, base + SLOT_SIZE - 1);
-                    return Ok(Self { base, _lock: file });
+                    if proxy_ports_free(base) {
+                        return Ok(Self { base, _lock: file });
+                    }
                 }
                 Err(fs::TryLockError::WouldBlock) => {}
                 Err(fs::TryLockError::Error(error)) => return Err(error.into()),
@@ -220,6 +227,34 @@ impl PortSlot {
         }
         Err(Error::Setup("every e2e port slot is in use".into()))
     }
+}
+
+/// True when the proxy ports of the slot at `base` can be bound on loopback the
+/// way the daemon binds them, without `SO_REUSEADDR`. HTTPS connections an
+/// earlier lab's proxy closed first stay in `TIME_WAIT` on its port (30 s on
+/// macOS, 60 s on Linux), and until then that bind fails, so the next lab's
+/// daemon would fall back to 8443. Such a slot is skipped. Only refusals count:
+/// a host without IPv6 fails `::1` for another reason.
+fn proxy_ports_free(base: u16) -> bool {
+    let loopback: [IpAddr; 2] = [Ipv4Addr::LOCALHOST.into(), Ipv6Addr::LOCALHOST.into()];
+    [base + HTTPS_OFFSET, base + HTTP_OFFSET]
+        .into_iter()
+        .flat_map(|port| loopback.map(|ip| SocketAddr::new(ip, port)))
+        .all(|address| {
+            let bound =
+                Socket::new(Domain::for_address(address), Type::STREAM, None).and_then(|socket| {
+                    if address.is_ipv6() {
+                        socket.set_only_v6(true)?;
+                    }
+                    socket.bind(&address.into())
+                });
+            !bound.is_err_and(|error| {
+                matches!(
+                    error.kind(),
+                    std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+                )
+            })
+        })
 }
 
 /// Exit status and captured output of one finished command.
@@ -372,8 +407,8 @@ impl Lab {
             format!(
                 "ports:\n  range: {base}-{}\nproxy:\n  https_port: {}\n  http_port: {}\n",
                 base + 79,
-                base + 90,
-                base + 91
+                base + HTTPS_OFFSET,
+                base + HTTP_OFFSET
             ),
         )?;
         let repo = TestRepo::new()?;
@@ -407,7 +442,7 @@ impl Lab {
 
     /// The HTTPS port the proxy is configured to bind.
     pub fn https_port(&self) -> u16 {
-        self.slot.base + 90
+        self.slot.base + HTTPS_OFFSET
     }
 
     /// The directory that holds linked worktrees; tests may create or move worktrees in it.
