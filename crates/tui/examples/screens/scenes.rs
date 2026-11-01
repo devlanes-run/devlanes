@@ -1344,7 +1344,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "menu",
-            what: "the Esc menu: banner over lane lines, version, options, what's new, help, quit",
+            what: "the Esc menu: banner over lane lines, version, options, highlights, help, quit",
             setup: |f| f.key(KeyCode::Esc),
         },
         Scene {

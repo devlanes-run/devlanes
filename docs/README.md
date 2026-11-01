@@ -20,7 +20,7 @@ Start with [getting started](getting-started.md). The two references are generat
 - [Service patterns](guides/services.md): APIs behind a frontend, workers, several ports, wildcards, replicas, monorepos, several projects in one repository, CI.
 - [Lane lifecycle](guides/lifecycle.md): start, stop, what a plain start brings back, `lane resume`, `reload` after a config edit, project renames, on-demand services, lifecycle tasks, and idle lanes that are throttled and frozen.
 - [Terminals](guides/terminals.md): tab progress bars, clipboard.
-- [Updates](guides/updates.md): release checks and notices, `devlanes update` per install method, builds of `main`, background installs, What's new, the install scripts and `devlanes uninstall`.
+- [Updates](guides/updates.md): release checks and notices, `devlanes update` per install method, builds of `main`, background installs, release highlights, the install scripts and `devlanes uninstall`.
 - [Remote setup](guides/remote-setup.md): preparing a box and a client for `devlanes remote connect`.
 - [Remote boxes over Tailscale](guides/remote-tailscale.md): MagicDNS names, OpenSSH keys or Tailscale SSH, check mode, Headscale.
 - [Remote boxes through Cloudflare](guides/remote-cloudflare.md): Cloudflare Tunnel with Access and `cloudflared` as `ProxyCommand`, the Cloudflare One Client, session expiry.

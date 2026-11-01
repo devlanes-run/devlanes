@@ -34,7 +34,7 @@ devlanes 0.10.0 is available with breaking changes (this is 0.9.0): devlanes upd
 
 Installs devlanes cannot update itself (cargo, `uvx`, `pipx run`, pip, a script install in a directory this user cannot write to) name their own command instead. When the daemon runs another version than the CLI, the line says to run `devlanes daemon restart` when convenient, since a restart stops services. Agent, JSON, plain and CI output never get these lines.
 
-The TUI header shows `0.9.1 available · U update` (`available, breaking` for a minor release), `0.9.1 installing…` and `0.9.1 ready · U restart`, and the summary printed when the TUI closes has an `Update` line. `devlanes doctor` shows the version, build, install method and the path that runs it, the update mode and registry, and the latest release with its command. Shown notices and the version What's new last showed are kept in `~/.devlanes/notices.json`.
+The TUI header shows `0.9.1 available · U update` (`available, breaking` for a minor release), `0.9.1 installing…` and `0.9.1 ready · U restart`, and the summary printed when the TUI closes has an `Update` line. `devlanes doctor` shows the version, build, install method and the path that runs it, the update mode and registry, and the latest release with its command. Shown notices and the version the release highlights last showed are kept in `~/.devlanes/notices.json`.
 
 ## devlanes update
 
@@ -77,9 +77,11 @@ When `devlanes` opens the TUI, or a start command opens it, and the daemon runs 
 
 A TUI that is open while another one updates reconnects to the new daemon and shows `daemon 0.9.1, TUI 0.9.0 · U reload`; `U` opens the new TUI on the same lane. When the binary that would open is not newer than this TUI (another install comes first, or a project's own devlanes), the TUI stays open and says so.
 
-## What's new
+## Release highlights
 
-Each build carries the notes of its `CHANGELOG.md`. The first TUI opened on a newer stable release shows "What's new" after the welcome: every release since the version it last showed, breaking changes first. A fresh home records its version without showing anything, and `next` and local builds never show it. The Esc menu's `what's new` opens it again.
+Each build carries the highlights of its `CHANGELOG.md`. The first TUI opened on a newer stable release shows them after the welcome, for every release since the version it last showed. The dialog lists every breaking change, then at most five highlights that the release authors picked, and `o` opens the release page for the rest. A release with no breaking change and no highlight shows nothing, which is most patch releases. A fresh home records its version without showing anything, and `next` and local builds never show it. The Esc menu's `highlights` opens the dialog again, and `updates.highlights: false` in the user config stops it from opening by itself.
+
+After `devlanes update` and the install scripts restart the daemon, the terminal prints one line with the link to the release page. Agent, JSON, plain and CI output print nothing.
 
 ## Windows
 

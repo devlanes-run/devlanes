@@ -77,7 +77,7 @@ pub struct NoticeLog {
     /// Keys the user dismissed in the TUI.
     #[serde(default)]
     pub dismissed: Vec<String>,
-    /// The newest release whose "What's new" was shown, or that a fresh home
+    /// The newest release whose highlights were shown, or that a fresh home
     /// started on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_version: Option<String>,

@@ -724,7 +724,7 @@ the setup prompt after the welcome: the CA is not trusted and a lane needs the h
 
 ## menu
 
-the Esc menu: banner over lane lines, version, options, what's new, help, quit
+the Esc menu: banner over lane lines, version, options, highlights, help, quit
 
 - 200x60: [txt](menu-200x60.txt) · [png](menu-200x60.png) · [ansi](menu-200x60.ansi)
 - 120x40: [txt](menu-120x40.txt) · [png](menu-120x40.png) · [ansi](menu-120x40.ansi)

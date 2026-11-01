@@ -166,7 +166,7 @@ async fn u_asks_with_the_notes_and_the_lanes_then_closes_to_update() -> TestResu
             "This TUI closes and opens again on the same lane.",
         ]
     );
-    // Inline code is styled as "What's new" shows it, without the backticks.
+    // Inline code is styled as the release highlights show it, without the backticks.
     let screen = draw(&app)?.backend().to_string();
     assert!(screen.contains("Changed start to do more."), "{screen}");
     assert!(!screen.contains("`start`"), "{screen}");

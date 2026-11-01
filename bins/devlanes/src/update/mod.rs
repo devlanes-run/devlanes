@@ -697,8 +697,8 @@ fn check_failed(error: &dyn std::fmt::Display, retry: &str) -> RpcError {
 /// `version`.
 fn release_notes_line(version: &str) -> String {
     format!(
-        "Release notes: {}/releases/tag/v{version}\n",
-        devlanes_version::REPOSITORY
+        "Release notes: {}\n",
+        devlanes_update::notes::release_url(version)
     )
 }
 
