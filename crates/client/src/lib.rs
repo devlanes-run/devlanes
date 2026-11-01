@@ -678,7 +678,7 @@ pub fn sandbox_reason() -> Option<&'static str> {
 }
 
 // The environment allowlist, the readiness reader and the handover below serve
-// a daemon spawn, which the browser build (crates/tui-web) never makes.
+// a daemon spawn, which the browser (wasm32) build never makes.
 
 /// Variables an auto-spawned daemon inherits from the spawning shell, by exact name.
 #[cfg(not(target_family = "wasm"))]

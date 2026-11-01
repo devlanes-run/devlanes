@@ -58,7 +58,7 @@ pub mod exit {
 
     /// Words for a process's exit `code` where they say more than the
     /// number; none on this platform, where codes stay numbers. The browser
-    /// build (crates/tui-web) words them as Unix does.
+    /// (wasm32) build words them as Unix does.
     #[cfg(not(windows))]
     pub fn words(_code: i64) -> Option<&'static str> {
         None

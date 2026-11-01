@@ -18,7 +18,7 @@ pub use os::{
     user_home,
 };
 
-// Not only Unix: the browser build (crates/tui-web) has Unix-style paths too.
+// Not only Unix: the browser (wasm32) build has Unix-style paths too.
 #[cfg(not(windows))]
 mod os {
     use super::{Cow, Path};

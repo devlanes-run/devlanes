@@ -1,9 +1,9 @@
 //! The key and mouse events the app reacts to.
 //!
 //! Natively these are crossterm's own types, so the terminal's events reach
-//! the app unchanged. crossterm does not build for the browser, so the web
-//! demo (crates/tui-web) gets copies with the same names, fields and values,
-//! covering what the demo's key mapping produces and the app matches on.
+//! the app unchanged. crossterm does not build for the browser, so the
+//! wasm32 build gets copies with the same names, fields and values, covering
+//! what the app matches on.
 //! One difference: crossterm's `KeyEvent` equality and hash ignore the case
 //! a Shift chord adds, while the copies compare fields as they are, so the
 //! app matches on `code` and `modifiers` rather than comparing events.

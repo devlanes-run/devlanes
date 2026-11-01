@@ -18,8 +18,7 @@ thiserror.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 tokio.workspace = true
 
-# The TUI web demo (crates/tui-web) builds this crate for the browser, where tokio
-# compiles only with these features.
+# The browser (wasm32) build, where tokio compiles only with these features.
 [target.'cfg(target_family = "wasm")'.dependencies]
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 

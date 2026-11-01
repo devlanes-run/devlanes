@@ -14,8 +14,8 @@ const FIRST_READ: u64 = 256 * 1024;
 /// Upper bound per read, so a burst of logging cannot stall the UI.
 const MAX_READ: u64 = 4 * 1024 * 1024;
 
-/// Which file a log is: `(device, inode)`. The browser build (crates/tui-web)
-/// reads no log and keeps the Unix shape.
+/// Which file a log is: `(device, inode)`. The browser build (wasm32) reads
+/// no log and keeps the Unix shape.
 #[cfg(not(windows))]
 pub type FileKey = (u64, u64);
 

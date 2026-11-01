@@ -2054,7 +2054,6 @@ dependencies = [
  "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-term",
- "devlanes-tui",
  "devlanes-version",
  "futures-util",
  "insta",
@@ -2078,12 +2077,18 @@ name = "devlanes-tui-web"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "devlanes-client",
+ "devlanes-config",
+ "devlanes-core",
+ "devlanes-proto",
  "devlanes-tui",
  "devlanes-version",
  "ratatui",
  "ratzilla",
+ "serde_json",
  "wasm-bindgen",
  "web-sys",
+ "web-time",
 ]
 
 [[package]]
