@@ -1,5 +1,5 @@
 //! Release checks against a local release server: the daemon reads the
-//! registry of its install method and channel, reports a newer release with
+//! registry of its install method, reports a newer release with
 //! its bump and changelog notes, caches both, checks again on `update.check`
 //! only when the last check is an hour old unless forced, and makes no request
 //! when checks are off. Needs `curl`.
@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use devlanes_config::{UpdateChannel, UpdateMode};
+use devlanes_config::UpdateMode;
 use devlanes_daemon::{
     Engine, EngineOptions, Handler, Session, integrations::Integrations, update::UpdateCheckOptions,
 };
@@ -83,8 +83,7 @@ fn hits_of(hits: &Hits, path: &str) -> usize {
 fn checks(base: &str, method: InstallMethod) -> UpdateCheckOptions {
     UpdateCheckOptions {
         urls: Urls {
-            github_stable: format!("{base}/stable.json"),
-            github_next: format!("{base}/next.json"),
+            github: format!("{base}/stable.json"),
             npm: format!("{base}/npm"),
             pypi: format!("{base}/pypi"),
             homebrew: format!("{base}/devlanes.rb"),
@@ -107,21 +106,15 @@ fn script() -> InstallMethod {
     InstallMethod::Script(PathBuf::from("/opt/acme/bin"))
 }
 
-/// An engine over `home` with `checks` and the user config's `updates`,
-/// reconciled so background work runs.
-async fn engine(
-    home: &Path,
-    checks: UpdateCheckOptions,
-    mode: UpdateMode,
-    channel: Option<UpdateChannel>,
-) -> Engine {
+/// An engine over `home` with `checks` and `updates.mode`, reconciled so
+/// background work runs.
+async fn engine(home: &Path, checks: UpdateCheckOptions, mode: UpdateMode) -> Engine {
     std::fs::create_dir_all(home).expect("home");
     let store = Store::open(home.join("state.db")).await.expect("store");
     let mut options = EngineOptions::new(home, home.join("d.sock"));
     options.watch = false;
     options.update_check = checks;
     options.user.updates.mode = mode;
-    options.user.updates.channel = channel;
     let integ = Integrations::with_runner(Arc::new(FakeRunner::default()));
     let engine = Engine::new(options, store, integ, CancellationToken::new());
     engine.reconcile().await.expect("reconcile");
@@ -202,17 +195,10 @@ async fn newer_release_is_reported_with_notes_and_cached() {
             ("/changelog/99.0.0", changelog()),
         ])
         .await;
-        let engine = engine(
-            dir.path(),
-            checks(&base, script()),
-            UpdateMode::Notify,
-            None,
-        )
-        .await;
+        let engine = engine(dir.path(), checks(&base, script()), UpdateMode::Notify).await;
         let status = status_until(&engine, |s| s.get("update").is_some()).await;
         let update = &status["update"];
         assert_eq!(update["latest"], "99.0.0", "{status}");
-        assert_eq!(update["channel"], "stable");
         assert_eq!(update["bump"], "minor");
         assert_eq!(update["state"], "available");
         assert!(update["checked_at"].is_u64());
@@ -228,7 +214,6 @@ async fn newer_release_is_reported_with_notes_and_cached() {
         assert_eq!(check["state"], "ok");
         assert_eq!(check["mode"], "notify");
         assert_eq!(check["source"], "github");
-        assert_eq!(check["channel"], "stable");
         assert_eq!(check["latest"], "99.0.0");
         assert_eq!(check["bump"], "minor");
         assert_eq!(hits_of(&hits, "/stable.json"), 1);
@@ -239,8 +224,7 @@ async fn newer_release_is_reported_with_notes_and_cached() {
         )
         .expect("cache json");
         assert_eq!(cache["latest"], "99.0.0");
-        assert_eq!(cache["channel"], "stable");
-        assert_eq!(cache["source"], "github");
+        assert_eq!(cache["source"], format!("{base}/stable.json"));
         assert_eq!(cache["notes_for"], "99.0.0");
         assert_eq!(cache["notes"].as_array().map(Vec::len), Some(3));
     })
@@ -262,28 +246,22 @@ async fn each_install_method_reads_its_registry() {
         ])
         .await;
         let cases = [
-            ("script-next", script(), Some(UpdateChannel::Next), "github", "next", "99.0.0-next.3"),
-            // Only script installs follow next; cargo reads the stable manifest.
-            ("cargo", InstallMethod::CargoInstall, Some(UpdateChannel::Next), "github", "stable", "96.0.0"),
-            ("pnpm", InstallMethod::Pnpm, None, "npm", "stable", "95.0.0"),
-            ("pipx", InstallMethod::Pipx, None, "pypi", "stable", "94.0.0-rc.1"),
-            ("brew", InstallMethod::Homebrew, None, "homebrew", "stable", "97.0.0"),
+            // The manifest a `next` build reads.
+            ("script-next", script(), "/next.json", "github", "99.0.0-next.3"),
+            ("cargo", InstallMethod::CargoInstall, "/stable.json", "github", "96.0.0"),
+            ("pnpm", InstallMethod::Pnpm, "/stable.json", "npm", "95.0.0"),
+            ("pipx", InstallMethod::Pipx, "/stable.json", "pypi", "94.0.0-rc.1"),
+            ("brew", InstallMethod::Homebrew, "/stable.json", "homebrew", "97.0.0"),
         ];
-        for (name, method, channel, source, channel_name, latest) in cases {
-            let engine = engine(
-                &dir.path().join(name),
-                checks(&base, method),
-                UpdateMode::Notify,
-                channel,
-            )
-            .await;
+        for (name, method, manifest, source, latest) in cases {
+            let mut options = checks(&base, method);
+            options.urls.github = format!("{base}{manifest}");
+            let engine = engine(&dir.path().join(name), options, UpdateMode::Notify).await;
             let status = status_until(&engine, |s| s["release_check"]["state"] == "ok").await;
             let check = &status["release_check"];
             assert_eq!(check["source"], source, "{name}: {status}");
-            assert_eq!(check["channel"], channel_name, "{name}: {status}");
             assert_eq!(check["latest"], latest, "{name}: {status}");
             assert_eq!(status["update"]["latest"], latest, "{name}: {status}");
-            assert_eq!(status["update"]["channel"], channel_name, "{name}: {status}");
             // No changelog at the server: the release shows without notes.
             assert_eq!(status["update"]["notes"], json!([]), "{name}: {status}");
         }
@@ -311,7 +289,6 @@ async fn patch_and_older_releases() {
             &dir.path().join("npm"),
             checks(&base, InstallMethod::Npm),
             UpdateMode::Notify,
-            None,
         )
         .await;
         let status = status_until(&npm, |s| s.get("update").is_some()).await;
@@ -324,7 +301,6 @@ async fn patch_and_older_releases() {
             &dir.path().join("older"),
             checks(&base, script()),
             UpdateMode::Notify,
-            None,
         )
         .await;
         let status = status_until(&older, |s| s["release_check"]["state"] == "ok").await;
@@ -334,6 +310,17 @@ async fn patch_and_older_releases() {
     })
     .await
     .expect("timed out");
+}
+
+/// Writes `home`'s cache file: release 98.0.0, read from `source` at
+/// `checked_at`.
+fn cache(home: &Path, checked_at: u64, source: &str) {
+    std::fs::create_dir_all(home).expect("home");
+    std::fs::write(
+        home.join("update-check.json"),
+        json!({"checked_at": checked_at, "latest": "98.0.0", "source": source}).to_string(),
+    )
+    .expect("cache");
 }
 
 /// Milliseconds since the epoch, an hour ago.
@@ -356,17 +343,12 @@ async fn failures_keep_the_cached_release() {
         // Checked an hour ago: the daemon waits out the rest of the interval
         // unless the interval is shorter, as here.
         let checked_at = hour_ago();
-        std::fs::write(
-            dir.path().join("update-check.json"),
-            json!({"checked_at": checked_at, "latest": "98.0.0", "channel": "stable", "source": "github"})
-                .to_string(),
-        )
-        .expect("cache");
         // Nothing is served: every request fails with 404.
         let (base, hits) = release_server(&[]).await;
+        cache(dir.path(), checked_at, &format!("{base}/stable.json"));
         let mut options = checks(&base, script());
         options.interval = Duration::from_millis(100);
-        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+        let engine = engine(dir.path(), options, UpdateMode::Notify).await;
         let status = status_until(&engine, |s| s.get("update").is_some()).await;
         assert_eq!(status["update"]["latest"], "98.0.0", "{status}");
         let deadline = tokio::time::Instant::now() + CHECK_PATIENCE;
@@ -391,16 +373,15 @@ async fn a_forced_check_that_cannot_read_the_registry_fails() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path()).expect("home");
-        std::fs::write(
-            dir.path().join("update-check.json"),
-            json!({"checked_at": hour_ago() - 1_000, "latest": "98.0.0", "channel": "stable", "source": "github"})
-                .to_string(),
-        )
-        .expect("cache");
         let (base, hits) = release_server(&[]).await;
+        cache(
+            dir.path(),
+            hour_ago() - 1_000,
+            &format!("{base}/stable.json"),
+        );
         let mut options = checks(&base, script());
         options.first_delay = Duration::from_secs(3600);
-        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+        let engine = engine(dir.path(), options, UpdateMode::Notify).await;
         status_until(&engine, |s| s.get("update").is_some()).await;
 
         let error = try_call(&engine, Method::UpdateCheck, json!({"force": true}))
@@ -409,7 +390,7 @@ async fn a_forced_check_that_cannot_read_the_registry_fails() {
         assert_eq!(error.code, "update_failed", "{error:?}");
         let title = error.data["title"].as_str().unwrap_or_default();
         assert!(
-            title.starts_with("cannot read the latest stable release"),
+            title.starts_with("cannot read the latest release"),
             "{title}"
         );
         assert_eq!(error.data["hint"], "retry with devlanes update");
@@ -427,20 +408,22 @@ async fn a_forced_check_that_cannot_read_the_registry_fails() {
 async fn a_cache_of_another_source_is_ignored() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
-        std::fs::create_dir_all(dir.path()).expect("home");
-        std::fs::write(
-            dir.path().join("update-check.json"),
-            json!({"checked_at": hour_ago(), "latest": "98.0.0", "channel": "stable", "source": "npm"})
-                .to_string(),
-        )
-        .expect("cache");
         let (base, _) = release_server(&[]).await;
         let mut options = checks(&base, script());
         options.first_delay = Duration::from_secs(3600);
-        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
-        let status = status_until(&engine, |s| s["release_check"]["source"] == "github").await;
-        assert_eq!(status["release_check"]["state"], "pending", "{status}");
-        assert!(status.get("update").is_none(), "{status}");
+        // The answer of another registry, and of the `next` manifest, which a
+        // stable build does not read.
+        for other in ["npm", "next.json"] {
+            let home = dir.path().join(other);
+            cache(&home, hour_ago(), &format!("{base}/{other}"));
+            let engine = engine(&home, options.clone(), UpdateMode::Notify).await;
+            let status = status_until(&engine, |s| s["release_check"]["source"] == "github").await;
+            assert_eq!(
+                status["release_check"]["state"], "pending",
+                "{other}: {status}"
+            );
+            assert!(status.get("update").is_none(), "{other}: {status}");
+        }
     })
     .await
     .expect("timed out");
@@ -458,7 +441,7 @@ async fn update_check_rechecks_after_an_hour_or_when_forced() {
         let mut options = checks(&base, script());
         // Only `update.check` reads the server.
         options.first_delay = Duration::from_secs(3600);
-        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+        let engine = engine(dir.path(), options, UpdateMode::Notify).await;
 
         let update = call(&engine, Method::UpdateCheck, json!({})).await;
         assert_eq!(update["latest"], "99.0.0", "{update}");
@@ -486,17 +469,16 @@ async fn update_check_with_an_hour_old_cache_checks_again() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path()).expect("home");
-        std::fs::write(
-            dir.path().join("update-check.json"),
-            json!({"checked_at": hour_ago() - 1_000, "latest": "98.0.0", "channel": "stable", "source": "github"})
-                .to_string(),
-        )
-        .expect("cache");
         let (base, hits) =
             release_server(&[("/stable.json", json!({"version": "99.0.0"}).to_string())]).await;
+        cache(
+            dir.path(),
+            hour_ago() - 1_000,
+            &format!("{base}/stable.json"),
+        );
         let mut options = checks(&base, script());
         options.first_delay = Duration::from_secs(3600);
-        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+        let engine = engine(dir.path(), options, UpdateMode::Notify).await;
         status_until(&engine, |s| s.get("update").is_some()).await;
         let update = call(&engine, Method::UpdateCheck, json!({})).await;
         assert_eq!(update["latest"], "99.0.0", "{update}");
@@ -520,7 +502,6 @@ async fn daemon_status_through_the_server_reports_the_release() {
             &tmp.path.join("home"),
             checks(&base, script()),
             UpdateMode::Notify,
-            None,
         )
         .await;
         status_until(&engine, |s| s.get("update").is_some()).await;
@@ -585,12 +566,11 @@ async fn disabled_checks_make_no_request() {
             &dir.path().join("config"),
             checks(&base, script()),
             UpdateMode::Disable,
-            None,
         )
         .await;
         let mut options = checks(&base, script());
         options.off = Some("env");
-        let by_env = engine(&dir.path().join("env"), options, UpdateMode::Notify, None).await;
+        let by_env = engine(&dir.path().join("env"), options, UpdateMode::Notify).await;
         let local = engine(
             &dir.path().join("local"),
             checks(
@@ -600,14 +580,12 @@ async fn disabled_checks_make_no_request() {
                 },
             ),
             UpdateMode::Notify,
-            None,
         )
         .await;
         let source = engine(
             &dir.path().join("source"),
             checks(&base, InstallMethod::Source),
             UpdateMode::Notify,
-            None,
         )
         .await;
         for engine in [&by_config, &by_env, &local, &source] {
@@ -727,7 +705,7 @@ async fn auto_mode_stages_a_patch_release_and_retries_a_failure() {
         // Only `update.check` reads the server, every time it is called.
         options.first_delay = Duration::from_secs(3600);
         options.recheck_after = Duration::ZERO;
-        let engine = engine(&home, options, UpdateMode::Auto, None).await;
+        let engine = engine(&home, options, UpdateMode::Auto).await;
 
         let update = call(&engine, Method::UpdateCheck, json!({"force": true})).await;
         assert_eq!(update["latest"], patch.as_str(), "{update}");

@@ -19,7 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::{
     InstallMethod,
-    check::{self, Channel, CheckError, Urls},
+    check::{self, CheckError, Urls},
     version::{Version, is_newer},
 };
 
@@ -201,9 +201,9 @@ pub enum Target {
 }
 
 /// What `devlanes update` installs over the running build `running` when
-/// `wanted` is the latest release of the channel it follows. Only a newer
-/// release installs, since an older devlanes may refuse the state database
-/// a newer build migrated.
+/// `wanted` is the latest release it reads. Only a newer release installs,
+/// since an older devlanes may refuse the state database a newer build
+/// migrated.
 pub fn target(running: &str, wanted: &str) -> Target {
     if is_newer(wanted, running) {
         Target::Install {
@@ -214,14 +214,6 @@ pub fn target(running: &str, wanted: &str) -> Target {
     } else {
         Target::Older
     }
-}
-
-/// Whether devlanes can follow `channel` for `method`. Every install follows
-/// stable releases; `next` builds are published only as release archives,
-/// which only `install.sh`, `install.ps1` and standalone binaries install.
-/// Such an install also needs a directory it can write to ([`Plan::new`]).
-pub fn follows(method: &InstallMethod, channel: Channel) -> bool {
-    channel == Channel::Stable || matches!(method, InstallMethod::Script(_))
 }
 
 /// `commands` with every derived tool path that does not exist replaced by
@@ -425,11 +417,13 @@ pub enum Release {
 }
 
 impl Release {
-    /// The word `staged.json` records: `stable` or `next`.
-    fn channel(&self) -> &'static str {
-        match self {
-            Self::Version(version) => check::Channel::of_version(version).as_str(),
-            Self::Next => "next",
+    /// The release that holds `version`: a `next` build has no tag, so it
+    /// comes from the `next` prerelease.
+    pub fn of(version: &str) -> Self {
+        if check::is_next_build(version) {
+            Self::Next
+        } else {
+            Self::Version(version.to_owned())
         }
     }
 
@@ -550,8 +544,6 @@ pub fn exact_entries(listing: &str, top: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Staged {
     pub version: String,
-    /// `stable` or `next`.
-    pub channel: String,
     /// The archive's SHA-256.
     pub sha256: String,
     /// The install's directory, where [`apply`] puts the binaries.
@@ -670,7 +662,6 @@ pub async fn stage(
     }
     let staged = Staged {
         version: entry.version,
-        channel: release.channel().to_owned(),
         sha256: entry.sha256,
         target: dir.to_path_buf(),
         files,
@@ -1275,86 +1266,29 @@ mod tests {
         );
     }
 
-    /// `update --next` and `update --stable` by install method, running
-    /// channel, target channel and whether the channel's latest release is
-    /// newer than the running build. `None` is a method that cannot follow
-    /// the channel.
-    #[test]
-    fn channel_switches() {
-        let decide = |method: &InstallMethod, running, channel, latest| {
-            follows(method, channel).then(|| target(running, latest))
-        };
-        let install = |version: &str| {
-            Some(Target::Install {
-                version: version.into(),
-            })
-        };
-        let script = InstallMethod::Script(PathBuf::from("/opt/acme/bin"));
-        let others = [
-            InstallMethod::Homebrew,
-            InstallMethod::Npm,
-            InstallMethod::Pnpm,
-            InstallMethod::Uv,
-            InstallMethod::Pipx,
-            InstallMethod::CargoInstall,
-            InstallMethod::Local {
-                manifest: PathBuf::from("package.json"),
-            },
-            InstallMethod::Source,
-        ];
-        let (stable, next) = (Channel::Stable, Channel::Next);
-        for (running, channel, latest, expected) in [
-            // Stable to next: the next build of the coming release is newer.
-            ("0.9.0", next, "0.9.1-next.14", install("0.9.1-next.14")),
-            // Next has not moved past the stable release yet.
-            ("0.9.1", next, "0.9.1-next.14", Some(Target::Older)),
-            (
-                "0.9.1-next.14",
-                next,
-                "0.9.1-next.14",
-                Some(Target::Current),
-            ),
-            (
-                "0.9.1-next.14",
-                next,
-                "0.9.1-next.15",
-                install("0.9.1-next.15"),
-            ),
-            // Next to stable once the release of that build shipped.
-            ("0.9.1-next.14", stable, "0.9.1", install("0.9.1")),
-            // Before it ships the build stays.
-            ("0.9.1-next.14", stable, "0.9.0", Some(Target::Older)),
-            // Stable to stable is a plain update.
-            ("0.9.0", stable, "0.9.1", install("0.9.1")),
-            ("0.9.1", stable, "0.9.1", Some(Target::Current)),
-        ] {
-            let case = format!("{running} -> {} {latest}", channel.as_str());
-            assert_eq!(
-                decide(&script, running, channel, latest),
-                expected,
-                "{case}"
-            );
-            for method in &others {
-                let expected = if channel == Channel::Next {
-                    None
-                } else {
-                    expected.clone()
-                };
-                assert_eq!(
-                    decide(method, running, channel, latest),
-                    expected,
-                    "{method:?}: {case}"
-                );
-            }
-        }
-    }
-
-    /// An older release never installs.
+    /// Only a newer release installs: a `next` build moves to a later `next`
+    /// build, and never back to an older release.
     #[test]
     fn older_releases_never_install() {
         assert_eq!(target("0.9.1", "0.9.0"), Target::Older);
         assert_eq!(target("0.9.1", "0.9.1-next.3"), Target::Older);
         assert_eq!(target("0.9.1", "v0.9.1"), Target::Current);
+        assert_eq!(
+            target("0.9.1-next.14", "0.9.1-next.20"),
+            Target::Install {
+                version: "0.9.1-next.20".into()
+            }
+        );
+        assert_eq!(target("0.9.1-next.14", "0.9.0"), Target::Older);
+    }
+
+    /// A `next` build has no tag: it comes from the `next` prerelease.
+    #[test]
+    fn next_builds_come_from_the_next_prerelease() {
+        assert_eq!(Release::of("0.9.1-next.14"), Release::Next);
+        assert_eq!(Release::of("0.9.1"), Release::Version("0.9.1".into()));
+        assert_eq!(Release::of("0.9.1").folder(), "download/v0.9.1");
+        assert_eq!(Release::Next.folder(), "download/next");
     }
 
     #[test]
@@ -1396,7 +1330,6 @@ mod tests {
         std::fs::create_dir_all(target.join("devlanes-hosts/busy"))?;
         let staged = Staged {
             version: "0.9.1".into(),
-            channel: "stable".into(),
             sha256: "a".repeat(64),
             target: target.clone(),
             files: files.clone(),

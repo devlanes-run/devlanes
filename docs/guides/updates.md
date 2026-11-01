@@ -7,8 +7,7 @@ The daemon looks for new devlanes releases, and `devlanes update` or `U` in the 
 ```yaml
 # ~/.devlanes/config.yaml
 updates:
-  mode: notify    # disable, notify (the default) or auto
-  channel: stable # or next; defaults to the running build's channel
+  mode: notify # disable, notify (the default) or auto
 ```
 
 `notify` shows a newer release in command output and the TUI. `auto` does the same and also installs patch releases in the background ([background installs](#background-installs)). `disable` never checks. Checks are also off in debug builds, when the daemon starts with CI variables set, and with `DEVLANES_NO_UPDATE_CHECK=1`. devlanes installed as a project dependency and source builds never check, since the project's manifest or the checkout decides their version. Changes to `updates.*` apply after `devlanes daemon restart`.
@@ -17,7 +16,7 @@ updates:
 
 The daemon reads the latest version 30 seconds after it starts, then every 4 hours, and when a TUI opens if the last check is over an hour old. It asks the registry devlanes was installed from, with `curl`:
 
-- `install.sh`, `install.ps1`, standalone binaries and cargo: the GitHub release manifest (`releases/latest/download/release-manifest.json`, or `releases/download/next/release-manifest.json` on the `next` channel).
+- `install.sh`, `install.ps1`, standalone binaries and cargo: the GitHub release manifest (`releases/latest/download/release-manifest.json`, or `releases/download/next/release-manifest.json` for a [build of main](#builds-of-main)).
 - npm, pnpm, Bun and Yarn: `https://registry.npmjs.org/devlanes/latest`.
 - uv, uvx, pipx and pip: `https://pypi.org/pypi/devlanes/json`.
 - Homebrew: the formula in `devlanes-run/homebrew-tap`.
@@ -35,7 +34,7 @@ devlanes 0.10.0 is available with breaking changes (this is 0.9.0): devlanes upd
 
 Installs devlanes cannot update itself (cargo, `uvx`, `pipx run`, pip, a script install in a directory this user cannot write to) name their own command instead. When the daemon runs another version than the CLI, the line says to run `devlanes daemon restart` when convenient, since a restart stops services. Agent, JSON, plain and CI output never get these lines.
 
-The TUI header shows `0.9.1 available · U update` (`available, breaking` for a minor release), `0.9.1 installing…` and `0.9.1 ready · U restart`, and the summary printed when the TUI closes has an `Update` line. `devlanes doctor` shows the version, build, install method and the path that runs it, the update mode, channel and registry, and the latest release with its command. Shown notices and the version What's new last showed are kept in `~/.devlanes/notices.json`.
+The TUI header shows `0.9.1 available · U update` (`available, breaking` for a minor release), `0.9.1 installing…` and `0.9.1 ready · U restart`, and the summary printed when the TUI closes has an `Update` line. `devlanes doctor` shows the version, build, install method and the path that runs it, the update mode and registry, and the latest release with its command. Shown notices and the version What's new last showed are kept in `~/.devlanes/notices.json`.
 
 ## devlanes update
 
@@ -54,16 +53,19 @@ One install runs at a time (`~/.devlanes/update/lock`); a `devlanes update` star
 
 In the TUI, `U` asks the same question with the release's changelog lines and the number of lanes the restart starts again. Confirming closes the TUI, runs the update in the terminal, and opens the TUI again on the same lane and view.
 
-## Channels
+## Builds of main
 
-`stable` is the tagged releases, published to every registry. `next` is the latest build of `main` (such as `0.9.1-next.14`), published only as release archives. To use it, install devlanes with `install.sh` or `install.ps1` as usual, then switch:
+Every commit on `main` is built as a `next` build (such as `0.9.1-next.14`), published only as release archives on the rolling `next` prerelease. Install one with the scripts:
 
 ```sh
-devlanes update --next               # follow the latest build of main
-devlanes update --stable             # back to releases once one is newer
+curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
 ```
 
-Both set `updates.channel` in `config.yaml`, keeping its comments, then update on that channel. `--next` needs an `install.sh` or `install.ps1` install in a directory you can write to; any other install fails before the config changes, with the commands that reinstall devlanes with the script. `--stable` from a `next` build installs only a stable release newer than that build; until one ships, it records the channel and the build stays.
+```powershell
+iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
+```
+
+Over an existing script install in the same directory, this installs the build of main in its place. A `next` build then updates along `next` builds by itself: `devlanes update` and `updates.mode: auto` read the `next` manifest, which only holds the latest build of main, so it never moves to a stable release on its own. To go back to stable releases, run `devlanes uninstall --keep-data` (or delete the installed files) and install the usual way. To move a Homebrew, npm or PyPI install to `next` builds, uninstall it first, since the scripts stop when another installer's `devlanes` comes first on `PATH`.
 
 ## Background installs
 
@@ -85,7 +87,7 @@ Windows refuses to replace an executable while a process runs from it, unless th
 
 ## Install scripts
 
-`install.sh` and `install.ps1` always install the latest stable release. They refuse `--version` (`-Version`) and `DEVLANES_VERSION`, naming the npm and PyPI packages instead. Run on a machine that already has devlanes in the install directory, they hand over to `devlanes update --yes` and exit with its status. They install by themselves instead when the directory is not writable (with `DEVLANES_INSTALL_SUDO=1` on macOS and Linux) or when the devlanes there predates `devlanes update`. After installing a new binary while a daemon runs, they restart it with `devlanes update --finish`, which also restarts a daemon of an older release. When the first `devlanes` on `PATH` comes from Homebrew, npm, pnpm, Bun, Yarn, uv, pipx or cargo, they stop and name it, since that one would keep running; `--force` (`-Force`) installs anyway.
+`install.sh` and `install.ps1` install the latest stable release, or with `--channel next` (`-Channel next`) the latest [build of main](#builds-of-main); `--channel stable` is the default. They refuse `--version` (`-Version`) and `DEVLANES_VERSION`, naming the npm and PyPI packages instead. Run on a machine that already has devlanes in the install directory, they hand over to `devlanes update --yes` and exit with its status. They install by themselves instead with `--channel next`, when the directory is not writable (with `DEVLANES_INSTALL_SUDO=1` on macOS and Linux) or when the devlanes there predates `devlanes update`. After installing a new binary while a daemon runs, they restart it with `devlanes update --finish`, which also restarts a daemon of an older release. When the first `devlanes` on `PATH` comes from Homebrew, npm, pnpm, Bun, Yarn, uv, pipx or cargo, they stop and name it, since that one would keep running; `--force` (`-Force`) installs anyway.
 
 ## Uninstall
 

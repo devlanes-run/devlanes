@@ -95,8 +95,7 @@ terminal:
 # Every 4 hours and when the TUI opens, the daemon reads the latest devlanes version from
 # the registry devlanes was installed from. mode: notify shows a newer release, auto also
 # installs patch releases in the background where it can, and disable (or
-# DEVLANES_NO_UPDATE_CHECK=1) turns checks off. channel: stable or next; left out, it
-# follows the running build's channel. devlanes update --next and --stable set it.
+# DEVLANES_NO_UPDATE_CHECK=1) turns checks off.
 updates:
   mode: notify
 # On a terminal, start, restart, lane resume and lane new --start run inside the TUI.

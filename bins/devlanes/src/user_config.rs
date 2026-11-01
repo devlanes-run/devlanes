@@ -321,7 +321,13 @@ pub async fn set(runtime: &Runtime, paths: &Paths, key: &str, value: &str) -> Re
     let path = file(paths);
     let value = devlanes_config::parse_setting_value(value)
         .map_err(|error| invalid_setting(&path, &format!("{key}: {}", error.message)))?;
-    write(paths, key, value.clone()).await?;
+    let (target, owned_key, written) = (path.clone(), key.to_owned(), value.clone());
+    blocking(move || {
+        file_value(&target)?;
+        devlanes_config::set_user_value(&target, &owned_key, &written)
+            .map_err(|error| invalid_setting(&target, &error.message))
+    })
+    .await??;
     let text = format!(
         "set {key} to {} in {}; {}\n",
         shown(&value),
@@ -334,21 +340,6 @@ pub async fn set(runtime: &Runtime, paths: &Paths, key: &str, value: &str) -> Re
         json!({"file": path, "key": key, "value": value, "applies": applies_name(key)}),
     );
     Ok(0)
-}
-
-/// Writes `value` at the dotted `key` of the user config, keeping the file's
-/// comments, and returns the file's path. A value the schema refuses, or a
-/// file that is not YAML, leaves the file as it is.
-pub async fn write(paths: &Paths, key: &str, value: Value) -> Result<PathBuf, RpcError> {
-    let path = file(paths);
-    let (target, owned_key) = (path.clone(), key.to_owned());
-    blocking(move || {
-        file_value(&target)?;
-        devlanes_config::set_user_value(&target, &owned_key, &value)
-            .map_err(|error| invalid_setting(&target, &error.message))
-    })
-    .await??;
-    Ok(path)
 }
 
 /// `config unset KEY`: removes the setting so its default applies again. A
@@ -492,50 +483,6 @@ mod tests {
     fn runtime(mode: &str) -> Runtime {
         let cli = Cli::parse_from(["devlanes", "--output", mode]);
         Runtime::resolve(&cli, devlanes_cli::Signals::default()).expect("runtime")
-    }
-
-    /// `update --next` and `--stable` write `updates.channel` through the
-    /// editor, which keeps the file's comments and refuses a value the schema
-    /// does not take.
-    #[tokio::test]
-    async fn channel_writes_keep_comments() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let paths = Paths::new(temp.path()).expect("paths");
-        let path = file(&paths);
-        std::fs::write(
-            &path,
-            "# my settings\nupdates:\n  mode: auto # patch releases\n",
-        )
-        .expect("write");
-        assert_eq!(
-            write(&paths, "updates.channel", json!("next"))
-                .await
-                .expect("written"),
-            path
-        );
-        let text = std::fs::read_to_string(&path).expect("read");
-        assert!(text.contains("# my settings"), "{text}");
-        assert!(text.contains("# patch releases"), "{text}");
-        let config = load_file(&path).expect("valid");
-        assert_eq!(
-            config.updates.channel,
-            Some(devlanes_config::UpdateChannel::Next)
-        );
-        write(&paths, "updates.channel", json!("stable"))
-            .await
-            .expect("written");
-        assert_eq!(
-            load_file(&path).expect("valid").updates.channel,
-            Some(devlanes_config::UpdateChannel::Stable)
-        );
-        let refused = write(&paths, "updates.channel", json!("nightly"))
-            .await
-            .expect_err("unknown channel");
-        assert_eq!(refused.code, "invalid_setting");
-        assert_eq!(
-            load_file(&path).expect("valid").updates.channel,
-            Some(devlanes_config::UpdateChannel::Stable)
-        );
     }
 
     /// A missing file is every default; one bad key fails the whole strict load

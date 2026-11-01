@@ -67,7 +67,7 @@ async fn the_welcome_shows_once_per_home() -> TestResult {
 /// `state`.
 fn update(latest: &str, bump: &str, state: &str) -> serde_json::Value {
     json!({
-        "latest": latest, "channel": "stable", "bump": bump, "state": state,
+        "latest": latest, "bump": bump, "state": state,
         "checked_at": 1,
         "notes": [
             {"version": latest, "level": "patch", "line": "Fixed a thing."},

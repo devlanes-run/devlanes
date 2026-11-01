@@ -9,11 +9,8 @@ use serde::{Deserialize, Serialize};
 /// report it in `update` and `update.check` replies with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UpdateInfo {
-    /// The newest release on the channel.
+    /// The newest release.
     pub latest: String,
-    /// The channel it came from: `stable` or `next`.
-    #[serde(default)]
-    pub channel: String,
     /// How far it is from the running version: `patch` or `minor` (which may
     /// break what worked, before 1.0).
     #[serde(default)]
@@ -63,11 +60,9 @@ pub struct ReleaseCheck {
     /// `updates.mode` as the daemon loaded it: `disable`, `notify` or `auto`.
     #[serde(default)]
     pub mode: String,
-    /// The channel the check follows: `stable` or `next`; absent until the
-    /// daemon knows its install method, and when it has no source.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub channel: Option<String>,
-    /// Where the check reads versions: `github`, `npm`, `pypi` or `homebrew`.
+    /// Where the check reads versions: `github`, `npm`, `pypi` or `homebrew`;
+    /// absent until the daemon knows its install method, and when it has no
+    /// source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// The latest release version the daemon read, newer or not.

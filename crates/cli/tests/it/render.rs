@@ -1522,7 +1522,7 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
             "version": "0.2.1", "build": "v0.2.1", "daemon_version": daemon,
             "install_method": "Homebrew", "entry": "/opt/homebrew/opt/devlanes/bin/devlanes",
             "command": "brew upgrade devlanes-run/tap/devlanes",
-            "check": "ok", "check_off_reason": null, "mode": "notify", "channel": "stable",
+            "check": "ok", "check_off_reason": null, "mode": "notify",
             "source": "homebrew", "latest": "0.3.0", "checked_at": null,
             "bump": update_available.then_some("minor"), "update_available": update_available,
         }})
@@ -1538,7 +1538,7 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
     );
     assert!(
         text.contains(
-            "devlanes 0.3.0 is available with breaking changes, read from homebrew (stable), updates.mode: notify"
+            "devlanes 0.3.0 is available with breaking changes, read from homebrew, updates.mode: notify"
         ),
         "{text}"
     );
@@ -1550,7 +1550,7 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
 
     let text = render_text(Method::Doctor, &release(false, "0.2.0"));
     assert!(
-        text.contains("latest release 0.3.0, read from homebrew (stable)"),
+        text.contains("latest release 0.3.0, read from homebrew"),
         "{text}"
     );
     assert!(
@@ -3091,43 +3091,4 @@ fn remote_use_refusals_say_what_to_do() {
         assert!(text.contains(says), "{code}: {text}");
         assert!(text.contains(fix), "{code}: {text}");
     }
-}
-
-/// `update --next` on an install that only gets stable releases names the
-/// install script command, after removing the other install when there is
-/// one.
-#[test]
-fn next_channel_refusal_says_how_to_reinstall() {
-    let rendered = |data: Value| {
-        runtime(OutputMode::Plain)
-            .reporter()
-            .error(&RpcError::new("update_next_unsupported", data, 1), None)
-            .stderr
-    };
-    let install = "curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir /Users/a/.local/bin";
-    let text = rendered(json!({
-        "method": "Homebrew",
-        "script": "install.sh",
-        "install": install,
-        "remove": "brew uninstall devlanes-run/tap/devlanes",
-    }));
-    assert!(
-        text.contains("the next channel needs devlanes installed by install.sh in a directory you can write to, and this one is Homebrew"),
-        "{text}"
-    );
-    assert!(
-        text.contains(&format!(
-            "run brew uninstall devlanes-run/tap/devlanes, then {install}, then devlanes update --next"
-        )),
-        "{text}"
-    );
-    let text = rendered(json!({
-        "method": "a standalone binary in /usr/local/bin",
-        "script": "install.sh",
-        "install": install,
-    }));
-    assert!(
-        text.contains(&format!("run {install}, then devlanes update --next")),
-        "{text}"
-    );
 }

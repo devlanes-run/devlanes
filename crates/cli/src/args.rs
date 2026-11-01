@@ -613,49 +613,27 @@ install.sh, install.ps1 and standalone binaries download the release archive
 and check it against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx
 and Homebrew installs run their package manager. Other installs, such as cargo
 or a project's own dependency, print the command to run instead. Without a
-terminal, pass --yes.
-
---next and --stable set updates.channel in the user config, then update on
-that channel. next is the latest build of main, published only as release
-archives, so it needs an install.sh or install.ps1 install. --stable from a
-next build installs only a stable release newer than that build; until one
-ships, the build stays.";
+terminal, pass --yes. A build of main, installed with install.sh --channel
+next or install.ps1 -Channel next, updates to the latest build of main.";
 
 const UPDATE_AFTER: &str = "\
 Examples:
   devlanes update                      install the latest release, asking first
   devlanes update --yes                install it without asking
   devlanes update --check              show the latest release and what changed
-  devlanes update --notes              show what changed in the running version
-  devlanes update --next               follow the latest build of main
-  devlanes update --stable             follow stable releases again";
+  devlanes update --notes              show what changed in the running version";
 
 #[derive(Debug, Args)]
 pub struct UpdateArgs {
     /// Only check: show the install method, the running and latest versions and what changed
-    #[arg(long, conflicts_with_all = ["finish", "notes", "next", "stable"])]
+    #[arg(long, conflicts_with_all = ["finish", "notes"])]
     pub check: bool,
     /// Only show the release notes of the running version; checks nothing
-    #[arg(long, conflicts_with_all = ["finish", "next", "stable"])]
-    pub notes: bool,
-    /// Follow the latest build of main (updates.channel: next), then update to it
-    #[arg(long, conflicts_with_all = ["finish", "stable"])]
-    pub next: bool,
-    /// Follow stable releases (updates.channel: stable), then update when one is newer
     #[arg(long, conflicts_with = "finish")]
-    pub stable: bool,
+    pub notes: bool,
     /// Restart the daemon into this binary after an update (run by devlanes update)
     #[arg(long, hide = true)]
     pub finish: bool,
-}
-
-/// The channel `devlanes update --next` or `--stable` switches to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelSwitch {
-    /// `--next`: the latest build of main.
-    Next,
-    /// `--stable`: stable releases.
-    Stable,
 }
 
 /// What `devlanes update` was asked to do.
@@ -667,9 +645,6 @@ pub enum UpdateAction {
     Notes,
     /// Install the latest release when it is newer; `yes` skips the question.
     Install { yes: bool },
-    /// Follow `channel` from now on, then install its latest release when
-    /// that is newer; `yes` skips the question.
-    Switch { channel: ChannelSwitch, yes: bool },
     /// Run by the newly installed binary: restart the daemon into it and say
     /// what changed.
     Finish,
@@ -1364,16 +1339,6 @@ impl Cli {
                     UpdateAction::Notes
                 } else if args.finish {
                     UpdateAction::Finish
-                } else if args.next {
-                    UpdateAction::Switch {
-                        channel: ChannelSwitch::Next,
-                        yes: self.yes,
-                    }
-                } else if args.stable {
-                    UpdateAction::Switch {
-                        channel: ChannelSwitch::Stable,
-                        yes: self.yes,
-                    }
                 } else {
                     UpdateAction::Install { yes: self.yes }
                 }));

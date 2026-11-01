@@ -19,9 +19,10 @@ The script installs the latest release, checks the archive against the release's
 
 ```powershell
 iex "& {$(irm https://devlanes.run/install.ps1)} -Dir D:\tools\devlanes"
+iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 ```
 
-`devlanes update --next` then follows the latest build of `main`, and `devlanes update --stable` goes back to releases. The script works in Windows PowerShell 5.1 and PowerShell 7. It has no option for an older release; if you need one, `npm install -g devlanes@X.Y.Z` or `uv tool install devlanes==X.Y.Z` installs it.
+`-Channel next` installs the latest build of `main`, which then updates along builds of `main` ([updates](updates.md#builds-of-main)). The script works in Windows PowerShell 5.1 and PowerShell 7. It has no option for an older release; if you need one, `npm install -g devlanes@X.Y.Z` or `uv tool install devlanes==X.Y.Z` installs it.
 
 cargo binstall downloads the same release build:
 

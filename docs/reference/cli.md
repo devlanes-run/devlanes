@@ -676,13 +676,8 @@ install.sh, install.ps1 and standalone binaries download the release archive
 and check it against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx
 and Homebrew installs run their package manager. Other installs, such as cargo
 or a project's own dependency, print the command to run instead. Without a
-terminal, pass --yes.
-
---next and --stable set updates.channel in the user config, then update on
-that channel. next is the latest build of main, published only as release
-archives, so it needs an install.sh or install.ps1 install. --stable from a
-next build installs only a stable release newer than that build; until one
-ships, the build stays.
+terminal, pass --yes. A build of main, installed with install.sh --channel
+next or install.ps1 -Channel next, updates to the latest build of main.
 
 ```text
 devlanes update [OPTIONS]
@@ -690,8 +685,6 @@ devlanes update [OPTIONS]
 
 - `--check`: Only check: show the install method, the running and latest versions and what changed
 - `--notes`: Only show the release notes of the running version; checks nothing
-- `--next`: Follow the latest build of main (updates.channel: next), then update to it
-- `--stable`: Follow stable releases (updates.channel: stable), then update when one is newer
 
 ```text
 Examples:
@@ -699,8 +692,6 @@ Examples:
   devlanes update --yes                install it without asking
   devlanes update --check              show the latest release and what changed
   devlanes update --notes              show what changed in the running version
-  devlanes update --next               follow the latest build of main
-  devlanes update --stable             follow stable releases again
 ```
 
 ### devlanes uninstall

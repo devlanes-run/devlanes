@@ -3,15 +3,17 @@
 # archive against the release's SHA256SUMS.
 #
 #   curl -fsSL https://devlanes.run/install.sh | sh
+#   curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
 #   curl -fsSL https://devlanes.run/install.sh | sh -s -- --uninstall
 #
-# It installs the latest stable release; there is no option for another one (npm
-# and PyPI install a given release). -d, --dir DIR sets the target directory
-# (default: ~/.local/bin), or DEVLANES_INSTALL_DIR when the option isn't given. The
-# latest build of main comes from `devlanes update --next` after installing.
-# When that directory already holds a devlanes with the `update` command, the script
-# runs `devlanes update --yes` from it instead and exits with its status, unless the
-# directory is not writable (the script may use sudo there). After installing, a
+# -c, --channel stable (the default) installs the latest release, and --channel next
+# the latest build of main from the rolling `next` prerelease; there is no option for
+# another release (npm and PyPI install a given one). -d, --dir DIR sets the target
+# directory (default: ~/.local/bin), or DEVLANES_INSTALL_DIR when the option isn't
+# given. When that directory already holds a devlanes with the `update` command, the
+# script runs `devlanes update --yes` from it instead and exits with its status,
+# unless the directory is not writable (the script may use sudo there) or the
+# channel is next, which the script always installs itself. After installing, a
 # running daemon is restarted into the new version with `devlanes update --finish`.
 # When the first devlanes on PATH comes from another installer (Homebrew, npm, pnpm,
 # Bun, Yarn, uv, pipx or cargo), the script stops and names it, since that one would
@@ -41,7 +43,7 @@ latest_only() {
 }
 [ -z "${DEVLANES_VERSION:-}" ] || latest_only
 
-usage='usage: sh install.sh [-d, --dir DIR] [--force] [--uninstall]'
+usage='usage: sh install.sh [-c, --channel stable|next] [-d, --dir DIR] [--force] [--uninstall]'
 usage() {
 	printf '%s\n' "$usage" >&2
 	exit 2
@@ -58,10 +60,32 @@ on_tty() {
 	fi
 }
 
+# Picks the channel: empty for stable releases, or next.
+set_channel() {
+	case $1 in
+	stable) channel= ;;
+	next) channel=next ;;
+	'') usage ;;
+	*) fail "unknown channel $1; use stable or next" ;;
+	esac
+	channel_set=1
+}
+
 uninstall=
 force=
+channel=
+channel_set=
 while [ "$#" -gt 0 ]; do
 	case $1 in
+	-c | --channel)
+		[ "$#" -ge 2 ] || usage
+		set_channel "$2"
+		shift 2
+		;;
+	--channel=*)
+		set_channel "${1#*=}"
+		shift
+		;;
 	--uninstall)
 		uninstall=1
 		shift
@@ -99,6 +123,7 @@ esac
 
 if [ -n "$uninstall" ]; then
 	[ -z "$force" ] || fail "--uninstall takes no --force"
+	[ -z "$channel_set" ] || fail "--uninstall takes no --channel"
 	exe=
 	if [ -x "$dir/devlanes" ]; then
 		exe=$dir/devlanes
@@ -167,7 +192,9 @@ fi
 
 # A devlanes that can update itself does it, the same way `devlanes update` would,
 # unless this user cannot write to its directory, where only this script may use sudo.
-if [ -x "$dir/devlanes" ] && [ -w "$dir" ] &&
+# `devlanes update` follows the channel of the build it runs, so next always installs
+# here, over a stable install too.
+if [ -z "$channel" ] && [ -x "$dir/devlanes" ] && [ -w "$dir" ] &&
 	"$dir/devlanes" update --help >/dev/null 2>&1 </dev/null; then
 	status=0
 	on_tty "$dir/devlanes" update --yes || status=$?
@@ -214,11 +241,16 @@ download() {
 	curl -fsSL --proto "$proto" --proto-redir "$proto" --tlsv1.2 "$1" -o "$2"
 }
 
-sums_url=$base/latest/download/SHA256SUMS
+if [ -n "$channel" ]; then
+	sums_url=$base/download/$channel/SHA256SUMS
+else
+	sums_url=$base/latest/download/SHA256SUMS
+fi
 download "$sums_url" "$tmp/SHA256SUMS" || fail "cannot download $sums_url"
 
 # The latest release is found through its SHA256SUMS, which names the archive and
-# so the version; the archive then comes from that version's own release.
+# so the version; the archive then comes from that version's own release, or from
+# the `next` release, which only ever holds its latest build.
 line=$(awk -v suffix="-$target.tar.gz" '
 	length($2) > length(suffix) && substr($2, length($2) - length(suffix) + 1) == suffix { print; exit }
 ' "$tmp/SHA256SUMS")
@@ -231,7 +263,7 @@ printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
 	fail "unexpected version $version in $sums_url"
 printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail "malformed checksum for $archive"
 
-url=$base/download/v$version/$archive
+url=$base/download/${channel:-v$version}/$archive
 download "$url" "$tmp/$archive" || fail "cannot download $url"
 actual=$(sha256 "$tmp/$archive")
 [ "$actual" = "$expected" ] || fail "checksum mismatch for $archive: expected $expected, got $actual"

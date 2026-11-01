@@ -16,14 +16,14 @@ use std::{
     time::Duration,
 };
 
-use devlanes_config::{UpdateChannel, UpdateMode};
+use devlanes_config::UpdateMode;
 use devlanes_proto::{
     RpcError,
     release::{ReleaseCheck, UpdateCheckParams, UpdateInfo, UpdateNote},
 };
 use devlanes_update::{
     InstallMethod,
-    check::{Channel, Source, Urls},
+    check::{Source, Urls},
     install::{self, InstallError, Lock, Plan, Release, Staged},
     notes,
     version::{Bump, Version, bump, is_newer},
@@ -124,9 +124,9 @@ pub(crate) struct Cached {
     /// Milliseconds since the epoch.
     pub checked_at: u64,
     pub latest: String,
-    /// The channel and source the check read; a cache of another one is
-    /// ignored after the config or the install changed.
-    pub channel: String,
+    /// The address the check read ([`Urls::latest`]). A cache of another one
+    /// is ignored after the install changed, so a `next` build never takes a
+    /// stable release's answer, nor the other way round.
     pub source: String,
     /// The `latest` that `notes` were read for, so the changelog is fetched
     /// once per release.
@@ -244,15 +244,6 @@ impl Inner {
             })
     }
 
-    /// The channel the config asks for, else the running build's.
-    fn update_channel(&self) -> Channel {
-        match self.opts.user.updates.channel {
-            Some(UpdateChannel::Stable) => Channel::Stable,
-            Some(UpdateChannel::Next) => Channel::Next,
-            None => Channel::of_version(devlanes_version::VERSION),
-        }
-    }
-
     /// How this daemon was installed and the executable it runs, read from
     /// the filesystem on first use.
     async fn install_method(&self) -> &(InstallMethod, PathBuf) {
@@ -276,12 +267,11 @@ impl Inner {
         if let Some(reason) = self.update_off() {
             return Err(reason);
         }
-        let channel = self.update_channel();
         let (method, _) = self.install_method().await;
         *self
             .update
             .source
-            .get_or_init(|| async move { Source::for_method(method, channel) })
+            .get_or_init(|| async move { Source::for_method(method) })
             .await
     }
 
@@ -315,7 +305,6 @@ impl Inner {
         };
         Some(UpdateInfo {
             latest: cached.latest,
-            channel: cached.channel,
             bump: bump.as_str().into(),
             state: state.into(),
             installed,
@@ -346,7 +335,6 @@ impl Inner {
         let base = ReleaseCheck {
             state: "pending".into(),
             mode,
-            channel: Some(source.channel().as_str().into()),
             source: Some(source.name().into()),
             ..ReleaseCheck::default()
         };
@@ -397,10 +385,7 @@ impl Inner {
                     return Err(RpcError::new(
                         "update_failed",
                         serde_json::json!({
-                            "title": format!(
-                                "cannot read the latest {} release: {error}",
-                                source.channel().as_str()
-                            ),
+                            "title": format!("cannot read the latest release: {error}"),
                             "hint": "retry with devlanes update",
                         }),
                         1,
@@ -424,8 +409,9 @@ impl Inner {
             return;
         };
         let (path, home) = (self.opts.home.join(CACHE_FILE), self.opts.home.clone());
+        let url = self.opts.update_check.urls.latest(source).to_owned();
         let (cached, staged) =
-            tokio::task::spawn_blocking(move || (read_cache(&path, source), Staged::load(&home)))
+            tokio::task::spawn_blocking(move || (read_cache(&path, &url), Staged::load(&home)))
                 .await
                 .unwrap_or_default();
         if let Some(cached) = cached {
@@ -484,7 +470,6 @@ impl Inner {
         if skip || mode != UpdateMode::Auto || bump != Bump::Patch {
             return;
         }
-        let channel = source_channel(&cached.channel);
         let retained = self.opts.update_check.exe_retained;
         tokio::spawn(async move {
             let (method, exe) = self.install_method().await.clone();
@@ -506,7 +491,7 @@ impl Inner {
             // `Installing` behind.
             let task = {
                 let (this, latest) = (self.clone(), latest.clone());
-                tokio::spawn(async move { this.install_release(&plan, &latest, channel).await })
+                tokio::spawn(async move { this.install_release(&plan, &latest).await })
             };
             self.update
                 .set_background(Background::after(&latest, task.await));
@@ -516,12 +501,7 @@ impl Inner {
     /// Runs `plan` for `version` under the update lock: stages the release
     /// archive, or runs the package manager with its output in
     /// `logs/update.log`. Returns the version now installed or staged.
-    async fn install_release(
-        &self,
-        plan: &Plan,
-        version: &str,
-        channel: Channel,
-    ) -> Result<String, InstallError> {
+    async fn install_release(&self, plan: &Plan, version: &str) -> Result<String, InstallError> {
         let home = self.opts.home.clone();
         let _lock = tokio::task::spawn_blocking(move || Lock::acquire(&home, Duration::ZERO))
             .await
@@ -531,15 +511,11 @@ impl Inner {
             })??;
         match plan {
             Plan::Archive { dir } => {
-                let release = match channel {
-                    Channel::Next => Release::Next,
-                    Channel::Stable => Release::Version(version.to_owned()),
-                };
                 let options = &self.opts.update_check;
                 let staged = install::stage(
                     &self.opts.home,
                     &options.urls,
-                    &release,
+                    &Release::of(version),
                     dir,
                     options.timeout,
                 )
@@ -612,8 +588,7 @@ impl Inner {
         let cached = Cached {
             checked_at: crate::units::now_ms(),
             latest,
-            channel: source.channel().as_str().into(),
-            source: source.name().into(),
+            source: options.urls.latest(source).into(),
             notes_for,
             notes,
         };
@@ -652,15 +627,6 @@ fn installs_in_background(mode: UpdateMode, bump: Bump, plan: &Plan) -> bool {
     mode == UpdateMode::Auto && bump == Bump::Patch && !matches!(plan, Plan::Manual { .. })
 }
 
-/// The channel a cache entry names.
-fn source_channel(channel: &str) -> Channel {
-    if channel == Channel::Next.as_str() {
-        Channel::Next
-    } else {
-        Channel::Stable
-    }
-}
-
 /// The entries of the releases after this daemon's version up to `latest`,
 /// newest release first.
 fn note_lines(releases: &[notes::Release], latest: &str) -> Vec<UpdateNote> {
@@ -677,12 +643,11 @@ fn note_lines(releases: &[notes::Release], latest: &str) -> Vec<UpdateNote> {
 }
 
 /// Reads the cache file; a missing or unreadable file, or one written for
-/// another source or channel, is no cache.
-fn read_cache(path: &Path, source: Source) -> Option<Cached> {
+/// another address than `source`, is no cache.
+fn read_cache(path: &Path, source: &str) -> Option<Cached> {
     let text = std::fs::read_to_string(path).ok()?;
     let cached: Cached = serde_json::from_str(&text).ok()?;
-    let matches = cached.source == source.name() && cached.channel == source.channel().as_str();
-    (matches && Version::parse(&cached.latest).is_some()).then_some(cached)
+    (cached.source == source && Version::parse(&cached.latest).is_some()).then_some(cached)
 }
 
 /// Writes the cache through a temporary file and a rename.
@@ -727,8 +692,6 @@ mod tests {
                 "{mode:?} {bump:?} {plan:?}"
             );
         }
-        assert_eq!(source_channel("next"), Channel::Next);
-        assert_eq!(source_channel("stable"), Channel::Stable);
     }
 
     /// A background install ends ready, idle when a `devlanes update` took
@@ -775,11 +738,13 @@ mod tests {
     fn cache_round_trip_and_rejects_junk_and_other_sources() -> std::io::Result<()> {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join(CACHE_FILE);
+        let urls = Urls::under("https://example.invalid");
+        let stable = "https://example.invalid/releases/latest/download/release-manifest.json";
+        let next = "https://example.invalid/releases/download/next/release-manifest.json";
         let cached = Cached {
             checked_at: 5,
             latest: "0.3.0".into(),
-            channel: "stable".into(),
-            source: "npm".into(),
+            source: stable.into(),
             notes_for: Some("0.3.0".into()),
             notes: vec![UpdateNote {
                 version: "0.3.0".into(),
@@ -788,16 +753,17 @@ mod tests {
             }],
         };
         write_cache(&path, &cached)?;
-        assert_eq!(read_cache(&path, Source::Npm), Some(cached));
-        assert_eq!(read_cache(&path, Source::PyPi), None);
-        assert_eq!(read_cache(&path, Source::GitHub(Channel::Stable)), None);
+        assert_eq!(read_cache(&path, stable), Some(cached));
+        // A `next` build reads another manifest, so a stable answer is no cache.
+        assert_eq!(read_cache(&path, next), None);
+        assert_eq!(read_cache(&path, urls.latest(Source::Npm)), None);
         std::fs::write(
             &path,
-            r#"{"checked_at":1,"latest":"junk","channel":"stable","source":"npm"}"#,
+            format!(r#"{{"checked_at":1,"latest":"junk","source":"{stable}"}}"#),
         )?;
-        assert_eq!(read_cache(&path, Source::Npm), None);
+        assert_eq!(read_cache(&path, stable), None);
         std::fs::write(&path, "not json")?;
-        assert_eq!(read_cache(&path, Source::Npm), None);
+        assert_eq!(read_cache(&path, stable), None);
         Ok(())
     }
 

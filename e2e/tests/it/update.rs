@@ -151,23 +151,21 @@ fn update_installs_the_release_and_restarts_the_daemon_with_its_lanes() -> Resul
     Ok(())
 }
 
-/// `update --next` and `update --stable` write `updates.channel` with the
-/// config editor, keeping comments, and install nothing when the channel has
-/// no release newer than this build. Neither needs a daemon then.
+/// A build of main (`-next.` in its version) reads the `next` prerelease's
+/// manifest, every other build the latest stable release's. Neither check
+/// starts a daemon.
 #[test]
-fn update_channel_switches_record_the_channel() -> Result<()> {
+fn a_next_build_reads_the_next_manifest() -> Result<()> {
     let root = tempfile::tempdir()?;
     let lab = Lab::with_config(CONFIG, BUDGET)?;
     let install = root.path().join("bin");
     std::fs::create_dir_all(&install)?;
     let entry = install.join(format!("devlanes{EXE_SUFFIX}"));
     std::fs::copy(bin_dir()?.join(format!("devlanes{EXE_SUFFIX}")), &entry)?;
-    let version = reported_version(&entry)?;
-    // `next` has this very build; the latest stable release is older than it.
     let site = root.path().join("site");
     for (folder, latest) in [
-        ("releases/download/next", version.as_str()),
-        ("releases/latest/download", "0.0.1"),
+        ("releases/download/next", "0.0.1-next.5"),
+        ("releases/latest/download", "99.0.0"),
     ] {
         std::fs::create_dir_all(site.join(folder))?;
         std::fs::write(
@@ -175,32 +173,20 @@ fn update_channel_switches_record_the_channel() -> Result<()> {
             json!({"version": latest}).to_string(),
         )?;
     }
-    let config = lab.home().join("config.yaml");
-    std::fs::write(&config, "# mine\nupdates:\n  mode: notify\n")?;
-    let switch = |flag: &str| -> Result<serde_json::Value> {
-        let mut command = lab.command_with(&entry, lab.repo(), &["update", flag, "--yes"])?;
-        command.env(BASE_URL_ENV, file_url(&site));
+    let check = |running: &str| -> Result<serde_json::Value> {
+        let mut command = lab.command_with(&entry, lab.repo(), &["update", "--check"])?;
+        command
+            .env(BASE_URL_ENV, file_url(&site))
+            .env(RUNNING_ENV, running);
         let output = lab.run(command, devlanes_e2e::COMMAND_TIMEOUT)?;
         output.expect_code(0)?.json()
     };
 
-    let next = switch("--next")?;
-    assert_eq!(next["updated"], false, "{next}");
-    assert_eq!(next["channel"], "next", "{next}");
-    assert_eq!(next["latest"], version.as_str(), "{next}");
-    assert_eq!(next["newer_than_latest"], false, "{next}");
-    let text = std::fs::read_to_string(&config)?;
-    assert!(
-        text.contains("# mine") && text.contains("channel: next"),
-        "{text}"
-    );
-
-    let stable = switch("--stable")?;
-    assert_eq!(stable["channel"], "stable", "{stable}");
-    assert_eq!(stable["latest"], "0.0.1", "{stable}");
-    assert_eq!(stable["newer_than_latest"], true, "{stable}");
-    assert!(std::fs::read_to_string(&config)?.contains("channel: stable"));
-    assert_eq!(reported_version(&entry)?, version, "the build stays");
+    let next = check("0.0.1-next.1")?;
+    assert_eq!(next["latest"], "0.0.1-next.5", "{next}");
+    assert_eq!(next["running"], "0.0.1-next.1", "{next}");
+    let stable = check("0.0.1")?;
+    assert_eq!(stable["latest"], "99.0.0", "{stable}");
     assert!(lab.daemon_pid()?.is_none(), "no daemon was started");
     Ok(())
 }
@@ -247,7 +233,6 @@ fn update_check_reads_the_registry_when_the_daemons_checks_are_off() -> Result<(
         let check = run(&["update", "--check"], &[])?;
         assert_eq!(check["latest"], "99.0.0", "{mode}: {check}");
         assert_eq!(check["state"], "available", "{mode}: {check}");
-        assert_eq!(check["channel"], "stable", "{mode}: {check}");
         run(&["daemon", "stop", "--yes"], &[])?;
     }
     Ok(())

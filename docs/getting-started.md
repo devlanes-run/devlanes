@@ -8,7 +8,7 @@ devlanes runs a project's dev services once per Git worktree. Each worktree is a
 brew install devlanes-run/tap/devlanes
 ```
 
-The [README](../README.md#install) lists the Homebrew, npm, PyPI, cargo and `install.sh` options and the source build. devlanes runs on macOS, Linux and Windows 11 ([Windows](guides/windows.md) covers its install and differences). The release installs give you the latest release, and `devlanes update` keeps it current ([updates](guides/updates.md) covers the `next` channel and older releases). `devlanes uninstall` removes it again (a project's own dependency and source builds stay), and asks before deleting `~/.devlanes`.
+The [README](../README.md#install) lists the Homebrew, npm, PyPI, cargo and `install.sh` options and the source build. devlanes runs on macOS, Linux and Windows 11 ([Windows](guides/windows.md) covers its install and differences). The release installs give you the latest release, and `devlanes update` keeps it current ([updates](guides/updates.md) covers builds of `main` and older releases). `devlanes uninstall` removes it again (a project's own dependency and source builds stay), and asks before deleting `~/.devlanes`.
 
 ## First config
 

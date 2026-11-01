@@ -2,7 +2,7 @@ name: Next
 # Each commit on main that passes CI is built as `X.Y.(Z+1)-next.N`, where X.Y.Z is the
 # committed version and N counts the commits since the last stable tag, so it sorts after
 # the current release and before the next one. The build replaces the assets of the
-# rolling `next` prerelease, which `devlanes update --next` installs.
+# rolling `next` prerelease, which `install.sh --channel next` installs.
 # Nothing else is published: npm, PyPI, Homebrew and the website only ever get stable
 # releases from release.yml.
 #
@@ -148,22 +148,16 @@ jobs:
           cat > "$notes" <<EOF
           Latest build of main: \`$VERSION\`, from $SHA.
 
-          Not a release; it is replaced on every commit to main that passes CI. Install the latest stable release:
+          Not a release; it is replaced on every commit to main that passes CI. Install it with:
 
           \`\`\`sh
-          curl -fsSL https://devlanes.run/install.sh | sh
+          curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
           \`\`\`
 
           On Windows, in PowerShell:
 
           \`\`\`powershell
-          irm https://devlanes.run/install.ps1 | iex
-          \`\`\`
-
-          Then switch to this build with:
-
-          \`\`\`sh
-          devlanes update --next
+          iex "& {\$(irm https://devlanes.run/install.ps1)} -Channel next"
           \`\`\`
           EOF
           # SHA256SUMS goes last and old archives are deleted after it, so the install

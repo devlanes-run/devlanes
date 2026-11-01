@@ -1258,27 +1258,6 @@
       ],
       "type": "string"
     },
-    "UpdateChannel": {
-      "description": "A line of devlanes releases.",
-      "enum": [
-        "stable",
-        "next"
-      ],
-      "enumDescriptions": [
-        "Tagged releases, published to every registry.",
-        "Prereleases built from the main branch, such as `0.9.1-next.14`, published only as release archives."
-      ],
-      "examples": [
-        "stable",
-        "next"
-      ],
-      "markdownDescription": "A line of devlanes releases.",
-      "markdownEnumDescriptions": [
-        "Tagged releases, published to every registry.",
-        "Prereleases built from the main branch, such as `0.9.1-next.14`, published only as release archives."
-      ],
-      "type": "string"
-    },
     "UpdateMode": {
       "description": "What devlanes does about newer releases.",
       "enum": [
@@ -1306,38 +1285,17 @@
     },
     "UpdatesConfig": {
       "additionalProperties": false,
-      "description": "Release checks: how the daemon looks for newer devlanes releases (`mode`) and which releases count (`channel`). Changes apply after `devlanes daemon restart`.",
+      "description": "Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes apply after `devlanes daemon restart`.",
       "examples": [
         {
           "mode": "disable"
         },
         {
-          "channel": "stable",
           "mode": "auto"
         }
       ],
-      "markdownDescription": "Release checks: how the daemon looks for newer devlanes releases (`mode`) and which releases count (`channel`). Changes apply after `devlanes daemon restart`.",
+      "markdownDescription": "Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes apply after `devlanes daemon restart`.",
       "properties": {
-        "channel": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/UpdateChannel",
-              "description": "",
-              "examples": [],
-              "markdownDescription": ""
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "description": "Which releases to follow: `stable` or `next` (prereleases built from the main branch). Defaults to the channel of the running build, so a `next` build keeps following `next`. Only `install.sh`, `install.ps1` and standalone binaries can follow `next`; package-manager installs always follow `stable`. `devlanes update --next` and `devlanes update --stable` set it and update on that channel.",
-          "examples": [
-            "stable",
-            "next"
-          ],
-          "markdownDescription": "Which releases to follow: `stable` or `next` (prereleases built from the main branch). Defaults to the channel of the running build, so a `next` build keeps following `next`. Only `install.sh`, `install.ps1` and standalone binaries can follow `next`; package-manager installs always follow `stable`. `devlanes update --next` and `devlanes update --stable` set it and update on that channel."
-        },
         "mode": {
           "$ref": "#/$defs/UpdateMode",
           "default": "notify",
@@ -1724,20 +1682,18 @@
     "updates": {
       "$ref": "#/$defs/UpdatesConfig",
       "default": {
-        "channel": null,
         "mode": "notify"
       },
-      "description": "Release checks: whether the daemon looks for newer devlanes releases (`mode`) and which releases it follows (`channel`).",
+      "description": "Release checks: whether the daemon looks for newer devlanes releases (`mode`).",
       "examples": [
         {
           "mode": "disable"
         },
         {
-          "channel": "stable",
           "mode": "auto"
         }
       ],
-      "markdownDescription": "Release checks: whether the daemon looks for newer devlanes releases (`mode`) and which releases it follows (`channel`)."
+      "markdownDescription": "Release checks: whether the daemon looks for newer devlanes releases (`mode`)."
     }
   },
   "type": "object"

@@ -1895,14 +1895,11 @@ fn release_checks(release: &Value) -> Vec<Check> {
         .and_then(Value::as_u64)
         .map(|ms| format!(", checked {}", ago(ms)))
         .unwrap_or_default();
-    // `, read from npm (stable), updates.mode: notify`: where the daemon reads
-    // releases and what it does about them.
+    // `, read from npm, updates.mode: notify`: where the daemon reads releases
+    // and what it does about them.
     let mut how = String::new();
-    if let (Some(source), Some(channel)) = (
-        release.get("source").and_then(Value::as_str),
-        release.get("channel").and_then(Value::as_str),
-    ) {
-        how.push_str(&format!(", read from {source} ({channel})"));
+    if let Some(source) = release.get("source").and_then(Value::as_str) {
+        how.push_str(&format!(", read from {source}"));
     }
     if let Some(mode) = release.get("mode").and_then(Value::as_str) {
         how.push_str(&format!(", updates.mode: {mode}"));

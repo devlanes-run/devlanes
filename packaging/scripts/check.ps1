@@ -388,6 +388,9 @@ try {
         [IO.File]::WriteAllText((Join-Path $versioned 'SHA256SUMS'), $lines[$version])
     }
     $sumsFile = Join-Path $latest 'SHA256SUMS'
+    # The rolling `next` release keeps its archives under download/next. It holds the
+    # oldest version, so installing from it is visible as a downgrade.
+    Copy-Item -LiteralPath (Join-Path $release "download/v$($versions[0])") -Destination (Join-Path $release 'download/next') -Recurse
 
     foreach ($shell in $shells) {
         $label = [IO.Path]::GetFileNameWithoutExtension($shell)
@@ -484,19 +487,31 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         $inBlock = Join-Path $work "installed by a script block by $label"
         $run = Invoke-Child $shell "& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '$installScript'))) -Dir '$inBlock'" $environment
         Assert-Equal (Get-FakeVersion (Join-Path $inBlock 'devlanes.exe')) $versions[1] "$label, -Dir through a script block: $($run.Output)"
+        # -Channel next installs the latest build of main from download/next, and
+        # -Channel stable the latest release again.
+        $nextDir = Join-Path $work "next by $label"
+        $run = Invoke-Child $shell (& $withOptions "-Channel next -Dir '$nextDir'") $environment
+        Assert-Equal (Get-FakeVersion (Join-Path $nextDir 'devlanes.exe')) $versions[0] "$label, -Channel next: $($run.Output)"
+        $run = Invoke-Child $shell (& $withOptions "-Channel stable -Dir '$nextDir'") $environment
+        Assert-Equal (Get-FakeVersion (Join-Path $nextDir 'devlanes.exe')) $versions[1] "$label, -Channel stable: $($run.Output)"
         # The check is the error text and an untouched installation. Only the latest
         # release installs, so a version by option or variable is refused.
         $latestOnly = 'devlanes install: devlanes installs only the latest release; for a specific version use npm (npm install -g devlanes@X.Y.Z) or PyPI (uv tool install devlanes==X.Y.Z)'
         foreach ($wrong in @(
-                @('-Channel next', 'unknown option -Channel next'),
                 @("-Version $($versions[0])", $latestOnly),
                 @("-Version:$($versions[0])", $latestOnly),
                 @("-v $($versions[0])", $latestOnly),
-                @('-Uninstall -Force', '-Uninstall takes no -Force'))) {
+                @('-Uninstall -Force', '-Uninstall takes no -Force'),
+                @('-Uninstall -Channel next', '-Uninstall takes no -Channel'))) {
             $run = Invoke-Child $shell (& $withOptions $wrong[0]) $environment
             Assert-True ($run.Code -ne 0 -and (Test-Say $run.Output $wrong[1])) "$label, install.ps1 accepted $($wrong[0]): $($run.Output)"
             Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, $($wrong[0]) left the installation alone"
         }
+        # Windows PowerShell exits with 0 after a parameter validation error, so the
+        # check is the error text and an untouched installation.
+        $run = Invoke-Child $shell (& $withOptions '-Channel dev') $environment
+        Assert-True ($run.Output -match 'Cannot validate argument') "$label, install.ps1 accepted -Channel dev: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $exe) $versions[1] "$label, -Channel dev left the installation alone"
         $pinned = $environment.Clone()
         $pinned.DEVLANES_VERSION = $versions[0]
         $run = Invoke-Child $shell "& '$installScript'" $pinned
@@ -521,6 +536,12 @@ if (@($version, $dir) -ne ''mine'') { throw ''the session lost its own $version 
         Assert-True ($run.Output.Contains('" update --yes') -and (Test-Say $run.Output 'devlanes update exited with 7')) "$label, a failed devlanes update under iex: $($run.Output)"
         $run = Invoke-Child $shell "& '$installScript'; exit `$LASTEXITCODE" $delegated "exit 0`r`n"
         Assert-Equal $run.Code 0 "$label, a devlanes update that succeeds: $($run.Output)"
+        # -Channel next installs over it itself, since `devlanes update` would stay on
+        # the channel of the build it runs.
+        $run = Invoke-Child $shell (& $withOptions '-Channel next') $delegated "echo %CMDCMDLINE%`r`nexit 0`r`n"
+        Assert-True ($run.Output.Contains("Installed devlanes $($versions[0])")) "$label, -Channel next over a devlanes with update: $($run.Output)"
+        Assert-True (-not $run.Output.Contains('" update --yes')) "$label, -Channel next never hands off: $($run.Output)"
+        Assert-Equal (Get-FakeVersion $updater) $versions[0] "$label, -Channel next installed over devlanes update"
 
         # A fresh install while a daemon answers (the cmd.exe fake says so) restarts it
         # into the new version with `devlanes update --finish`.

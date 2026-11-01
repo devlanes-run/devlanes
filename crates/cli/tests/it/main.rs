@@ -503,34 +503,6 @@ fn update_flags_pick_the_action() {
         (vec!["--check"], UpdateAction::Check),
         (vec!["--finish"], UpdateAction::Finish),
         (vec!["--notes"], UpdateAction::Notes),
-        (
-            vec!["--next"],
-            UpdateAction::Switch {
-                channel: ChannelSwitch::Next,
-                yes: false,
-            },
-        ),
-        (
-            vec!["--next", "--yes"],
-            UpdateAction::Switch {
-                channel: ChannelSwitch::Next,
-                yes: true,
-            },
-        ),
-        (
-            vec!["--stable"],
-            UpdateAction::Switch {
-                channel: ChannelSwitch::Stable,
-                yes: false,
-            },
-        ),
-        (
-            vec!["--stable", "--yes"],
-            UpdateAction::Switch {
-                channel: ChannelSwitch::Stable,
-                yes: true,
-            },
-        ),
     ] {
         let cli = Cli::parse_from(["devlanes", "update"].into_iter().chain(args.clone()));
         match action(&cli, &runtime(&cli, OutputMode::Plain)) {
@@ -541,11 +513,7 @@ fn update_flags_pick_the_action() {
     for refused in [
         &["update", "--check", "--finish"][..],
         &["update", "--notes", "--check"],
-        &["update", "--next", "--stable"],
-        &["update", "--next", "--check"],
-        &["update", "--stable", "--notes"],
-        &["update", "--next", "--finish"],
-        &["update", "--stable", "--finish"],
+        &["update", "--notes", "--finish"],
     ] {
         assert!(
             Cli::try_parse_from(std::iter::once("devlanes").chain(refused.iter().copied()))
@@ -553,10 +521,12 @@ fn update_flags_pick_the_action() {
             "{refused:?}"
         );
     }
-    // Only the latest release installs: no option picks another one.
+    // Only the latest release installs: no option picks another one, and
+    // the running build alone decides between releases and builds of main.
     for removed in [
         &["update", "--version", "0.9.1"][..],
-        &["update", "--stable", "--force"],
+        &["update", "--next"],
+        &["update", "--stable"],
     ] {
         let error = Cli::try_parse_from(std::iter::once("devlanes").chain(removed.iter().copied()))
             .expect_err("removed option");

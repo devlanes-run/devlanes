@@ -143,7 +143,7 @@ fn select_api_search(f: &mut Fake) {
 fn update_available(f: &mut Fake) {
     let mut status = data::daemon_status();
     status["update"] = json!({
-        "latest": "1.1.0", "channel": "stable", "bump": "minor",
+        "latest": "1.1.0", "bump": "minor",
         "state": "available", "checked_at": 1,
         "notes": [
             {"version": "1.1.0", "level": "patch", "line": "Fixed `devlanes logs` dropping the last line of a unit that exited."},

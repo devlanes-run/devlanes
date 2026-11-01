@@ -2,12 +2,13 @@
 # against the release's SHA256SUMS.
 #
 #   irm https://devlanes.run/install.ps1 | iex
+#   iex "& {$(irm https://devlanes.run/install.ps1)} -Channel next"
 #   iex "& {$(irm https://devlanes.run/install.ps1)} -Uninstall"
 #
-# It installs the latest stable release; there is no option for another one (npm
-# and PyPI install a given release). -Dir DIR sets the target directory (default:
-# %LOCALAPPDATA%\Programs\devlanes). The latest build of main comes from
-# `devlanes update --next` after installing.
+# -Channel stable (the default) installs the latest release, and -Channel next the
+# latest build of main from the rolling `next` prerelease; there is no option for
+# another release (npm and PyPI install a given one). -Dir DIR sets the target
+# directory (default: %LOCALAPPDATA%\Programs\devlanes).
 # -Uninstall runs `devlanes uninstall` from that directory (or, without -Dir and
 # DEVLANES_INSTALL_DIR, the devlanes.exe on PATH); when there is none, it deletes
 # what the script left there and its user PATH entry, and names the data folder.
@@ -18,7 +19,8 @@
 #
 # When that directory already holds a devlanes.exe with the `update` command, the
 # script runs `devlanes update --yes` from it instead, unless this user cannot write
-# to the directory. When the first devlanes on PATH comes from another installer
+# to the directory or the channel is next, which the script always installs itself.
+# When the first devlanes on PATH comes from another installer
 # (npm, pnpm, Bun, Yarn, uv, pipx or cargo), it stops and names it, since that one
 # would keep running; -Force installs anyway.
 #
@@ -34,10 +36,11 @@
 # close the window) is used only when the script runs as a file. Failures throw, which
 # ends a file run with exit code 1 and leaves an iex session open. The options are the
 # block's parameters, so they never reach the caller's session either. `@args`
-# forwards them by name from the `& { ... } -Uninstall` wrapper above, and is empty
+# forwards them by name from the `& { ... } -Channel next` wrapper above, and is empty
 # under plain `irm | iex`.
 & {
     param(
+        [ValidateSet('stable', 'next')][string]$Channel,
         [string]$Dir,
         [switch]$Force,
         [switch]$Uninstall
@@ -484,7 +487,7 @@
     function Install-DevlanesRelease {
         <# Downloads, checks and installs a release; see the comment at the top for the settings. #>
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingWriteHost', '', Justification = 'An installer reports to the console, not to the pipeline.')]
-        param([string]$Dir, [switch]$Force)
+        param([string]$Channel, [string]$Dir, [switch]$Force)
         # $dir is the -Dir parameter (PowerShell names are case-insensitive).
         if (-not $dir) { $dir = [string]$env:DEVLANES_INSTALL_DIR }
         if (-not $dir) {
@@ -505,9 +508,11 @@
         }
 
         # A devlanes that can update itself does it, the same way `devlanes update` would,
-        # unless it cannot write to its directory.
+        # unless it cannot write to its directory. `devlanes update` follows the channel
+        # of the build it runs, so next always installs here, over a stable install too.
+        $next = $Channel -eq 'next'
         $exe = Join-Path $dir 'devlanes.exe'
-        if (Test-DevlanesHandOff -Exe $exe -Dir $dir) {
+        if (-not $next -and (Test-DevlanesHandOff -Exe $exe -Dir $dir)) {
             & $exe update --yes
             Invoke-DevlanesExit $LASTEXITCODE 'devlanes update'
             return
@@ -527,14 +532,16 @@
         New-Item -ItemType Directory -Path $temporary | Out-Null
         $staged = Join-Path $dir ".devlanes.exe.new.$PID"
         try {
-            $sumsUrl = "$base/latest/download/SHA256SUMS"
+            $sumsUrl = if ($next) { "$base/download/next/SHA256SUMS" } else { "$base/latest/download/SHA256SUMS" }
             $sumsFile = Join-Path $temporary 'SHA256SUMS'
             Get-DevlanesDownload -Url $sumsUrl -OutFile $sumsFile -Schemes $schemes
             $release = Find-DevlanesArchive -Sums ([IO.File]::ReadAllText($sumsFile)) -Target $target -Source $sumsUrl
             $version = $release.Version
 
-            # The archive comes from that version's own release.
-            $url = "$base/download/v$version/$($release.Archive)"
+            # The archive comes from that version's own release, or from the `next`
+            # release, which only ever holds its latest build.
+            $folder = if ($next) { 'next' } else { "v$version" }
+            $url = "$base/download/$folder/$($release.Archive)"
             $archive = Join-Path $temporary $release.Archive
             Get-DevlanesDownload -Url $url -OutFile $archive -Schemes $schemes
             $actual = Get-DevlanesFileHash $archive
@@ -604,21 +611,22 @@
         throw 'devlanes install: devlanes installs only the latest release; for a specific version use npm (npm install -g devlanes@X.Y.Z) or PyPI (uv tool install devlanes==X.Y.Z)'
     }
     # A script block without [CmdletBinding()] puts unknown options in $args instead of
-    # refusing them, and a removed one such as -Channel must not install silently.
+    # refusing them, and an unknown one must not install silently.
     if ($args) { throw "devlanes install: unknown option $($args -join ' ')" }
-    # Windows PowerShell 5.1 may not offer TLS 1.2, which GitHub requires, when the
-    # .NET defaults were changed; the process-wide setting is restored afterwards.
     if ($Uninstall) {
         if ($Force) { throw "devlanes install: -Uninstall takes no -Force" }
+        if ($Channel) { throw "devlanes install: -Uninstall takes no -Channel" }
         Uninstall-DevlanesRelease -Dir $Dir
         return
     }
+    # Windows PowerShell 5.1 may not offer TLS 1.2, which GitHub requires, when the
+    # .NET defaults were changed; the process-wide setting is restored afterwards.
     $protocols = [Net.ServicePointManager]::SecurityProtocol
     try {
         if ($PSVersionTable.PSVersion.Major -lt 6 -and $protocols -ne [Net.SecurityProtocolType]::SystemDefault) {
             [Net.ServicePointManager]::SecurityProtocol = $protocols -bor [Net.SecurityProtocolType]::Tls12
         }
-        Install-DevlanesRelease -Dir $Dir -Force:$Force
+        Install-DevlanesRelease -Channel $Channel -Dir $Dir -Force:$Force
     } finally {
         [Net.ServicePointManager]::SecurityProtocol = $protocols
     }

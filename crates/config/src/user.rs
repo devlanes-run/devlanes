@@ -64,8 +64,7 @@ pub struct UserConfig {
     /// progress bar during starts). A plain string, the terminal app name older versions
     /// used, is still accepted but ignored with a warning.
     pub terminal: Option<TerminalConfig>,
-    /// Release checks: whether the daemon looks for newer devlanes releases (`mode`) and
-    /// which releases it follows (`channel`).
+    /// Release checks: whether the daemon looks for newer devlanes releases (`mode`).
     pub updates: UpdatesConfig,
     /// Whether start commands open the terminal UI, how it looks, and what quitting it
     /// does with running lanes.
@@ -368,23 +367,17 @@ fn below_home(dir: &str) -> Option<&str> {
     dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\"))
 }
 
-/// Release checks: how the daemon looks for newer devlanes releases (`mode`) and which
-/// releases count (`channel`). Changes apply after `devlanes daemon restart`.
+/// Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes
+/// apply after `devlanes daemon restart`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"mode":"disable"},{"mode":"auto","channel":"stable"}]))]
+#[schemars(extend("examples" = [{"mode":"disable"},{"mode":"auto"}]))]
 pub struct UpdatesConfig {
     /// What devlanes does about newer releases: `notify` (the default) checks every 4
     /// hours and when the TUI opens, and shows the new version; `auto` also installs patch
     /// releases in the background where the install method allows it; `disable` never
     /// checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.
     pub mode: UpdateMode,
-    /// Which releases to follow: `stable` or `next` (prereleases built from the main
-    /// branch). Defaults to the channel of the running build, so a `next` build keeps
-    /// following `next`. Only `install.sh`, `install.ps1` and standalone binaries can
-    /// follow `next`; package-manager installs always follow `stable`. `devlanes update
-    /// --next` and `devlanes update --stable` set it and update on that channel.
-    pub channel: Option<UpdateChannel>,
 }
 
 /// What devlanes does about newer releases.
@@ -414,30 +407,6 @@ impl UpdateMode {
             Self::Disable => "disable",
             Self::Notify => "notify",
             Self::Auto => "auto",
-        }
-    }
-}
-
-/// A line of devlanes releases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-#[schemars(extend("examples" = ["stable","next"]))]
-pub enum UpdateChannel {
-    /// Tagged releases, published to every registry.
-    #[schemars(extend("examples" = ["stable"]))]
-    Stable,
-    /// Prereleases built from the main branch, such as `0.9.1-next.14`, published only as
-    /// release archives.
-    #[schemars(extend("examples" = ["next"]))]
-    Next,
-}
-
-impl UpdateChannel {
-    /// The word the config uses: `stable` or `next`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Stable => "stable",
-            Self::Next => "next",
         }
     }
 }

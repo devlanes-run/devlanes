@@ -254,7 +254,6 @@ mod tests {
     fn release(latest: &str, bump: &str) -> UpdateInfo {
         UpdateInfo {
             latest: latest.into(),
-            channel: "stable".into(),
             bump: bump.into(),
             state: "available".into(),
             installed: None,

@@ -120,7 +120,7 @@ fn due_lines(
 
 /// Adds `release` to doctor data: this binary's version, build, install method
 /// and the path that runs the install, the daemon's release check (mode,
-/// channel, source, latest release and bump), and the command that installs
+/// source, latest release and bump), and the command that installs
 /// the latest release. Without a daemon (`client` is `None`) the release check
 /// and the daemon's version are unknown; this binary's facts are still there.
 pub async fn annotate_doctor(client: Option<&mut Client>, data: &mut Value) {
@@ -168,7 +168,6 @@ pub async fn annotate_doctor(client: Option<&mut Client>, data: &mut Value) {
                 "check": check.state,
                 "check_off_reason": check.reason,
                 "mode": (!check.mode.is_empty()).then_some(check.mode),
-                "channel": check.channel,
                 "source": check.source,
                 "latest": latest,
                 "checked_at": check.checked_at,

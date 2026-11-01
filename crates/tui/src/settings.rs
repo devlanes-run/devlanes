@@ -1939,7 +1939,6 @@ mod tests {
             "terminal.notifications",
             "terminal.marks",
             "updates.mode",
-            "updates.channel",
             "proxy.https_port",
             "hostnames.resolver",
             "hostnames.tld",

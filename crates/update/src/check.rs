@@ -1,6 +1,6 @@
 //! Release checks: which registry tells the latest version for an install
-//! method and channel, reading it with `curl`, and the release notes of a
-//! version. The daemon schedules the checks and caches their answers.
+//! method, reading it with `curl`, and the release notes of a version. The
+//! daemon schedules the checks and caches their answers.
 
 use std::{path::Path, process::Stdio, time::Duration};
 
@@ -15,34 +15,21 @@ const MAX_LATEST_BYTES: usize = 8 * 1024 * 1024;
 /// Upper bound on `CHANGELOG.md`, which grows by a few KiB per release.
 const MAX_CHANGELOG_BYTES: usize = 8 * 1024 * 1024;
 
-/// A line of releases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Channel {
-    /// Tagged releases, published to every registry.
-    Stable,
-    /// Prereleases built from the main branch (`0.9.1-next.14`), published only
-    /// as release archives on GitHub.
-    Next,
+/// Whether `version` is a build of the main branch from the rolling `next`
+/// prerelease, such as `0.9.1-next.14`. Such a build has no tag of its own.
+pub fn is_next_build(version: &str) -> bool {
+    version.contains("-next.")
 }
 
-impl Channel {
-    /// The word config, status and the cache use: `stable` or `next`.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Stable => "stable",
-            Self::Next => "next",
-        }
-    }
-
-    /// The channel a build of `version` follows when the config names none:
-    /// `next` for a version with `-next.`.
-    pub fn of_version(version: &str) -> Self {
-        if version.contains("-next.") {
-            Self::Next
-        } else {
-            Self::Stable
-        }
-    }
+/// The release manifest a build of `running` reads, of the latest stable
+/// release's (`stable`) and the `next` prerelease's (`next`). A `next` build
+/// reads `next`, so `devlanes update` and `updates.mode: auto` keep it on the
+/// latest build of main; that manifest only ever names `next` builds, so such
+/// an install stays on them. Only `install.sh --channel next` and
+/// `install.ps1 -Channel next` install `next` builds, so every other install
+/// reads `stable`.
+fn manifest_for<'a>(running: &str, stable: &'a str, next: &'a str) -> &'a str {
+    if is_next_build(running) { next } else { stable }
 }
 
 /// Where the latest version of an install comes from.
@@ -50,7 +37,7 @@ impl Channel {
 pub enum Source {
     /// The release manifest on GitHub, for `install.sh`, `install.ps1`,
     /// standalone binaries and cargo.
-    GitHub(Channel),
+    GitHub,
     /// The npm registry, for npm, pnpm, Bun and Yarn.
     Npm,
     /// PyPI, for uv, uvx, pipx and pip.
@@ -60,17 +47,14 @@ pub enum Source {
 }
 
 impl Source {
-    /// The source for `method` following `channel`, or why it has none:
-    /// `local` for a project dependency, which its manifest pins, and `source`
-    /// for a build from a checkout. Only `install.sh`, `install.ps1` and
-    /// standalone binaries follow `next`; the registries carry stable releases
-    /// alone, so every other method reads its stable source.
-    pub fn for_method(method: &InstallMethod, channel: Channel) -> Result<Self, &'static str> {
+    /// The source for `method`, or why it has none: `local` for a project
+    /// dependency, which its manifest pins, and `source` for a build from a
+    /// checkout.
+    pub fn for_method(method: &InstallMethod) -> Result<Self, &'static str> {
         Ok(match method {
-            InstallMethod::Script(_) => Self::GitHub(channel),
-            InstallMethod::CargoInstall | InstallMethod::CargoBinstall => {
-                Self::GitHub(Channel::Stable)
-            }
+            InstallMethod::Script(_)
+            | InstallMethod::CargoInstall
+            | InstallMethod::CargoBinstall => Self::GitHub,
             InstallMethod::Npm | InstallMethod::Pnpm | InstallMethod::Bun | InstallMethod::Yarn => {
                 Self::Npm
             }
@@ -89,18 +73,10 @@ impl Source {
     /// The word status and the cache use: `github`, `npm`, `pypi` or `homebrew`.
     pub fn name(self) -> &'static str {
         match self {
-            Self::GitHub(_) => "github",
+            Self::GitHub => "github",
             Self::Npm => "npm",
             Self::PyPi => "pypi",
             Self::Homebrew => "homebrew",
-        }
-    }
-
-    /// The channel this source serves.
-    pub fn channel(self) -> Channel {
-        match self {
-            Self::GitHub(channel) => channel,
-            Self::Npm | Self::PyPi | Self::Homebrew => Channel::Stable,
         }
     }
 }
@@ -108,10 +84,9 @@ impl Source {
 /// The addresses a check reads. Tests point them at a local server.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Urls {
-    /// The latest stable release's manifest (`{"version": ...}`).
-    pub github_stable: String,
-    /// The newest `next` prerelease's manifest.
-    pub github_next: String,
+    /// The release manifest (`{"version": ...}`) of the latest stable release,
+    /// or of the newest `next` prerelease for a `next` build.
+    pub github: String,
     /// The npm registry's `latest` document (`{"version": ...}`).
     pub npm: String,
     /// PyPI's JSON for the project (`{"info": {"version": ...}}`).
@@ -130,9 +105,13 @@ impl Default for Urls {
     /// The real registries.
     fn default() -> Self {
         let raw = "https://raw.githubusercontent.com/devlanes-run";
+        let github = manifest_for(
+            crate::version::running(),
+            devlanes_version::LATEST_RELEASE_MANIFEST_URL,
+            devlanes_version::NEXT_RELEASE_MANIFEST_URL,
+        );
         Self {
-            github_stable: devlanes_version::LATEST_RELEASE_MANIFEST_URL.into(),
-            github_next: devlanes_version::NEXT_RELEASE_MANIFEST_URL.into(),
+            github: github.into(),
             npm: "https://registry.npmjs.org/devlanes/latest".into(),
             pypi: "https://pypi.org/pypi/devlanes/json".into(),
             homebrew: format!("{raw}/homebrew-tap/main/Formula/devlanes.rb"),
@@ -162,9 +141,12 @@ impl Urls {
     /// under `npm/`, `pypi/`, `homebrew/` and `changelog/v<version>/`.
     pub fn under(base: &str) -> Self {
         let base = base.trim_end_matches('/');
+        let (stable, next) = (
+            format!("{base}/releases/latest/download/release-manifest.json"),
+            format!("{base}/releases/download/next/release-manifest.json"),
+        );
         Self {
-            github_stable: format!("{base}/releases/latest/download/release-manifest.json"),
-            github_next: format!("{base}/releases/download/next/release-manifest.json"),
+            github: manifest_for(crate::version::running(), &stable, &next).to_owned(),
             npm: format!("{base}/npm/devlanes/latest"),
             pypi: format!("{base}/pypi/devlanes/json"),
             homebrew: format!("{base}/homebrew/devlanes.rb"),
@@ -176,8 +158,7 @@ impl Urls {
     /// Where `source` tells the latest version.
     pub fn latest(&self, source: Source) -> &str {
         match source {
-            Source::GitHub(Channel::Stable) => &self.github_stable,
-            Source::GitHub(Channel::Next) => &self.github_next,
+            Source::GitHub => &self.github,
             Source::Npm => &self.npm,
             Source::PyPi => &self.pypi,
             Source::Homebrew => &self.homebrew,
@@ -301,7 +282,7 @@ pub fn parse_latest(source: Source, body: &[u8]) -> Result<String, CheckError> {
     let invalid =
         |what: &str| CheckError::Invalid(format!("{} answer has no {what}", source.name()));
     let version = match source {
-        Source::GitHub(_) | Source::Npm => {
+        Source::GitHub | Source::Npm => {
             json_string(body, &["version"]).ok_or_else(|| invalid("version"))?
         }
         Source::PyPi => {
@@ -383,44 +364,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sources_by_method_and_channel() {
+    fn sources_by_method() {
         let script = InstallMethod::Script(PathBuf::from("/opt/acme/bin"));
+        assert_eq!(Source::for_method(&script), Ok(Source::GitHub));
         assert_eq!(
-            Source::for_method(&script, Channel::Next),
-            Ok(Source::GitHub(Channel::Next))
+            Source::for_method(&InstallMethod::CargoInstall),
+            Ok(Source::GitHub)
         );
+        assert_eq!(Source::for_method(&InstallMethod::Pnpm), Ok(Source::Npm));
         assert_eq!(
-            Source::for_method(&InstallMethod::CargoInstall, Channel::Next),
-            Ok(Source::GitHub(Channel::Stable))
-        );
-        assert_eq!(
-            Source::for_method(&InstallMethod::Pnpm, Channel::Next),
-            Ok(Source::Npm)
-        );
-        assert_eq!(
-            Source::for_method(&InstallMethod::UvPip(PathBuf::new()), Channel::Stable),
+            Source::for_method(&InstallMethod::UvPip(PathBuf::new())),
             Ok(Source::PyPi)
         );
         assert_eq!(
-            Source::for_method(&InstallMethod::Homebrew, Channel::Stable),
+            Source::for_method(&InstallMethod::Homebrew),
             Ok(Source::Homebrew)
         );
         let local = InstallMethod::Local {
             manifest: PathBuf::from("package.json"),
         };
-        assert_eq!(Source::for_method(&local, Channel::Stable), Err("local"));
-        assert_eq!(
-            Source::for_method(&InstallMethod::Source, Channel::Stable),
-            Err("source")
-        );
-        assert_eq!(Source::Npm.channel(), Channel::Stable);
-        assert_eq!(Channel::of_version("0.9.1-next.14"), Channel::Next);
-        assert_eq!(Channel::of_version("0.9.1-rc.1"), Channel::Stable);
+        assert_eq!(Source::for_method(&local), Err("local"));
+        assert_eq!(Source::for_method(&InstallMethod::Source), Err("source"));
+    }
+
+    /// A `next` build reads the `next` manifest, every other build the
+    /// latest stable release's.
+    #[test]
+    fn next_builds_read_the_next_manifest() {
+        let pick = |running| manifest_for(running, "stable", "next");
+        assert_eq!(pick("0.9.1-next.14"), "next");
+        assert_eq!(pick("0.9.1"), "stable");
+        assert_eq!(pick("0.9.1-rc.1"), "stable");
+        assert!(is_next_build("0.9.1-next.14"));
+        assert!(!is_next_build("0.9.1"));
     }
 
     #[test]
     fn reads_each_registry() {
-        let github = Source::GitHub(Channel::Stable);
+        let github = Source::GitHub;
         assert_eq!(
             parse_latest(github, br#"{"version":"0.9.1","assets":[]}"#).ok(),
             Some("0.9.1".into())

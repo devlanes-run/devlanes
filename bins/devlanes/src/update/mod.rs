@@ -18,9 +18,8 @@ use crossterm::{
     cursor::MoveToPreviousLine,
     terminal::{Clear, ClearType},
 };
-use devlanes_cli::{ChannelSwitch, OutputMode, Rendered, Runtime, UpdateAction};
+use devlanes_cli::{OutputMode, Rendered, Runtime, UpdateAction};
 use devlanes_client::{Client, Paths, restart::RowState};
-use devlanes_config::UpdateChannel;
 use devlanes_proto::{
     Context, LaneSummary, Method, Page, RpcError,
     release::{UpdateInfo, UpdateNote},
@@ -28,7 +27,7 @@ use devlanes_proto::{
 use devlanes_tui::{REOPEN_ENV, Reopen};
 use devlanes_update::{
     InstallMethod,
-    check::{Channel, Source, Urls},
+    check::{Source, Urls},
     install::{self, InstallError, Lock, Plan, Release, Staged, Target},
     notes::{Level, WhatsNew},
     version::{Bump, bump, is_newer},
@@ -62,8 +61,7 @@ enum Installed {
     Nothing(u8),
 }
 
-/// `devlanes update` and its `--check`, `--notes`, `--next`, `--stable` and
-/// `--finish` forms.
+/// `devlanes update` and its `--check`, `--notes` and `--finish` forms.
 pub async fn run(runtime: &Runtime, paths: &Paths, action: UpdateAction) -> Result<u8, RpcError> {
     match action {
         UpdateAction::Check => check(runtime, paths).await,
@@ -71,7 +69,6 @@ pub async fn run(runtime: &Runtime, paths: &Paths, action: UpdateAction) -> Resu
         UpdateAction::Install { yes } => match install(runtime, paths, yes, None).await? {
             Installed::Finished(code) | Installed::Nothing(code) => Ok(code),
         },
-        UpdateAction::Switch { channel, yes } => switch(runtime, paths, channel, yes).await,
         UpdateAction::Finish => finish(runtime, paths).await,
     }
 }
@@ -196,19 +193,12 @@ async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     let mut client = compatible_daemon(paths).await?;
     let daemon = client.as_ref().map(|client| client.peer.version.clone());
     let from = daemon.clone().unwrap_or_else(|| own().to_owned());
-    let info = latest(client.as_mut(), &method, paths, &from, true).await?;
-    let channel = match &info {
-        Some(info) => info.channel.clone(),
-        None => effective_channel(&crate::user_config::lenient(paths).await)
-            .as_str()
-            .to_owned(),
-    };
+    let info = latest(client.as_mut(), &method, &from, true).await?;
     let command = info
         .as_ref()
         .map(|info| devlanes_update::update_command(&method, &info.latest));
     let data = json!({
         "method": method.describe(devlanes_core::paths::user_home().as_deref()),
-        "channel": channel,
         "running": own(),
         "daemon": daemon,
         "latest": info.as_ref().map(|info| &info.latest),
@@ -234,7 +224,7 @@ async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
         None => "no daemon of this protocol runs".to_owned(),
     };
     let mut out = format!(
-        "devlanes {own} ({}), {daemon}, channel {channel}\n",
+        "devlanes {own} ({}), {daemon}\n",
         data["method"].as_str().unwrap_or_default(),
         own = own()
     );
@@ -268,9 +258,10 @@ async fn check(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
 }
 
 /// `devlanes update`: finds the latest release, then [`deliver`]s it when it
-/// is newer than this build or the daemon. It is skipped when the install
-/// already holds it (the daemon or a package manager put it there), so only
-/// the restart is left.
+/// is newer than the daemon and not older than this build, which it never
+/// replaces with an older release. It is skipped when the install already
+/// holds it (this build, or what the daemon or a package manager put there),
+/// so only the restart is left.
 async fn install(
     runtime: &Runtime,
     paths: &Paths,
@@ -285,209 +276,24 @@ async fn install(
     let from = client
         .as_ref()
         .map_or_else(|| own().to_owned(), |client| client.peer.version.clone());
-    let info = match latest(client.as_mut(), &method, paths, &from, false).await? {
-        Some(info) if is_newer(&info.latest, own()) || is_newer(&info.latest, &from) => info,
-        _ => return up_to_date(runtime, &from).map(Installed::Nothing),
+    let Some(info) = latest(client.as_mut(), &method, &from, false).await? else {
+        return up_to_date(runtime, &from).map(Installed::Nothing);
     };
+    match install::target(own(), &info.latest) {
+        Target::Install { .. } => {}
+        Target::Current if is_newer(&info.latest, &from) => {}
+        Target::Current => return up_to_date(runtime, &from).map(Installed::Nothing),
+        Target::Older => return up_to_date(runtime, own()).map(Installed::Nothing),
+    }
     let delivery = Delivery {
         method,
         exe,
         client,
         from,
         to: info.latest.clone(),
-        channel: channel_of(&info.channel),
-        switched: false,
-        info: Some(info),
+        info,
     };
     deliver(runtime, paths, delivery, yes, reopen).await
-}
-
-/// `devlanes update --next` and `--stable`: records the channel in
-/// `updates.channel`, then installs its latest release when that is newer
-/// than this build. Otherwise it says this build stays. `--next` refuses
-/// before changing the config when the install cannot take release archives.
-async fn switch(
-    runtime: &Runtime,
-    paths: &Paths,
-    choice: ChannelSwitch,
-    yes: bool,
-) -> Result<u8, RpcError> {
-    let channel = match choice {
-        ChannelSwitch::Next => Channel::Next,
-        ChannelSwitch::Stable => Channel::Stable,
-    };
-    let (method, exe) = current().await?;
-    if channel == Channel::Next {
-        let (planned, path) = (method.clone(), exe.clone());
-        // A script install in a directory it cannot write to is a manual one.
-        let archive = tokio::task::spawn_blocking(move || {
-            let retained = devlanes_update::own_exe_retained();
-            matches!(
-                Plan::new(&planned, &path, own(), retained),
-                Ok(Plan::Archive { .. })
-            )
-        })
-        .await
-        .map_err(|error| io_error(&error))?;
-        if !install::follows(&method, channel) || !archive {
-            return Err(next_unsupported(&method, &exe).await);
-        }
-    }
-    let source = Source::for_method(&method, channel)
-        .map_err(|_| manual(&method, &method.upgrade_command(own())))?;
-    let before = effective_channel(&crate::user_config::lenient(paths).await);
-    let file = crate::user_config::write(paths, "updates.channel", json!(channel.as_str())).await?;
-    let latest = devlanes_update::check::latest(source, &Urls::from_env(), FETCH_TIMEOUT)
-        .await
-        .map_err(|error| {
-            check_failed(
-                channel,
-                &error,
-                &format!("devlanes update --{}", channel.as_str()),
-            )
-        })?;
-    let to = match install::target(own(), &latest) {
-        Target::Install { version } => version,
-        decided => {
-            return Ok(stays(
-                runtime,
-                &Stay {
-                    channel,
-                    changed: before != channel,
-                    file: &file,
-                    latest: &latest,
-                    older: decided == Target::Older,
-                },
-            ));
-        }
-    };
-    let client = compatible_daemon(paths).await?;
-    let from = client
-        .as_ref()
-        .map_or_else(|| own().to_owned(), |client| client.peer.version.clone());
-    let delivery = Delivery {
-        method,
-        exe,
-        client,
-        from,
-        to,
-        channel,
-        switched: true,
-        info: None,
-    };
-    match deliver(runtime, paths, delivery, yes, None).await? {
-        Installed::Finished(code) | Installed::Nothing(code) => Ok(code),
-    }
-}
-
-/// What [`switch`] reports when nothing is installed.
-struct Stay<'a> {
-    channel: Channel,
-    /// Whether the config followed another channel before.
-    changed: bool,
-    /// The user config file.
-    file: &'a Path,
-    /// The channel's latest release.
-    latest: &'a str,
-    /// Whether `latest` is older than this build, which then stays.
-    older: bool,
-}
-
-/// Says that `updates.channel` now names the channel and why this build
-/// stays: it is the channel's latest release, or newer than it.
-fn stays(runtime: &Runtime, stay: &Stay<'_>) -> u8 {
-    let channel = stay.channel.as_str();
-    let rendered = match runtime.mode {
-        OutputMode::Json => Rendered {
-            stdout: format!(
-                "{}\n",
-                json!({
-                    "updated": false,
-                    "channel": channel,
-                    "file": stay.file,
-                    "running": own(),
-                    "latest": stay.latest,
-                    "newer_than_latest": stay.older,
-                })
-            ),
-            ..Rendered::default()
-        },
-        _ if runtime.quiet => Rendered::default(),
-        _ => Rendered {
-            stdout: stay_text(stay),
-            ..Rendered::default()
-        },
-    };
-    emit(&rendered);
-    0
-}
-
-/// The human text of [`stays`].
-fn stay_text(stay: &Stay<'_>) -> String {
-    let (channel, latest, own) = (stay.channel.as_str(), stay.latest, own());
-    let what = match stay.channel {
-        Channel::Stable => "stable release",
-        Channel::Next => "next build",
-    };
-    let mut out = format!("updates.channel is {channel} in {}", stay.file.display());
-    if stay.changed {
-        out.push_str("; the daemon follows it from its next restart");
-    }
-    out.push('\n');
-    if !stay.older {
-        out.push_str(&format!("devlanes {own} is the latest {what}\n"));
-        return out;
-    }
-    out.push_str(&format!(
-        "devlanes {own} stays until a {what} newer than it ships; the latest is {latest}\n"
-    ));
-    out
-}
-
-/// The channel the user config `config` makes devlanes follow: its
-/// `updates.channel`, else the channel of this build.
-fn effective_channel(config: &devlanes_config::UserConfig) -> Channel {
-    match config.updates.channel {
-        Some(UpdateChannel::Stable) => Channel::Stable,
-        Some(UpdateChannel::Next) => Channel::Next,
-        None => Channel::of_version(own()),
-    }
-}
-
-/// `update_next_unsupported` for `method`: how to reinstall with the install
-/// script in its default directory, after removing this install when a
-/// package manager owns it.
-async fn next_unsupported(method: &InstallMethod, exe: &Path) -> RpcError {
-    let (method, exe) = (method.clone(), exe.to_path_buf());
-    let found = tokio::task::spawn_blocking(move || {
-        let remove = install::removal_commands(&method, &exe).map(|commands| {
-            commands
-                .iter()
-                .map(install::Argv::display)
-                .collect::<Vec<_>>()
-                .join(" && ")
-        });
-        let home = devlanes_core::paths::user_home();
-        (method.describe(home.as_deref()), remove)
-    })
-    .await;
-    let (described, remove) = found.unwrap_or_else(|_| ("this install".into(), None));
-    let dir = devlanes_update::default_script_dir().unwrap_or_else(|| {
-        PathBuf::from(if cfg!(windows) {
-            r"%LOCALAPPDATA%\Programs\devlanes"
-        } else {
-            "~/.local/bin"
-        })
-    });
-    let mut data = json!({
-        "method": described,
-        "script": devlanes_update::SCRIPT_NAME,
-        "install": devlanes_update::script_install_command(&dir),
-    });
-    if let Some(remove) = remove {
-        data["remove"] = json!(remove);
-    }
-    RpcError::new("update_next_unsupported", data, 1)
 }
 
 /// The daemon when one runs and speaks this binary's protocol.
@@ -510,12 +316,8 @@ struct Delivery {
     /// The daemon's version, else this binary's.
     from: String,
     to: String,
-    /// The channel `to` comes from.
-    channel: Channel,
-    /// `update --next` or `--stable` set `updates.channel` to `channel`.
-    switched: bool,
-    /// The daemon's report of `to`, whose notes the question lists.
-    info: Option<UpdateInfo>,
+    /// The report of `to`, whose notes the question lists.
+    info: UpdateInfo,
 }
 
 /// Asks unless `yes`, installs the release in the step block, then runs the
@@ -533,8 +335,6 @@ async fn deliver(
         mut client,
         from,
         to,
-        channel,
-        switched,
         info,
     } = delivery;
     let entry = method.entry(&exe);
@@ -559,11 +359,7 @@ async fn deliver(
             Some(client) => lanes_running(client).await,
             None => 0,
         };
-        let notes = info
-            .as_ref()
-            .map(|info| info.notes.as_slice())
-            .unwrap_or_default();
-        if !confirm_update(runtime, &from, &to, lanes, notes).await? {
+        if !confirm_update(runtime, &from, &to, lanes, &info.notes).await? {
             return Ok(Installed::Nothing(devlanes_cli::exit::USAGE));
         }
     }
@@ -576,16 +372,8 @@ async fn deliver(
             to: to.clone(),
         },
     );
-    if switched {
-        view.set(
-            "channel",
-            format!("following {} (updates.channel)", channel_words(channel)),
-            RowState::Done,
-            None,
-        );
-    }
     if let Some(plan) = plan
-        && let Err(error) = run_plan(&mut view, paths, &plan, &to, channel, &entry).await
+        && let Err(error) = run_plan(&mut view, paths, &plan, &to, &entry).await
     {
         view.fail(&error);
         return Err(error);
@@ -616,7 +404,6 @@ async fn run_plan(
     paths: &Paths,
     plan: &Plan,
     to: &str,
-    channel: Channel,
     entry: &Path,
 ) -> Result<(), RpcError> {
     const ROW: &str = "install";
@@ -669,11 +456,7 @@ async fn run_plan(
                 RowState::Running,
                 None,
             );
-            let release = match channel {
-                Channel::Next if Channel::of_version(to) == Channel::Next => Release::Next,
-                _ => Release::Version(to.to_owned()),
-            };
-            let urls = devlanes_update::check::Urls::from_env();
+            let (urls, release) = (Urls::from_env(), Release::of(to));
             let staged = view
                 .spin(install::stage(&home, &urls, &release, dir, FETCH_TIMEOUT))
                 .await
@@ -830,7 +613,6 @@ async fn current() -> Result<(InstallMethod, PathBuf), RpcError> {
 async fn latest(
     client: Option<&mut Client>,
     method: &InstallMethod,
-    paths: &Paths,
     from: &str,
     install: bool,
 ) -> Result<Option<UpdateInfo>, RpcError> {
@@ -848,15 +630,14 @@ async fn latest(
             return Ok(answer);
         }
     }
-    let channel = effective_channel(&crate::user_config::lenient(paths).await);
     // Project dependencies and source builds have no registry to read.
-    let Ok(source) = Source::for_method(method, channel) else {
+    let Ok(source) = Source::for_method(method) else {
         return Ok(None);
     };
     let latest = devlanes_update::check::latest(source, &Urls::from_env(), FETCH_TIMEOUT)
         .await
-        .map_err(|error| check_failed(source.channel(), &error, "devlanes update"))?;
-    Ok(found(source.channel(), latest, from))
+        .map_err(|error| check_failed(&error, "devlanes update"))?;
+    Ok(found(latest, from))
 }
 
 /// What the daemon's `reply` to a forced `update.check` says: `Some` with
@@ -885,13 +666,12 @@ async fn checks_off(client: &mut Client) -> bool {
         .is_ok_and(|status| status.pointer("/release_check/state") == Some(&json!("off")))
 }
 
-/// `latest` of `channel` as the report a daemon would give, when it is newer
-/// than `from` or this build: without notes, which only the daemon reads.
-fn found(channel: Channel, latest: String, from: &str) -> Option<UpdateInfo> {
+/// `latest` as the report a daemon would give, when it is newer than `from`
+/// or this build: without notes, which only the daemon reads.
+fn found(latest: String, from: &str) -> Option<UpdateInfo> {
     let bump = bump(from, &latest).or_else(|| bump(own(), &latest))?;
     Some(UpdateInfo {
         latest,
-        channel: channel.as_str().into(),
         bump: bump.as_str().into(),
         state: "available".into(),
         installed: None,
@@ -901,13 +681,13 @@ fn found(channel: Channel, latest: String, from: &str) -> Option<UpdateInfo> {
     })
 }
 
-/// `update_failed` for a registry of `channel` that could not be read, with
-/// `retry` as the command to run again.
-fn check_failed(channel: Channel, error: &dyn std::fmt::Display, retry: &str) -> RpcError {
+/// `update_failed` for a registry that could not be read, with `retry` as the
+/// command to run again.
+fn check_failed(error: &dyn std::fmt::Display, retry: &str) -> RpcError {
     RpcError::new(
         "update_failed",
         json!({
-            "title": format!("cannot read the latest {} release: {error}", channel.as_str()),
+            "title": format!("cannot read the latest release: {error}"),
             "hint": format!("retry with {retry}"),
         }),
         1,
@@ -1028,14 +808,6 @@ async fn confirm_update(
     .await
 }
 
-/// `next builds` or `stable releases`, as the channel row names them.
-fn channel_words(channel: Channel) -> &'static str {
-    match channel {
-        Channel::Stable => "stable releases",
-        Channel::Next => "next builds",
-    }
-}
-
 /// `1 lane`, `3 lanes`.
 fn lanes_word(n: usize) -> String {
     if n == 1 {
@@ -1138,15 +910,6 @@ fn restart_context(runtime: &Runtime) -> Context {
     }
 }
 
-/// The channel an update report names.
-fn channel_of(channel: &str) -> Channel {
-    if channel == Channel::Next.as_str() {
-        Channel::Next
-    } else {
-        Channel::Stable
-    }
-}
-
 /// Runs `entry` with `args` and `envs` in place of this process. On Unix this
 /// returns only when that fails. Windows has no exec: the new process runs on
 /// this console while this one waits, ignoring Ctrl-C, and passes its exit
@@ -1246,43 +1009,6 @@ mod tests {
         assert_eq!(lines, ["Removed --acme.", "Fixed a crash.", "Added acme."]);
         assert_eq!(lanes_word(1), "1 lane");
         assert_eq!(lanes_word(3), "3 lanes");
-        assert_eq!(channel_of("next"), Channel::Next);
-        assert_eq!(channel_of("stable"), Channel::Stable);
-    }
-
-    /// Without an install, a switch says the channel is recorded and why this
-    /// build stays.
-    #[test]
-    fn switches_that_install_nothing_say_why() {
-        let file = Path::new("/home/a/.devlanes/config.yaml");
-        let stay = |channel, changed, older| Stay {
-            channel,
-            changed,
-            file,
-            latest: "0.9.0",
-            older,
-        };
-        let text = stay_text(&stay(Channel::Stable, true, true));
-        assert_eq!(
-            text,
-            format!(
-                "updates.channel is stable in {}; the daemon follows it from its next restart\n\
-                 devlanes {own} stays until a stable release newer than it ships; the latest is 0.9.0\n",
-                file.display(),
-                own = own()
-            )
-        );
-        let text = stay_text(&stay(Channel::Next, false, true));
-        assert!(
-            text.contains("stays until a next build newer than it ships"),
-            "{text}"
-        );
-        assert!(!text.contains("restart"), "{text}");
-        let text = stay_text(&stay(Channel::Next, false, false));
-        assert!(
-            text.ends_with(&format!("devlanes {} is the latest next build\n", own())),
-            "{text}"
-        );
     }
 
     /// The daemon's answer counts unless it could not tell: a daemon that
@@ -1298,12 +1024,12 @@ mod tests {
             Err("io".to_owned())
         );
         // A forced check the daemon could not read fails here too.
-        let unread = check_failed(Channel::Stable, &"timed out", "devlanes update");
+        let unread = check_failed(&"timed out", "devlanes update");
         let passed = daemon_answer(Err(unread.clone()), false).expect_err("passes through");
         assert_eq!((passed.code, passed.data), (unread.code, unread.data));
         assert_eq!(daemon_answer(Ok(Value::Null), true)?, None);
         assert_eq!(daemon_answer(Ok(Value::Null), false)?, Some(None));
-        let info = found(Channel::Stable, "99.0.0".into(), own()).expect("newer");
+        let info = found("99.0.0".into(), own()).expect("newer");
         let reply = serde_json::to_value(&info).map_err(|error| io_error(&error))?;
         assert_eq!(daemon_answer(Ok(reply), false)?, Some(Some(info)));
         Ok(())
@@ -1362,7 +1088,7 @@ mod tests {
         let mut view = View::new(&runtime, &paths, kind);
         let ran = tokio::time::timeout(
             Duration::from_secs(30),
-            run_plan(&mut view, &paths, &plan, "99.0.1", Channel::Stable, &entry),
+            run_plan(&mut view, &paths, &plan, "99.0.1", &entry),
         )
         .await
         .expect("in time");
@@ -1374,19 +1100,15 @@ mod tests {
     /// this build, as the daemon would report it, without notes.
     #[test]
     fn releases_read_here_are_reported_like_the_daemons() {
-        let info = found(Channel::Next, "99.0.0-next.1".into(), own()).expect("newer");
+        let info = found("99.0.0-next.1".into(), own()).expect("newer");
         assert_eq!(
-            (
-                info.channel.as_str(),
-                info.bump.as_str(),
-                info.state.as_str()
-            ),
-            ("next", "minor", "available")
+            (info.bump.as_str(), info.state.as_str()),
+            ("minor", "available")
         );
         assert!(info.notes.is_empty());
-        assert_eq!(found(Channel::Stable, own().into(), own()), None);
+        assert_eq!(found(own().into(), own()), None);
         // This build is newer than the daemon, and the latest release.
-        assert!(found(Channel::Stable, own().into(), "0.0.1").is_some());
+        assert!(found(own().into(), "0.0.1").is_some());
     }
 
     /// A daemon that cannot be reached is a warning, never a reason for the
@@ -1419,16 +1141,5 @@ mod tests {
             .await
             .expect("startup returns, so the TUI opens");
         server.abort();
-    }
-
-    #[test]
-    fn the_config_channel_wins_over_the_build() {
-        let mut config = devlanes_config::UserConfig::default();
-        assert_eq!(effective_channel(&config), Channel::of_version(own()));
-        config.updates.channel = Some(UpdateChannel::Next);
-        assert_eq!(effective_channel(&config), Channel::Next);
-        config.updates.channel = Some(UpdateChannel::Stable);
-        assert_eq!(effective_channel(&config), Channel::Stable);
-        assert_eq!(channel_words(Channel::Next), "next builds");
     }
 }

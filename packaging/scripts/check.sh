@@ -196,8 +196,29 @@ install_with -d "$work/installed-short" >/dev/null
 [ "$("$work/installed-short/devlanes")" = "devlanes $version" ]
 install_with --dir="$work/installed-long" >/dev/null
 [ "$("$work/installed-long/devlanes")" = "devlanes $version" ]
+
+# The rolling `next` release keeps its archives under download/next, not
+# download/vVERSION. Each source is the only one present, so a run that reads the
+# wrong one fails.
+mkdir -p "$release/download/next"
+cp "$work"/dist/*.tar.gz "$work/dist/SHA256SUMS" "$release/download/next/"
+mv "$release/download/v$version" "$work/versioned"
+mv "$release/latest" "$work/latest"
+install_with --channel next -d "$work/installed-next" >/dev/null
+[ "$("$work/installed-next/devlanes")" = "devlanes $version" ]
+install_with -c next -d "$work/installed-next-short" >/dev/null
+[ "$("$work/installed-next-short/devlanes")" = "devlanes $version" ]
+install_with --channel=next -d "$work/installed-next-long" >/dev/null
+[ "$("$work/installed-next-long/devlanes")" = "devlanes $version" ]
+mv "$work/versioned" "$release/download/v$version"
+mv "$work/latest" "$release/latest"
+mv "$release/download/next" "$work/next"
+install_with --channel stable -d "$work/installed-stable" >/dev/null
+[ "$("$work/installed-stable/devlanes")" = "devlanes $version" ]
+mv "$work/next" "$release/download/next"
+
 [ "$(sh "$root/install.sh" --help)" = "$(sed -n "s/^usage='\(.*\)'$/\1/p" "$root/install.sh")" ]
-for wrong in '--channel next' '--channel=next' '-c next' '--release 1' '--dir' '--uninstall --force'; do
+for wrong in '--channel dev' '--channel' '--channel=' '-c' '--release 1' '--dir' '--uninstall --force' '--uninstall --channel next'; do
 	# shellcheck disable=SC2086 # each case is several words
 	if install_with $wrong >/dev/null 2>&1; then
 		echo "install.sh accepted $wrong" >&2
@@ -235,6 +256,13 @@ DEVLANES_CHECK_LOG=$log DEVLANES_CHECK_EXIT=7 install_with >/dev/null 2>&1 || st
 [ "$status" -eq 7 ]
 [ "$(cat "$log")" = "update --help
 update --yes" ]
+rm "$log"
+# With --channel next it installs over that devlanes itself, since `devlanes update`
+# would stay on the channel of the build it runs, then restarts the daemon.
+DEVLANES_CHECK_LOG=$log install_with --channel next >/dev/null
+[ "$(cat "$log")" = "daemon status
+update --finish" ]
+[ "$("$work/installed-opt/devlanes")" = "devlanes $version" ]
 rm "$log"
 
 # Nor into a directory this user cannot write to, where only install.sh may use

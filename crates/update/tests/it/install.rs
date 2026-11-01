@@ -195,7 +195,6 @@ async fn a_staged_release_is_applied_over_the_install() {
     let binary = site.publish("0.9.1", "0.9.1", None, None);
     let staged = site.stage("0.9.1").await.expect("staged");
     assert_eq!(staged.version, "0.9.1");
-    assert_eq!(staged.channel, "stable");
     assert_eq!(staged.target, site.dir);
     assert_eq!(staged.files, site.staged_files("0.9.1"));
     assert_eq!(Staged::load(&site.home), Some(staged.clone()));
