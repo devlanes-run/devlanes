@@ -106,7 +106,7 @@ Every process devlanes starts (services, tasks, infra commands) and every comman
 | Variable | Value |
 | --- | --- |
 | `DEVLANES` | `1` |
-| `DEVLANES_PROJECT` | `project` from the project file, such as `acme`. devlanes commands run by the process read it as `--project`, so they stay in this project |
+| `DEVLANES_PROJECT` | `project` from the project file, such as `acme`. devlanes commands run by the process read it as `--project`, so they stay in this project, unless they run in another project's folder or checkout |
 | `DEVLANES_LANE` | the lane index: `0` for the primary worktree, then `1`, `2`, … A lane whose branch becomes the primary one takes index 0, so key lasting state on `DEVLANES_LANE_DATA` instead |
 | `DEVLANES_LANE_NAME` | `main` for lane 0, `lane<N>` for the others |
 | `DEVLANES_LANE_DATA` | the [lane data folder](#lane-data-folder), `~/.devlanes/data/<project>/<lane id>`. The lane id is not the index |

@@ -233,7 +233,7 @@ impl Handler for Engine {
         self.inner.reconcile().await
     }
 
-    /// Canonicalizes the cwd, then dispatches.
+    /// Canonicalizes the cwd, settles an inherited project, then dispatches.
     async fn handle(&self, mut request: Request, session: Session) -> Result<Value, RpcError> {
         request.context.cwd = canonical(&request.context.cwd).await;
         // A project's file is recorded relative to its repository, which only one
@@ -241,6 +241,9 @@ impl Handler for Engine {
         if let Some(file) = &request.context.file {
             request.context.file = Some(canonical(file).await);
         }
+        self.inner
+            .settle_inherited_project(&mut request.context)
+            .await;
         self.inner.dispatch(request, session).await
     }
 

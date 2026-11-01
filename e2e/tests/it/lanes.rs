@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeSet, fs, path::PathBuf, time::Duration};
 
-use devlanes_e2e::{Lab, Result, http_get, lane, listening, pid, port, unit};
+use devlanes_e2e::{Lab, Output, Result, http_get, lane, listening, pid, port, unit};
 use serde_json::Value;
 
 use crate::{BUDGET, need, units_in};
@@ -259,5 +259,59 @@ fn ci_gives_a_detached_checkout_lane_zero() -> Result<()> {
     let lanes = lab.lanes(lab.repo())?;
     let zero = need(lane(&lanes, "fixture-two@0"), "lane 0")?;
     assert_eq!(units_in(zero, "ready"), ["api", "web"], "{zero}");
+    Ok(())
+}
+
+/// The GitHub action's two-project job: one repository checked out twice, a project
+/// in a subfolder of each, and the first lane's variables exported to every later
+/// step. They name the first project only inside its folder, so the second checkout
+/// starts its own project and the first stops from its own folder after the second
+/// start exported its variables in turn.
+#[test]
+fn exported_lane_variables_leave_another_checkouts_project_alone() -> Result<()> {
+    let lab = Lab::without_config(BUDGET)?;
+    for (dir, project) in [("basic", "e2e-basic"), ("infra", "e2e-infra")] {
+        fs::create_dir_all(lab.repo().join("test").join(dir))?;
+        lab.write(
+            &format!("test/{dir}/devlanes.yaml"),
+            &format!(
+                "project: {project}\nservices:\n  api:\n    run: [fixture-server, --log-line, api-ready]\n    ready:\n      http:\n        path: /healthz\n"
+            ),
+        )?;
+    }
+    lab.git(&["add", "-A"])?;
+    lab.git(&["commit", "-q", "-m", "two projects"])?;
+    let second = lab.worktrees_dir().join("second");
+    lab.git(&["clone", "-q", ".", &second.to_string_lossy()])?;
+    let basic = lab.repo().join("test/basic");
+    let infra = second.join("test/infra");
+    // A step of a job: CI variables plus what earlier steps exported.
+    let step = |cwd: &PathBuf, args: &[&str], exported: &Value| -> Result<Output> {
+        let mut command = lab.command(cwd, args)?;
+        command.env("CI", "true").env("GITHUB_ACTIONS", "true");
+        for (key, value) in exported.as_object().into_iter().flatten() {
+            if let Some(value) = value.as_str() {
+                command.env(key, value);
+            }
+        }
+        let output = lab.run(command, Duration::from_secs(90))?;
+        output.expect_code(0)?;
+        Ok(output)
+    };
+    let started = step(&basic, &["start"], &Value::Null)?.json()?;
+    assert_eq!(started["ready"], true, "{started}");
+    let exported = step(&basic, &["env", "show"], &Value::Null)?.json()?["env"].clone();
+    assert_eq!(exported["DEVLANES_PROJECT"], "e2e-basic", "{exported}");
+    let started = step(&infra, &["start"], &exported)?.json()?;
+    assert_eq!(started["ready"], true, "{started}");
+    let exported = step(&infra, &["env", "show"], &exported)?.json()?["env"].clone();
+    assert_eq!(exported["DEVLANES_PROJECT"], "e2e-infra", "{exported}");
+    step(&basic, &["stop"], &exported)?;
+    let lanes = lab.lanes(&basic)?;
+    let first = need(lane(&lanes, "e2e-basic@0"), "lane e2e-basic@0")?;
+    assert!(units_in(first, "ready").is_empty(), "{first}");
+    let lanes = lab.lanes(&infra)?;
+    let other = need(lane(&lanes, "e2e-infra@0"), "lane e2e-infra@0")?;
+    assert_eq!(units_in(other, "ready"), ["api"], "{other}");
     Ok(())
 }

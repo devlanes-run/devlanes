@@ -83,6 +83,11 @@ pub struct Context {
     pub actor: Actor,
     #[serde(default)]
     pub project: Option<String>,
+    /// `project` came from an inherited `DEVLANES_PROJECT` instead of `--project`, so
+    /// it gives way to the cwd's own project outside that project's folder. Older
+    /// daemons ignore it and treat `project` as given.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub project_inherited: bool,
     /// Absolute path of a project file given with `--file`, which registers the project
     /// it names; otherwise the nearest `devlanes.yaml` above the cwd is used.
     #[serde(default, skip_serializing_if = "Option::is_none")]

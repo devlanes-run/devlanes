@@ -428,6 +428,46 @@ impl Inner {
         self.project_for_cwd(&context.cwd).await
     }
 
+    /// Keeps a `project` inherited from `DEVLANES_PROJECT` only where the cwd is in that
+    /// project: in its folder of one of its lanes with no nearer `devlanes.yaml` below
+    /// that folder, or in no project at all. Elsewhere, such as another checkout in the
+    /// same CI job, the cwd's own project answers, as without the variable.
+    pub(crate) async fn settle_inherited_project(&self, context: &mut devlanes_proto::Context) {
+        if !std::mem::take(&mut context.project_inherited)
+            || context.file.is_some()
+            || context.cwd.as_os_str().is_empty()
+        {
+            return;
+        }
+        let Some(name) = context.project.clone() else {
+            return;
+        };
+        let nearest = {
+            let cwd = context.cwd.clone();
+            tokio::task::spawn_blocking(move || devlanes_config::find_project_file(&cwd))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        };
+        let nearest_dir = nearest.as_deref().and_then(Path::parent);
+        let inside = self.all_lanes().into_iter().any(|(project, lane)| {
+            if project.name() != name {
+                return false;
+            }
+            let (config_dir, _) = project.config_path();
+            let st = lane.st();
+            let folder = st.path.join(config_dir);
+            // A devlanes.yaml nearer than the folder, such as a subdirectory project's.
+            st.present
+                && path_starts_with(&context.cwd, &folder)
+                && nearest_dir.is_none_or(|dir| path_starts_with(&folder, dir))
+        });
+        if !inside && (nearest.is_some() || self.project_holding(&context.cwd).is_some()) {
+            context.project = None;
+        }
+    }
+
     /// The registered project named `name`; `not_found` says how a project file other
     /// than `devlanes.yaml` gets registered.
     pub(crate) fn project_by_name(&self, name: &str) -> Result<Arc<ProjectRt>, RpcError> {

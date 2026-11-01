@@ -75,8 +75,8 @@ fn project_file_and_short_project_flags() {
 }
 
 #[test]
-/// The file names its project, so `-p` and an inherited `DEVLANES_PROJECT` (which
-/// clap reads into the same field) are left out instead of refused.
+/// The file names its project, so `-p` and an inherited `DEVLANES_PROJECT` are left
+/// out instead of refused.
 fn project_file_sends_only_the_file() {
     let mut cli = Cli::parse_from([
         "devlanes",
@@ -91,9 +91,26 @@ fn project_file_sends_only_the_file() {
     assert!(req.context.file.is_some());
     // What `DEVLANES_PROJECT` of the lane this command runs in would set.
     cli = Cli::parse_from(["devlanes", "--file", "devlanes.prod.yaml", "start"]);
-    cli.project = Some("acme".into());
+    cli.inherited_project = Some("acme".into());
     let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
     assert_eq!(req.context.project, None);
+    assert!(!req.context.project_inherited);
+}
+
+#[test]
+/// An inherited `DEVLANES_PROJECT` is sent marked as such, so the daemon lets the
+/// cwd's own project win outside it; `-p` replaces it and stays explicit.
+fn inherited_project_is_marked() {
+    let mut cli = Cli::parse_from(["devlanes", "status"]);
+    cli.inherited_project = Some("acme".into());
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.project.as_deref(), Some("acme"));
+    assert!(req.context.project_inherited);
+    let mut cli = Cli::parse_from(["devlanes", "-p", "acme-prod", "status"]);
+    cli.inherited_project = Some("acme".into());
+    let req = request(action(&cli, &runtime(&cli, OutputMode::Agent)));
+    assert_eq!(req.context.project.as_deref(), Some("acme-prod"));
+    assert!(!req.context.project_inherited);
 }
 
 #[test]

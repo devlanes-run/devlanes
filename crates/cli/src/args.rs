@@ -74,8 +74,13 @@ pub struct Cli {
     #[arg(long, global = true, value_enum, value_name = "MODE", help_heading = GLOBAL)]
     pub output: Option<OutputMode>,
     /// Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT, which devlanes sets in the processes it starts]
-    #[arg(short = 'p', long, global = true, env = "DEVLANES_PROJECT", hide_env = true, value_name = "PROJECT", help_heading = GLOBAL)]
+    #[arg(short = 'p', long, global = true, value_name = "PROJECT", help_heading = GLOBAL)]
     pub project: Option<String>,
+    /// `DEVLANES_PROJECT` from the environment, used without `-p`. Unlike `-p` it gives
+    /// way to the cwd's own project outside its folder: lane variables also reach
+    /// later CI steps and `devlanes with` shells, which may run in another project.
+    #[arg(skip = std::env::var("DEVLANES_PROJECT").ok().filter(|name| !name.is_empty()))]
+    pub inherited_project: Option<String>,
     /// Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
     // No `-f`: `logs -f` and the other `--follow` flags already take it.
     #[arg(long, global = true, value_name = "FILE", help_heading = GLOBAL)]
@@ -1040,18 +1045,22 @@ impl Cli {
         // The daemon resolves the file, so a relative one names a path below the cwd.
         let file = self.file.as_ref().map(|file| cwd.join(file));
         // The file names its project. `-p` is dropped rather than refused with clap's
-        // `conflicts_with`, which counts `DEVLANES_PROJECT` as given: inside a lane that
+        // `conflicts_with`, as the inherited `DEVLANES_PROJECT` is: inside a lane that
         // env var names the lane's project and would point lookups at it instead.
-        let project = if file.is_some() {
-            None
-        } else {
-            self.project.clone()
+        let (project, project_inherited) = match (&file, &self.project) {
+            (Some(_), _) => (None, false),
+            (None, Some(project)) => (Some(project.clone()), false),
+            (None, None) => (
+                self.inherited_project.clone(),
+                self.inherited_project.is_some(),
+            ),
         };
         let mut context = Context {
             cwd,
             file,
             actor: runtime.actor.clone(),
             project,
+            project_inherited,
             lane: self.lane.clone(),
             yes: self.yes,
             env: None,
