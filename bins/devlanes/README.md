@@ -42,7 +42,7 @@ Project settings live in each repository's `devlanes.yaml`; `docs/examples/user-
 
 ## Behaviour
 
-Any command except `devlanes daemon status`, `daemon stop`, `daemon reset-state` and `doctor` auto-spawns the daemon (`devlanes daemon run`, a hidden subcommand) when none is running; `daemon status` reports it as not running and exits 1, and `doctor` reports it as a warning and runs the checks it can without it (home, user config, CA trust, processes on the proxy ports, the hosts helper, release). The daemon inherits only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`, `XDG_*`, `DOCKER_*`, `KUBECONFIG`, `SSH_AUTH_SOCK`, the proxy variables, `DEVLANES_*` and CI markers from that shell. Services and tasks still get the environment of the shell that sent each `start`, `run` or `exec`, and Docker Compose gets the daemon's Docker-related variables plus `infra.env` and the primary worktree's `.env`. Inside an agent sandbox the CLI refuses to auto-spawn; start the daemon from a normal shell or install it once with `devlanes daemon install`. `devlanes daemon stop`, `devlanes daemon restart` and `devlanes daemon reset-state` are the only commands that stop all managed processes, and they ask first; `reset-state` also empties `state.db`. Without a running daemon, `reset-state --yes` moves `state.db` to `state.db.legacy-<time>` and the lane data folders into `<data folder>/.legacy-<time>` instead, deleting nothing, since a new database numbers lanes from 1 again. `daemon restart` checks the user config first, so an invalid file stops nothing.
+Any command except `devlanes daemon status`, `daemon stop`, `daemon reset-state`, `doctor`, `setup`, `update` and `uninstall` auto-spawns the daemon (`devlanes daemon run`, a hidden subcommand) when none is running; `daemon status` reports it as not running and exits 1, and `doctor` reports it as a warning and runs the checks it can without it (home, user config, CA trust, processes on the proxy ports, the hosts helper, release). The daemon inherits only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`, `XDG_*`, `DOCKER_*`, `KUBECONFIG`, `SSH_AUTH_SOCK`, the proxy variables, `DEVLANES_*` and CI markers from that shell. Services and tasks still get the environment of the shell that sent each `start`, `run` or `exec`, and Docker Compose gets the daemon's Docker-related variables plus `infra.env` and the primary worktree's `.env`. Inside an agent sandbox the CLI refuses to auto-spawn; start the daemon from a normal shell or install it once with `devlanes daemon install`. `devlanes daemon stop`, `devlanes daemon restart` and `devlanes daemon reset-state` are the only commands that stop all managed processes, and they ask first; `reset-state` also empties `state.db`. Without a running daemon, `reset-state --yes` moves `state.db` to `state.db.legacy-<time>` and the lane data folders into `<data folder>/.legacy-<time>` instead, deleting nothing, since a new database numbers lanes from 1 again. `daemon restart` checks the user config first, so an invalid file stops nothing.
 
 Everything lives under `~/.devlanes`, or `DEVLANES_HOME` when set: `state.db`, `config.yaml`, `logs/` (including `daemon.log`), `ca/` and `run/daemon.sock`. When the socket path is too long for macOS, it moves to a short temporary directory. devlanes refuses a home that other users can read or write, so create it with `mkdir -m 700 ~/.devlanes` when you add `config.yaml` before the first run.
 
@@ -69,18 +69,9 @@ DEVLANES_LOG=debug devlanes daemon restart
 devlanes debug bundle -- start api
 ```
 
-## Release notices
+## Updates
 
-Three minutes after it starts, and then once a day, the daemon reads the version in `https://github.com/devlanes-run/devlanes/releases/latest/download/release-manifest.json` with `curl` and caches it in `update-check.json`. A failed request keeps the cached answer. A release is reported once it is newer than the daemon and has been seen for two hours, the time Homebrew and npm take to publish it. devlanes never downloads, installs or restarts anything itself.
-
-In human output, a command then prints one line on stderr, at most once a day per version, with the upgrade command for how this binary was installed (Homebrew, npm, pnpm, Bun, Yarn, uv, uvx, pipx, pip, cargo binstall, cargo install or `install.sh`). When the daemon runs another version than the CLI, the line says to run `devlanes daemon restart` when convenient, since a restart stops services. Agent, JSON, plain and CI output never get these lines. The TUI shows the same notice in its header, and `u` hides it for that version. `devlanes doctor` always shows the version, build, install method, latest release and upgrade command. Shown and hidden notices are kept in `notices.json`.
-
-Checks are off in debug builds, when the daemon starts with CI variables set, with `DEVLANES_NO_UPDATE_CHECK=1`, or with this in `config.yaml`:
-
-```yaml
-updates:
-  check: false
-```
+The daemon checks for new releases every 4 hours and when the TUI opens (`updates.mode` in `config.yaml`: `disable`, `notify` or `auto`). `devlanes update`, or `U` in the TUI, installs the latest release the way devlanes was installed and restarts the daemon; it never installs an older one, and `install.sh` and `install.ps1` take no version either (npm and PyPI install a given release: `npm install -g devlanes@X.Y.Z`, `uv tool install devlanes==X.Y.Z`). A build of `main`, installed with `install.sh --channel next` or `install.ps1 -Channel next`, updates to the latest build of `main`. `devlanes uninstall` removes devlanes. [Updates](../../docs/guides/updates.md) covers builds of `main`, background installs, Windows and the install scripts.
 
 ## License
 

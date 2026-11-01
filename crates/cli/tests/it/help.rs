@@ -41,7 +41,7 @@ fn main_help_pages() {
         &["debug"],
         &["env"],
         &["url"],
-        &["certs"],
+        &["setup"],
         &["infra"],
         &["config"],
         &["remote"],

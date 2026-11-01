@@ -13,7 +13,7 @@ wsl
   ! systemd is not running in this distro, so devlanes daemon install cannot start the daemon with it
     fix: set systemd=true under [boot] in /etc/wsl.conf, then run wsl.exe --shutdown from Windows and reopen the distro
   ! browsers on Windows do not trust the CA: tls.trust leaves out windows
-    fix: add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes certs trust
+    fix: add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes setup
   ! acme@2 is on the Windows drive C:\ (/mnt/c/src/acme): file access is slow and file watching misses edits made from Windows
     fix: move the repository to the Linux filesystem, for example ~/src
 tls
@@ -32,7 +32,7 @@ wsl
   warn systemd is not running in this distro, so devlanes daemon install cannot start the daemon with it
     fix: set systemd=true under [boot] in /etc/wsl.conf, then run wsl.exe --shutdown from Windows and reopen the distro
   warn browsers on Windows do not trust the CA: tls.trust leaves out windows
-    fix: add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes certs trust
+    fix: add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes setup
   warn acme@2 is on the Windows drive C:\ (/mnt/c/src/acme): file access is slow and file watching misses edits made from Windows
     fix: move the repository to the Linux filesystem, for example ~/src
 tls
@@ -46,7 +46,7 @@ warn daemon: not running (socket null)
 warn wsl: systemd is not running in this distro, so devlanes daemon install cannot start the daemon with it
   fix: set systemd=true under [boot] in /etc/wsl.conf, then run wsl.exe --shutdown from Windows and reopen the distro
 warn wsl: browsers on Windows do not trust the CA: tls.trust leaves out windows
-  fix: add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes certs trust
+  fix: add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes setup
 warn wsl: acme@2 is on the Windows drive C:\ (/mnt/c/src/acme): file access is slow and file watching misses edits made from Windows
   fix: move the repository to the Linux filesystem, for example ~/src
 ok sandbox: not sandboxed

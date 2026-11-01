@@ -12,7 +12,7 @@
 │ │   terminal.links                   auto│ wrong; `NO_COLOR` in the        │ │
 │ │   terminal.notifications           auto│ environment turns colors off    │a│
 │ │   terminal.marks                   auto│ whatever this says.             │ │
-│ │   updates.check                    true│                                 │a│
+│ │   updates.mode                   notify│                                 │a│
 │ │   lanes.data_dir                default│  auto   Use the true-color dark │ │
 │ │   lanes.throttle_after               5m│         or light palette when   │a│
 │ │   lanes.freeze_after                15m│         the terminal reports    │ │
@@ -38,7 +38,7 @@
 11: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 39-42 dim, 43 #8f8a7f, 77 #9a6b00, 79 #8f8a7f
 12: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 39-42 dim, 43 #8f8a7f, 77 #9a6b00, 79 #8f8a7f
 13: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 39-42 dim, 43 #8f8a7f, 77 #9a6b00, 79 #8f8a7f
-14: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 39-42 dim, 43 #8f8a7f, 77 #9a6b00, 79 #8f8a7f
+14: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 37-42 dim, 43 #8f8a7f, 77 #9a6b00, 79 #8f8a7f
 15: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 36-42 dim, 43 #8f8a7f, 45 #9a6b00, 53-75 dim, 77 #9a6b00, 79 #8f8a7f
 16: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 41-42 dim, 43 #8f8a7f, 53-73 dim, 77 #9a6b00, 79 #8f8a7f
 17: 0 #8f8a7f, 2 #9a6b00, 4 #9a6b00, 40-42 dim, 43 #8f8a7f, 53-72 dim, 77 #9a6b00, 79 #8f8a7f

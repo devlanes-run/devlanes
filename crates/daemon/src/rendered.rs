@@ -460,6 +460,32 @@ mod tests {
         assert_eq!(logged, expected);
     }
 
+    /// A resize while output streams, as the console host sends it: at
+    /// 300x40 the last line is written without its line break, then the
+    /// marked repaint at 200x45 first scrolls the window by the line written
+    /// since, then draws it from the top. The lines fill the viewer down to
+    /// the cursor, and the next one follows the last without a gap.
+    #[test]
+    fn a_repaint_that_scrolls_first_fills_the_screen() {
+        let mut screen = Rendered::new(TerminalSize::RENDERED_HEADLESS, 1);
+        feed(&mut screen, wide(1).as_bytes());
+        for i in 2..=147 {
+            feed(&mut screen, format!("\r\n{}", wide(i)).as_bytes());
+        }
+        let scrolled = repaint(109, 150, 2, 43).replacen("\x1b[?25l", "\x1b[?25l\x1b[45;1H\n", 1);
+        feed(&mut screen, format!("\x1b[8;45;200t{scrolled}").as_bytes());
+        feed(&mut screen, format!("{}\r\n", wide(151)).as_bytes());
+        let size = TerminalSize {
+            columns: 200,
+            rows: 45,
+        };
+        assert_eq!(screen.terminal().size(), size);
+        let bytes = redraw(&screen, None);
+        let shown = lines_in_order(&bytes, 200, 45);
+        assert_eq!(shown.last(), Some(&151));
+        assert_eq!(shown.len(), 44, "{:#?}", rows_after(&bytes, 200, 45));
+    }
+
     /// The alternate screen is sent as the program drew it.
     #[test]
     fn the_alternate_screen_is_sent_as_drawn() {

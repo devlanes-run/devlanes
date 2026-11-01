@@ -320,7 +320,7 @@ impl Nrpt {
             .collect())
     }
 
-    /// What `certs trust --resolver` changes for `zone`: the rule, written
+    /// What `devlanes setup` changes for `zone`: the rule, written
     /// fresh, and devlanes rules for other TLDs, removed. `None` when the rule
     /// is already in place and nothing is stale. Refused when Group Policy
     /// rules make a local one useless, or another rule covers the TLD.
@@ -350,7 +350,7 @@ impl Nrpt {
         }))
     }
 
-    /// What `certs untrust --resolver` changes: every rule devlanes wrote,
+    /// What `devlanes setup --remove` changes: every rule devlanes wrote,
     /// whatever TLD it was for, removed. `None` when there is none.
     pub fn plan_removal(&self) -> Result<Option<Change>, NrptError> {
         let zones = self
@@ -384,7 +384,7 @@ impl Nrpt {
             &mut text,
             "Comment",
             &format!(
-                "Sends *.{tld} lookups to the devlanes DNS server. Remove with: devlanes certs untrust --resolver"
+                "Sends *.{tld} lookups to the devlanes DNS server. Remove with: devlanes setup --remove"
             ),
         );
         text.push_str("\r\n");
@@ -674,7 +674,7 @@ mod tests {
                  \"ConfigOptions\"=dword:00000008\r\n\
                  \"IPSECCARestriction\"=\"\"\r\n\
                  \"DisplayName\"=\"devlanes .test\"\r\n\
-                 \"Comment\"=\"Sends *.test lookups to the devlanes DNS server. Remove with: devlanes certs untrust --resolver\"\r\n\
+                 \"Comment\"=\"Sends *.test lookups to the devlanes DNS server. Remove with: devlanes setup --remove\"\r\n\
                  \r\n"
             )
         );

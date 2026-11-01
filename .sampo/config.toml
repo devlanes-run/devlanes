@@ -82,5 +82,6 @@ linked = [[
   "cargo/devlanes-tui",
   "cargo/devlanes-tui-web",
   "cargo/devlanes-tunnel",
+  "cargo/devlanes-update",
   "cargo/devlanes-version",
 ]]

@@ -1,11 +1,11 @@
  devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 3 issues
 ┌ boxes ────────────────────────────────────── 0 of 3 connected · j k for more ┐
-│ ! hetzner                                                needs pairing · ssh │
+│ ! hetzner                               needs pairing · ssh · devlanes 0.9.2 │
 │   link      waiting for a new pairing code, with ports and hostnames kept    │
 │   error     the box no longer accepts this machine's pairing and needs a new │
 │             code from devlanes daemon pair on the box                        │
 │   fix       run devlanes daemon pair on hetzner, then press enter here       │
-│   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999          │
+│   box       proxy on 443 · ports.range 24000-29999                           │
 │   mirror    1 lane · 4 of 5 ports bound here · 3 hostnames routed            │
 │   skipped   acme@0 also runs on this machine. Press m to stop it and use     │
 │             this one.                                                        │

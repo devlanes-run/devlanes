@@ -22,7 +22,7 @@ The daemon never stores a shell's environment, so after a reboot, a crash or `de
 
 The new daemon and the services it starts again get the environment of whoever asked for the restart: the shell that ran `devlanes daemon restart`, or the shell that opened the TUI for `R`. That is how a changed `PATH`, `SSH_AUTH_SOCK` or other variable reaches the daemon and its services, so restart from a shell that has it.
 
-On a terminal, `daemon stop` and `daemon restart` show each step as it happens: closing box connections, waking idle lanes, running `lane.stop` tasks, stopping processes (with how many are left), saving state, then for a restart the new daemon's start and each lane coming back. `daemon.log` records how long each shutdown step took and names any process that took more than 2 seconds to stop. While the daemon is away, every view of the TUI shows the same steps with the daemon log below them, and its `devlanes` logo turns grey while the daemon stops or starts and red while it is stopped or not answering.
+On a terminal, `daemon stop` and `daemon restart` show each step as it happens: closing box connections, waking idle lanes, running `lane.stop` tasks, stopping processes (with how many are left), saving state, then for a restart the new daemon's start and the lanes it starts again, with how many services each. `daemon.log` records how long each shutdown step took and names any process that took more than 2 seconds to stop. While the daemon is away, every view of the TUI shows the same steps with the daemon log below them, and its `devlanes` logo turns grey while the daemon stops or starts and red while it is stopped or not answering.
 
 ## Editing the project file
 

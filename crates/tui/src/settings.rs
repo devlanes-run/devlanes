@@ -1938,7 +1938,7 @@ mod tests {
             "terminal.links",
             "terminal.notifications",
             "terminal.marks",
-            "updates.check",
+            "updates.mode",
             "proxy.https_port",
             "hostnames.resolver",
             "hostnames.tld",
@@ -2075,13 +2075,13 @@ mod tests {
         assert_eq!(settings.unsaved(), 0);
 
         // Enter edits the row without moving; Enter again leaves edit mode.
-        let mut settings = open("", "updates.check");
+        let mut settings = open("", "updates.mode");
         let row = settings.index;
         press(&mut settings, KeyCode::Enter, &mut theme);
         assert!(settings.edit.is_some());
         assert_eq!(settings.index, row);
         press(&mut settings, KeyCode::Right, &mut theme);
-        assert_eq!(settings.file_value("updates.check"), Some(json!(false)));
+        assert_eq!(settings.file_value("updates.mode"), Some(json!("auto")));
         press(&mut settings, KeyCode::Enter, &mut theme);
         assert!(settings.edit.is_none());
         assert_eq!(settings.index, row);
@@ -2091,7 +2091,7 @@ mod tests {
     #[test]
     fn esc_in_edit_mode_reverts_only_that_row() {
         let mut theme = Theme::default();
-        let mut settings = open("updates:\n  check: true\n", "hostnames.hosts_file");
+        let mut settings = open("updates:\n  mode: notify\n", "hostnames.hosts_file");
         // A change kept with Enter on another row stays.
         press(&mut settings, KeyCode::Enter, &mut theme);
         press(&mut settings, KeyCode::Right, &mut theme);
@@ -2235,7 +2235,7 @@ mod tests {
     #[test]
     fn changes_wait_for_s_and_save_in_one_request() {
         let mut theme = Theme::default();
-        let mut settings = open("updates:\n  check: true # daily\n", "updates.check");
+        let mut settings = open("updates:\n  mode: notify # checks\n", "updates.mode");
         press(&mut settings, KeyCode::Enter, &mut theme);
         let effects = press(&mut settings, KeyCode::Right, &mut theme);
         assert!(
@@ -2258,17 +2258,17 @@ mod tests {
         assert_eq!(
             saved(&effects),
             [
-                ("updates.check".to_owned(), Some(json!(false))),
+                ("updates.mode".to_owned(), Some(json!("auto"))),
                 ("proxy.lan".to_owned(), Some(json!(true))),
             ]
         );
         written(
             &mut settings,
-            "updates:\n  check: false # daily\nproxy:\n  lan: true\n",
+            "updates:\n  mode: auto # checks\nproxy:\n  lan: true\n",
         );
         assert_eq!(settings.unsaved(), 0);
         assert_eq!(settings.saved_count, Some(2));
-        assert_eq!(settings.restart, ["updates.check", "proxy.lan"]);
+        assert_eq!(settings.restart, ["updates.mode", "proxy.lan"]);
         assert_eq!(
             outcome(&mut settings, KeyCode::Char('R'), &mut theme),
             Outcome::RestartDaemon
@@ -2291,7 +2291,7 @@ mod tests {
     #[test]
     fn closing_with_unsaved_changes_asks_first() {
         let mut theme = Theme::default();
-        let mut settings = open("", "updates.check");
+        let mut settings = open("", "updates.mode");
         assert_eq!(
             outcome(&mut settings, KeyCode::Esc, &mut theme),
             Outcome::Menu
@@ -2325,11 +2325,11 @@ mod tests {
         assert_eq!(gone, Outcome::Menu);
         assert_eq!(
             saved(&effects),
-            [("updates.check".to_owned(), Some(json!(false)))]
+            [("updates.mode".to_owned(), Some(json!("auto")))]
         );
-        assert_eq!(settings.restart, ["updates.check"]);
+        assert_eq!(settings.restart, ["updates.mode"]);
         // Discard: nothing is written.
-        let mut settings = open("", "updates.check");
+        let mut settings = open("", "updates.mode");
         press(&mut settings, KeyCode::Enter, &mut theme);
         press(&mut settings, KeyCode::Right, &mut theme);
         press(&mut settings, KeyCode::Enter, &mut theme);

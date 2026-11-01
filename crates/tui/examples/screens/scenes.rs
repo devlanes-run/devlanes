@@ -12,7 +12,6 @@ use std::{
 };
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use devlanes_client::update::InstallMethod;
 use devlanes_proto::{AttachResult, Event, Page, RpcError, events};
 use devlanes_tui::{
     ApiError,
@@ -23,6 +22,7 @@ use devlanes_tui::{
     theme::{Glyphs, Theme, Tier},
     ui,
 };
+use devlanes_update::InstallMethod;
 use ratatui::{
     Terminal,
     backend::TestBackend,
@@ -447,6 +447,28 @@ fn select_api_search(f: &mut Fake) {
     let _ = render(&f.app);
     f.key(KeyCode::Char('k'));
     f.key(KeyCode::Char('j'));
+}
+
+/// A minor release with notes in `daemon.status`, the welcome dismissed.
+fn update_available(f: &mut Fake) {
+    let mut status = data::daemon_status();
+    status["update"] = json!({
+        "latest": "1.1.0", "bump": "minor",
+        "state": "available", "checked_at": 1,
+        "notes": [
+            {"version": "1.1.0", "level": "patch", "line": "Fixed `devlanes logs` dropping the last line of a unit that exited."},
+            {"version": "1.1.0", "level": "minor", "line": "Changed `lanes.hosts_file` to default to `auto`."},
+            {"version": "1.0.3", "level": "patch", "line": "Added `devlanes url --copy`."},
+        ],
+    });
+    f.send(Msg::DaemonInfo {
+        status: Ok(status),
+        doctor: Ok(data::doctor()),
+    });
+    f.send(Msg::Notices {
+        method: InstallMethod::Homebrew,
+        dismissed: vec![devlanes_tui::welcome::KEY.into()],
+    });
 }
 
 /// Every state, in review order.
@@ -1032,6 +1054,18 @@ fn scenes() -> Vec<Scene> {
             },
         },
         Scene {
+            name: "whats-new",
+            what: "the first TUI after an update: the releases since the one seen before, breaking changes first",
+            setup: |f| {
+                f.app.whats_new = Some(data::whats_new());
+                f.app.whats_new_pending = true;
+                f.send(Msg::Notices {
+                    method: InstallMethod::Homebrew,
+                    dismissed: vec![devlanes_tui::welcome::KEY.into()],
+                });
+            },
+        },
+        Scene {
             name: "theme-dark",
             what: "true color on a dark background",
             setup: |f| themed(f, Tier::Dark, Glyphs::Unicode, None),
@@ -1260,10 +1294,43 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "update-badge",
-            what: "a newer release in the header",
+            what: "a newer release in the header once no start has it: U updates",
+            setup: |f| {
+                idle(f);
+                update_available(f);
+                f.unit("acme@0", "web-app");
+            },
+        },
+        Scene {
+            name: "dialog-update",
+            what: "U on a newer release: its changes, breaking first, and the lanes the restart starts again",
+            setup: |f| {
+                update_available(f);
+                f.unit("acme@0", "web-app");
+                f.shifted('U');
+            },
+        },
+        Scene {
+            name: "daemon-older-protocol",
+            what: "the daemon runs a release on an older protocol: U updates, R restarts it",
+            setup: |f| {
+                f.send(Msg::EventsEnded(Some(ApiError::Incompatible {
+                    peer: devlanes_proto::Hello {
+                        protocol: devlanes_proto::PROTOCOL_VERSION - 1,
+                        version: "0.8.4".into(),
+                        build_id: "release".into(),
+                        features: Vec::new(),
+                        managed_processes: 41,
+                    },
+                })));
+            },
+        },
+        Scene {
+            name: "dialog-setup",
+            what: "the setup prompt after the welcome: the CA is not trusted and a lane needs the hosts helper",
             setup: |f| {
                 let mut status = data::daemon_status();
-                status["update"] = json!({"latest": "1.1.0", "checked_at": 1});
+                status["setup"] = json!({"missing": ["hosts"]});
                 f.send(Msg::DaemonInfo {
                     status: Ok(status),
                     doctor: Ok(data::doctor()),
@@ -1272,12 +1339,12 @@ fn scenes() -> Vec<Scene> {
                     method: InstallMethod::Homebrew,
                     dismissed: vec![devlanes_tui::welcome::KEY.into()],
                 });
-                f.unit("acme@0", "web-app");
+                f.send(Msg::SetupMissing(vec!["ca".into()]));
             },
         },
         Scene {
             name: "menu",
-            what: "the Esc menu: banner over lane lines, version, options, help, quit",
+            what: "the Esc menu: banner over lane lines, version, options, what's new, help, quit",
             setup: |f| f.key(KeyCode::Esc),
         },
         Scene {
@@ -1420,6 +1487,19 @@ pub fn shots() -> Vec<Shot> {
         "menu-narrow",
         "the Esc menu without room for the banner",
         narrow,
+    ));
+    // What's new scrolls only on the smallest size.
+    let mut notes = Fake::new(80, 24);
+    notes.app.whats_new = Some(data::whats_new());
+    notes.key(KeyCode::Esc);
+    notes.key(KeyCode::Char('w'));
+    // A frame tells the keys how far the notes scroll.
+    let _ = render(&notes.app);
+    notes.key(KeyCode::Char('G'));
+    shots.push(Shot::new(
+        "whats-new-scrolled",
+        "What's new from the Esc menu (w), scrolled to its end (G)",
+        notes,
     ));
     // Below the minimum size the TUI only says so.
     shots.push(Shot::new(

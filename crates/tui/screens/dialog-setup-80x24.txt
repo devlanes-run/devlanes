@@ -1,0 +1,50 @@
+ devlanes  1 acme   2 billing   3 shop   starting feat/che…  M  D · 2 issues  B
+ lanes  1 main  2 feat/checkout 4/8  +2 more            1-9 or [ ] switch lanes
+┌ @0 · 34/38 up ───────────────┐┌ wrk-export  failed · exit 1 ─────────────────┐
+│   ● api-auth                 ││ failed    exited with code 1                 │
+│   ● api-users                ││ next      r restarts it                      │
+│   ● a┌────────────────────────────────────────────────────────────────┐rt    │
+│   ● a│ Set up HTTPS and hostnames?                                    │      │
+│   ● a│                                                                │──────┤
+│   ● a│ HTTPS: the devlanes CA is not trusted, so browsers warn on     │e=defa│
+│   ● a│ https:// addresses.                                            │      │
+│   ● a│ Hostnames: a lane needs the /etc/hosts helper, which is not    │e=defa│
+│   ● a│ installed.                                                     │      │
+│   ● w│ devlanes setup runs in this terminal, then the TUI opens again │e=defa│
+│   ● w│ on the same lane.                                              │      │
+│   ● w│ It may ask for your password once.                             │e=defa│
+│   · w│                                                                │      │
+│   ● w│ enter set up   esc cancel                                      │e=defa│
+│   ◉ w└────────────────────────────────────────────────────────────────┘      │
+│   ◉ wrk-billing              ││ 2026-10-21T10:42:24Z INFO job done queue=defa│
+│   ◉ wrk-index                ││ ult id=job_8132 took=196ms                   │
+│   ◉ wrk-thumbs               ││ 2026-10-21T10:42:31Z INFO job done queue=defa│
+│   ✕ wrk-export        failed ││ ult id=job_8133 took=209ms                   │
+└──────────────────────────────┘└──────────────────────────────────────────────┘
+ r restart   n next problem   pgup scroll back            ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 61 bold, 64 bold, 65-75 red, 78 bold
+1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 36-43 dim, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
+2: 0 darkgray, 2-3 bold, 4-14 dim, 16-32 darkgray, 34-43 bold, 44-45 dim, 46-51 red, 52-54 dim, 55-60 red, 62-79 darkgray
+3: 0 darkgray, 4-5 green, 6-13 blue, 31-32 darkgray, 34-43 dim, 44-61 red, 79 darkgray
+4: 0 darkgray, 4-5 green, 6-14 blue, 31-32 darkgray, 34-43 dim, 79 darkgray
+5: 0 darkgray, 4-5 green, 6 blue, 7-72 bold, 73-74 dim, 79 darkgray
+6: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-35 bold, 72 bold, 79 darkgray
+7: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 73-79 darkgray
+8: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
+9: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
+10: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
+11: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
+12: 0 darkgray, 4-6 green, 7 bold, 72 bold, 79 darkgray
+13: 0 darkgray, 4-6 green, 7 bold, 72 bold, 79 darkgray
+14: 0 darkgray, 4-6 green, 7 bold, 72 bold, 79 darkgray
+15: 0 darkgray, 4-5 dim, 6 dim green, 7 bold, 72 bold, 79 darkgray
+16: 0 darkgray, 4-6 green, 7 bold, 9-13 bold, 14-20 dim, 24-26 bold, 27-33 dim, 72 bold, 79 darkgray
+17: 0 darkgray, 4-5 green, 6 magenta, 7-72 bold, 79 darkgray
+18: 0 darkgray, 4-5 green, 6-16 magenta, 31-32 darkgray, 34-53 dim, 55-58 color2, 79 darkgray
+19: 0 darkgray, 4-5 green, 6-14 magenta, 31-32 darkgray, 79 darkgray
+20: 0 darkgray, 4-5 green, 6-15 magenta, 31-32 darkgray, 34-53 dim, 55-58 color2, 79 darkgray
+21: 0 darkgray, 1-30 reversed, 31-32 darkgray, 79 darkgray
+22: 0-79 darkgray
+23: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-33 bold, 34-48 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

@@ -13,6 +13,8 @@ mod remote;
 mod shutdown;
 mod tasks;
 mod tui_zoom;
+mod uninstall;
+mod update;
 #[cfg(windows)]
 mod windows;
 mod with;

@@ -635,36 +635,96 @@ devlanes config unset [OPTIONS] <KEY>
 
 - `<KEY>`: Dotted setting or section, such as tui.theme
 
-### devlanes certs
+### devlanes setup
 
-Trust the devlanes CA and install the /etc/hosts helper
+Trust the devlanes CA and set up hostnames for this machine; asks once.
 
-```text
-devlanes certs [OPTIONS] <COMMAND>
-```
+Works out what this machine needs and lists each step as ok, todo or skip:
+  ca        trust the CA in the stores tls.trust names (mkcert's CA with tls.ca: mkcert)
+  hosts     install the /etc/hosts helper (macOS and Linux) when *.localhost does not
+            resolve to loopback, the user config asks for the hosts file, or the
+            daemon needs it for a project
+  resolver  send hostnames.tld to the devlanes DNS server (a resolver file, or an
+            NRPT rule on Windows) when hostnames.resolver is resolver
 
-### devlanes certs trust
-
-Trust the devlanes CA in the system and browser stores
-
-```text
-devlanes certs trust [OPTIONS]
-```
-
-- `--hosts`: Also install the /etc/hosts helper for programs that cannot resolve *.localhost
-- `--resolver`: Also send lookups for hostnames.tld to the devlanes DNS server (/etc/resolver on macOS, systemd-resolved on Linux)
-
-### devlanes certs untrust
-
-Remove the devlanes CA from the trust stores
+Then it asks once before doing the todo steps; sudo asks for your password at
+most once. Without a terminal, pass --yes.
 
 ```text
-devlanes certs untrust [OPTIONS]
+devlanes setup [OPTIONS]
 ```
 
-- `--hosts`: Also remove the /etc/hosts helper, its sudo rule and the devlanes block in /etc/hosts
-- `--resolver`: Also remove the OS resolver file for hostnames.tld
-- `--keep-ca`: Keep the CA trusted; with --hosts or --resolver, remove only those
+- `--check`: Only report each step; exit 0 when nothing is missing, 1 otherwise
+- `--remove`: Undo everything: the resolver file or NRPT rule, the /etc/hosts helper and the CA trust
+- `--keep-ca`: With --remove, keep the CA trusted
+
+```text
+Examples:
+  devlanes setup                       set up what is missing, asking once
+  devlanes setup --check               exit 1 when something is missing
+  devlanes setup --remove --keep-ca    remove the hosts helper and resolver, keep the CA
+```
+
+### devlanes update
+
+Install the latest devlanes release the way devlanes was installed, then restart the daemon.
+
+Checks for a newer release, asks once (a minor release before 1.0 may break
+what worked, so it lists those changes and defaults to no), installs it, and
+restarts the daemon, which starts again the lanes that were running.
+install.sh, install.ps1 and standalone binaries download the release archive
+and check it against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx
+and Homebrew installs run their package manager. Other installs, such as cargo
+or a project's own dependency, print the command to run instead. Without a
+terminal, pass --yes. A build of main, installed with install.sh --channel
+next or install.ps1 -Channel next, updates to the latest build of main.
+
+```text
+devlanes update [OPTIONS]
+```
+
+- `--check`: Only check: show the install method, the running and latest versions and what changed
+- `--notes`: Only show the release notes of the running version; checks nothing
+
+```text
+Examples:
+  devlanes update                      install the latest release, asking first
+  devlanes update --yes                install it without asking
+  devlanes update --check              show the latest release and what changed
+  devlanes update --notes              show what changed in the running version
+```
+
+### devlanes uninstall
+
+Remove devlanes from this machine: stop the daemon, then remove its login service, what devlanes setup changed and this install.
+
+In order, and going on when a step fails:
+  1. stop the daemon (asked once up front, naming the processes it stops;
+     without a terminal, pass --yes)
+  2. remove the login service (daemon install)
+  3. undo devlanes setup: the CA trust, the /etc/hosts helper and the resolver
+     file or NRPT rule; sudo asks for your password at most once
+  4. remove this install: install.sh and install.ps1 files (and the user PATH
+     entry on Windows), or the package manager's remove command. A project's
+     own dependency and a source build stay.
+  5. the devlanes home (~/.devlanes, or $DEVLANES_HOME) and lane data: listed
+     with their sizes and deleted only if you answer yes to a second question.
+     With --yes and no terminal they stay unless --remove-data is given.
+
+```text
+devlanes uninstall [OPTIONS]
+```
+
+- `--remove-data`: Delete the devlanes home and lane data without asking
+- `--keep-data`: Keep the devlanes home and lane data, and print where they are
+- `--dry-run`: Print what each step would remove; change nothing
+
+```text
+Examples:
+  devlanes uninstall --dry-run         show what would be removed
+  devlanes uninstall                   remove devlanes, asking first and again before deleting data
+  devlanes uninstall --yes --keep-data
+```
 
 ### devlanes remote
 

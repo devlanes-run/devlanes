@@ -1091,13 +1091,13 @@ fn clients_rows(
         counts.push(Span::styled(format!("{paired} paired"), quiet));
     }
     let now = app.boxes.clients.now_ms();
-    // Each client's cells: [name, id, address, seen, pairing, mirror].
-    let cells: Vec<[(String, Style); 6]> = list
+    // Each client's cells: [name, id, address, seen, version, pairing, mirror].
+    let cells: Vec<[(String, Style); 7]> = list
         .items
         .iter()
         .map(|client| client_cells(app, client, now))
         .collect();
-    let widths: Vec<usize> = (0..6)
+    let widths: Vec<usize> = (0..7)
         .map(|column| {
             cells
                 .iter()
@@ -1109,8 +1109,9 @@ fn clients_rows(
     // A blank column and the glyph take three cells, and two spaces follow
     // every cell but the last: 3 + the cells + 2 per cell - 2.
     let total = |keep: &[usize]| 1 + keep.iter().map(|c| widths[*c] + 2).sum::<usize>();
-    let mut keep: Vec<usize> = (0..6).filter(|c| widths[*c] > 0).collect();
-    for drop in [2, 5, 4, 1] {
+    let mut keep: Vec<usize> = (0..7).filter(|c| widths[*c] > 0).collect();
+    // A narrow box drops the address, then the mirror, version, pairing and id.
+    for drop in [2, 6, 4, 5, 1] {
         if total(&keep) <= width {
             break;
         }
@@ -1147,8 +1148,9 @@ fn clients_rows(
 }
 
 /// One client's cells, each with its style: name, short id, address, when
-/// it connected or was last seen, its pairing and what it mirrors.
-fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style); 6] {
+/// it connected or was last seen, its devlanes version (in the attention
+/// tone when it differs from this machine's), its pairing and what it mirrors.
+fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style); 7] {
     let theme = &app.theme;
     let quiet = theme.quiet();
     let name = clip(&clean(&client.name), 24);
@@ -1197,11 +1199,19 @@ fn client_cells(app: &App, client: &Client, now: Option<u64>) -> [(String, Style
     } else {
         quiet
     };
+    let (version, version_style) = match client.version().map(clean) {
+        Some(version) if version != app.version => {
+            (format!("devlanes {version}"), theme.tone(Tone::Attention))
+        }
+        Some(version) => (format!("devlanes {version}"), quiet),
+        None => (String::new(), quiet),
+    };
     [
         (name, Style::new().add_modifier(Modifier::BOLD)),
         (short_id(&client.id), quiet),
         (address, quiet),
         (seen, seen_style),
+        (version, version_style),
         (pairing, pairing_style),
         (mirror, quiet),
     ]
@@ -1274,6 +1284,15 @@ fn host_lines(
     let mut right = vec![Span::styled(state, theme.tone(tone))];
     if let Some(transport) = &host.transport {
         right.push(Span::styled(format!(" · {}", clean(transport)), quiet));
+    }
+    if let Some(version) = host.version().map(|v| clean(&v)) {
+        let style = if version == app.version {
+            quiet
+        } else {
+            theme.tone(Tone::Attention)
+        };
+        right.push(Span::styled(" · ", quiet));
+        right.push(Span::styled(format!("devlanes {version}"), style));
     }
     let mut lines = vec![spread(
         vec![
@@ -1356,7 +1375,6 @@ fn host_lines(
         lines.extend(fact("fix", &fix, theme.key()));
     }
     let mut about = Vec::new();
-    about.extend(host.version().map(|v| format!("devlanes {}", clean(&v))));
     let info = host.info.as_ref();
     if let Some(port) = info.and_then(|i| i.https_port) {
         about.push(format!("proxy on {port}"));

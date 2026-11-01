@@ -1,6 +1,7 @@
 //! String and binary values under `HKEY_CURRENT_USER`, such as the logon
 //! entry under `Software\Microsoft\Windows\CurrentVersion\Run` and its Task
-//! Manager state under `...\Explorer\StartupApproved\Run`. Every write goes to
+//! Manager state under `...\Explorer\StartupApproved\Run`, and the user
+//! `Path` under `Environment`. Every write goes to
 //! the current user's hive, so nothing needs elevation. [`read_value`] and
 //! [`subkeys`] also read `HKEY_LOCAL_MACHINE`, such as the NRPT rules under
 //! `SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig`.
@@ -16,9 +17,12 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ENUMERATE_SUB_KEYS, KEY_SET_VALUE, REG_BINARY,
     REG_DWORD, REG_EXPAND_SZ, REG_MULTI_SZ, REG_OPTION_NON_VOLATILE, REG_ROUTINE_FLAGS, REG_SZ,
-    REG_VALUE_TYPE, RRF_NOEXPAND, RRF_RT_ANY, RRF_RT_REG_BINARY, RRF_RT_REG_SZ, RegCloseKey,
-    RegCreateKeyExW, RegDeleteKeyValueW, RegDeleteTreeW, RegEnumKeyExW, RegGetValueW,
-    RegOpenKeyExW, RegSetValueExW,
+    REG_VALUE_TYPE, RRF_NOEXPAND, RRF_RT_ANY, RRF_RT_REG_BINARY, RRF_RT_REG_EXPAND_SZ,
+    RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyValueW, RegDeleteTreeW, RegEnumKeyExW,
+    RegGetValueW, RegOpenKeyExW, RegSetValueExW,
+};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    HWND_BROADCAST, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_SETTINGCHANGE,
 };
 
 use crate::util::{wide, win32_error};
@@ -71,6 +75,62 @@ pub fn read_string(subkey: &str, name: &str) -> io::Result<Option<String>> {
         .into_string()
         .map(Some)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "value is not Unicode"))
+}
+
+/// The `REG_SZ` or `REG_EXPAND_SZ` value `name` of `HKCU\<subkey>` as
+/// stored (variables not expanded), with `true` for `REG_EXPAND_SZ`; `None`
+/// when the key or the value does not exist. A value of another type is an
+/// error. Write it back with [`write_text`] to keep its type, as an edit of
+/// `HKCU\Environment\Path` must: entries such as `%USERPROFILE%\bin` work
+/// only in a `REG_EXPAND_SZ` value.
+pub fn read_text(subkey: &str, name: &str) -> io::Result<Option<(String, bool)>> {
+    let flags = RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND;
+    let Some((kind, bytes)) = read_raw(HKEY_CURRENT_USER, subkey, name, flags)? else {
+        return Ok(None);
+    };
+    let units = utf16(&bytes);
+    let end = units
+        .iter()
+        .position(|&unit| unit == 0)
+        .unwrap_or(units.len());
+    let text = OsString::from_wide(&units[..end])
+        .into_string()
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "value is not Unicode"))?;
+    Ok(Some((text, kind == REG_EXPAND_SZ)))
+}
+
+/// Writes `value` as the value `name` of `HKCU\<subkey>`: `REG_EXPAND_SZ`
+/// when `expandable`, else `REG_SZ`. Creates the key when it is missing.
+pub fn write_text(subkey: &str, name: &str, value: &str, expandable: bool) -> io::Result<()> {
+    let data = wide(OsStr::new(value))?;
+    let kind = if expandable { REG_EXPAND_SZ } else { REG_SZ };
+    write_raw(subkey, name, kind, &le_bytes(&data))
+}
+
+/// Tells running programs that the user environment changed
+/// (`WM_SETTINGCHANGE` with `Environment`), so Explorer, and the terminals
+/// it starts afterwards, read the new `HKCU\Environment`; the registry write
+/// alone does not reach them. Waits at most 5 s for each window, skipping
+/// hung ones.
+pub fn broadcast_environment_change() {
+    let area = wide(OsStr::new("Environment")).unwrap_or_default();
+    if area.is_empty() {
+        return;
+    }
+    let mut result = 0_usize;
+    // SAFETY: `area` is a NUL-terminated UTF-16 string that outlives the call,
+    // which reads it as the message's `lParam`; `result` is writable.
+    unsafe {
+        SendMessageTimeoutW(
+            HWND_BROADCAST,
+            WM_SETTINGCHANGE,
+            0,
+            area.as_ptr() as isize,
+            SMTO_ABORTIFHUNG,
+            5000,
+            &raw mut result,
+        )
+    };
 }
 
 /// The `REG_BINARY` value `name` of `HKCU\<subkey>`, or `None` when the key or
@@ -380,5 +440,29 @@ mod tests {
         assert_eq!(decode(REG_DWORD, &8_u32.to_le_bytes()), RegValue::Dword(8));
         assert_eq!(decode(REG_DWORD, &[1, 2]), RegValue::Other(REG_DWORD));
         assert_eq!(decode(REG_BINARY, &[1]), RegValue::Other(REG_BINARY));
+    }
+
+    /// Text values keep their type and their `%VARIABLE%` references.
+    #[test]
+    fn text_values_keep_their_type() -> io::Result<()> {
+        let key = format!(r"Software\devlanes-test-{}", std::process::id());
+        let result = (|| {
+            assert_eq!(read_text(&key, "Path")?, None);
+            write_text(&key, "Path", r"%USERPROFILE%\bin;C:\tools", true)?;
+            assert_eq!(
+                read_text(&key, "Path")?,
+                Some((r"%USERPROFILE%\bin;C:\tools".to_owned(), true))
+            );
+            write_text(&key, "Path", r"C:\tools", false)?;
+            assert_eq!(
+                read_text(&key, "Path")?,
+                Some((r"C:\tools".to_owned(), false))
+            );
+            write_dword(&key, "Number", 1)?;
+            assert!(read_text(&key, "Number").is_err());
+            Ok(())
+        })();
+        delete_tree(&key)?;
+        result
     }
 }

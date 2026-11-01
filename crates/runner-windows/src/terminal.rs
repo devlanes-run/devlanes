@@ -161,7 +161,9 @@ impl Sizing {
 /// would resize a viewer's window.
 ///
 /// Where a repaint for a resize begins (`ESC[?25l ESC[H`, with SGR sequences
-/// between them when the program left colors active), it puts
+/// between them when the program left colors active, line breaks after a
+/// move to the bottom row when output scrolled the window since the last
+/// repaint, or `ESC[2J` when it is the console's first), it puts
 /// `ESC[8;<rows>;<columns>t` for the new size, so the daemon's screen model
 /// switches sizes at the first byte drawn at the new one (see
 /// [`devlanes_core::Unit::renders_screen`]). A sequence split across reads is
@@ -173,9 +175,11 @@ pub(crate) struct Toggles {
     /// An `ESC[?25l` held back until the next sequence shows whether a repaint
     /// starts.
     hidden: bool,
-    /// SGR sequences after a held `ESC[?25l`: the console host resets the
-    /// colors a program left active before it moves home to repaint.
-    styles: Vec<u8>,
+    /// What came after a held `ESC[?25l` that a repaint may start with: the
+    /// console host resets the colors a program left active, scrolls the
+    /// window by the lines output added since its last repaint, or clears it
+    /// on its first, before it moves home.
+    lead: Vec<u8>,
     /// Asked at each repaint start for the size it is drawn at.
     sizing: Option<Arc<Sizing>>,
 }
@@ -207,12 +211,12 @@ impl Toggles {
         out
     }
 
-    /// Writes a held `ESC[?25l` and the SGR sequences after it.
+    /// Writes a held `ESC[?25l` and what was held after it.
     fn release(&mut self, out: &mut Vec<u8>) {
         if std::mem::take(&mut self.hidden) {
             out.extend_from_slice(HIDE_CURSOR);
         }
-        out.append(&mut self.styles);
+        out.append(&mut self.lead);
     }
 
     /// One byte through the filter.
@@ -220,6 +224,8 @@ impl Toggles {
         if self.pending.is_empty() {
             if byte == ESC {
                 self.pending.push(byte);
+            } else if self.hidden && matches!(byte, b'\r' | b'\n') {
+                self.lead.push(byte);
             } else {
                 self.release(out);
                 out.push(byte);
@@ -271,8 +277,10 @@ impl Toggles {
             self.hidden = true;
             return;
         }
-        if self.hidden && last == b'm' {
-            self.styles.extend_from_slice(sequence);
+        let cursor_move = last == b'H' && params.iter().all(|&b| b.is_ascii_digit() || b == b';');
+        let leads = last == b'm' || (cursor_move && sequence != HOME) || sequence == b"\x1b[2J";
+        if self.hidden && leads {
+            self.lead.extend_from_slice(sequence);
             return;
         }
         if self.hidden && sequence == HOME {
@@ -406,6 +414,49 @@ mod tests {
             b"\x1b[8;12;150t\x1b[?25l\x1b[m\x1b[36m\x1b[Hcyan\x1b[?25l\x1b[1mx"
         );
         assert_eq!(sizing.state.lock().expect("state").pending, None);
+    }
+
+    /// A resize while output streams gets a repaint that first scrolls the
+    /// window by the lines written since the last one, and a resize before
+    /// the console's first repaint gets that one, which clears the window:
+    /// both are marked before they start, since they are drawn at the new
+    /// size, and the bytes pass as they came.
+    #[test]
+    fn repaints_after_a_scroll_or_a_clear_are_marked() {
+        let size = TerminalSize {
+            columns: 200,
+            rows: 45,
+        };
+        let scrolled = sizing(Some(size));
+        let mut toggles = Toggles::with_sizing(Arc::clone(&scrolled));
+        let out = toggles.filter(b"\r\nP147\x1b[?25l\x1b[45;1H\n");
+        assert_eq!(out, b"\r\nP147");
+        let out = toggles.filter(b"\n\x1b[HP109\x1b[K\r\n");
+        assert_eq!(
+            out,
+            b"\x1b[8;45;200t\x1b[?25l\x1b[45;1H\n\n\x1b[HP109\x1b[K\r\n"
+        );
+        assert_eq!(scrolled.state.lock().expect("state").pending, None);
+
+        // The cursor already is on the bottom row.
+        let bottom = sizing(Some(size));
+        let mut toggles = Toggles::with_sizing(Arc::clone(&bottom));
+        let out = toggles.filter(b"\x1b[?25l\r\n\x1b[HP109");
+        assert_eq!(out, b"\x1b[8;45;200t\x1b[?25l\r\n\x1b[HP109");
+        assert_eq!(bottom.state.lock().expect("state").pending, None);
+
+        let cleared = sizing(Some(size));
+        let mut toggles = Toggles::with_sizing(Arc::clone(&cleared));
+        let out = toggles.filter(b"\x1b[?25l\x1b[2J\x1b[m\x1b[H\r\n");
+        assert_eq!(out, b"\x1b[8;45;200t\x1b[?25l\x1b[2J\x1b[m\x1b[H\r\n");
+        assert_eq!(cleared.state.lock().expect("state").pending, None);
+
+        // Output that scrolls and draws elsewhere is no repaint.
+        let other = sizing(Some(size));
+        let mut toggles = Toggles::with_sizing(Arc::clone(&other));
+        let out = toggles.filter(b"\x1b[?25l\x1b[40;1H\r\n\x1b[38;1Hx");
+        assert_eq!(out, b"\x1b[?25l\x1b[40;1H\r\n\x1b[38;1Hx");
+        assert_eq!(other.state.lock().expect("state").pending, Some(size));
     }
 
     /// A request while a resize is in flight waits for its repaint; only the

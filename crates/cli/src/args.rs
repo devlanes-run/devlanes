@@ -240,11 +240,15 @@ without the daemon.",
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Trust the devlanes CA and install the /etc/hosts helper
-    Certs {
-        #[command(subcommand)]
-        command: CertsCommand,
-    },
+    /// Trust the devlanes CA and set up hostnames for this machine; asks once
+    #[command(long_about = SETUP_ABOUT, after_help = SETUP_AFTER)]
+    Setup(SetupArgs),
+    /// Install the latest devlanes release the way devlanes was installed, then restart the daemon
+    #[command(long_about = UPDATE_ABOUT, after_help = UPDATE_AFTER)]
+    Update(UpdateArgs),
+    /// Remove devlanes from this machine: stop the daemon, then remove its login service, what devlanes setup changed and this install
+    #[command(long_about = UNINSTALL_ABOUT, after_help = UNINSTALL_AFTER)]
+    Uninstall(UninstallArgs),
     /// Connect to boxes and mirror their lanes here
     Remote {
         #[command(subcommand)]
@@ -566,31 +570,152 @@ pub enum UrlCommand {
     Ls,
 }
 
-#[derive(Debug, Subcommand)]
-pub enum CertsCommand {
-    /// Trust the devlanes CA in the system and browser stores
-    Trust {
-        /// Also install the /etc/hosts helper for programs that cannot resolve *.localhost
-        #[arg(long)]
-        hosts: bool,
-        /// Also send lookups for hostnames.tld to the devlanes DNS server (/etc/resolver on
-        /// macOS, systemd-resolved on Linux)
-        #[arg(long)]
-        resolver: bool,
-    },
-    /// Remove the devlanes CA from the trust stores
-    #[command(group(clap::ArgGroup::new("removal").args(["hosts", "resolver"]).multiple(true)))]
-    Untrust {
-        /// Also remove the /etc/hosts helper, its sudo rule and the devlanes block in /etc/hosts
-        #[arg(long)]
-        hosts: bool,
-        /// Also remove the OS resolver file for hostnames.tld
-        #[arg(long)]
-        resolver: bool,
-        /// Keep the CA trusted; with --hosts or --resolver, remove only those
-        #[arg(long, requires = "removal")]
-        keep_ca: bool,
-    },
+const SETUP_ABOUT: &str = "\
+Trust the devlanes CA and set up hostnames for this machine; asks once.
+
+Works out what this machine needs and lists each step as ok, todo or skip:
+  ca        trust the CA in the stores tls.trust names (mkcert's CA with tls.ca: mkcert)
+  hosts     install the /etc/hosts helper (macOS and Linux) when *.localhost does not
+            resolve to loopback, the user config asks for the hosts file, or the
+            daemon needs it for a project
+  resolver  send hostnames.tld to the devlanes DNS server (a resolver file, or an
+            NRPT rule on Windows) when hostnames.resolver is resolver
+
+Then it asks once before doing the todo steps; sudo asks for your password at
+most once. Without a terminal, pass --yes.";
+
+const SETUP_AFTER: &str = "\
+Examples:
+  devlanes setup                       set up what is missing, asking once
+  devlanes setup --check               exit 1 when something is missing
+  devlanes setup --remove --keep-ca    remove the hosts helper and resolver, keep the CA";
+
+#[derive(Debug, Args)]
+pub struct SetupArgs {
+    /// Only report each step; exit 0 when nothing is missing, 1 otherwise
+    #[arg(long, conflicts_with = "remove")]
+    pub check: bool,
+    /// Undo everything: the resolver file or NRPT rule, the /etc/hosts helper and the CA trust
+    #[arg(long)]
+    pub remove: bool,
+    /// With --remove, keep the CA trusted
+    #[arg(long, requires = "remove")]
+    pub keep_ca: bool,
+}
+
+const UPDATE_ABOUT: &str = "\
+Install the latest devlanes release the way devlanes was installed, then restart the daemon.
+
+Checks for a newer release, asks once (a minor release before 1.0 may break
+what worked, so it lists those changes and defaults to no), installs it, and
+restarts the daemon, which starts again the lanes that were running.
+install.sh, install.ps1 and standalone binaries download the release archive
+and check it against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx
+and Homebrew installs run their package manager. Other installs, such as cargo
+or a project's own dependency, print the command to run instead. Without a
+terminal, pass --yes. A build of main, installed with install.sh --channel
+next or install.ps1 -Channel next, updates to the latest build of main.";
+
+const UPDATE_AFTER: &str = "\
+Examples:
+  devlanes update                      install the latest release, asking first
+  devlanes update --yes                install it without asking
+  devlanes update --check              show the latest release and what changed
+  devlanes update --notes              show what changed in the running version";
+
+#[derive(Debug, Args)]
+pub struct UpdateArgs {
+    /// Only check: show the install method, the running and latest versions and what changed
+    #[arg(long, conflicts_with_all = ["finish", "notes"])]
+    pub check: bool,
+    /// Only show the release notes of the running version; checks nothing
+    #[arg(long, conflicts_with = "finish")]
+    pub notes: bool,
+    /// Restart the daemon into this binary after an update (run by devlanes update)
+    #[arg(long, hide = true)]
+    pub finish: bool,
+}
+
+/// What `devlanes update` was asked to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateAction {
+    /// Check now and show the release; installs nothing.
+    Check,
+    /// Print the running version's release notes, from the binary.
+    Notes,
+    /// Install the latest release when it is newer; `yes` skips the question.
+    Install { yes: bool },
+    /// Run by the newly installed binary: restart the daemon into it and say
+    /// what changed.
+    Finish,
+}
+
+const UNINSTALL_ABOUT: &str = "\
+Remove devlanes from this machine: stop the daemon, then remove its login service, what devlanes setup changed and this install.
+
+In order, and going on when a step fails:
+  1. stop the daemon (asked once up front, naming the processes it stops;
+     without a terminal, pass --yes)
+  2. remove the login service (daemon install)
+  3. undo devlanes setup: the CA trust, the /etc/hosts helper and the resolver
+     file or NRPT rule; sudo asks for your password at most once
+  4. remove this install: install.sh and install.ps1 files (and the user PATH
+     entry on Windows), or the package manager's remove command. A project's
+     own dependency and a source build stay.
+  5. the devlanes home (~/.devlanes, or $DEVLANES_HOME) and lane data: listed
+     with their sizes and deleted only if you answer yes to a second question.
+     With --yes and no terminal they stay unless --remove-data is given.";
+
+const UNINSTALL_AFTER: &str = "\
+Examples:
+  devlanes uninstall --dry-run         show what would be removed
+  devlanes uninstall                   remove devlanes, asking first and again before deleting data
+  devlanes uninstall --yes --keep-data";
+
+#[derive(Debug, Args)]
+pub struct UninstallArgs {
+    /// Delete the devlanes home and lane data without asking
+    #[arg(long, conflicts_with = "keep_data")]
+    pub remove_data: bool,
+    /// Keep the devlanes home and lane data, and print where they are
+    #[arg(long)]
+    pub keep_data: bool,
+    /// Print what each step would remove; change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+/// What `devlanes uninstall` does with the devlanes home and lane data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DataChoice {
+    /// Ask on a terminal; keep without one.
+    Ask,
+    /// `--remove-data`.
+    Remove,
+    /// `--keep-data`.
+    Keep,
+}
+
+/// What `devlanes uninstall` was asked to do.
+#[derive(Clone)]
+pub struct UninstallAction {
+    /// What to do with the devlanes home and lane data.
+    pub data: DataChoice,
+    /// Only print the plan.
+    pub dry_run: bool,
+    /// The actor, and `--yes` for stopping running processes.
+    pub context: Context,
+}
+
+/// What `devlanes setup` was asked to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupAction {
+    /// Do the missing steps; `yes` skips the question.
+    Apply { yes: bool },
+    /// Report the steps and exit 1 when one is missing; changes nothing.
+    Check,
+    /// Undo every step, the CA trust only without `keep_ca`.
+    Remove { keep_ca: bool },
 }
 
 #[derive(Debug, Subcommand)]
@@ -828,15 +953,12 @@ pub enum Action {
     },
     Shell(Request),
     Ui,
-    Trust {
-        hosts: bool,
-        resolver: bool,
-    },
-    Untrust {
-        hosts: bool,
-        resolver: bool,
-        keep_ca: bool,
-    },
+    /// `devlanes setup`: runs in the terminal, never in the daemon.
+    Setup(SetupAction),
+    /// `devlanes update`: installs in the terminal, then restarts the daemon.
+    Update(UpdateAction),
+    /// `devlanes uninstall`: runs in the terminal, never in the daemon.
+    Uninstall(UninstallAction),
     DaemonStart,
     DaemonRestart(Context),
     DaemonLogs {
@@ -1199,25 +1321,42 @@ impl Cli {
                 ConfigCommand::Unset { key } => return Ok(Action::ConfigUnset(key.clone())),
             },
             Some(Command::Doctor) => (Method::Doctor, json!({})),
-            Some(Command::Certs { command }) => match command {
-                CertsCommand::Trust { hosts, resolver } => {
-                    return Ok(Action::Trust {
-                        hosts: *hosts,
-                        resolver: *resolver,
-                    });
-                }
-                CertsCommand::Untrust {
-                    hosts,
-                    resolver,
-                    keep_ca,
-                } => {
-                    return Ok(Action::Untrust {
-                        hosts: *hosts,
-                        resolver: *resolver,
-                        keep_ca: *keep_ca,
-                    });
-                }
-            },
+            Some(Command::Setup(args)) => {
+                return Ok(Action::Setup(if args.remove {
+                    SetupAction::Remove {
+                        keep_ca: args.keep_ca,
+                    }
+                } else if args.check {
+                    SetupAction::Check
+                } else {
+                    SetupAction::Apply { yes: self.yes }
+                }));
+            }
+            Some(Command::Update(args)) => {
+                return Ok(Action::Update(if args.check {
+                    UpdateAction::Check
+                } else if args.notes {
+                    UpdateAction::Notes
+                } else if args.finish {
+                    UpdateAction::Finish
+                } else {
+                    UpdateAction::Install { yes: self.yes }
+                }));
+            }
+            Some(Command::Uninstall(args)) => {
+                let data = if args.remove_data {
+                    DataChoice::Remove
+                } else if args.keep_data {
+                    DataChoice::Keep
+                } else {
+                    DataChoice::Ask
+                };
+                return Ok(Action::Uninstall(UninstallAction {
+                    data,
+                    dry_run: args.dry_run,
+                    context,
+                }));
+            }
             Some(Command::Daemon { command }) => match command {
                 DaemonCommand::Start => return Ok(Action::DaemonStart),
                 DaemonCommand::Status => (Method::DaemonStatus, json!({})),

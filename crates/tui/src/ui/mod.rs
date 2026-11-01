@@ -25,7 +25,7 @@ use ratatui::{
 
 use crate::app::{
     App, AttachState, Click, Connection, DaemonState, Focus, MIN_HEIGHT, MIN_WIDTH, PaneMode,
-    Target, View,
+    ReleaseNotice, Target, View,
 };
 use crate::keys::{KeyCode, KeyModifiers};
 use crate::steps::LogoState;
@@ -664,7 +664,7 @@ fn view_buttons(app: &App, letters: usize) -> Vec<(Vec<Span<'static>>, KeyCode)>
         if active || !compact {
             spans.push(Span::styled(rest.to_owned(), label_style));
         }
-        // `Daemon · 1 issue`, `Daemon · update`: a count alone said nothing.
+        // `Daemon · 1 issue`: a count alone said nothing.
         let view_badge = match view {
             View::Daemon => badge.as_ref(),
             View::Boxes => boxes_badge.as_ref(),
@@ -729,8 +729,8 @@ fn project_tabs(app: &App) -> Vec<(String, Vec<Span<'static>>)> {
         .collect()
 }
 
-/// Failing and warning doctor checks, plus a daemon that runs another
-/// version or a newer release: the count and tone of the daemon button's `!`.
+/// Failing and warning doctor checks: the count and tone of the daemon
+/// button's badge.
 fn daemon_badge(app: &App) -> Option<(String, Tone)> {
     let mut fail = 0;
     let mut warn = 0;
@@ -743,17 +743,11 @@ fn daemon_badge(app: &App) -> Option<(String, Tone)> {
             }
         }
     }
-    let update = app.release_badge().is_some();
-    let issues = fail + warn;
-    let mut text = match issues {
-        0 if !update => return None,
-        0 => "update".to_owned(),
+    let text = match fail + warn {
+        0 => return None,
         1 => "1 issue".to_owned(),
         n => format!("{n} issues"),
     };
-    if update && issues > 0 {
-        text.push_str(", update");
-    }
     let tone = if fail > 0 {
         Tone::Failure
     } else {
@@ -800,6 +794,7 @@ fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
         let (after, tone) = match &app.daemon_state {
             DaemonState::Stopped { .. } => (Some("s starts it".to_owned()), Tone::Quiet),
             DaemonState::Unreachable => (Some("retrying".to_owned()), Tone::Failure),
+            DaemonState::Outdated { .. } => (Some("U update".to_owned()), Tone::Failure),
             state => (
                 state
                     .steps()
@@ -879,6 +874,19 @@ fn header_message(app: &App) -> Option<(Vec<Span<'static>>, Option<Click>)> {
         return Some((
             vec![Span::styled(text, theme.tone(Tone::Busy))],
             Some(Click::StartLane(lane.reference.clone())),
+        ));
+    }
+    // Before the problem count: rows and tabs show problems too, while
+    // nothing else says a version is waiting.
+    if let Some(notice) = app.release_notice() {
+        let tone = match &notice {
+            ReleaseNotice::Update { state, .. } if state == "installing" => Tone::Busy,
+            ReleaseNotice::Update { state, .. } if state == "failed" => Tone::Failure,
+            _ => Tone::Attention,
+        };
+        return Some((
+            vec![Span::styled(notice.text(app.version), theme.tone(tone))],
+            Some(Click::Key(KeyCode::Char('U'), KeyModifiers::SHIFT)),
         ));
     }
     // Problems in the project, clickable.
@@ -1319,19 +1327,23 @@ fn follow_hint(app: &App) -> Hint {
     }
 }
 
-/// The keys the unavailable screen takes: starting the daemon where that
-/// helps, then the log's.
+/// The keys the unavailable screen takes: starting, updating or restarting
+/// the daemon where that helps, then the log's.
 fn unavailable_hints(app: &App) -> Vec<Hint> {
     let ch = KeyCode::Char;
     if app.daemon.copy.is_some() || app.daemon.filter_editing {
         return log_mode_hints(app);
     }
     let mut hints = Vec::new();
-    if matches!(
-        app.daemon_state,
-        DaemonState::Stopped { .. } | DaemonState::Unreachable
-    ) {
-        hints.push(("s", "start daemon", ch('s')));
+    match app.daemon_state {
+        DaemonState::Stopped { .. } | DaemonState::Unreachable => {
+            hints.push(("s", "start daemon", ch('s')));
+        }
+        DaemonState::Outdated { .. } => {
+            hints.push(("U", "update", ch('U')));
+            hints.push(("R", "restart daemon", ch('R')));
+        }
+        _ => {}
     }
     hints.extend([
         ("j k", "scroll", ch('k')),
@@ -1391,7 +1403,7 @@ fn hints(app: &App) -> Vec<Hint> {
                 crate::app::DaemonBox::Log => ("tab", "to checks", KeyCode::Tab),
                 crate::app::DaemonBox::Checks => ("tab", "to log", KeyCode::Tab),
             };
-            return vec![
+            let mut hints = vec![
                 ("j k", "scroll", ch('k')),
                 follow,
                 ("w", "level", ch('w')),
@@ -1404,6 +1416,17 @@ fn hints(app: &App) -> Vec<Hint> {
                 ("R", "restart", ch('R')),
                 ("S", "stop", ch('S')),
             ];
+            // Versions are the daemon's business too; first, as the page's
+            // most useful key while one waits.
+            if let Some(notice) = app.release_notice() {
+                let label = match notice {
+                    ReleaseNotice::Reload { .. } => "reload",
+                    ReleaseNotice::Update { state, .. } if state != "ready" => "update",
+                    _ => "restart into it",
+                };
+                hints.insert(0, ("U", label, ch('U')));
+            }
+            return hints;
         }
         View::Boxes => {
             let mut hints = Vec::new();

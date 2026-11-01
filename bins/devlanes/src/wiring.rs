@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use devlanes_cli::Runtime;
 use devlanes_client::Paths;
 use devlanes_core::{
     ExitOutcome, LaunchSpec, OutputChunk, ProcessIdentity, StopPolicy, TerminalSize, Unit,
@@ -32,9 +33,25 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+/// The colors and glyphs the TUI would use, from the user config and the
+/// environment, for output drawn outside it (the step block of `daemon
+/// stop`, `restart` and `update`). Reads nothing else and records nothing.
+pub fn tui_theme(paths: &Paths) -> devlanes_tui::theme::Theme {
+    let user = crate::user_config::display(paths);
+    let tui = &user.tui;
+    devlanes_tui::Options {
+        theme: Some(tui.theme.as_str().to_owned()),
+        glyphs: Some(tui.glyphs.as_str().to_owned()),
+        ..devlanes_tui::Options::default()
+    }
+    .theme()
+}
+
 /// The TUI's progress bar, colors, glyphs and quit choice from the user config,
-/// and the service definition the daemon page's doctor checks compare stop
-/// timeouts with.
+/// the service definition the daemon page's doctor checks compare stop
+/// timeouts with, where a relaunch opens, the CA trust check of the setup
+/// prompt, and the release notes "What's new" shows, which the TUI claims
+/// once its terminal is set up ([`crate::notes::for_tui`]).
 pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
     use std::io::IsTerminal;
     // An invalid key leaves only that setting on its default, with a warning.
@@ -62,7 +79,18 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         env: None,
         time_zone: None,
         cwd: None,
+        reopen: crate::relaunch::reopen(),
+        setup_check: Some(setup_check(paths.clone())),
+        whats_new: Some(crate::notes::for_tui(paths.home.clone())),
     }
+}
+
+/// The setup steps only this user can check, for the TUI's setup prompt.
+fn setup_check(paths: Paths) -> devlanes_tui::SetupCheck {
+    Arc::new(move || {
+        let paths = paths.clone();
+        Box::pin(async move { crate::setup::client_missing(&paths).await })
+    })
 }
 
 /// A TUI failure as a CLI error.
@@ -75,12 +103,24 @@ pub fn tui_error(error: devlanes_tui::Error) -> RpcError {
     }
 }
 
-/// Opens the TUI; closing it never stops anything.
-pub async fn ui(paths: &Paths) -> Result<u8, RpcError> {
-    devlanes_tui::run_with(paths.clone(), tui_options(paths).await)
+/// Opens the TUI, after applying an installed update; closing it never stops
+/// anything. A TUI that closed to update, reload or set up opens again once
+/// that is done.
+pub async fn ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
+    crate::update::startup(runtime, paths).await;
+    open_ui(runtime, paths).await
+}
+
+/// [`ui`] for a caller that ran [`crate::update::startup`] itself, before a
+/// request of its own.
+pub async fn open_ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
+    let relaunch = devlanes_tui::run_with(paths.clone(), tui_options(paths).await)
         .await
-        .map(|()| 0)
-        .map_err(tui_error)
+        .map_err(tui_error)?;
+    match relaunch {
+        Some(relaunch) => crate::relaunch::after(runtime, paths, relaunch).await,
+        None => Ok(0),
+    }
 }
 
 /// How long a daemon a client spawned stays up after the last TUI closed with
@@ -120,7 +160,7 @@ pub async fn engine(
     step("state database");
     let store = open_store(&paths.db).await?;
     step("certificate authority");
-    let ca_tld = crate::local::ca_tld(&user);
+    let ca_tld = crate::setup::ca_tld(&user);
     let (ca_env, ca_status, ca) =
         certificate_authority(&paths.home, user.tls.ca, ca_tld.as_deref()).await;
     let ca_permitted = ca.as_ref().and_then(|ca| ca.permitted_dns_names());
@@ -266,8 +306,7 @@ async fn hosts_file(
             installed,
             tld_error,
             sync: devlanes_resolver_hosts::SyncConfig::default(),
-            // Shipped together: the helper next to this binary has this version.
-            expected_version: env!("CARGO_PKG_VERSION").into(),
+            required_revision: devlanes_resolver_hosts::REVISION,
         },
     ))
 }
@@ -451,32 +490,13 @@ async fn open_store(db: &Path) -> anyhow::Result<devlanes_state::Store> {
     }
 }
 
-/// Checks the file `devlanes certs trust --resolver` writes (the NRPT rule on
-/// Windows).
+/// Checks the resolver file (the NRPT rule on Windows) `devlanes setup` writes.
 struct OsResolverFiles;
 
 impl devlanes_daemon::integrations::ResolverFiles for OsResolverFiles {
-    /// `{path, installed, matches}`; `matches` is false when the file routes the TLD
-    /// elsewhere (another port, a stale install), `{error}` when the OS has no form.
-    #[cfg(unix)]
+    /// See [`crate::setup::resolver_status`].
     fn status(&self, tld: &str, server: std::net::SocketAddr) -> Value {
-        match crate::local::resolver_file(tld, server) {
-            Ok(file) => {
-                let current = std::fs::read_to_string(&file.path).ok();
-                json!({
-                    "path": file.path,
-                    "installed": current.is_some(),
-                    "matches": current.as_deref() == Some(file.contents.as_str()),
-                })
-            }
-            Err(error) => json!({"error": error}),
-        }
-    }
-
-    /// The NRPT rule in the same shape; see [`crate::local::nrpt::doctor_status`].
-    #[cfg(windows)]
-    fn status(&self, tld: &str, server: std::net::SocketAddr) -> Value {
-        crate::local::nrpt::doctor_status(tld, server)
+        crate::setup::resolver_status(tld, server)
     }
 }
 
@@ -526,7 +546,7 @@ async fn certificate_authority_with(
                 .await;
             match output {
                 // Exit status, emptiness and absoluteness are all checked there.
-                Ok(output) => match crate::local::mkcert_caroot(&output) {
+                Ok(output) => match crate::setup::mkcert_caroot(&output) {
                     Ok(root) => Some(root),
                     Err(message) => return failed("mkcert", "mkcert_failed", message),
                 },
@@ -624,8 +644,8 @@ async fn certificate_authority_with(
                 "caroot": caroot,
                 "trusted": "unknown",
                 "name_constrained": constrained,
-                "hint": recreate.then_some(crate::local::UNCONSTRAINED_CA),
-                "fix": recreate.then(|| crate::local::recreate_ca_command(home)),
+                "hint": recreate.then_some(crate::setup::UNCONSTRAINED_CA),
+                "fix": recreate.then(|| crate::setup::recreate_ca_command(home)),
             });
             (env, status, Some(Arc::new(ca)))
         }

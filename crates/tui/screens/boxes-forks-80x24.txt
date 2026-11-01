@@ -1,8 +1,8 @@
  devlanes  1 acme   2 billing   3 shop   starting feat/checkout: …  M  D  Boxes
 ┌ boxes ────────────────────────────────────── 2 of 2 connected · j k for more ┐
-│ ● fork-b                                                     connected · ssh │
+│ ● fork-b                                    connected · ssh · devlanes 1.0.0 │
 │   link      connected since 2026-10-14 16:46                                 │
-│   box       devlanes 1.0.0 · proxy on 8443 · ports.range 31000-31999         │
+│   box       proxy on 8443 · ports.range 31000-31999                          │
 │   mirror    no lanes · no ports bound here · no hostnames routed             │
 │   skipped   shop@0: fork-a's shop@0 is in use. Press m to use this one.      │
 │   ! ports.range 31000-31999 overlaps box fork-a (31000-31999). Lanes that    │
@@ -26,7 +26,7 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 68 bold, 71 bold, 74-78 bold underlined
 1: 0-45 bold, 46-78 bold dim, 79 bold
-2: 0 bold, 2-3 green, 4-9 bold, 63-71 green, 72-77 dim, 79 bold
+2: 0 bold, 2-3 green, 4-9 bold, 46-54 green, 55-77 dim, 79 bold
 3: 0 bold, 4-13 dim, 79 bold
 4: 0 bold, 4-13 dim, 79 bold
 5: 0 bold, 4-13 dim, 79 bold

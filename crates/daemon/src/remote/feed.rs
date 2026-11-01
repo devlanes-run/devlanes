@@ -186,6 +186,7 @@ impl ClientGuard {
         let client = RemoteClient {
             id: clean(&client.id),
             name: clean(&client.name),
+            version: client.version.as_deref().map(clean),
             ..client
         };
         let key = if client.id.is_empty() {

@@ -121,8 +121,8 @@ pub struct LanesConfig {
     /// Whether this project's hostnames are also written to `/etc/hosts`, for programs
     /// that cannot resolve `*.localhost` by themselves (Wrangler's workerd, musl or pure-Go
     /// binaries). Overrides the user's `hostnames.hosts_file` (default `auto`), except that
-    /// a user `never` always wins. Writing needs the helper installed by
-    /// `devlanes certs trust --hosts`, and only exact names are written, never wildcards.
+    /// a user `never` always wins. Writing needs the helper `devlanes setup` installs,
+    /// and only exact names are written, never wildcards.
     pub hosts_file: Option<HostsFile>,
     /// Values computed for each lane and read as `${{ lane.<name> }}`, such as a database
     /// name, vhost, bucket or Redis index per lane. A var named `domain` replaces the

@@ -19,10 +19,10 @@ Open a service at its hostname, such as `https://api.acme2.localhost`, and not a
 ## Trust the CA once
 
 ```sh
-devlanes certs trust
+devlanes setup
 ```
 
-The CA is created on first use at `~/.devlanes/ca/ca.pem` (key `ca-key.pem`, mode 0600) and the daemon writes `~/.devlanes/ca/bundle.pem`, the system roots plus the CA. `certs trust` runs in your terminal, never in the daemon, because it needs your password.
+lists what this machine needs (the CA, plus the hosts helper or the resolver file below when they apply), marks each step `ok`, `todo` or `skip`, and asks once before doing the `todo` ones. `devlanes setup --check` only reports, and exits 1 when something is missing. The CA is created on first use at `~/.devlanes/ca/ca.pem` (key `ca-key.pem`, mode 0600) and the daemon writes `~/.devlanes/ca/bundle.pem`, the system roots plus the CA. `setup` runs in your terminal, never in the daemon, because it needs your password. When a start on a terminal runs without the TUI and one of the lane's URLs needs a missing step (an untrusted CA for an `https://` address, the hosts helper or resolver for a hostname), `devlanes start` prints a line naming the first such URL's host, such as `acme.localhost needs devlanes setup (CA not trusted)`, at most once a day for the same steps. The TUI's setup prompt follows the same rules and shares that day.
 
 What it does per OS, by the stores in `tls.trust` (default `[system]`):
 
@@ -32,7 +32,7 @@ What it does per OS, by the stores in `tls.trust` (default `[system]`):
 | Linux | anchor directory of your distro (`/usr/local/share/ca-certificates`, `/etc/pki/ca-trust/source/anchors`, …) then `update-ca-certificates` or `update-ca-trust`, through sudo | `~/.pki/nssdb` with `certutil`; Chrome, Chromium and Playwright's Chromium read it, Playwright's Firefox does not | every profile under `~/.mozilla/firefox` (snap and flatpak paths too); needs `libnss3-tools` or `nss-tools` |
 | Windows | your user root store `Cert:\CurrentUser\Root`, no administrator rights; Windows asks you to confirm each change in a security warning; Chrome, Edge and `curl.exe` read it; Firefox 120+ too | same store as `system` | same store as `system` |
 
-On Linux the system store does not reach browsers, so set `tls.trust: [system, chrome, firefox]` in `~/.devlanes/config.yaml` there. Inside WSL, where the browser usually runs on Windows, add `windows` for the Windows user root store ([WSL](wsl.md#trusting-the-ca-in-windows)). `devlanes certs untrust` removes the CA from the same stores; `--keep-ca` with `--hosts` or `--resolver` removes only those extras.
+On Linux the system store does not reach browsers, so set `tls.trust: [system, chrome, firefox]` in `~/.devlanes/config.yaml` there. Inside WSL, where the browser usually runs on Windows, add `windows` for the Windows user root store ([WSL](wsl.md#trusting-the-ca-in-windows)). `devlanes setup --remove` removes the CA from the same stores, along with the hosts helper and the resolver file; `--keep-ca` removes only those two.
 
 `devlanes doctor` reports the CA path and, per store, whether it is trusted. The CA is constrained to `localhost`, `test`, `internal`, `home.arpa` and the TLD configured when it was created; a hostname outside those is reported by `doctor` as `outside the CA's names`.
 
@@ -53,7 +53,7 @@ Other tools from your shell:
 
 ### mkcert
 
-`tls.ca: mkcert` makes the daemon load mkcert's `rootCA.pem` from `mkcert -CAROOT` instead of creating its own CA. Browsers that already trust mkcert keep working and `certs trust` has nothing to install. mkcert's root has no name constraints and `certs untrust` leaves it alone (`mkcert -uninstall` removes it).
+`tls.ca: mkcert` makes the daemon load mkcert's `rootCA.pem` from `mkcert -CAROOT` instead of creating its own CA. Browsers that already trust mkcert keep working, and `setup` reports mkcert's root as `ok` once it is trusted in the stores of `tls.trust`. mkcert's root has no name constraints and `setup --remove` leaves it alone (`mkcert -uninstall` removes it).
 
 ## Hostnames in config
 
@@ -106,13 +106,9 @@ The argument must be hostname labels, and anything else is a config error.
 
 ## Programs that cannot resolve *.localhost
 
-workerd (Wrangler), musl binaries, pure-Go programs built without cgo, programs that use the system resolver on macOS before 26 (Safari included) and anything inside a container send `*.localhost` to DNS. Programs on the host have two answers; containers have neither and should use `host.docker.internal:<port>` (see the table above):
+workerd (Wrangler), musl binaries, pure-Go programs built without cgo, programs that use the system resolver on macOS before 26 (Safari included) and anything inside a container send `*.localhost` to DNS. Programs on the host have two answers; containers have neither and should use `host.docker.internal:<port>` (see the table above). The first is the hosts file: `devlanes setup` installs a small root-owned helper (`/usr/local/libexec/devlanes-hosts`) with a sudoers rule for it alone, and the daemon then keeps a `# devlanes begin` / `# devlanes end` block in `/etc/hosts` with the exact hostnames of projects that want it. Wildcards cannot be written there; programs on the host reach wildcard hostnames only with the resolver strategy below, and only under its TLD. The user setting `hostnames.hosts_file` is `auto` by default, which writes names only when a startup probe shows the system resolver fails `*.localhost`; `lanes.hosts_file: always` in a project forces it for that project (Wrangler repos want this), `never` in the user config wins over every project. `setup` installs the helper when the probe fails, when the user config asks for the hosts file, or when the daemon reports that a project needs it. `crates/hosts-helper/README.md` describes what the helper accepts and refuses. devlanes never writes the hosts file on Windows and `setup` has no helper to install there. Windows 11 resolves every `*.localhost` name itself. Windows Server does not; add the names to its hosts file by hand ([Windows](windows.md#hostnames)).
 
-```sh
-devlanes certs trust --hosts
-```
-
-installs a small root-owned helper (`/usr/local/libexec/devlanes-hosts`) with a sudoers rule for it alone, and the daemon then keeps a `# devlanes begin` / `# devlanes end` block in `/etc/hosts` with the exact hostnames of projects that want it. Wildcards cannot be written there; programs on the host reach wildcard hostnames only with the resolver strategy below, and only under its TLD. The user setting `hostnames.hosts_file` is `auto` by default, which writes names only when a startup probe shows the system resolver fails `*.localhost`; `lanes.hosts_file: always` in a project forces it for that project (Wrangler repos want this), `never` in the user config wins over every project. `crates/hosts-helper/README.md` describes what the helper accepts and refuses. devlanes never writes the hosts file on Windows and `--hosts` has nothing to install there. Windows 11 resolves every `*.localhost` name itself. Windows Server does not; add the names to its hosts file by hand ([Windows](windows.md#hostnames)).
+The second is the resolver strategy:
 
 ```yaml
 # ~/.devlanes/config.yaml
@@ -122,17 +118,17 @@ hostnames:
 ```
 
 ```sh
-devlanes certs trust --resolver
+devlanes setup
 ```
 
-switches lane domains to `acme.test` and `acme2.test`, answered by a DNS server the daemon runs on `127.0.0.1:15353`. `--resolver` writes `/etc/resolver/test` on macOS, or a systemd-resolved delegate on Linux (systemd 258 or newer; older versions could only add the server globally, so `--resolver` refuses them). On Windows it adds an NRPT rule after an administrator prompt, and the server listens on `127.53.0.1:53` instead, because an NRPT rule cannot name a port ([Windows](windows.md#hostnames)). The OS sends only that TLD there, and every other lookup keeps your existing DNS (VPN, corporate DNS, Pi-hole). The server answers every name under the TLD, so wildcard hostnames resolve for every program that uses the system resolver; on macOS `dig` and `nslookup` bypass it. The TLD must be `test`, `internal`, `home.arpa` or a name under one of them (or a name under `localhost`). The CA is constrained to the TLD it was created with; switching later needs the recreate command `doctor` prints. `.dev` is a real TLD with HSTS preloaded and `.local` is mDNS; neither is accepted.
+switches lane domains to `acme.test` and `acme2.test`, answered by a DNS server the daemon runs on `127.0.0.1:15353`. `setup` writes `/etc/resolver/test` on macOS, or a systemd-resolved delegate on Linux (systemd 258 or newer; older versions could only add the server globally, so `setup` refuses them). On Windows it adds an NRPT rule after an administrator prompt, and the server listens on `127.53.0.1:53` instead, because an NRPT rule cannot name a port ([Windows](windows.md#hostnames)). The OS sends only that TLD there, and every other lookup keeps your existing DNS (VPN, corporate DNS, Pi-hole). The server answers every name under the TLD, so wildcard hostnames resolve for every program that uses the system resolver; on macOS `dig` and `nslookup` bypass it. The TLD must be `test`, `internal`, `home.arpa` or a name under one of them (or a name under `localhost`). The CA is constrained to the TLD it was created with; switching later needs the recreate command `doctor` prints. `.dev` is a real TLD with HSTS preloaded and `.local` is mDNS; neither is accepted.
 
 ## Ports 443 and 80
 
 macOS lets a user process bind the low ports on the wildcard address; devlanes does so and accepts only loopback peers unless `proxy.lan: true`. On Linux the daemon falls back to 8443 and 8080 unless it may bind low ports:
 
 ```sh
-sudo setcap cap_net_bind_service=+ep "$(command -v devlanes)"   # redo after upgrades
+sudo setcap cap_net_bind_service=+ep "$(command -v devlanes)"   # redo after updates
 # or
 sudo sysctl -w net.ipv4.ip_unprivileged_port_start=80
 ```

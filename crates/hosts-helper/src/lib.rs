@@ -24,10 +24,10 @@ pub mod write;
 /// The file the helper edits.
 pub const HOSTS_PATH: &str = "/etc/hosts";
 
-/// Where `devlanes certs trust --hosts` installs the helper.
+/// Where `devlanes setup` installs the helper.
 pub const INSTALL_PATH: &str = "/usr/local/libexec/devlanes-hosts";
 
-/// Where `devlanes certs trust --hosts` installs the sudo rule.
+/// Where `devlanes setup` installs the sudo rule.
 pub const SUDOERS_PATH: &str = "/etc/sudoers.d/devlanes";
 
 /// Version of the command-line contract between the daemon and the helper.
@@ -35,6 +35,15 @@ pub const SUDOERS_PATH: &str = "/etc/sudoers.d/devlanes";
 /// Bump it when arguments, input or output change incompatibly; the daemon compares
 /// it with `devlanes-hosts version` and asks for a reinstall on mismatch.
 pub const PROTOCOL: u32 = 1;
+
+/// Revision of the helper's behaviour, independent of the devlanes release.
+///
+/// Bump it when an installed helper should be replaced: a security fix, or new
+/// behaviour the daemon relies on. The daemon asks for a reinstall only while the
+/// installed helper reports a lower revision, so a release that leaves the helper
+/// alone does not ask for sudo again. Incompatible command-line changes bump
+/// [`PROTOCOL`] instead.
+pub const REVISION: u32 = 1;
 
 /// Build profile reported by `version`; the installer refuses `debug` builds because
 /// they accept `--hosts-file`.

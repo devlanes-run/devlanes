@@ -6,8 +6,8 @@
 //!   names to write.
 //! - [`HostsClient`] runs `sudo -n /usr/local/libexec/devlanes-hosts apply` with
 //!   those names on stdin; [`HostsSync`] debounces route changes in the daemon.
-//! - [`install`] builds and runs the commands of `devlanes certs trust --hosts` and
-//!   `devlanes certs untrust --hosts` in the user's terminal.
+//! - [`install`] builds and runs the commands `devlanes setup` and
+//!   `devlanes setup --remove` use for the helper, in the user's terminal.
 //!
 //! Validation rules and paths come from `devlanes-hosts-helper`, so the daemon
 //! filters names exactly the way the helper checks them. The helper's README
@@ -23,7 +23,7 @@ pub mod sync;
 
 pub use client::{Applied, HelperVersion, HostsClient, HostsError};
 pub use devlanes_hosts_helper::names::Suffixes;
-pub use devlanes_hosts_helper::{INSTALL_PATH, PROTOCOL, SUDOERS_PATH};
+pub use devlanes_hosts_helper::{INSTALL_PATH, PROTOCOL, REVISION, SUDOERS_PATH};
 pub use exec::{
     CommandOutput, CommandSpec, Executor, FileInfo, FileKind, FsProbe, SystemExecutor, SystemFs,
 };

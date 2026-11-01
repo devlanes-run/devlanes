@@ -53,8 +53,8 @@
 │   ▾ shared                              3 up │ everywhere                                                                                             │                                              │
 │     ● pgbouncer                              │   tab  shift+tab    next, previous project; shift+1-9 picks one by number                              │                                              │
 │     ● postgres                               │   M  D  B           monitor, daemon, boxes; again or esc returns                                       │                                              │
-│     ● redis                                  │   esc               one step back, then the menu: options, help, quit                                  │                                              │
-│   ▸ setup                             4 done │   u  q              hide the version notice; quit, asking first while lanes run                        │                                              │
+│     ● redis                                  │   esc               one step back, then the menu: options, what's new, help, quit                      │                                              │
+│   ▸ setup                             4 done │   U  q              update as the header offers; quit, asking while lanes run                          │                                              │
 │                                              │                                                                                                        │                                              │
 └──────────────────────────────────────────────│ any key closes                                                                                         │──────────────────────────────────────────────┘
  r restart   n next problem   pgup scroll back └────────────────────────────────────────────────────────────────────────────────────────────────────────┘                         ? all keys   q quit

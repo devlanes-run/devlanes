@@ -130,8 +130,8 @@ impl Change {
     /// The devlanes command that makes this change, for the user to rerun.
     fn command(self) -> &'static str {
         match self {
-            Self::Add => "devlanes certs trust",
-            Self::Delete => "devlanes certs untrust",
+            Self::Add => "devlanes setup",
+            Self::Delete => "devlanes setup --remove",
         }
     }
 }

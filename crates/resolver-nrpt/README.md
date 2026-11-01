@@ -1,6 +1,6 @@
 # devlanes-resolver-nrpt
 
-The Windows side of the `resolver` hostname strategy: one NRPT (Name Resolution Policy Table) rule that sends lookups under `hostnames.tld` to the daemon's DNS server on `127.53.0.1:53`. `devlanes certs trust --resolver` and `certs untrust --resolver` change the rule; the daemon's `doctor` facts read it. The registry calls go through `devlanes-sys-windows`.
+The Windows side of the `resolver` hostname strategy: one NRPT (Name Resolution Policy Table) rule that sends lookups under `hostnames.tld` to the daemon's DNS server on `127.53.0.1:53`. `devlanes setup` and `devlanes setup --remove` change the rule; the daemon's `doctor` facts read it. The registry calls go through `devlanes-sys-windows`.
 
 ## Usage
 

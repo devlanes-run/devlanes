@@ -34,6 +34,8 @@ portable-pty = "0.9"
 # The fake daemon's named pipe, and the remote tests' sessions.
 tokio.workspace = true
 vt100 = "0.18"
+# The update test's fake release: its archive's checksum and target triple.
+devlanes-update = { path = "../crates/update" }
 
 # The tunnel command a Windows box's shell gets, quoted as the SSH transport quotes it.
 [target.'cfg(windows)'.dev-dependencies]

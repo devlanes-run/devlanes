@@ -96,4 +96,17 @@ impl Inner {
         }
         status
     }
+
+    /// Whether the resolver strategy has a valid TLD whose resolver file (NRPT
+    /// rule on Windows) does not send it to the DNS server, which `devlanes
+    /// setup` fixes. An OS without a form for it (an `error`) is not fixable
+    /// there, and neither is a missing integration.
+    pub(crate) async fn resolver_unrouted(&self) -> bool {
+        if self.resolver_zone().is_none() {
+            return false;
+        }
+        let status = self.dns_doctor().await;
+        let file = &status["resolver_file"];
+        file.is_object() && file.get("error").is_none() && file["matches"] != true
+    }
 }

@@ -47,6 +47,15 @@ pub struct FakeApi {
     /// waits for its answer, recorded as `answer <stream> <text>`, and the
     /// link connects after the last one.
     pub prompts: Mutex<Vec<(String, String)>>,
+    /// What `update.check` answers; unset, `null` (no newer release).
+    pub update: Mutex<Option<Value>>,
+    /// What `daemon.status` reports in `setup.missing`; unset, nothing.
+    pub daemon_setup: Vec<String>,
+    /// The setup steps this side finds missing (the CA's trust); unset, none.
+    pub setup: Vec<String>,
+    /// The version the install's entry runs, which a reload opens; unset,
+    /// unknown.
+    pub installed: Option<String>,
     /// What `remote.pair` answers; unset, a code valid for ten minutes.
     pub pairing: Mutex<Option<Result<Value, RpcError>>>,
     /// Shared, so a `connect` session records its answers after the call.
@@ -191,7 +200,27 @@ impl DaemonApi for FakeApi {
 
     async fn daemon_status(&self) -> Result<Value, ApiError> {
         self.record("daemon.status".into());
-        Ok(daemon_status())
+        let mut status = daemon_status();
+        if let Some(update) = self.update.lock().ok().and_then(|update| update.clone()) {
+            status["update"] = update;
+        }
+        status["setup"] = json!({"missing": self.daemon_setup});
+        Ok(status)
+    }
+
+    async fn setup_missing(&self) -> Vec<String> {
+        self.record("setup.missing".into());
+        self.setup.clone()
+    }
+
+    async fn update_check(&self, force: bool) -> Result<Value, ApiError> {
+        self.record(format!("update.check force={force}"));
+        Ok(self
+            .update
+            .lock()
+            .ok()
+            .and_then(|update| update.clone())
+            .unwrap_or(Value::Null))
     }
 
     async fn doctor(&self) -> Result<Value, ApiError> {
@@ -392,11 +421,15 @@ impl DaemonApi for FakeApi {
 
     /// Fixed: a source build with only the welcome dismissed, whatever
     /// binary runs the tests and whatever its home holds.
-    fn notices(&self) -> (devlanes_client::update::InstallMethod, Vec<String>) {
+    fn notices(&self) -> (devlanes_update::InstallMethod, Vec<String>) {
         (
-            devlanes_client::update::InstallMethod::Source,
+            devlanes_update::InstallMethod::Source,
             vec![devlanes_tui::welcome::KEY.into()],
         )
+    }
+
+    fn installed_version(&self) -> Option<String> {
+        self.installed.clone()
     }
 }
 

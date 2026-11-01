@@ -117,10 +117,13 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
                 "next, previous project; shift+1-9 picks one by number",
             ),
             ("M  D  B", "monitor, daemon, boxes; again or esc returns"),
-            ("esc", "one step back, then the menu: options, help, quit"),
             (
-                "u  q",
-                "hide the version notice; quit, asking first while lanes run",
+                "esc",
+                "one step back, then the menu: options, what's new, help, quit",
+            ),
+            (
+                "U  q",
+                "update as the header offers; quit, asking while lanes run",
             ),
         ],
     ),
@@ -334,6 +337,9 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
             return crate::settings::render(theme, settings, frame, area);
         }
         Dialog::Welcome(welcome) => return crate::welcome::render(theme, welcome, frame, area),
+        Dialog::WhatsNew(dialog) => {
+            return crate::whats_new::render(theme, dialog, app.whats_new.as_ref(), frame, area);
+        }
         Dialog::Connect(dialog) => super::connect::connect(app, dialog, narrow),
         Dialog::Pair(dialog) => super::connect::pair(app, dialog, narrow),
         // No border title: the bold prompt already says what it is about.
@@ -349,7 +355,19 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
                 body.push(Line::from(""));
             }
             for sentence in detail {
-                body.extend(wrapped(sentence, narrow, Style::new()));
+                if sentence.is_empty() {
+                    body.push(Line::from(""));
+                    continue;
+                }
+                // Inline code (release notes) as "What's new" shows it.
+                let mut in_code = false;
+                for row in text::wrap(&clean(sentence), narrow) {
+                    body.push(Line::from(crate::whats_new::code_spans(
+                        &row,
+                        &mut in_code,
+                        theme.focus(),
+                    )));
+                }
             }
             let tail = if *strict {
                 keys(theme, &[("y", action), ("n", "cancel")])

@@ -1,6 +1,6 @@
 # devlanes-resolver-dns
 
-The embedded DNS server behind the `resolver` hostname strategy, plus the OS files that send one TLD to it. The daemon runs the server; `devlanes certs trust --resolver` writes the generated file with sudo.
+The embedded DNS server behind the `resolver` hostname strategy, plus the OS files that send one TLD to it. The daemon runs the server; `devlanes setup` writes the generated file with sudo.
 
 ## Usage
 

@@ -26,6 +26,7 @@ devlanes-state = { path = "../state" }
 devlanes-sys = { path = "../sys" }
 devlanes-sync = { path = "../sync" }
 devlanes-transport = { path = "../transport" }
+devlanes-update = { path = "../update" }
 async-trait.workspace = true
 base64.workspace = true
 dunce.workspace = true
@@ -75,3 +76,7 @@ rustls.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-rustls.workspace = true
+
+# `fake-tool` stands in for a release's `devlanes.exe` in the background update test.
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-testing = { path = "../testing" }

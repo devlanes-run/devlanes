@@ -7,28 +7,28 @@
 │   ● api-users                                │├─ last output ────────────────────────────────────────────────────────┤
 │   ● api-billing                              ││ 2026-10-21T10:40:00Z INFO job done queue=default id=job_8120 took=40m│
 │   ● api-orders                               ││ s                                                                    │
-│   ● api-search                               ││ 2026-10-21T10:40:07Z INFO job done queue=default id=job_8121 took=53m│
-│   ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐   │
-│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │66m│
-│   │                                   █████                      ████                                            │   │
-│   │                                  ░░███                      ░░███                                            │79m│
-│   │     ██████████████             ███████   ██████  █████ █████ ░███   ██████   ████████    ██████   █████      │   │
-│   │                               ███░░███  ███░░███░░███ ░░███  ░███  ░░░░░███ ░░███░░███  ███░░███ ███░░       │92m│
-│   │         ██████████████       ░███ ░███ ░███████  ░███  ░███  ░███   ███████  ░███ ░███ ░███████ ░░█████      │   │
-│   │                              ░███ ░███ ░███░░░   ░░███ ███   ░███  ███░░███  ░███ ░███ ░███░░░   ░░░░███     │105│
-│   │             ██████████████   ░░████████░░██████   ░░█████    █████░░████████ ████ █████░░██████  ██████      │   │
-│   │                               ░░░░░░░░  ░░░░░░     ░░░░░    ░░░░░  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░░  ░░░░░░       │118│
+│   ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐53m│
 │   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │   │
-│   │       ╎       ╎       ╎       ╎       ╎       ╎    v1.0.0     ╎       ╎       ╎       ╎       ╎       ╎      │131│
-│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │   │
-│   │       ╎       ╎       ╎       ╎       ╎       ▌  o  options           ╎       ╎       ╎       ╎       ╎      │144│
-│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │   │
-│   │       ╎       ╎       ╎       ╎       ╎          h  help              ╎       ╎       ╎       ╎       ╎      │157│
-│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │   │
-│   │       ╎       ╎       ╎       ╎       ╎          q  quit              ╎       ╎       ╎       ╎       ╎      │170│
-│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │   │
-│   └────────────────────────────────────────────────────────────────────────────────────────────────── esc closes ┘183│
-│   ● stub-sendgrid                            ││ ms                                                                   │
+│   │                                   █████                      ████                                            │66m│
+│   │                                  ░░███                      ░░███                                            │   │
+│   │     ██████████████             ███████   ██████  █████ █████ ░███   ██████   ████████    ██████   █████      │79m│
+│   │                               ███░░███  ███░░███░░███ ░░███  ░███  ░░░░░███ ░░███░░███  ███░░███ ███░░       │   │
+│   │         ██████████████       ░███ ░███ ░███████  ░███  ░███  ░███   ███████  ░███ ░███ ░███████ ░░█████      │92m│
+│   │                              ░███ ░███ ░███░░░   ░░███ ███   ░███  ███░░███  ░███ ░███ ░███░░░   ░░░░███     │   │
+│   │             ██████████████   ░░████████░░██████   ░░█████    █████░░████████ ████ █████░░██████  ██████      │105│
+│   │                               ░░░░░░░░  ░░░░░░     ░░░░░    ░░░░░  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░░  ░░░░░░       │   │
+│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │118│
+│   │       ╎       ╎       ╎       ╎       ╎       ╎    v1.0.0     ╎       ╎       ╎       ╎       ╎       ╎      │   │
+│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │131│
+│   │       ╎       ╎       ╎       ╎       ╎       ▌  o  options           ╎       ╎       ╎       ╎       ╎      │   │
+│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │144│
+│   │       ╎       ╎       ╎       ╎       ╎          w  what's new        ╎       ╎       ╎       ╎       ╎      │   │
+│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │157│
+│   │       ╎       ╎       ╎       ╎       ╎          h  help              ╎       ╎       ╎       ╎       ╎      │   │
+│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │170│
+│   │       ╎       ╎       ╎       ╎       ╎          q  quit              ╎       ╎       ╎       ╎       ╎      │   │
+│   │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │183│
+│   └────────────────────────────────────────────────────────────────────────────────────────────────── esc closes ┘   │
 │   ● stub-segment                             ││ 2026-10-21T10:42:24Z INFO job done queue=default id=job_8132 took=196│
 │   ● stub-auth0                               ││ ms                                                                   │
 │   ● proxy-edge                               ││ 2026-10-21T10:42:31Z INFO job done queue=default id=job_8133 took=209│
@@ -49,28 +49,28 @@
 6: 0 darkgray, 4-5 green, 6-14 blue, 47-119 darkgray
 7: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray
 8: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 119 darkgray
-9: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray
-10: 0 darkgray, 4-115 bold, 119 darkgray
-11: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-12: 0 darkgray, 4 bold, 40-44 lightyellow, 67-70 lightyellow, 115 bold, 119 darkgray
-13: 0 darkgray, 4 bold, 39-40 yellow, 41-43 lightyellow, 66-67 yellow, 68-70 lightyellow, 115 bold, 119 darkgray
-14: 0 darkgray, 4 bold, 10-23 yellow, 37-43 lightyellow, 47-52 lightyellow, 55-59 lightyellow, 61-65 lightyellow, 67 yellow, 68-70 lightyellow, 74-79 lightyellow, 83-90 lightyellow, 95-100 lightyellow, 104-108 lightyellow, 115 bold, 119 darkgray
-15: 0 darkgray, 4 bold, 36-38 lightyellow, 39-40 yellow, 41-43 lightyellow, 46-48 lightyellow, 49-50 yellow, 51-53 lightyellow, 54-55 yellow, 56-58 lightyellow, 60-61 yellow, 62-64 lightyellow, 67 yellow, 68-70 lightyellow, 73-77 yellow, 78-80 lightyellow, 82-83 yellow, 84-86 lightyellow, 87-88 yellow, 89-91 lightyellow, 94-96 lightyellow, 97-98 yellow, 99-101 lightyellow, 103-105 lightyellow, 106-107 yellow, 115 bold, 119 darkgray
-16: 0 darkgray, 4 bold, 14-27 gray, 35 yellow, 36-38 lightyellow, 40 yellow, 41-43 lightyellow, 45 yellow, 46-52 lightyellow, 55 yellow, 56-58 lightyellow, 61 yellow, 62-64 lightyellow, 67 yellow, 68-70 lightyellow, 74-80 lightyellow, 83 yellow, 84-86 lightyellow, 88 yellow, 89-91 lightyellow, 93 yellow, 94-100 lightyellow, 102-103 yellow, 104-108 lightyellow, 115 bold, 119 darkgray
-17: 0 darkgray, 4 bold, 35 yellow, 36-38 lightyellow, 40 yellow, 41-43 lightyellow, 45 yellow, 46-48 lightyellow, 49-51 yellow, 55-56 yellow, 57-59 lightyellow, 61-63 lightyellow, 67 yellow, 68-70 lightyellow, 73-75 lightyellow, 76-77 yellow, 78-80 lightyellow, 83 yellow, 84-86 lightyellow, 88 yellow, 89-91 lightyellow, 93 yellow, 94-96 lightyellow, 97-99 yellow, 103-106 yellow, 107-109 lightyellow, 115 bold, 119 darkgray
-18: 0 darkgray, 4 bold, 18-31 gray, 35-36 yellow, 37-44 lightyellow, 45-46 yellow, 47-52 lightyellow, 56-57 yellow, 58-62 lightyellow, 67-71 lightyellow, 72-73 yellow, 74-81 lightyellow, 83-86 lightyellow, 88-92 lightyellow, 93-94 yellow, 95-100 lightyellow, 103-108 lightyellow, 115 bold, 119 darkgray
-19: 0 darkgray, 4 bold, 36-43 yellow, 46-51 yellow, 57-61 yellow, 66-70 yellow, 73-80 yellow, 82-85 yellow, 87-91 yellow, 94-99 yellow, 102-107 yellow, 115 bold, 119 darkgray
-20: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-21: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 57-62 dim, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-22: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-23: 0 darkgray, 1-3 reversed, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 bold reversed, 53-54 reversed, 55 bold reversed, 56-67 reversed, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-24: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-25: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-26: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-27: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-28: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
-29: 0 darkgray, 4-102 bold, 103-114 bold dim, 115 bold, 119 darkgray
-30: 0 darkgray, 4-5 green, 6-18 darkgray, 47-48 darkgray, 119 darkgray
+9: 0 darkgray, 4-115 bold, 119 darkgray
+10: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+11: 0 darkgray, 4 bold, 40-44 lightyellow, 67-70 lightyellow, 115 bold, 119 darkgray
+12: 0 darkgray, 4 bold, 39-40 yellow, 41-43 lightyellow, 66-67 yellow, 68-70 lightyellow, 115 bold, 119 darkgray
+13: 0 darkgray, 4 bold, 10-23 yellow, 37-43 lightyellow, 47-52 lightyellow, 55-59 lightyellow, 61-65 lightyellow, 67 yellow, 68-70 lightyellow, 74-79 lightyellow, 83-90 lightyellow, 95-100 lightyellow, 104-108 lightyellow, 115 bold, 119 darkgray
+14: 0 darkgray, 4 bold, 36-38 lightyellow, 39-40 yellow, 41-43 lightyellow, 46-48 lightyellow, 49-50 yellow, 51-53 lightyellow, 54-55 yellow, 56-58 lightyellow, 60-61 yellow, 62-64 lightyellow, 67 yellow, 68-70 lightyellow, 73-77 yellow, 78-80 lightyellow, 82-83 yellow, 84-86 lightyellow, 87-88 yellow, 89-91 lightyellow, 94-96 lightyellow, 97-98 yellow, 99-101 lightyellow, 103-105 lightyellow, 106-107 yellow, 115 bold, 119 darkgray
+15: 0 darkgray, 4 bold, 14-27 gray, 35 yellow, 36-38 lightyellow, 40 yellow, 41-43 lightyellow, 45 yellow, 46-52 lightyellow, 55 yellow, 56-58 lightyellow, 61 yellow, 62-64 lightyellow, 67 yellow, 68-70 lightyellow, 74-80 lightyellow, 83 yellow, 84-86 lightyellow, 88 yellow, 89-91 lightyellow, 93 yellow, 94-100 lightyellow, 102-103 yellow, 104-108 lightyellow, 115 bold, 119 darkgray
+16: 0 darkgray, 4 bold, 35 yellow, 36-38 lightyellow, 40 yellow, 41-43 lightyellow, 45 yellow, 46-48 lightyellow, 49-51 yellow, 55-56 yellow, 57-59 lightyellow, 61-63 lightyellow, 67 yellow, 68-70 lightyellow, 73-75 lightyellow, 76-77 yellow, 78-80 lightyellow, 83 yellow, 84-86 lightyellow, 88 yellow, 89-91 lightyellow, 93 yellow, 94-96 lightyellow, 97-99 yellow, 103-106 yellow, 107-109 lightyellow, 115 bold, 119 darkgray
+17: 0 darkgray, 4 bold, 18-31 gray, 35-36 yellow, 37-44 lightyellow, 45-46 yellow, 47-52 lightyellow, 56-57 yellow, 58-62 lightyellow, 67-71 lightyellow, 72-73 yellow, 74-81 lightyellow, 83-86 lightyellow, 88-92 lightyellow, 93-94 yellow, 95-100 lightyellow, 103-108 lightyellow, 115 bold, 119 darkgray
+18: 0 darkgray, 4 bold, 36-43 yellow, 46-51 yellow, 57-61 yellow, 66-70 yellow, 73-80 yellow, 82-85 yellow, 87-91 yellow, 94-99 yellow, 102-107 yellow, 115 bold, 119 darkgray
+19: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+20: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 57-62 dim, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+21: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+22: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 bold reversed, 53-54 reversed, 55 bold reversed, 56-67 reversed, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+23: 0 darkgray, 1-3 reversed, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+24: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+25: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+26: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+27: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+28: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 bold, 55 bold, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+29: 0 darkgray, 4 bold, 12 darkgray, 20 darkgray, 28 darkgray, 36 darkgray, 44 darkgray, 52 darkgray, 60 dim yellow, 68 darkgray, 76 darkgray, 84 darkgray, 92 darkgray, 100 darkgray, 108 darkgray, 115 bold, 119 darkgray
+30: 0 darkgray, 4-102 bold, 103-114 bold dim, 115 bold, 119 darkgray
 31: 0 darkgray, 4-5 green, 6-17 darkgray, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray
 32: 0 darkgray, 4-5 green, 6-15 darkgray, 47-48 darkgray, 119 darkgray
 33: 0 darkgray, 4-5 green, 6-15 cyan, 47-48 darkgray, 50-69 dim, 71-74 color2, 119 darkgray

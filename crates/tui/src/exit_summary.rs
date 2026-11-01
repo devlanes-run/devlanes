@@ -1,6 +1,7 @@
 //! What the shell shows once the TUI closed: the devlanes banner, the lane
-//! that was on screen and whether the daemon still runs, with the command
-//! that stops the lane while it runs.
+//! that was on screen, whether the daemon still runs, a newer release with
+//! the command that installs it, and the command that stops the lane while it
+//! runs.
 
 use std::{
     fmt::Write as _,
@@ -8,7 +9,8 @@ use std::{
     time::Duration,
 };
 
-use devlanes_proto::LaneSummary;
+use devlanes_proto::{LaneSummary, release::UpdateInfo};
+use devlanes_update::{InstallMethod, update_command, version::is_newer};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -25,8 +27,8 @@ use crate::{
     tree,
 };
 
-/// How long the daemon gets to answer `status` before the summary says it
-/// did not.
+/// How long the daemon gets to answer `status` and `daemon.status` before
+/// the summary says it did not.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(1);
 /// The banner's tallest font is too much for a shell: the medium and small
 /// ones fit in this many rows.
@@ -37,8 +39,12 @@ const LABEL: usize = 10;
 /// The daemon as it answered after the TUI closed.
 #[derive(Debug, Clone)]
 pub enum Daemon {
-    /// It answered with every lane it knows.
-    Running(Vec<LaneSummary>),
+    /// It answered with every lane it knows, and the newer release its
+    /// `daemon.status` reported, if any.
+    Running {
+        lanes: Vec<LaneSummary>,
+        update: Option<UpdateInfo>,
+    },
     /// Nothing listens on its socket any more.
     Stopped,
     /// It is there but `status` failed or took too long.
@@ -46,23 +52,38 @@ pub enum Daemon {
 }
 
 impl Daemon {
-    /// Asks `api` for every lane, within [`STATUS_TIMEOUT`].
+    /// Asks `api` for every lane and for its status, within [`STATUS_TIMEOUT`].
+    /// A `daemon.status` that fails or does not decode only leaves out the
+    /// release.
     pub async fn ask(api: &dyn DaemonApi) -> Self {
-        match tokio::time::timeout(STATUS_TIMEOUT, api.status()).await {
-            Ok(Ok(lanes)) => Self::Running(lanes),
-            Ok(Err(ApiError::Disconnected(_))) => Self::Stopped,
-            Ok(Err(_)) | Err(_) => Self::Unanswered,
+        let both = async { tokio::join!(api.status(), api.daemon_status()) };
+        match tokio::time::timeout(STATUS_TIMEOUT, both).await {
+            Ok((Ok(lanes), status)) => Self::Running {
+                lanes,
+                update: status
+                    .ok()
+                    .and_then(|status| status.get("update").cloned())
+                    .and_then(|update| serde_json::from_value(update).ok()),
+            },
+            Ok((Err(ApiError::Disconnected(_)), _)) => Self::Stopped,
+            Ok((Err(_), _)) | Err(_) => Self::Unanswered,
         }
     }
 }
 
 /// Asks the daemon how things stand and prints the summary on stdout, for
-/// `lane`, the lane the TUI showed last. Runs after the terminal left TUI
-/// mode; a failed write is dropped, as the TUI already closed.
-pub async fn print(api: &dyn DaemonApi, theme: &Theme, lane: Option<&str>) {
+/// `lane`, the lane the TUI showed last, and `method`, how devlanes was
+/// installed (`None` before the TUI found out). Runs after the terminal left
+/// TUI mode; a failed write is dropped, as the TUI already closed.
+pub async fn print(
+    api: &dyn DaemonApi,
+    theme: &Theme,
+    lane: Option<&str>,
+    method: Option<&InstallMethod>,
+) {
     let daemon = Daemon::ask(api).await;
     let width = crossterm::terminal::size().map_or(80, |(width, _)| width);
-    let text = render(theme, width, lane, &daemon);
+    let text = render(theme, width, lane, method, &daemon);
     let mut stdout = io::stdout();
     let _ = stdout
         .write_all(text.as_bytes())
@@ -71,10 +92,16 @@ pub async fn print(api: &dyn DaemonApi, theme: &Theme, lane: Option<&str>) {
 
 /// The summary for a terminal `width` columns wide, with SGR sequences for
 /// its colors and a blank line around it.
-pub fn render(theme: &Theme, width: u16, lane: Option<&str>, daemon: &Daemon) -> String {
+pub fn render(
+    theme: &Theme,
+    width: u16,
+    lane: Option<&str>,
+    method: Option<&InstallMethod>,
+    daemon: &Daemon,
+) -> String {
     let size = banner::Size::pick(theme, width.saturating_sub(INDENT), BANNER_ROWS);
     let (banner_width, banner_rows) = size.dimensions();
-    let lines = lines(theme, lane, daemon);
+    let lines = lines(theme, lane, method, daemon);
     let text_width = lines.iter().map(Line::width).max().unwrap_or(0);
     let content = u16::try_from(text_width)
         .unwrap_or(u16::MAX)
@@ -94,14 +121,20 @@ pub fn render(theme: &Theme, width: u16, lane: Option<&str>, daemon: &Daemon) ->
     format!("\n{}\n", ansi::text(&buf))
 }
 
-/// The lane, daemon and stop lines; the lane's state only when the daemon
-/// still knows it.
-fn lines(theme: &Theme, lane: Option<&str>, daemon: &Daemon) -> Vec<Line<'static>> {
+/// The lane, daemon, update and stop lines; the lane's state only when the
+/// daemon still knows it, the update only when the release is newer than this
+/// binary.
+fn lines(
+    theme: &Theme,
+    lane: Option<&str>,
+    method: Option<&InstallMethod>,
+    daemon: &Daemon,
+) -> Vec<Line<'static>> {
     let label = |text: &str| Span::styled(format!("{text:<LABEL$}"), theme.quiet());
     let bold = Style::new().add_modifier(Modifier::BOLD);
-    let lanes = match daemon {
-        Daemon::Running(lanes) => lanes.as_slice(),
-        Daemon::Stopped | Daemon::Unanswered => &[],
+    let (lanes, update) = match daemon {
+        Daemon::Running { lanes, update } => (lanes.as_slice(), update.as_ref()),
+        Daemon::Stopped | Daemon::Unanswered => (&[][..], None),
     };
     let known = lane.and_then(|reference| lanes.iter().find(|l| l.reference == reference));
     let mut out = Vec::new();
@@ -116,7 +149,7 @@ fn lines(theme: &Theme, lane: Option<&str>, daemon: &Daemon) -> Vec<Line<'static
     }
     let mut spans = vec![label("Daemon")];
     match daemon {
-        Daemon::Running(lanes) => {
+        Daemon::Running { lanes, .. } => {
             let live = lanes.iter().filter(|l| tree::lane_is_live(l)).count();
             let running = match live {
                 0 => ", no lanes running".to_owned(),
@@ -132,6 +165,35 @@ fn lines(theme: &Theme, lane: Option<&str>, daemon: &Daemon) -> Vec<Line<'static
         }
     }
     out.push(Line::from(spans));
+    if let Some(update) = update.filter(|u| is_newer(&u.latest, devlanes_version::VERSION)) {
+        let breaking = if update.bump == "minor" {
+            ", breaking changes"
+        } else {
+            ""
+        };
+        // Installed in the background, the next `devlanes` switches to it.
+        let (state, command) = if update.state == "ready" {
+            let version = update.installed.as_deref().unwrap_or(&update.latest);
+            (
+                format!("{version} ready"),
+                Some("run devlanes to switch to it".to_owned()),
+            )
+        } else {
+            (
+                format!("{} available{breaking}", update.latest),
+                method.map(|method| update_command(method, &update.latest)),
+            )
+        };
+        let mut spans = vec![
+            label("Update"),
+            Span::styled(state, theme.tone(Tone::Attention)),
+        ];
+        if let Some(command) = command {
+            spans.push(Span::styled(" · ", theme.quiet()));
+            spans.push(Span::styled(command, bold));
+        }
+        out.push(Line::from(spans));
+    }
     if let Some(known) = known.filter(|l| tree::lane_is_live(l)) {
         out.push(Line::from(vec![
             label("Stop"),
@@ -180,20 +242,48 @@ mod tests {
         }
     }
 
+    /// A daemon that runs `lanes` and reports no release.
+    fn running(lanes: Vec<LaneSummary>) -> Daemon {
+        Daemon::Running {
+            lanes,
+            update: None,
+        }
+    }
+
+    /// A release `latest`, `bump` away.
+    fn release(latest: &str, bump: &str) -> UpdateInfo {
+        UpdateInfo {
+            latest: latest.into(),
+            bump: bump.into(),
+            state: "available".into(),
+            installed: None,
+            error: None,
+            checked_at: 1,
+            notes: Vec::new(),
+        }
+    }
+
     /// The summary without its SGR sequences, trailing blank lines cut.
-    fn text(theme: &Theme, width: u16, lane: Option<&str>, daemon: &Daemon) -> Vec<String> {
-        let rendered = render(theme, width, lane, daemon);
+    fn text(
+        theme: &Theme,
+        width: u16,
+        lane: Option<&str>,
+        method: Option<&InstallMethod>,
+        daemon: &Daemon,
+    ) -> Vec<String> {
+        let rendered = render(theme, width, lane, method, daemon);
         let plain = strip_ansi_escapes::strip_str(&rendered);
         plain.trim_end().lines().map(str::to_owned).collect()
     }
 
     #[test]
     fn a_running_lane_gets_its_state_and_the_stop_command() {
-        let daemon = Daemon::Running(vec![lane("acme@0", "running"), lane("acme@1", "idle")]);
+        let daemon = running(vec![lane("acme@0", "running"), lane("acme@1", "idle")]);
         let rows = text(
             &theme(Tier::Ansi, Glyphs::Unicode),
             42,
             Some("acme@0"),
+            None,
             &daemon,
         );
         assert_eq!(
@@ -212,11 +302,79 @@ mod tests {
     }
 
     #[test]
+    fn a_newer_release_comes_after_the_daemon_with_its_command() {
+        let daemon = Daemon::Running {
+            lanes: vec![lane("acme@0", "running")],
+            update: Some(release("99.0.1", "patch")),
+        };
+        let rows = text(
+            &theme(Tier::Plain, Glyphs::Ascii),
+            80,
+            Some("acme@0"),
+            Some(&InstallMethod::Homebrew),
+            &daemon,
+        );
+        assert_eq!(
+            rows[3..],
+            [
+                "  Lane      acme@0  running",
+                "  Daemon    running, 1 lane running",
+                "  Update    99.0.1 available · devlanes update",
+                "  Stop      devlanes stop --lane acme@0",
+            ]
+        );
+        // Installed in the background: the next `devlanes` switches to it.
+        let mut ready = release("99.0.1", "patch");
+        ready.state = "ready".into();
+        ready.installed = Some("99.0.1".into());
+        let daemon = Daemon::Running {
+            lanes: Vec::new(),
+            update: Some(ready),
+        };
+        let rows = text(
+            &theme(Tier::Plain, Glyphs::Ascii),
+            80,
+            None,
+            Some(&InstallMethod::Homebrew),
+            &daemon,
+        );
+        assert_eq!(
+            rows[3..],
+            [
+                "  Daemon    running, no lanes running",
+                "  Update    99.0.1 ready · run devlanes to switch to it",
+            ]
+        );
+        // A minor release says it may break things; without the install
+        // method the command is left out.
+        let daemon = Daemon::Running {
+            lanes: Vec::new(),
+            update: Some(release("99.0.0", "minor")),
+        };
+        let rows = text(&theme(Tier::Plain, Glyphs::Ascii), 80, None, None, &daemon);
+        assert_eq!(
+            rows[3..],
+            [
+                "  Daemon    running, no lanes running",
+                "  Update    99.0.0 available, breaking changes",
+            ]
+        );
+        // A release this binary already is, or is past, is no news.
+        let daemon = Daemon::Running {
+            lanes: Vec::new(),
+            update: Some(release("0.0.1", "patch")),
+        };
+        let rows = text(&theme(Tier::Plain, Glyphs::Ascii), 80, None, None, &daemon);
+        assert_eq!(rows[3..], ["  Daemon    running, no lanes running"]);
+    }
+
+    #[test]
     fn a_stopped_daemon_leaves_the_lane_without_state() {
         let rows = text(
             &theme(Tier::Plain, Glyphs::Ascii),
             80,
             Some("acme@0"),
+            None,
             &Daemon::Stopped,
         );
         assert_eq!(
@@ -233,11 +391,12 @@ mod tests {
 
     #[test]
     fn an_idle_lane_has_no_stop_command() {
-        let daemon = Daemon::Running(vec![lane("acme@0", "idle")]);
+        let daemon = running(vec![lane("acme@0", "idle")]);
         let rows = text(
             &theme(Tier::Ansi, Glyphs::Ascii),
             80,
             Some("acme@0"),
+            None,
             &daemon,
         );
         assert_eq!(
@@ -247,7 +406,7 @@ mod tests {
                 "  Daemon    running, no lanes running"
             ]
         );
-        let rows = text(&theme(Tier::Ansi, Glyphs::Ascii), 80, None, &daemon);
+        let rows = text(&theme(Tier::Ansi, Glyphs::Ascii), 80, None, None, &daemon);
         assert_eq!(rows[3..], ["  Daemon    running, no lanes running"]);
     }
 
@@ -257,6 +416,7 @@ mod tests {
             &theme(Tier::Ansi, Glyphs::Unicode),
             80,
             Some("acme@0"),
+            None,
             &Daemon::Unanswered,
         );
         assert!(rendered.contains("not answering"), "{rendered:?}");

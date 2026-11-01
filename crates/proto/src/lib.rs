@@ -312,7 +312,7 @@ pub enum Method {
     RemotePairingClaim,
     /// Box side, for `devlanes daemon clients` and the TUI: paired and
     /// connected clients, connected ones first, then by name, `{items: [{id, name, paired, pairings,
-    /// paired_at_ms, last_seen_ms, connections: [{address, since_ms,
+    /// paired_at_ms, last_seen_ms, connections: [{address, since_ms, version,
     /// mirror}]}], now_ms}`; a client connected without pairing
     /// (`remote.require_pairing: false`) has `paired: false` and no times.
     /// `now_ms` is the daemon's clock, which the times are measured against.
@@ -326,10 +326,18 @@ pub enum Method {
     /// `client_ambiguous` (`{client, candidates}`).
     #[serde(rename = "remote.revoke")]
     RemoteRevoke,
-    /// Sent by `devlanes certs trust --hosts` and `certs untrust --hosts` after changing the
+    /// Sent by `devlanes setup` and `devlanes setup --remove` after changing the
     /// helper: the daemon drops its sudo backoff and reapplies `/etc/hosts` now.
     #[serde(rename = "hosts.retry")]
     HostsRetry,
+    /// Looks for a newer release now ([`release::UpdateCheckParams`]): without
+    /// `force` only when the last check is over an hour old. Replies once the
+    /// check ended with the newer release as in `daemon.status.update`
+    /// ([`release::UpdateInfo`]), or `null` when there is none or checks are off.
+    /// Errors `update_failed` (`{title, hint}`) when a forced check cannot
+    /// read the registry.
+    #[serde(rename = "update.check")]
+    UpdateCheck,
     /// Any method name this build does not know, so a request from a newer client
     /// decodes and gets an `unknown_method` answer instead of a dropped connection.
     #[serde(rename = "unknown", other)]
@@ -1289,6 +1297,15 @@ pub mod remote {
         })
     }
 
+    /// The release in a handshake label: `0.5.0` of `devlanes 0.5.0 (linger
+    /// off)`. Boxes and clients both send `devlanes <version>`, with notes in
+    /// parentheses after it.
+    pub fn label_version(label: &str) -> Option<&str> {
+        label
+            .strip_prefix("devlanes ")
+            .and_then(|rest| rest.split_whitespace().next())
+    }
+
     /// Params of `remote.pairing.verify`. Not `Debug`: it holds a token.
     #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
     pub struct VerifyParams {
@@ -1488,6 +1505,10 @@ pub mod remote {
         /// until a client with the `mirror_report` feature sent one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub mirror: Option<MirrorReport>,
+        /// The client's devlanes version, from its handshake label; absent when
+        /// the label names none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub version: Option<String>,
     }
 
     /// Ports a [`MirrorReport`] lists at most; the box keeps the first ones.

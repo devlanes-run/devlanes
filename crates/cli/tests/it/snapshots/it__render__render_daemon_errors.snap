@@ -80,5 +80,5 @@ hint: devlanes stop bg --lane acme@2
 error: lane acme@2 could not be frozen: api: operation not permitted; it runs normally
 error: this system cannot throttle processes; idle lanes are frozen after lanes.freeze_after instead
 error: lane acme@2 could not be thawed: api: no such process; it stays idle and devlanes retries
-error: the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0
-hint: devlanes certs trust --hosts
+error: the installed /etc/hosts helper is revision 1, devlanes needs 2
+hint: devlanes setup

@@ -17,8 +17,8 @@
         "mkcert"
       ],
       "enumDescriptions": [
-        "devlanes creates its own CA in `~/.devlanes/ca` on first use, limited to names under `localhost`, `test`, `internal`, `home.arpa` and `hostnames.tld`, so it cannot sign for real sites. Trust it once with `devlanes certs trust`.",
-        "Load mkcert's existing root CA (from `mkcert -CAROOT`) instead, so browsers that already trust it need nothing new. HTTPS stays off when `mkcert` is not on `PATH`; the mkcert CA has no name limits, and `certs untrust` leaves it trusted."
+        "devlanes creates its own CA in `~/.devlanes/ca` on first use, limited to names under `localhost`, `test`, `internal`, `home.arpa` and `hostnames.tld`, so it cannot sign for real sites. Trust it once with `devlanes setup`.",
+        "Load mkcert's existing root CA (from `mkcert -CAROOT`) instead, so browsers that already trust it need nothing new. HTTPS stays off when `mkcert` is not on `PATH`; the mkcert CA has no name limits, and `devlanes setup --remove` leaves it trusted."
       ],
       "examples": [
         "devlanes",
@@ -26,8 +26,8 @@
       ],
       "markdownDescription": "Certificate authority that signs HTTPS certificates for lane hostnames.",
       "markdownEnumDescriptions": [
-        "devlanes creates its own CA in `~/.devlanes/ca` on first use, limited to names under `localhost`, `test`, `internal`, `home.arpa` and `hostnames.tld`, so it cannot sign for real sites. Trust it once with `devlanes certs trust`.",
-        "Load mkcert's existing root CA (from `mkcert -CAROOT`) instead, so browsers that already trust it need nothing new. HTTPS stays off when `mkcert` is not on `PATH`; the mkcert CA has no name limits, and `certs untrust` leaves it trusted."
+        "devlanes creates its own CA in `~/.devlanes/ca` on first use, limited to names under `localhost`, `test`, `internal`, `home.arpa` and `hostnames.tld`, so it cannot sign for real sites. Trust it once with `devlanes setup`.",
+        "Load mkcert's existing root CA (from `mkcert -CAROOT`) instead, so browsers that already trust it need nothing new. HTTPS stays off when `mkcert` is not on `PATH`; the mkcert CA has no name limits, and `devlanes setup --remove` leaves it trusted."
       ],
       "type": "string"
     },
@@ -213,25 +213,25 @@
             }
           ],
           "default": null,
-          "description": "Whether lane hostnames are also written to `/etc/hosts`, for programs that do not resolve `*.localhost` themselves (workerd, musl or pure-Go binaries); defaults to `auto`, which writes them only when a probe at daemon start shows the system resolver fails `*.localhost`. `never` here wins over every project; otherwise a project's `lanes.hosts_file` replaces this value for that project. Writing needs the helper `devlanes certs trust --hosts` installs, only exact names are written (no wildcards), and `resolver: hosts_file` ignores this key.",
+          "description": "Whether lane hostnames are also written to `/etc/hosts`, for programs that do not resolve `*.localhost` themselves (workerd, musl or pure-Go binaries); defaults to `auto`, which writes them only when a probe at daemon start shows the system resolver fails `*.localhost`. `never` here wins over every project; otherwise a project's `lanes.hosts_file` replaces this value for that project. Writing needs the helper `devlanes setup` installs, only exact names are written (no wildcards), and `resolver: hosts_file` ignores this key.",
           "examples": [
             "auto",
             "never",
             "always"
           ],
-          "markdownDescription": "Whether lane hostnames are also written to `/etc/hosts`, for programs that do not resolve `*.localhost` themselves (workerd, musl or pure-Go binaries); defaults to `auto`, which writes them only when a probe at daemon start shows the system resolver fails `*.localhost`. `never` here wins over every project; otherwise a project's `lanes.hosts_file` replaces this value for that project. Writing needs the helper `devlanes certs trust --hosts` installs, only exact names are written (no wildcards), and `resolver: hosts_file` ignores this key."
+          "markdownDescription": "Whether lane hostnames are also written to `/etc/hosts`, for programs that do not resolve `*.localhost` themselves (workerd, musl or pure-Go binaries); defaults to `auto`, which writes them only when a probe at daemon start shows the system resolver fails `*.localhost`. `never` here wins over every project; otherwise a project's `lanes.hosts_file` replaces this value for that project. Writing needs the helper `devlanes setup` installs, only exact names are written (no wildcards), and `resolver: hosts_file` ignores this key."
         },
         "resolver": {
           "$ref": "#/$defs/Resolver",
           "default": "localhost",
-          "description": "Which domain lanes get and what makes their hostnames resolve; defaults to `localhost`. `resolver` also needs `tld` and a one-time `devlanes certs trust --resolver`; `public` is not supported yet.",
+          "description": "Which domain lanes get and what makes their hostnames resolve; defaults to `localhost`. `resolver` also needs `tld` and a one-time `devlanes setup`; `public` is not supported yet.",
           "examples": [
             "localhost",
             "hosts_file",
             "resolver",
             "public"
           ],
-          "markdownDescription": "Which domain lanes get and what makes their hostnames resolve; defaults to `localhost`. `resolver` also needs `tld` and a one-time `devlanes certs trust --resolver`; `public` is not supported yet."
+          "markdownDescription": "Which domain lanes get and what makes their hostnames resolve; defaults to `localhost`. `resolver` also needs `tld` and a one-time `devlanes setup`; `public` is not supported yet."
         },
         "tld": {
           "default": null,
@@ -661,8 +661,8 @@
       ],
       "enumDescriptions": [
         "Lane domains end in `.localhost` (`acme.localhost`, `acme2.localhost`), which browsers and many system resolvers send to loopback by themselves. `hosts_file` covers programs that do not.",
-        "Keep `.localhost` names and always write exact hostnames to `/etc/hosts`, as `hosts_file: always` does, whatever `hosts_file` says; a project's `lanes.hosts_file` still takes precedence. Needs the helper from `devlanes certs trust --hosts`.",
-        "Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the names `domain()` returns. They are answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`. Projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains, and `domain()` gives them `.localhost` names.",
+        "Keep `.localhost` names and always write exact hostnames to `/etc/hosts`, as `hosts_file: always` does, whatever `hosts_file` says; a project's `lanes.hosts_file` still takes precedence. Needs the helper `devlanes setup` installs.",
+        "Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the names `domain()` returns. They are answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes setup`. Projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains, and `domain()` gives them `.localhost` names.",
         "Reserved for public DNS names with DNS-01 certificates; not supported yet, so the config is rejected."
       ],
       "examples": [
@@ -674,8 +674,8 @@
       "markdownDescription": "Strategy that makes lane hostnames resolve to this machine.",
       "markdownEnumDescriptions": [
         "Lane domains end in `.localhost` (`acme.localhost`, `acme2.localhost`), which browsers and many system resolvers send to loopback by themselves. `hosts_file` covers programs that do not.",
-        "Keep `.localhost` names and always write exact hostnames to `/etc/hosts`, as `hosts_file: always` does, whatever `hosts_file` says; a project's `lanes.hosts_file` still takes precedence. Needs the helper from `devlanes certs trust --hosts`.",
-        "Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the names `domain()` returns. They are answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`. Projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains, and `domain()` gives them `.localhost` names.",
+        "Keep `.localhost` names and always write exact hostnames to `/etc/hosts`, as `hosts_file: always` does, whatever `hosts_file` says; a project's `lanes.hosts_file` still takes precedence. Needs the helper `devlanes setup` installs.",
+        "Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the names `domain()` returns. They are answered by a DNS server the daemon runs on `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the system resolver. Needs `tld` and a one-time `devlanes setup`. Projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains, and `domain()` gives them `.localhost` names.",
         "Reserved for public DNS names with DNS-01 certificates; not supported yet, so the config is rejected."
       ],
       "type": "string"
@@ -1021,7 +1021,7 @@
     },
     "TlsConfig": {
       "additionalProperties": false,
-      "description": "Certificate authority behind the proxy's HTTPS certificates, and the stores `devlanes certs trust` installs it into.",
+      "description": "Certificate authority behind the proxy's HTTPS certificates, and the stores `devlanes setup` installs it into.",
       "examples": [
         {
           "ca": "devlanes",
@@ -1031,7 +1031,7 @@
           ]
         }
       ],
-      "markdownDescription": "Certificate authority behind the proxy's HTTPS certificates, and the stores `devlanes certs trust` installs it into.",
+      "markdownDescription": "Certificate authority behind the proxy's HTTPS certificates, and the stores `devlanes setup` installs it into.",
       "properties": {
         "ca": {
           "$ref": "#/$defs/CaKind",
@@ -1045,7 +1045,7 @@
         },
         "trust": {
           "default": [],
-          "description": "Stores `devlanes certs trust` installs the CA into and `certs untrust` removes it from; an empty list means `[system]`. On Linux, browsers do not read the system store, so add `chrome` and `firefox` there; inside WSL add `windows` for browsers on Windows. `devlanes doctor` shows each store's state.",
+          "description": "Stores `devlanes setup` installs the CA into and `devlanes setup --remove` removes it from; an empty list means `[system]`. On Linux, browsers do not read the system store, so add `chrome` and `firefox` there; inside WSL add `windows` for browsers on Windows. `devlanes doctor` shows each store's state.",
           "examples": [
             [
               "system",
@@ -1061,7 +1061,7 @@
           ],
           "items": {
             "$ref": "#/$defs/TrustTarget",
-            "description": "Certificate store that `devlanes certs trust` installs the CA into.",
+            "description": "Certificate store that `devlanes setup` installs the CA into.",
             "examples": [
               "system",
               "firefox",
@@ -1070,16 +1070,16 @@
               "ios-simulator",
               "android-emulator"
             ],
-            "markdownDescription": "Certificate store that `devlanes certs trust` installs the CA into."
+            "markdownDescription": "Certificate store that `devlanes setup` installs the CA into."
           },
-          "markdownDescription": "Stores `devlanes certs trust` installs the CA into and `certs untrust` removes it from; an empty list means `[system]`. On Linux, browsers do not read the system store, so add `chrome` and `firefox` there; inside WSL add `windows` for browsers on Windows. `devlanes doctor` shows each store's state.",
+          "markdownDescription": "Stores `devlanes setup` installs the CA into and `devlanes setup --remove` removes it from; an empty list means `[system]`. On Linux, browsers do not read the system store, so add `chrome` and `firefox` there; inside WSL add `windows` for browsers on Windows. `devlanes doctor` shows each store's state.",
           "type": "array"
         }
       },
       "type": "object"
     },
     "TrustTarget": {
-      "description": "Certificate store that `devlanes certs trust` installs the CA into.",
+      "description": "Certificate store that `devlanes setup` installs the CA into.",
       "enum": [
         "system",
         "firefox",
@@ -1092,7 +1092,7 @@
         "The OS store: the login keychain on macOS, read by Safari, Chrome, Edge and `/usr/bin/curl`; on Linux, the distribution's CA anchors, updated through sudo.",
         "Every Firefox profile's certificate database, through `certutil` from the NSS tools (`brew install nss`, or `libnss3-tools` / `nss-tools` on Linux).",
         "The store Chrome and Chromium read: `~/.pki/nssdb` through `certutil` on Linux, the same login keychain as `system` on macOS.",
-        "The Windows user root store, read by Edge, Chrome and Firefox on Windows. For devlanes inside WSL, whose browser usually runs on Windows: it runs Windows' `certutil.exe` through interop, and Windows asks you to confirm each change. On Windows it is the same store as `system`; on macOS and Linux outside WSL `certs trust` reports it as unavailable.",
+        "The Windows user root store, read by Edge, Chrome and Firefox on Windows. For devlanes inside WSL, whose browser usually runs on Windows: it runs Windows' `certutil.exe` through interop, and Windows asks you to confirm each change. On Windows it is the same store as `system`; on macOS and Linux outside WSL `devlanes setup` reports it as unavailable.",
         "Reserved for the iOS simulator; not supported yet, so it is dropped with a warning.",
         "Reserved for the Android emulator; not supported yet, so it is dropped with a warning."
       ],
@@ -1104,12 +1104,12 @@
         "ios-simulator",
         "android-emulator"
       ],
-      "markdownDescription": "Certificate store that `devlanes certs trust` installs the CA into.",
+      "markdownDescription": "Certificate store that `devlanes setup` installs the CA into.",
       "markdownEnumDescriptions": [
         "The OS store: the login keychain on macOS, read by Safari, Chrome, Edge and `/usr/bin/curl`; on Linux, the distribution's CA anchors, updated through sudo.",
         "Every Firefox profile's certificate database, through `certutil` from the NSS tools (`brew install nss`, or `libnss3-tools` / `nss-tools` on Linux).",
         "The store Chrome and Chromium read: `~/.pki/nssdb` through `certutil` on Linux, the same login keychain as `system` on macOS.",
-        "The Windows user root store, read by Edge, Chrome and Firefox on Windows. For devlanes inside WSL, whose browser usually runs on Windows: it runs Windows' `certutil.exe` through interop, and Windows asks you to confirm each change. On Windows it is the same store as `system`; on macOS and Linux outside WSL `certs trust` reports it as unavailable.",
+        "The Windows user root store, read by Edge, Chrome and Firefox on Windows. For devlanes inside WSL, whose browser usually runs on Windows: it runs Windows' `certutil.exe` through interop, and Windows asks you to confirm each change. On Windows it is the same store as `system`; on macOS and Linux outside WSL `devlanes setup` reports it as unavailable.",
         "Reserved for the iOS simulator; not supported yet, so it is dropped with a warning.",
         "Reserved for the Android emulator; not supported yet, so it is dropped with a warning."
       ],
@@ -1258,25 +1258,54 @@
       ],
       "type": "string"
     },
+    "UpdateMode": {
+      "description": "What devlanes does about newer releases.",
+      "enum": [
+        "disable",
+        "notify",
+        "auto"
+      ],
+      "enumDescriptions": [
+        "Never look for releases; nothing is read from the network.",
+        "Read the latest version from the registry devlanes was installed from, and show it in the TUI and in command output when it is newer. Nothing is installed.",
+        "Like `notify`, and also install patch releases in the background where the install method allows it; they apply the next time you start devlanes at a terminal. Minor releases, which can break things before 1.0, still wait for you to update."
+      ],
+      "examples": [
+        "disable",
+        "notify",
+        "auto"
+      ],
+      "markdownDescription": "What devlanes does about newer releases.",
+      "markdownEnumDescriptions": [
+        "Never look for releases; nothing is read from the network.",
+        "Read the latest version from the registry devlanes was installed from, and show it in the TUI and in command output when it is newer. Nothing is installed.",
+        "Like `notify`, and also install patch releases in the background where the install method allows it; they apply the next time you start devlanes at a terminal. Minor releases, which can break things before 1.0, still wait for you to update."
+      ],
+      "type": "string"
+    },
     "UpdatesConfig": {
       "additionalProperties": false,
-      "description": "Release checks: the daemon reads the latest release's version once a day and commands print a one-line notice. Nothing is downloaded or installed.",
+      "description": "Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes apply after `devlanes daemon restart`.",
       "examples": [
         {
-          "check": false
+          "mode": "disable"
+        },
+        {
+          "mode": "auto"
         }
       ],
-      "markdownDescription": "Release checks: the daemon reads the latest release's version once a day and commands print a one-line notice. Nothing is downloaded or installed.",
+      "markdownDescription": "Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes apply after `devlanes daemon restart`.",
       "properties": {
-        "check": {
-          "default": true,
-          "description": "Have the daemon read the latest release's version from GitHub once a day; when it is newer, commands print the upgrade command on one line, at most once a day. Defaults to true; `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns it off.",
+        "mode": {
+          "$ref": "#/$defs/UpdateMode",
+          "default": "notify",
+          "description": "What devlanes does about newer releases: `notify` (the default) checks every 4 hours and when the TUI opens, and shows the new version; `auto` also installs patch releases in the background where the install method allows it; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.",
           "examples": [
-            true,
-            false
+            "disable",
+            "notify",
+            "auto"
           ],
-          "markdownDescription": "Have the daemon read the latest release's version from GitHub once a day; when it is newer, commands print the upgrade command on one line, at most once a day. Defaults to true; `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns it off.",
-          "type": "boolean"
+          "markdownDescription": "What devlanes does about newer releases: `notify` (the default) checks every 4 hours and when the TUI opens, and shows the new version; `auto` also installs patch releases in the background where the install method allows it; `disable` never checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off."
         }
       },
       "type": "object"
@@ -1615,7 +1644,7 @@
         "ca": "devlanes",
         "trust": []
       },
-      "description": "Which certificate authority signs the proxy's HTTPS certificates (`ca`), and which stores `devlanes certs trust` installs it into (`trust`).",
+      "description": "Which certificate authority signs the proxy's HTTPS certificates (`ca`), and which stores `devlanes setup` installs it into (`trust`).",
       "examples": [
         {
           "ca": "devlanes",
@@ -1625,7 +1654,7 @@
           ]
         }
       ],
-      "markdownDescription": "Which certificate authority signs the proxy's HTTPS certificates (`ca`), and which stores `devlanes certs trust` installs it into (`trust`)."
+      "markdownDescription": "Which certificate authority signs the proxy's HTTPS certificates (`ca`), and which stores `devlanes setup` installs it into (`trust`)."
     },
     "tui": {
       "$ref": "#/$defs/TuiConfig",
@@ -1653,15 +1682,18 @@
     "updates": {
       "$ref": "#/$defs/UpdatesConfig",
       "default": {
-        "check": true
+        "mode": "notify"
       },
-      "description": "Daily check for a newer devlanes release; nothing is downloaded or installed.",
+      "description": "Release checks: whether the daemon looks for newer devlanes releases (`mode`).",
       "examples": [
         {
-          "check": false
+          "mode": "disable"
+        },
+        {
+          "mode": "auto"
         }
       ],
-      "markdownDescription": "Daily check for a newer devlanes release; nothing is downloaded or installed."
+      "markdownDescription": "Release checks: whether the daemon looks for newer devlanes releases (`mode`)."
     }
   },
   "type": "object"

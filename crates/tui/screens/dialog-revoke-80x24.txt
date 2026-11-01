@@ -1,10 +1,10 @@
  devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 3 issues
 ┌ boxes ────────────────────────────────────── 1 of 3 connected · j k for more ┐
-│ ⠋ devbox                                              reconnecting · command │
+│ ⠋ devbox                             reconnecting · command · devlanes 1.0.0 │
 │   link      next try in 8s                                                   │
 │   error     docker exec exited 1: Error response from daemon: container      │
 │             devbox is not running                                            │
-│   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767         │
+│   box       proxy on 9443 · ports.range 30000-32767                          │
 │   proxy     this machine serves its hostnames on 8443 and on 9443, which its │
 │     ┌─────────────────────────────────────────────────────────────────┐      │
 │   mi│ Revoke laptop (dl_cid_3f2a9c1e)?                                │      │
@@ -26,7 +26,7 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 57 bold, 60 bold, 63-67 bold underlined, 68-78 yellow
 1: 0 darkgray, 1-7 bold, 8-45 darkgray, 46-78 dim, 79 darkgray
-2: 0 darkgray, 4-9 bold, 68-77 dim, 79 darkgray
+2: 0 darkgray, 4-9 bold, 51-77 dim, 79 darkgray
 3: 0 darkgray, 4-13 dim, 14-27 yellow, 79 darkgray
 4: 0 darkgray, 4-13 dim, 14-72 yellow, 79 darkgray
 5: 0 darkgray, 4-13 dim, 14-34 yellow, 79 darkgray

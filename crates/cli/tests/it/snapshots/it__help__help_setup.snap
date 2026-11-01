@@ -2,16 +2,31 @@
 source: crates/cli/tests/it/help.rs
 expression: long_help(path)
 ---
-Trust the devlanes CA and install the /etc/hosts helper
+Trust the devlanes CA and set up hostnames for this machine; asks once.
 
-Usage: devlanes certs [OPTIONS] <COMMAND>
+Works out what this machine needs and lists each step as ok, todo or skip:
+  ca        trust the CA in the stores tls.trust names (mkcert's CA with tls.ca: mkcert)
+  hosts     install the /etc/hosts helper (macOS and Linux) when *.localhost does not
+            resolve to loopback, the user config asks for the hosts file, or the
+            daemon needs it for a project
+  resolver  send hostnames.tld to the devlanes DNS server (a resolver file, or an
+            NRPT rule on Windows) when hostnames.resolver is resolver
 
-Commands:
-  trust    Trust the devlanes CA in the system and browser stores
-  untrust  Remove the devlanes CA from the trust stores
-  help     Print this message or the help of the given subcommand(s)
+Then it asks once before doing the todo steps; sudo asks for your password at
+most once. Without a terminal, pass --yes.
+
+Usage: devlanes setup [OPTIONS]
 
 Options:
+      --check
+          Only report each step; exit 0 when nothing is missing, 1 otherwise
+
+      --remove
+          Undo everything: the resolver file or NRPT rule, the /etc/hosts helper and the CA trust
+
+      --keep-ca
+          With --remove, keep the CA trusted
+
   -h, --help
           Print help (see a summary with '-h')
 
@@ -54,3 +69,8 @@ Global options:
 
   -v, --verbose...
           Print timestamped diagnostics of the client and daemon to stderr; -vv for more [env: DEVLANES_VERBOSE=1|2]
+
+Examples:
+  devlanes setup                       set up what is missing, asking once
+  devlanes setup --check               exit 1 when something is missing
+  devlanes setup --remove --keep-ca    remove the hosts helper and resolver, keep the CA

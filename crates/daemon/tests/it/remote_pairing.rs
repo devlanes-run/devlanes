@@ -156,6 +156,11 @@ async fn a_code_pairs_a_client_whose_token_serves_later_connections() {
             Some(1),
             "{entry}"
         );
+        assert_eq!(
+            entry["connections"][0]["version"],
+            devlanes_version::VERSION,
+            "{entry}"
+        );
         let box_store = Store::open(side.h.home.join("state.db"))
             .await
             .expect("box store");

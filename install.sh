@@ -4,13 +4,23 @@
 #
 #   curl -fsSL https://devlanes.run/install.sh | sh
 #   curl -fsSL https://devlanes.run/install.sh | sh -s -- --channel next
-#   curl -fsSL https://devlanes.run/install.sh | sh -s -- --version 0.4.0
+#   curl -fsSL https://devlanes.run/install.sh | sh -s -- --uninstall
 #
-# -c, --channel stable (the default) installs the latest release, --channel next the
-# latest build of main from the rolling `next` prerelease, and -v, --version X.Y.Z one
-# release. -d, --dir DIR sets the target directory (default: ~/.local/bin).
-# DEVLANES_VERSION (X.Y.Z or next) and DEVLANES_INSTALL_DIR do the same when the
-# option isn't given.
+# -c, --channel stable (the default) installs the latest release, and --channel next
+# the latest build of main from the rolling `next` prerelease; there is no option for
+# another release (npm and PyPI install a given one). -d, --dir DIR sets the target
+# directory (default: ~/.local/bin), or DEVLANES_INSTALL_DIR when the option isn't
+# given. When that directory already holds a devlanes with the `update` command, the
+# script runs `devlanes update --yes` from it instead and exits with its status,
+# unless the directory is not writable (the script may use sudo there) or the
+# channel is next, which the script always installs itself. After installing, a
+# running daemon is restarted into the new version with `devlanes update --finish`.
+# When the first devlanes on PATH comes from another installer (Homebrew, npm, pnpm,
+# Bun, Yarn, uv, pipx or cargo), the script stops and names it, since that one would
+# keep running; --force installs anyway.
+# --uninstall runs `devlanes uninstall` from that directory (or, without --dir and
+# DEVLANES_INSTALL_DIR, the devlanes on PATH) on the terminal; when there is none, it
+# deletes the files the script installs there and names the data directory.
 # DEVLANES_INSTALL_SUDO=1 allows sudo when that directory is not writable.
 # DEVLANES_INSTALL_BASE_URL replaces the release URL; it exists only so the
 # script can be tested against a local directory of fake releases.
@@ -19,33 +29,82 @@ set -eu
 base=${DEVLANES_INSTALL_BASE_URL:-https://github.com/devlanes-run/devlanes/releases}
 proto='=https'
 if [ -n "${DEVLANES_INSTALL_BASE_URL:-}" ]; then proto='=https,file'; fi
-version=${DEVLANES_VERSION:-}
 dir=${DEVLANES_INSTALL_DIR:-$HOME/.local/bin}
+dir_set=${DEVLANES_INSTALL_DIR:+1}
 
 fail() {
 	printf 'devlanes install: %s\n' "$1" >&2
 	exit 1
 }
 
-usage='usage: sh install.sh [-c, --channel stable|next | -v, --version X.Y.Z] [-d, --dir DIR]'
+# Earlier versions of this script took a version to install.
+latest_only() {
+	fail "devlanes installs only the latest release; for a specific version use npm (npm install -g devlanes@X.Y.Z) or PyPI (uv tool install devlanes==X.Y.Z)"
+}
+[ -z "${DEVLANES_VERSION:-}" ] || latest_only
+
+usage='usage: sh install.sh [-c, --channel stable|next] [-d, --dir DIR] [--force] [--uninstall]'
 usage() {
 	printf '%s\n' "$usage" >&2
 	exit 2
 }
 
+# Runs devlanes with the terminal as stdin when there is one: under `curl | sh` stdin
+# is the script. A subshell tests it, since a failed redirection may end a shell
+# running `:`.
+on_tty() {
+	if (: </dev/tty) 2>/dev/null; then
+		"$@" </dev/tty
+	else
+		"$@"
+	fi
+}
+
+# Picks the channel: empty for stable releases, or next.
+set_channel() {
+	case $1 in
+	stable) channel= ;;
+	next) channel=next ;;
+	'') usage ;;
+	*) fail "unknown channel $1; use stable or next" ;;
+	esac
+	channel_set=1
+}
+
+uninstall=
+force=
+channel=
 channel_set=
-version_set=
 while [ "$#" -gt 0 ]; do
 	case $1 in
-	-c | --channel | -v | --version | -d | --dir)
+	-c | --channel)
 		[ "$#" -ge 2 ] || usage
-		option=$1 value=$2
+		set_channel "$2"
 		shift 2
 		;;
-	--channel=* | --version=* | --dir=*)
-		option=${1%%=*} value=${1#*=}
+	--channel=*)
+		set_channel "${1#*=}"
 		shift
 		;;
+	--uninstall)
+		uninstall=1
+		shift
+		;;
+	--force)
+		force=1
+		shift
+		;;
+	-d | --dir)
+		if [ "$#" -lt 2 ] || [ -z "$2" ]; then usage; fi
+		dir=$2 dir_set=1
+		shift 2
+		;;
+	--dir=*)
+		dir=${1#*=} dir_set=1
+		[ -n "$dir" ] || usage
+		shift
+		;;
+	-v | --version | --version=*) latest_only ;;
 	-h | --help)
 		printf '%s\n' "$usage"
 		exit 0
@@ -55,24 +114,91 @@ while [ "$#" -gt 0 ]; do
 		usage
 		;;
 	esac
-	[ -n "$value" ] || usage
-	case $option:$value in
-	-c:stable | --channel:stable) version='' channel_set=1 ;;
-	-c:next | --channel:next) version=next channel_set=1 ;;
-	-c:* | --channel:*) fail "unknown channel $value; use stable or next" ;;
-	-v:* | --version:*) version=$value version_set=1 ;;
-	-d:* | --dir:*) dir=$value ;;
-	esac
 done
-if [ -n "$channel_set" ] && [ -n "$version_set" ]; then
-	fail "--channel and --version can't be combined"
+
+case "$dir" in
+/*) ;;
+*) dir=$(pwd)/$dir ;;
+esac
+
+if [ -n "$uninstall" ]; then
+	[ -z "$force" ] || fail "--uninstall takes no --force"
+	[ -z "$channel_set" ] || fail "--uninstall takes no --channel"
+	exe=
+	if [ -x "$dir/devlanes" ]; then
+		exe=$dir/devlanes
+	# An explicit directory is the only place looked at, so a devlanes on PATH that
+	# another installer put there is never removed by mistake.
+	elif [ -z "$dir_set" ]; then
+		exe=$(command -v devlanes 2>/dev/null || true)
+	fi
+	if [ -n "$exe" ]; then
+		# Under `curl | sh` stdin is the script; devlanes asks on the terminal.
+		# A subshell, since a failed redirection may end a shell running `:`.
+		if (: </dev/tty) 2>/dev/null; then
+			exec "$exe" uninstall </dev/tty
+		fi
+		exec "$exe" uninstall
+	fi
+	removed=
+	for bin in devlanes devlanes-hosts; do
+		if [ -e "$dir/$bin" ]; then
+			rm -f "$dir/$bin"
+			removed="$removed $dir/$bin"
+		fi
+	done
+	if [ -n "$removed" ]; then
+		printf 'No devlanes in %s; removed:%s\n' "$dir" "$removed"
+	else
+		printf 'No devlanes in %s and nothing install.sh left there.\n' "$dir"
+	fi
+	printf 'The devlanes data stays in %s; delete that directory to remove it.\n' "${DEVLANES_HOME:-$HOME/.devlanes}"
+	exit 0
 fi
 
-version=${version#v}
-channel=
-if [ "$version" = next ]; then
-	channel=next
-	version=
+# Follows symlinks, as Homebrew, npm, uv and pipx put a link to their copy on PATH.
+resolve() {
+	path=$1
+	while [ -L "$path" ]; do
+		link=$(readlink "$path")
+		case $link in
+		/*) path=$link ;;
+		*) path=$(dirname "$path")/$link ;;
+		esac
+	done
+	parent=$(cd "$(dirname "$path")" 2>/dev/null && pwd -P) && path=$parent/${path##*/}
+	printf '%s\n' "$path"
+}
+
+# A devlanes that another installer manages keeps running from PATH and updates itself
+# its own way, so a copy here would only shadow it or be shadowed.
+first=$(command -v devlanes 2>/dev/null || true)
+if [ -z "$force" ] && [ -n "$first" ]; then
+	resolved=$(resolve "$first")
+	other=
+	case $resolved in
+	*/Cellar/devlanes/* | *node_modules* | */uv/tools/* | */pipx/venvs/* | *.cargo/bin/*) other=1 ;;
+	*)
+		# pnpm puts a shell script on PATH that runs its copy, instead of a link to it.
+		if [ "$(dd if="$resolved" bs=2 count=1 2>/dev/null)" = '#!' ] &&
+			grep -Eq 'node_modules|\.pnpm' "$resolved" 2>/dev/null; then
+			other=1
+		fi
+		;;
+	esac
+	[ -z "$other" ] ||
+		fail "the devlanes on PATH, $resolved, comes from another installer; update it with: devlanes update (or pass --force to install here anyway)"
+fi
+
+# A devlanes that can update itself does it, the same way `devlanes update` would,
+# unless this user cannot write to its directory, where only this script may use sudo.
+# `devlanes update` follows the channel of the build it runs, so next always installs
+# here, over a stable install too.
+if [ -z "$channel" ] && [ -x "$dir/devlanes" ] && [ -w "$dir" ] &&
+	"$dir/devlanes" update --help >/dev/null 2>&1 </dev/null; then
+	status=0
+	on_tty "$dir/devlanes" update --yes || status=$?
+	exit "$status"
 fi
 
 for tool in curl tar uname mktemp awk; do
@@ -117,8 +243,6 @@ download() {
 
 if [ -n "$channel" ]; then
 	sums_url=$base/download/$channel/SHA256SUMS
-elif [ -n "$version" ]; then
-	sums_url=$base/download/v$version/SHA256SUMS
 else
 	sums_url=$base/latest/download/SHA256SUMS
 fi
@@ -133,12 +257,8 @@ line=$(awk -v suffix="-$target.tar.gz" '
 [ -n "$line" ] || fail "no $target archive listed in $sums_url"
 expected=${line%% *}
 archive=${line##* }
-found=${archive#devlanes-}
-found=${found%"-$target.tar.gz"}
-if [ -n "$version" ] && [ "$found" != "$version" ]; then
-	fail "$sums_url lists version $found, expected $version"
-fi
-version=$found
+version=${archive#devlanes-}
+version=${version%"-$target.tar.gz"}
 printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' ||
 	fail "unexpected version $version in $sums_url"
 printf '%s\n' "$expected" | grep -Eq '^[0-9a-f]{64}$' || fail "malformed checksum for $archive"
@@ -155,10 +275,6 @@ listed=$(tar -tzf "$tmp/$archive" | sed 's#/$##' | LC_ALL=C sort | tr '\n' ' ')
 	fail "unexpected entries in $archive: $listed"
 tar -xzf "$tmp/$archive" -C "$tmp"
 
-case "$dir" in
-/*) ;;
-*) dir=$(pwd)/$dir ;;
-esac
 sudo=
 if ! mkdir -p "$dir" 2>/dev/null || [ ! -w "$dir" ]; then
 	if [ "${DEVLANES_INSTALL_SUDO:-}" != 1 ]; then
@@ -177,6 +293,11 @@ for bin in devlanes devlanes-hosts; do
 done
 
 printf 'Installed devlanes %s to %s\n' "$version" "$dir"
+# A daemon keeps running the binary it started from until it restarts into this one.
+if "$dir/devlanes" daemon status >/dev/null 2>&1 </dev/null; then
+	on_tty "$dir/devlanes" update --finish ||
+		fail "the daemon did not restart into devlanes $version; run devlanes daemon restart"
+fi
 case ":${PATH:-}:" in
 *":$dir:"*)
 	first=$(command -v devlanes 2>/dev/null || true)

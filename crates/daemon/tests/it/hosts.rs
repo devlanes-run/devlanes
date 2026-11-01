@@ -84,7 +84,7 @@ async fn engine(home: &Path, executor: Arc<FakeExecutor>) -> Engine {
                 max_delay: Duration::from_millis(200),
                 ..SyncConfig::default()
             },
-            expected_version: "0.1.0".into(),
+            required_revision: devlanes_resolver_hosts::REVISION,
         },
     );
     let mut integ = Integrations::with_runner(Arc::new(FakeRunner::default()));
@@ -143,14 +143,18 @@ async fn routes_reach_the_helper_and_retry_reapplies() {
                 && reason["data"]["hosts"] == json!(["web.demo.localhost"])),
             "{why}"
         );
+        let status = call(&engine, Method::DaemonStatus, json!({}), &main).await;
+        assert_eq!(status["setup"]["missing"], json!(["hosts"]), "{status}");
 
-        // `trust --hosts` fixed sudo; the retry skips the five-minute backoff.
+        // `devlanes setup` fixed sudo; the retry skips the five-minute backoff.
         deny.store(false, Ordering::SeqCst);
         let retried = call(&engine, Method::HostsRetry, json!({}), &main).await;
         assert_eq!(retried["retried"], true);
         assert_eq!(retried["hosts"]["state"], "applied", "{retried}");
         assert_eq!(retried["hosts"]["names"], 1);
         assert_eq!(applies(&executor).len(), 2);
+        let status = call(&engine, Method::DaemonStatus, json!({}), &main).await;
+        assert_eq!(status["setup"]["missing"], json!([]), "{status}");
         let _ = engine.shutdown(crate::signal_shutdown()).await;
         assert!(
             executor

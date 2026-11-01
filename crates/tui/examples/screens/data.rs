@@ -839,8 +839,9 @@ pub fn connect_refused(host: &str) -> RpcError {
 }
 
 /// `remote.clients` on this machine as a box, connected clients first as the
-/// daemon sorts them: a laptop connected with two pairings (two box names),
-/// then a CI runner last seen an hour ago and a desktop away for three days.
+/// daemon sorts them: a laptop on this release connected with two pairings
+/// (two box names), then a CI runner last seen an hour ago and a desktop away
+/// for three days.
 pub fn clients() -> Value {
     json!({
         "now_ms": NOW_MS,
@@ -851,6 +852,7 @@ pub fn clients() -> Value {
              "name": "laptop", "paired": true, "pairings": 2,
              "paired_at_ms": NOW_MS - 604_800_000, "last_seen_ms": NOW_MS - 8_040_000,
              "connections": [{"address": "203.0.113.24", "since_ms": NOW_MS - 8_040_000,
+                              "version": VERSION,
                               "mirror": {"ports": 6, "bound": 5, "skipped_lanes": 1}}]},
             {"id": "dl_cid_0b9e44d1c7a35f2e8a6d0c1b9f4e7a2d3c5b8e1f0a9d6c4b2e7f3a1d5c8b0e9f",
              "name": "ci-runner", "paired": true, "pairings": 1,
@@ -864,8 +866,9 @@ pub fn clients() -> Value {
     })
 }
 
-/// [`clients`] on a box with `remote.require_pairing: false`: a tablet is
-/// connected without pairing, listed after the laptop with the connected.
+/// [`clients`] on a box with `remote.require_pairing: false`: a tablet on an
+/// older release is connected without pairing, listed after the laptop with
+/// the connected.
 pub fn clients_unpaired() -> Value {
     let mut list = clients();
     list["require_pairing"] = json!(false);
@@ -877,7 +880,7 @@ pub fn clients_unpaired() -> Value {
                 "name": "tablet", "paired": false, "pairings": 0,
                 "paired_at_ms": null, "last_seen_ms": null,
                 "connections": [{"address": "198.51.100.7", "since_ms": NOW_MS - 300_000,
-                                 "mirror": null}],
+                                 "version": "0.8.1", "mirror": null}],
             }),
         );
     }
@@ -985,6 +988,87 @@ pub fn log_page(unit: &str) -> Vec<LogLine> {
 /// The version of the fake daemon and of the TUI drawn against it, pinned so
 /// a release does not change the committed screens.
 pub const VERSION: &str = "1.0.0";
+
+/// The release notes since 0.9.0, as the binary hands them to the first TUI
+/// after an update to [`VERSION`].
+pub fn whats_new() -> devlanes_update::notes::WhatsNew {
+    use devlanes_update::notes::{Entry, Level, Release, WhatsNew};
+    let release = |version: &str, entries: &[(Level, &str)]| Release {
+        version: version.into(),
+        entries: entries
+            .iter()
+            .map(|(level, line)| Entry {
+                level: *level,
+                line: (*line).into(),
+                body: String::new(),
+            })
+            .collect(),
+    };
+    WhatsNew {
+        since: Some("0.9.0".into()),
+        releases: vec![
+            release(
+                VERSION,
+                &[
+                    (
+                        Level::Minor,
+                        "Changed `lanes.hosts_file` to default to `auto`, so lanes on `*.localhost` no longer write the hosts file.",
+                    ),
+                    (
+                        Level::Minor,
+                        "Removed the `--watch` flag of `devlanes logs`; use `devlanes logs -f`.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Added `devlanes url --copy`, which copies a service's address.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Fixed `devlanes logs` dropping the last line of a unit that exited.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Added a CPU column to `devlanes status --long`.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Fixed the monitor's memory box counting a frozen lane twice.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Changed `devlanes doctor` to name the config key behind each warning.",
+                    ),
+                ],
+            ),
+            release(
+                "0.9.2",
+                &[
+                    (
+                        Level::Patch,
+                        "Fixed the TUI's monitor showing a stopped lane's last CPU sample.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Added the `tui.on_quit` choice to the quit dialog.",
+                    ),
+                ],
+            ),
+            release(
+                "0.9.1",
+                &[
+                    (
+                        Level::Patch,
+                        "Fixed `devlanes start` waiting for a ready check of a service that already exited.",
+                    ),
+                    (
+                        Level::Patch,
+                        "Fixed `devlanes stop` leaving a lane's containers running.",
+                    ),
+                ],
+            ),
+        ],
+    }
+}
 
 /// The fake's clock: every history ends here.
 pub const NOW_MS: u64 = 1_792_000_000_000;

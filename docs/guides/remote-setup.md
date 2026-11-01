@@ -10,11 +10,13 @@ devlanes on the box is an ordinary install. It needs:
 - `git`, and Docker if the project has `infra`.
 - The `devlanes` binary on the `PATH` that a non-interactive SSH session gets, or at `~/.devlanes/bin/devlanes`. `remote connect` finds it with `sh -c 'command -v devlanes'`, which does not read `.bashrc` or `.zshrc`. On a Windows box it asks PowerShell (`Get-Command`), with the `PATH` sshd builds from the registry.
 
-Install the same release as on the client, from an SSH shell on the box. `install.sh` can put it in `~/.devlanes/bin`, where `remote connect` always looks; replace `X.Y.Z` with the version `devlanes --version` prints on the client:
+Install the latest release from an SSH shell on the box, and keep the client on the latest release too (`devlanes update`), so both run the same one. `install.sh` can put it in `~/.devlanes/bin`, where `remote connect` always looks:
 
 ```sh
-curl -fsSL https://devlanes.run/install.sh | sh -s -- --version X.Y.Z --dir ~/.devlanes/bin
+curl -fsSL https://devlanes.run/install.sh | sh -s -- --dir ~/.devlanes/bin
 ```
+
+`install.sh` installs only the latest release. To match a client that stays on an older one, install that version on the box with npm or PyPI (`npm install -g devlanes@X.Y.Z` or `uv tool install devlanes==X.Y.Z`, where `X.Y.Z` is what `devlanes --version` prints on the client), though staying on an older release is not recommended.
 
 Without `--dir` it installs to `~/.local/bin`, which a non-interactive SSH session may not have on its `PATH`; check with `ssh hetzner 'command -v devlanes'` from the client. Homebrew, npm and cargo binstall work too (the [README](../../README.md) lists them). When their directory is not on that `PATH`, as with Homebrew's `/opt/homebrew/bin` on macOS, link the binary into `~/.devlanes/bin` from an interactive shell on the box:
 
@@ -22,7 +24,7 @@ Without `--dir` it installs to `~/.local/bin`, which a non-interactive SSH sessi
 mkdir -p ~/.devlanes/bin && ln -sf "$(command -v devlanes)" ~/.devlanes/bin/devlanes
 ```
 
-`remote connect` never installs or upgrades devlanes on a box. Without a binary the first connection fails with `devlanes is not installed on hetzner` and stops retrying.
+`remote connect` never installs or updates devlanes on a box. Without a binary the first connection fails with `devlanes is not installed on hetzner` and stops retrying.
 
 Then, on the box:
 
@@ -30,7 +32,7 @@ Then, on the box:
 ssh hetzner
 git clone git@github.com:acme/acme.git && cd acme
 devlanes start                      # or devlanes start --no-ui
-devlanes certs trust                # optional: for curl and browsers running on the box itself
+devlanes setup                      # optional: for curl and browsers running on the box itself
 ```
 
 Services on the box must listen on loopback or a wildcard address. The box dials `127.0.0.1:<port>` for the mirror, as the proxy does locally.
@@ -137,7 +139,7 @@ If that rule is missing, add it with `New-NetFirewallRule -Name OpenSSH-Server-I
 
 sshd runs commands with `cmd.exe` unless the `DefaultShell` value under `HKLM:\SOFTWARE\OpenSSH` names another shell. `remote connect` works with cmd.exe, Windows PowerShell, PowerShell 7 and Git Bash: when its `sh` probe finds no `sh`, it asks PowerShell for devlanes and the shell, and quotes the tunnel command for that shell. A Windows client therefore authenticates twice on its first connection to a Windows box after its daemon starts, and once from then on. With cmd.exe as the shell, the path to devlanes must not hold `%` or `!`, which cmd.exe would expand. On a locked-down box where PowerShell runs in Constrained Language Mode, or security software blocks `powershell -EncodedCommand`, that probe gets no answer, and `remote connect` fails with `unexpected probe output from the box`, followed by what PowerShell printed on stderr. Such a box can still be reached as a [box reached by a command](remote-command.md) that names devlanes itself, such as `[ssh, acme-box, C:\Users\acme\.devlanes\bin\devlanes.exe, tunnel, --stdio]`.
 
-The daemon a connection starts leaves the SSH session and keeps running after it ends. It runs in the SSH server's background session, not on the desktop, even when you are signed in there, so a unit that opens a window shows nothing, and `devlanes certs trust` there fails as it does over any SSH session; the client serves the box's hostnames with its own CA, so the box needs no trust. A daemon already started on the desktop (for example by `devlanes daemon install`) is used instead. With key authentication the daemon started over SSH has no network credentials, so units cannot reach SMB shares or use credentials from the Windows Credential Manager; when that matters, `devlanes daemon restart` from the desktop moves the daemon there. `devlanes daemon install` starts the daemon when you sign in on the desktop, not when the machine boots. A box nobody signs in to gets its daemon from the first connection or the first `devlanes` command over SSH, or from a Task Scheduler task that runs `devlanes.exe daemon run` as you at startup. When an SSH server other than Windows' own keeps the daemon inside the session, `remote ls` warns `the box daemon stops when this SSH session ends`; start the daemon in one of those ways instead.
+The daemon a connection starts leaves the SSH session and keeps running after it ends. It runs in the SSH server's background session, not on the desktop, even when you are signed in there, so a unit that opens a window shows nothing, and `devlanes setup` there fails as it does over any SSH session; the client serves the box's hostnames with its own CA, so the box needs no trust. A daemon already started on the desktop (for example by `devlanes daemon install`) is used instead. With key authentication the daemon started over SSH has no network credentials, so units cannot reach SMB shares or use credentials from the Windows Credential Manager; when that matters, `devlanes daemon restart` from the desktop moves the daemon there. `devlanes daemon install` starts the daemon when you sign in on the desktop, not when the machine boots. A box nobody signs in to gets its daemon from the first connection or the first `devlanes` command over SSH, or from a Task Scheduler task that runs `devlanes.exe daemon run` as you at startup. When an SSH server other than Windows' own keeps the daemon inside the session, `remote ls` warns `the box daemon stops when this SSH session ends`; start the daemon in one of those ways instead.
 
 A project with `infra` needs Docker Desktop running, which starts only when you sign in on the desktop; over SSH `docker` reaches it while it runs.
 
@@ -149,7 +151,7 @@ The client runs macOS, Linux or Windows (see [Windows clients](#windows-clients)
 
 - A `Host` entry in `~/.ssh/config`. devlanes runs the system `ssh`, so `ProxyJump`, `ProxyCommand`, certificates, `IdentityFile` and `User` apply. The name you give `remote connect` is that `Host`. Boxes on a tailnet or behind Cloudflare Zero Trust have their own pages: [Tailscale](remote-tailscale.md) and [Cloudflare](remote-cloudflare.md). A container, pod, WSL distribution or codespace without SSH is reached by a command instead; see [boxes reached by a command](remote-command.md).
 - Your key in an agent. The `ssh` master process is a child of the local daemon and uses the agent the daemon was started with; a daemon spawned from your shell inherits that shell's `SSH_AUTH_SOCK`. If the agent socket changes (new login, 1Password restart), `devlanes daemon restart` picks up the new one.
-- `devlanes certs trust`, once. The box's hostnames are served by your local proxy with your local CA.
+- `devlanes setup`, once. The box's hostnames are served by your local proxy with your local CA.
 - A different `ports.range` than the box in `~/.devlanes/config.yaml`, so lanes created on both machines before they first connected do not overlap. Overlapping ports are reported, not mirrored, and the local allocator avoids the box's ports from then on. While the ranges overlap, every connection warns about it. With several boxes, give each box its own range as well.
 
 ```sh
@@ -175,7 +177,7 @@ devlanes remote connect hetzner
 
 Case and the dash do not matter. `--background` asks for the code the same way before it returns; without a terminal, as for an agent, pass `--code`. The box gives this machine a token, kept in its state database, that every later connection presents, also the ones the daemon makes on its own after sleep or a restart. Without a code, as in a script with no terminal, or with a wrong one, the connection waits in `needs_pairing` and `remote connect` says why; run it again with a new code. The same happens when the box revoked this machine's pairing: its ports stay bound and its hostnames answer with a [pairing needed](../errors/box-pairing-needed.md) page until you pair again.
 
-The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an upgrade): the new daemon connects every box that connected since you last ran `remote disconnect` for it, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
+The connection belongs to your local daemon, not to the terminal: Ctrl-C detaches, the daemon reconnects with backoff after sleep or network loss and keeps the mirrored ports bound meanwhile. It also survives a restart of the local daemon (`devlanes daemon restart`, a reboot with `devlanes daemon install`, an update): the new daemon connects every box that connected since you last ran `remote disconnect` for it, in the background. It keeps retrying such a box even when the box is gone for good or its name no longer resolves; only `remote disconnect` ends that.
 
 ### Unattended reconnects
 
@@ -253,11 +255,11 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | `... failed because nothing on the box accepted it (connection refused)` | the unit runs but does not listen on the box's loopback | make it listen on `127.0.0.1`, `::1` or a wildcard address |
 | `... failed because the box did not answer in time` or `the link dropped while it opened` | a slow or dropped link | try again; `remote ls` shows the link state |
 | `... failed because box hetzner is not connected: ...` | the link stayed down for 10 seconds | the error after the colon says why |
-| `the box runs devlanes 0.4.1 and this machine 0.4.3. Install the same release on both.` | different releases, same protocol | works; upgrade the box when convenient |
-| `the box runs ... (protocol 5) but this client speaks protocol 4` | releases too far apart | install the same release on both machines, then `devlanes daemon restart` on the box |
-| `` `devlanes tunnel --stdio` did not answer within 20s. If the box runs an older devlanes release, ... `` | this client is newer than the box: the box's devlanes predates protocol 4, whose tunnel announces itself first | install the same release on both machines |
-| a mux or handshake error right after one machine was upgraded | this client predates protocol 4 and the box is newer: the client cannot read the line the box's tunnel starts with | install the same release on both machines |
-| ``the box daemon runs an older devlanes than `devlanes tunnel` `` | the box's binary was upgraded but its daemon still runs the old one | `devlanes daemon restart` on the box |
+| `the box runs devlanes 0.4.1 and this machine 0.4.3. Install the same release on both.` | different releases, same protocol | works; update the box when convenient |
+| `the box runs ... (protocol 5) but this client speaks protocol 4` | releases too far apart | `devlanes update` on both machines, then `devlanes daemon restart` on the box |
+| `` `devlanes tunnel --stdio` did not answer within 20s. If the box runs an older devlanes release, ... `` | this client is newer than the box: the box's devlanes predates protocol 4, whose tunnel announces itself first | `devlanes update` on both machines |
+| a mux or handshake error right after one machine was updated | this client predates protocol 4 and the box is newer: the client cannot read the line the box's tunnel starts with | `devlanes update` on both machines |
+| ``the box daemon runs an older devlanes than `devlanes tunnel` `` | the box's binary was updated but its daemon still runs the old one | `devlanes daemon restart` on the box |
 | ``the box closed the connection before `devlanes tunnel --stdio` started. The box printed: ...`` | the login shell exited or ran something else; its output follows | fix the shell's startup files, or the `ForceCommand` or `RemoteCommand` for this host |
 | ``the box printed more than 64 KiB before `devlanes tunnel --stdio` started`` | a profile file prints a lot on every login | make it quiet for non-interactive sessions |
 | `port 5432 is not mirrored because postgres (pid 812) uses it here` | a local process holds the port | stop it, or mark the box container `hidden` |
@@ -281,9 +283,9 @@ curl -sS https://api.acme.localhost/healthz          # from the client, once the
 | a box connects again after a daemon restart | you connected it and have not run `remote disconnect` for it since | `devlanes remote disconnect hetzner` when you no longer want it |
 | `no ssh client found` | Windows without OpenSSH Client | add the optional feature, or put `ssh.exe` on `PATH` |
 
-## Upgrading
+## Updating
 
-devlanes never upgrades a box. Install the same release on both machines, then run `devlanes daemon restart` on the box, so its daemon matches `devlanes tunnel`, and on the client. Machines with different protocol versions do not connect ([checking](#checking)).
+devlanes never updates a box. Run `devlanes update` on both machines: it installs the latest release and restarts the daemon, so the box's daemon matches `devlanes tunnel`. Machines with different protocol versions do not connect ([checking](#checking)).
 
 ## Limits
 

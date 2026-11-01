@@ -3,7 +3,7 @@
 
 mod paths;
 pub mod restart;
-pub mod update;
+pub mod setup;
 
 #[cfg(unix)]
 use std::process::Stdio;
@@ -841,6 +841,16 @@ fn handover_lines(plan: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (first, go)
 }
 
+/// The executable to spawn as the daemon: this install's stable path (see
+/// [`devlanes_update::spawn_exe`]), so a client that outlived an upgrade
+/// starts the binary installed now. Reads the filesystem on a blocking thread.
+#[cfg(not(target_family = "wasm"))]
+async fn daemon_exe() -> Result<PathBuf> {
+    Ok(tokio::task::spawn_blocking(devlanes_update::spawn_exe)
+        .await
+        .map_err(std::io::Error::other)??)
+}
+
 /// Spawns `devlanes daemon run` and returns the lines of its readiness pipe
 /// and `false`: Unix has no jobs to stay inside. With `replace`, the daemon
 /// waits for the running one to exit and reads its plan from stdin; the
@@ -853,7 +863,7 @@ async fn start_daemon(
     replace: Option<Replace>,
 ) -> Result<(ReadyLines, bool, Option<Handover>)> {
     use tokio::io::AsyncWriteExt;
-    let mut command = Command::new(std::env::current_exe()?);
+    let mut command = Command::new(daemon_exe().await?);
     // The daemon outlives this shell and serves every later one, so it keeps
     // only what it needs itself; services get each request's client env.
     command
@@ -1010,7 +1020,7 @@ async fn start_daemon(
 
     use devlanes_sys_windows::spawn::{self, CreationFlags, Environment, Spawn, Stdio, Stream};
 
-    let exe = std::env::current_exe()?;
+    let exe = daemon_exe().await?;
     // The daemon's own variables replace inherited ones; Windows would refuse
     // two spellings of one name. The askpass relay of an ssh run never reaches
     // a daemon, which would hand it to every unit.

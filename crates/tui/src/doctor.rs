@@ -108,10 +108,7 @@ mod tests {
             ))
         );
         let tls = checks.iter().find(|c| c.group == "tls");
-        assert_eq!(
-            tls.and_then(|c| c.fix.as_deref()),
-            Some("devlanes certs trust")
-        );
+        assert_eq!(tls.and_then(|c| c.fix.as_deref()), Some("devlanes setup"));
         assert!(checks.iter().any(|c| c.text == "Compose 2.29.1"));
     }
 
@@ -130,7 +127,7 @@ mod tests {
                 "data": {"host": "api.acme.localhost", "lane": "acme@0", "other": "acme@1"}}],
             "warnings": [{"code": "ports_pending", "data": {"lane": "acme@2"}}],
             "hosts": {"mode": "auto", "state": "applied", "names": 3, "last_error": null,
-                "helper": {"state": "mismatch", "level": "warning", "installed": "0.1.0", "expected": "0.2.0"}},
+                "helper": {"state": "outdated", "level": "warning", "installed": "0.1.0", "revision": 1, "required": 2}},
             "dns": {"tld": "test", "listen": "127.0.0.1:15353", "running": true,
                 "resolver_file": {"path": "/etc/resolver/test", "installed": false, "matches": false}},
             "user_config": {"path": "/h/config.yaml", "valid": false,
@@ -155,7 +152,7 @@ mod tests {
         );
         assert_eq!(state("config changed ports"), Some(CheckState::Warn));
         assert_eq!(
-            state("the installed /etc/hosts helper is version 0.1.0, devlanes is 0.2.0"),
+            state("the installed /etc/hosts helper is revision 1, devlanes needs 2"),
             Some(CheckState::Warn)
         );
         assert_eq!(

@@ -16,7 +16,7 @@ use rcgen::{
 
 /// DNS subtrees every newly created devlanes CA may sign for. A configured TLD is added at creation.
 pub const PERMITTED_DOMAINS: &[&str] = &["localhost", "test", "internal", "home.arpa"];
-/// Common name of new CAs. macOS uses it as the keychain label that `certs untrust` searches.
+/// Common name of new CAs. macOS uses it as the keychain label that `devlanes setup --remove` searches.
 const CA_COMMON_NAME: &str = "devlanes local development CA";
 /// Organization in the subject of every certificate devlanes creates.
 const ORGANIZATION: &str = "devlanes";

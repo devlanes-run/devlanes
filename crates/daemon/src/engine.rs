@@ -142,6 +142,13 @@ pub(crate) struct Inner {
     pub pacing: crate::pacing::Pacing,
     /// Embedded DNS server state for `doctor` (`null` without the resolver strategy).
     pub dns: Mutex<Value>,
+    /// When `daemon.status`'s `setup` last read whether the resolver file
+    /// (NRPT rule) routes `hostnames.tld`, and whether it does not; `None`
+    /// until read, and again after `hosts.retry`, which `devlanes setup`
+    /// sends once it changed the file. The answer is read again after
+    /// `setup::RESOLVER_CHECK_TTL`, since a person or another tool
+    /// may change the file too.
+    pub resolver_check: Mutex<Option<(Instant, bool)>>,
     /// The latest state.db retention pass, for `doctor`.
     pub last_prune: Mutex<Option<crate::maintenance::LastPrune>>,
     /// The latest release the background check read.
@@ -191,6 +198,7 @@ impl Engine {
                 remote: crate::remote::Remotes::default(),
                 pacing: crate::pacing::Pacing::default(),
                 dns: Mutex::new(Value::Null),
+                resolver_check: Mutex::new(None),
                 last_prune: Mutex::new(None),
                 update: crate::update::UpdateState::default(),
                 route_publisher: crate::routes::RoutePublisher::default(),
@@ -496,6 +504,7 @@ impl Inner {
                 // What `devlanes tunnel` tells connected clients about this box.
                 "https_port": self.integ.routes.https_port(),
                 "ports_range": self.opts.user.ports.range,
+                "setup": self.setup_status().await,
             }))),
             Method::DaemonShutdown => Ok(json!({"stopping": true})),
             Method::DaemonResetState => self.reset_state(&context).await,
@@ -555,6 +564,7 @@ impl Inner {
             Method::HostList => self.host_list().await,
             Method::RemoteUse => self.use_method(params).await,
             Method::HostsRetry => self.hosts_retry().await,
+            Method::UpdateCheck => self.update_check_method(params).await,
             // A newer client's method: answer instead of dropping the connection.
             Method::Unknown => Err(RpcError::new("unknown_method", json!({}), 2)),
         }

@@ -1,0 +1,50 @@
+ devlanes  1 acme   2 billing   3 shop   starting feat/checkout: 4 of…  M  D  B
+ l┌ What's new since 0.9.0 ─────────────────────────────────────────────────┐es
+┌ │                                                                         │──┐
+│ │  ▸ breaking Changed lanes.hosts_file to default to auto, so lanes on    │  │
+│ │             *.localhost no longer write the hosts file.                 │  │
+│ │  ▸ breaking Removed the --watch flag of devlanes logs; use devlanes     │  │
+│ │             logs -f.                                                    │  │
+│ │  ▸ Added devlanes url --copy, which copies a service's address.         │──┤
+│ │  ▸ Fixed devlanes logs dropping the last line of a unit that exited.    │fa│
+│ │  ▸ Added a CPU column to devlanes status --long.                        │  │
+│ │  ▸ Fixed the monitor's memory box counting a frozen lane twice.         │fa│
+│ │  ▸ Changed devlanes doctor to name the config key behind each warning.  │  │
+│ │                                                                         │fa│
+│ │  0.9.2                                                                  │  │
+│ │  ▸ Fixed the TUI's monitor showing a stopped lane's last CPU sample.    │fa│
+│ │  ▸ Added the tui.on_quit choice to the quit dialog.                     │  │
+│ │                                                                         │fa│
+│ │  0.9.1                                                                  │  │
+│ │  ▸ Fixed devlanes start waiting for a ready check of a service that     │fa│
+│ │    already exited.                                                      │  │
+│ │  ▸ Fixed devlanes stop leaving a lane's containers running.             │fa│
+│ │                                                                         │  │
+└─└─────────────────────────── lines 2-19 of 19 · j k scroll · enter closes ┘──┘
+ r restart   n next problem   pgup scroll back            ? all keys   q quit
+
+--- styles (row: columns style) ---
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 72 bold, 75 bold, 78 bold
+1: 0-1 dim, 2-76 bold, 77-79 dim
+2: 0 darkgray, 2 bold, 76 bold, 77-79 darkgray
+3: 0 darkgray, 2 bold, 5-6 dim, 7-15 yellow, 24-39 bold, 55-58 bold, 76 bold, 79 darkgray
+4: 0 darkgray, 2 bold, 16-26 bold, 76 bold, 79 darkgray
+5: 0 darkgray, 2 bold, 5-6 dim, 7-15 yellow, 28-34 bold, 44-56 bold, 63-70 bold, 76 bold, 79 darkgray
+6: 0 darkgray, 2 bold, 16-22 bold, 76 bold, 79 darkgray
+7: 0 darkgray, 2 bold, 5-6 dim, 13-31 bold, 76 bold, 77-79 darkgray
+8: 0 darkgray, 2 bold, 5-6 dim, 13-25 bold, 76 bold, 79 darkgray
+9: 0 darkgray, 2 bold, 5-6 dim, 29-50 bold, 76 bold, 79 darkgray
+10: 0 darkgray, 2 bold, 5-6 dim, 76 bold, 79 darkgray
+11: 0 darkgray, 2 bold, 5-6 dim, 15-29 bold, 76 bold, 79 darkgray
+12: 0 darkgray, 2 bold, 76 bold, 79 darkgray
+13: 0 darkgray, 2 bold, 5-9 bold, 76 bold, 79 darkgray
+14: 0 darkgray, 2 bold, 5-6 dim, 76 bold, 79 darkgray
+15: 0 darkgray, 2 bold, 5-6 dim, 17-27 bold, 76 bold, 79 darkgray
+16: 0 darkgray, 2 bold, 76 bold, 79 darkgray
+17: 0 darkgray, 2 bold, 5-9 bold, 76 bold, 79 darkgray
+18: 0 darkgray, 2 bold, 5-6 dim, 13-26 bold, 76 bold, 79 darkgray
+19: 0 darkgray, 2 bold, 76 bold, 79 darkgray
+20: 0 darkgray, 2 bold, 5-6 dim, 13-25 bold, 76 bold, 79 darkgray
+21: 0 darkgray, 1 reversed, 2 bold, 76 bold, 79 darkgray
+22: 0-1 darkgray, 2-29 bold, 30-75 bold dim, 76 bold, 77-79 darkgray
+23: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-33 bold, 34-48 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

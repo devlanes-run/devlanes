@@ -82,7 +82,7 @@ async fn daemon_tab_at_80x24() -> TestResult {
         // Below 100 columns the facts are two lines in the checks' box.
         facts.as_str(),
         "https on fallback port 8443: port 443 needs root",
-        "fix: devlanes certs trust",
+        "fix: devlanes setup",
         "following · all levels · repeats folded",
         // Parsed: level tag, target without `devlanes_`, the message, fields.
         "ERROR daemon::lifecycle",
@@ -576,13 +576,13 @@ async fn checks_text_is_selected_and_copied_like_the_log() -> TestResult {
     let rows = copied(&app.update(key(KeyCode::Char('y'))))?;
     let lines: Vec<&str> = rows.lines().collect();
     assert_eq!(lines.len(), 2, "{rows}");
-    assert_eq!(lines[1].trim_start(), "fix: devlanes certs trust", "{rows}");
+    assert_eq!(lines[1].trim_start(), "fix: devlanes setup", "{rows}");
 
     // Y: the whole check with its fix, unwrapped.
     app.update(key(KeyCode::Char('c')));
     let whole = copied(&app.update(key(KeyCode::Char('Y'))))?;
     assert!(whole.starts_with("fail tls: "), "{whole}");
-    assert!(whole.ends_with("\n  fix: devlanes certs trust"), "{whole}");
+    assert!(whole.ends_with("\n  fix: devlanes setup"), "{whole}");
 
     // The service check carries its units on a line of their own.
     let checks = app.daemon_check_blocks();
@@ -631,7 +631,7 @@ async fn dragging_over_the_checks_copies_their_text() -> TestResult {
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");
     assert!(lines[0].starts_with("fail tls"), "{text}");
-    assert_eq!(lines[1].trim_start(), "fix: devlanes certs trust", "{text}");
+    assert_eq!(lines[1].trim_start(), "fix: devlanes setup", "{text}");
     assert!(app.daemon.checks_copy.is_none() && app.daemon.copy.is_none());
 
     // A click without a drag copies nothing; one in the log focuses it.
@@ -1019,7 +1019,7 @@ async fn help_lists_clean_and_the_daemon_page() -> TestResult {
         "clean the lanes whose worktree is gone",
         "connect, sign in, type a code or disconnect",
         "revoke the selected client",
-        "hide the version notice",
+        "update as the header offers",
         "monitor, daemon, boxes; again or esc returns",
     ] {
         assert!(text.contains(expected), "missing {expected:?}:\n{text}");
@@ -1169,7 +1169,7 @@ async fn drive_tails_the_daemon_log_file() -> TestResult {
     let text = screen(terminal.buffer());
     assert!(text.contains("ERROR daemon::lifecycle"), "{text}");
     assert!(text.contains("compose failed"), "{text}");
-    assert!(text.contains("fix: devlanes certs trust"), "{text}");
+    assert!(text.contains("fix: devlanes setup"), "{text}");
     assert_clean(terminal.buffer(), "drive daemon tab");
     assert!(!api.calls().iter().any(|c| c.starts_with("daemon.shutdown")));
     Ok(())

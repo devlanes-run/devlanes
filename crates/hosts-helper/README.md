@@ -80,11 +80,15 @@ and only matter while the devlanes proxy listens there.
 ## Usage
 
 ```sh
-devlanes certs trust --hosts
+devlanes setup
 ```
 
-This installs the devlanes CA in the trust stores, as `devlanes certs trust`
-does, and then the helper and its sudo rule.
+`devlanes setup` installs the helper and its sudo rule when this machine needs
+them: when the system resolver does not answer `*.localhost` with loopback,
+when the user config sets `hostnames.hosts_file: always` or
+`hostnames.resolver: hosts_file`, when the daemon reports that a project needs
+the file, or when an installed helper needs replacing. It also trusts the
+devlanes CA, and lists every step before asking once.
 
 The helper comes from the `devlanes-hosts` binary next to the `devlanes`
 binary, or from the path in `DEVLANES_HOSTS_HELPER`. The installer reads it
@@ -93,9 +97,10 @@ together with the rule. It runs `<copy> version` and refuses anything that
 reports `build=debug` or another protocol. From then on only the private copy
 is used, so rebuilding or replacing the original file mid-install has no effect.
 
-It then asks for your password once (sudo caches it for the remaining commands)
-and runs the commands below, shown for macOS. Linux uses group `root` instead
-of `wheel` and `/usr/bin/test` instead of `/bin/test`.
+`devlanes setup` asks for your password once with `sudo -v` (sudo caches it for
+the remaining commands), and the installer runs the commands below, shown for
+macOS. Linux uses group `root` instead of `wheel` and `/usr/bin/test` instead
+of `/bin/test`.
 
 ```sh
 sudo /bin/test -e /etc/sudoers.d/devlanes    # is there a rule to back up?
@@ -145,7 +150,7 @@ refuses to install otherwise.
 The rule, for a user named `alice`:
 
 ```
-# Installed by `devlanes certs trust --hosts`; remove with `devlanes certs untrust --hosts`.
+# Installed by `devlanes setup`; remove with `devlanes setup --remove`.
 # Lets alice run the devlanes /etc/hosts helper as root without a password.
 # The helper only edits the block between `# devlanes begin` and `# devlanes end`.
 Defaults!/usr/local/libexec/devlanes-hosts !requiretty
@@ -256,7 +261,7 @@ socket, the CA and remote connections.
 
 ```sh
 /usr/local/libexec/devlanes-hosts status     # prints the block; no root needed
-/usr/local/libexec/devlanes-hosts version    # devlanes-hosts 0.1.0 protocol=1 build=release
+/usr/local/libexec/devlanes-hosts version    # devlanes-hosts 0.1.0 protocol=1 revision=1 build=release
 sudo -l                                      # lists your sudo rules, including this one
 ls -l /usr/local/libexec/devlanes-hosts /etc/sudoers.d/devlanes
 ```
@@ -269,14 +274,16 @@ directly and never read `/etc/hosts`.
 ## Removing
 
 ```sh
-devlanes certs untrust --hosts
+devlanes setup --remove
 ```
 
-This clears the block, removes the rule and the helper, then removes the devlanes
-CA from the trust stores, undoing `devlanes certs trust --hosts`. Use
-`devlanes certs untrust --hosts --keep-ca` to remove only the helper and keep the
-CA trusted. If the helper is already gone, the block cannot be cleared that way;
-delete the lines between the markers by hand. To remove everything manually:
+This clears the block, removes the rule and the helper, removes the resolver
+file, then removes the devlanes CA from the trust stores, undoing
+`devlanes setup`. Use `devlanes setup --remove --keep-ca` to keep the CA
+trusted. Without a helper and a block it skips this step, so it asks for no
+password on machines that never installed it. If the helper is already gone,
+the block cannot be cleared that way; delete the lines between the markers by
+hand. To remove everything manually:
 
 ```sh
 sudo /usr/local/libexec/devlanes-hosts clear
@@ -312,7 +319,7 @@ refusing to run it.
 
 ### `helper_missing`
 
-`/usr/local/libexec/devlanes-hosts` does not exist. Run `devlanes certs trust --hosts`.
+`/usr/local/libexec/devlanes-hosts` does not exist. Run `devlanes setup`.
 
 ### `sudo_denied`
 
@@ -321,13 +328,20 @@ sudo asked for a password or refused. Check with
 after an install, `/etc/sudoers` probably does not read `/etc/sudoers.d`; it
 needs `#includedir /etc/sudoers.d` or `@includedir /etc/sudoers.d`. After a
 denial the daemon waits five minutes before trying sudo again, so a missing
-rule does not fill the auth log. Running `devlanes certs trust --hosts` makes it
-retry at once.
+rule does not fill the auth log. Running `devlanes setup` makes it retry at
+once.
 
 ### `helper_outdated`
 
 The installed helper speaks a different protocol version from this devlanes.
-Run `devlanes certs trust --hosts` again.
+Run `devlanes setup` again.
+
+### `helper_revision_outdated`
+
+The installed helper reports a lower revision than this devlanes needs, or
+cannot be run. `devlanes doctor` shows both revisions. Run `devlanes setup`
+again. Updating devlanes asks for this only when the helper itself changed;
+its release version may differ from devlanes' without any warning.
 
 ### `hosts_file_refused`
 
@@ -376,9 +390,17 @@ DEVLANES_HOSTS_HELPER=$PWD/target/release/devlanes-hosts \
 Bump `PROTOCOL` in `src/lib.rs` whenever arguments, input or output change in a
 way an older daemon or helper would misread.
 
+Bump `REVISION` when installed helpers should be replaced, for a security fix
+or new behaviour the daemon relies on. The daemon asks for a reinstall only when
+the installed helper's revision is lower, so releases that leave the helper
+alone do not ask for sudo again. A test in `tests/it/revision.rs` records a hash
+of `src/` next to the revision and fails when the code changes, so each change
+gets that decision; bump `REVISION` if needed, then record the new hash it
+prints.
+
 The helper is Unix only. devlanes writes no hosts file on Windows. Windows 11
 answers every `*.localhost` name itself; on Windows Server, which does not,
-`certs trust --hosts` warns and the entries are added by hand.
+`devlanes setup` warns and the entries are added by hand.
 On Windows the library keeps the name rules and constants, and the binary
 prints that it is not supported and exits 2.
 

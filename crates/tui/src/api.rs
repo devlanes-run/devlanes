@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use devlanes_client::{Client, Frame, Paths};
 use devlanes_proto::{
-    Actor, ActorKind, AttachParams, AttachResult, AttachView, Context, Control, Event, LaneSummary,
-    LogLine, LogQuery, Method, Outcome, Page, ResizeParams, RpcError, RunParams, Selection, events,
+    Actor, ActorKind, AttachParams, AttachResult, AttachView, Context, Control, Event, Hello,
+    LaneSummary, LogLine, LogQuery, Method, Outcome, Page, ResizeParams, RpcError, RunParams,
+    Selection, events,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
@@ -41,29 +42,42 @@ pub enum ApiError {
     /// The daemon answered with data this client does not understand.
     #[error("unexpected daemon data: {0}")]
     Decode(String),
+    /// The daemon speaks another protocol than this TUI; `peer` is its hello.
+    #[error("the daemon runs devlanes {} with protocol {}", .peer.version, .peer.protocol)]
+    Incompatible { peer: Hello },
 }
 
 impl ApiError {
-    /// True when the connection itself is gone and a reconnect is needed.
+    /// True when the connection is gone or unusable and a reconnect is
+    /// needed; an incompatible daemon is one the TUI cannot talk to.
     pub fn is_disconnect(&self) -> bool {
-        matches!(self, Self::Disconnected(_))
+        matches!(self, Self::Disconnected(_) | Self::Incompatible { .. })
     }
 }
 
 impl From<devlanes_client::Error> for ApiError {
-    /// Keeps structured daemon errors and folds every transport failure into a
-    /// disconnect. A stalled start becomes the CLI's `daemon_start_stalled`,
-    /// so it names the step and points at the daemon log.
+    /// Keeps structured daemon errors and incompatible daemons, and folds
+    /// every other transport failure into a disconnect. A stalled start
+    /// becomes the CLI's `daemon_start_stalled`, so it names the step and
+    /// points at the daemon log.
     fn from(error: devlanes_client::Error) -> Self {
         match error {
             devlanes_client::Error::Rpc(rpc) => Self::Rpc(rpc),
             devlanes_client::Error::StartupStalled { step, log } => Self::Rpc(
                 devlanes_client::startup_stalled_error(step.as_deref(), &log),
             ),
+            devlanes_client::Error::Incompatible { peer } => Self::Incompatible { peer },
             other => Self::Disconnected(other.to_string()),
         }
     }
 }
+
+/// The setup steps this machine misses that only the client can see, by the
+/// names `daemon.status` gives them in `setup.missing` (`ca`): the trust
+/// stores belong to the user, not to the daemon. Read-only and bounded in
+/// time by whoever provides it.
+pub type SetupCheck =
+    Arc<dyn Fn() -> futures_util::future::BoxFuture<'static, Vec<String>> + Send + Sync>;
 
 /// What the monitor asks `metrics` for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -603,6 +617,16 @@ pub trait DaemonApi: Send + Sync {
             2,
         )))
     }
+    /// `update.check`: has the daemon look for a newer release unless it
+    /// checked within the hour (always with `force`). Replies with the release
+    /// as `daemon.status` reports it in `update`, or `null`.
+    async fn update_check(&self, _force: bool) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "update.check"}),
+            2,
+        )))
+    }
     /// `infra.logs` with `follow` for one infra container of `lane`: its last
     /// `tail` lines, then new ones, as `log` events until the stream is dropped.
     async fn follow_container(
@@ -617,6 +641,11 @@ pub trait DaemonApi: Send + Sync {
             2,
         )))
     }
+    /// The setup steps missing on this machine that the daemon cannot see
+    /// (see [`SetupCheck`]); `daemon.status` reports the others.
+    async fn setup_missing(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// The daemon's own log file, read directly because the TUI runs on the
     /// same machine. `None` when there is no local file.
     fn daemon_log(&self) -> Option<PathBuf> {
@@ -627,16 +656,33 @@ pub trait DaemonApi: Send + Sync {
     fn home(&self) -> Option<PathBuf> {
         None
     }
-    /// How this devlanes was installed and the release notices dismissed so
-    /// far, for the update notice. Reads the binary's path and the home's
-    /// notice log; called on a blocking thread.
-    fn notices(&self) -> (devlanes_client::update::InstallMethod, Vec<String>) {
-        let method = devlanes_client::update::InstallMethod::current();
-        let dismissed = self
+    /// How this devlanes was installed and the notices to hold back: the
+    /// dismissed dialogs (the welcome) and the notices shown in the last
+    /// day. Reads the binary's path and the home's notice log; called on a
+    /// blocking thread.
+    fn notices(&self) -> (devlanes_update::InstallMethod, Vec<String>) {
+        let method = devlanes_update::InstallMethod::current();
+        let held = self
             .home()
-            .map(|home| devlanes_client::update::NoticeLog::load(&home).dismissed)
+            .map(|home| {
+                let log = devlanes_update::NoticeLog::load(&home);
+                let now = devlanes_update::now_ms();
+                let recent = log
+                    .shown
+                    .keys()
+                    .filter(|key| !log.due(key, now))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                log.dismissed.into_iter().chain(recent).collect()
+            })
             .unwrap_or_default();
-        (method, dismissed)
+        (method, held)
+    }
+    /// The version the install's entry runs now
+    /// ([`devlanes_update::installed_version`]), which a reload would open;
+    /// `None` when it is unknown. Called on a blocking thread.
+    fn installed_version(&self) -> Option<String> {
+        None
     }
 }
 
@@ -802,6 +848,20 @@ pub fn is_unsupported(error: &ApiError) -> bool {
     )
 }
 
+/// The environment lanes started from the TUI get: `vars` with names folded
+/// as the CLI folds them (`Path` is `PATH` on Windows), without what a
+/// relaunch or `devlanes update` passed to this TUI alone.
+fn lane_env(vars: impl IntoIterator<Item = (String, String)>) -> BTreeMap<String, String> {
+    vars.into_iter()
+        .map(|(name, value)| (devlanes_core::env::fold_name(name), value))
+        .filter(|(name, _)| {
+            ![crate::REOPEN_ENV, crate::UPDATE_STEPS_ENV]
+                .iter()
+                .any(|own| devlanes_core::env::fold_name((*own).to_owned()) == *name)
+        })
+        .collect()
+}
+
 /// The real implementation over `devlanes-client`.
 ///
 /// Short requests share one connection. Subscriptions, attaches and long
@@ -814,23 +874,27 @@ pub struct ClientApi {
     shared: Mutex<Option<Client>>,
     /// Whether the cwd's project was looked up, which registers it with the daemon.
     cwd_seen: AtomicBool,
+    setup_check: Option<SetupCheck>,
 }
 
 impl ClientApi {
     /// Connects once, spawning the daemon if needed, so startup errors surface
-    /// before the terminal switches to the alternate screen.
-    pub async fn connect(paths: Paths) -> Result<Arc<Self>, devlanes_client::Error> {
+    /// before the terminal switches to the alternate screen. `setup_check`
+    /// answers [`DaemonApi::setup_missing`].
+    pub async fn connect(
+        paths: Paths,
+        setup_check: Option<SetupCheck>,
+    ) -> Result<Arc<Self>, devlanes_client::Error> {
         let client = Client::connect_or_spawn(&paths).await?;
         Ok(Arc::new(Self {
             paths,
             cwd: std::env::current_dir().unwrap_or_default(),
             // Captured once: start/run from the TUI use this shell's env as the lane
-            // base env. Names folded as the CLI folds them (`Path` is `PATH` on Windows).
-            env: std::env::vars()
-                .map(|(name, value)| (devlanes_core::env::fold_name(name), value))
-                .collect(),
+            // base env.
+            env: lane_env(std::env::vars()),
             shared: Mutex::new(Some(client)),
             cwd_seen: AtomicBool::new(false),
+            setup_check,
         }))
     }
 
@@ -1132,6 +1196,17 @@ impl DaemonApi for ClientApi {
             .await
     }
 
+    /// Calls `update.check` on its own connection: reading a registry can
+    /// take seconds, which must not hold up requests on the shared one.
+    async fn update_check(&self, force: bool) -> Result<Value, ApiError> {
+        self.oneshot(
+            Method::UpdateCheck,
+            json!({"force": force}),
+            self.context(None, false),
+        )
+        .await
+    }
+
     /// Calls `doctor` on the shared connection.
     async fn doctor(&self) -> Result<Value, ApiError> {
         self.shared_request(Method::Doctor, json!({}), self.context(None, false))
@@ -1372,6 +1447,14 @@ impl DaemonApi for ClientApi {
         .await
     }
 
+    /// Runs the binary's [`SetupCheck`]; nothing without one.
+    async fn setup_missing(&self) -> Vec<String> {
+        match &self.setup_check {
+            Some(check) => check().await,
+            None => Vec::new(),
+        }
+    }
+
     /// `$DEVLANES_HOME/logs/daemon.log`.
     fn daemon_log(&self) -> Option<PathBuf> {
         Some(self.paths.logs.join("daemon.log"))
@@ -1380,6 +1463,11 @@ impl DaemonApi for ClientApi {
     /// The home the client resolved, explicit or default.
     fn home(&self) -> Option<PathBuf> {
         Some(self.paths.home.clone())
+    }
+
+    /// Runs the install's entry with `--version`.
+    fn installed_version(&self) -> Option<String> {
+        devlanes_update::installed_version()
     }
 }
 
@@ -1401,6 +1489,23 @@ fn box_settings(path: &std::path::Path) -> (devlanes_config::BoxSettings, bool) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What a relaunch or `devlanes update` passed to this TUI never reaches
+    /// the lanes it starts.
+    #[test]
+    fn lanes_get_the_shell_env_without_the_relaunch_variables() {
+        let env = lane_env([
+            ("HOME".to_owned(), "/home/a".to_owned()),
+            (crate::REOPEN_ENV.to_owned(), "{}".to_owned()),
+            (crate::UPDATE_STEPS_ENV.to_owned(), "{}".to_owned()),
+        ]);
+        assert_eq!(
+            env.keys().cloned().collect::<Vec<_>>(),
+            [devlanes_core::env::fold_name("HOME".to_owned())]
+        );
+        #[cfg(windows)]
+        assert!(lane_env([("devlanes_update_steps".to_owned(), "{}".to_owned())]).is_empty());
+    }
 
     /// Read as the tunnel reads them: pairing is off and connections are
     /// off only when set so and valid.

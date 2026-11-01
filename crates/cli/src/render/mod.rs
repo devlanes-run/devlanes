@@ -359,7 +359,7 @@ pub(crate) fn table(rows: &[Vec<String>], indent: &str) -> Vec<String> {
 }
 
 /// Binary-prefixed size with one decimal, matching the CI resource summary.
-pub(crate) fn bytes(value: u64) -> String {
+pub fn bytes(value: u64) -> String {
     const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
     if value < 1024 {
         return format!("{value} B");

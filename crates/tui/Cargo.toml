@@ -21,6 +21,7 @@ devlanes-config = { path = "../config" }
 devlanes-core = { path = "../core" }
 devlanes-proto = { path = "../proto" }
 devlanes-term = { path = "../term" }
+devlanes-update = { path = "../update" }
 futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true

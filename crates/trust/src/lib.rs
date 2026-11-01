@@ -30,7 +30,7 @@ pub use exec::{
     path_arg, run, run_checked,
 };
 
-/// A store a user can ask `devlanes certs trust` to install the CA into.
+/// A store a user can ask `devlanes setup` to install the CA into.
 ///
 /// Mirrors `tls.trust` in the user config; the composition root maps between the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

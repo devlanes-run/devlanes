@@ -96,20 +96,21 @@ The daemon's proxy listens on 443 and 80, and falls back to 8443 and 8080 when i
 ```sh
 dl url ls                                   # routed hostnames with their lane, unit and port
 curl --cacert "$DEVLANES_HOME/ca/ca.pem" https://api.fixture-two.localhost/healthz
-dl certs trust                              # installs the dev CA (asks for your password)
-dl certs untrust
+dl setup                                    # trusts the dev CA (asks for your password)
+dl setup --remove
 ```
 
-The `/etc/hosts` helper needs a release build, because its installer refuses debug builds:
+The `/etc/hosts` helper needs a release build, because its installer refuses debug builds. `setup` installs it only where this machine needs it, so force it with the user config where `*.localhost` already resolves:
 
 ```sh
 cargo build --release -p devlanes-hosts-helper
-DEVLANES_HOSTS_HELPER="$PWD/target/release/devlanes-hosts" dl certs trust --hosts   # CA + helper
-dl certs untrust --hosts             # removes both
-dl certs untrust --hosts --keep-ca   # removes only the helper
+dl config set hostnames.hosts_file always
+DEVLANES_HOSTS_HELPER="$PWD/target/release/devlanes-hosts" dl setup   # CA + helper
+dl setup --remove             # removes both
+dl setup --remove --keep-ca   # removes only the helper
 ```
 
-`crates/hosts-helper/README.md` explains what that installs and why. On Windows there is no helper: `*.localhost` resolves natively on Windows 11 (not on Windows Server), `certs trust` shows a Windows security warning instead of a password prompt, `curl.exe` needs `--ssl-revoke-best-effort`, and `certs trust --resolver` writes an NRPT rule after a UAC prompt ([Windows](docs/guides/windows.md)).
+`crates/hosts-helper/README.md` explains what that installs and why. On Windows there is no helper: `*.localhost` resolves natively on Windows 11 (not on Windows Server), `setup` shows a Windows security warning instead of a password prompt, `curl.exe` needs `--ssl-revoke-best-effort`, and with the resolver strategy `setup` writes an NRPT rule after a UAC prompt ([Windows](docs/guides/windows.md)).
 
 ## Docker and compose
 

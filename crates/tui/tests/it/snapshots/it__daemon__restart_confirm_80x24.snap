@@ -7,7 +7,7 @@ expression: screen(&render(&app)?)
 "│daemon    X.Y.Z · pid 4242 · up 2h 5m · 3 managed                             │"
 "│socket    /home/acme/.devlanes/run/daemon.sock                                │"
 "│fail tls     no CA: no CA has been created yet                                │"
-"│             fix: devlanes certs trust                                        │"
+"│             fix: devlanes setup                                              │"
 "│warn proxy   https on fallback port 8443: port 443 needs root                 │"
 "│      ┌───────────────────────────────────────────────────────────────┐       │"
 "│      │ Restart the daemon?                                           │       │"

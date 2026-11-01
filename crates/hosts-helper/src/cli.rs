@@ -11,7 +11,7 @@ use std::process::ExitCode;
 use crate::block::{self, BlockError};
 use crate::names::{self, InputError, MAX_INPUT_BYTES, NameError, Suffixes};
 use crate::write::{self, Outcome, UpdateError, WriteError};
-use crate::{HOSTS_PATH, PROTOCOL, exit};
+use crate::{HOSTS_PATH, PROTOCOL, REVISION, exit};
 
 /// A subcommand.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,7 +25,7 @@ pub enum Command {
     Clear,
     /// Prints the block.
     Status,
-    /// Prints version, protocol and build profile.
+    /// Prints version, protocol, revision and build profile.
     Version,
 }
 
@@ -53,7 +53,7 @@ commands:
                        stdin (one per line); names must end in .localhost or .<tld>
   clear                remove the devlanes block
   status               print the devlanes block (needs no root)
-  version              print version, protocol and build profile
+  version              print version, protocol, revision and build profile
 ";
 
 /// Parses arguments after the program name.
@@ -197,7 +197,7 @@ fn run(
     match &invocation.command {
         Command::Version => printed(writeln!(
             stdout,
-            "devlanes-hosts {} protocol={PROTOCOL} build={}",
+            "devlanes-hosts {} protocol={PROTOCOL} revision={REVISION} build={}",
             env!("CARGO_PKG_VERSION"),
             crate::BUILD
         )),

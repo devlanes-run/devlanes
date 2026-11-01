@@ -8,7 +8,7 @@ Read this when the user asks to move an existing setup (mprocs, dekit, process-c
 2. Read each command to its end. Open the `package.json` scripts, Makefile targets and entrypoints the setup runs: they tell you which port a process listens on, whether it has a health route, what it logs once it is up, and whether it ends by itself.
 3. Write `devlanes.yaml` with the rules below. Keep the old files; delete them only when the user asks.
 4. Run `devlanes config check`, then `devlanes start`, and fix what fails (`devlanes debug errors`, `devlanes logs UNIT --tail 200`). Check `devlanes status` shows each service ready on its hostname.
-5. Tell the user what did not carry over (the "not mapped" rows that apply) and what they need to do: `devlanes certs trust` once, a ready log line to add to a worker.
+5. Tell the user what did not carry over (the "not mapped" rows that apply) and what they need to do: `devlanes setup` once, a ready log line to add to a worker.
 
 ## Rules for every source
 

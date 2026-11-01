@@ -1,82 +1,82 @@
- devlanes  1 acme   2 billing   3 shop   starting feat/checkout: 4 of 8 rea…  Monitor  Daemon · 2 issues, update  Boxes
- lanes  1 main  2 feat/checkout 4/8  3 fix/cache  4 spike/old-search                            1-9 or [ ] switch lanes
-┌ @0 · 34/38 up ───────────────────────────────┐┌ web-app  ready ────────────────────────────── watching · enter types ┐
+ devlanes  1 acme   2 billing   3 shop          1.1.0 available, breaking · U update  Monitor  Daemon · 2 issues  Boxes
+ lanes  1 main  2 feat/checkout  3 fix/cache  4 spike/old-search                                1-9 or [ ] switch lanes
+┌ @0 frozen · 37/38 up ────────────────────────┐┌ web-app  ❄ frozen ─────────────────────────── watching · enter types ┐
 │ ▾ services                                34 ││   VITE v6.0.3  ready in 412 ms                                       │
-│   ● Gateway API                              ││                                                                      │
-│   ● api-auth                                 ││   ➜  Local:   https://app.acme.localhost/                            │
-│   ● api-users                                ││   ➜  Network: use --host to expose                                   │
-│   ● api-billing                              ││ 10:42:07 [vite] hmr update /src/routes/checkout.tsx                  │
-│   ● api-orders                               ││ 10:42:11 [vite] page reload src/main.tsx                             │
-│   ● api-search                               ││                                                                      │
-│   ● api-catalog                              ││                                                                      │
-│   ● api-inventory                            ││                                                                      │
-│   ● api-notify                               ││                                                                      │
-│   ● api-reports                              ││                                                                      │
-│   ● web-app                                  ││                                                                      │
-│   ● web-admin                                ││                                                                      │
-│   ● web-docs                                 ││                                                                      │
+│   ❄ Gateway API                              ││                                                                      │
+│   ❄ api-auth                                 ││   ➜  Local:   https://app.acme.localhost/                            │
+│   ❄ api-users                                ││   ➜  Network: use --host to expose                                   │
+│   ❄ api-billing                              ││ 10:42:07 [vite] hmr update /src/routes/checkout.tsx                  │
+│   ❄ api-orders                               ││ 10:42:11 [vite] page reload src/main.tsx                             │
+│   ❄ api-search                               ││                                                                      │
+│   ❄ api-catalog                              ││                                                                      │
+│   ❄ api-inventory                            ││                                                                      │
+│   ❄ api-notify                               ││                                                                      │
+│   ❄ api-reports                              ││                                                                      │
+│   ❄ web-app                                  ││                                                                      │
+│   ❄ web-admin                                ││                                                                      │
+│   ❄ web-docs                                 ││                                                                      │
 │   · web-storybook                            ││                                                                      │
-│   ● web-landing                              ││                                                                      │
-│   ◉ wrk-email                                ││                                                                      │
-│   ◉ wrk-billing                              ││                                                                      │
-│   ◉ wrk-index                                ││                                                                      │
-│   ◉ wrk-thumbs                               ││                                                                      │
-│   ✕ wrk-export               failed · exit 1 ││                                                                      │
-│   ◉ wrk-cron                                 ││                                                                      │
-│   ◉ wrk-webhooks                             ││                                                                      │
-│   ◉ wrk-ledger                               ││                                                                      │
-│   ● stub-stripe                              ││                                                                      │
-│   ● stub-s3                                  ││                                                                      │
-│   ◆ stub-twilio         orphaned · pid 48211 ││                                                                      │
-│   ● stub-sendgrid                            ││                                                                      │
-│   ● stub-segment                             ││                                                                      │
-│   ● stub-auth0                               ││                                                                      │
-│   ● proxy-edge                               ││                                                                      │
-│   ● docs-search                              ││                                                                      │
-│   ● ml-ranker                                ││                                                                      │
-│   ⠋ ml-embed                        starting ││                                                                      │
-│   ● cache-warm                               ││                                                                      │
+│   ❄ web-landing                              ││                                                                      │
+│   ❄ wrk-email                                ││                                                                      │
+│   ❄ wrk-billing                              ││                                                                      │
+│   ❄ wrk-index                                ││                                                                      │
+│   ❄ wrk-thumbs                               ││                                                                      │
+│   ❄ wrk-export                               ││                                                                      │
+│   ❄ wrk-cron                                 ││                                                                      │
+│   ❄ wrk-webhooks                             ││                                                                      │
+│   ❄ wrk-ledger                               ││                                                                      │
+│   ❄ stub-stripe                              ││                                                                      │
+│   ❄ stub-s3                                  ││                                                                      │
+│   ❄ stub-twilio                              ││                                                                      │
+│   ❄ stub-sendgrid                            ││                                                                      │
+│   ❄ stub-segment                             ││                                                                      │
+│   ❄ stub-auth0                               ││                                                                      │
+│   ❄ proxy-edge                               ││                                                                      │
+│   ❄ docs-search                              ││                                                                      │
+│   ❄ ml-ranker                                ││                                                                      │
+│   ❄ ml-embed                                 ││                                                                      │
+│   ❄ cache-warm                               ││                                                                      │
 └──────────────────────────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
  enter type into it   x stop   r restart   o open in browser   c select text   z zoom             ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 78 bold, 79-84 dim, 87 bold, 88-92 dim, 93-111 red, 114 bold, 115-118 dim
-1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 37-47 dim, 50-51 dim, 52-67 yellow, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
-2: 0 darkgray, 2-3 bold, 4-14 dim, 16-48 darkgray, 50-56 bold, 57-58 dim, 59-63 green, 65-94 darkgray, 96-117 dim, 119 darkgray
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 48-83 yellow, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 101-111 red, 114 bold, 115-118 dim
+1: 0-6 dim, 7-14 bold reversed, 16-30 dim, 33-43 dim, 46-47 dim, 48-63 yellow, 96-98 bold, 99-102 dim, 103-105 bold, 106-119 dim
+2: 0 darkgray, 2-3 bold, 4-21 dim, 23-48 darkgray, 50-56 bold, 57-58 dim, 59-60 blue, 61-66 dim, 68-94 darkgray, 96-117 dim, 119 darkgray
 3: 0 darkgray, 2-3 dim, 44-45 dim, 47-48 darkgray, 50-62 color2, 74-76 bold, 119 darkgray
-4: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 119 darkgray
-5: 0 darkgray, 4-5 green, 6-13 blue, 47-48 darkgray, 52 color2, 64-90 color6, 119 darkgray
-6: 0 darkgray, 4-5 green, 6-14 blue, 47-48 darkgray, 52 color2, 119 darkgray
-7: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 50-57 dim, 59-64 color6, 119 darkgray
-8: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 50-57 dim, 59-64 color6, 119 darkgray
-9: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 119 darkgray
-10: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 119 darkgray
-11: 0 darkgray, 4-5 green, 6-18 blue, 47-48 darkgray, 119 darkgray
-12: 0 darkgray, 4-5 green, 6-15 blue, 47-48 darkgray, 119 darkgray
-13: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 119 darkgray
+4: 0 darkgray, 4-16 blue, 47-48 darkgray, 119 darkgray
+5: 0 darkgray, 4-13 blue, 47-48 darkgray, 52 color2, 64-90 color6, 119 darkgray
+6: 0 darkgray, 4-14 blue, 47-48 darkgray, 52 color2, 119 darkgray
+7: 0 darkgray, 4-16 blue, 47-48 darkgray, 50-57 dim, 59-64 color6, 119 darkgray
+8: 0 darkgray, 4-15 blue, 47-48 darkgray, 50-57 dim, 59-64 color6, 119 darkgray
+9: 0 darkgray, 4-15 blue, 47-48 darkgray, 119 darkgray
+10: 0 darkgray, 4-16 blue, 47-48 darkgray, 119 darkgray
+11: 0 darkgray, 4-18 blue, 47-48 darkgray, 119 darkgray
+12: 0 darkgray, 4-15 blue, 47-48 darkgray, 119 darkgray
+13: 0 darkgray, 4-16 blue, 47-48 darkgray, 119 darkgray
 14: 0 darkgray, 1-46 reversed, 47-48 darkgray, 119 darkgray
-15: 0 darkgray, 4-14 green, 47-48 darkgray, 119 darkgray
-16: 0 darkgray, 4-13 green, 47-48 darkgray, 119 darkgray
+15: 0 darkgray, 4-5 blue, 6-14 green, 47-48 darkgray, 119 darkgray
+16: 0 darkgray, 4-5 blue, 6-13 green, 47-48 darkgray, 119 darkgray
 17: 0 darkgray, 4-5 dim, 6-18 dim green, 47-48 darkgray, 119 darkgray
-18: 0 darkgray, 4-16 green, 47-48 darkgray, 119 darkgray
-19: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 119 darkgray
-20: 0 darkgray, 4-5 green, 6-16 magenta, 47-48 darkgray, 119 darkgray
-21: 0 darkgray, 4-5 green, 6-14 magenta, 47-48 darkgray, 119 darkgray
-22: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 119 darkgray
-23: 0 darkgray, 4-5 red, 6-15 magenta, 31-36 red, 37-39 dim, 40-45 red, 47-48 darkgray, 119 darkgray
-24: 0 darkgray, 4-5 green, 6-13 magenta, 47-48 darkgray, 119 darkgray
-25: 0 darkgray, 4-5 green, 6-17 magenta, 47-48 darkgray, 119 darkgray
-26: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 119 darkgray
-27: 0 darkgray, 4-5 green, 6-16 darkgray, 47-48 darkgray, 119 darkgray
-28: 0 darkgray, 4-5 green, 6-12 darkgray, 47-48 darkgray, 119 darkgray
-29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-45 dim, 47-48 darkgray, 119 darkgray
-30: 0 darkgray, 4-5 green, 6-18 darkgray, 47-48 darkgray, 119 darkgray
-31: 0 darkgray, 4-5 green, 6-17 darkgray, 47-48 darkgray, 119 darkgray
-32: 0 darkgray, 4-5 green, 6-15 darkgray, 47-48 darkgray, 119 darkgray
-33: 0 darkgray, 4-5 green, 6-15 cyan, 47-48 darkgray, 119 darkgray
-34: 0 darkgray, 4-5 green, 6-16 cyan, 47-48 darkgray, 119 darkgray
-35: 0 darkgray, 4-14 green, 47-48 darkgray, 119 darkgray
-36: 0 darkgray, 6-13 green, 47-48 darkgray, 119 darkgray
-37: 0 darkgray, 4-5 green, 6-15 dim blue, 47-48 darkgray, 119 darkgray
+18: 0 darkgray, 4-5 blue, 6-16 green, 47-48 darkgray, 119 darkgray
+19: 0 darkgray, 4-5 blue, 6-14 magenta, 47-48 darkgray, 119 darkgray
+20: 0 darkgray, 4-5 blue, 6-16 magenta, 47-48 darkgray, 119 darkgray
+21: 0 darkgray, 4-5 blue, 6-14 magenta, 47-48 darkgray, 119 darkgray
+22: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 119 darkgray
+23: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 119 darkgray
+24: 0 darkgray, 4-5 blue, 6-13 magenta, 47-48 darkgray, 119 darkgray
+25: 0 darkgray, 4-5 blue, 6-17 magenta, 47-48 darkgray, 119 darkgray
+26: 0 darkgray, 4-5 blue, 6-15 magenta, 47-48 darkgray, 119 darkgray
+27: 0 darkgray, 4-5 blue, 6-16 darkgray, 47-48 darkgray, 119 darkgray
+28: 0 darkgray, 4-5 blue, 6-12 darkgray, 47-48 darkgray, 119 darkgray
+29: 0 darkgray, 4-5 blue, 6-16 darkgray, 47-48 darkgray, 119 darkgray
+30: 0 darkgray, 4-5 blue, 6-18 darkgray, 47-48 darkgray, 119 darkgray
+31: 0 darkgray, 4-5 blue, 6-17 darkgray, 47-48 darkgray, 119 darkgray
+32: 0 darkgray, 4-5 blue, 6-15 darkgray, 47-48 darkgray, 119 darkgray
+33: 0 darkgray, 4-5 blue, 6-15 cyan, 47-48 darkgray, 119 darkgray
+34: 0 darkgray, 4-5 blue, 6-16 cyan, 47-48 darkgray, 119 darkgray
+35: 0 darkgray, 4-5 blue, 6-14 green, 47-48 darkgray, 119 darkgray
+36: 0 darkgray, 4-5 blue, 6-13 green, 47-48 darkgray, 119 darkgray
+37: 0 darkgray, 4-5 blue, 6-15 dim blue, 47-48 darkgray, 119 darkgray
 38: 0-119 darkgray
 39: 1-5 bold, 6-21 dim, 22 bold, 23-30 dim, 31 bold, 32-42 dim, 43 bold, 44-62 dim, 63 bold, 64-78 dim, 79 bold, 80-87 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

@@ -45,6 +45,8 @@ pub struct Connection {
     /// The client's address from `$SSH_CONNECTION`; `None` over a command.
     pub address: Option<String>,
     pub since_ms: Option<u64>,
+    /// The client's devlanes version, from its handshake.
+    pub version: Option<String>,
     /// What the client last reported mirroring; `None` before its first
     /// report and from clients that send none.
     pub mirror: Option<Mirror>,
@@ -121,6 +123,11 @@ impl Client {
         self.connections.iter().find_map(|c| c.address.as_deref())
     }
 
+    /// The devlanes version of its first live connection that sent one.
+    pub fn version(&self) -> Option<&str> {
+        self.connections.iter().find_map(|c| c.version.as_deref())
+    }
+
     /// The first mirror report among its connections.
     pub fn mirror(&self) -> Option<&Mirror> {
         self.connections.iter().find_map(|c| c.mirror.as_ref())
@@ -144,7 +151,7 @@ mod tests {
                  "connections": [
                      {"address": "203.0.113.4", "since_ms": 3_000,
                       "mirror": {"ports": 6, "bound": 5, "skipped_lanes": 1}},
-                     {"address": null, "since_ms": 2_000, "mirror": null}
+                     {"address": null, "since_ms": 2_000, "version": "0.9.0", "mirror": null}
                  ]},
                 {"id": "", "name": "old", "paired": false, "pairings": 0,
                  "connections": [{"address": "198.51.100.7", "since_ms": 4_500}]},
@@ -161,6 +168,8 @@ mod tests {
         assert_eq!(laptop.connected_since(), Some(2_000));
         assert_eq!(laptop.address(), Some("203.0.113.4"));
         assert_eq!(laptop.mirror().map(|m| m.bound), Some(5));
+        assert_eq!(laptop.version(), Some("0.9.0"));
+        assert_eq!(parsed.items[1].version(), None);
         assert_eq!(short_id(&laptop.id), "dl_cid_01234567");
         assert!(!parsed.items[1].revocable());
         assert_eq!(parse(&json!({})), Clients::default());

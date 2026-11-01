@@ -14,16 +14,20 @@ mod daemon;
 mod driver;
 #[cfg(windows)]
 mod follow;
-mod hosts;
 mod lifecycle;
 mod local;
 mod local_doctor;
+mod notes;
 mod notices;
 mod output;
 mod progress;
+mod relaunch;
 mod remote;
+mod setup;
 mod start_ui;
 mod terminal;
+mod uninstall;
+mod update;
 mod user_config;
 mod verbose;
 mod wiring;
@@ -66,12 +70,16 @@ fn main() -> ExitCode {
             #[cfg(windows)]
             cli_console();
             use devlanes_cli::clap::error::ErrorKind;
-            // Help, version and similar displays are not errors.
+            if error.kind() == ErrorKind::DisplayVersion {
+                use std::io::Write as _;
+                let version = devlanes_update::version::running();
+                let _ = writeln!(std::io::stdout(), "devlanes {version}");
+                return ExitCode::SUCCESS;
+            }
+            // Help and similar displays are not errors.
             if matches!(
                 error.kind(),
-                ErrorKind::DisplayHelp
-                    | ErrorKind::DisplayVersion
-                    | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                ErrorKind::DisplayHelp | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
             ) {
                 error.exit();
             }
@@ -144,6 +152,16 @@ fn main() -> ExitCode {
         version = env!("CARGO_PKG_VERSION"),
         "output mode"
     );
+    // Processes that may run while a package manager replaces devlanes.exe
+    // keep a second link to it, without which Windows refuses the replace.
+    #[cfg(windows)]
+    let _retained = matches!(
+        action,
+        Action::Ui | Action::StartUi { .. } | Action::RpcThenUi(_) | Action::Update(_)
+    )
+    .then(devlanes_client::Paths::discover)
+    .and_then(Result::ok)
+    .and_then(|paths| devlanes_update::retain_own_exe(&paths.home));
     let tokio = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

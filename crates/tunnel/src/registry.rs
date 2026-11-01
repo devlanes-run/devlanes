@@ -12,7 +12,7 @@ use devlanes_proto::{
     Context, Control, Event, Method, Outcome, RpcError,
     remote::{
         MirrorReport, REGISTRY_CHANGE_EVENT, REGISTRY_SNAPSHOT_EVENT, RegistryParams, RemoteClient,
-        ReportParams,
+        ReportParams, label_version,
     },
 };
 use devlanes_transport::{
@@ -145,6 +145,7 @@ impl RegistrySource for DaemonRegistry {
             client: Some(RemoteClient {
                 id: client.id.clone(),
                 name: client.name.clone(),
+                version: label_version(&client.label).map(str::to_owned),
                 ..self.client.clone()
             }),
             features: client.features.clone(),
@@ -397,7 +398,7 @@ mod tests {
             .await?;
             let registry = DaemonRegistry::new(paths, RemoteClient::default(), true);
             let client = ClientInfo {
-                label: "devlanes test".into(),
+                label: "devlanes 0.9.0 (linger off)".into(),
                 id: "0123abcd".into(),
                 name: "laptop".into(),
                 features: vec!["mirror_report".into()],
@@ -424,6 +425,7 @@ mod tests {
                 (sent.id.as_str(), sent.name.as_str()),
                 ("0123abcd", "laptop")
             );
+            assert_eq!(sent.version.as_deref(), Some("0.9.0"));
             assert_eq!(params.features, ["mirror_report"]);
             assert!(params.paired, "a box that requires pairing says so");
             Ok(())
