@@ -67,7 +67,8 @@ strip = true
 # downloads it, so size wins over build time and speed.
 [profile.web]
 inherits = "release"
-opt-level = "s"
+# `z` over `s`: measured on the first build, 1.04 MB gzipped instead of 1.24 MB.
+opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"
