@@ -60,62 +60,62 @@
  enter disconnect   n new box   p pairing code   j k select   esc back                                                                                                            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183-187 bold underlined, 188-198 yellow
-1: 0-180 bold, 181-198 bold dim, 199 bold
-2: 0 bold, 2-3 reversed, 4-10 bold reversed, 11-197 reversed, 199 bold
-3: 0 bold, 4-13 dim, 199 bold
-4: 0 bold, 4-13 dim, 199 bold
-5: 0 bold, 4-13 dim, 199 bold
-6: 0 bold, 4-13 dim, 14-83 yellow, 199 bold
-7: 0 bold, 4-13 dim, 14-69 yellow, 199 bold
-8: 0 bold, 4-13 dim, 14-60 green, 199 bold
-9: 0 bold, 4-90 yellow, 199 bold
-10: 0 bold, 4-105 yellow, 199 bold
-11: 0 bold, 4-107 yellow, 199 bold
-12: 0 bold, 199 bold
-13: 0 bold, 4-9 bold, 171-197 dim, 199 bold
-14: 0 bold, 4-13 dim, 14-27 yellow, 199 bold
-15: 0 bold, 4-13 dim, 14-94 yellow, 199 bold
-16: 0 bold, 4-13 dim, 199 bold
-17: 0 bold, 4-13 dim, 199 bold
-18: 0 bold, 4-13 dim, 199 bold
-19: 0 bold, 199 bold
-20: 0 bold, 2-3 yellow, 4-6 bold, 177-191 yellow, 192-197 dim, 199 bold
-21: 0 bold, 4-13 dim, 14-76 yellow, 199 bold
-22: 0 bold, 4-13 dim, 14-68 yellow, 199 bold
-23: 0 bold, 4-13 dim, 14-33 bold, 199 bold
-24: 0 bold, 199 bold
-25: 0 bold, 199 bold
-26: 0 bold, 77-122 bold, 199 bold
-27: 0 bold, 77 bold, 79-97 bold, 122 bold, 199 bold
-28: 0 bold, 77 bold, 122 bold, 199 bold
-29: 0 bold, 77 bold, 122 bold, 199 bold
-30: 0 bold, 77 bold, 122 bold, 199 bold
-31: 0 bold, 77 bold, 122 bold, 199 bold
-32: 0 bold, 77 bold, 79 bold, 80-90 dim, 94 bold, 95-101 dim, 122 bold, 199 bold
-33: 0 bold, 77-122 bold, 199 bold
-34: 0 bold, 199 bold
-35: 0 bold, 199 bold
-36: 0 bold, 199 bold
-37: 0 bold, 199 bold
-38: 0 bold, 199 bold
-39: 0 bold, 199 bold
-40: 0 bold, 199 bold
-41: 0 bold, 199 bold
-42: 0 bold, 199 bold
-43: 0 bold, 199 bold
-44: 0 bold, 199 bold
-45: 0 bold, 199 bold
-46: 0 bold, 199 bold
-47: 0 bold, 199 bold
-48: 0 bold, 199 bold
-49: 0 bold, 199 bold
-50: 0 bold, 199 bold
-51: 0 bold, 199 bold
-52: 0 bold, 199 bold
-53: 0 bold, 199 bold
-54: 0 bold, 199 bold
-55: 0-199 bold
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 166 bold, 167-172 dim, 175 bold, 176-180 dim, 183 bold underlined, 184-187 bold underlined yellow, 188-198 yellow
+1: 0 bold yellow, 1-7 bold, 8-180 bold yellow, 181-198 bold dim, 199 bold yellow
+2: 0 bold yellow, 2-3 reversed, 4-10 bold reversed, 11-197 reversed, 199 bold yellow
+3: 0 bold yellow, 4-13 dim, 199 bold yellow
+4: 0 bold yellow, 4-13 dim, 199 bold yellow
+5: 0 bold yellow, 4-13 dim, 199 bold yellow
+6: 0 bold yellow, 4-13 dim, 14-83 yellow, 199 bold yellow
+7: 0 bold yellow, 4-13 dim, 14-69 yellow, 199 bold yellow
+8: 0 bold yellow, 4-13 dim, 14-60 green, 199 bold yellow
+9: 0 bold yellow, 4-90 yellow, 199 bold yellow
+10: 0 bold yellow, 4-105 yellow, 199 bold yellow
+11: 0 bold yellow, 4-107 yellow, 199 bold yellow
+12: 0 bold yellow, 199 bold yellow
+13: 0 bold yellow, 4-9 bold, 171-197 dim, 199 bold yellow
+14: 0 bold yellow, 4-13 dim, 14-27 yellow, 199 bold yellow
+15: 0 bold yellow, 4-13 dim, 14-94 yellow, 199 bold yellow
+16: 0 bold yellow, 4-13 dim, 199 bold yellow
+17: 0 bold yellow, 4-13 dim, 199 bold yellow
+18: 0 bold yellow, 4-13 dim, 199 bold yellow
+19: 0 bold yellow, 199 bold yellow
+20: 0 bold yellow, 2-3 yellow, 4-6 bold, 177-191 yellow, 192-197 dim, 199 bold yellow
+21: 0 bold yellow, 4-13 dim, 14-76 yellow, 199 bold yellow
+22: 0 bold yellow, 4-13 dim, 14-68 yellow, 199 bold yellow
+23: 0 bold yellow, 4-13 dim, 14-33 bold, 199 bold yellow
+24: 0 bold yellow, 199 bold yellow
+25: 0 bold yellow, 199 bold yellow
+26: 0 bold yellow, 77-122 bold yellow, 199 bold yellow
+27: 0 bold yellow, 77 bold yellow, 79-97 bold, 122 bold yellow, 199 bold yellow
+28: 0 bold yellow, 77 bold yellow, 122 bold yellow, 199 bold yellow
+29: 0 bold yellow, 77 bold yellow, 122 bold yellow, 199 bold yellow
+30: 0 bold yellow, 77 bold yellow, 122 bold yellow, 199 bold yellow
+31: 0 bold yellow, 77 bold yellow, 122 bold yellow, 199 bold yellow
+32: 0 bold yellow, 77 bold yellow, 79 bold, 80-90 dim, 94 bold, 95-101 dim, 122 bold yellow, 199 bold yellow
+33: 0 bold yellow, 77-122 bold yellow, 199 bold yellow
+34: 0 bold yellow, 199 bold yellow
+35: 0 bold yellow, 199 bold yellow
+36: 0 bold yellow, 199 bold yellow
+37: 0 bold yellow, 199 bold yellow
+38: 0 bold yellow, 199 bold yellow
+39: 0 bold yellow, 199 bold yellow
+40: 0 bold yellow, 199 bold yellow
+41: 0 bold yellow, 199 bold yellow
+42: 0 bold yellow, 199 bold yellow
+43: 0 bold yellow, 199 bold yellow
+44: 0 bold yellow, 199 bold yellow
+45: 0 bold yellow, 199 bold yellow
+46: 0 bold yellow, 199 bold yellow
+47: 0 bold yellow, 199 bold yellow
+48: 0 bold yellow, 199 bold yellow
+49: 0 bold yellow, 199 bold yellow
+50: 0 bold yellow, 199 bold yellow
+51: 0 bold yellow, 199 bold yellow
+52: 0 bold yellow, 199 bold yellow
+53: 0 bold yellow, 199 bold yellow
+54: 0 bold yellow, 199 bold yellow
+55: 0-199 bold yellow
 56: 0 darkgray, 1-14 bold, 15-199 darkgray
 57: 0 darkgray, 2-64 dim, 199 darkgray
 58: 0-199 darkgray

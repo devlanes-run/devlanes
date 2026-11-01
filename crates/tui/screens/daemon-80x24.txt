@@ -24,7 +24,7 @@
  j k scroll   F pause   w level   / filter   T targets    ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 56 bold, 59-64 bold underlined, 65-75 red, 78 bold
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 56 bold, 59 bold underlined, 60-64 bold underlined yellow, 65-75 red, 78 bold
 1: 0 darkgray, 1-8 bold, 9-53 darkgray, 55-60 red, 61-63 dim, 64-69 yellow, 70-78 dim, 79 darkgray
 2: 0 darkgray, 1-10 dim, 79 darkgray
 3: 0 darkgray, 1-10 dim, 79 darkgray
@@ -35,16 +35,16 @@
 8: 0 darkgray, 1-13 yellow, 14-36 dim, 79 darkgray
 9: 0 darkgray, 1-13 green, 79 darkgray
 10: 0-79 darkgray
-11: 0-26 bold, 27-78 bold dim, 79 bold
-12: 0 bold, 1-9 dim, 10-14 yellow, 65-78 dim, 79 bold
-13: 0 bold, 37-41 dim, 49-55 dim, 79 bold
-14: 0 bold, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold
-15: 0 bold, 37-41 dim, 42-59 blue, 61-65 dim, 79 bold
-16: 0 bold, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold
-17: 0 bold, 37-41 dim, 42-56 blue, 58-62 dim, 79 bold
-18: 0 bold, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold
-19: 0 bold, 37-41 dim, 42-58 magenta, 60-64 dim, 79 bold
-20: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 79 bold
-21: 0 bold, 37-41 dim, 79 bold
-22: 0-79 bold
+11: 0 bold yellow, 1-12 bold, 13-26 bold yellow, 27-78 bold dim, 79 bold yellow
+12: 0 bold yellow, 1-9 dim, 10-14 yellow, 65-78 dim, 79 bold yellow
+13: 0 bold yellow, 37-41 dim, 49-55 dim, 79 bold yellow
+14: 0 bold yellow, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold yellow
+15: 0 bold yellow, 37-41 dim, 42-59 blue, 61-65 dim, 79 bold yellow
+16: 0 bold yellow, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold yellow
+17: 0 bold yellow, 37-41 dim, 42-56 blue, 58-62 dim, 79 bold yellow
+18: 0 bold yellow, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold yellow
+19: 0 bold yellow, 37-41 dim, 42-58 magenta, 60-64 dim, 79 bold yellow
+20: 0 bold yellow, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 79 bold yellow
+21: 0 bold yellow, 37-41 dim, 79 bold yellow
+22: 0-79 bold yellow
 23: 1-3 bold, 4-13 dim, 14 bold, 15-23 dim, 24 bold, 25-33 dim, 34 bold, 35-44 dim, 45 bold, 46-56 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

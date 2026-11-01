@@ -29,19 +29,19 @@
 2: 0 darkgray, 2-3 bold, 4-14 dim, 16-32 darkgray, 34-43 bold, 44-45 dim, 46-51 red, 52-54 dim, 55-60 red, 62-79 darkgray
 3: 0 darkgray, 4-5 green, 6-13 blue, 31-32 darkgray, 34-43 dim, 44-61 red, 79 darkgray
 4: 0 darkgray, 4-5 green, 6-14 blue, 31-32 darkgray, 34-43 dim, 79 darkgray
-5: 0 darkgray, 4-5 green, 6 blue, 7-72 bold, 73-74 dim, 79 darkgray
-6: 0 darkgray, 4-5 green, 6 blue, 7 bold, 9-35 bold, 72 bold, 79 darkgray
-7: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 73-79 darkgray
-8: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
-9: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
-10: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
-11: 0 darkgray, 4-5 green, 6 blue, 7 bold, 72 bold, 79 darkgray
-12: 0 darkgray, 4-6 green, 7 bold, 72 bold, 79 darkgray
-13: 0 darkgray, 4-6 green, 7 bold, 72 bold, 79 darkgray
-14: 0 darkgray, 4-6 green, 7 bold, 72 bold, 79 darkgray
-15: 0 darkgray, 4-5 dim, 6 dim green, 7 bold, 72 bold, 79 darkgray
-16: 0 darkgray, 4-6 green, 7 bold, 9-13 bold, 14-20 dim, 24-26 bold, 27-33 dim, 72 bold, 79 darkgray
-17: 0 darkgray, 4-5 green, 6 magenta, 7-72 bold, 79 darkgray
+5: 0 darkgray, 4-5 green, 6 blue, 7-72 bold yellow, 73-74 dim, 79 darkgray
+6: 0 darkgray, 4-5 green, 6 blue, 7 bold yellow, 9-35 bold, 72 bold yellow, 79 darkgray
+7: 0 darkgray, 4-5 green, 6 blue, 7 bold yellow, 72 bold yellow, 73-79 darkgray
+8: 0 darkgray, 4-5 green, 6 blue, 7 bold yellow, 72 bold yellow, 79 darkgray
+9: 0 darkgray, 4-5 green, 6 blue, 7 bold yellow, 72 bold yellow, 79 darkgray
+10: 0 darkgray, 4-5 green, 6 blue, 7 bold yellow, 72 bold yellow, 79 darkgray
+11: 0 darkgray, 4-5 green, 6 blue, 7 bold yellow, 72 bold yellow, 79 darkgray
+12: 0 darkgray, 4-6 green, 7 bold yellow, 72 bold yellow, 79 darkgray
+13: 0 darkgray, 4-6 green, 7 bold yellow, 72 bold yellow, 79 darkgray
+14: 0 darkgray, 4-6 green, 7 bold yellow, 72 bold yellow, 79 darkgray
+15: 0 darkgray, 4-5 dim, 6 dim green, 7 bold yellow, 72 bold yellow, 79 darkgray
+16: 0 darkgray, 4-6 green, 7 bold yellow, 9-13 bold, 14-20 dim, 24-26 bold, 27-33 dim, 72 bold yellow, 79 darkgray
+17: 0 darkgray, 4-5 green, 6 magenta, 7-72 bold yellow, 79 darkgray
 18: 0 darkgray, 4-5 green, 6-16 magenta, 31-32 darkgray, 34-53 dim, 55-58 color2, 79 darkgray
 19: 0 darkgray, 4-5 green, 6-14 magenta, 31-32 darkgray, 79 darkgray
 20: 0 darkgray, 4-5 green, 6-15 magenta, 31-32 darkgray, 34-53 dim, 55-58 color2, 79 darkgray

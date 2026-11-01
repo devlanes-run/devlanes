@@ -54,10 +54,10 @@
 11: 0 darkgray, 4-14 dim, 39-45 dim, 47-48 darkgray, 50-59 dim, 119 darkgray
 12: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 119 darkgray
 13: 0 darkgray, 4-12 dim, 39-45 dim, 47-48 darkgray, 50-62 bold, 119 darkgray
-14: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-51 bold, 77-84 red, 85-87 dim, 98-105 dim, 119 darkgray
-15: 0 darkgray, 47-48 darkgray, 50-51 bold, 85-99 dim, 119 darkgray
-16: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-51 bold, 77-87 dim, 119 darkgray
-17: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 50-51 bold, 77-92 yellow, 119 darkgray
+14: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 50-51 bold yellow, 77-84 red, 85-87 dim, 98-105 dim, 119 darkgray
+15: 0 darkgray, 47-48 darkgray, 50-51 bold yellow, 85-99 dim, 119 darkgray
+16: 0 darkgray, 2-3 dim, 47-48 darkgray, 50-51 bold yellow, 77-87 dim, 119 darkgray
+17: 0 darkgray, 4-5 dim, 42-45 dim, 47-48 darkgray, 50-51 bold yellow, 77-92 yellow, 119 darkgray
 18: 0 darkgray, 6-7 green, 8-16 dim magenta, 47-48 darkgray, 119 darkgray
 19: 0 darkgray, 6-7 green, 8-15 cyan, 47-48 darkgray, 50-112 dim, 119 darkgray
 20: 0 darkgray, 6-7 green, 8-12 cyan, 47-48 darkgray, 50-109 dim, 119 darkgray

@@ -28,21 +28,21 @@
 2: 2-6 red, 11-31 bold, 32-45 dim
 3: 3-7 red, 11 green, 44-47 dim
 4: 4-8 red
-6: 0-26 bold, 27-78 bold dim, 79 bold
-7: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 79 bold
-8: 0 bold, 37-41 dim, 79 bold
-9: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 79 bold
-10: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 79 bold
-11: 0 bold, 37-41 dim, 79 bold
-12: 0 bold, 1-9 dim, 10-14 yellow, 65-78 dim, 79 bold
-13: 0 bold, 37-41 dim, 49-55 dim, 79 bold
-14: 0 bold, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold
-15: 0 bold, 37-41 dim, 42-59 blue, 61-65 dim, 79 bold
-16: 0 bold, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold
-17: 0 bold, 37-41 dim, 42-56 blue, 58-62 dim, 79 bold
-18: 0 bold, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold
-19: 0 bold, 37-41 dim, 42-58 magenta, 60-64 dim, 79 bold
-20: 0 bold, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 79 bold
-21: 0 bold, 37-41 dim, 79 bold
-22: 0-79 bold
+6: 0 bold yellow, 1-12 bold, 13-26 bold yellow, 27-78 bold dim, 79 bold yellow
+7: 0 bold yellow, 1-9 dim, 10-14 blue, 48-53 dim, 54-71 blue, 79 bold yellow
+8: 0 bold yellow, 37-41 dim, 79 bold yellow
+9: 0 bold yellow, 1-9 dim, 10-14 blue, 48-53 dim, 54-68 blue, 70-74 dim, 79 bold yellow
+10: 0 bold yellow, 1-9 dim, 10-14 blue, 48-53 dim, 54-69 blue, 79 bold yellow
+11: 0 bold yellow, 37-41 dim, 79 bold yellow
+12: 0 bold yellow, 1-9 dim, 10-14 yellow, 65-78 dim, 79 bold yellow
+13: 0 bold yellow, 37-41 dim, 49-55 dim, 79 bold yellow
+14: 0 bold yellow, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold yellow
+15: 0 bold yellow, 37-41 dim, 42-59 blue, 61-65 dim, 79 bold yellow
+16: 0 bold yellow, 1-9 dim, 10-14 blue, 65-78 dim, 79 bold yellow
+17: 0 bold yellow, 37-41 dim, 42-56 blue, 58-62 dim, 79 bold yellow
+18: 0 bold yellow, 1-9 dim, 10-14 bold red, 65-78 dim, 79 bold yellow
+19: 0 bold yellow, 37-41 dim, 42-58 magenta, 60-64 dim, 79 bold yellow
+20: 0 bold yellow, 1-9 dim, 10-14 blue, 48-53 dim, 54-70 blue, 79 bold yellow
+21: 0 bold yellow, 37-41 dim, 79 bold yellow
+22: 0-79 bold yellow
 23: 1 bold, 2-17 dim, 18-20 bold, 21-30 dim, 31 bold, 32-40 dim, 41 bold, 42-50 dim, 51 bold, 52-61 dim, 62 bold, 63-67 dim, 71 bold, 72-79 dim

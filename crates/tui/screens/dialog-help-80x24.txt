@@ -24,27 +24,27 @@
  └────────────────────────────────────────────────────────────────────────────┘
 
 --- styles (row: columns style) ---
-0: 1-78 bold
-1: 0 dim, 1 bold, 3-8 dim, 78 bold, 79 dim
-2: 0 darkgray, 1 bold, 5-6 green, 29-30 green, 78 bold, 79 darkgray
-3: 0 darkgray, 1 bold, 5-6 dim, 29-30 blue, 78 bold, 79 darkgray
-4: 0 darkgray, 1 bold, 5-6 dim, 78 bold, 79 darkgray
-5: 0 darkgray, 1 bold, 5-6 dim, 29-30 red, 78 bold, 79 darkgray
-6: 0 darkgray, 1 bold, 5-6 yellow, 29-30 green, 78 bold, 79 darkgray
-7: 0 darkgray, 1 bold, 29-30 dim, 78 bold, 79 darkgray
-8: 0 darkgray, 1 bold, 78 bold, 79 darkgray
-9: 0 darkgray, 1 bold, 3-6 dim, 78 bold, 79 darkgray
-10: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-11: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-12: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-13: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-14: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-15: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-16: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-17: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-18: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-19: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-20: 0 darkgray, 1 bold, 3-22 bold, 78 bold, 79 darkgray
-21: 0 darkgray, 1 bold, 3 dim, 78 bold, 79 darkgray
-22: 0 darkgray, 1 bold, 3-16 dim, 78 bold, 79 darkgray
-23: 1-78 bold, 79 dim
+0: 1-78 bold yellow
+1: 0 dim, 1 bold yellow, 3-8 dim, 78 bold yellow, 79 dim
+2: 0 darkgray, 1 bold yellow, 5-6 green, 29-30 green, 78 bold yellow, 79 darkgray
+3: 0 darkgray, 1 bold yellow, 5-6 dim, 29-30 blue, 78 bold yellow, 79 darkgray
+4: 0 darkgray, 1 bold yellow, 5-6 dim, 78 bold yellow, 79 darkgray
+5: 0 darkgray, 1 bold yellow, 5-6 dim, 29-30 red, 78 bold yellow, 79 darkgray
+6: 0 darkgray, 1 bold yellow, 5-6 yellow, 29-30 green, 78 bold yellow, 79 darkgray
+7: 0 darkgray, 1 bold yellow, 29-30 dim, 78 bold yellow, 79 darkgray
+8: 0 darkgray, 1 bold yellow, 78 bold yellow, 79 darkgray
+9: 0 darkgray, 1 bold yellow, 3-6 dim, 78 bold yellow, 79 darkgray
+10: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+11: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+12: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+13: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+14: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+15: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+16: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+17: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+18: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+19: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+20: 0 darkgray, 1 bold yellow, 3-22 bold, 78 bold yellow, 79 darkgray
+21: 0 darkgray, 1 bold yellow, 3 dim, 78 bold yellow, 79 darkgray
+22: 0 darkgray, 1 bold yellow, 3-16 dim, 78 bold yellow, 79 darkgray
+23: 1-78 bold yellow, 79 dim

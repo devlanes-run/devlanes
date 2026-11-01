@@ -40,7 +40,7 @@
  j k move   enter open unit   ←→ sort   i reverse   / filter   e flat   m memory graph            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86-92 bold underlined, 95 bold, 96-100 dim, 101-111 red, 114 bold, 115-118 dim
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold underlined, 87-92 bold underlined yellow, 95 bold, 96-100 dim, 101-111 red, 114 bold, 115-118 dim
 1: 0 darkgray, 6-65 darkgray, 66-78 dim, 79-80 darkgray, 86-108 darkgray, 109-118 dim, 119 darkgray
 2: 0 darkgray, 1-4 dim, 5 darkgray, 64-72 darkgray, 79-80 darkgray, 103-105 green, 106-111 darkgray, 119 darkgray
 3: 0 darkgray, 1-4 dim, 5 darkgray, 64-66 green, 67-72 darkgray, 79-80 darkgray, 103-106 green, 107-108 yellow, 109-111 darkgray, 112-116 yellow, 119 darkgray
@@ -65,7 +65,7 @@
 22: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-66 green, 67-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
 23: 0 darkgray, 3-4 green, 25-40 dim, 47 green, 48-54 darkgray, 62-64 green, 65-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
 24: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-66 green, 67-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
-25: 0 darkgray, 1-2 bold on darkgray, 3-4 bold green on darkgray, 5-24 bold on darkgray, 25-40 bold dim on darkgray, 41-46 bold red on darkgray, 47-50 bold green on darkgray, 51-52 bold yellow on darkgray, 53-54 bold lightred on darkgray, 55-61 bold on darkgray, 62-67 bold green on darkgray, 68-69 bold darkgray on darkgray, 70 bold on darkgray, 71-77 bold dim on darkgray, 78-86 bold on darkgray, 87-110 bold red on darkgray, 111 bold lightred on darkgray, 112 bold red on darkgray, 113 bold lightred on darkgray, 114 bold red on darkgray, 115 bold lightred on darkgray, 116-117 bold red on darkgray, 118 bold on darkgray, 119 darkgray
+25: 0 darkgray, 1 bold yellow on darkgray, 2 bold on darkgray, 3-4 bold green on darkgray, 5-24 bold on darkgray, 25-40 bold dim on darkgray, 41-46 bold red on darkgray, 47-50 bold green on darkgray, 51-52 bold yellow on darkgray, 53-54 bold lightred on darkgray, 55-61 bold on darkgray, 62-67 bold green on darkgray, 68-69 bold darkgray on darkgray, 70 bold on darkgray, 71-77 bold dim on darkgray, 78-86 bold on darkgray, 87-110 bold red on darkgray, 111 bold lightred on darkgray, 112 bold red on darkgray, 113 bold lightred on darkgray, 114 bold red on darkgray, 115 bold lightred on darkgray, 116-117 bold red on darkgray, 118 bold on darkgray, 119 darkgray
 26: 0 darkgray, 3-4 green, 25-40 dim, 47-54 darkgray, 62-63 green, 64-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
 27: 0-119 darkgray
 28: 0 darkgray, 1-2 green, 25-40 dim, 47-54 darkgray, 62 green, 63-69 darkgray, 71-77 dim, 87-117 green, 119 darkgray
