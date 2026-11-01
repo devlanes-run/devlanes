@@ -1,5 +1,13 @@
 # devlanes-cli
 
+## 0.11.0 — 2026-11-01
+
+### Minor changes
+
+- [9d7557c](https://github.com/devlanes-run/devlanes/commit/9d7557cf5829274623142c4393958b76b536d5a2) Changed lanes to export their project as `DEVLANES_LANE_PROJECT` instead of `DEVLANES_PROJECT`, so a lane's variables no longer pin devlanes commands in another project's folder or checkout to that project.
+  
+  `DEVLANES_PROJECT` is now only a setting you export yourself, and it wins over the current folder like `-p`. Scripts that read the lane's project from its environment use `DEVLANES_LANE_PROJECT`.
+
 ## 0.10.0 — 2026-11-01
 
 ### Minor changes

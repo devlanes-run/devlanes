@@ -1,5 +1,21 @@
 # devlanes
 
+## 0.11.0 — 2026-11-01
+
+### Minor changes
+
+- [9d7557c](https://github.com/devlanes-run/devlanes/commit/9d7557cf5829274623142c4393958b76b536d5a2) Changed lanes to export their project as `DEVLANES_LANE_PROJECT` instead of `DEVLANES_PROJECT`, so a lane's variables no longer pin devlanes commands in another project's folder or checkout to that project.
+  
+  `DEVLANES_PROJECT` is now only a setting you export yourself, and it wins over the current folder like `-p`. Scripts that read the lane's project from its environment use `DEVLANES_LANE_PROJECT`.
+
+### Patch changes
+
+- [e52b808](https://github.com/devlanes-run/devlanes/commit/e52b8085584cd0224b93fb3dc97642ba299e9ef2) Fixed `devlanes setup` failing to install the /etc/hosts helper on machines whose sudo configuration already had an unrelated problem, such as GitHub's Ubuntu runners; it now installs the helper and warns about the other file.
+- [545075f](https://github.com/devlanes-run/devlanes/commit/545075fff72aa6c314a8edd8fc3a3d86cd25eb1c) Fixed `devlanes remote connect` sometimes leaving a box's lanes neither mirrored nor listed as skipped until something on the box changed.
+- [9d7557c](https://github.com/devlanes-run/devlanes/commit/9d7557cf5829274623142c4393958b76b536d5a2) Fixed `devlanes debug thaw` sometimes saying a frozen lane was not throttled or frozen after it had thawed it.
+- [9d7557c](https://github.com/devlanes-run/devlanes/commit/9d7557cf5829274623142c4393958b76b536d5a2) Fixed `devlanes start` on macOS sometimes waiting until its timeout, and `devlanes daemon stop` stalling after it, when a service printed something and exited right after it started, instead of reporting it as failed with its exit code and output.
+- [9d7557c](https://github.com/devlanes-run/devlanes/commit/9d7557cf5829274623142c4393958b76b536d5a2) Fixed the proxy moving to its fallback port (8443 or 8080) on macOS and Linux when the daemon restarted shortly after the proxy had closed connections, such as a browser's after `devlanes daemon restart`.
+
 ## 0.10.0 — 2026-11-01
 
 ### Minor changes
