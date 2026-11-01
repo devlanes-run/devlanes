@@ -14,7 +14,7 @@ let manifest = devlanes_version::LATEST_RELEASE_MANIFEST_URL;
 - `VERSION`: the release version, such as `0.4.0`.
 - `BUILD_ID`: `DEVLANES_BUILD_ID` at compile time (the release tag in official builds), else `local`.
 - `REPOSITORY`: the GitHub repository releases come from.
-- `LATEST_RELEASE_MANIFEST_URL`: the manifest of the latest stable release, which the update check reads.
+- `LATEST_RELEASE_MANIFEST_URL` and `NEXT_RELEASE_MANIFEST_URL`: the manifests of the latest stable and `next` releases, which the update check reads for `install.sh` and standalone installs.
 - `MINIMAL_CONFIG_URL`: the minimal example config on the default branch.
 
 ## Versioning

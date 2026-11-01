@@ -146,6 +146,67 @@ async fn resolver_strategy_serves_lane_hostnames() {
     .expect("timeout");
 }
 
+/// A resolver file check whose answer the test flips.
+struct Files(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl devlanes_daemon::integrations::ResolverFiles for Files {
+    /// Installed, and routing to `server` while the flag is set.
+    fn status(&self, tld: &str, _server: std::net::SocketAddr) -> serde_json::Value {
+        let matches = self.0.load(std::sync::atomic::Ordering::SeqCst);
+        json!({"path": format!("/etc/resolver/{tld}"), "installed": true, "matches": matches})
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+/// `daemon.status` lists `resolver` in `setup.missing` while the resolver
+/// file does not route the TLD to the server, and nothing without the strategy.
+async fn daemon_status_reports_an_unrouted_tld() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let routed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut user = UserConfig::default();
+        user.hostnames.resolver = Resolver::Resolver;
+        user.hostnames.tld = Some("test".into());
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                user: Some(user),
+                resolver_files: Some(std::sync::Arc::new(Files(routed.clone()))),
+                ..Setup::default()
+            },
+        )
+        .await;
+        let missing = || async {
+            h.call(Method::DaemonStatus, json!({}), cx(&main))
+                .await
+                .expect("status")["setup"]["missing"]
+                .clone()
+        };
+        assert_eq!(missing().await, json!(["resolver"]));
+        routed.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(missing().await, json!([]));
+        h.close().await;
+
+        let other = harness(
+            &tmp.path.join("plain"),
+            Setup {
+                resolver_files: Some(std::sync::Arc::new(Files(Default::default()))),
+                ..Setup::default()
+            },
+        )
+        .await;
+        let status = other
+            .call(Method::DaemonStatus, json!({}), cx(&main))
+            .await
+            .expect("status");
+        assert_eq!(status["setup"]["missing"], json!([]), "{status}");
+        other.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 /// A TLD outside the special-use names starts no server, leaves lane
 /// domains under `.localhost`, and `doctor` says why.

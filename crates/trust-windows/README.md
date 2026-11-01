@@ -1,6 +1,6 @@
 # devlanes-trust-windows
 
-Windows implementation of `devlanes-trust`: the current user's `Root` certificate store for the `system`, `chrome`, `firefox` and `windows` targets, plus the roots of `bundle.pem`. The composition root registers it on Windows; the CLI uses the store for `devlanes certs trust`, and the daemon calls `bundle_roots` when it writes the CA bundle.
+Windows implementation of `devlanes-trust`: the current user's `Root` certificate store for the `system`, `chrome`, `firefox` and `windows` targets, plus the roots of `bundle.pem`. The composition root registers it on Windows; the CLI uses the store for `devlanes setup`, and the daemon calls `bundle_roots` when it writes the CA bundle.
 
 ## Usage
 

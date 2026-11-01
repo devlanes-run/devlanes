@@ -4,9 +4,9 @@ expression: draw(&app)?.backend()
 ---
 " devlanes  1 acme   2 shop                            ✕ 1 failed  Monitor  Daemon  Boxes · 2 issues "
 "┌ boxes ───────────────────────────────────────────────────────────────────────── 1 of 2 connected ┐"
-"│ ● hetzner                                                                        connected · ssh │"
+"│ ● hetzner                                                       connected · ssh · devlanes 0.0.1 │"
 "│   link      connected since 2026-10-14 17:46                                                     │"
-"│   box       devlanes 0.0.1 · proxy on 443 · ports.range 24000-24999                              │"
+"│   box       proxy on 443 · ports.range 24000-24999                                               │"
 "│   mirror    1 lane · 1 of 3 ports bound here · 1 hostname routed                                 │"
 "│   ! the box runs devlanes 0.0.1 and this machine X. Install the same release on both.            │"
 "│                                                                                                  │"

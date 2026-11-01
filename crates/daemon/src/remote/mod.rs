@@ -58,7 +58,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use devlanes_proto::{
     Event, RpcError,
-    remote::{self as wire, RemoteClient, SyncEntry},
+    remote::{self as wire, RemoteClient, SyncEntry, label_version},
 };
 use devlanes_sync::{HashCache, RelPath};
 use devlanes_transport::{
@@ -1966,13 +1966,6 @@ fn parse_range(range: &str) -> Option<(u16, u16)> {
 /// Whether two inclusive port ranges share a port.
 fn ranges_overlap(a: (u16, u16), b: (u16, u16)) -> bool {
     a.0 <= b.1 && b.0 <= a.1
-}
-
-/// The release in a handshake label: `0.5.0` of `devlanes 0.5.0 (linger off)`.
-fn label_version(label: &str) -> Option<&str> {
-    label
-        .strip_prefix("devlanes ")
-        .and_then(|rest| rest.split_whitespace().next())
 }
 
 /// Findings about the box behind a handshake label (`devlanes <version>`,

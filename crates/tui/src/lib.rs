@@ -177,6 +177,6 @@ async fn open(
         .as_ref()
         .map(|selected| selected.lane.as_str())
         .filter(|lane| app.box_lane(lane).is_none());
-    exit_summary::print(api.as_ref(), &app.theme, lane).await;
+    exit_summary::print(api.as_ref(), &app.theme, lane, app.release.0.as_ref()).await;
     Ok(app)
 }

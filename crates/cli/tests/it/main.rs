@@ -229,9 +229,9 @@ fn entire_command_inventory_builds_actions() {
             &["debug", "events", "-f", "--timeout", "30s"],
             Some(Method::Subscribe),
         ),
-        (&["certs", "trust", "--hosts"], None),
-        (&["certs", "untrust"], None),
-        (&["certs", "untrust", "--hosts", "--keep-ca"], None),
+        (&["setup"], None),
+        (&["setup", "--check"], None),
+        (&["setup", "--remove", "--keep-ca"], None),
         (&["daemon", "start"], None),
         (&["daemon", "restart"], None),
         (&["daemon", "logs", "-f", "--tail", "10"], None),
@@ -460,41 +460,39 @@ fn restart_and_reload_without_units_name_the_whole_lane() {
 }
 
 #[test]
-fn trust_and_untrust_carry_the_hosts_flag() {
-    // (is trust, hosts, resolver, keep_ca)
+fn setup_flags_pick_the_action() {
     for (args, expected) in [
-        (vec!["trust"], (true, false, false, false)),
-        (vec!["trust", "--hosts"], (true, true, false, false)),
-        (vec!["trust", "--resolver"], (true, false, true, false)),
-        (vec!["untrust"], (false, false, false, false)),
-        (vec!["untrust", "--hosts"], (false, true, false, false)),
+        (vec![], SetupAction::Apply { yes: false }),
+        (vec!["--yes"], SetupAction::Apply { yes: true }),
+        (vec!["--check"], SetupAction::Check),
+        (vec!["--remove"], SetupAction::Remove { keep_ca: false }),
         (
-            vec!["untrust", "--hosts", "--keep-ca"],
-            (false, true, false, true),
+            vec!["--remove", "--keep-ca"],
+            SetupAction::Remove { keep_ca: true },
         ),
         (
-            vec!["untrust", "--resolver", "--keep-ca"],
-            (false, false, true, true),
-        ),
-        (
-            vec!["untrust", "--hosts", "--resolver"],
-            (false, true, true, false),
+            vec!["--remove", "--keep-ca", "--yes"],
+            SetupAction::Remove { keep_ca: true },
         ),
     ] {
-        let cli = Cli::parse_from(["devlanes", "certs"].into_iter().chain(args));
-        let found = match action(&cli, &runtime(&cli, OutputMode::Plain)) {
-            Action::Trust { hosts, resolver } => (true, hosts, resolver, false),
-            Action::Untrust {
-                hosts,
-                resolver,
-                keep_ca,
-            } => (false, hosts, resolver, keep_ca),
-            _ => panic!("expected a trust action"),
-        };
-        assert_eq!(found, expected);
+        let cli = Cli::parse_from(["devlanes", "setup"].into_iter().chain(args.clone()));
+        match action(&cli, &runtime(&cli, OutputMode::Plain)) {
+            Action::Setup(found) => assert_eq!(found, expected, "{args:?}"),
+            _ => panic!("expected a setup action for {args:?}"),
+        }
     }
-    // Keeping the CA only makes sense when something else is being removed.
-    assert!(Cli::try_parse_from(["devlanes", "certs", "untrust", "--keep-ca"]).is_err());
+    // --keep-ca only goes with --remove, and --check never changes anything.
+    for refused in [
+        &["setup", "--keep-ca"][..],
+        &["setup", "--check", "--remove"],
+    ] {
+        assert!(
+            Cli::try_parse_from(std::iter::once("devlanes").chain(refused.iter().copied()))
+                .is_err(),
+            "{refused:?}"
+        );
+    }
+    assert!(Cli::try_parse_from(["devlanes", "certs", "trust"]).is_err());
 }
 
 #[test]

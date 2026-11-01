@@ -30,14 +30,14 @@ pub enum HostsError {
         reason: &'static str,
     },
     /// The helper is not installed.
-    #[error("the hosts helper is not installed at {}; run `devlanes certs trust --hosts`", path.display())]
+    #[error("the hosts helper is not installed at {}; run `devlanes setup`", path.display())]
     HelperMissing {
         /// Expected path.
         path: PathBuf,
     },
     /// sudo would not run the helper without a password, or is not installed.
     #[error(
-        "sudo will not run the hosts helper without a password ({message}); run `devlanes certs trust --hosts`"
+        "sudo will not run the hosts helper without a password ({message}); run `devlanes setup`"
     )]
     SudoDenied {
         /// sudo's message.
@@ -57,7 +57,7 @@ pub enum HostsError {
     },
     /// The installed helper speaks another protocol version.
     #[error(
-        "the installed hosts helper speaks protocol {found}, this devlanes needs {PROTOCOL}; run `devlanes certs trust --hosts` again"
+        "the installed hosts helper speaks protocol {found}, this devlanes needs {PROTOCOL}; run `devlanes setup` again"
     )]
     Outdated {
         /// What `version` reported.

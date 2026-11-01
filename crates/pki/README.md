@@ -36,7 +36,7 @@ tls:
   ca: mkcert
 ```
 
-With `mkcert`, the daemon loads mkcert's root from `mkcert -CAROOT` through `CertificateAuthority::from_mkcert` and the proxy signs leaf certificates with it; `devlanes certs trust` installs that same root. The combined CA bundle for child processes is still written under `~/.devlanes/ca`.
+With `mkcert`, the daemon loads mkcert's root from `mkcert -CAROOT` through `CertificateAuthority::from_mkcert` and the proxy signs leaf certificates with it; `devlanes setup` installs that same root. The combined CA bundle for child processes is still written under `~/.devlanes/ca`.
 
 ## Behaviour
 
@@ -46,7 +46,7 @@ On Windows a new CA directory gets an explicit owner and an access list for the 
 
 ## Name constraints
 
-New devlanes CAs carry X.509 name constraints that permit DNS names under `localhost`, `test`, `internal` and `home.arpa`, plus the TLD passed to `load_or_create_with_tld`. Clients that enforce constraints reject leaves for any other name, so a leaked CA key cannot impersonate public sites. CAs created before this change, and mkcert roots, have no constraints and keep working. To get the constraints, or to pick up a TLD configured later, recreate the CA: run `devlanes certs untrust`, delete the `ca` directory under the devlanes home, run `devlanes certs trust` to create and trust the new root, then `devlanes daemon restart` so the proxy signs with it. `certs untrust` alone keeps the old root on disk.
+New devlanes CAs carry X.509 name constraints that permit DNS names under `localhost`, `test`, `internal` and `home.arpa`, plus the TLD passed to `load_or_create_with_tld`. Clients that enforce constraints reject leaves for any other name, so a leaked CA key cannot impersonate public sites. CAs created before this change, and mkcert roots, have no constraints and keep working. To get the constraints, or to pick up a TLD configured later, recreate the CA: run `devlanes setup --remove`, delete the `ca` directory under the devlanes home, run `devlanes setup` to create and trust the new root, then `devlanes daemon restart` so the proxy signs with it. `devlanes setup --remove` alone keeps the old root on disk.
 
 The dynamic resolver issues leaf certificates only for names authorized by its policy and refuses unknown or missing SNI. Direct callers of `CertificateAuthority::issue` must enforce authorization themselves. Leaves expire within 30 days, and the resolver rechecks authorization on cache hits.
 

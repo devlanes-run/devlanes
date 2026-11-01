@@ -321,6 +321,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             args,
             context,
         } => crate::bundle::run(runtime, to, log_lines, args, context).await,
+        Action::Setup(action) => crate::setup::run(runtime, action).await,
         Action::DaemonInstall => crate::daemon::install(runtime).await,
         Action::DaemonUninstall => crate::daemon::uninstall(runtime).await,
         Action::DaemonRun => Err(RpcError::new(
@@ -496,6 +497,8 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
     // `… infra` lines that turn into `✓ infra` when the phase ends.
     let mut phases = devlanes_cli::PhaseLines::new(runtime);
     let mut events: u64 = 0;
+    // A start's result, for the setup notice once everything is printed.
+    let mut started = None;
     // Followed logs and a foreground task's output share one output budget; the
     // reserve keeps room for the summary printed after the stream.
     let mut log_stream = streamed_output(&request).map(|more| {
@@ -536,7 +539,7 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                                 // Trust stores belong to this user and machine, so the
                                 // CLI checks them, not the daemon.
                                 if data.get("ca").is_some_and(Value::is_object) {
-                                    data["ca"]["trust"] = crate::local::trust_report().await;
+                                    data["ca"]["trust"] = crate::setup::doctor_report(&paths).await;
                                 }
                                 // The service definition is in this user's home, read here.
                                 if data.is_object() {
@@ -587,6 +590,9 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
                                     ..Rendered::default()
                                 });
                             }
+                            if method == Method::Start {
+                                started = Some(data);
+                            }
                             Ok(code)
                         }
                         Outcome::Error { error } => {
@@ -634,6 +640,9 @@ async fn rpc(cli: &Cli, runtime: &Runtime, request: Request) -> Result<u8, RpcEr
         title.finish(runtime, matches!(result, Ok(0)));
     }
     if result.is_ok() {
+        if let Some(data) = &started {
+            crate::setup::start_notice(&mut client, runtime, &paths, data).await;
+        }
         crate::notices::after_command(&mut client, runtime, &paths, method).await;
     }
     result

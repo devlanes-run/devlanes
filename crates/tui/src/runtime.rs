@@ -249,6 +249,7 @@ where
         executor.execute(effect);
     }
     executor.execute(Effect::LoadNotices);
+    executor.execute(Effect::CheckRelease);
     if !executor.flush(&mut app) {
         return Ok(app);
     }
@@ -890,6 +891,11 @@ impl Executor {
                 tokio::task::spawn_blocking(move || {
                     let (method, dismissed) = api.notices();
                     deliver_blocking(&sender, Msg::Notices { method, dismissed });
+                });
+            }
+            Effect::CheckRelease => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::ReleaseChecked(api.update_check(false).await)).await;
                 });
             }
             Effect::DismissNotice(key) => {

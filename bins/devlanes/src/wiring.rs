@@ -120,7 +120,7 @@ pub async fn engine(
     step("state database");
     let store = open_store(&paths.db).await?;
     step("certificate authority");
-    let ca_tld = crate::local::ca_tld(&user);
+    let ca_tld = crate::setup::ca_tld(&user);
     let (ca_env, ca_status, ca) =
         certificate_authority(&paths.home, user.tls.ca, ca_tld.as_deref()).await;
     let ca_permitted = ca.as_ref().and_then(|ca| ca.permitted_dns_names());
@@ -450,32 +450,13 @@ async fn open_store(db: &Path) -> anyhow::Result<devlanes_state::Store> {
     }
 }
 
-/// Checks the file `devlanes certs trust --resolver` writes (the NRPT rule on
-/// Windows).
+/// Checks the resolver file (the NRPT rule on Windows) `devlanes setup` writes.
 struct OsResolverFiles;
 
 impl devlanes_daemon::integrations::ResolverFiles for OsResolverFiles {
-    /// `{path, installed, matches}`; `matches` is false when the file routes the TLD
-    /// elsewhere (another port, a stale install), `{error}` when the OS has no form.
-    #[cfg(unix)]
+    /// See [`crate::setup::resolver_status`].
     fn status(&self, tld: &str, server: std::net::SocketAddr) -> Value {
-        match crate::local::resolver_file(tld, server) {
-            Ok(file) => {
-                let current = std::fs::read_to_string(&file.path).ok();
-                json!({
-                    "path": file.path,
-                    "installed": current.is_some(),
-                    "matches": current.as_deref() == Some(file.contents.as_str()),
-                })
-            }
-            Err(error) => json!({"error": error}),
-        }
-    }
-
-    /// The NRPT rule in the same shape; see [`crate::local::nrpt::doctor_status`].
-    #[cfg(windows)]
-    fn status(&self, tld: &str, server: std::net::SocketAddr) -> Value {
-        crate::local::nrpt::doctor_status(tld, server)
+        crate::setup::resolver_status(tld, server)
     }
 }
 
@@ -525,7 +506,7 @@ async fn certificate_authority_with(
                 .await;
             match output {
                 // Exit status, emptiness and absoluteness are all checked there.
-                Ok(output) => match crate::local::mkcert_caroot(&output) {
+                Ok(output) => match crate::setup::mkcert_caroot(&output) {
                     Ok(root) => Some(root),
                     Err(message) => return failed("mkcert", "mkcert_failed", message),
                 },
@@ -623,8 +604,8 @@ async fn certificate_authority_with(
                 "caroot": caroot,
                 "trusted": "unknown",
                 "name_constrained": constrained,
-                "hint": recreate.then_some(crate::local::UNCONSTRAINED_CA),
-                "fix": recreate.then(|| crate::local::recreate_ca_command(home)),
+                "hint": recreate.then_some(crate::setup::UNCONSTRAINED_CA),
+                "fix": recreate.then(|| crate::setup::recreate_ca_command(home)),
             });
             (env, status, Some(Arc::new(ca)))
         }

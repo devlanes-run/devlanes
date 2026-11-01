@@ -108,10 +108,7 @@ mod tests {
             ))
         );
         let tls = checks.iter().find(|c| c.group == "tls");
-        assert_eq!(
-            tls.and_then(|c| c.fix.as_deref()),
-            Some("devlanes certs trust")
-        );
+        assert_eq!(tls.and_then(|c| c.fix.as_deref()), Some("devlanes setup"));
         assert!(checks.iter().any(|c| c.text == "Compose 2.29.1"));
     }
 

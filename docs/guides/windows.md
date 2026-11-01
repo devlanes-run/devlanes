@@ -127,10 +127,10 @@ With `proxy.lan: true` the proxy listens on every address, and Windows Defender 
 ## HTTPS
 
 ```powershell
-devlanes certs trust
+devlanes setup
 ```
 
-adds the CA to your user root store (`Cert:\CurrentUser\Root`). Chrome and Edge read that store, and Firefox 120 and later reads it through `security.enterprise_roots.enabled`, so the `system`, `chrome`, `firefox` and `windows` targets of `tls.trust` all mean that one store. (`windows` exists for devlanes inside WSL, where it reaches this store from the distro; see [WSL](wsl.md).) It needs no administrator rights, but Windows shows a security warning for each change, which you confirm with Yes; `devlanes certs untrust` asks again. Over SSH, or anywhere without a desktop, the command fails before any change and says to run it from a desktop session. A CA that an administrator trusted for every user counts as trusted, and one listed under Untrusted Certificates (`Disallowed`) counts as missing.
+adds the CA to your user root store (`Cert:\CurrentUser\Root`). Chrome and Edge read that store, and Firefox 120 and later reads it through `security.enterprise_roots.enabled`, so the `system`, `chrome`, `firefox` and `windows` targets of `tls.trust` all mean that one store. (`windows` exists for devlanes inside WSL, where it reaches this store from the distro; see [WSL](wsl.md).) It needs no administrator rights, but Windows shows a security warning for each change, which you confirm with Yes; `devlanes setup --remove` asks again. Over SSH, or anywhere without a desktop, the command fails before any change and says to run it from a desktop session. A CA that an administrator trusted for every user counts as trusted, and one listed under Untrusted Certificates (`Disallowed`) counts as missing.
 
 Units get the CA through `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` and the other variables in [hostnames and HTTPS](https.md#programs-started-by-devlanes). `%USERPROFILE%\.devlanes\ca\bundle.pem` holds Mozilla's roots, the roots of your Windows store that are valid for servers (minus `Disallowed`) and the devlanes CA. Windows downloads most public roots only when a program first needs them, so its store alone would miss many. For tools you run yourself:
 
@@ -142,7 +142,7 @@ Units get the CA through `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`, `REQUESTS_CA_BU
 
 ## Hostnames
 
-On Windows 11 the DNS client answers every `*.localhost` name with loopback, so Node, Python, browsers and other programs that use the system resolver reach lane hostnames with no setup. devlanes never writes the hosts file on Windows: `devlanes certs trust --hosts`, `hostnames.hosts_file: always` and `hostnames.resolver: hosts_file` have nothing to install, and `--hosts` reports whether a test lookup of a `*.localhost` name works. `devlanes doctor` shows the lookup the daemon tried when it started.
+On Windows 11 the DNS client answers every `*.localhost` name with loopback, so Node, Python, browsers and other programs that use the system resolver reach lane hostnames with no setup. devlanes never writes the hosts file on Windows: `hostnames.hosts_file: always` and `hostnames.resolver: hosts_file` have nothing to install, `devlanes setup` skips its `hosts` step, and it warns when a test lookup of a `*.localhost` name fails. `devlanes doctor` shows the lookup the daemon tried when it started.
 
 Windows Server, including Windows Server 2025 on GitHub's `windows-latest` runner, does not resolve these names: `devlanes doctor` reports that the daemon's test lookup failed, and programs that use the system resolver get "not found" (Node's `ENOTFOUND`). Chrome, Edge and Firefox resolve them on their own. For other programs, add each hostname to `%SystemRoot%\System32\drivers\etc\hosts` from an elevated shell, such as `127.0.0.1 api.acme.localhost`; wildcard names cannot go there. The [devlanes action](https://github.com/devlanes-run/action) adds these entries itself on Windows runners.
 
@@ -156,10 +156,10 @@ hostnames:
 ```
 
 ```powershell
-devlanes certs trust --resolver
+devlanes setup
 ```
 
-adds a Name Resolution Policy Table (NRPT) rule, `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\devlanes-test`, that sends `.test` lookups to the daemon's DNS server on `127.53.0.1:53`. Windows asks for administrator approval once, and the rule applies at once, with no restart. `devlanes certs untrust --resolver` removes every devlanes rule. Because the approval prompt needs your desktop, a non-interactive session such as an agent, CI or SSH gets `terminal_required`, unless it already runs elevated. When Group Policy sets NRPT rules, Windows ignores local ones, so `--resolver` refuses and `doctor` says why; it also refuses when another program's rule covers the TLD.
+adds a Name Resolution Policy Table (NRPT) rule, `HKLM\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig\devlanes-test`, that sends `.test` lookups to the daemon's DNS server on `127.53.0.1:53`. Windows asks for administrator approval once, and the rule applies at once, with no restart. `devlanes setup --remove` removes every devlanes rule. Because the approval prompt needs your desktop, a non-interactive session such as an agent, CI or SSH gets `terminal_required`, unless it already runs elevated. When Group Policy sets NRPT rules, Windows ignores local ones, so `setup` refuses and `doctor` says why; it also refuses when another program's rule covers the TLD.
 
 ## Starting at logon
 
@@ -199,5 +199,5 @@ A Windows machine can be a box that other machines connect to with `devlanes rem
 - When a unit's main process exits, everything left in its job is ended, for tasks too. A setup task cannot start a background daemon that outlives it; make that program a service.
 - Windows cannot delete or rename a folder that a running process works in or holds a file open in. Run `devlanes stop` in a worktree before `git worktree remove` or `git worktree move`. `devlanes lane clean` leaves a lane data folder that another program still holds, with a warning in the daemon's log; delete it by hand afterwards.
 - `pty: true` units stop with the daemon (see [terminals in units](#terminals-in-units)).
-- The DNS server for `--resolver` always listens on `127.53.0.1:53`, because an NRPT rule cannot name a port.
+- The DNS server for the resolver strategy always listens on `127.53.0.1:53`, because an NRPT rule cannot name a port.
 - Unit names that differ only in case (`web` and `Web`) would share a log folder, so `devlanes config check` rejects them on Windows.

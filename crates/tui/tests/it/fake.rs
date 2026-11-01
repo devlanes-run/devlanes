@@ -47,6 +47,8 @@ pub struct FakeApi {
     /// waits for its answer, recorded as `answer <stream> <text>`, and the
     /// link connects after the last one.
     pub prompts: Mutex<Vec<(String, String)>>,
+    /// What `update.check` answers; unset, `null` (no newer release).
+    pub update: Mutex<Option<Value>>,
     /// What `remote.pair` answers; unset, a code valid for ten minutes.
     pub pairing: Mutex<Option<Result<Value, RpcError>>>,
     /// Shared, so a `connect` session records its answers after the call.
@@ -191,7 +193,21 @@ impl DaemonApi for FakeApi {
 
     async fn daemon_status(&self) -> Result<Value, ApiError> {
         self.record("daemon.status".into());
-        Ok(daemon_status())
+        let mut status = daemon_status();
+        if let Some(update) = self.update.lock().ok().and_then(|update| update.clone()) {
+            status["update"] = update;
+        }
+        Ok(status)
+    }
+
+    async fn update_check(&self, force: bool) -> Result<Value, ApiError> {
+        self.record(format!("update.check force={force}"));
+        Ok(self
+            .update
+            .lock()
+            .ok()
+            .and_then(|update| update.clone())
+            .unwrap_or(Value::Null))
     }
 
     async fn doctor(&self) -> Result<Value, ApiError> {

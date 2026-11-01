@@ -247,9 +247,9 @@ fn port_holders(ports: &[(&'static str, u16)]) -> Vec<Value> {
 /// problems are listed under `user_config`.
 async fn ca(paths: &Paths) -> Value {
     let config = crate::user_config::lenient(paths).await;
-    let mkcert = crate::local::mkcert_selected(&config);
+    let mkcert = crate::setup::mkcert_selected(&config);
     let path = paths.home.join("ca").join("ca.pem");
-    let mut ca = match crate::local::certificate(paths, &config, false).await {
+    let mut ca = match crate::setup::certificate(paths, &config, false).await {
         Ok(Some(certificate)) => {
             let recreate = !mkcert && !certificate.is_name_constrained();
             json!({
@@ -257,8 +257,8 @@ async fn ca(paths: &Paths) -> Value {
                 "kind": if mkcert { "mkcert" } else { "devlanes" },
                 "path": path,
                 "name_constrained": certificate.is_name_constrained(),
-                "hint": recreate.then_some(crate::local::UNCONSTRAINED_CA),
-                "fix": recreate.then(|| crate::local::recreate_ca_command(&paths.home)),
+                "hint": recreate.then_some(crate::setup::UNCONSTRAINED_CA),
+                "fix": recreate.then(|| crate::setup::recreate_ca_command(&paths.home)),
             })
         }
         // The daemon creates its CA when it first starts.
@@ -271,32 +271,16 @@ async fn ca(paths: &Paths) -> Value {
             "message": error.data.get("message"),
         }),
     };
-    ca["trust"] = crate::local::trust_report().await;
+    ca["trust"] = crate::setup::report(paths, &config).await;
     ca
 }
 
 /// `{helper}` as in the daemon's hosts status, when the /etc/hosts helper is
 /// installed; `null` otherwise (most machines never need it).
 async fn hosts_helper() -> Value {
-    use devlanes_resolver_hosts::{
-        FileKind, FsProbe, HostsClient, INSTALL_PATH, REVISION, SystemExecutor, SystemFs,
-    };
-    let installed = matches!(
-        SystemFs.lstat(Path::new(INSTALL_PATH)),
-        Ok(Some(info)) if info.kind == FileKind::File
-    );
-    if !installed {
-        return Value::Null;
-    }
-    let Ok(client) = HostsClient::new(
-        std::sync::Arc::new(SystemExecutor),
-        std::sync::Arc::new(SystemFs),
-        None,
-    ) else {
-        return Value::Null;
-    };
-    let check = devlanes_daemon::hosts::helper_check(&client.version().await, REVISION);
-    json!({"helper": check})
+    crate::setup::installed_helper()
+        .await
+        .map_or(Value::Null, |check| json!({"helper": check}))
 }
 
 #[cfg(test)]

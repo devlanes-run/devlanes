@@ -635,36 +635,35 @@ devlanes config unset [OPTIONS] <KEY>
 
 - `<KEY>`: Dotted setting or section, such as tui.theme
 
-### devlanes certs
+### devlanes setup
 
-Trust the devlanes CA and install the /etc/hosts helper
+Trust the devlanes CA and set up hostnames for this machine; asks once.
 
-```text
-devlanes certs [OPTIONS] <COMMAND>
-```
+Works out what this machine needs and lists each step as ok, todo or skip:
+  ca        trust the CA in the stores tls.trust names (mkcert's CA with tls.ca: mkcert)
+  hosts     install the /etc/hosts helper (macOS and Linux) when *.localhost does not
+            resolve to loopback, the user config asks for the hosts file, or the
+            daemon needs it for a project
+  resolver  send hostnames.tld to the devlanes DNS server (a resolver file, or an
+            NRPT rule on Windows) when hostnames.resolver is resolver
 
-### devlanes certs trust
-
-Trust the devlanes CA in the system and browser stores
-
-```text
-devlanes certs trust [OPTIONS]
-```
-
-- `--hosts`: Also install the /etc/hosts helper for programs that cannot resolve *.localhost
-- `--resolver`: Also send lookups for hostnames.tld to the devlanes DNS server (/etc/resolver on macOS, systemd-resolved on Linux)
-
-### devlanes certs untrust
-
-Remove the devlanes CA from the trust stores
+Then it asks once before doing the todo steps; sudo asks for your password at
+most once. Without a terminal, pass --yes.
 
 ```text
-devlanes certs untrust [OPTIONS]
+devlanes setup [OPTIONS]
 ```
 
-- `--hosts`: Also remove the /etc/hosts helper, its sudo rule and the devlanes block in /etc/hosts
-- `--resolver`: Also remove the OS resolver file for hostnames.tld
-- `--keep-ca`: Keep the CA trusted; with --hosts or --resolver, remove only those
+- `--check`: Only report each step; exit 0 when nothing is missing, 1 otherwise
+- `--remove`: Undo everything: the resolver file or NRPT rule, the /etc/hosts helper and the CA trust
+- `--keep-ca`: With --remove, keep the CA trusted
+
+```text
+Examples:
+  devlanes setup                       set up what is missing, asking once
+  devlanes setup --check               exit 1 when something is missing
+  devlanes setup --remove --keep-ca    remove the hosts helper and resolver, keep the CA
+```
 
 ### devlanes remote
 

@@ -41,6 +41,7 @@ mod resolve;
 mod routes;
 mod sampler;
 mod screen;
+mod setup;
 mod spawn_error;
 mod stopping;
 mod stream;

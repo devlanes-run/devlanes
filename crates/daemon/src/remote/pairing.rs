@@ -492,8 +492,9 @@ impl Inner {
 
     /// `remote.clients`: every paired client and every client a tunnel serves
     /// now, connected ones first, then by name, with its connections
-    /// (address, since when, and what it mirrors: `{ports, bound,
-    /// skipped_lanes}`) and how many pairings it has, and this daemon's clock
+    /// (address, since when, the client's devlanes version, and what it
+    /// mirrors: `{ports, bound, skipped_lanes}`) and how many pairings it has,
+    /// and this daemon's clock
     /// (`now_ms`) for the times.
     pub(crate) async fn clients_method(&self) -> Result<Value, RpcError> {
         let pairings = self.store.remote_pairings().await.map_err(store_error)?;
@@ -519,6 +520,7 @@ impl Inner {
             let connection = json!({
                 "address": client_address(client.ssh.as_deref()),
                 "since_ms": client.since_ms,
+                "version": client.version,
                 "mirror": client.mirror.as_ref().map(|report| json!({
                     "ports": report.ports.len(),
                     "bound": report.ports.iter().filter(|port| port.state == "bound").count(),

@@ -38,7 +38,7 @@ pub struct UserConfig {
     /// lane may sit without activity before devlanes throttles or freezes it.
     pub lanes: UserLanesConfig,
     /// Which certificate authority signs the proxy's HTTPS certificates (`ca`), and which
-    /// stores `devlanes certs trust` installs it into (`trust`).
+    /// stores `devlanes setup` installs it into (`trust`).
     pub tls: TlsConfig,
     /// Ports of the daemon's HTTP/HTTPS proxy, which serves every `hosts` entry, and
     /// whether other devices on the network may connect to it.
@@ -64,7 +64,8 @@ pub struct UserConfig {
     /// progress bar during starts). A plain string, the terminal app name older versions
     /// used, is still accepted but ignored with a warning.
     pub terminal: Option<TerminalConfig>,
-    /// Daily check for a newer devlanes release; nothing is downloaded or installed.
+    /// Release checks: whether the daemon looks for newer devlanes releases (`mode`) and
+    /// which releases it follows (`channel`).
     pub updates: UpdatesConfig,
     /// Whether start commands open the terminal UI, how it looks, and what quitting it
     /// does with running lanes.
@@ -366,23 +367,76 @@ fn below_home(dir: &str) -> Option<&str> {
     dir.strip_prefix("~/").or_else(|| dir.strip_prefix("~\\"))
 }
 
-/// Release checks: the daemon reads the latest release's version once a day and
-/// commands print a one-line notice. Nothing is downloaded or installed.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Release checks: how the daemon looks for newer devlanes releases (`mode`) and which
+/// releases count (`channel`). Changes apply after `devlanes daemon restart`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-#[schemars(extend("examples" = [{"check":false}]))]
+#[schemars(extend("examples" = [{"mode":"disable"},{"mode":"auto","channel":"stable"}]))]
 pub struct UpdatesConfig {
-    /// Have the daemon read the latest release's version from GitHub once a day; when it
-    /// is newer, commands print the upgrade command on one line, at most once a day.
-    /// Defaults to true; `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns it off.
-    #[schemars(extend("examples" = [true,false]))]
-    pub check: bool,
+    /// What devlanes does about newer releases: `notify` (the default) checks every 4
+    /// hours and when the TUI opens, and shows the new version; `auto` also installs patch
+    /// releases in the background where the install method allows it; `disable` never
+    /// checks. `DEVLANES_NO_UPDATE_CHECK=1` or a CI environment also turns checks off.
+    pub mode: UpdateMode,
+    /// Which releases to follow: `stable` or `next` (prereleases built from the main
+    /// branch). Defaults to the channel of the running build, so a `next` build keeps
+    /// following `next`. Only `install.sh`, `install.ps1` and standalone binaries can
+    /// follow `next`; package-manager installs always follow `stable`.
+    pub channel: Option<UpdateChannel>,
 }
 
-impl Default for UpdatesConfig {
-    /// Checks are on unless turned off.
-    fn default() -> Self {
-        Self { check: true }
+/// What devlanes does about newer releases.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(extend("examples" = ["disable","notify","auto"]))]
+pub enum UpdateMode {
+    /// Never look for releases; nothing is read from the network.
+    #[schemars(extend("examples" = ["disable"]))]
+    Disable,
+    /// Read the latest version from the registry devlanes was installed from, and show it
+    /// in the TUI and in command output when it is newer. Nothing is installed.
+    #[default]
+    #[schemars(extend("examples" = ["notify"]))]
+    Notify,
+    /// Like `notify`, and also install patch releases in the background where the install
+    /// method allows it; they apply the next time you start devlanes at a terminal. Minor
+    /// releases, which can break things before 1.0, still wait for you to update.
+    #[schemars(extend("examples" = ["auto"]))]
+    Auto,
+}
+
+impl UpdateMode {
+    /// The word the config uses: `disable`, `notify` or `auto`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Disable => "disable",
+            Self::Notify => "notify",
+            Self::Auto => "auto",
+        }
+    }
+}
+
+/// A line of devlanes releases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(extend("examples" = ["stable","next"]))]
+pub enum UpdateChannel {
+    /// Tagged releases, published to every registry.
+    #[schemars(extend("examples" = ["stable"]))]
+    Stable,
+    /// Prereleases built from the main branch, such as `0.9.1-next.14`, published only as
+    /// release archives.
+    #[schemars(extend("examples" = ["next"]))]
+    Next,
+}
+
+impl UpdateChannel {
+    /// The word the config uses: `stable` or `next`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Next => "next",
+        }
     }
 }
 
@@ -686,15 +740,15 @@ impl StartupConfig {
 #[schemars(extend("examples" = [{"resolver":"localhost","hosts_file":"auto"},{"resolver":"resolver","tld":"test"}]))]
 pub struct HostnamesConfig {
     /// Which domain lanes get and what makes their hostnames resolve; defaults to
-    /// `localhost`. `resolver` also needs `tld` and a one-time
-    /// `devlanes certs trust --resolver`; `public` is not supported yet.
+    /// `localhost`. `resolver` also needs `tld` and a one-time `devlanes setup`;
+    /// `public` is not supported yet.
     pub resolver: Resolver,
     /// Whether lane hostnames are also written to `/etc/hosts`, for programs that do not
     /// resolve `*.localhost` themselves (workerd, musl or pure-Go binaries); defaults to
     /// `auto`, which writes them only when a probe at daemon start shows the system
     /// resolver fails `*.localhost`. `never` here wins over every project; otherwise a
     /// project's `lanes.hosts_file` replaces this value for that project. Writing needs the
-    /// helper `devlanes certs trust --hosts` installs, only exact names are written (no
+    /// helper `devlanes setup` installs, only exact names are written (no
     /// wildcards), and `resolver: hosts_file` ignores this key.
     pub hosts_file: Option<HostsFile>,
     /// Top-level domain for the `resolver` strategy, such as `test`; required there. It
@@ -726,14 +780,14 @@ pub enum Resolver {
     Localhost,
     /// Keep `.localhost` names and always write exact hostnames to `/etc/hosts`, as
     /// `hosts_file: always` does, whatever `hosts_file` says; a project's
-    /// `lanes.hosts_file` still takes precedence. Needs the helper from
-    /// `devlanes certs trust --hosts`.
+    /// `lanes.hosts_file` still takes precedence. Needs the helper `devlanes setup`
+    /// installs.
     #[schemars(extend("examples" = ["hosts_file"]))]
     HostsFile,
     /// Lane domains become `<project>.<tld>` and `<project><N>.<tld>`, and so do the
     /// names `domain()` returns. They are answered by a DNS server the daemon runs on
     /// `127.0.0.1:15353`, so wildcard hostnames resolve too for programs that use the
-    /// system resolver. Needs `tld` and a one-time `devlanes certs trust --resolver`.
+    /// system resolver. Needs `tld` and a one-time `devlanes setup`.
     /// Projects that set `lanes.vars.domain` or `lanes.matrix` keep their own domains,
     /// and `domain()` gives them `.localhost` names.
     #[schemars(extend("examples" = ["resolver"]))]
@@ -804,14 +858,14 @@ impl PortsConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 /// Certificate authority behind the proxy's HTTPS certificates, and the stores
-/// `devlanes certs trust` installs it into.
+/// `devlanes setup` installs it into.
 #[schemars(extend("examples" = [{"ca":"devlanes","trust":["system","firefox"]}]))]
 pub struct TlsConfig {
     /// Which CA signs the certificate for each lane hostname; defaults to `devlanes`.
     /// Choose `mkcert` when your browsers already trust mkcert's CA.
     pub ca: CaKind,
-    /// Stores `devlanes certs trust` installs the CA into and `certs untrust` removes it
-    /// from; an empty list means `[system]`. On Linux, browsers do not read the system
+    /// Stores `devlanes setup` installs the CA into and `devlanes setup --remove` removes
+    /// it from; an empty list means `[system]`. On Linux, browsers do not read the system
     /// store, so add `chrome` and `firefox` there; inside WSL add `windows` for browsers on
     /// Windows. `devlanes doctor` shows each store's state.
     #[schemars(extend("examples" = [["system","firefox"],["chrome"],["system","windows"]]))]
@@ -825,20 +879,20 @@ pub struct TlsConfig {
 pub enum CaKind {
     /// devlanes creates its own CA in `~/.devlanes/ca` on first use, limited to names under
     /// `localhost`, `test`, `internal`, `home.arpa` and `hostnames.tld`, so it cannot sign
-    /// for real sites. Trust it once with `devlanes certs trust`.
+    /// for real sites. Trust it once with `devlanes setup`.
     #[default]
     #[schemars(extend("examples" = ["devlanes"]))]
     Devlanes,
     /// Load mkcert's existing root CA (from `mkcert -CAROOT`) instead, so browsers that
     /// already trust it need nothing new. HTTPS stays off when `mkcert` is not on `PATH`;
-    /// the mkcert CA has no name limits, and `certs untrust` leaves it trusted.
+    /// the mkcert CA has no name limits, and `devlanes setup --remove` leaves it trusted.
     #[schemars(extend("examples" = ["mkcert"]))]
     Mkcert,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
-/// Certificate store that `devlanes certs trust` installs the CA into.
+/// Certificate store that `devlanes setup` installs the CA into.
 #[schemars(extend("examples" = ["system","firefox","chrome","windows","ios-simulator","android-emulator"]))]
 pub enum TrustTarget {
     /// The OS store: the login keychain on macOS, read by Safari, Chrome, Edge and
@@ -857,7 +911,7 @@ pub enum TrustTarget {
     /// devlanes inside WSL, whose browser usually runs on Windows: it runs Windows'
     /// `certutil.exe` through interop, and Windows asks you to confirm each change.
     /// On Windows it is the same store as `system`; on macOS and Linux outside WSL
-    /// `certs trust` reports it as unavailable.
+    /// `devlanes setup` reports it as unavailable.
     #[schemars(extend("examples" = ["windows"]))]
     Windows,
     /// Reserved for the iOS simulator; not supported yet, so it is dropped with a warning.

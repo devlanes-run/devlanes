@@ -40,10 +40,10 @@ tls:
 Then run:
 
 ```sh
-devlanes certs trust
+devlanes setup
 ```
 
-For `windows` this runs Windows' `certutil.exe -user -addstore Root` through WSL interop, and Windows shows a security warning on the desktop that you confirm with Yes. A No fails the command with `ERROR_CANCELLED` and changes nothing. `devlanes certs untrust` removes the CA again (Windows asks once more). `doctor` reads the store with `certutil.exe -user -verifystore Root`, which shows no dialog, and reports `CA trusted by windows` once the CA is there. Without `windows` in `tls.trust`, `doctor` warns that browsers on Windows do not trust the CA.
+For `windows` this runs Windows' `certutil.exe -user -addstore Root` through WSL interop, and Windows shows a security warning on the desktop that you confirm with Yes. A No fails the command with `ERROR_CANCELLED` and changes nothing. `devlanes setup --remove` removes the CA again (Windows asks once more). `doctor` reads the store with `certutil.exe -user -verifystore Root`, which shows no dialog, and reports `CA trusted by windows` once the CA is there. Without `windows` in `tls.trust`, `doctor` warns that browsers on Windows do not trust the CA.
 
 With interop off, and on macOS and Linux outside WSL, the `windows` target is reported as unavailable. On Windows itself it is the same store as `system` ([Windows](windows.md#https)).
 
@@ -61,6 +61,6 @@ Turn on Docker Desktop's WSL integration for the distro (Settings, Resources, WS
 
 ## Limitations
 
-- `certs trust` and `certs untrust` for `windows` wait for someone at the Windows desktop to answer the dialog. `doctor` gives up on a store lookup after 20 seconds and reports the state as unknown.
+- `setup` and `setup --remove` for `windows` wait for someone at the Windows desktop to answer the dialog. `doctor` gives up on a store lookup after 20 seconds and reports the state as unknown.
 - With interop off (`[interop] enabled=false` in `/etc/wsl.conf`), the `windows` target and opening URLs in Windows are unavailable; `doctor` says so.
 - A daemon started by systemd has no `WSL_DISTRO_NAME`. It still detects WSL through the interop entry, but with interop off it does not, and then neither starts nor `doctor` warn about lanes on Windows drives.

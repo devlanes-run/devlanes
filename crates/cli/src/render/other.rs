@@ -795,8 +795,7 @@ fn listener(proxy: &Value, name: &'static str) -> Option<Check> {
     }
     if entry.get("reason").and_then(Value::as_str) == Some("no_ca") {
         return Some(
-            Check::new("proxy", Outcome::Skip, format!("{name} off: no CA"))
-                .fix("devlanes certs trust"),
+            Check::new("proxy", Outcome::Skip, format!("{name} off: no CA")).fix("devlanes setup"),
         );
     }
     Some(
@@ -1036,7 +1035,7 @@ fn wsl_checks(data: &Value) -> Vec<Check> {
                 Outcome::Skip,
                 "browsers on Windows do not trust the CA: tls.trust leaves out windows",
             )
-            .fix("add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes certs trust"),
+            .fix("add windows to tls.trust in ~/.devlanes/config.yaml, then devlanes setup"),
         );
     }
     for worktree in list(data, "windows_drive_worktrees") {
@@ -1108,14 +1107,14 @@ fn dns_checks(dns: &Value) -> Vec<Check> {
             Outcome::Skip,
             format!(".{tld} lookups do not reach the devlanes DNS server: {missing}"),
         )
-        .fix("devlanes certs trust --resolver")
+        .fix("devlanes setup")
     } else if file.get("matches").and_then(Value::as_bool) != Some(true) {
         Check::new(
             "dns",
             Outcome::Skip,
             format!("{path} sends .{tld} lookups elsewhere, not to {listen}"),
         )
-        .fix("devlanes certs trust --resolver")
+        .fix("devlanes setup")
     } else {
         let what = if nrpt { "NRPT rule" } else { "resolver file" };
         Check::new(
@@ -1623,7 +1622,7 @@ fn tls_and_hosts_checks(data: &Value, running: bool) -> Vec<Check> {
                 "trusted" => Check::new("tls", Outcome::Ok, format!("CA trusted by {store}")),
                 "untrusted" => {
                     Check::new("tls", Outcome::Fail, format!("CA not trusted by {store}"))
-                        .fix("devlanes certs trust")
+                        .fix("devlanes setup")
                 }
                 _ => Check::new(
                     "tls",
@@ -1653,7 +1652,7 @@ fn tls_and_hosts_checks(data: &Value, running: bool) -> Vec<Check> {
                 Outcome::Fail,
                 format!("no CA: {}", text(ca, "error")),
             )
-            .fix("devlanes certs trust"),
+            .fix("devlanes setup"),
         );
     }
     // Routed hosts the CA cannot certify: HTTPS fails for them, plain HTTP works.
@@ -1700,7 +1699,7 @@ fn tls_and_hosts_checks(data: &Value, running: bool) -> Vec<Check> {
             );
             checks.push(match code.as_str() {
                 "hosts_file_refused" => check.fix("fix the devlanes markers in /etc/hosts by hand"),
-                _ => check.fix("devlanes certs trust --hosts"),
+                _ => check.fix("devlanes setup"),
             });
         } else {
             let state = match (text(hosts, "state").as_str(), int(hosts, "names")) {
@@ -1778,7 +1777,7 @@ fn native_hosts_check(hosts: &Value) -> Check {
                 }
             ),
         )
-        .fix("add the lane hostnames to %SystemRoot%\\System32\\drivers\\etc\\hosts from an elevated shell, or set hostnames.resolver: resolver and hostnames.tld, then devlanes certs trust --resolver"),
+        .fix("add the lane hostnames to %SystemRoot%\\System32\\drivers\\etc\\hosts from an elevated shell, or set hostnames.resolver: resolver and hostnames.tld, then devlanes setup"),
     }
 }
 
@@ -1800,7 +1799,7 @@ fn helper_check(hosts: &Value) -> Option<Check> {
     let fix = helper
         .get("fix")
         .and_then(Value::as_str)
-        .map_or_else(|| "devlanes certs trust --hosts".to_owned(), clean);
+        .map_or_else(|| "devlanes setup".to_owned(), clean);
     Some(Check::new("hosts", Outcome::Skip, words::helper_outdated(helper)).fix(fix))
 }
 
@@ -1853,7 +1852,9 @@ fn user_config_checks(config: &Value) -> Vec<Check> {
 }
 
 /// The `release` facts the client adds to doctor: this binary, how it was
-/// installed, a version difference with the daemon and the latest release.
+/// installed and the path that runs the install, a version difference with
+/// the daemon, and the daemon's release check: its mode, where it reads
+/// releases, the latest release and how far this binary is behind it.
 fn release_checks(release: &Value) -> Vec<Check> {
     let version = text(release, "version");
     let build = match release.get("build").and_then(Value::as_str) {
@@ -1869,6 +1870,14 @@ fn release_checks(release: &Value) -> Vec<Check> {
             how => format!("devlanes {version} ({build}), installed with {how}"),
         },
     )];
+    let entry = text(release, "entry");
+    if !entry.is_empty() {
+        checks.push(Check::new(
+            "release",
+            Outcome::Ok,
+            format!("runs from {entry}"),
+        ));
+    }
     let daemon = text(release, "daemon_version");
     if !daemon.is_empty() && daemon != version {
         checks.push(
@@ -1886,32 +1895,55 @@ fn release_checks(release: &Value) -> Vec<Check> {
         .and_then(Value::as_u64)
         .map(|ms| format!(", checked {}", ago(ms)))
         .unwrap_or_default();
+    // `, read from npm (stable), updates.mode: notify`: where the daemon reads
+    // releases and what it does about them.
+    let mut how = String::new();
+    if let (Some(source), Some(channel)) = (
+        release.get("source").and_then(Value::as_str),
+        release.get("channel").and_then(Value::as_str),
+    ) {
+        how.push_str(&format!(", read from {source} ({channel})"));
+    }
+    if let Some(mode) = release.get("mode").and_then(Value::as_str) {
+        how.push_str(&format!(", updates.mode: {mode}"));
+    }
     let check = match release.get("check").and_then(Value::as_str) {
         Some("off") => Check::new(
             "release",
             Outcome::Ok,
             match release.get("check_off_reason").and_then(Value::as_str) {
-                Some("config") => "release checks are off (updates.check: false)",
+                Some("config") => "release checks are off (updates.mode: disable)",
                 Some("env") => "release checks are off (DEVLANES_NO_UPDATE_CHECK)",
                 Some("ci") => "release checks are off in CI",
                 Some("debug_build") => "release checks are off in debug builds",
+                Some("local") => {
+                    "release checks are off for a project dependency; its manifest sets the version"
+                }
+                Some("source") => "release checks are off for a build from a checkout",
                 _ => "release checks are off",
             },
         ),
         Some("ok") if release.get("update_available").and_then(Value::as_bool) == Some(true) => {
+            let breaking = match release.get("bump").and_then(Value::as_str) {
+                Some("minor") => " (breaking changes)",
+                _ => "",
+            };
             Check::new(
                 "release",
                 Outcome::Skip,
-                format!("devlanes {} is available{checked}", latest.unwrap_or("?")),
+                format!(
+                    "devlanes {} is available{breaking}{how}{checked}",
+                    latest.unwrap_or("?")
+                ),
             )
             .fix(text(release, "command"))
         }
         Some("ok") => Check::new(
             "release",
             Outcome::Ok,
-            format!("latest release {}{checked}", latest.unwrap_or("?")),
+            format!("latest release {}{how}{checked}", latest.unwrap_or("?")),
         ),
-        _ => Check::new("release", Outcome::Ok, "no release check yet"),
+        _ => Check::new("release", Outcome::Ok, format!("no release check yet{how}")),
     };
     checks.push(check);
     checks.extend(old_copy_checks(&release["old_copies"]));
@@ -1989,6 +2021,15 @@ pub(super) fn host_list(data: &Value) -> Vec<String> {
         let Some(fields) = item.as_object_mut() else {
             continue;
         };
+        // The box's devlanes release is the one fact of its handshake worth a line.
+        if let Some(version) = fields
+            .get("box")
+            .and_then(|about| about.get("version"))
+            .and_then(Value::as_str)
+            .map(|version| Value::String(format!("devlanes {version}")))
+        {
+            fields.insert("version".into(), version);
+        }
         for key in ["registry", "box", "proxy", "suffixes"] {
             fields.remove(key);
         }
@@ -2187,7 +2228,8 @@ pub(super) fn daemon_pair(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 }
 
 /// `daemon clients`: one row per client by name, with its short id, whether
-/// it is paired, its connections or when it was last seen, and what it mirrors.
+/// it is paired, its connections or when it was last seen, the devlanes
+/// release it runs, and what it mirrors.
 pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     let items = list(data, "items");
     if items.is_empty() {
@@ -2240,11 +2282,18 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                     )
                 })
                 .unwrap_or_default();
+            let version = connections
+                .iter()
+                .find_map(|connection| connection.get("version").and_then(Value::as_str))
+                .map(super::clean);
             if cx.agent() {
                 return vec![format!(
-                    "client {} id={id} paired={paired} connections={} {seen}{}",
+                    "client {} id={id} paired={paired} connections={}{} {seen}{}",
                     text(item, "name"),
                     connections.len(),
+                    version
+                        .map(|version| format!(" version={version}"))
+                        .unwrap_or_default(),
                     if mirror.is_empty() {
                         String::new()
                     } else {
@@ -2252,13 +2301,23 @@ pub(super) fn daemon_clients(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
                     }
                 )];
             }
+            let version = version
+                .map(|version| format!("devlanes {version}"))
+                .unwrap_or_default();
             let pairings = item.get("pairings").and_then(Value::as_u64).unwrap_or(0);
             let state = match (paired, pairings) {
                 (false, _) => "not paired".to_owned(),
                 (true, 0 | 1) => "paired".to_owned(),
                 (true, pairings) => format!("{pairings} pairings"),
             };
-            vec![text(item, "name"), short_id(&id), state, seen, mirror]
+            vec![
+                text(item, "name"),
+                short_id(&id),
+                state,
+                seen,
+                version,
+                mirror,
+            ]
         })
         .collect();
     if cx.agent() {

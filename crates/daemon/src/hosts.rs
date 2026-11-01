@@ -110,7 +110,7 @@ pub struct HostsOptions {
 }
 
 /// The fix for an outdated, missing or broken helper.
-const REINSTALL: &str = "devlanes certs trust --hosts";
+const REINSTALL: &str = "devlanes setup";
 
 /// `doctor`'s `helper` object from the installed helper's `version`:
 /// `{state, level, installed, revision, required, message?, fix?}` with `state` one
@@ -351,27 +351,37 @@ impl HostsFile {
         })
     }
 
-    /// A `why` reason when `hosts` should be in the block but the helper cannot
-    /// write it: `helper_missing`, `sudo_denied`, `helper_outdated` or (any failure
-    /// with an installed helper that needs replacing) `helper_revision_outdated`,
-    /// each fixed by `devlanes certs trust --hosts`.
-    pub fn reason(&self, hosts: &[String]) -> Option<(&'static str, Value)> {
-        let state = self.sync.state().borrow().clone();
-        let SyncState::Failed(error) = state else {
+    /// The latest attempt's error and [`Self::failure_value`] when `devlanes
+    /// setup` fixes it: `helper_missing`, `sudo_denied`, `helper_outdated`, or
+    /// any failure with an installed helper that needs replacing.
+    fn setup_failure(&self) -> Option<(HostsError, Value)> {
+        let SyncState::Failed(error) = self.sync.state().borrow().clone() else {
             return None;
         };
         let failure = self.failure_value(&error);
-        let outdated = failure["code"] == "helper_revision_outdated";
-        if !outdated
-            && !matches!(
+        let fixable = failure["code"] == "helper_revision_outdated"
+            || matches!(
                 error,
                 HostsError::HelperMissing { .. }
                     | HostsError::SudoDenied { .. }
                     | HostsError::Outdated { .. }
-            )
-        {
-            return None;
-        }
+            );
+        fixable.then_some((error, failure))
+    }
+
+    /// Whether `/etc/hosts` cannot be written until `devlanes setup` runs, for
+    /// `daemon.status`'s `setup.missing`.
+    pub fn needs_setup(&self) -> bool {
+        self.setup_failure().is_some()
+    }
+
+    /// A `why` reason when `hosts` should be in the block but the helper cannot
+    /// write it: `helper_missing`, `sudo_denied`, `helper_outdated` or (any failure
+    /// with an installed helper that needs replacing) `helper_revision_outdated`,
+    /// each fixed by `devlanes setup`.
+    pub fn reason(&self, hosts: &[String]) -> Option<(&'static str, Value)> {
+        let (error, failure) = self.setup_failure()?;
+        let outdated = failure["code"] == "helper_revision_outdated";
         let desired = lock(&self.desired);
         let affected: Vec<&String> = hosts
             .iter()
@@ -685,6 +695,7 @@ mod tests {
         assert_eq!(code, "sudo_denied");
         assert_eq!(data["hosts"], json!(["web.acme2.localhost"]));
         assert!(hosts.reason(&["other.localhost".into()]).is_none());
+        assert!(hosts.needs_setup());
 
         deny.store(false, Ordering::SeqCst);
         let status = hosts.retry().await;
@@ -695,6 +706,7 @@ mod tests {
             "retry skips the five-minute backoff"
         );
         assert!(hosts.reason(&["web.acme2.localhost".into()]).is_none());
+        assert!(!hosts.needs_setup());
     }
 
     #[tokio::test(start_paused = true)]
@@ -706,6 +718,7 @@ mod tests {
         assert_eq!(hosts.status()["last_error"]["code"], "helper_missing");
         assert!(executor.calls().is_empty(), "no sudo without the helper");
         assert_eq!(hosts.status()["helper"]["state"], "missing");
+        assert!(hosts.needs_setup());
     }
 
     /// An installed helper whose `version` prints `line` (or fails to start).
@@ -748,14 +761,14 @@ mod tests {
         let older = helper_check(&Ok(found("0.4.0", 1)), 2);
         assert_eq!(older["state"], "outdated");
         assert_eq!(older["level"], "warning");
-        assert_eq!(older["fix"], "devlanes certs trust --hosts");
+        assert_eq!(older["fix"], "devlanes setup");
         assert_eq!(
             (&older["installed"], &older["revision"], &older["required"]),
             (&json!("0.4.0"), &json!(1), &json!(2))
         );
         assert_eq!(
             older["message"],
-            "The installed hosts helper is revision 1 and devlanes needs 2. Run `devlanes certs trust --hosts` to reinstall it."
+            "The installed hosts helper is revision 1 and devlanes needs 2. Run `devlanes setup` to reinstall it."
         );
         let other = helper_check(&Err(HostsError::Outdated { found: "2".into() }), 2);
         assert_eq!(other["state"], "incompatible");
@@ -815,7 +828,8 @@ mod tests {
             .reason(&["web.acme2.localhost".into()])
             .expect("why reason");
         assert_eq!(code, "helper_revision_outdated");
-        assert_eq!(data["fix"], "devlanes certs trust --hosts");
+        assert_eq!(data["fix"], "devlanes setup");
+        assert!(hosts.needs_setup());
     }
 
     #[tokio::test(start_paused = true)]

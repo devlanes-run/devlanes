@@ -1,7 +1,7 @@
 //! The user config (`config.yaml` in the devlanes home) as CLI commands read it.
 //! A missing file means every default. Commands whose effect depends on its
-//! settings (certificate trust, the OS resolver file, the lane data folder of
-//! `daemon reset-state`) refuse an invalid file with a `config_error`, and so
+//! settings (`devlanes setup`, the lane data folder of `daemon reset-state`)
+//! refuse an invalid file with a `config_error`, and so
 //! does the daemon, which then does not start (`daemon restart` checks first);
 //! doctor reads it leniently and lists every problem; display settings (TUI
 //! look, the tab's progress bar) keep every valid key after a warning.

@@ -839,8 +839,9 @@ pub fn connect_refused(host: &str) -> RpcError {
 }
 
 /// `remote.clients` on this machine as a box, connected clients first as the
-/// daemon sorts them: a laptop connected with two pairings (two box names),
-/// then a CI runner last seen an hour ago and a desktop away for three days.
+/// daemon sorts them: a laptop on this release connected with two pairings
+/// (two box names), then a CI runner last seen an hour ago and a desktop away
+/// for three days.
 pub fn clients() -> Value {
     json!({
         "now_ms": NOW_MS,
@@ -851,6 +852,7 @@ pub fn clients() -> Value {
              "name": "laptop", "paired": true, "pairings": 2,
              "paired_at_ms": NOW_MS - 604_800_000, "last_seen_ms": NOW_MS - 8_040_000,
              "connections": [{"address": "203.0.113.24", "since_ms": NOW_MS - 8_040_000,
+                              "version": VERSION,
                               "mirror": {"ports": 6, "bound": 5, "skipped_lanes": 1}}]},
             {"id": "dl_cid_0b9e44d1c7a35f2e8a6d0c1b9f4e7a2d3c5b8e1f0a9d6c4b2e7f3a1d5c8b0e9f",
              "name": "ci-runner", "paired": true, "pairings": 1,
@@ -864,8 +866,9 @@ pub fn clients() -> Value {
     })
 }
 
-/// [`clients`] on a box with `remote.require_pairing: false`: a tablet is
-/// connected without pairing, listed after the laptop with the connected.
+/// [`clients`] on a box with `remote.require_pairing: false`: a tablet on an
+/// older release is connected without pairing, listed after the laptop with
+/// the connected.
 pub fn clients_unpaired() -> Value {
     let mut list = clients();
     list["require_pairing"] = json!(false);
@@ -877,7 +880,7 @@ pub fn clients_unpaired() -> Value {
                 "name": "tablet", "paired": false, "pairings": 0,
                 "paired_at_ms": null, "last_seen_ms": null,
                 "connections": [{"address": "198.51.100.7", "since_ms": NOW_MS - 300_000,
-                                 "mirror": null}],
+                                 "version": "0.8.1", "mirror": null}],
             }),
         );
     }

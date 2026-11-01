@@ -603,6 +603,16 @@ pub trait DaemonApi: Send + Sync {
             2,
         )))
     }
+    /// `update.check`: has the daemon look for a newer release unless it
+    /// checked within the hour (always with `force`). Replies with the release
+    /// as `daemon.status` reports it in `update`, or `null`.
+    async fn update_check(&self, _force: bool) -> Result<Value, ApiError> {
+        Err(ApiError::Rpc(RpcError::new(
+            "unknown_method",
+            json!({"method": "update.check"}),
+            2,
+        )))
+    }
     /// `infra.logs` with `follow` for one infra container of `lane`: its last
     /// `tail` lines, then new ones, as `log` events until the stream is dropped.
     async fn follow_container(
@@ -1130,6 +1140,17 @@ impl DaemonApi for ClientApi {
     async fn daemon_status(&self) -> Result<Value, ApiError> {
         self.shared_request(Method::DaemonStatus, json!({}), self.context(None, false))
             .await
+    }
+
+    /// Calls `update.check` on its own connection: reading a registry can
+    /// take seconds, which must not hold up requests on the shared one.
+    async fn update_check(&self, force: bool) -> Result<Value, ApiError> {
+        self.oneshot(
+            Method::UpdateCheck,
+            json!({"force": force}),
+            self.context(None, false),
+        )
+        .await
     }
 
     /// Calls `doctor` on the shared connection.

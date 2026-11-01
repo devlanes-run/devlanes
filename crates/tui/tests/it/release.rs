@@ -1,6 +1,7 @@
 //! The header's release notice: a newer release with its upgrade command, or a
-//! daemon that runs another version. `u` hides it for good. The welcome of
-//! the first launch is kept with the same dismissals.
+//! daemon that runs another version. `u` hides it for good. Opening the TUI
+//! asks the daemon for a release check. The welcome of the first launch is
+//! kept with the same dismissals.
 
 use crossterm::event::KeyCode;
 use devlanes_tui::app::{Dialog, Effect, Msg};
@@ -56,12 +57,21 @@ async fn the_welcome_shows_once_per_home() -> TestResult {
     Ok(())
 }
 
-/// `daemon.status` from a daemon of this version, with `update` when given.
-fn status(version: &str, latest: Option<&str>) -> serde_json::Value {
+/// `update` as `daemon.status` reports a release `latest`, `bump` away.
+fn update(latest: &str, bump: &str) -> serde_json::Value {
+    json!({
+        "latest": latest, "channel": "stable", "bump": bump, "state": "available",
+        "checked_at": 1, "notes": [{"version": latest, "level": bump, "line": "Fixed a thing."}],
+    })
+}
+
+/// `daemon.status` from a daemon of this version, with `update` for the
+/// release and bump when given.
+fn status(version: &str, latest: Option<(&str, &str)>) -> serde_json::Value {
     let mut status = daemon_status();
     status["version"] = json!(version);
-    if let Some(latest) = latest {
-        status["update"] = json!({"latest": latest, "checked_at": 1});
+    if let Some((latest, bump)) = latest {
+        status["update"] = update(latest, bump);
     }
     status
 }
@@ -72,7 +82,7 @@ async fn newer_release_shows_until_dismissed() -> TestResult {
     let (mut app, _) = loaded(&api, 140, 24).await;
     let own = devlanes_version::VERSION;
     app.update(Msg::DaemonInfo {
-        status: Ok(status(own, Some("99.0.0"))),
+        status: Ok(status(own, Some(("99.0.0", "minor")))),
         doctor: Ok(json!({})),
     });
     assert_eq!(
@@ -88,7 +98,7 @@ async fn newer_release_shows_until_dismissed() -> TestResult {
     assert_eq!(notice, "update:99.0.0");
     assert_eq!(
         text,
-        "99.0.0 available: brew upgrade devlanes-run/tap/devlanes"
+        "99.0.0 available, breaking changes: brew upgrade devlanes-run/tap/devlanes"
     );
     // The top bar marks the daemon button; the daemon page says what to run.
     let screen = draw(&app)?.backend().to_string();
@@ -102,7 +112,7 @@ async fn newer_release_shows_until_dismissed() -> TestResult {
     )));
     let page = draw(&app)?.backend().to_string();
     assert!(
-        page.contains("warn update  99.0.0 available · u hides it"),
+        page.contains("warn update  99.0.0 available, breaking changes · u hides it"),
         "{page}"
     );
     assert!(
@@ -126,10 +136,108 @@ async fn newer_release_shows_until_dismissed() -> TestResult {
     });
     assert_eq!(app.release_badge(), None);
     app.update(Msg::DaemonInfo {
-        status: Ok(status(own, Some("99.1.0"))),
+        status: Ok(status(own, Some(("99.1.0", "minor")))),
         doctor: Ok(json!({})),
     });
     assert!(app.release_badge().is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_patch_release_is_not_called_breaking() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 140, 24).await;
+    app.update(Msg::Notices {
+        method: InstallMethod::Homebrew,
+        dismissed: vec![WELCOME.into()],
+    });
+    app.update(Msg::DaemonInfo {
+        status: Ok(status(devlanes_version::VERSION, Some(("99.0.1", "patch")))),
+        doctor: Ok(json!({})),
+    });
+    let (_, text) = app.release_badge().ok_or("no notice")?;
+    assert_eq!(
+        text,
+        "99.0.1 available: brew upgrade devlanes-run/tap/devlanes"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_release_check_on_open_updates_the_badge() -> TestResult {
+    let api = FakeApi::with_lanes(mixed_lanes());
+    let (mut app, _) = loaded(&api, 140, 24).await;
+    app.update(Msg::Notices {
+        method: InstallMethod::Npm,
+        dismissed: vec![WELCOME.into()],
+    });
+    // Before `daemon.status` answered, the answer asks for it.
+    let effects = app.update(Msg::ReleaseChecked(Ok(update("99.0.1", "patch"))));
+    assert!(
+        effects.iter().any(|e| matches!(e, Effect::FetchDaemon)),
+        "{effects:?}"
+    );
+    app.update(Msg::DaemonInfo {
+        status: Ok(status(devlanes_version::VERSION, None)),
+        doctor: Ok(json!({})),
+    });
+    assert_eq!(app.release_badge(), None);
+    app.update(Msg::ReleaseChecked(Ok(update("99.0.1", "patch"))));
+    assert!(app.release_badge().is_some());
+    // No newer release any more, or a failed check: the answer decides.
+    app.update(Msg::ReleaseChecked(Ok(serde_json::Value::Null)));
+    assert_eq!(app.release_badge(), None);
+    Ok(())
+}
+
+#[tokio::test]
+async fn opening_the_tui_asks_for_a_release_check_once() -> TestResult {
+    use crossterm::event::{Event as TermEvent, KeyEvent, KeyModifiers};
+    use std::sync::Arc;
+
+    let mut fake = FakeApi::with_lanes(Vec::new());
+    *fake.update.get_mut().map_err(|_| "poisoned")? = Some(update("99.0.1", "patch"));
+    let api = Arc::new(fake);
+    let (keys_tx, keys_rx) = tokio::sync::mpsc::channel::<std::io::Result<TermEvent>>(8);
+    let events = Box::pin(futures_util::stream::unfold(keys_rx, |mut rx| async move {
+        rx.recv().await.map(|event| (event, rx))
+    }));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(140, 24))?;
+    let driver: Arc<dyn devlanes_tui::DaemonApi> = api.clone();
+    let script = {
+        let api = api.clone();
+        async move {
+            while !api
+                .calls()
+                .iter()
+                .any(|call| call.starts_with("update.check"))
+            {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+            let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+            keys_tx.send(Ok(TermEvent::Key(quit))).await.ok();
+            keys_tx
+        }
+    };
+    let options = super::hermetic_options();
+    let run = devlanes_tui::drive(
+        &mut terminal,
+        driver,
+        &options,
+        events,
+        Box::new(std::io::sink()),
+    );
+    let (result, _keys) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(run, script)
+    })
+    .await?;
+    result?;
+    let checks: Vec<String> = api
+        .calls()
+        .into_iter()
+        .filter(|call| call.starts_with("update.check"))
+        .collect();
+    assert_eq!(checks, ["update.check force=false"]);
     Ok(())
 }
 
@@ -142,7 +250,7 @@ async fn older_or_equal_release_and_matching_daemon_show_nothing() -> TestResult
         dismissed: vec![WELCOME.into()],
     });
     app.update(Msg::DaemonInfo {
-        status: Ok(status(devlanes_version::VERSION, Some("0.0.1"))),
+        status: Ok(status(devlanes_version::VERSION, Some(("0.0.1", "patch")))),
         doctor: Ok(json!({})),
     });
     assert_eq!(app.release_badge(), None);

@@ -5,14 +5,27 @@ use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
+use crate::{InstallMethod, version::Bump};
+
 /// The notice log under `$DEVLANES_HOME`.
 const NOTICES_FILE: &str = "notices.json";
 /// A notice repeats at most once per day.
 const REPEAT_MS: u64 = 24 * 3600 * 1000;
 
-/// The notice for a newer release.
-pub fn update_line(latest: &str, current: &str, command: &str) -> String {
-    format!("devlanes {latest} is available (this is {current}): {command}")
+/// The command notices name for installing `latest`: the upgrade command of
+/// how this binary was installed.
+pub fn update_command(method: &InstallMethod, latest: &str) -> String {
+    method.upgrade_command(latest)
+}
+
+/// The notice for a newer release `bump` away from `current`, with the command
+/// that installs it. A minor release says it may break what worked.
+pub fn update_line(latest: &str, current: &str, bump: Bump, command: &str) -> String {
+    let breaking = match bump {
+        Bump::Minor => " (breaking changes)",
+        Bump::Patch => "",
+    };
+    format!("devlanes {latest} is available (this is {current}): {command}{breaking}")
 }
 
 /// The notice for a daemon that runs another version than this client.
@@ -111,6 +124,18 @@ pub fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_lines_mark_breaking_releases() {
+        assert_eq!(
+            update_line("0.9.1", "0.9.0", Bump::Patch, "devlanes update"),
+            "devlanes 0.9.1 is available (this is 0.9.0): devlanes update"
+        );
+        assert_eq!(
+            update_line("0.10.0", "0.9.0", Bump::Minor, "devlanes update"),
+            "devlanes 0.10.0 is available (this is 0.9.0): devlanes update (breaking changes)"
+        );
+    }
 
     #[test]
     fn notices_repeat_daily_and_persist() -> std::io::Result<()> {

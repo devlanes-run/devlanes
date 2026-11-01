@@ -71,15 +71,23 @@ devlanes debug bundle -- start api
 
 ## Release notices
 
-Three minutes after it starts, and then once a day, the daemon reads the version in `https://github.com/devlanes-run/devlanes/releases/latest/download/release-manifest.json` with `curl` and caches it in `update-check.json`. A failed request keeps the cached answer. A release is reported once it is newer than the daemon and has been seen for two hours, the time Homebrew and npm take to publish it. devlanes never downloads, installs or restarts anything itself.
+The daemon reads the latest version 30 seconds after it starts, then every 4 hours, and when a TUI opens if the last check is over an hour old. It reads the registry it was installed from, with `curl`:
 
-In human output, a command then prints one line on stderr, at most once a day per version, with the upgrade command for how this binary was installed (Homebrew, npm, pnpm, Bun, Yarn, uv, uvx, pipx, pip, cargo binstall, cargo install or `install.sh`). When the daemon runs another version than the CLI, the line says to run `devlanes daemon restart` when convenient, since a restart stops services. Agent, JSON, plain and CI output never get these lines. The TUI shows the same notice in its header, and `u` hides it for that version. `devlanes doctor` always shows the version, build, install method, latest release and upgrade command. Shown and hidden notices are kept in `notices.json`.
+- `install.sh`, `install.ps1`, standalone binaries and cargo: the GitHub release manifest (`releases/latest/download/release-manifest.json`, or `releases/download/next/release-manifest.json` on the `next` channel).
+- npm, pnpm, Bun and Yarn: `https://registry.npmjs.org/devlanes/latest`.
+- uv, uvx, pipx and pip: `https://pypi.org/pypi/devlanes/json`.
+- Homebrew: the formula in `devlanes-run/homebrew-tap`.
+
+Only `install.sh`, `install.ps1` and standalone binaries follow `next`; the registries carry stable releases. Project-local installs and source builds are not checked. For a new release the daemon also reads its `CHANGELOG.md` and keeps the entries since the running version. Answers are cached in `update-check.json`, and a failed request keeps the cached answer.
+
+In human output, a command then prints one line on stderr, at most once a day per version, such as `devlanes 0.9.1 is available (this is 0.9.0): brew upgrade devlanes-run/tap/devlanes`, with the upgrade command for how this binary was installed and `(breaking changes)` for a new minor version. When the daemon runs another version than the CLI, the line says to run `devlanes daemon restart` when convenient, since a restart stops services. Agent, JSON, plain and CI output never get these lines. The TUI shows the same notice in its header, `u` hides it for that version, and the summary printed when the TUI closes has an `Update` line. `devlanes doctor` always shows the version, build, install method and the path that runs it, the update mode, channel and registry, and the latest release with its upgrade command. Shown and hidden notices are kept in `notices.json`.
 
 Checks are off in debug builds, when the daemon starts with CI variables set, with `DEVLANES_NO_UPDATE_CHECK=1`, or with this in `config.yaml`:
 
 ```yaml
 updates:
-  check: false
+  mode: disable # notify (the default) or auto
+  channel: stable # or next; defaults to the running build's channel
 ```
 
 ## License

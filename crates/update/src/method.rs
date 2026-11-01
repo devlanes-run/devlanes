@@ -155,6 +155,15 @@ impl InstallMethod {
         Self::of(&running_exe().unwrap_or_else(|_| PathBuf::from("devlanes")))
     }
 
+    /// The method of the running binary and its [`Self::entry`]. Reads the
+    /// filesystem, so async code calls it from a blocking task.
+    pub fn current_with_entry() -> (Self, PathBuf) {
+        let exe = running_exe().unwrap_or_else(|_| PathBuf::from("devlanes"));
+        let method = Self::of(&exe);
+        let entry = method.entry(&exe);
+        (method, entry)
+    }
+
     /// The method of the canonical executable `exe`, with the facts
     /// [`Self::detect`] needs read from the filesystem.
     fn of(exe: &Path) -> Self {

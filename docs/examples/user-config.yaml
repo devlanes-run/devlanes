@@ -29,7 +29,7 @@ lanes:
 tls:
   # Certificate authority: devlanes keeps its own under ~/.devlanes/ca; mkcert reuses mkcert's.
   ca: devlanes
-  # Stores that devlanes certs trust installs the CA into.
+  # Stores that devlanes setup installs the CA into.
   trust: [system, firefox]
 # Ports the HTTPS proxy listens on; lan: true also accepts other machines.
 proxy:
@@ -92,10 +92,13 @@ terminal:
   links: auto
   notifications: auto
   marks: auto
-# Once a day the daemon reads the version of the latest devlanes release, and commands
-# print the upgrade command when it is newer. false (or DEVLANES_NO_UPDATE_CHECK=1) turns it off.
+# Every 4 hours and when the TUI opens, the daemon reads the latest devlanes version from
+# the registry devlanes was installed from. mode: notify shows a newer release, auto also
+# installs patch releases in the background where it can, and disable (or
+# DEVLANES_NO_UPDATE_CHECK=1) turns checks off. channel: stable or next; left out, it
+# follows the running build's channel.
 updates:
-  check: true
+  mode: notify
 # On a terminal, start, restart, lane resume and lane new --start run inside the TUI.
 # false prints them as text instead, like --no-ui or DEVLANES_NO_UI=1.
 # theme: auto uses the terminal's 16 colors, or a true-color palette when the

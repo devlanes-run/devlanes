@@ -42,7 +42,7 @@ pub const CERTUTIL_HINT: &str = "install NSS tools: `sudo apt install libnss3-to
 const CA_TOOLS_HINT: &str = "install the `ca-certificates` package";
 
 /// Shown when sudo is missing.
-const SUDO_HINT: &str = "run `devlanes certs trust` as root or install sudo";
+const SUDO_HINT: &str = "run `devlanes setup` as root or install sudo";
 
 /// Shown if `install` or `rm` is missing from the system directories.
 const COREUTILS_HINT: &str = "install coreutils";
@@ -356,7 +356,7 @@ impl SystemStore {
         if !output.success() && needs_password(&output.stderr) {
             return Err(TrustError::InteractionRequired {
                 command: command.to_string(),
-                detail: "sudo needs a password; rerun `devlanes certs trust` in a terminal or \
+                detail: "sudo needs a password; rerun `devlanes setup` in a terminal or \
                          allow passwordless sudo"
                     .into(),
             });

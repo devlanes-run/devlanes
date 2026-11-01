@@ -1263,7 +1263,10 @@ fn scenes() -> Vec<Scene> {
             what: "a newer release in the header",
             setup: |f| {
                 let mut status = data::daemon_status();
-                status["update"] = json!({"latest": "1.1.0", "checked_at": 1});
+                status["update"] = json!({
+                    "latest": "1.1.0", "channel": "stable", "bump": "minor",
+                    "state": "available", "checked_at": 1, "notes": [],
+                });
                 f.send(Msg::DaemonInfo {
                     status: Ok(status),
                     doctor: Ok(data::doctor()),

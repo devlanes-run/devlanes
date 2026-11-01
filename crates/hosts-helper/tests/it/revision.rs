@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 /// The revision and the hash of `src/` it was recorded for.
 const RECORDED: (u32, &str) = (
     1,
-    "7252cfba2cab30e10b8c004be84284c41b22242d14d54941bb98e1be20a4b820",
+    "f4281f549e7283c997b2035ceb847beb149168c048dd5c61086847bd02c9de4f",
 );
 
 /// Every file under `dir`, recursively.

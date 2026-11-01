@@ -98,6 +98,41 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     }
 }
 
+/// How far a newer release is from the running one. Before 1.0 a minor release
+/// may break what worked, so it always asks before installing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bump {
+    /// Fixes and additions only.
+    Patch,
+    /// Another major or minor version, which may break what worked.
+    Minor,
+}
+
+impl Bump {
+    /// The word status and doctor use: `patch` or `minor`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Patch => "patch",
+            Self::Minor => "minor",
+        }
+    }
+}
+
+/// The bump from `current` to `latest`; `None` when `latest` is not newer or
+/// either does not parse. A prerelease (a `next` build) moving to another
+/// `MAJOR.MINOR.PATCH` counts as minor, since the prerelease may already hold
+/// changes the other release line lacks.
+pub fn bump(current: &str, latest: &str) -> Option<Bump> {
+    let (current, latest) = (Version::parse(current)?, Version::parse(latest)?);
+    if latest <= current {
+        return None;
+    }
+    let (major, minor, _) = current.core;
+    let differs = (major, minor) != (latest.core.0, latest.core.1)
+        || (!current.pre.is_empty() && current.core != latest.core);
+    Some(if differs { Bump::Minor } else { Bump::Patch })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,6 +152,20 @@ mod tests {
         assert!(is_newer("1.0.0-alpha.beta", "1.0.0-alpha.1"));
         assert!(is_newer("1.0.0-alpha.1", "1.0.0-alpha"));
         assert!(!is_newer("0.2.0+build.5", "0.2.0"));
+    }
+
+    #[test]
+    fn bumps() {
+        assert_eq!(bump("0.9.0", "0.9.1"), Some(Bump::Patch));
+        assert_eq!(bump("0.9.0", "0.10.0"), Some(Bump::Minor));
+        assert_eq!(bump("0.9.3", "1.0.0"), Some(Bump::Minor));
+        assert_eq!(bump("0.9.1-next.3", "0.9.1-next.4"), Some(Bump::Patch));
+        assert_eq!(bump("0.9.1-next.3", "0.9.1"), Some(Bump::Patch));
+        assert_eq!(bump("0.9.1-next.3", "0.9.2"), Some(Bump::Minor));
+        assert_eq!(bump("0.9.1", "0.9.1"), None);
+        assert_eq!(bump("0.9.1", "0.9.0"), None);
+        assert_eq!(bump("local", "0.9.0"), None);
+        assert_eq!(Bump::Minor.as_str(), "minor");
     }
 
     #[test]

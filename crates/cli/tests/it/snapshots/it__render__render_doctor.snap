@@ -15,12 +15,12 @@ docker
 proxy
   ✓ http on port 80
   ! https off: no CA
-    fix: devlanes certs trust
+    fix: devlanes setup
 tls
   ✓ CA at /home/u/.devlanes/ca/ca.pem
 hosts
   ✗ /etc/hosts fallback auto: the hosts helper is not installed
-    fix: devlanes certs trust --hosts
+    fix: devlanes setup
 output
   ✓ mode human (DEVLANES_OUTPUT)
 --- plain (exit 1)
@@ -36,21 +36,21 @@ docker
 proxy
   ok http on port 80
   warn https off: no CA
-    fix: devlanes certs trust
+    fix: devlanes setup
 tls
   ok CA at /home/u/.devlanes/ca/ca.pem
 hosts
   fail /etc/hosts fallback auto: the hosts helper is not installed
-    fix: devlanes certs trust --hosts
+    fix: devlanes setup
 output
   ok mode plain (DEVLANES_OUTPUT)
 --- agent (exit 1)
 fail hosts: /etc/hosts fallback auto: the hosts helper is not installed
-  fix: devlanes certs trust --hosts
+  fix: devlanes setup
 warn docker: Docker is not reachable
   fix: start Docker; only projects with infra need it
 warn proxy: https off: no CA
-  fix: devlanes certs trust
+  fix: devlanes setup
 ok daemon: devlanes 0.1.0, pid 4242, socket /home/u/.devlanes/run/daemon.sock
 ok daemon: state schema 5 at /home/u/.devlanes/state.db
 ok sandbox: not sandboxed

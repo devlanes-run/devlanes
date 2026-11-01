@@ -733,7 +733,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
         // The daemon's message already names the command; the hint carries it instead.
         "helper_revision_outdated" => (
             helper_outdated(data.get("helper").unwrap_or(data)),
-            Some(Hint::command(["certs", "trust", "--hosts"])),
+            Some(Hint::command(["setup"])),
         ),
         "helper_missing"
         | "sudo_denied"
@@ -746,7 +746,7 @@ pub(crate) fn error_message(error: &RpcError) -> (String, Option<Hint>) {
                 .and_then(Value::as_str)
                 .map(super::clean)
                 .unwrap_or_else(|| error.code.replace('_', " ")),
-            Some(Hint::command(["certs", "trust", "--hosts"])),
+            Some(Hint::command(["setup"])),
         ),
         code => more_errors(code, data).unwrap_or_else(|| {
             (
@@ -1847,7 +1847,7 @@ pub(crate) fn reason(code: &str, data: &Value, lane: &str, unit: &str) -> (Strin
             };
             (
                 format!("{problem}, so {} may not resolve", hosts.join(", ")),
-                Some(Hint::command(["certs", "trust", "--hosts"])),
+                Some(Hint::command(["setup"])),
             )
         }
         other => (

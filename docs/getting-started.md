@@ -76,9 +76,8 @@ To run a folder twice, for example with two profiles, `devlanes lane new --name 
 The proxy serves `https://api.acme.localhost` and the other hostnames on port 443, or 8443 when 443 cannot be bound. Browsers resolve `*.localhost` to your machine without any setup. To make browsers and command-line tools accept the certificates, trust the devlanes CA once:
 
 ```sh
-devlanes certs trust            # system and browser trust stores; asks for your password
-devlanes certs trust --hosts    # also for programs that cannot resolve *.localhost
-devlanes doctor                 # checks the daemon, Docker, proxy, CA and hosts file
+devlanes setup     # trust stores, plus /etc/hosts when *.localhost does not resolve; asks once
+devlanes doctor    # checks the daemon, Docker, proxy, CA and hosts file
 ```
 
 Node and Python services get the CA through `NODE_EXTRA_CA_CERTS` and `SSL_CERT_FILE` without trusting it system-wide.

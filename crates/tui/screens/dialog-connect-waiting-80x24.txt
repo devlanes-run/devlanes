@@ -1,10 +1,10 @@
  devlanes  1 acme   2 billing   3 shop   starting feat…  M  D  Boxes · 3 issues
 ┌ boxes ────────────────────────────────────── 1 of 3 connected · j k for more ┐
-│ ⠋ devbox                                              reconnecting · command │
+│ ⠋ devbox                             reconnecting · command · devlanes 1.0.0 │
 │   link      next try in 8s                                                   │
 │   error     docker exec exited 1: Error response from daemon: container      │
 │             devbox is not running                                            │
-│   box       devlanes 1.0.0 · proxy on 9443 · ports.range 30000-32767         │
+│   box       proxy on 9443 · ports.range 30000-32767                          │
 │   prox┌ connect devbox ─────────────────────────────────────────────┐ich its │
 │       │ ⠋ next try in 4s                                            │        │
 │   mirr│ docker exec exited 1: Error response from daemon: container │        │

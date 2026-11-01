@@ -34,3 +34,10 @@ pub const LATEST_RELEASE_MANIFEST_URL: &str = concat!(
     repository!(),
     "/releases/latest/download/release-manifest.json"
 );
+
+/// The manifest of the newest `next` prerelease, which every push to the main branch
+/// replaces.
+pub const NEXT_RELEASE_MANIFEST_URL: &str = concat!(
+    repository!(),
+    "/releases/download/next/release-manifest.json"
+);

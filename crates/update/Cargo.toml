@@ -14,6 +14,9 @@ devlanes-core = { path = "../core" }
 dunce.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+# Release checks run `curl` from the daemon's runtime.
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

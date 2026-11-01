@@ -1,6 +1,6 @@
 # devlanes-update
 
-How this devlanes binary was installed, the command that upgrades it, the stable path that runs the install after an upgrade, release versions, and the release notices clients show. The `devlanes` binary, the TUI, the client and the daemon use it; it depends only on `devlanes-core` (the user's home) and `devlanes-version`.
+How this devlanes binary was installed, the command that upgrades it, the stable path that runs the install after an upgrade, release versions, release checks and notes, and the release notices clients show. The `devlanes` binary, the TUI, the client and the daemon use it; it depends on `devlanes-core` (the user's home) and `devlanes-version`, and runs `curl` for release checks.
 
 ## Usage
 
@@ -25,8 +25,11 @@ let due = log.due(&update_key("0.9.1"), devlanes_update::now_ms());
 - `InstallMethod::current()` reads how this binary was installed; `InstallMethod::detect` does the same from a path and `InstallFacts`, without touching the filesystem.
 - `InstallMethod::upgrade_command` is the command to show for an upgrade; `describe` names the install for `doctor`.
 - `InstallMethod::entry` is the path that runs this install after an upgrade, and `spawn_exe()` is the executable to start for a daemon or a login service.
-- `version::Version` and `version::is_newer` order release versions by semver.
-- `NoticeLog` records when each notice was shown or dismissed (`notices.json`); `update_line` and `skew_line` are the notices.
+- `InstallMethod::current_with_entry()` is the method and entry path of the running binary, for `doctor`.
+- `version::Version` and `version::is_newer` order release versions by semver; `version::bump` says whether a newer release is a patch or a minor one.
+- `check::Source::for_method` picks the registry an install reads its latest version from (`GitHub`, `Npm`, `PyPi`, `Homebrew`), `check::latest` reads it with `curl`, and `check::release_notes` reads a release's `CHANGELOG.md`. `check::Urls` holds the addresses, which tests replace.
+- `notes::parse` reads devlanes' `CHANGELOG.md` into releases and entries, and `notes::between` picks the releases after one version up to another. It uses only the standard library.
+- `NoticeLog` records when each notice was shown or dismissed (`notices.json`); `update_line` and `skew_line` are the notices, and `update_command` is the command they name.
 - `remove_old_copies` (Windows) deletes the `devlanes.exe.old-*` files `install.ps1` leaves.
 
 ## Project dependencies

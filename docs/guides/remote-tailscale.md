@@ -94,7 +94,7 @@ With Tailscale for Windows running, `ssh.exe` reaches MagicDNS names and Tailsca
 
 ## No Serve or Funnel
 
-devlanes exposes nothing on the tailnet, so `tailscale serve`, Funnel and binding services to the box's Tailscale address are not needed. Services listen on the box's loopback, the client binds the same port numbers on its own loopback, and the box's hostnames go through your local HTTPS proxy with your local CA (`devlanes certs trust`). URLs stay `https://<name>.localhost`, the origins the box's services were configured with, and browsers treat them as secure contexts.
+devlanes exposes nothing on the tailnet, so `tailscale serve`, Funnel and binding services to the box's Tailscale address are not needed. Services listen on the box's loopback, the client binds the same port numbers on its own loopback, and the box's hostnames go through your local HTTPS proxy with your local CA (`devlanes setup`). URLs stay `https://<name>.localhost`, the origins the box's services were configured with, and browsers treat them as secure contexts.
 
 ## Checking
 

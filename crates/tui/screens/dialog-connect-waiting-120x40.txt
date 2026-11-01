@@ -1,8 +1,8 @@
  devlanes  1 acme   2 billing   3 shop          starting feat/checkout: 4 of 8 ready  Monitor  Daemon  Boxes · 3 issues
 ┌ boxes ───────────────────────────────────────────────────────────────────────────────────────────── 1 of 3 connected ┐
-│ ● hetzner                                                                                            connected · ssh │
+│ ● hetzner                                                                           connected · ssh · devlanes 0.9.2 │
 │   link      connected since 2026-10-14 15:32                                                                         │
-│   box       devlanes 0.9.2 · proxy on 443 · ports.range 24000-29999                                                  │
+│   box       proxy on 443 · ports.range 24000-29999                                                                   │
 │   mirror    1 lane · 4 of 5 ports bound here · 3 hostnames routed                                                    │
 │   skipped   acme@0 also runs on this machine. Press m to stop it and use this one.                                   │
 │             ext.example.com (acme@4:ext-build): not under .localhost                                                 │
@@ -11,10 +11,10 @@
 │   ! the box stops your processes at logout. Run loginctl enable-linger or devlanes daemon install there.             │
 │   ! this machine cannot use the box's HTTPS port 443 (permission denied). Open its hostnames on port 8443.           │
 │                                                                                                                      │
-│ ⠋ devbox                                                                                      reconnecting · command │
+│ ⠋ devbox                                                                     reconnecting · command · devlanes 1.0.0 │
 │   link      next try in 8s                                                                                           │
 │   error     docker exec ex┌ connect devbox ─────────────────────────────────────────────┐ning                        │
-│   box       devlanes 1.0.0│ ⠋ next try in 4s                                            │                            │
+│   box       proxy on 9443 │ ⠋ next try in 4s                                            │                            │
 │   proxy     this machine s│ docker exec exited 1: Error response from daemon: container │                            │
 │   mirror    1 lane · no po│ devbox is not running                                       │                            │
 │                           │                                                             │                            │
@@ -42,7 +42,7 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 86 bold, 87-92 dim, 95 bold, 96-100 dim, 103-107 bold underlined, 108-118 yellow
 1: 0-100 bold, 101-118 bold dim, 119 bold
-2: 0 bold, 2-3 green, 4-10 bold, 103-111 green, 112-117 dim, 119 bold
+2: 0 bold, 2-3 green, 4-10 bold, 86-94 green, 95-103 dim, 104-117 yellow, 119 bold
 3: 0 bold, 4-13 dim, 119 bold
 4: 0 bold, 4-13 dim, 119 bold
 5: 0 bold, 4-13 dim, 119 bold

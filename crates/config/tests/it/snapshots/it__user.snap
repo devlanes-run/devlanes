@@ -67,7 +67,8 @@ expression: user
     "marks": "auto"
   },
   "updates": {
-    "check": true
+    "mode": "notify",
+    "channel": null
   },
   "tui": {
     "open_on_start": true,

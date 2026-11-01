@@ -14,7 +14,6 @@ mod daemon;
 mod driver;
 #[cfg(windows)]
 mod follow;
-mod hosts;
 mod lifecycle;
 mod local;
 mod local_doctor;
@@ -22,6 +21,7 @@ mod notices;
 mod output;
 mod progress;
 mod remote;
+mod setup;
 mod start_ui;
 mod terminal;
 mod user_config;

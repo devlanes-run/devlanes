@@ -687,7 +687,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                        "trust": [{"store": "system", "state": "untrusted"},
                                  {"store": "firefox", "state": "unknown", "reason": "certutil is not installed"}],
                        "hint": "the devlanes CA has no name constraints (it predates them), so a leaked key could sign certificates for any site",
-                       "fix": "devlanes certs untrust && rm -r /home/u/.devlanes/ca && devlanes certs trust && devlanes daemon restart"},
+                       "fix": "devlanes setup --remove && rm -r /home/u/.devlanes/ca && devlanes setup && devlanes daemon restart"},
                 "route_warnings": [{"code": "host_rejected", "data": {"lane": "acme@2", "unit": "web", "host": "web_app.localhost",
                                     "message": "`web_app.localhost` contains `_`, which DNS names cannot; the route is left out"}}],
                 "ca_warnings": [{"code": "host_outside_ca", "data": {
@@ -699,7 +699,7 @@ fn fixtures() -> Vec<(&'static str, Method, Value)> {
                           "last_error": null, "tld_error": null,
                           "helper": {"state": "outdated", "level": "warning", "installed": "0.1.0", "revision": 1, "required": 2,
                                      "message": "The installed hosts helper is revision 1 and devlanes needs 2.",
-                                     "fix": "devlanes certs trust --hosts"}},
+                                     "fix": "devlanes setup"}},
                 "user_config": {
                     "path": "/home/u/.devlanes/config.yaml", "valid": false,
                     "error": {"message": "unknown field `proxyy`", "file": "/home/u/.devlanes/config.yaml", "line": 4, "column": 1},
@@ -1502,7 +1502,7 @@ fn doctor_says_how_to_recreate_an_unconstrained_ca() {
             "present": true, "kind": "devlanes", "path": "/home/u/.devlanes/ca/ca.pem",
             "name_constrained": false,
             "hint": "the devlanes CA has no name constraints",
-            "fix": "devlanes certs untrust && rm -r /home/u/.devlanes/ca && devlanes certs trust && devlanes daemon restart",
+            "fix": "devlanes setup --remove && rm -r /home/u/.devlanes/ca && devlanes setup && devlanes daemon restart",
         },
     });
     let text = render_text(Method::Doctor, &data);
@@ -1520,9 +1520,11 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
     let release = |update_available: bool, daemon: &str| {
         json!({"release": {
             "version": "0.2.1", "build": "v0.2.1", "daemon_version": daemon,
-            "install_method": "Homebrew", "command": "brew upgrade devlanes-run/tap/devlanes",
-            "check": "ok", "check_off_reason": null, "latest": "0.3.0",
-            "checked_at": null, "update_available": update_available,
+            "install_method": "Homebrew", "entry": "/opt/homebrew/opt/devlanes/bin/devlanes",
+            "command": "brew upgrade devlanes-run/tap/devlanes",
+            "check": "ok", "check_off_reason": null, "mode": "notify", "channel": "stable",
+            "source": "homebrew", "latest": "0.3.0", "checked_at": null,
+            "bump": update_available.then_some("minor"), "update_available": update_available,
         }})
     };
     let text = render_text(Method::Doctor, &release(true, "0.2.1"));
@@ -1530,7 +1532,16 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
         text.contains("devlanes 0.2.1 (release build v0.2.1), installed with Homebrew"),
         "{text}"
     );
-    assert!(text.contains("devlanes 0.3.0 is available"), "{text}");
+    assert!(
+        text.contains("runs from /opt/homebrew/opt/devlanes/bin/devlanes"),
+        "{text}"
+    );
+    assert!(
+        text.contains(
+            "devlanes 0.3.0 is available (breaking changes), read from homebrew (stable), updates.mode: notify"
+        ),
+        "{text}"
+    );
     assert!(
         text.contains("fix: brew upgrade devlanes-run/tap/devlanes"),
         "{text}"
@@ -1538,7 +1549,10 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
     assert!(!text.contains("the daemon runs"), "{text}");
 
     let text = render_text(Method::Doctor, &release(false, "0.2.0"));
-    assert!(text.contains("latest release 0.3.0"), "{text}");
+    assert!(
+        text.contains("latest release 0.3.0, read from homebrew (stable)"),
+        "{text}"
+    );
     assert!(
         text.contains("the daemon runs 0.2.0, this CLI is 0.2.1"),
         "{text}"
@@ -1553,7 +1567,14 @@ fn doctor_shows_release_facts_and_the_upgrade_command() {
     let text = render_text(Method::Doctor, &off);
     assert!(text.contains("(local build)"), "{text}");
     assert!(
-        text.contains("release checks are off (updates.check: false)"),
+        text.contains("release checks are off (updates.mode: disable)"),
+        "{text}"
+    );
+    let local = json!({"release": {"version": "0.2.1", "build": "local", "install_method": "a project dependency, in /work/acme/package.json",
+        "check": "off", "check_off_reason": "local", "mode": "notify"}});
+    let text = render_text(Method::Doctor, &local);
+    assert!(
+        text.contains("release checks are off for a project dependency"),
         "{text}"
     );
 }
@@ -1895,7 +1916,7 @@ fn doctor_helper_and_user_config_checks() {
         "helper": {"state": "outdated", "level": "warning", "installed": "0.1.0", "revision": 1, "required": 2}}});
     let text = render_text(Method::Doctor, &failed);
     assert!(!text.contains("helper is revision 1, devlanes"), "{text}");
-    assert!(text.contains("fix: devlanes certs trust --hosts"), "{text}");
+    assert!(text.contains("fix: devlanes setup"), "{text}");
 }
 
 /// The resolver strategy's DNS server and the OS resolver file, from `dns`.
@@ -1928,10 +1949,7 @@ fn doctor_checks_the_dns_server_and_the_resolver_file() {
         ),
         "{text}"
     );
-    assert!(
-        text.contains("fix: devlanes certs trust --resolver"),
-        "{text}"
-    );
+    assert!(text.contains("fix: devlanes setup"), "{text}");
     let down = dns(Value::Null, false);
     let checks = doctor_checks_of(&down);
     let check = checks.iter().find(|c| c.group == "dns").expect("dns check");
@@ -2264,8 +2282,8 @@ fn daemon_errors_are_worded_with_hints() {
         ),
         RpcError::new(
             "helper_revision_outdated",
-            json!({"message": "The installed hosts helper is revision 1 and devlanes needs 2. Run `devlanes certs trust --hosts` to reinstall it.",
-                   "fix": "devlanes certs trust --hosts",
+            json!({"message": "The installed hosts helper is revision 1 and devlanes needs 2. Run `devlanes setup` to reinstall it.",
+                   "fix": "devlanes setup",
                    "helper": {"state": "outdated", "level": "warning", "installed": "0.1.0", "revision": 1, "required": 2}}),
             1,
         ),
@@ -2433,6 +2451,7 @@ fn box_registries_stay_out_of_remote_ls() {
     }
     assert!(text.contains("https://web.acme1.localhost"), "{text}");
     assert!(text.contains("connected_since: 5m ago"), "{text}");
+    assert!(text.contains("version: devlanes 0.0.1"), "{text}");
 }
 
 /// A box waiting for a sign-in shows its state, the error and the command
@@ -2626,8 +2645,8 @@ fn connections_off_reads_plainly_on_both_ends() {
 }
 
 /// `daemon clients` lists each client with a short id that `revoke` takes,
-/// whether it is paired, its connection or when it was last seen, and what
-/// it mirrors; `revoke` says whom it revoked.
+/// whether it is paired, its connection or when it was last seen, its
+/// devlanes release and what it mirrors; `revoke` says whom it revoked.
 #[test]
 fn daemon_clients_and_revoke_name_each_client() {
     let now = std::time::SystemTime::now()
@@ -2639,7 +2658,8 @@ fn daemon_clients_and_revoke_name_each_client() {
         {"id": id, "name": "laptop", "paired": true, "pairings": 1,
          "paired_at_ms": now - 86_400_000,
          "last_seen_ms": now, "connections": [{"address": "203.0.113.4",
-         "since_ms": now - 5 * 60_000, "mirror": {"ports": 4, "bound": 3, "skipped_lanes": 0}}]},
+         "since_ms": now - 5 * 60_000, "version": "0.9.0",
+         "mirror": {"ports": 4, "bound": 3, "skipped_lanes": 0}}]},
         {"id": format!("dl_cid_{}", "cd34".repeat(16)), "name": "desk", "paired": true,
          "pairings": 2, "paired_at_ms": now - 86_400_000, "last_seen_ms": now - 3 * 3_600_000,
          "connections": []},
@@ -2647,7 +2667,7 @@ fn daemon_clients_and_revoke_name_each_client() {
     let text = render_text(Method::RemoteClients, &clients);
     assert!(
         text.contains(
-            "laptop  dl_cid_ab12ab12  paired      connected for 5m from 203.0.113.4  mirrors 3 of 4 ports"
+            "laptop  dl_cid_ab12ab12  paired      connected for 5m from 203.0.113.4  devlanes 0.9.0  mirrors 3 of 4 ports"
         ),
         "{text}"
     );
@@ -2662,7 +2682,9 @@ fn daemon_clients_and_revoke_name_each_client() {
         "a pairing that never connected"
     );
     assert!(
-        text.contains(&format!("client laptop id={id} paired=true connections=1")),
+        text.contains(&format!(
+            "client laptop id={id} paired=true connections=1 version=0.9.0"
+        )),
         "{text}"
     );
     let empty = render_text(Method::RemoteClients, &json!({"items": []}));

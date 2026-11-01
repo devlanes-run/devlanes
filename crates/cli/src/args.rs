@@ -240,11 +240,9 @@ without the daemon.",
         #[command(subcommand)]
         command: ConfigCommand,
     },
-    /// Trust the devlanes CA and install the /etc/hosts helper
-    Certs {
-        #[command(subcommand)]
-        command: CertsCommand,
-    },
+    /// Trust the devlanes CA and set up hostnames for this machine; asks once
+    #[command(long_about = SETUP_ABOUT, after_help = SETUP_AFTER)]
+    Setup(SetupArgs),
     /// Connect to boxes and mirror their lanes here
     Remote {
         #[command(subcommand)]
@@ -566,31 +564,48 @@ pub enum UrlCommand {
     Ls,
 }
 
-#[derive(Debug, Subcommand)]
-pub enum CertsCommand {
-    /// Trust the devlanes CA in the system and browser stores
-    Trust {
-        /// Also install the /etc/hosts helper for programs that cannot resolve *.localhost
-        #[arg(long)]
-        hosts: bool,
-        /// Also send lookups for hostnames.tld to the devlanes DNS server (/etc/resolver on
-        /// macOS, systemd-resolved on Linux)
-        #[arg(long)]
-        resolver: bool,
-    },
-    /// Remove the devlanes CA from the trust stores
-    #[command(group(clap::ArgGroup::new("removal").args(["hosts", "resolver"]).multiple(true)))]
-    Untrust {
-        /// Also remove the /etc/hosts helper, its sudo rule and the devlanes block in /etc/hosts
-        #[arg(long)]
-        hosts: bool,
-        /// Also remove the OS resolver file for hostnames.tld
-        #[arg(long)]
-        resolver: bool,
-        /// Keep the CA trusted; with --hosts or --resolver, remove only those
-        #[arg(long, requires = "removal")]
-        keep_ca: bool,
-    },
+const SETUP_ABOUT: &str = "\
+Trust the devlanes CA and set up hostnames for this machine; asks once.
+
+Works out what this machine needs and lists each step as ok, todo or skip:
+  ca        trust the CA in the stores tls.trust names (mkcert's CA with tls.ca: mkcert)
+  hosts     install the /etc/hosts helper (macOS and Linux) when *.localhost does not
+            resolve to loopback, the user config asks for the hosts file, or the
+            daemon needs it for a project
+  resolver  send hostnames.tld to the devlanes DNS server (a resolver file, or an
+            NRPT rule on Windows) when hostnames.resolver is resolver
+
+Then it asks once before doing the todo steps; sudo asks for your password at
+most once. Without a terminal, pass --yes.";
+
+const SETUP_AFTER: &str = "\
+Examples:
+  devlanes setup                       set up what is missing, asking once
+  devlanes setup --check               exit 1 when something is missing
+  devlanes setup --remove --keep-ca    remove the hosts helper and resolver, keep the CA";
+
+#[derive(Debug, Args)]
+pub struct SetupArgs {
+    /// Only report each step; exit 0 when nothing is missing, 1 otherwise
+    #[arg(long, conflicts_with = "remove")]
+    pub check: bool,
+    /// Undo everything: the resolver file or NRPT rule, the /etc/hosts helper and the CA trust
+    #[arg(long)]
+    pub remove: bool,
+    /// With --remove, keep the CA trusted
+    #[arg(long, requires = "remove")]
+    pub keep_ca: bool,
+}
+
+/// What `devlanes setup` was asked to do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupAction {
+    /// Do the missing steps; `yes` skips the question.
+    Apply { yes: bool },
+    /// Report the steps and exit 1 when one is missing; changes nothing.
+    Check,
+    /// Undo every step, the CA trust only without `keep_ca`.
+    Remove { keep_ca: bool },
 }
 
 #[derive(Debug, Subcommand)]
@@ -828,15 +843,8 @@ pub enum Action {
     },
     Shell(Request),
     Ui,
-    Trust {
-        hosts: bool,
-        resolver: bool,
-    },
-    Untrust {
-        hosts: bool,
-        resolver: bool,
-        keep_ca: bool,
-    },
+    /// `devlanes setup`: runs in the terminal, never in the daemon.
+    Setup(SetupAction),
     DaemonStart,
     DaemonRestart(Context),
     DaemonLogs {
@@ -1199,25 +1207,17 @@ impl Cli {
                 ConfigCommand::Unset { key } => return Ok(Action::ConfigUnset(key.clone())),
             },
             Some(Command::Doctor) => (Method::Doctor, json!({})),
-            Some(Command::Certs { command }) => match command {
-                CertsCommand::Trust { hosts, resolver } => {
-                    return Ok(Action::Trust {
-                        hosts: *hosts,
-                        resolver: *resolver,
-                    });
-                }
-                CertsCommand::Untrust {
-                    hosts,
-                    resolver,
-                    keep_ca,
-                } => {
-                    return Ok(Action::Untrust {
-                        hosts: *hosts,
-                        resolver: *resolver,
-                        keep_ca: *keep_ca,
-                    });
-                }
-            },
+            Some(Command::Setup(args)) => {
+                return Ok(Action::Setup(if args.remove {
+                    SetupAction::Remove {
+                        keep_ca: args.keep_ca,
+                    }
+                } else if args.check {
+                    SetupAction::Check
+                } else {
+                    SetupAction::Apply { yes: self.yes }
+                }));
+            }
             Some(Command::Daemon { command }) => match command {
                 DaemonCommand::Start => return Ok(Action::DaemonStart),
                 DaemonCommand::Status => (Method::DaemonStatus, json!({})),

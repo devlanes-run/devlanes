@@ -368,9 +368,12 @@ history:
             set("", "tui.theme", json!("light")),
             "tui:\n  theme: light\n"
         );
-        let text = set("# mine\n", "updates.check", json!(false));
+        let text = set("# mine\n", "updates.mode", json!("disable"));
         assert!(text.starts_with("# mine\n"), "{text}");
-        assert!(!crate::parse_user(&text).expect("valid").updates.check);
+        assert_eq!(
+            crate::parse_user(&text).expect("valid").updates.mode,
+            crate::UpdateMode::Disable
+        );
     }
 
     #[test]
@@ -435,8 +438,8 @@ history:
         let text = set("tui: {theme: auto}", "tui.glyphs", json!("ascii"));
         let config = crate::parse_user(&text).expect("valid");
         assert_eq!(config.tui.glyphs, crate::TuiGlyphs::Ascii);
-        let text = set("updates:\n  check: true", "updates.check", json!(false));
-        assert_eq!(text, "updates:\n  check: false");
+        let text = set("updates:\n  mode: notify", "updates.mode", json!("auto"));
+        assert_eq!(text, "updates:\n  mode: auto");
     }
 
     #[test]

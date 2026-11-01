@@ -1,50 +1,65 @@
-//! Release checks against a local manifest server: the daemon reports a newer
-//! release once it is old enough, keeps its cache when the server fails, and
-//! makes no request when checks are off. Needs `curl`.
+//! Release checks against a local release server: the daemon reads the
+//! registry of its install method and channel, reports a newer release with
+//! its bump and changelog notes, caches both, checks again on `update.check`
+//! only when the last check is an hour old unless forced, and makes no request
+//! when checks are off. Needs `curl`.
 
 use std::{
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
+use devlanes_config::{UpdateChannel, UpdateMode};
 use devlanes_daemon::{
     Engine, EngineOptions, Handler, Session, integrations::Integrations, update::UpdateCheckOptions,
 };
 use devlanes_proto::{Context, Method, Request};
 use devlanes_state::Store;
+use devlanes_update::{InstallMethod, check::Urls};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
 use crate::FakeRunner;
 
-/// Serves `status` and `body` for every request and counts them.
-async fn manifest_server(status: &'static str, body: String) -> (String, Arc<AtomicUsize>) {
+/// Paths a [`release_server`] was asked for, in order.
+type Hits = Arc<Mutex<Vec<String>>>;
+
+/// Serves each path of `routes` with its body (`404` for others) and records
+/// the paths requested.
+async fn release_server(routes: &[(&str, String)]) -> (String, Hits) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
-    let url = format!(
-        "http://{}/release-manifest.json",
-        listener.local_addr().expect("address")
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let routes: Arc<BTreeMap<String, String>> = Arc::new(
+        routes
+            .iter()
+            .map(|(path, body)| ((*path).to_owned(), body.clone()))
+            .collect(),
     );
-    let hits = Arc::new(AtomicUsize::new(0));
-    let counter = hits.clone();
+    let hits = Hits::default();
+    let recorded = hits.clone();
     tokio::spawn(async move {
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 return;
             };
-            counter.fetch_add(1, Ordering::SeqCst);
-            let body = body.clone();
+            let (routes, recorded) = (routes.clone(), recorded.clone());
             tokio::spawn(async move {
                 let mut request = [0u8; 2048];
-                let _ = stream.read(&mut request).await;
+                let read = stream.read(&mut request).await.unwrap_or(0);
+                let text = String::from_utf8_lossy(&request[..read]);
+                let path = text.split_whitespace().nth(1).unwrap_or("").to_owned();
+                recorded.lock().expect("hits").push(path.clone());
+                let (status, body) = match routes.get(&path) {
+                    Some(body) => ("200 OK", body.clone()),
+                    None => ("404 Not Found", String::new()),
+                };
                 let response = format!(
-                    "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
                 );
                 let _ = stream.write_all(response.as_bytes()).await;
@@ -52,49 +67,80 @@ async fn manifest_server(status: &'static str, body: String) -> (String, Arc<Ato
             });
         }
     });
-    (url, hits)
+    (base, hits)
 }
 
-/// Options that check at once against `url`.
-fn checks(url: &str, min_age: Duration) -> UpdateCheckOptions {
+/// How often `path` was requested.
+fn hits_of(hits: &Hits, path: &str) -> usize {
+    hits.lock()
+        .expect("hits")
+        .iter()
+        .filter(|p| *p == path)
+        .count()
+}
+
+/// Options that check at once against `base` as installed by `method`.
+fn checks(base: &str, method: InstallMethod) -> UpdateCheckOptions {
     UpdateCheckOptions {
-        url: url.into(),
+        urls: Urls {
+            github_stable: format!("{base}/stable.json"),
+            github_next: format!("{base}/next.json"),
+            npm: format!("{base}/npm"),
+            pypi: format!("{base}/pypi"),
+            homebrew: format!("{base}/devlanes.rb"),
+            changelog: format!("{base}/changelog/{{version}}"),
+        },
+        method: Some(method),
         off: None,
         first_delay: Duration::ZERO,
         interval: Duration::from_secs(3600),
-        min_age,
+        recheck_after: Duration::from_secs(3600),
         // Includes starting `curl`; see `CHECK_PATIENCE`.
         timeout: Duration::from_secs(30),
     }
 }
 
-/// An engine over `home` with `checks`, reconciled so background work runs.
-async fn engine(home: &Path, checks: UpdateCheckOptions, check_enabled: bool) -> Engine {
+/// A script install.
+fn script() -> InstallMethod {
+    InstallMethod::Script(PathBuf::from("/opt/acme/bin"))
+}
+
+/// An engine over `home` with `checks` and the user config's `updates`,
+/// reconciled so background work runs.
+async fn engine(
+    home: &Path,
+    checks: UpdateCheckOptions,
+    mode: UpdateMode,
+    channel: Option<UpdateChannel>,
+) -> Engine {
     std::fs::create_dir_all(home).expect("home");
     let store = Store::open(home.join("state.db")).await.expect("store");
     let mut options = EngineOptions::new(home, home.join("d.sock"));
     options.watch = false;
     options.update_check = checks;
-    options.user.updates.check = check_enabled;
+    options.user.updates.mode = mode;
+    options.user.updates.channel = channel;
     let integ = Integrations::with_runner(Arc::new(FakeRunner::default()));
     let engine = Engine::new(options, store, integ, CancellationToken::new());
     engine.reconcile().await.expect("reconcile");
     engine
 }
 
-/// `daemon.status` on a fresh local session.
-async fn daemon_status(engine: &Engine) -> Value {
+/// `method` with `params` on a fresh local session.
+async fn call(engine: &Engine, method: Method, params: Value) -> Value {
     let (session, _frames) = Session::local(1);
     let request = Request {
         id: 1,
-        method: Method::DaemonStatus,
-        params: json!({}),
+        method,
+        params,
         context: Context::default(),
     };
-    engine
-        .handle(request, session)
-        .await
-        .expect("daemon.status")
+    engine.handle(request, session).await.expect("call")
+}
+
+/// `daemon.status` on a fresh local session.
+async fn daemon_status(engine: &Engine) -> Value {
+    call(engine, Method::DaemonStatus, json!({})).await
 }
 
 /// How long a test waits for the background check. Starting `curl` has taken
@@ -103,7 +149,7 @@ async fn daemon_status(engine: &Engine) -> Value {
 const CHECK_PATIENCE: Duration = Duration::from_secs(40);
 
 /// Every test's own limit, above [`CHECK_PATIENCE`].
-const LIMIT: Duration = Duration::from_secs(60);
+const LIMIT: Duration = Duration::from_secs(90);
 
 /// Polls `daemon.status` until `done` holds, for up to [`CHECK_PATIENCE`].
 async fn status_until(engine: &Engine, done: impl Fn(&Value) -> bool) -> Value {
@@ -118,55 +164,171 @@ async fn status_until(engine: &Engine, done: impl Fn(&Value) -> bool) -> Value {
     daemon_status(engine).await
 }
 
+/// The next patch release after the running version.
+fn next_patch() -> String {
+    let core = devlanes_version::VERSION
+        .split(['-', '+'])
+        .next()
+        .expect("core");
+    let parts: Vec<u64> = core
+        .split('.')
+        .map(|p| p.parse().expect("number"))
+        .collect();
+    format!("{}.{}.{}", parts[0], parts[1], parts[2] + 1)
+}
+
+/// A changelog with releases 99.0.0 and 98.0.0, and one older than any build.
+fn changelog() -> String {
+    "# devlanes\n\n## 99.0.0 — 2026-11-01\n\n### Minor changes\n\n- [abc1234](https://example.invalid/c) Removed `--acme`.\n  \n  Use `--other`.\n\n### Patch changes\n\n- [abc1234](https://example.invalid/c) Fixed a crash.\n\n## 98.0.0 — 2026-10-30\n\n### Patch changes\n\n- Added `acme`.\n\n## 0.0.1 — 2020-01-01\n\n### Patch changes\n\n- Old.\n".into()
+}
+
 #[tokio::test]
-async fn newer_release_is_reported_and_cached() {
+async fn newer_release_is_reported_with_notes_and_cached() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (url, hits) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
-        let engine = engine(dir.path(), checks(&url, Duration::ZERO), true).await;
+        let (base, hits) = release_server(&[
+            ("/stable.json", json!({"version": "99.0.0"}).to_string()),
+            ("/changelog/99.0.0", changelog()),
+        ])
+        .await;
+        let engine = engine(
+            dir.path(),
+            checks(&base, script()),
+            UpdateMode::Notify,
+            None,
+        )
+        .await;
         let status = status_until(&engine, |s| s.get("update").is_some()).await;
-        assert_eq!(status["update"]["latest"], "99.0.0", "{status}");
-        assert_eq!(status["release_check"]["state"], "ok");
-        assert_eq!(status["release_check"]["latest"], "99.0.0");
-        assert!(hits.load(Ordering::SeqCst) >= 1);
+        let update = &status["update"];
+        assert_eq!(update["latest"], "99.0.0", "{status}");
+        assert_eq!(update["channel"], "stable");
+        assert_eq!(update["bump"], "minor");
+        assert_eq!(update["state"], "available");
+        assert!(update["checked_at"].is_u64());
+        assert_eq!(
+            update["notes"],
+            json!([
+                {"version": "99.0.0", "level": "minor", "line": "Removed `--acme`."},
+                {"version": "99.0.0", "level": "patch", "line": "Fixed a crash."},
+                {"version": "98.0.0", "level": "patch", "line": "Added `acme`."},
+            ])
+        );
+        let check = &status["release_check"];
+        assert_eq!(check["state"], "ok");
+        assert_eq!(check["mode"], "notify");
+        assert_eq!(check["source"], "github");
+        assert_eq!(check["channel"], "stable");
+        assert_eq!(check["latest"], "99.0.0");
+        assert_eq!(check["bump"], "minor");
+        assert_eq!(hits_of(&hits, "/stable.json"), 1);
+        assert_eq!(hits_of(&hits, "/changelog/99.0.0"), 1);
+
         let cache: Value = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join("update-check.json")).expect("cache"),
         )
         .expect("cache json");
         assert_eq!(cache["latest"], "99.0.0");
-        assert!(cache["first_seen_at"].as_u64().is_some());
+        assert_eq!(cache["channel"], "stable");
+        assert_eq!(cache["source"], "github");
+        assert_eq!(cache["notes_for"], "99.0.0");
+        assert_eq!(cache["notes"].as_array().map(Vec::len), Some(3));
     })
     .await
     .expect("timed out");
 }
 
 #[tokio::test]
-async fn fresh_release_waits_and_older_release_is_not_reported() {
+async fn each_install_method_reads_its_registry() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (url, _) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
-        let young = engine(
-            &dir.path().join("young"),
-            checks(&url, Duration::from_secs(7200)),
-            true,
+        let formula = "class Devlanes < Formula\n  on_macos do\n    url \"https://github.com/devlanes-run/devlanes/releases/download/v97.0.0/devlanes-97.0.0-aarch64-apple-darwin.tar.gz\"\n";
+        let (base, _) = release_server(&[
+            ("/stable.json", json!({"version": "96.0.0"}).to_string()),
+            ("/next.json", json!({"version": "99.0.0-next.3"}).to_string()),
+            ("/npm", json!({"name": "devlanes", "version": "95.0.0"}).to_string()),
+            ("/pypi", json!({"info": {"version": "94.0.0rc1"}}).to_string()),
+            ("/devlanes.rb", formula.to_owned()),
+        ])
+        .await;
+        let cases = [
+            ("script-next", script(), Some(UpdateChannel::Next), "github", "next", "99.0.0-next.3"),
+            // Only script installs follow next; cargo reads the stable manifest.
+            ("cargo", InstallMethod::CargoInstall, Some(UpdateChannel::Next), "github", "stable", "96.0.0"),
+            ("pnpm", InstallMethod::Pnpm, None, "npm", "stable", "95.0.0"),
+            ("pipx", InstallMethod::Pipx, None, "pypi", "stable", "94.0.0-rc.1"),
+            ("brew", InstallMethod::Homebrew, None, "homebrew", "stable", "97.0.0"),
+        ];
+        for (name, method, channel, source, channel_name, latest) in cases {
+            let engine = engine(
+                &dir.path().join(name),
+                checks(&base, method),
+                UpdateMode::Notify,
+                channel,
+            )
+            .await;
+            let status = status_until(&engine, |s| s["release_check"]["state"] == "ok").await;
+            let check = &status["release_check"];
+            assert_eq!(check["source"], source, "{name}: {status}");
+            assert_eq!(check["channel"], channel_name, "{name}: {status}");
+            assert_eq!(check["latest"], latest, "{name}: {status}");
+            assert_eq!(status["update"]["latest"], latest, "{name}: {status}");
+            assert_eq!(status["update"]["channel"], channel_name, "{name}: {status}");
+            // No changelog at the server: the release shows without notes.
+            assert_eq!(status["update"]["notes"], json!([]), "{name}: {status}");
+        }
+    })
+    .await
+    .expect("timed out");
+}
+
+#[tokio::test]
+async fn patch_and_older_releases() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let patch = next_patch();
+        let (base, _) = release_server(&[
+            ("/npm", json!({"version": patch}).to_string()),
+            ("/stable.json", json!({"version": "0.0.1"}).to_string()),
+        ])
+        .await;
+        let npm = engine(
+            &dir.path().join("npm"),
+            checks(&base, InstallMethod::Npm),
+            UpdateMode::Auto,
+            None,
         )
         .await;
-        let status = status_until(&young, |s| s["release_check"]["state"] == "ok").await;
-        assert_eq!(status["release_check"]["latest"], "99.0.0", "{status}");
-        assert!(status.get("update").is_none(), "{status}");
+        let status = status_until(&npm, |s| s.get("update").is_some()).await;
+        assert_eq!(status["update"]["latest"], patch.as_str(), "{status}");
+        assert_eq!(status["update"]["bump"], "patch");
+        assert_eq!(status["release_check"]["mode"], "auto");
 
-        let (url, _) = manifest_server("200 OK", json!({"version": "0.0.1"}).to_string()).await;
         let older = engine(
             &dir.path().join("older"),
-            checks(&url, Duration::ZERO),
-            true,
+            checks(&base, script()),
+            UpdateMode::Notify,
+            None,
         )
         .await;
         let status = status_until(&older, |s| s["release_check"]["state"] == "ok").await;
+        assert_eq!(status["release_check"]["latest"], "0.0.1", "{status}");
+        assert!(status["release_check"].get("bump").is_none(), "{status}");
         assert!(status.get("update").is_none(), "{status}");
     })
     .await
     .expect("timed out");
+}
+
+/// Milliseconds since the epoch, an hour ago.
+fn hour_ago() -> u64 {
+    u64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_millis(),
+    )
+    .expect("ms")
+        - 3_600_000
 }
 
 #[tokio::test]
@@ -176,35 +338,112 @@ async fn failures_keep_the_cached_release() {
         std::fs::create_dir_all(dir.path()).expect("home");
         // Checked an hour ago: the daemon waits out the rest of the interval
         // unless the interval is shorter, as here.
-        let hour_ago = u64::try_from(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock")
-                .as_millis(),
-        )
-        .expect("ms")
-            - 3_600_000;
+        let checked_at = hour_ago();
         std::fs::write(
             dir.path().join("update-check.json"),
-            json!({"checked_at": hour_ago, "latest": "98.0.0", "first_seen_at": hour_ago})
+            json!({"checked_at": checked_at, "latest": "98.0.0", "channel": "stable", "source": "github"})
                 .to_string(),
         )
         .expect("cache");
-        let (url, hits) = manifest_server("500 Internal Server Error", "{}".into()).await;
-        let mut options = checks(&url, Duration::ZERO);
+        // Nothing is served: every request fails with 404.
+        let (base, hits) = release_server(&[]).await;
+        let mut options = checks(&base, script());
         options.interval = Duration::from_millis(100);
-        let engine = engine(dir.path(), options, true).await;
+        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
         let status = status_until(&engine, |s| s.get("update").is_some()).await;
         assert_eq!(status["update"]["latest"], "98.0.0", "{status}");
         let deadline = tokio::time::Instant::now() + CHECK_PATIENCE;
-        while hits.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        while hits_of(&hits, "/stable.json") == 0 && tokio::time::Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        assert!(hits.load(Ordering::SeqCst) >= 1, "the check never ran");
+        assert!(hits_of(&hits, "/stable.json") >= 1, "the check never ran");
         tokio::time::sleep(Duration::from_millis(200)).await;
         let status = daemon_status(&engine).await;
         assert_eq!(status["update"]["latest"], "98.0.0", "{status}");
-        assert_eq!(status["release_check"]["checked_at"], hour_ago);
+        assert_eq!(status["release_check"]["checked_at"], checked_at);
+    })
+    .await
+    .expect("timed out");
+}
+
+#[tokio::test]
+async fn a_cache_of_another_source_is_ignored() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path()).expect("home");
+        std::fs::write(
+            dir.path().join("update-check.json"),
+            json!({"checked_at": hour_ago(), "latest": "98.0.0", "channel": "stable", "source": "npm"})
+                .to_string(),
+        )
+        .expect("cache");
+        let (base, _) = release_server(&[]).await;
+        let mut options = checks(&base, script());
+        options.first_delay = Duration::from_secs(3600);
+        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+        let status = status_until(&engine, |s| s["release_check"]["source"] == "github").await;
+        assert_eq!(status["release_check"]["state"], "pending", "{status}");
+        assert!(status.get("update").is_none(), "{status}");
+    })
+    .await
+    .expect("timed out");
+}
+
+#[tokio::test]
+async fn update_check_rechecks_after_an_hour_or_when_forced() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (base, hits) = release_server(&[
+            ("/stable.json", json!({"version": "99.0.0"}).to_string()),
+            ("/changelog/99.0.0", changelog()),
+        ])
+        .await;
+        let mut options = checks(&base, script());
+        // Only `update.check` reads the server.
+        options.first_delay = Duration::from_secs(3600);
+        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+
+        let update = call(&engine, Method::UpdateCheck, json!({})).await;
+        assert_eq!(update["latest"], "99.0.0", "{update}");
+        assert_eq!(update, daemon_status(&engine).await["update"]);
+        assert_eq!(hits_of(&hits, "/stable.json"), 1);
+
+        // Checked moments ago: no request.
+        let again = call(&engine, Method::UpdateCheck, json!({"force": false})).await;
+        assert_eq!(again, update);
+        assert_eq!(hits_of(&hits, "/stable.json"), 1);
+
+        let forced = call(&engine, Method::UpdateCheck, json!({"force": true})).await;
+        assert_eq!(forced["latest"], "99.0.0", "{forced}");
+        assert_eq!(hits_of(&hits, "/stable.json"), 2);
+        // The notes are read once per release.
+        assert_eq!(hits_of(&hits, "/changelog/99.0.0"), 1);
+        assert_eq!(forced["notes"], update["notes"]);
+    })
+    .await
+    .expect("timed out");
+}
+
+#[tokio::test]
+async fn update_check_with_an_hour_old_cache_checks_again() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(dir.path()).expect("home");
+        std::fs::write(
+            dir.path().join("update-check.json"),
+            json!({"checked_at": hour_ago() - 1_000, "latest": "98.0.0", "channel": "stable", "source": "github"})
+                .to_string(),
+        )
+        .expect("cache");
+        let (base, hits) =
+            release_server(&[("/stable.json", json!({"version": "99.0.0"}).to_string())]).await;
+        let mut options = checks(&base, script());
+        options.first_delay = Duration::from_secs(3600);
+        let engine = engine(dir.path(), options, UpdateMode::Notify, None).await;
+        status_until(&engine, |s| s.get("update").is_some()).await;
+        let update = call(&engine, Method::UpdateCheck, json!({})).await;
+        assert_eq!(update["latest"], "99.0.0", "{update}");
+        assert_eq!(hits_of(&hits, "/stable.json"), 1);
     })
     .await
     .expect("timed out");
@@ -218,8 +457,15 @@ async fn daemon_status_through_the_server_reports_the_release() {
 
     tokio::time::timeout(LIMIT, async {
         let tmp = crate::temp();
-        let (url, _) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
-        let engine = engine(&tmp.path.join("home"), checks(&url, Duration::ZERO), true).await;
+        let (base, _) =
+            release_server(&[("/stable.json", json!({"version": "99.0.0"}).to_string())]).await;
+        let engine = engine(
+            &tmp.path.join("home"),
+            checks(&base, script()),
+            UpdateMode::Notify,
+            None,
+        )
+        .await;
         status_until(&engine, |s| s.get("update").is_some()).await;
         let options = devlanes_daemon::Options {
             home: tmp.path.join("srv"),
@@ -276,26 +522,61 @@ async fn daemon_status_through_the_server_reports_the_release() {
 async fn disabled_checks_make_no_request() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
-        let (url, hits) = manifest_server("200 OK", json!({"version": "99.0.0"}).to_string()).await;
+        let (base, hits) =
+            release_server(&[("/stable.json", json!({"version": "99.0.0"}).to_string())]).await;
         let by_config = engine(
             &dir.path().join("config"),
-            checks(&url, Duration::ZERO),
-            false,
+            checks(&base, script()),
+            UpdateMode::Disable,
+            None,
         )
         .await;
-        let mut options = checks(&url, Duration::ZERO);
+        let mut options = checks(&base, script());
         options.off = Some("env");
-        let by_env = engine(&dir.path().join("env"), options, true).await;
+        let by_env = engine(&dir.path().join("env"), options, UpdateMode::Notify, None).await;
+        let local = engine(
+            &dir.path().join("local"),
+            checks(
+                &base,
+                InstallMethod::Local {
+                    manifest: PathBuf::from("package.json"),
+                },
+            ),
+            UpdateMode::Notify,
+            None,
+        )
+        .await;
+        let source = engine(
+            &dir.path().join("source"),
+            checks(&base, InstallMethod::Source),
+            UpdateMode::Notify,
+            None,
+        )
+        .await;
+        for engine in [&by_config, &by_env, &local, &source] {
+            let reply = call(engine, Method::UpdateCheck, json!({"force": true})).await;
+            assert_eq!(reply, Value::Null);
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(hits.load(Ordering::SeqCst), 0);
+        assert!(hits.lock().expect("hits").is_empty());
         let status = daemon_status(&by_config).await;
         assert_eq!(
             status["release_check"],
-            json!({"state": "off", "reason": "config"})
+            json!({"state": "off", "reason": "config", "mode": "disable"})
         );
         assert!(status.get("update").is_none());
-        let status = daemon_status(&by_env).await;
-        assert_eq!(status["release_check"]["reason"], "env");
+        assert_eq!(
+            daemon_status(&by_env).await["release_check"]["reason"],
+            "env"
+        );
+        assert_eq!(
+            daemon_status(&local).await["release_check"]["reason"],
+            "local"
+        );
+        assert_eq!(
+            daemon_status(&source).await["release_check"]["reason"],
+            "source"
+        );
     })
     .await
     .expect("timed out");

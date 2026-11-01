@@ -496,6 +496,7 @@ impl Inner {
                 // What `devlanes tunnel` tells connected clients about this box.
                 "https_port": self.integ.routes.https_port(),
                 "ports_range": self.opts.user.ports.range,
+                "setup": self.setup_status().await,
             }))),
             Method::DaemonShutdown => Ok(json!({"stopping": true})),
             Method::DaemonResetState => self.reset_state(&context).await,
@@ -555,6 +556,7 @@ impl Inner {
             Method::HostList => self.host_list().await,
             Method::RemoteUse => self.use_method(params).await,
             Method::HostsRetry => self.hosts_retry().await,
+            Method::UpdateCheck => self.update_check_method(params).await,
             // A newer client's method: answer instead of dropping the connection.
             Method::Unknown => Err(RpcError::new("unknown_method", json!({}), 2)),
         }

@@ -754,6 +754,8 @@ pub enum Msg {
         method: devlanes_update::InstallMethod,
         dismissed: Vec<String>,
     },
+    /// What `update.check` answered: the newer release, or `null`.
+    ReleaseChecked(Result<Value, ApiError>),
     Profiles {
         lane: String,
         result: Result<crate::api::ProfileList, ApiError>,
@@ -949,6 +951,8 @@ pub enum Effect {
     FetchDaemon,
     /// Finds how devlanes was installed and which release notices were dismissed.
     LoadNotices,
+    /// Has the daemon look for a newer release, unless it did within the hour.
+    CheckRelease,
     /// Remembers that the release notice `key` was dismissed.
     DismissNotice(String),
     ReadDaemonLog {
@@ -2056,6 +2060,22 @@ impl App {
                 self.release = (Some(method), dismissed);
                 self.show_welcome();
             }
+            // A failed check changes nothing: the next `daemon.status` still
+            // carries what the daemon knew.
+            Msg::ReleaseChecked(Ok(update)) => {
+                match self.daemon.status.as_mut().and_then(Value::as_object_mut) {
+                    Some(status) if update.is_null() => {
+                        status.remove("update");
+                    }
+                    Some(status) => {
+                        status.insert("update".into(), update);
+                    }
+                    // The badge reads `daemon.status`, which carries the release now.
+                    None if !update.is_null() => effects.push(Effect::FetchDaemon),
+                    None => {}
+                }
+            }
+            Msg::ReleaseChecked(Err(_)) => {}
             Msg::DaemonInfo { status, doctor } => {
                 let mut failure = None;
                 match status {
@@ -7434,14 +7454,21 @@ impl App {
             _ => None,
         };
         let notice = notice.or_else(|| {
-            let latest = status.pointer("/update/latest").and_then(Value::as_str)?;
+            let info: devlanes_proto::release::UpdateInfo =
+                serde_json::from_value(status.get("update")?.clone()).ok()?;
+            let latest = info.latest.as_str();
             if !update::version::is_newer(latest, own) {
                 return None;
             }
-            let command = self.release.0.as_ref()?.upgrade_command(latest);
+            let command = update::update_command(self.release.0.as_ref()?, latest);
+            let breaking = if info.bump == "minor" {
+                ", breaking changes"
+            } else {
+                ""
+            };
             Some((
                 update::update_key(latest),
-                format!("{latest} available: {command}"),
+                format!("{latest} available{breaking}: {command}"),
             ))
         })?;
         (!self.release.1.contains(&notice.0)).then_some(notice)

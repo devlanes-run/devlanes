@@ -1382,13 +1382,13 @@
               "type": "null"
             }
           ],
-          "description": "Whether this project's hostnames are also written to `/etc/hosts`, for programs that cannot resolve `*.localhost` by themselves (Wrangler's workerd, musl or pure-Go binaries). Overrides the user's `hostnames.hosts_file` (default `auto`), except that a user `never` always wins. Writing needs the helper installed by `devlanes certs trust --hosts`, and only exact names are written, never wildcards.",
+          "description": "Whether this project's hostnames are also written to `/etc/hosts`, for programs that cannot resolve `*.localhost` by themselves (Wrangler's workerd, musl or pure-Go binaries). Overrides the user's `hostnames.hosts_file` (default `auto`), except that a user `never` always wins. Writing needs the helper `devlanes setup` installs, and only exact names are written, never wildcards.",
           "examples": [
             "auto",
             "never",
             "always"
           ],
-          "markdownDescription": "Whether this project's hostnames are also written to `/etc/hosts`, for programs that cannot resolve `*.localhost` by themselves (Wrangler's workerd, musl or pure-Go binaries). Overrides the user's `hostnames.hosts_file` (default `auto`), except that a user `never` always wins. Writing needs the helper installed by `devlanes certs trust --hosts`, and only exact names are written, never wildcards."
+          "markdownDescription": "Whether this project's hostnames are also written to `/etc/hosts`, for programs that cannot resolve `*.localhost` by themselves (Wrangler's workerd, musl or pure-Go binaries). Overrides the user's `hostnames.hosts_file` (default `auto`), except that a user `never` always wins. Writing needs the helper `devlanes setup` installs, and only exact names are written, never wildcards."
         },
         "matrix": {
           "description": "Fixed values per lane instead of computed `vars`: entry N holds lane N's values, read as `lane.<name>`. A lane whose index has no entry fails to resolve. Cannot be combined with `vars`.",

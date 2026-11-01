@@ -97,7 +97,7 @@ impl HostsSync {
 
     /// Forgets the backoff and the last applied set, and reapplies.
     ///
-    /// Call after `devlanes certs trust --hosts` installs or repairs the helper.
+    /// Call after `devlanes setup` installs or repairs the helper.
     pub fn retry(&self) {
         self.desired.send_modify(|desired| desired.retry += 1);
     }
