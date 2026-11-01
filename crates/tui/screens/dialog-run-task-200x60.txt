@@ -86,13 +86,13 @@
 23: 0 darkgray, 4-5 red, 6-15 magenta, 31-36 red, 37-39 dim, 40-45 red, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
 24: 0 darkgray, 4-5 green, 6-13 magenta, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
 25: 0 darkgray, 4-5 green, 6-17 magenta, 47-48 darkgray, 50-57 dim, 79-81 color2, 199 darkgray
-26: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 50-57 dim, 77-121 bold, 199 darkgray
-27: 0 darkgray, 4-5 green, 6-16 darkgray, 47-48 darkgray, 77 bold, 79-97 bold, 121 bold, 199 darkgray
-28: 0 darkgray, 4-5 green, 6-12 darkgray, 47-48 darkgray, 77 bold, 121 bold, 199 darkgray
-29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-45 dim, 47-48 darkgray, 77 bold, 121 bold, 199 darkgray
-30: 0 darkgray, 4-5 green, 6-18 darkgray, 47-48 darkgray, 77 bold, 121 bold, 199 darkgray
-31: 0 darkgray, 4-5 green, 6-17 darkgray, 47-48 darkgray, 77 bold, 79-83 bold, 84-87 dim, 91-93 bold, 94-100 dim, 121 bold, 199 darkgray
-32: 0 darkgray, 4-5 green, 6-15 darkgray, 47-48 darkgray, 77-121 bold, 199 darkgray
+26: 0 darkgray, 4-5 green, 6-15 magenta, 47-48 darkgray, 50-57 dim, 77-121 bold yellow, 199 darkgray
+27: 0 darkgray, 4-5 green, 6-16 darkgray, 47-48 darkgray, 77 bold yellow, 79-97 bold, 121 bold yellow, 199 darkgray
+28: 0 darkgray, 4-5 green, 6-12 darkgray, 47-48 darkgray, 77 bold yellow, 121 bold yellow, 199 darkgray
+29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-45 dim, 47-48 darkgray, 77 bold yellow, 121 bold yellow, 199 darkgray
+30: 0 darkgray, 4-5 green, 6-18 darkgray, 47-48 darkgray, 77 bold yellow, 121 bold yellow, 199 darkgray
+31: 0 darkgray, 4-5 green, 6-17 darkgray, 47-48 darkgray, 77 bold yellow, 79-83 bold, 84-87 dim, 91-93 bold, 94-100 dim, 121 bold yellow, 199 darkgray
+32: 0 darkgray, 4-5 green, 6-15 darkgray, 47-48 darkgray, 77-121 bold yellow, 199 darkgray
 33: 0 darkgray, 4-5 green, 6-15 cyan, 47-48 darkgray, 199 darkgray
 34: 0 darkgray, 4-5 green, 6-16 cyan, 47-48 darkgray, 199 darkgray
 35: 0 darkgray, 4-14 green, 47-48 darkgray, 199 darkgray

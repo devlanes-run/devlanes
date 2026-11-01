@@ -170,13 +170,16 @@ impl Theme {
             .map_or_else(|| self.quiet(), |color| Style::new().fg(color))
     }
 
-    /// Focus: the panel marker, the active tab, a dialog's border. Paint in
-    /// true color, bold default text otherwise.
+    /// Focus: the panel marker, the active tab, a dialog's border, inline
+    /// code. Paint in true color, the terminal's yellow in 16 colors (what
+    /// Windows Terminal gets, since it sets no `COLORTERM`), bold default
+    /// text without color.
     pub fn focus(&self) -> Style {
         match self.tier {
             Tier::Dark => Style::new().fg(Color::Rgb(0xf5, 0xc5, 0x42)),
             Tier::Light => Style::new().fg(Color::Rgb(0x9a, 0x6b, 0x00)),
-            Tier::Plain | Tier::Ansi => Style::new().add_modifier(Modifier::BOLD),
+            Tier::Ansi => Style::new().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Tier::Plain => Style::new().add_modifier(Modifier::BOLD),
         }
     }
 

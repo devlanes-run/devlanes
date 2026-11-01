@@ -60,7 +60,7 @@
  n new box   p pairing code   esc back                                                                                                                                            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194-198 bold underlined
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold underlined, 195-198 bold underlined yellow
 1: 0 darkgray, 1-7 bold, 8-199 darkgray
 2: 0 darkgray, 2-13 bold, 199 darkgray
 3: 0 darkgray, 199 darkgray
@@ -86,14 +86,14 @@
 23: 0 darkgray, 199 darkgray
 24: 0 darkgray, 199 darkgray
 25: 0 darkgray, 199 darkgray
-26: 0 darkgray, 66-133 bold, 199 darkgray
-27: 0 darkgray, 66 bold, 68 bold reversed, 69-79 reversed, 80-93 bold, 94-131 reversed, 133 bold, 199 darkgray
-28: 0 darkgray, 66 bold, 68 bold, 81-105 dim italic, 133 bold, 199 darkgray
-29: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-30: 0 darkgray, 66 bold, 68-120 dim, 133 bold, 199 darkgray
-31: 0 darkgray, 66 bold, 133 bold, 199 darkgray
-32: 0 darkgray, 66 bold, 68-70 bold, 71-81 dim, 85-89 bold, 90-96 dim, 100-104 bold, 105-112 dim, 116-118 bold, 119-125 dim, 133 bold, 199 darkgray
-33: 0 darkgray, 66-133 bold, 199 darkgray
+26: 0 darkgray, 66-133 bold yellow, 199 darkgray
+27: 0 darkgray, 66 bold yellow, 68 bold reversed yellow, 69-79 reversed, 80-93 bold yellow, 94-131 reversed, 133 bold yellow, 199 darkgray
+28: 0 darkgray, 66 bold yellow, 68 bold yellow, 81-105 dim italic, 133 bold yellow, 199 darkgray
+29: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+30: 0 darkgray, 66 bold yellow, 68-120 dim, 133 bold yellow, 199 darkgray
+31: 0 darkgray, 66 bold yellow, 133 bold yellow, 199 darkgray
+32: 0 darkgray, 66 bold yellow, 68-70 bold, 71-81 dim, 85-89 bold, 90-96 dim, 100-104 bold, 105-112 dim, 116-118 bold, 119-125 dim, 133 bold yellow, 199 darkgray
+33: 0 darkgray, 66-133 bold yellow, 199 darkgray
 34: 0 darkgray, 199 darkgray
 35: 0 darkgray, 199 darkgray
 36: 0 darkgray, 199 darkgray

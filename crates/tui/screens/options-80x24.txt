@@ -13,11 +13,11 @@
 │ │   terminal.notifications           auto│ environment turns colors off    │a│
 │ │   terminal.marks                   auto│ whatever this says.             │ │
 │ │   updates.mode                   notify│                                 │a│
-│ │   lanes.data_dir                default│  auto   Use the true-color dark │ │
-│ │   lanes.throttle_after               5m│         or light palette when   │a│
-│ │   lanes.freeze_after                15m│         the terminal reports    │ │
-│ │   daemon.exit_when_idle            true│         true color              │a│
-│ │                                        │         (`COLORTERM`) and its   │ │
+│ │   updates.highlights               true│  auto   Use the true-color dark │ │
+│ │   lanes.data_dir                default│         or light palette when   │a│
+│ │   lanes.throttle_after               5m│         the terminal reports    │ │
+│ │   lanes.freeze_after                15m│         true color              │a│
+│ │   daemon.exit_when_idle            true│         (`COLORTERM`) and its   │ │
 │ │                                                                          │a│
 │ └ ↑↓ select  ←→ section  enter edit  d default  s save ─────────────[save] ┘ │
 └──────────────────────────────┘└──────────────────────────────────────────────┘
@@ -26,25 +26,25 @@
 --- styles (row: columns style) ---
 0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 10-17 bold black on yellow, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 72 bold, 75 bold, 78 bold
 1: 0-6 dim, 7-14 bold reversed, 16-17 dim, 18-34 yellow, 36-43 dim, 56-58 bold, 59-62 dim, 63-65 bold, 66-79 dim
-2: 0 darkgray, 2-51 bold, 52-76 bold dim, 77 bold, 78-79 darkgray
-3: 0 darkgray, 2 bold, 4-5 dim, 6-12 bold underlined, 16-17 dim, 28-29 dim, 40-41 dim, 77 bold, 79 darkgray
-4: 0 darkgray, 2 bold, 4-75 darkgray, 77 bold, 79 darkgray
-5: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 45-53 bold, 77 bold, 79 darkgray
-6: 0 darkgray, 2 bold, 4 bold reversed, 5-42 reversed, 43 darkgray, 77 bold, 79 darkgray
-7: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 78-79 darkgray
-8: 0 darkgray, 2 bold, 4 bold, 40-42 dim, 43 darkgray, 77 bold, 79 darkgray
-9: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
-10: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
-11: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
-12: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
-13: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 77 bold, 79 darkgray
-14: 0 darkgray, 2 bold, 4 bold, 37-42 dim, 43 darkgray, 77 bold, 79 darkgray
-15: 0 darkgray, 2 bold, 4 bold, 36-42 dim, 43 darkgray, 45 bold, 53-75 dim, 77 bold, 79 darkgray
-16: 0 darkgray, 2 bold, 4 bold, 41-42 dim, 43 darkgray, 53-73 dim, 77 bold, 79 darkgray
-17: 0 darkgray, 2 bold, 4 bold, 40-42 dim, 43 darkgray, 53-72 dim, 77 bold, 79 darkgray
-18: 0 darkgray, 2 bold, 4 bold, 39-42 dim, 43 darkgray, 53-62 dim, 77 bold, 79 darkgray
-19: 0 darkgray, 2 bold, 43 darkgray, 53-73 dim, 77 bold, 79 darkgray
-20: 0 darkgray, 2 bold, 77 bold, 79 darkgray
-21: 0 darkgray, 1 reversed, 2-5 bold, 6-12 bold dim, 13-16 bold, 17-24 bold dim, 25-31 bold, 32-36 bold dim, 37-39 bold, 40-47 bold dim, 48-50 bold, 51-55 bold dim, 56-69 bold, 70-75 bold dim, 76-77 bold, 79 darkgray
+2: 0 darkgray, 2-51 bold yellow, 52-76 bold dim yellow, 77 bold yellow, 78-79 darkgray
+3: 0 darkgray, 2 bold yellow, 4-5 dim, 6-12 bold underlined yellow, 16-17 dim, 28-29 dim, 40-41 dim, 77 bold yellow, 79 darkgray
+4: 0 darkgray, 2 bold yellow, 4-75 darkgray, 77 bold yellow, 79 darkgray
+5: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 45-53 bold, 77 bold yellow, 79 darkgray
+6: 0 darkgray, 2 bold yellow, 4 bold reversed yellow, 5-42 reversed, 43 darkgray, 77 bold yellow, 79 darkgray
+7: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 78-79 darkgray
+8: 0 darkgray, 2 bold yellow, 4 bold yellow, 40-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+9: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+10: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+11: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+12: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+13: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+14: 0 darkgray, 2 bold yellow, 4 bold yellow, 37-42 dim, 43 darkgray, 77 bold yellow, 79 darkgray
+15: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 45 bold yellow, 53-75 dim, 77 bold yellow, 79 darkgray
+16: 0 darkgray, 2 bold yellow, 4 bold yellow, 36-42 dim, 43 darkgray, 53-73 dim, 77 bold yellow, 79 darkgray
+17: 0 darkgray, 2 bold yellow, 4 bold yellow, 41-42 dim, 43 darkgray, 53-72 dim, 77 bold yellow, 79 darkgray
+18: 0 darkgray, 2 bold yellow, 4 bold yellow, 40-42 dim, 43 darkgray, 53-62 dim, 77 bold yellow, 79 darkgray
+19: 0 darkgray, 2 bold yellow, 4 bold yellow, 39-42 dim, 43 darkgray, 53-73 dim, 77 bold yellow, 79 darkgray
+20: 0 darkgray, 2 bold yellow, 77 bold yellow, 79 darkgray
+21: 0 darkgray, 1 reversed, 2-5 bold yellow, 6-12 bold dim yellow, 13-16 bold yellow, 17-24 bold dim yellow, 25-31 bold yellow, 32-36 bold dim yellow, 37-39 bold yellow, 40-47 bold dim yellow, 48-50 bold yellow, 51-55 bold dim yellow, 56-69 bold yellow, 70-75 bold dim yellow, 76-77 bold yellow, 79 darkgray
 22: 0-79 darkgray
 23: 1 bold, 2-12 dim, 13 bold, 14-29 dim, 30-33 bold, 34-48 dim, 58 bold, 59-70 dim, 71 bold, 72-79 dim

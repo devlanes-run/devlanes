@@ -776,6 +776,7 @@ mod tests {
                     level: notes::Level::Minor,
                     line: "Removed a flag.".into(),
                     body: String::new(),
+                    highlight: None,
                 }],
             },
             notes::Release {
@@ -784,6 +785,7 @@ mod tests {
                     level: notes::Level::Patch,
                     line: "Fixed a thing.".into(),
                     body: "More.".into(),
+                    highlight: None,
                 }],
             },
             notes::Release {
@@ -792,6 +794,7 @@ mod tests {
                     level: notes::Level::Patch,
                     line: "Old.".into(),
                     body: String::new(),
+                    highlight: None,
                 }],
             },
         ];

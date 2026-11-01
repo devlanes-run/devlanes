@@ -1,6 +1,7 @@
 //! Project-local installs, stable entry paths and the executable to spawn;
 //! installing a release in `install`.
 
+mod highlights;
 mod install;
 
 use std::path::{Path, PathBuf};

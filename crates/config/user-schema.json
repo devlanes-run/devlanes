@@ -1285,17 +1285,30 @@
     },
     "UpdatesConfig": {
       "additionalProperties": false,
-      "description": "Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes apply after `devlanes daemon restart`.",
+      "description": "Release checks and notices: how the daemon looks for newer devlanes releases (`mode`) and whether the TUI shows release highlights after an update (`highlights`). `mode` changes apply after `devlanes daemon restart`; `highlights` applies the next time the TUI opens.",
       "examples": [
         {
           "mode": "disable"
         },
         {
           "mode": "auto"
+        },
+        {
+          "highlights": false
         }
       ],
-      "markdownDescription": "Release checks: how the daemon looks for newer devlanes releases (`mode`). Changes apply after `devlanes daemon restart`.",
+      "markdownDescription": "Release checks and notices: how the daemon looks for newer devlanes releases (`mode`) and whether the TUI shows release highlights after an update (`highlights`). `mode` changes apply after `devlanes daemon restart`; `highlights` applies the next time the TUI opens.",
       "properties": {
+        "highlights": {
+          "default": true,
+          "description": "Show the release highlights dialog the first time the TUI opens after an update; defaults to true. Set false to skip the dialog. The new version still counts as seen, so turning this back on does not show the highlights of releases you already skipped.",
+          "examples": [
+            true,
+            false
+          ],
+          "markdownDescription": "Show the release highlights dialog the first time the TUI opens after an update; defaults to true. Set false to skip the dialog. The new version still counts as seen, so turning this back on does not show the highlights of releases you already skipped.",
+          "type": "boolean"
+        },
         "mode": {
           "$ref": "#/$defs/UpdateMode",
           "default": "notify",
@@ -1682,18 +1695,22 @@
     "updates": {
       "$ref": "#/$defs/UpdatesConfig",
       "default": {
+        "highlights": true,
         "mode": "notify"
       },
-      "description": "Release checks: whether the daemon looks for newer devlanes releases (`mode`).",
+      "description": "Release checks: whether the daemon looks for newer devlanes releases (`mode`), and whether the TUI shows release highlights after an update (`highlights`).",
       "examples": [
         {
           "mode": "disable"
         },
         {
           "mode": "auto"
+        },
+        {
+          "highlights": false
         }
       ],
-      "markdownDescription": "Release checks: whether the daemon looks for newer devlanes releases (`mode`)."
+      "markdownDescription": "Release checks: whether the daemon looks for newer devlanes releases (`mode`), and whether the TUI shows release highlights after an update (`highlights`)."
     }
   },
   "type": "object"

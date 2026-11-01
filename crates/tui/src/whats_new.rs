@@ -1,12 +1,13 @@
-//! "What's new": the release notes the binary hands over in
+//! Release highlights: the notes the binary hands over in
 //! [`crate::Options`], shown once after the welcome when this devlanes is
-//! newer than the one seen before, and from the Esc menu. Each release under
-//! its version, minor entries first and marked `breaking`, inline code in
-//! the focus color. j/k, PgUp/PgDn and the wheel scroll a long list.
+//! newer than the one seen before, and from the Esc menu. Breaking entries
+//! first, marked `breaking`, then the highlights, inline code in the focus
+//! color; `o` opens the release page. j/k, PgUp/PgDn and the wheel scroll a
+//! long list.
 
 use std::cell::{Cell, RefCell};
 
-use devlanes_update::notes::{Level, WhatsNew};
+use devlanes_update::notes::WhatsNew;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -44,11 +45,14 @@ pub enum Action {
     Stay,
     Close,
     Quit,
+    /// Open the release page in the browser and keep the dialog.
+    OpenPage,
 }
 
 impl WhatsNewDialog {
     /// j/k and the arrows scroll a line, PgUp/PgDn ten, g/G to either end;
-    /// Enter or Esc closes; `q` and Ctrl+C quit as they do everywhere else.
+    /// `o` opens the release page; Enter or Esc closes; `q` and Ctrl+C quit
+    /// as they do everywhere else.
     pub fn key(&mut self, key: KeyEvent) -> Action {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let max = self.max_scroll.get();
@@ -57,6 +61,7 @@ impl WhatsNewDialog {
         match key.code {
             KeyCode::Char('c') if ctrl => return Action::Quit,
             KeyCode::Char('q') => return Action::Quit,
+            KeyCode::Char('o') => return Action::OpenPage,
             KeyCode::Enter | KeyCode::Esc => return Action::Close,
             KeyCode::Down | KeyCode::Char('j') => self.scroll = (self.scroll + 1).min(max),
             KeyCode::Up | KeyCode::Char('k') => self.scroll = self.scroll.saturating_sub(1),
@@ -107,48 +112,77 @@ pub(crate) fn code_spans(text: &str, in_code: &mut bool, code: Style) -> Vec<Spa
     spans
 }
 
-/// Every line of `notes` wrapped to `width`: a heading per release, then its
-/// entries as bullets with a hanging indent.
+/// Every line of `notes` wrapped to `width`: the breaking entries, then the
+/// highlights, each as a bullet with a hanging indent. A highlight is its
+/// bold title with the body under it; a breaking entry without one is its
+/// first line.
 fn lines(theme: &Theme, notes: Option<&WhatsNew>, width: usize) -> Vec<Line<'static>> {
     let Some(notes) = notes.filter(|notes| !notes.is_empty()) else {
         return vec![Line::styled(
-            "This build carries no release notes.",
+            "This build carries no release highlights.",
             theme.quiet(),
         )];
     };
+    let summary = notes.summary();
     let bullet = format!("{} ", theme.glyph(Glyph::Folded));
     let mut lines = Vec::new();
-    for release in &notes.releases {
-        if !lines.is_empty() {
+    let mut previous_titled = false;
+    for item in summary.breaking.iter().chain(&summary.highlights) {
+        let titled = item.title.is_some();
+        // Plain breaking lines sit together; anything with a title stands apart.
+        if !lines.is_empty() && (titled || previous_titled) {
             lines.push(Line::from(""));
         }
-        lines.push(Line::styled(
-            clean(&release.version),
-            theme.focus().add_modifier(Modifier::BOLD),
-        ));
-        for entry in &release.entries {
-            let marker = match entry.level {
-                Level::Minor => BREAKING,
-                Level::Patch => "",
-            };
-            let indent = text::width(&bullet) + marker.len();
-            let mut in_code = false;
-            for (index, row) in text::wrap(&clean(&entry.line), width.saturating_sub(indent))
-                .into_iter()
-                .enumerate()
-            {
-                let mut spans = if index == 0 {
-                    vec![
-                        Span::styled(bullet.clone(), theme.quiet()),
-                        Span::styled(marker, theme.tone(Tone::Attention)),
-                    ]
-                } else {
-                    vec![Span::raw(" ".repeat(indent))]
-                };
-                spans.extend(code_spans(&row, &mut in_code, theme.focus()));
+        previous_titled = titled;
+        let marker = if item.breaking { BREAKING } else { "" };
+        let indent = text::width(&bullet);
+        let lead = |theme: &Theme| {
+            vec![
+                Span::styled(bullet.clone(), theme.quiet()),
+                Span::styled(marker, theme.tone(Tone::Attention)),
+            ]
+        };
+        let mut in_code = false;
+        match &item.title {
+            Some(title) => {
+                let mut spans = lead(theme);
+                spans.push(Span::styled(
+                    clean(title),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ));
                 lines.push(Line::from(spans));
+                for row in text::wrap(&clean(&item.text), width.saturating_sub(indent)) {
+                    let mut spans = vec![Span::raw(" ".repeat(indent))];
+                    spans.extend(code_spans(&row, &mut in_code, theme.focus()));
+                    lines.push(Line::from(spans));
+                }
+            }
+            None => {
+                let hanging = indent + marker.len();
+                let rows = text::wrap(&clean(&item.text), width.saturating_sub(hanging));
+                for (index, row) in rows.into_iter().enumerate() {
+                    let mut spans = if index == 0 {
+                        lead(theme)
+                    } else {
+                        vec![Span::raw(" ".repeat(hanging))]
+                    };
+                    spans.extend(code_spans(&row, &mut in_code, theme.focus()));
+                    lines.push(Line::from(spans));
+                }
             }
         }
+    }
+    if summary.more > 0 {
+        let noun = if summary.more == 1 {
+            "highlight"
+        } else {
+            "highlights"
+        };
+        lines.push(Line::from(""));
+        lines.push(Line::styled(
+            format!("and {} more {noun} in the release notes", summary.more),
+            theme.quiet(),
+        ));
     }
     lines
 }
@@ -164,7 +198,7 @@ pub fn render(
     // Two columns of border and padding on each side.
     let width = usize::from(area.width.saturating_sub(8)).clamp(1, TEXT_WIDTH);
     let text = lines(theme, notes, width);
-    let title = notes.map_or_else(|| "What's new".to_owned(), WhatsNew::title);
+    let title = notes.map_or_else(|| "Release highlights".to_owned(), WhatsNew::title);
     // The border, a blank row above and below the text, and a row of the
     // screen above and below the box.
     let room = usize::from(area.height.saturating_sub(6)).max(1);
@@ -172,15 +206,20 @@ pub fn render(
     dialog.max_scroll.set(max_scroll);
     let scroll = dialog.scroll.min(max_scroll);
     let shown = text.len().min(room);
+    // Without notes there is no release to open.
+    let has_page = notes.is_some_and(|notes| !notes.is_empty());
     let hint = if max_scroll > 0 {
+        // Short, so it still fits the border of the narrowest box.
+        let page = if has_page { "o notes · " } else { "" };
         format!(
-            " lines {}-{} of {} · j k scroll · enter closes ",
+            " lines {}-{} of {} · j k · {page}enter closes ",
             scroll + 1,
             scroll + shown,
             text.len()
         )
     } else {
-        " enter or esc closes ".to_owned()
+        let page = if has_page { "o release notes · " } else { "" };
+        format!(" {page}enter or esc closes ")
     };
     // Wide enough for the title and the hint in the border too.
     let content_width = text
@@ -222,9 +261,10 @@ pub fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use devlanes_update::notes::{Entry, Release};
+    use devlanes_update::notes::{Entry, Highlight, Level, Release};
 
-    /// Notes for `versions`, each with a minor and a patch entry.
+    /// Notes for `versions`, each with a breaking entry, a patch entry that
+    /// is a highlight and one that is not.
     fn notes(versions: &[&str]) -> WhatsNew {
         WhatsNew {
             since: Some("0.8.0".into()),
@@ -235,13 +275,24 @@ mod tests {
                     entries: vec![
                         Entry {
                             level: Level::Minor,
-                            line: "Removed `devlanes lane new <branch>` and the `lanes.worktree_dir` config key; devlanes no longer creates worktrees.".into(),
+                            line: "Removed `devlanes lane new <branch>` and the `lanes.worktree_dir` config key.".into(),
                             body: String::new(),
+                            highlight: None,
                         },
                         Entry {
                             level: Level::Patch,
                             line: "Added `devlanes reload`.".into(),
                             body: String::new(),
+                            highlight: Some(Highlight {
+                                title: format!("Reload a lane in {version}"),
+                                body: "Run `devlanes reload` to apply project file edits.".into(),
+                            }),
+                        },
+                        Entry {
+                            level: Level::Patch,
+                            line: "Fixed a crash that stays out of the dialog.".into(),
+                            body: String::new(),
+                            highlight: None,
                         },
                     ],
                 })
@@ -261,22 +312,78 @@ mod tests {
     }
 
     #[test]
-    fn notes_show_under_their_versions_with_code_unquoted() {
+    fn breaking_entries_come_first_then_highlights_with_code_unquoted() {
         let shown = notes(&["0.9.1", "0.9.0"]);
         let screen = draw(&WhatsNewDialog::default(), Some(&shown), 100, 30);
         for wanted in [
-            "What's new since 0.8.0",
-            "0.9.1",
-            "0.9.0",
+            "Release highlights since 0.8.0",
             "breaking Removed devlanes lane new <branch>",
-            "Added devlanes reload.",
-            "enter or esc closes",
+            "Reload a lane in 0.9.1",
+            "Reload a lane in 0.9.0",
+            "Run devlanes reload to apply project file edits.",
+            "o release notes · enter or esc closes",
         ] {
             assert!(screen.contains(wanted), "{wanted}\n{screen}");
         }
+        // Ordinary entries stay on the release page.
+        assert!(!screen.contains("stays out"), "{screen}");
         assert!(!screen.contains('`'), "{screen}");
+        let breaking = screen.find("breaking Removed").expect("breaking");
+        assert!(breaking < screen.find("Reload a lane").expect("highlight"));
         let screen = draw(&WhatsNewDialog::default(), None, 80, 24);
-        assert!(screen.contains("no release notes"), "{screen}");
+        assert!(screen.contains("no release highlights"), "{screen}");
+        assert!(!screen.contains("release notes"), "{screen}");
+    }
+
+    /// A release with only breaking entries, or only highlights, shows just
+    /// that part.
+    #[test]
+    fn either_part_shows_alone() {
+        let mut breaking_only = notes(&["0.9.1"]);
+        breaking_only.releases[0].entries.truncate(1);
+        let screen = draw(&WhatsNewDialog::default(), Some(&breaking_only), 100, 30);
+        assert!(
+            screen.contains("breaking Removed devlanes lane new"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Reload a lane"), "{screen}");
+
+        let mut highlights_only = notes(&["0.9.1"]);
+        highlights_only.releases[0].entries.remove(0);
+        let screen = draw(&WhatsNewDialog::default(), Some(&highlights_only), 100, 30);
+        assert!(screen.contains("Reload a lane in 0.9.1"), "{screen}");
+        assert!(!screen.contains("breaking"), "{screen}");
+    }
+
+    /// Highlights past the limit are counted on screen, not listed.
+    #[test]
+    fn highlights_past_the_limit_point_to_the_release_notes() {
+        let versions = [
+            "0.9.7", "0.9.6", "0.9.5", "0.9.4", "0.9.3", "0.9.2", "0.9.1",
+        ];
+        let screen = draw(&WhatsNewDialog::default(), Some(&notes(&versions)), 100, 60);
+        assert!(
+            screen.contains("and 2 more highlights in the release notes"),
+            "{screen}"
+        );
+        assert!(!screen.contains("Reload a lane in 0.9.1"), "{screen}");
+    }
+
+    /// A breaking entry with a highlight shows the highlight, not its line.
+    #[test]
+    fn a_highlight_that_breaks_is_listed_once_in_its_own_words() {
+        let mut shown = notes(&["0.9.1"]);
+        shown.releases[0].entries[0].highlight = Some(Highlight {
+            title: "Setup replaces certs".into(),
+            body: "Run `devlanes setup` instead of `devlanes certs trust`.".into(),
+        });
+        let screen = draw(&WhatsNewDialog::default(), Some(&shown), 100, 30);
+        assert!(screen.contains("breaking Setup replaces certs"), "{screen}");
+        assert!(
+            screen.contains("Run devlanes setup instead of devlanes certs trust."),
+            "{screen}"
+        );
+        assert!(!screen.contains("lanes.worktree_dir"), "{screen}");
     }
 
     #[test]
@@ -343,5 +450,6 @@ mod tests {
         assert_eq!(press(&mut dialog, KeyCode::Esc), Action::Close);
         assert_eq!(press(&mut dialog, KeyCode::Enter), Action::Close);
         assert_eq!(press(&mut dialog, KeyCode::Char('q')), Action::Quit);
+        assert_eq!(press(&mut dialog, KeyCode::Char('o')), Action::OpenPage);
     }
 }

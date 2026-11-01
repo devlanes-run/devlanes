@@ -60,7 +60,7 @@
  n new box   p pairing code   esc back                                                                                                                                            ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194-198 bold underlined
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 177 bold, 178-183 dim, 186 bold, 187-191 dim, 194 bold underlined, 195-198 bold underlined yellow
 1: 0 darkgray, 1-7 bold, 8-199 darkgray
 2: 0 darkgray, 2-13 bold, 199 darkgray
 3: 0 darkgray, 199 darkgray
@@ -87,12 +87,12 @@
 24: 0 darkgray, 199 darkgray
 25: 0 darkgray, 199 darkgray
 26: 0 darkgray, 199 darkgray
-27: 0 darkgray, 79-120 bold, 199 darkgray
-28: 0 darkgray, 79 bold, 81-118 bold, 120 bold, 199 darkgray
-29: 0 darkgray, 79 bold, 120 bold, 199 darkgray
-30: 0 darkgray, 79 bold, 120 bold, 199 darkgray
-31: 0 darkgray, 79 bold, 81 bold, 82-91 dim, 95-97 bold, 98-103 dim, 120 bold, 199 darkgray
-32: 0 darkgray, 79-120 bold, 199 darkgray
+27: 0 darkgray, 79-120 bold yellow, 199 darkgray
+28: 0 darkgray, 79 bold yellow, 81-118 bold, 120 bold yellow, 199 darkgray
+29: 0 darkgray, 79 bold yellow, 120 bold yellow, 199 darkgray
+30: 0 darkgray, 79 bold yellow, 120 bold yellow, 199 darkgray
+31: 0 darkgray, 79 bold yellow, 81 bold, 82-91 dim, 95-97 bold, 98-103 dim, 120 bold yellow, 199 darkgray
+32: 0 darkgray, 79-120 bold yellow, 199 darkgray
 33: 0 darkgray, 199 darkgray
 34: 0 darkgray, 199 darkgray
 35: 0 darkgray, 199 darkgray

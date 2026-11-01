@@ -119,7 +119,7 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("M  D  B", "monitor, daemon, boxes; again or esc returns"),
             (
                 "esc",
-                "one step back, then the menu: options, what's new, help, quit",
+                "one step back, then the menu: options, highlights, help, quit",
             ),
             (
                 "U  q",
@@ -359,7 +359,7 @@ pub fn render(app: &App, dialog: &Dialog, frame: &mut Frame, area: Rect) {
                     body.push(Line::from(""));
                     continue;
                 }
-                // Inline code (release notes) as "What's new" shows it.
+                // Inline code (release notes) as the release highlights show it.
                 let mut in_code = false;
                 for row in text::wrap(&clean(sentence), narrow) {
                     body.push(Line::from(crate::whats_new::code_spans(

@@ -561,7 +561,7 @@ mod tests {
     use super::*;
 
     /// A stop, restart or update draws its block in the TUI's colors without
-    /// claiming "What's new": the next TUI still shows it.
+    /// claiming the release highlights: the next TUI still shows them.
     #[test]
     fn the_step_block_leaves_whats_new_to_the_next_tui() {
         use devlanes_cli::clap::Parser;
@@ -596,9 +596,10 @@ mod tests {
             &paths.home,
             devlanes_version::VERSION,
             false,
+            true,
             &crate::notes::embedded(),
         );
-        assert!(shown.is_some(), "the next TUI shows what's new");
+        assert!(shown.is_some(), "the next TUI shows the release highlights");
     }
 
     #[test]

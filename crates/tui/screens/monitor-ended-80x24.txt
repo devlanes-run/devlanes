@@ -24,7 +24,7 @@
  j k move   enter open unit   ←→ sort   i reverse         ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 66-72 bold underlined, 75 bold, 78 bold
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 66 bold underlined, 67-72 bold underlined yellow, 75 bold, 78 bold
 1: 0-4 dim, 5-28 green, 33-46 dim, 56-77 dim
 2: 0 darkgray, 7-26 dim, 27-66 darkgray, 67-70 dim, 71-74 bold, 75-78 dim, 79 darkgray
 3: 0 darkgray, 1-78 dim, 79 darkgray
@@ -43,7 +43,7 @@
 16: 0 darkgray, 3-55 dim, 79 darkgray
 17: 0 darkgray, 1-2 dim, 3-24 bold, 34-55 bold, 79 darkgray
 18: 0 darkgray, 3-55 dim, 79 darkgray
-19: 0 darkgray, 1-2 bold on darkgray, 3-55 bold dim on darkgray, 56-78 bold on darkgray, 79 darkgray
+19: 0 darkgray, 1 bold yellow on darkgray, 2 bold on darkgray, 3-55 bold dim on darkgray, 56-78 bold on darkgray, 79 darkgray
 20: 0-79 darkgray
 21: 0 darkgray, 1-2 green, 25-33 dim, 40-43 darkgray, 51-54 darkgray, 65-77 green, 79 darkgray
 22: 0-79 darkgray

@@ -20,11 +20,13 @@ pub enum Applies {
 /// When a change to the dotted user config `key` takes effect. `start`, `tui`,
 /// `terminal` and `remote` are read by each command (`devlanes tunnel` reads
 /// `remote` at each client connection, the daemon reads `remote.boxes` at each
-/// `remote connect`); everything else by the daemon.
+/// `remote connect`), and so is `updates.highlights`, which the TUI reads when it
+/// opens; everything else by the daemon.
 pub fn applies(key: &str) -> Applies {
     let section = key.split('.').next().unwrap_or(key);
     match key {
         "tui.theme" | "tui.glyphs" => Applies::Now,
+        "updates.highlights" => Applies::NextCommand,
         _ if matches!(section, "start" | "tui" | "terminal" | "remote") => Applies::NextCommand,
         _ => Applies::Daemon,
     }
@@ -395,6 +397,8 @@ mod tests {
         assert_eq!(applies("remote.allow_connections"), Applies::NextCommand);
         assert_eq!(applies("remote.start_daemon"), Applies::NextCommand);
         assert_eq!(applies("remote.require_pairing"), Applies::NextCommand);
+        assert_eq!(applies("updates.highlights"), Applies::NextCommand);
+        assert_eq!(applies("updates.mode"), Applies::Daemon);
         assert_eq!(applies("startup.mode"), Applies::Daemon);
         assert_eq!(applies("proxy.https_port"), Applies::Daemon);
         assert_eq!(applies("lanes.freeze_after"), Applies::Daemon);

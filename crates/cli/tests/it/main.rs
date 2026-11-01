@@ -518,7 +518,6 @@ fn update_flags_pick_the_action() {
         (vec!["--yes"], UpdateAction::Install { yes: true }),
         (vec!["--check"], UpdateAction::Check),
         (vec!["--finish"], UpdateAction::Finish),
-        (vec!["--notes"], UpdateAction::Notes),
     ] {
         let cli = Cli::parse_from(["devlanes", "update"].into_iter().chain(args.clone()));
         match action(&cli, &runtime(&cli, OutputMode::Plain)) {
@@ -526,21 +525,12 @@ fn update_flags_pick_the_action() {
             _ => panic!("expected an update action for {args:?}"),
         }
     }
-    for refused in [
-        &["update", "--check", "--finish"][..],
-        &["update", "--notes", "--check"],
-        &["update", "--notes", "--finish"],
-    ] {
-        assert!(
-            Cli::try_parse_from(std::iter::once("devlanes").chain(refused.iter().copied()))
-                .is_err(),
-            "{refused:?}"
-        );
-    }
+    assert!(Cli::try_parse_from(["devlanes", "update", "--check", "--finish"]).is_err());
     // Only the latest release installs: no option picks another one, and
     // the running build alone decides between releases and builds of main.
     for removed in [
-        &["update", "--version", "0.9.1"][..],
+        &["update", "--notes"][..],
+        &["update", "--version", "0.9.1"],
         &["update", "--next"],
         &["update", "--stable"],
     ] {

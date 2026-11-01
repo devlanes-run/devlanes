@@ -1055,7 +1055,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "whats-new",
-            what: "the first TUI after an update: the releases since the one seen before, breaking changes first",
+            what: "the first TUI after an update: release highlights since the one seen before, breaking changes first",
             setup: |f| {
                 f.app.whats_new = Some(data::whats_new());
                 f.app.whats_new_pending = true;
@@ -1344,7 +1344,7 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "menu",
-            what: "the Esc menu: banner over lane lines, version, options, what's new, help, quit",
+            what: "the Esc menu: banner over lane lines, version, options, highlights, help, quit",
             setup: |f| f.key(KeyCode::Esc),
         },
         Scene {
@@ -1488,17 +1488,17 @@ pub fn shots() -> Vec<Shot> {
         "the Esc menu without room for the banner",
         narrow,
     ));
-    // What's new scrolls only on the smallest size.
+    // The release highlights scroll only on the smallest size.
     let mut notes = Fake::new(80, 24);
     notes.app.whats_new = Some(data::whats_new());
     notes.key(KeyCode::Esc);
-    notes.key(KeyCode::Char('w'));
+    notes.key(KeyCode::Char('l'));
     // A frame tells the keys how far the notes scroll.
     let _ = render(&notes.app);
     notes.key(KeyCode::Char('G'));
     shots.push(Shot::new(
         "whats-new-scrolled",
-        "What's new from the Esc menu (w), scrolled to its end (G)",
+        "release highlights from the Esc menu (l), scrolled to its end (G)",
         notes,
     ));
     // Below the minimum size the TUI only says so.

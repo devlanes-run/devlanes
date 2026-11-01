@@ -27,11 +27,11 @@
 │   ◉ wrk-ledger                            │   terminal.notifications                auto│         terminal reports true color (`COLORTERM`) and its      │                                           │
 │   ● stub-stripe                           │   terminal.marks                        auto│         background (`COLORFGBG`); otherwise the terminal's 16  │                                           │
 │   ● stub-s3                               │   updates.mode                        notify│         colors.                                                │                                           │
-│   ◆ stub-twilio         orphaned · pid 482│   lanes.data_dir                     default│ ▌dark   Always use the true-color palette made for a dark      │                                           │
-│   ● stub-sendgrid                         │   lanes.throttle_after                    5m│         background.                                            │                                           │
-│   ● stub-segment                          │   lanes.freeze_after                     15m│  light  Always use the true-color palette made for a light     │                                           │
-│   ● stub-auth0                            │   daemon.exit_when_idle                 true│         background.                                            │                                           │
-│   ● proxy-edge                            │                                             │  ansi   Use only the terminal's 16 named colors, so the TUI    │                                           │
+│   ◆ stub-twilio         orphaned · pid 482│   updates.highlights                    true│ ▌dark   Always use the true-color palette made for a dark      │                                           │
+│   ● stub-sendgrid                         │   lanes.data_dir                     default│         background.                                            │                                           │
+│   ● stub-segment                          │   lanes.throttle_after                    5m│  light  Always use the true-color palette made for a light     │                                           │
+│   ● stub-auth0                            │   lanes.freeze_after                     15m│         background.                                            │                                           │
+│   ● proxy-edge                            │   daemon.exit_when_idle                 true│  ansi   Use only the terminal's 16 named colors, so the TUI    │                                           │
 │   ● docs-search                           │                                             │         follows the terminal's color scheme.                   │                                           │
 │   ● ml-ranker                             │                                             │                                                                │                                           │
 │   ⠋ ml-embed                        starti│                                             │ default  auto                                                  │                                           │
@@ -76,34 +76,34 @@
 13: 0 darkgray, 4-5 green, 6-16 blue, 47-48 darkgray, 50-69 dim, 71-74 color2, 199 darkgray
 14: 0 darkgray, 4-12 green, 47-48 darkgray, 50-69 dim, 71-74 color2, 199 darkgray
 15: 0 darkgray, 4-14 green, 47-48 darkgray, 50-69 dim, 71-74 color2, 199 darkgray
-16: 0 darkgray, 4-13 green, 44-129 bold, 130-154 bold dim, 155 bold, 199 darkgray
-17: 0 darkgray, 4-5 dim, 6-18 dim green, 44 bold, 46-47 dim, 48-54 bold underlined, 58-59 dim, 70-71 dim, 82-83 dim, 155 bold, 199 darkgray
-18: 0 darkgray, 4-16 green, 44 bold, 46-153 darkgray, 155 bold, 199 darkgray
-19: 0 darkgray, 4-5 green, 6-14 magenta, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 92-100 bold, 155 bold, 199 darkgray
-20: 0 darkgray, 4-5 green, 6-16 magenta, 44 bold, 46 bold reversed, 47-89 reversed, 90 darkgray, 155 bold, 199 darkgray
-21: 0 darkgray, 4-5 green, 6-14 magenta, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 155 bold, 199 darkgray
-22: 0 darkgray, 4-5 green, 6-15 magenta, 44 bold, 46 bold, 87-89 dim, 90 darkgray, 155 bold, 199 darkgray
-23: 0 darkgray, 1-43 reversed, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 155 bold, 199 darkgray
-24: 0 darkgray, 4-5 green, 6-13 magenta, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 155 bold, 199 darkgray
-25: 0 darkgray, 4-5 green, 6-17 magenta, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 92 bold, 100-148 dim, 155 bold, 199 darkgray
-26: 0 darkgray, 4-5 green, 6-15 magenta, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 100-148 dim, 155 bold, 199 darkgray
-27: 0 darkgray, 4-5 green, 6-16 darkgray, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 100-152 dim, 155 bold, 199 darkgray
-28: 0 darkgray, 4-5 green, 6-12 darkgray, 44 bold, 46 bold, 84-89 dim, 90 darkgray, 100-106 dim, 155 bold, 199 darkgray
-29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-43 dim, 44 bold, 46 bold, 83-89 dim, 90 darkgray, 92-99 bold, 100-148 dim, 155 bold, 199 darkgray
-30: 0 darkgray, 4-5 green, 6-18 darkgray, 44 bold, 46 bold, 88-89 dim, 90 darkgray, 100-110 dim, 155 bold, 199 darkgray
-31: 0 darkgray, 4-5 green, 6-17 darkgray, 44 bold, 46 bold, 87-89 dim, 90 darkgray, 92 bold, 100-149 dim, 155 bold, 199 darkgray
-32: 0 darkgray, 4-5 green, 6-15 darkgray, 44 bold, 46 bold, 86-89 dim, 90 darkgray, 100-110 dim, 155 bold, 199 darkgray
-33: 0 darkgray, 4-5 green, 6-15 cyan, 44 bold, 90 darkgray, 92 bold, 100-150 dim, 155 bold, 199 darkgray
-34: 0 darkgray, 4-5 green, 6-16 cyan, 44 bold, 90 darkgray, 100-135 dim, 155 bold, 199 darkgray
-35: 0 darkgray, 4-14 green, 44 bold, 90 darkgray, 155 bold, 199 darkgray
-36: 0 darkgray, 6-13 green, 44 bold, 90 darkgray, 92-100 dim, 155 bold, 199 darkgray
-37: 0 darkgray, 4-5 green, 6-15 dim blue, 44 bold, 90 darkgray, 155 bold, 199 darkgray
-38: 0 darkgray, 44 bold, 90 darkgray, 92-120 dim, 155 bold, 199 darkgray
-39: 0 darkgray, 2-3 dim, 44 bold, 90 darkgray, 155 bold, 199 darkgray
-40: 0 darkgray, 4-5 green, 26-43 dim, 44 bold, 90 darkgray, 155 bold, 199 darkgray
-41: 0 darkgray, 4-5 green, 42-43 dim, 44 bold, 90 darkgray, 155 bold, 199 darkgray
-42: 0 darkgray, 4-9 dim, 39-43 dim, 44 bold, 155 bold, 199 darkgray
-43: 0 darkgray, 4-14 dim, 39-43 dim, 44-47 bold, 48-54 bold dim, 55-58 bold, 59-66 bold dim, 67-73 bold, 74-78 bold dim, 79-81 bold, 82-89 bold dim, 90-92 bold, 93-97 bold dim, 98-102 bold, 103-108 bold dim, 109-147 bold, 148-153 bold dim, 154-155 bold, 199 darkgray
+16: 0 darkgray, 4-13 green, 44-129 bold yellow, 130-154 bold dim yellow, 155 bold yellow, 199 darkgray
+17: 0 darkgray, 4-5 dim, 6-18 dim green, 44 bold yellow, 46-47 dim, 48-54 bold underlined yellow, 58-59 dim, 70-71 dim, 82-83 dim, 155 bold yellow, 199 darkgray
+18: 0 darkgray, 4-16 green, 44 bold yellow, 46-153 darkgray, 155 bold yellow, 199 darkgray
+19: 0 darkgray, 4-5 green, 6-14 magenta, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 92-100 bold, 155 bold yellow, 199 darkgray
+20: 0 darkgray, 4-5 green, 6-16 magenta, 44 bold yellow, 46 bold reversed yellow, 47-89 reversed, 90 darkgray, 155 bold yellow, 199 darkgray
+21: 0 darkgray, 4-5 green, 6-14 magenta, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+22: 0 darkgray, 4-5 green, 6-15 magenta, 44 bold yellow, 46 bold yellow, 87-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+23: 0 darkgray, 1-43 reversed, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+24: 0 darkgray, 4-5 green, 6-13 magenta, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 155 bold yellow, 199 darkgray
+25: 0 darkgray, 4-5 green, 6-17 magenta, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 92 bold yellow, 100-148 dim, 155 bold yellow, 199 darkgray
+26: 0 darkgray, 4-5 green, 6-15 magenta, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 100-148 dim, 155 bold yellow, 199 darkgray
+27: 0 darkgray, 4-5 green, 6-16 darkgray, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 100-152 dim, 155 bold yellow, 199 darkgray
+28: 0 darkgray, 4-5 green, 6-12 darkgray, 44 bold yellow, 46 bold yellow, 84-89 dim, 90 darkgray, 100-106 dim, 155 bold yellow, 199 darkgray
+29: 0 darkgray, 4-5 yellow, 6-16 darkgray, 26-33 yellow, 34-43 dim, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 92-99 bold yellow, 100-148 dim, 155 bold yellow, 199 darkgray
+30: 0 darkgray, 4-5 green, 6-18 darkgray, 44 bold yellow, 46 bold yellow, 83-89 dim, 90 darkgray, 100-110 dim, 155 bold yellow, 199 darkgray
+31: 0 darkgray, 4-5 green, 6-17 darkgray, 44 bold yellow, 46 bold yellow, 88-89 dim, 90 darkgray, 92 bold yellow, 100-149 dim, 155 bold yellow, 199 darkgray
+32: 0 darkgray, 4-5 green, 6-15 darkgray, 44 bold yellow, 46 bold yellow, 87-89 dim, 90 darkgray, 100-110 dim, 155 bold yellow, 199 darkgray
+33: 0 darkgray, 4-5 green, 6-15 cyan, 44 bold yellow, 46 bold yellow, 86-89 dim, 90 darkgray, 92 bold yellow, 100-150 dim, 155 bold yellow, 199 darkgray
+34: 0 darkgray, 4-5 green, 6-16 cyan, 44 bold yellow, 90 darkgray, 100-135 dim, 155 bold yellow, 199 darkgray
+35: 0 darkgray, 4-14 green, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
+36: 0 darkgray, 6-13 green, 44 bold yellow, 90 darkgray, 92-100 dim, 155 bold yellow, 199 darkgray
+37: 0 darkgray, 4-5 green, 6-15 dim blue, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
+38: 0 darkgray, 44 bold yellow, 90 darkgray, 92-120 dim, 155 bold yellow, 199 darkgray
+39: 0 darkgray, 2-3 dim, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
+40: 0 darkgray, 4-5 green, 26-43 dim, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
+41: 0 darkgray, 4-5 green, 42-43 dim, 44 bold yellow, 90 darkgray, 155 bold yellow, 199 darkgray
+42: 0 darkgray, 4-9 dim, 39-43 dim, 44 bold yellow, 155 bold yellow, 199 darkgray
+43: 0 darkgray, 4-14 dim, 39-43 dim, 44-47 bold yellow, 48-54 bold dim yellow, 55-58 bold yellow, 59-66 bold dim yellow, 67-73 bold yellow, 74-78 bold dim yellow, 79-81 bold yellow, 82-89 bold dim yellow, 90-92 bold yellow, 93-97 bold dim yellow, 98-102 bold yellow, 103-108 bold dim yellow, 109-147 bold yellow, 148-153 bold dim yellow, 154-155 bold yellow, 199 darkgray
 44: 0 darkgray, 4-13 dim, 39-45 dim, 47-48 darkgray, 199 darkgray
 45: 0 darkgray, 4-5 green, 42-45 dim, 47-48 darkgray, 199 darkgray
 46: 0 darkgray, 4-16 dim, 39-45 dim, 47-48 darkgray, 199 darkgray

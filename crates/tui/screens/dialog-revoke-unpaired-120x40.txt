@@ -40,7 +40,7 @@
  x revoke   n new box   p pairing code   j k select   esc back                                    ? all keys   q quit
 
 --- styles (row: columns style) ---
-0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114-118 bold underlined
+0: 1-2 bold color220, 3 bold color221, 4-5 bold color214, 6 bold color215, 7-8 bold color208, 11-12 dim, 13-16 red, 20-21 dim, 22-28 yellow, 32-33 dim, 34-37 green, 97 bold, 98-103 dim, 106 bold, 107-111 dim, 114 bold underlined, 115-118 bold underlined yellow
 1: 0 darkgray, 1-7 bold, 8-119 darkgray
 2: 0 darkgray, 2-13 bold, 119 darkgray
 3: 0 darkgray, 119 darkgray
@@ -55,15 +55,15 @@
 12: 0 darkgray, 119 darkgray
 13: 0 darkgray, 119 darkgray
 14: 0 darkgray, 119 darkgray
-15: 0 darkgray, 26-92 bold, 119 darkgray
-16: 0 darkgray, 26 bold, 28-59 bold, 92 bold, 119 darkgray
-17: 0 darkgray, 26 bold, 92 bold, 119 darkgray
-18: 0 darkgray, 26 bold, 92 bold, 119 darkgray
-19: 0 darkgray, 26 bold, 92 bold, 119 darkgray
-20: 0 darkgray, 26 bold, 92 bold, 119 darkgray
-21: 0 darkgray, 26 bold, 92 bold, 119 darkgray
-22: 0 darkgray, 26 bold, 28 bold, 29-35 dim, 39 bold, 40-46 dim, 92 bold, 119 darkgray
-23: 0 darkgray, 26-92 bold, 119 darkgray
+15: 0 darkgray, 26-92 bold yellow, 119 darkgray
+16: 0 darkgray, 26 bold yellow, 28-59 bold, 92 bold yellow, 119 darkgray
+17: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+18: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+19: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+20: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+21: 0 darkgray, 26 bold yellow, 92 bold yellow, 119 darkgray
+22: 0 darkgray, 26 bold yellow, 28 bold, 29-35 dim, 39 bold, 40-46 dim, 92 bold yellow, 119 darkgray
+23: 0 darkgray, 26-92 bold yellow, 119 darkgray
 24: 0 darkgray, 119 darkgray
 25: 0 darkgray, 119 darkgray
 26: 0 darkgray, 119 darkgray
@@ -72,11 +72,11 @@
 29: 0 darkgray, 119 darkgray
 30: 0 darkgray, 119 darkgray
 31: 0-119 darkgray
-32: 0-95 bold, 96-106 bold green, 107-117 bold dim, 118-119 bold
-33: 0 bold, 2-68 yellow, 119 bold
-34: 0 bold, 1-3 reversed, 4-14 bold reversed, 15-118 reversed, 119 bold
-35: 0 bold, 2-3 green, 4-14 bold, 15-31 dim, 54-81 yellow, 119 bold
-36: 0 bold, 2-3 dim, 4-14 bold, 15-81 dim, 119 bold
-37: 0 bold, 2-3 dim, 4-14 bold, 15-81 dim, 119 bold
-38: 0-119 bold
+32: 0 bold yellow, 1-14 bold, 15-94 bold yellow, 95 bold, 96-106 bold green, 107-117 bold dim, 118 bold, 119 bold yellow
+33: 0 bold yellow, 2-68 yellow, 119 bold yellow
+34: 0 bold yellow, 1-3 reversed, 4-14 bold reversed, 15-118 reversed, 119 bold yellow
+35: 0 bold yellow, 2-3 green, 4-14 bold, 15-31 dim, 54-81 yellow, 119 bold yellow
+36: 0 bold yellow, 2-3 dim, 4-14 bold, 15-81 dim, 119 bold yellow
+37: 0 bold yellow, 2-3 dim, 4-14 bold, 15-81 dim, 119 bold yellow
+38: 0-119 bold yellow
 39: 1 bold, 2-11 dim, 12 bold, 13-23 dim, 24 bold, 25-40 dim, 41-43 bold, 44-53 dim, 54-56 bold, 57-64 dim, 98 bold, 99-110 dim, 111 bold, 112-119 dim

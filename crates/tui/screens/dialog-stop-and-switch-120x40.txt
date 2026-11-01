@@ -56,14 +56,14 @@
 13: 0 darkgray, 47-48 darkgray, 119 darkgray
 14: 0 darkgray, 47-48 darkgray, 119 darkgray
 15: 0 darkgray, 47-48 darkgray, 119 darkgray
-16: 0 darkgray, 27-91 bold, 119 darkgray
-17: 0 darkgray, 27 bold, 29-89 bold, 91 bold, 119 darkgray
-18: 0 darkgray, 27 bold, 91 bold, 119 darkgray
-19: 0 darkgray, 27 bold, 91 bold, 119 darkgray
-20: 0 darkgray, 27 bold, 91 bold, 119 darkgray
-21: 0 darkgray, 27 bold, 91 bold, 119 darkgray
-22: 0 darkgray, 27 bold, 29 bold, 30-45 dim, 49 bold, 50-56 dim, 91 bold, 119 darkgray
-23: 0 darkgray, 27-91 bold, 119 darkgray
+16: 0 darkgray, 27-91 bold yellow, 119 darkgray
+17: 0 darkgray, 27 bold yellow, 29-89 bold, 91 bold yellow, 119 darkgray
+18: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
+19: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
+20: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
+21: 0 darkgray, 27 bold yellow, 91 bold yellow, 119 darkgray
+22: 0 darkgray, 27 bold yellow, 29 bold, 30-45 dim, 49 bold, 50-56 dim, 91 bold yellow, 119 darkgray
+23: 0 darkgray, 27-91 bold yellow, 119 darkgray
 24: 0 darkgray, 47-48 darkgray, 119 darkgray
 25: 0 darkgray, 47-48 darkgray, 119 darkgray
 26: 0 darkgray, 47-48 darkgray, 119 darkgray

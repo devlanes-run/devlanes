@@ -77,7 +77,7 @@ pub struct NoticeLog {
     /// Keys the user dismissed in the TUI.
     #[serde(default)]
     pub dismissed: Vec<String>,
-    /// The newest release whose "What's new" was shown, or that a fresh home
+    /// The newest release whose highlights were shown, or that a fresh home
     /// started on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_version: Option<String>,
@@ -143,7 +143,7 @@ impl NoticeLog {
     }
 }
 
-/// What opening devlanes on a version does about "What's new".
+/// What opening devlanes on a version does about the release highlights.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WhatsNewStart {
     /// Show these notes and record the version as seen.
@@ -154,16 +154,19 @@ pub enum WhatsNewStart {
     Nothing,
 }
 
-/// The "What's new" rule for opening devlanes `running`, given the notice
-/// log (`None` when the home has none yet) and the `releases` this build
-/// carries. A stable release newer than the one seen shows every release
-/// after it up to `running`; a log that never saw one shows `running`'s own
-/// notes. A home without a log is a fresh install: it records `running`
-/// silently. Prereleases, `local` builds and downgrades never show.
+/// The release highlights rule for opening devlanes `running`, given the
+/// notice log (`None` when the home has none yet) and the `releases` this
+/// build carries. A stable release newer than the one seen shows every
+/// release after it up to `running`; a log that never saw one shows
+/// `running`'s own. A home without a log is a fresh install: it records
+/// `running` silently, as does a range with no breaking entry and no
+/// highlight, or `enabled` (`updates.highlights`) being off. Prereleases,
+/// `local` builds and downgrades never show.
 pub fn whats_new_on_start(
     log: Option<&NoticeLog>,
     running: &str,
     local: bool,
+    enabled: bool,
     releases: &[Release],
 ) -> WhatsNewStart {
     let Some(version) = Version::parse(running) else {
@@ -184,7 +187,7 @@ pub fn whats_new_on_start(
         Some((seen, _)) => WhatsNew::since(releases, seen, running),
         None => WhatsNew::of(releases, running),
     };
-    if shown.is_empty() {
+    if !enabled || shown.is_empty() {
         WhatsNewStart::Record
     } else {
         WhatsNewStart::Show(shown)
@@ -201,11 +204,12 @@ pub fn claim_whats_new(
     home: &Path,
     running: &str,
     local: bool,
+    enabled: bool,
     releases: &[Release],
 ) -> Option<WhatsNew> {
     let _lock = crate::install::Lock::acquire(home, std::time::Duration::ZERO).ok()?;
     let log = NoticeLog::read(home);
-    let shown = match whats_new_on_start(log.as_ref(), running, local, releases) {
+    let shown = match whats_new_on_start(log.as_ref(), running, local, enabled, releases) {
         WhatsNewStart::Nothing => return None,
         WhatsNewStart::Record => None,
         WhatsNewStart::Show(shown) => Some(shown),
@@ -279,6 +283,7 @@ mod tests {
                         level,
                         line: format!("{} in {version}", level.as_str()),
                         body: String::new(),
+                        highlight: None,
                     })
                     .collect(),
             })
@@ -308,12 +313,12 @@ mod tests {
             ..NoticeLog::default()
         };
         let rule = |log: Option<&NoticeLog>, running, local| {
-            shown(whats_new_on_start(log, running, local, &releases))
+            shown(whats_new_on_start(log, running, local, true, &releases))
         };
         assert_eq!(
             rule(Some(&seen(Some("0.9.0"))), "0.10.0", false),
             Ok((
-                "What's new since 0.9.0".into(),
+                "Release highlights since 0.9.0".into(),
                 vec![
                     "minor in 0.10.0".into(),
                     "patch in 0.10.0".into(),
@@ -324,12 +329,32 @@ mod tests {
         );
         assert_eq!(
             rule(Some(&seen(Some("0.9.0"))), "0.9.1", false).map(|(title, _)| title),
-            Ok("What's new in 0.9.1".into())
+            Ok("Release highlights in 0.9.1".into())
         );
         // A log from before seen versions shows the running release alone.
         assert_eq!(
             rule(Some(&seen(None)), "0.9.1", false).map(|(title, _)| title),
-            Ok("What's new in 0.9.1".into())
+            Ok("Release highlights in 0.9.1".into())
+        );
+        // `updates.highlights: false` records without showing, and so does a
+        // range of ordinary entries only.
+        assert_eq!(
+            whats_new_on_start(
+                Some(&seen(Some("0.9.0"))),
+                "0.10.0",
+                false,
+                false,
+                &releases
+            ),
+            WhatsNewStart::Record
+        );
+        let mut ordinary = releases.clone();
+        for entry in ordinary.iter_mut().flat_map(|release| &mut release.entries) {
+            entry.level = crate::notes::Level::Patch;
+        }
+        assert_eq!(
+            whats_new_on_start(Some(&seen(Some("0.9.0"))), "0.10.0", false, true, &ordinary),
+            WhatsNewStart::Record
         );
         // A fresh home records silently; nothing to show records too.
         assert_eq!(rule(None, "0.10.0", false), Err(WhatsNewStart::Record));
@@ -359,18 +384,21 @@ mod tests {
         let releases = releases();
         let dir = tempfile::tempdir()?;
         // A fresh home records the version and shows nothing.
-        assert_eq!(claim_whats_new(dir.path(), "0.9.0", false, &releases), None);
+        assert_eq!(
+            claim_whats_new(dir.path(), "0.9.0", false, true, &releases),
+            None
+        );
         assert_eq!(
             NoticeLog::load(dir.path()).seen_version.as_deref(),
             Some("0.9.0")
         );
-        let shown = claim_whats_new(dir.path(), "0.10.0", false, &releases);
+        let shown = claim_whats_new(dir.path(), "0.10.0", false, true, &releases);
         assert_eq!(
             shown.map(|shown| shown.title()).as_deref(),
-            Some("What's new since 0.9.0")
+            Some("Release highlights since 0.9.0")
         );
         assert_eq!(
-            claim_whats_new(dir.path(), "0.10.0", false, &releases),
+            claim_whats_new(dir.path(), "0.10.0", false, true, &releases),
             None
         );
         // Another process installing, or showing it, holds the lock.
@@ -380,11 +408,23 @@ mod tests {
         let lock = crate::install::Lock::acquire(dir.path(), Duration::ZERO)
             .map_err(std::io::Error::other)?;
         assert_eq!(
-            claim_whats_new(dir.path(), "0.10.0", false, &releases),
+            claim_whats_new(dir.path(), "0.10.0", false, true, &releases),
             None
         );
         drop(lock);
-        assert!(claim_whats_new(dir.path(), "0.10.0", false, &releases).is_some());
+        assert!(claim_whats_new(dir.path(), "0.10.0", false, true, &releases).is_some());
+        // Turned off, the version is recorded and nothing shows.
+        let mut log = NoticeLog::load(dir.path());
+        log.seen_version = Some("0.9.0".into());
+        log.save(dir.path())?;
+        assert_eq!(
+            claim_whats_new(dir.path(), "0.10.0", false, false, &releases),
+            None
+        );
+        assert_eq!(
+            NoticeLog::load(dir.path()).seen_version.as_deref(),
+            Some("0.10.0")
+        );
         Ok(())
     }
 

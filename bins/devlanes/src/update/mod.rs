@@ -61,11 +61,10 @@ enum Installed {
     Nothing(u8),
 }
 
-/// `devlanes update` and its `--check`, `--notes` and `--finish` forms.
+/// `devlanes update` and its `--check` and `--finish` forms.
 pub async fn run(runtime: &Runtime, paths: &Paths, action: UpdateAction) -> Result<u8, RpcError> {
     match action {
         UpdateAction::Check => check(runtime, paths).await,
-        UpdateAction::Notes => Ok(notes(runtime)),
         UpdateAction::Install { yes } => match install(runtime, paths, yes, None).await? {
             Installed::Finished(code) | Installed::Nothing(code) => Ok(code),
         },
@@ -511,9 +510,9 @@ async fn run_plan(
 
 /// `devlanes update --finish`, run by the binary just installed: restarts
 /// the daemon into it in the block the old binary drew, and opens the TUI
-/// again when the update came from it, which shows what changed. Otherwise
-/// prints what changed since the daemon's version, from this binary's
-/// changelog, and records it as seen so the next TUI does not repeat it.
+/// again when the update came from it, which shows the release highlights.
+/// Otherwise prints a link to the release notes; the next TUI shows the
+/// highlights.
 async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
     let mut code = 0;
     let reopen = crate::relaunch::reopen();
@@ -526,14 +525,14 @@ async fn finish(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
                 runtime,
                 paths,
                 Kind::Update {
-                    from: from.clone(),
+                    from,
                     to: own().to_owned(),
                 },
             );
             take_over(&mut view);
             code = lifecycle::restart_in(runtime, paths, restart_context(runtime), view).await?;
-            if reopen.is_none() && runtime.mode == OutputMode::Human && !runtime.quiet {
-                print_whats_new(paths, &from).await;
+            if prints_release_link(reopen.is_some(), runtime.mode, runtime.quiet) {
+                print_release_link();
             }
         }
         Err(error) if error.is_not_running() => {
@@ -694,54 +693,29 @@ fn check_failed(error: &dyn std::fmt::Display, retry: &str) -> RpcError {
     )
 }
 
-/// Prints what changed from `from` to this binary, from its changelog, and
-/// records it as seen in the notice log, as the TUI does when it shows it.
-async fn print_whats_new(paths: &Paths, from: &str) {
-    let releases = crate::notes::embedded();
-    let shown = WhatsNew::since(&releases, from, own());
-    if !shown.is_empty() {
-        emit(&Rendered {
-            stdout: format!("\n{}", crate::notes::render(&shown)),
-            ..Rendered::default()
-        });
-    }
-    let home = paths.home.clone();
-    let _ = tokio::task::spawn_blocking(move || {
-        devlanes_update::claim_whats_new(&home, own(), crate::notes::local_build(), &releases)
-    })
-    .await;
+/// The line `devlanes update` ends with: a link to the release page of
+/// `version`.
+fn release_notes_line(version: &str) -> String {
+    format!(
+        "Release notes: {}\n",
+        devlanes_update::notes::release_url(version)
+    )
 }
 
-/// `devlanes update --notes`: the notes of the running version, or for a
-/// `next` build of the release it builds on.
-fn notes(runtime: &Runtime) -> u8 {
-    let shown = WhatsNew::latest(&crate::notes::embedded(), own());
-    let stdout = match runtime.mode {
-        OutputMode::Json => {
-            let releases: Vec<Value> = shown
-                .releases
-                .iter()
-                .map(|release| {
-                    json!({
-                        "version": release.version,
-                        "entries": release.entries.iter().map(|entry| json!({
-                            "level": entry.level.as_str(),
-                            "line": entry.line,
-                        })).collect::<Vec<_>>(),
-                    })
-                })
-                .collect();
-            format!("{}\n", json!({"running": own(), "releases": releases}))
-        }
-        _ if runtime.quiet => String::new(),
-        _ if shown.is_empty() => format!("devlanes {} carries no release notes\n", own()),
-        _ => crate::notes::render(&shown),
-    };
+/// Whether `update --finish` ends with the release link: only for a person
+/// at a terminal (human output, not `--quiet`), and not when the TUI asked
+/// for the update, since it reopens and shows the highlights itself.
+fn prints_release_link(from_tui: bool, mode: OutputMode, quiet: bool) -> bool {
+    !from_tui && mode == OutputMode::Human && !quiet
+}
+
+/// Prints the link to the release notes of this binary. It does not claim
+/// the release highlights, so the next TUI still shows them.
+fn print_release_link() {
     emit(&Rendered {
-        stdout,
+        stdout: release_notes_line(own()),
         ..Rendered::default()
     });
-    0
 }
 
 /// How many lanes run services, which a restart starts again.
@@ -1009,6 +983,38 @@ mod tests {
         assert_eq!(lines, ["Removed --acme.", "Fixed a crash.", "Added acme."]);
         assert_eq!(lanes_word(1), "1 lane");
         assert_eq!(lanes_word(3), "3 lanes");
+    }
+
+    /// Only human output without `--quiet` and outside the TUI's update
+    /// prints the link.
+    #[test]
+    fn the_release_link_is_for_people_at_a_terminal() {
+        assert!(prints_release_link(false, OutputMode::Human, false));
+        assert!(!prints_release_link(true, OutputMode::Human, false));
+        assert!(!prints_release_link(false, OutputMode::Human, true));
+        for mode in [OutputMode::Json, OutputMode::Agent, OutputMode::Plain] {
+            assert!(!prints_release_link(false, mode, false), "{mode:?}");
+        }
+    }
+
+    /// The line after an update links to the release page of the tag, and
+    /// for a `next` build to the rolling prerelease.
+    #[test]
+    fn the_release_link_points_at_the_tag() {
+        assert_eq!(
+            release_notes_line("0.9.1-next.4"),
+            format!(
+                "Release notes: {}/releases/tag/next\n",
+                devlanes_version::REPOSITORY
+            )
+        );
+        assert_eq!(
+            release_notes_line("1.2.3"),
+            format!(
+                "Release notes: {}/releases/tag/v1.2.3\n",
+                devlanes_version::REPOSITORY
+            )
+        );
     }
 
     /// The daemon's answer counts unless it could not tell: a daemon that
