@@ -47,9 +47,10 @@ pub(crate) const REMOVE: &str = "devlanes setup --remove";
 /// Bound on the `*.localhost` probe, as at daemon start.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Longest the start notice waits for the trust stores; past it the CA is not
-/// mentioned rather than delaying the shell prompt.
-const NOTICE_CA_TIMEOUT: Duration = Duration::from_millis(1500);
+/// Longest the start notice and the TUI's setup prompt wait for the trust
+/// stores; past it the CA is not mentioned rather than delaying the shell
+/// prompt.
+const CA_CHECK_TIMEOUT: Duration = Duration::from_millis(1500);
 
 /// `{path, installed, matches, ...}` for the file (or NRPT rule) that sends
 /// `tld` to the DNS server at `server`, as `doctor` and the plan read it.
@@ -683,20 +684,8 @@ pub(crate) async fn start_notice(
         .request(Method::DaemonStatus, json!({}), Context::default())
         .await
         .unwrap_or_default();
-    let mut missing = missing_of(&status);
-    let untrusted = tokio::time::timeout(NOTICE_CA_TIMEOUT, async {
-        let config = crate::user_config::lenient(paths).await;
-        // Without a CA the report is empty; the daemon creates one at start.
-        matches!(
-            trust_of(&ca::report(paths, &config).await),
-            Trust::Untrusted(_)
-        )
-    })
-    .await
-    .unwrap_or(false);
-    if untrusted {
-        missing.insert(0, StepKind::Ca.name().to_owned());
-    }
+    let mut missing = client_missing(paths).await;
+    missing.extend(missing_of(&status));
     if missing.is_empty() {
         return;
     }
@@ -721,6 +710,27 @@ pub(crate) async fn start_notice(
             stderr: line,
             ..Rendered::default()
         });
+    }
+}
+
+/// The setup steps only this user can check, by the names `daemon.status`
+/// gives them in `setup.missing`: `ca` when the configured stores do not
+/// trust the CA. Read-only and bounded by [`CA_CHECK_TIMEOUT`]. A CA that
+/// does not exist yet is not missing here: the daemon creates it at start.
+pub(crate) async fn client_missing(paths: &Paths) -> Vec<String> {
+    let untrusted = tokio::time::timeout(CA_CHECK_TIMEOUT, async {
+        let config = crate::user_config::lenient(paths).await;
+        matches!(
+            trust_of(&ca::report(paths, &config).await),
+            Trust::Untrusted(_)
+        )
+    })
+    .await
+    .unwrap_or(false);
+    if untrusted {
+        vec![StepKind::Ca.name().to_owned()]
+    } else {
+        Vec::new()
     }
 }
 

@@ -1,6 +1,6 @@
 //! Release and version notices. After a command in human mode, one stderr line
 //! per notice, each at most once a day; `doctor` always shows the facts. The
-//! daemon finds releases; nothing here downloads, installs or restarts anything.
+//! daemon finds releases; `devlanes update` installs them.
 
 use devlanes_cli::{OutputMode, Rendered, Runtime};
 use devlanes_client::{Client, Paths};
@@ -9,8 +9,9 @@ use devlanes_proto::{
     release::{ReleaseCheck, UpdateInfo},
 };
 use devlanes_update::{
-    InstallMethod, NoticeLog, now_ms, skew_key, skew_line, update_command, update_key, update_line,
-    version::{Bump, bump},
+    InstallMethod, NoticeLog, now_ms, ready_key, ready_line, skew_key, skew_line, update_command,
+    update_key, update_line,
+    version::{Bump, bump, is_newer},
 };
 use serde_json::{Value, json};
 
@@ -31,13 +32,23 @@ pub async fn after_command(client: &mut Client, runtime: &Runtime, paths: &Paths
     let daemon = (method != Method::DaemonStatus)
         .then(|| client.peer.version.clone())
         .filter(|daemon| daemon != OWN);
-    let release = client
+    let update = client
         .request(Method::DaemonStatus, json!({}), Context::default())
         .await
         .ok()
         .and_then(|status| status.get("update").cloned())
-        .and_then(|update| serde_json::from_value::<UpdateInfo>(update).ok())
-        .and_then(|update| Some((bump(OWN, &update.latest)?, update.latest)));
+        .and_then(|update| serde_json::from_value::<UpdateInfo>(update).ok());
+    let release = update.as_ref().and_then(|update| {
+        // A release the daemon installed or staged is announced as ready instead.
+        let ready = update
+            .installed
+            .as_deref()
+            .filter(|installed| update.state == "ready" && is_newer(installed, OWN));
+        Some(match ready {
+            Some(installed) => Release::Ready(installed.to_owned()),
+            None => Release::Available(update.latest.clone(), bump(OWN, &update.latest)?),
+        })
+    });
     if daemon.is_none() && release.is_none() {
         return;
     }
@@ -48,9 +59,7 @@ pub async fn after_command(client: &mut Client, runtime: &Runtime, paths: &Paths
             &mut log,
             now_ms(),
             daemon.as_deref(),
-            release
-                .as_ref()
-                .map(|(bump, latest)| (latest.as_str(), *bump)),
+            release.as_ref(),
             |latest| update_command(&InstallMethod::current(), latest),
         );
         if !lines.is_empty() {
@@ -67,13 +76,23 @@ pub async fn after_command(client: &mut Client, runtime: &Runtime, paths: &Paths
     });
 }
 
+/// A newer release the daemon reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Release {
+    /// This version, this far from this binary, can be installed.
+    Available(String, Bump),
+    /// This version was installed or staged; the next interactive `devlanes`
+    /// switches to it.
+    Ready(String),
+}
+
 /// The notice lines due at `now`, marked as shown in `log`: a daemon on another
-/// version, then a newer release `bump` away with `command` for it.
+/// version, then a newer release with `command` for it, or one that is ready.
 fn due_lines(
     log: &mut NoticeLog,
     now: u64,
     daemon: Option<&str>,
-    release: Option<(&str, Bump)>,
+    release: Option<&Release>,
     command: impl Fn(&str) -> String,
 ) -> String {
     let mut lines = String::new();
@@ -84,13 +103,17 @@ fn due_lines(
             log.mark_shown(&key, now);
         }
     }
-    if let Some((latest, bump)) = release {
-        let key = update_key(latest);
-        if log.due(&key, now) {
-            let line = update_line(latest, OWN, bump, &command(latest));
-            lines.push_str(&format!("{line}\n"));
-            log.mark_shown(&key, now);
-        }
+    let (key, line) = match release {
+        Some(Release::Available(latest, bump)) => (
+            update_key(latest),
+            update_line(latest, OWN, *bump, &command(latest)),
+        ),
+        Some(Release::Ready(installed)) => (ready_key(installed), ready_line(installed, OWN)),
+        None => return lines,
+    };
+    if log.due(&key, now) {
+        lines.push_str(&format!("{line}\n"));
+        log.mark_shown(&key, now);
     }
     lines
 }
@@ -193,44 +216,33 @@ mod tests {
     #[test]
     fn notices_show_once_a_day_per_version() {
         let mut log = NoticeLog::default();
-        let command = |v: &str| format!("brew upgrade devlanes-run/tap/devlanes # {v}");
-        let lines = due_lines(
-            &mut log,
-            1_000,
-            Some("0.0.1"),
-            Some(("99.0.0", Bump::Minor)),
-            command,
-        );
+        let command = |v: &str| format!("devlanes update # {v}");
+        let minor = Release::Available("99.0.0".into(), Bump::Minor);
+        let lines = due_lines(&mut log, 1_000, Some("0.0.1"), Some(&minor), command);
         assert_eq!(
             lines,
             format!(
                 "daemon runs 0.0.1, this CLI is {OWN}; run devlanes daemon restart when convenient (it stops services)\n\
-                 devlanes 99.0.0 is available (this is {OWN}): brew upgrade devlanes-run/tap/devlanes # 99.0.0 (breaking changes)\n"
+                 devlanes 99.0.0 is available (this is {OWN}): devlanes update # 99.0.0 (breaking changes)\n"
             )
         );
         assert_eq!(
-            due_lines(
-                &mut log,
-                2_000,
-                Some("0.0.1"),
-                Some(("99.0.0", Bump::Minor)),
-                command
-            ),
+            due_lines(&mut log, 2_000, Some("0.0.1"), Some(&minor), command),
             ""
         );
         // A newer release is news at once; the old one waits a day.
+        let patch = Release::Available("99.0.1".into(), Bump::Patch);
         assert_eq!(
-            due_lines(
-                &mut log,
-                3_000,
-                None,
-                Some(("99.0.1", Bump::Patch)),
-                command
-            ),
-            format!(
-                "devlanes 99.0.1 is available (this is {OWN}): brew upgrade devlanes-run/tap/devlanes # 99.0.1\n"
-            )
+            due_lines(&mut log, 3_000, None, Some(&patch), command),
+            format!("devlanes 99.0.1 is available (this is {OWN}): devlanes update # 99.0.1\n")
         );
+        // Once the daemon installed it, it is announced again as ready.
+        let ready = Release::Ready("99.0.1".into());
+        assert_eq!(
+            due_lines(&mut log, 4_000, None, Some(&ready), command),
+            format!("devlanes 99.0.1 is ready (this is {OWN}): run devlanes to switch to it\n")
+        );
+        assert_eq!(due_lines(&mut log, 5_000, None, Some(&ready), command), "");
         let day = 24 * 3600 * 1000;
         assert_eq!(
             due_lines(&mut log, 1_000 + day, Some("0.0.1"), None, command)

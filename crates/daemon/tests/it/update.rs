@@ -89,6 +89,7 @@ fn checks(base: &str, method: InstallMethod) -> UpdateCheckOptions {
             pypi: format!("{base}/pypi"),
             homebrew: format!("{base}/devlanes.rb"),
             changelog: format!("{base}/changelog/{{version}}"),
+            releases: format!("{base}/releases"),
         },
         method: Some(method),
         off: None,
@@ -291,17 +292,20 @@ async fn patch_and_older_releases() {
             ("/stable.json", json!({"version": "0.0.1"}).to_string()),
         ])
         .await;
+        // npm installs devlanes itself, so `auto` mode would run it; notify
+        // mode reads the same registry.
         let npm = engine(
             &dir.path().join("npm"),
             checks(&base, InstallMethod::Npm),
-            UpdateMode::Auto,
+            UpdateMode::Notify,
             None,
         )
         .await;
         let status = status_until(&npm, |s| s.get("update").is_some()).await;
         assert_eq!(status["update"]["latest"], patch.as_str(), "{status}");
         assert_eq!(status["update"]["bump"], "patch");
-        assert_eq!(status["release_check"]["mode"], "auto");
+        assert_eq!(status["update"]["state"], "available");
+        assert_eq!(status["release_check"]["mode"], "notify");
 
         let older = engine(
             &dir.path().join("older"),
@@ -577,6 +581,112 @@ async fn disabled_checks_make_no_request() {
             daemon_status(&source).await["release_check"]["reason"],
             "source"
         );
+    })
+    .await
+    .expect("timed out");
+}
+
+/// `file:///...` for a local directory.
+fn file_url(path: &Path) -> String {
+    let path = path.display().to_string().replace('\\', "/");
+    format!("file:///{}", path.trim_start_matches('/'))
+}
+
+/// Publishes `version` under `site/releases/download/v<version>/`: its
+/// release archive, whose `devlanes` reports `version`, and `SHA256SUMS`. On
+/// Windows that `devlanes.exe` is `fake-tool`, whose behaviour goes where
+/// staging unpacks it under `home`, since the archive holds only release files.
+fn publish(site: &Path, home: &Path, version: &str) {
+    use devlanes_update::install::{TARGET, sha256_file};
+    let top = format!("devlanes-{version}-{TARGET}");
+    let work = site.join("work");
+    let package = work.join(&top);
+    std::fs::create_dir_all(&package).expect("package");
+    std::fs::write(package.join("LICENSE"), "Apache-2.0").expect("license");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let script = package.join("devlanes");
+        std::fs::write(&script, format!("#!/bin/sh\necho 'devlanes {version}'\n")).expect("script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("mode");
+        std::fs::write(package.join("devlanes-hosts"), "helper").expect("helper");
+    }
+    #[cfg(windows)]
+    {
+        use devlanes_testing::fake_tool::{Behaviour, install, sidecar};
+        let behaviour = Behaviour::new().stdout(format!("devlanes {version}\n"));
+        let program = install(&work, "devlanes", &behaviour).expect("fake-tool");
+        std::fs::rename(&program, package.join("devlanes.exe")).expect("move");
+        let staged = home.join("update").join(version).join(&top);
+        std::fs::create_dir_all(&staged).expect("staged");
+        std::fs::rename(sidecar(&program), staged.join("devlanes.exe.json")).expect("behaviour");
+    }
+    #[cfg(unix)]
+    let _ = home;
+    let folder = site.join("releases/download").join(format!("v{version}"));
+    std::fs::create_dir_all(&folder).expect("folder");
+    #[cfg(unix)]
+    let (suffix, tar, flags) = (".tar.gz", PathBuf::from("tar"), &["-czf"][..]);
+    #[cfg(windows)]
+    let (suffix, tar, flags) = (
+        ".zip",
+        PathBuf::from(std::env::var_os("SystemRoot").expect("SystemRoot"))
+            .join(r"System32\tar.exe"),
+        &["-a", "-cf"][..],
+    );
+    let name = format!("{top}{suffix}");
+    let archive = folder.join(&name);
+    let status = std::process::Command::new(tar)
+        .args(flags)
+        .arg(&archive)
+        .arg("-C")
+        .arg(&work)
+        .arg(&top)
+        .status()
+        .expect("tar");
+    assert!(status.success(), "tar");
+    let sha = sha256_file(&archive).expect("sha");
+    std::fs::write(folder.join("SHA256SUMS"), format!("{sha}  {name}\n")).expect("sums");
+}
+
+/// `auto` mode stages a patch release of a script install in the background
+/// and reports it ready; a failed download is reported with its error and
+/// tried again at the next check. The installed binary stays as it is.
+#[tokio::test]
+async fn auto_mode_stages_a_patch_release_and_retries_a_failure() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (home, site, bin) = (
+            dir.path().join("home"),
+            dir.path().join("site"),
+            dir.path().join("bin"),
+        );
+        std::fs::create_dir_all(&bin).expect("bin");
+        let installed = bin.join(format!("devlanes{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&installed, "old").expect("installed");
+        let patch = next_patch();
+        let (base, _) =
+            release_server(&[("/stable.json", json!({"version": patch}).to_string())]).await;
+        let mut options = checks(&base, InstallMethod::Script(bin.clone()));
+        options.urls.releases = format!("{}/releases", file_url(&site));
+        // Only `update.check` reads the server.
+        options.first_delay = Duration::from_secs(3600);
+        let engine = engine(&home, options, UpdateMode::Auto, None).await;
+
+        let update = call(&engine, Method::UpdateCheck, json!({"force": true})).await;
+        assert_eq!(update["latest"], patch.as_str(), "{update}");
+        let status = status_until(&engine, |s| s["update"]["state"] == "failed").await;
+        let error = status["update"]["error"].as_str().unwrap_or_default();
+        assert!(error.contains("SHA256SUMS"), "{status}");
+
+        publish(&site, &home, &patch);
+        call(&engine, Method::UpdateCheck, json!({"force": true})).await;
+        let status = status_until(&engine, |s| s["update"]["state"] == "ready").await;
+        assert_eq!(status["update"]["installed"], patch.as_str(), "{status}");
+        let staged = devlanes_update::install::Staged::load(&home).expect("staged");
+        assert_eq!(staged.version, patch);
+        assert_eq!(staged.target, bin);
+        assert_eq!(std::fs::read(&installed).expect("installed"), b"old");
     })
     .await
     .expect("timed out");

@@ -160,15 +160,18 @@ fn install_panic_hook() {
     }));
 }
 
-/// Runs the TUI until the user quits. Closing never stops units: the loop only
-/// drops its connections, which detaches.
+/// Runs the TUI until the user quits, or it closes for an [`ExitReason`],
+/// returned with where to open again. Closing never stops units: the loop
+/// only drops its connections, which detaches.
+///
+/// [`ExitReason`]: crate::ExitReason
 pub async fn drive<B, E>(
     terminal: &mut Terminal<B>,
     api: Arc<dyn DaemonApi>,
     options: &Options,
     events: E,
     clipboard: Box<dyn Write + Send>,
-) -> Result<(), Error>
+) -> Result<Option<crate::Relaunch>, Error>
 where
     B: Backend,
     B::Error: Send + Sync + 'static,
@@ -176,7 +179,7 @@ where
 {
     run_loop(terminal, api, options, events, clipboard, None)
         .await
-        .map(drop)
+        .map(|app| app.relaunch())
 }
 
 /// [`drive`] for a start sent before the TUI opened (`devlanes start` on a
@@ -245,11 +248,18 @@ where
     }
     let (sender, mut receiver) = mpsc::channel(MESSAGE_QUEUE);
     let mut executor = Executor::new(api, sender, options, clipboard);
-    for effect in app.start() {
+    let mut effects = app.start();
+    if let Some(reopen) = &options.reopen {
+        app.reopen(reopen, &mut effects);
+    }
+    effects.extend([
+        Effect::LoadNotices,
+        Effect::CheckRelease,
+        Effect::CheckSetup,
+    ]);
+    for effect in effects {
         executor.execute(effect);
     }
-    executor.execute(Effect::LoadNotices);
-    executor.execute(Effect::CheckRelease);
     if !executor.flush(&mut app) {
         return Ok(app);
     }
@@ -549,12 +559,13 @@ impl Executor {
         });
     }
 
-    /// Runs one effect, returning false for [`Effect::Quit`].
+    /// Runs one effect, returning false for [`Effect::Quit`] and
+    /// [`Effect::Exit`].
     fn execute(&mut self, effect: Effect) -> bool {
         let api = Arc::clone(&self.api);
         let sender = self.sender.clone();
         match effect {
-            Effect::Quit => {
+            Effect::Quit | Effect::Exit(_) => {
                 self.detach();
                 return false;
             }
@@ -896,6 +907,11 @@ impl Executor {
             Effect::CheckRelease => {
                 tokio::spawn(async move {
                     deliver(&sender, Msg::ReleaseChecked(api.update_check(false).await)).await;
+                });
+            }
+            Effect::CheckSetup => {
+                tokio::spawn(async move {
+                    deliver(&sender, Msg::SetupMissing(api.setup_missing().await)).await;
                 });
             }
             Effect::DismissNotice(key) => {

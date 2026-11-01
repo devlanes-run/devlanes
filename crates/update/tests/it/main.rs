@@ -1,4 +1,7 @@
-//! Project-local installs, stable entry paths and the executable to spawn.
+//! Project-local installs, stable entry paths and the executable to spawn;
+//! installing a release in `install`.
+
+mod install;
 
 use std::path::{Path, PathBuf};
 
@@ -117,34 +120,21 @@ fn python_project_environments_are_local() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn local_installs_name_their_manifest() {
-    let method = local("/p/acme/package.json");
+    #[cfg(unix)]
+    let manifest = "/p/acme/package.json";
+    #[cfg(windows)]
+    let manifest = r"D:\acme\pyproject.toml";
+    let method = local(manifest);
     assert_eq!(method.label(), "a project dependency");
     assert_eq!(
         method.describe(None),
-        "a project dependency, in /p/acme/package.json"
+        format!("a project dependency, in {manifest}")
     );
     assert_eq!(
         method.upgrade_command("0.9.1"),
-        "update devlanes in /p/acme/package.json"
-    );
-}
-
-/// Windows can't replace the executable the daemon runs from.
-#[cfg(windows)]
-#[test]
-fn local_installs_name_their_manifest() {
-    let method = local(r"D:\acme\pyproject.toml");
-    assert_eq!(method.label(), "a project dependency");
-    assert_eq!(
-        method.describe(None),
-        r"a project dependency, in D:\acme\pyproject.toml"
-    );
-    assert_eq!(
-        method.upgrade_command("0.9.1"),
-        r"devlanes daemon stop (it stops services), then update devlanes in D:\acme\pyproject.toml"
+        format!("update devlanes in {manifest}")
     );
 }
 

@@ -256,10 +256,9 @@ impl InstallMethod {
         }
     }
 
-    /// The command that installs `version` the same way. On Windows, methods
-    /// that overwrite the executable the daemon runs from say to stop it first.
+    /// The command that installs `version` the same way, for a person to run.
     pub fn upgrade_command(&self, version: &str) -> String {
-        let command = match self {
+        match self {
             Self::Homebrew => "brew upgrade devlanes-run/tap/devlanes".into(),
             Self::Npm => "npm install -g devlanes@latest".into(),
             Self::Pnpm => "pnpm add -g devlanes@latest".into(),
@@ -279,11 +278,6 @@ impl InstallMethod {
             Self::Local { manifest } => format!("update devlanes in {}", manifest.display()),
             Self::Source => format!("git pull, then cargo build --release (v{version})"),
             Self::Script(dir) => os::script_upgrade(dir),
-        };
-        if os::needs_daemon_stop(self) {
-            format!("devlanes daemon stop (it stops services), then {command}")
-        } else {
-            command
         }
     }
 
@@ -322,8 +316,8 @@ pub fn spawn_exe() -> std::io::Result<PathBuf> {
     Ok(if entry.is_file() { entry } else { exe })
 }
 
-/// This process's executable, canonical when it still exists.
-fn running_exe() -> std::io::Result<PathBuf> {
+/// This process's executable, canonical when it still exists. Blocking.
+pub fn running_exe() -> std::io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     // Linux reads `/proc/self/exe`, which names a replaced file
     // `<path> (deleted)`; the path itself may hold the new binary.
@@ -497,12 +491,10 @@ fn uv_receipt_lists(receipt: &str, exe: &Path) -> bool {
 }
 
 /// macOS and Linux: `install.sh`, POSIX shell quoting, paths matched as they
-/// are, and installers that replace a running executable by renaming over it.
+/// are.
 #[cfg(unix)]
 mod os {
     use std::path::{Path, PathBuf};
-
-    use super::InstallMethod;
 
     /// `install.sh` of the latest stable release, served by the website.
     const INSTALL_SCRIPT: &str = "https://devlanes.run/install.sh";
@@ -586,11 +578,6 @@ mod os {
         )
     }
 
-    /// Every installer renames over a running executable.
-    pub(super) fn needs_daemon_stop(_method: &InstallMethod) -> bool {
-        false
-    }
-
     /// Quotes `text` for a POSIX shell when it needs it.
     fn shell_quote(text: &str) -> String {
         let plain = !text.is_empty()
@@ -606,12 +593,10 @@ mod os {
 }
 
 /// Windows: `install.ps1`, PowerShell quoting, paths compared with `/` for `\`
-/// and without case, and executables that cannot be replaced while they run.
+/// and without case.
 #[cfg(windows)]
 mod os {
     use std::path::{Path, PathBuf};
-
-    use super::InstallMethod;
 
     /// `install.ps1` of the latest stable release, served by the website like
     /// `install.sh`.
@@ -725,22 +710,6 @@ mod os {
     /// Quotes `text` as a PowerShell single-quoted string.
     fn powershell_quote(text: &str) -> String {
         format!("'{}'", text.replace('\'', "''"))
-    }
-
-    /// Windows refuses to overwrite or delete a running executable, and the
-    /// daemon runs from the installed one. `install.ps1` renames it out of the
-    /// way; npm, cargo, uv, pipx, pip and a rebuild do not, so they can fail
-    /// while it runs. `uvx` and `pipx run` fetch the new release into another
-    /// environment and leave the running one alone. Homebrew has no Windows
-    /// build, so its advice stays as on every other OS.
-    pub(super) fn needs_daemon_stop(method: &InstallMethod) -> bool {
-        !matches!(
-            method,
-            InstallMethod::Script(_)
-                | InstallMethod::Homebrew
-                | InstallMethod::Uvx
-                | InstallMethod::PipxRun
-        )
     }
 }
 
@@ -1294,42 +1263,42 @@ entrypoints = [
 
     #[cfg(windows)]
     #[test]
-    fn windows_upgrades_stop_the_daemon_when_they_replace_its_exe() {
+    fn windows_upgrade_commands() {
         assert_eq!(
             InstallMethod::Npm.upgrade_command("0.4.0"),
-            "devlanes daemon stop (it stops services), then npm install -g devlanes@latest"
+            "npm install -g devlanes@latest"
         );
         assert_eq!(
             InstallMethod::CargoBinstall.upgrade_command("0.4.0"),
-            "devlanes daemon stop (it stops services), then cargo binstall --git https://github.com/devlanes-run/devlanes devlanes"
+            "cargo binstall --git https://github.com/devlanes-run/devlanes devlanes"
         );
         assert_eq!(
             InstallMethod::CargoInstall.upgrade_command("0.4.0"),
-            "devlanes daemon stop (it stops services), then cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.4.0 devlanes"
+            "cargo install --locked --git https://github.com/devlanes-run/devlanes --tag v0.4.0 devlanes"
         );
         assert_eq!(
             InstallMethod::Uv.upgrade_command("0.4.0"),
-            "devlanes daemon stop (it stops services), then uv tool upgrade devlanes"
+            "uv tool upgrade devlanes"
         );
         assert_eq!(
             InstallMethod::Pipx.upgrade_command("0.4.0"),
-            "devlanes daemon stop (it stops services), then pipx upgrade devlanes"
+            "pipx upgrade devlanes"
         );
         assert_eq!(
             InstallMethod::Pip(PathBuf::from(r"D:\acme\.venv")).upgrade_command("0.4.0"),
-            r"devlanes daemon stop (it stops services), then D:\acme\.venv\Scripts\python.exe -m pip install --upgrade devlanes"
+            r"D:\acme\.venv\Scripts\python.exe -m pip install --upgrade devlanes"
         );
         assert_eq!(
             InstallMethod::Pip(PathBuf::from(r"C:\Users\o'neil\My Env")).upgrade_command("0.4.0"),
-            r"devlanes daemon stop (it stops services), then in PowerShell: & 'C:\Users\o''neil\My Env\Scripts\python.exe' -m pip install --upgrade devlanes"
+            r"in PowerShell: & 'C:\Users\o''neil\My Env\Scripts\python.exe' -m pip install --upgrade devlanes"
         );
         assert_eq!(
             InstallMethod::UvPip(PathBuf::from(r"D:\acme\.venv")).upgrade_command("0.4.0"),
-            r"devlanes daemon stop (it stops services), then uv pip install --upgrade --python D:\acme\.venv devlanes"
+            r"uv pip install --upgrade --python D:\acme\.venv devlanes"
         );
         assert_eq!(
             InstallMethod::UvPip(PathBuf::from(r"D:\My Env")).upgrade_command("0.4.0"),
-            r"devlanes daemon stop (it stops services), then in PowerShell: uv pip install --upgrade --python 'D:\My Env' devlanes"
+            r"in PowerShell: uv pip install --upgrade --python 'D:\My Env' devlanes"
         );
         // Cached runs fetch the release into a new environment.
         assert_eq!(

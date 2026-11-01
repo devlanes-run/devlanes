@@ -1,9 +1,11 @@
-//! Release checks. The daemon reads the latest version from the registry it
-//! was installed from (`devlanes_update::check`) 30 seconds after it starts,
-//! then every 4 hours and when a TUI opens (`update.check`), and caches the
-//! answer with the release notes in `$DEVLANES_HOME/update-check.json`.
-//! `daemon.status` and `status` report a newer release. Nothing is downloaded
-//! or installed, and nothing restarts.
+//! Release checks and background installs. The daemon reads the latest
+//! version from the registry it was installed from (`devlanes_update::check`)
+//! 30 seconds after it starts, then every 4 hours and when a TUI opens
+//! (`update.check`), and caches the answer with the release notes in
+//! `$DEVLANES_HOME/update-check.json`. `daemon.status` and `status` report a
+//! newer release. With `updates.mode: auto`, a patch release is installed in
+//! the background: script installs download and stage it for the next
+//! interactive `devlanes`, package managers install it. Nothing restarts.
 
 use std::{
     path::{Path, PathBuf},
@@ -19,8 +21,9 @@ use devlanes_proto::{
 use devlanes_update::{
     InstallMethod,
     check::{Channel, Source, Urls},
+    install::{self, InstallError, Lock, Plan, Release, Staged},
     notes,
-    version::{Version, bump, is_newer},
+    version::{Bump, Version, bump, is_newer},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -54,9 +57,10 @@ pub struct UpdateCheckOptions {
 
 impl UpdateCheckOptions {
     /// Production timing and registries; off in debug builds, under CI markers
-    /// and with `DEVLANES_NO_UPDATE_CHECK` set to a true value.
+    /// and with `DEVLANES_NO_UPDATE_CHECK` set to a true value. A debug build
+    /// with `DEVLANES_UPDATE_BASE_URL` set checks the releases there.
     pub fn from_env() -> Self {
-        let off = if cfg!(debug_assertions) {
+        let off = if cfg!(debug_assertions) && devlanes_update::check::base_override().is_none() {
             Some("debug_build")
         } else if ci_detected(|name| std::env::var(name).ok()) {
             Some("ci")
@@ -70,7 +74,7 @@ impl UpdateCheckOptions {
             None
         };
         Self {
-            urls: Urls::default(),
+            urls: Urls::from_env(),
             method: None,
             off,
             first_delay: Duration::from_secs(30),
@@ -125,17 +129,49 @@ pub(crate) struct Cached {
     pub notes: Vec<UpdateNote>,
 }
 
+/// What the background install is at.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum Installing {
+    /// Nothing ran, or it gave way to a `devlanes update`.
+    #[default]
+    Idle,
+    /// Installing this version now.
+    Downloading(String),
+    /// This version is installed, or staged for the next interactive start.
+    Ready(String),
+    /// Installing `version` failed with `error`; the next check tries again.
+    Failed { version: String, error: String },
+}
+
 /// The daemon's view of the latest release.
 #[derive(Debug, Default)]
 pub(crate) struct UpdateState {
+    /// How this daemon's executable was installed, and its path; read once.
+    method: tokio::sync::OnceCell<(InstallMethod, PathBuf)>,
     /// The source for this install, or why it has none; read once.
     source: tokio::sync::OnceCell<Result<Source, &'static str>>,
     cached: Mutex<Option<Cached>>,
     /// One check at a time: the background loop and `update.check` share it.
     checking: tokio::sync::Mutex<()>,
+    /// Told after every successful check, so the loop can install what it found.
+    checked: tokio::sync::Notify,
+    installing: Mutex<Installing>,
 }
 
 impl UpdateState {
+    /// The background install's state.
+    fn installing(&self) -> Installing {
+        self.installing
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Replaces the background install's state.
+    fn set_installing(&self, state: Installing) {
+        *self.installing.lock().unwrap_or_else(|e| e.into_inner()) = state;
+    }
+
     /// The cached result.
     fn get(&self) -> Option<Cached> {
         self.cached
@@ -182,30 +218,40 @@ impl Inner {
         }
     }
 
+    /// How this daemon was installed and the executable it runs, read from
+    /// the filesystem on first use.
+    async fn install_method(&self) -> &(InstallMethod, PathBuf) {
+        let configured = self.opts.update_check.method.clone();
+        self.update
+            .method
+            .get_or_init(|| async move {
+                tokio::task::spawn_blocking(move || {
+                    let exe = devlanes_update::running_exe()
+                        .unwrap_or_else(|_| PathBuf::from("devlanes"));
+                    (configured.unwrap_or_else(InstallMethod::current), exe)
+                })
+                .await
+                .unwrap_or((InstallMethod::Source, PathBuf::from("devlanes")))
+            })
+            .await
+    }
+
     /// Where this install reads the latest version, or why checks are off.
-    /// The install method is read from the filesystem on first use.
     async fn update_source(&self) -> Result<Source, &'static str> {
         if let Some(reason) = self.update_off() {
             return Err(reason);
         }
         let channel = self.update_channel();
-        let configured = self.opts.update_check.method.clone();
+        let (method, _) = self.install_method().await;
         *self
             .update
             .source
-            .get_or_init(|| async move {
-                let method = match configured {
-                    Some(method) => method,
-                    None => tokio::task::spawn_blocking(InstallMethod::current)
-                        .await
-                        .unwrap_or(InstallMethod::Source),
-                };
-                Source::for_method(&method, channel)
-            })
+            .get_or_init(|| async move { Source::for_method(method, channel) })
             .await
     }
 
-    /// The newer release to report, if any.
+    /// The newer release to report, if any, with the background install's
+    /// state for it.
     pub(crate) fn update_report(&self) -> Option<UpdateInfo> {
         if self.update_off().is_some() {
             return None;
@@ -220,11 +266,25 @@ impl Inner {
                 is_newer(&note.version, running) && !is_newer(&note.version, &cached.latest)
             })
             .collect();
+        let (state, installed, error) = match self.update.installing() {
+            Installing::Downloading(version) if version == cached.latest => {
+                ("downloading", None, None)
+            }
+            Installing::Ready(version) if is_newer(&version, running) => {
+                ("ready", Some(version), None)
+            }
+            Installing::Failed { version, error } if version == cached.latest => {
+                ("failed", None, Some(error))
+            }
+            _ => ("available", None, None),
+        };
         Some(UpdateInfo {
             latest: cached.latest,
             channel: cached.channel,
             bump: bump.as_str().into(),
-            state: "available".into(),
+            state: state.into(),
+            installed,
+            error,
             checked_at: cached.checked_at,
             notes,
         })
@@ -286,6 +346,8 @@ impl Inner {
             let recheck = self.opts.update_check.recheck_after;
             self.check_release(source, (!force).then_some(recheck))
                 .await;
+            // The loop installs what this found when the mode says so.
+            self.update.checked.notify_one();
         }
         Ok(self
             .update_report()
@@ -293,19 +355,25 @@ impl Inner {
             .unwrap_or(Value::Null))
     }
 
-    /// Loads the cache, then checks after the first delay and every interval
-    /// after the last check. Returns at once when checks are off.
+    /// Loads the cache and a release staged before a restart, then checks
+    /// after the first delay and every interval after the last check, and
+    /// installs what a check found when the mode says so. Returns at once
+    /// when checks are off.
     pub(crate) async fn update_check_loop(self: Arc<Self>) {
         let Ok(source) = self.update_source().await else {
             return;
         };
-        let path = self.opts.home.join(CACHE_FILE);
-        let cached = tokio::task::spawn_blocking(move || read_cache(&path, source))
-            .await
-            .ok()
-            .flatten();
+        let (path, home) = (self.opts.home.join(CACHE_FILE), self.opts.home.clone());
+        let (cached, staged) =
+            tokio::task::spawn_blocking(move || (read_cache(&path, source), Staged::load(&home)))
+                .await
+                .unwrap_or_default();
         if let Some(cached) = cached {
             self.update.load(cached);
+        }
+        if let Some(staged) = staged.filter(|s| is_newer(&s.version, devlanes_version::VERSION)) {
+            self.update
+                .set_installing(Installing::Ready(staged.version));
         }
         let options = self.opts.update_check.clone();
         let mut wait = options.first_delay;
@@ -316,13 +384,114 @@ impl Inner {
             tokio::select! {
                 () = self.shutdown.cancelled() => return,
                 () = tokio::time::sleep(wait) => {}
+                () = self.update.checked.notified() => {
+                    self.clone().install_in_background();
+                    wait = Duration::ZERO;
+                    continue;
+                }
             }
             if !self.until_due(options.interval).is_zero() {
                 wait = Duration::ZERO;
                 continue;
             }
             self.check_release(source, None).await;
+            self.clone().install_in_background();
             wait = options.interval;
+        }
+    }
+
+    /// Starts installing the latest release in the background when
+    /// [`installs_in_background`] says so and nothing installed it yet. A
+    /// failure stays in the state until the next check tries again.
+    fn install_in_background(self: Arc<Self>) {
+        let Some(cached) = self.update.get() else {
+            return;
+        };
+        let latest = cached.latest;
+        let Some(bump) = bump(devlanes_version::VERSION, &latest) else {
+            return;
+        };
+        let mode = self.opts.user.updates.mode;
+        let skip = match self.update.installing() {
+            Installing::Downloading(_) => true,
+            Installing::Ready(version) => !is_newer(&latest, &version),
+            Installing::Idle | Installing::Failed { .. } => false,
+        };
+        if skip || mode != UpdateMode::Auto || bump != Bump::Patch {
+            return;
+        }
+        let channel = source_channel(&cached.channel);
+        tokio::spawn(async move {
+            let (method, exe) = self.install_method().await.clone();
+            let version = latest.clone();
+            let plan = tokio::task::spawn_blocking(move || Plan::new(&method, &exe, &version))
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|plan| plan.map_err(|error| error.to_string()));
+            let Ok(plan) = plan else {
+                return;
+            };
+            if !installs_in_background(mode, bump, &plan) {
+                return;
+            }
+            self.update
+                .set_installing(Installing::Downloading(latest.clone()));
+            let state = match self.install_release(&plan, &latest, channel).await {
+                Ok(installed) => Installing::Ready(installed),
+                // A `devlanes update` holds the lock and installs it itself.
+                Err(InstallError::Busy) => Installing::Idle,
+                Err(error) => {
+                    tracing::info!(%error, version = %latest, "background update failed");
+                    Installing::Failed {
+                        version: latest,
+                        error: error.to_string(),
+                    }
+                }
+            };
+            self.update.set_installing(state);
+        });
+    }
+
+    /// Runs `plan` for `version` under the update lock: stages the release
+    /// archive, or runs the package manager with its output in
+    /// `logs/update.log`. Returns the version now installed or staged.
+    async fn install_release(
+        &self,
+        plan: &Plan,
+        version: &str,
+        channel: Channel,
+    ) -> Result<String, InstallError> {
+        let home = self.opts.home.clone();
+        let _lock = tokio::task::spawn_blocking(move || Lock::acquire(&home, Duration::ZERO))
+            .await
+            .map_err(|error| InstallError::Io {
+                what: "update lock".into(),
+                source: std::io::Error::other(error),
+            })??;
+        match plan {
+            Plan::Archive { dir } => {
+                let release = match channel {
+                    Channel::Next => Release::Next,
+                    Channel::Stable => Release::Version(version.to_owned()),
+                };
+                let options = &self.opts.update_check;
+                let staged = install::stage(
+                    &self.opts.home,
+                    &options.urls,
+                    &release,
+                    dir,
+                    options.timeout,
+                )
+                .await?;
+                Ok(staged.version)
+            }
+            Plan::PackageManager(commands) => {
+                install::run_package_manager(commands, &self.opts.logs.join("update.log")).await?;
+                Ok(version.to_owned())
+            }
+            Plan::Manual { command } => Err(InstallError::Manual {
+                command: command.clone(),
+            }),
         }
     }
 
@@ -400,6 +569,23 @@ impl Inner {
     }
 }
 
+/// Whether the daemon installs a release `bump` away in the background under
+/// `mode` with `plan`: only `auto` mode, only patch releases (a minor one may
+/// break what worked, so a person decides), and only what devlanes can
+/// install itself.
+fn installs_in_background(mode: UpdateMode, bump: Bump, plan: &Plan) -> bool {
+    mode == UpdateMode::Auto && bump == Bump::Patch && !matches!(plan, Plan::Manual { .. })
+}
+
+/// The channel a cache entry names.
+fn source_channel(channel: &str) -> Channel {
+    if channel == Channel::Next.as_str() {
+        Channel::Next
+    } else {
+        Channel::Stable
+    }
+}
+
 /// The entries of the releases after this daemon's version up to `latest`,
 /// newest release first.
 fn note_lines(releases: &[notes::Release], latest: &str) -> Vec<UpdateNote> {
@@ -435,6 +621,40 @@ fn write_cache(path: &Path, cached: &Cached) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Mode x bump x method: only `auto` installs, only patch releases, only
+    /// for methods devlanes installs itself.
+    #[test]
+    fn background_installs_decision_table() {
+        let archive = Plan::Archive {
+            dir: PathBuf::from("/opt/acme/bin"),
+        };
+        let npm = Plan::PackageManager(vec![install::Argv {
+            program: PathBuf::from("npm"),
+            args: vec!["install".into(), "-g".into(), "devlanes@0.9.1".into()],
+        }]);
+        let manual = Plan::Manual {
+            command: "cargo install devlanes".into(),
+        };
+        for (mode, bump, plan, expected) in [
+            (UpdateMode::Auto, Bump::Patch, &archive, true),
+            (UpdateMode::Auto, Bump::Patch, &npm, true),
+            (UpdateMode::Auto, Bump::Patch, &manual, false),
+            (UpdateMode::Auto, Bump::Minor, &archive, false),
+            (UpdateMode::Auto, Bump::Minor, &npm, false),
+            (UpdateMode::Notify, Bump::Patch, &archive, false),
+            (UpdateMode::Notify, Bump::Patch, &npm, false),
+            (UpdateMode::Disable, Bump::Patch, &archive, false),
+        ] {
+            assert_eq!(
+                installs_in_background(mode, bump, plan),
+                expected,
+                "{mode:?} {bump:?} {plan:?}"
+            );
+        }
+        assert_eq!(source_channel("next"), Channel::Next);
+        assert_eq!(source_channel("stable"), Channel::Stable);
+    }
 
     #[test]
     fn ci_markers() {

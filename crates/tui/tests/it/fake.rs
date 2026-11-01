@@ -49,6 +49,10 @@ pub struct FakeApi {
     pub prompts: Mutex<Vec<(String, String)>>,
     /// What `update.check` answers; unset, `null` (no newer release).
     pub update: Mutex<Option<Value>>,
+    /// What `daemon.status` reports in `setup.missing`; unset, nothing.
+    pub daemon_setup: Vec<String>,
+    /// The setup steps this side finds missing (the CA's trust); unset, none.
+    pub setup: Vec<String>,
     /// What `remote.pair` answers; unset, a code valid for ten minutes.
     pub pairing: Mutex<Option<Result<Value, RpcError>>>,
     /// Shared, so a `connect` session records its answers after the call.
@@ -197,7 +201,13 @@ impl DaemonApi for FakeApi {
         if let Some(update) = self.update.lock().ok().and_then(|update| update.clone()) {
             status["update"] = update;
         }
+        status["setup"] = json!({"missing": self.daemon_setup});
         Ok(status)
+    }
+
+    async fn setup_missing(&self) -> Vec<String> {
+        self.record("setup.missing".into());
+        self.setup.clone()
     }
 
     async fn update_check(&self, force: bool) -> Result<Value, ApiError> {

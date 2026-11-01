@@ -1156,6 +1156,35 @@ fn more_errors(code: &str, data: &Value) -> Option<(String, Option<Hint>)> {
             with_message("this machine's random number source failed".into()),
             None,
         ),
+        // `devlanes update` for an install it leaves to a person.
+        "update_manual" => (
+            format!(
+                "devlanes cannot update this install ({}) itself",
+                field(data, "method")
+            ),
+            Some(Hint(text(data, "command"))),
+        ),
+        // `{title, tail?, hint}`: a download, check or package manager failed.
+        "update_failed" => {
+            let mut message = text(data, "title");
+            for line in text(data, "tail").lines() {
+                message.push_str(&format!("\n  {}", super::clean(line)));
+            }
+            let hint = text(data, "hint");
+            (message, (!hint.is_empty()).then_some(Hint(hint)))
+        }
+        "update_busy" => (
+            "another devlanes update is running; retry once it is done".into(),
+            None,
+        ),
+        "update_older" => (
+            format!(
+                "devlanes {} is older than this devlanes ({}), so update does not install it",
+                field(data, "version"),
+                field(data, "running")
+            ),
+            None,
+        ),
         code @ ("client_not_found" | "client_ambiguous") => {
             let client = text(data, "client");
             let ids: Vec<String> = list(data, "candidates")

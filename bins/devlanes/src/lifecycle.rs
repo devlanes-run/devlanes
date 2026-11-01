@@ -1,10 +1,11 @@
 //! `daemon stop` and `daemon restart`: the steps [`devlanes_client::restart`]
 //! reports, drawn as the TUI's step block on a terminal and as one line per
 //! finished step on plain output. Agents and JSON get only the result.
+//! `devlanes update` draws its install and restart in the same block.
 
 use std::{
     collections::BTreeSet,
-    io::{IsTerminal, Stdout},
+    io::{IsTerminal, Stdout, Write},
     time::{Duration, Instant},
 };
 
@@ -26,6 +27,7 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{driver::rpc_error, output::emit};
@@ -45,26 +47,59 @@ enum Sink {
 
 /// How a stop or restart ended, for its title and logo.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Outcome {
+pub(crate) enum Outcome {
     Running,
     Done,
     Failed,
 }
 
-/// The steps of one stop or restart and how they are shown.
-struct View {
+/// What the block shows the steps of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Stop,
+    Restart,
+    /// `devlanes update` from `from` to `to`: the install, then the restart.
+    Update {
+        from: String,
+        to: String,
+    },
+}
+
+/// The rows a process drew, handed to the process it runs next (the new
+/// binary after `devlanes update`) through [`STEPS_ENV`], so that one
+/// redraws the same block instead of starting another below it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Handoff {
+    /// Lines the block took on the terminal, which the next process erases.
+    lines: u16,
+    rows: Vec<HandoffRow>,
+}
+
+/// A finished row of a [`Handoff`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HandoffRow {
+    key: String,
+    text: String,
+    detail: Option<String>,
+    elapsed_ms: u64,
+}
+
+/// The environment variable that carries a [`Handoff`].
+pub(crate) const STEPS_ENV: &str = "DEVLANES_UPDATE_STEPS";
+
+/// The steps of one stop, restart or update and how they are shown.
+pub(crate) struct View {
     sink: Sink,
     theme: Theme,
     steps: Steps,
-    /// A restart; otherwise a stop.
-    restart: bool,
+    kind: Kind,
     outcome: Outcome,
     spin: u64,
 }
 
 impl View {
-    /// The view `runtime` asks for, for a restart or a stop.
-    async fn new(runtime: &Runtime, paths: &Paths, restart: bool) -> Self {
+    /// The view `runtime` asks for, for a `kind` of block.
+    pub(crate) async fn new(runtime: &Runtime, paths: &Paths, kind: Kind) -> Self {
         let theme = crate::wiring::tui_options(paths).await.theme();
         let sink = if runtime.quiet || matches!(runtime.mode, OutputMode::Json | OutputMode::Agent)
         {
@@ -81,15 +116,92 @@ impl View {
             sink,
             theme,
             steps: Steps::default(),
-            restart,
+            kind,
             outcome: Outcome::Running,
             spin: 0,
         }
     }
 
     /// Whether the steps are drawn as the live block.
-    fn live(&self) -> bool {
+    pub(crate) fn live(&self) -> bool {
         matches!(self.sink, Sink::Live(_))
+    }
+
+    /// Sets the row `key` and shows it; see [`Steps::set`].
+    pub(crate) fn set(&mut self, key: &str, text: String, state: RowState, detail: Option<String>) {
+        self.steps.set(key, text, state, detail, Instant::now());
+        self.draw();
+    }
+
+    /// Runs `work` while the spinner of the running row turns.
+    pub(crate) async fn spin<T>(&mut self, work: impl Future<Output = T>) -> T {
+        let mut tick = tokio::time::interval(FRAME);
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                result = &mut work => return result,
+                _ = tick.tick(), if self.live() => self.draw(),
+            }
+        }
+    }
+
+    /// The block as drawn so far, for the process this one runs next; `None`
+    /// unless the block is live.
+    pub(crate) fn handoff(&self) -> Option<Handoff> {
+        if !self.live() {
+            return None;
+        }
+        let width = crossterm::terminal::size().map_or(80, |(width, _)| width);
+        let now = Instant::now();
+        let block = steps::render(
+            &self.theme,
+            width,
+            self.logo(),
+            self.title(),
+            &self.steps,
+            now,
+            self.spin,
+        );
+        Some(Handoff {
+            // The blank line above the block counts, as for `Live`.
+            lines: u16::try_from(block.matches('\n').count() + 1).unwrap_or(u16::MAX),
+            rows: self
+                .steps
+                .rows()
+                .iter()
+                .map(|row| HandoffRow {
+                    key: row.key.clone(),
+                    text: row.text.clone(),
+                    detail: row.detail.clone(),
+                    elapsed_ms: u64::try_from(row.elapsed.unwrap_or_default().as_millis())
+                        .unwrap_or(u64::MAX),
+                })
+                .collect(),
+        })
+    }
+
+    /// Takes over the block a previous process drew: erases it and keeps its
+    /// rows, so the next draw puts the whole block back in its place.
+    pub(crate) fn take_over(&mut self, handoff: Handoff) {
+        let now = Instant::now();
+        for row in handoff.rows {
+            let started = now
+                .checked_sub(Duration::from_millis(row.elapsed_ms))
+                .unwrap_or(now);
+            self.steps
+                .set(&row.key, row.text.clone(), RowState::Running, None, started);
+            self.steps
+                .set(&row.key, row.text, RowState::Done, row.detail, now);
+        }
+        if self.live() && handoff.lines > 0 {
+            let mut stdout = std::io::stdout();
+            let _ = crossterm::execute!(
+                stdout,
+                MoveToPreviousLine(handoff.lines),
+                Clear(ClearType::FromCursorDown)
+            );
+            let _ = stdout.flush();
+        }
     }
 
     /// Folds `progress` in and shows it.
@@ -127,7 +239,7 @@ impl View {
     }
 
     /// Draws the block a last time for `outcome` and leaves it on screen.
-    fn finish(&mut self, outcome: Outcome) {
+    pub(crate) fn finish(&mut self, outcome: Outcome) {
         self.outcome = outcome;
         let (logo, title) = (self.logo(), self.title());
         match &mut self.sink {
@@ -140,10 +252,11 @@ impl View {
     }
 
     /// Marks what was running as failed with `error`, and draws it.
-    fn fail(&mut self, error: &RpcError) {
+    pub(crate) fn fail(&mut self, error: &RpcError) {
         let message = error
             .data
             .get("message")
+            .or_else(|| error.data.get("title"))
             .and_then(Value::as_str)
             .unwrap_or(error.code.as_str())
             .to_owned();
@@ -153,36 +266,43 @@ impl View {
 
     /// Grey while it runs; afterwards as the daemon is: running or not.
     fn logo(&self) -> LogoState {
-        match (self.outcome, self.restart) {
+        match (self.outcome, &self.kind) {
             (Outcome::Running, _) => LogoState::Busy,
-            (Outcome::Done, true) => LogoState::Online,
-            (Outcome::Done, false) | (Outcome::Failed, _) => LogoState::Down,
+            (Outcome::Done, Kind::Restart | Kind::Update { .. }) => LogoState::Online,
+            (Outcome::Done, Kind::Stop) | (Outcome::Failed, _) => LogoState::Down,
         }
     }
 
     /// `devlanes is restarting · 0.6.1`, then `devlanes restarted` or
-    /// `devlanes did not restart`.
+    /// `devlanes did not restart`; an update says `is updating · 0.9.0 → 0.9.1`.
     fn title(&self) -> Line<'static> {
-        let (words, failed) = match (self.outcome, self.restart) {
-            (Outcome::Running, true) => ("is restarting", false),
-            (Outcome::Running, false) => ("is stopping", false),
-            (Outcome::Done, true) => ("restarted", false),
-            (Outcome::Done, false) => ("stopped", false),
-            (Outcome::Failed, true) => ("did not restart", true),
-            (Outcome::Failed, false) => ("did not stop", true),
+        let (words, failed) = match (self.outcome, &self.kind) {
+            (Outcome::Running, Kind::Restart) => ("is restarting", false),
+            (Outcome::Running, Kind::Stop) => ("is stopping", false),
+            (Outcome::Running, Kind::Update { .. }) => ("is updating", false),
+            (Outcome::Done, Kind::Restart) => ("restarted", false),
+            (Outcome::Done, Kind::Stop) => ("stopped", false),
+            (Outcome::Done, Kind::Update { .. }) => ("updated", false),
+            (Outcome::Failed, Kind::Restart) => ("did not restart", true),
+            (Outcome::Failed, Kind::Stop) => ("did not stop", true),
+            (Outcome::Failed, Kind::Update { .. }) => ("did not update", true),
         };
         let words = if failed {
             Span::styled(format!(" {words}"), self.theme.tone(Tone::Failure))
         } else {
             Span::raw(format!(" {words}"))
         };
+        let version = match &self.kind {
+            Kind::Update { from, to } if self.outcome == Outcome::Running => {
+                format!(" · {from} → {to}")
+            }
+            Kind::Update { to, .. } => format!(" · {to}"),
+            Kind::Stop | Kind::Restart => format!(" · {}", devlanes_version::VERSION),
+        };
         Line::from(vec![
             Span::styled("devlanes", Style::new().add_modifier(Modifier::BOLD)),
             words,
-            Span::styled(
-                format!(" · {}", devlanes_version::VERSION),
-                self.theme.quiet(),
-            ),
+            Span::styled(version, self.theme.quiet()),
         ])
     }
 
@@ -271,7 +391,7 @@ pub async fn stop(runtime: &Runtime, paths: &Paths, context: Context) -> Result<
     if !confirmed(runtime, &context, &question, processes)? {
         return Ok(devlanes_cli::exit::USAGE);
     }
-    let mut view = View::new(runtime, paths, false).await;
+    let mut view = View::new(runtime, paths, Kind::Stop).await;
     let (mut report, reports) = reporter();
     let result = view
         .drive(restart::stop(paths, &mut report), reports)
@@ -317,7 +437,19 @@ pub async fn restart(runtime: &Runtime, paths: &Paths, context: Context) -> Resu
         Err(error) if error.is_not_running() => {}
         Err(error) => return Err(rpc_error(error)),
     }
-    let mut view = View::new(runtime, paths, true).await;
+    let view = View::new(runtime, paths, Kind::Restart).await;
+    restart_in(runtime, paths, context, view).await
+}
+
+/// Restarts the daemon with its steps in `view` (confirm and check the user
+/// config first) and returns once the new daemon answers, naming the lanes
+/// that start again: the rest of `daemon restart`, and of `devlanes update`.
+pub(crate) async fn restart_in(
+    runtime: &Runtime,
+    paths: &Paths,
+    context: Context,
+    mut view: View,
+) -> Result<u8, RpcError> {
     let (mut report, reports) = reporter();
     let env = context.env.clone().unwrap_or_default();
     let work = restart::restart(paths, env, context.actor.clone(), &mut report);

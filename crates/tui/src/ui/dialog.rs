@@ -119,8 +119,8 @@ const KEYS: &[(&str, &[(&str, &str)])] = &[
             ("M  D  B", "monitor, daemon, boxes; again or esc returns"),
             ("esc", "one step back, then the menu: options, help, quit"),
             (
-                "u  q",
-                "hide the version notice; quit, asking first while lanes run",
+                "U  q",
+                "update as the header offers; quit, asking while lanes run",
             ),
         ],
     ),

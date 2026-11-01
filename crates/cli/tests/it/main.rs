@@ -496,6 +496,43 @@ fn setup_flags_pick_the_action() {
 }
 
 #[test]
+fn update_flags_pick_the_action() {
+    let install = |version: Option<&str>, yes| UpdateAction::Install {
+        version: version.map(str::to_owned),
+        yes,
+    };
+    for (args, expected) in [
+        (vec![], install(None, false)),
+        (vec!["--yes"], install(None, true)),
+        (vec!["--version", "0.9.1"], install(Some("0.9.1"), false)),
+        (
+            vec!["--version", "0.9.1", "--yes"],
+            install(Some("0.9.1"), true),
+        ),
+        (vec!["--check"], UpdateAction::Check),
+        (vec!["--finish"], UpdateAction::Finish),
+    ] {
+        let cli = Cli::parse_from(["devlanes", "update"].into_iter().chain(args.clone()));
+        match action(&cli, &runtime(&cli, OutputMode::Plain)) {
+            Action::Update(found) => assert_eq!(found, expected, "{args:?}"),
+            _ => panic!("expected an update action for {args:?}"),
+        }
+    }
+    for refused in [
+        &["update", "--check", "--version", "0.9.1"][..],
+        &["update", "--finish", "--version", "0.9.1"],
+        &["update", "--check", "--finish"],
+        &["update", "--version"],
+    ] {
+        assert!(
+            Cli::try_parse_from(std::iter::once("devlanes").chain(refused.iter().copied()))
+                .is_err(),
+            "{refused:?}"
+        );
+    }
+}
+
+#[test]
 fn output_precedence_and_attribution_are_deterministic() {
     let actor = Actor {
         kind: ActorKind::Agent,

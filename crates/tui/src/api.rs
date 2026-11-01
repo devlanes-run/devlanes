@@ -13,8 +13,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use devlanes_client::{Client, Frame, Paths};
 use devlanes_proto::{
-    Actor, ActorKind, AttachParams, AttachResult, AttachView, Context, Control, Event, LaneSummary,
-    LogLine, LogQuery, Method, Outcome, Page, ResizeParams, RpcError, RunParams, Selection, events,
+    Actor, ActorKind, AttachParams, AttachResult, AttachView, Context, Control, Event, Hello,
+    LaneSummary, LogLine, LogQuery, Method, Outcome, Page, ResizeParams, RpcError, RunParams,
+    Selection, events,
 };
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, mpsc};
@@ -41,29 +42,42 @@ pub enum ApiError {
     /// The daemon answered with data this client does not understand.
     #[error("unexpected daemon data: {0}")]
     Decode(String),
+    /// The daemon speaks another protocol than this TUI; `peer` is its hello.
+    #[error("the daemon runs devlanes {} with protocol {}", .peer.version, .peer.protocol)]
+    Incompatible { peer: Hello },
 }
 
 impl ApiError {
-    /// True when the connection itself is gone and a reconnect is needed.
+    /// True when the connection is gone or unusable and a reconnect is
+    /// needed; an incompatible daemon is one the TUI cannot talk to.
     pub fn is_disconnect(&self) -> bool {
-        matches!(self, Self::Disconnected(_))
+        matches!(self, Self::Disconnected(_) | Self::Incompatible { .. })
     }
 }
 
 impl From<devlanes_client::Error> for ApiError {
-    /// Keeps structured daemon errors and folds every transport failure into a
-    /// disconnect. A stalled start becomes the CLI's `daemon_start_stalled`,
-    /// so it names the step and points at the daemon log.
+    /// Keeps structured daemon errors and incompatible daemons, and folds
+    /// every other transport failure into a disconnect. A stalled start
+    /// becomes the CLI's `daemon_start_stalled`, so it names the step and
+    /// points at the daemon log.
     fn from(error: devlanes_client::Error) -> Self {
         match error {
             devlanes_client::Error::Rpc(rpc) => Self::Rpc(rpc),
             devlanes_client::Error::StartupStalled { step, log } => Self::Rpc(
                 devlanes_client::startup_stalled_error(step.as_deref(), &log),
             ),
+            devlanes_client::Error::Incompatible { peer } => Self::Incompatible { peer },
             other => Self::Disconnected(other.to_string()),
         }
     }
 }
+
+/// The setup steps this machine misses that only the client can see, by the
+/// names `daemon.status` gives them in `setup.missing` (`ca`): the trust
+/// stores belong to the user, not to the daemon. Read-only and bounded in
+/// time by whoever provides it.
+pub type SetupCheck =
+    Arc<dyn Fn() -> futures_util::future::BoxFuture<'static, Vec<String>> + Send + Sync>;
 
 /// What the monitor asks `metrics` for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -627,6 +641,11 @@ pub trait DaemonApi: Send + Sync {
             2,
         )))
     }
+    /// The setup steps missing on this machine that the daemon cannot see
+    /// (see [`SetupCheck`]); `daemon.status` reports the others.
+    async fn setup_missing(&self) -> Vec<String> {
+        Vec::new()
+    }
     /// The daemon's own log file, read directly because the TUI runs on the
     /// same machine. `None` when there is no local file.
     fn daemon_log(&self) -> Option<PathBuf> {
@@ -824,23 +843,31 @@ pub struct ClientApi {
     shared: Mutex<Option<Client>>,
     /// Whether the cwd's project was looked up, which registers it with the daemon.
     cwd_seen: AtomicBool,
+    setup_check: Option<SetupCheck>,
 }
 
 impl ClientApi {
     /// Connects once, spawning the daemon if needed, so startup errors surface
-    /// before the terminal switches to the alternate screen.
-    pub async fn connect(paths: Paths) -> Result<Arc<Self>, devlanes_client::Error> {
+    /// before the terminal switches to the alternate screen. `setup_check`
+    /// answers [`DaemonApi::setup_missing`].
+    pub async fn connect(
+        paths: Paths,
+        setup_check: Option<SetupCheck>,
+    ) -> Result<Arc<Self>, devlanes_client::Error> {
         let client = Client::connect_or_spawn(&paths).await?;
         Ok(Arc::new(Self {
             paths,
             cwd: std::env::current_dir().unwrap_or_default(),
             // Captured once: start/run from the TUI use this shell's env as the lane
             // base env. Names folded as the CLI folds them (`Path` is `PATH` on Windows).
+            // The reopen request was for this TUI alone, not for its lanes.
             env: std::env::vars()
+                .filter(|(name, _)| name != crate::REOPEN_ENV)
                 .map(|(name, value)| (devlanes_core::env::fold_name(name), value))
                 .collect(),
             shared: Mutex::new(Some(client)),
             cwd_seen: AtomicBool::new(false),
+            setup_check,
         }))
     }
 
@@ -1391,6 +1418,14 @@ impl DaemonApi for ClientApi {
             self.context(None, false),
         )
         .await
+    }
+
+    /// Runs the binary's [`SetupCheck`]; nothing without one.
+    async fn setup_missing(&self) -> Vec<String> {
+        match &self.setup_check {
+            Some(check) => check().await,
+            None => Vec::new(),
+        }
     }
 
     /// `$DEVLANES_HOME/logs/daemon.log`.

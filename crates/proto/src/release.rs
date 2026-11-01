@@ -1,7 +1,7 @@
 //! What the daemon's release check reports. The daemon reads the latest
-//! version from the registry devlanes was installed from; it never downloads or
-//! installs. Version ordering, sources and release notes live in
-//! `devlanes-update`.
+//! version from the registry devlanes was installed from and, with
+//! `updates.mode: auto`, installs patch releases in the background. Version
+//! ordering, sources, release notes and installing live in `devlanes-update`.
 
 use serde::{Deserialize, Serialize};
 
@@ -18,9 +18,19 @@ pub struct UpdateInfo {
     /// break what worked, before 1.0).
     #[serde(default)]
     pub bump: String,
-    /// `available`: found, not installed.
+    /// `available`: found, not installed; `downloading`: the daemon is
+    /// installing it in the background; `ready`: installed or downloaded
+    /// (`installed`), waiting for the next interactive `devlanes` to switch
+    /// to it; `failed`: the background install failed (`error`), and the
+    /// next check tries again.
     #[serde(default)]
     pub state: String,
+    /// The version the background install put in place, in state `ready`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed: Option<String>,
+    /// Why the background install failed, in state `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
     /// When the daemon last read the release, in milliseconds since the epoch.
     pub checked_at: u64,
     /// The changelog entries of the releases after the running version up to

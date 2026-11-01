@@ -449,6 +449,28 @@ fn select_api_search(f: &mut Fake) {
     f.key(KeyCode::Char('j'));
 }
 
+/// A minor release with notes in `daemon.status`, the welcome dismissed.
+fn update_available(f: &mut Fake) {
+    let mut status = data::daemon_status();
+    status["update"] = json!({
+        "latest": "1.1.0", "channel": "stable", "bump": "minor",
+        "state": "available", "checked_at": 1,
+        "notes": [
+            {"version": "1.1.0", "level": "patch", "line": "Fixed `devlanes logs` dropping the last line of a unit that exited."},
+            {"version": "1.1.0", "level": "minor", "line": "Changed `lanes.hosts_file` to default to `auto`."},
+            {"version": "1.0.3", "level": "patch", "line": "Added `devlanes url --copy`."},
+        ],
+    });
+    f.send(Msg::DaemonInfo {
+        status: Ok(status),
+        doctor: Ok(data::doctor()),
+    });
+    f.send(Msg::Notices {
+        method: InstallMethod::Homebrew,
+        dismissed: vec![devlanes_tui::welcome::KEY.into()],
+    });
+}
+
 /// Every state, in review order.
 fn scenes() -> Vec<Scene> {
     vec![
@@ -1260,13 +1282,43 @@ fn scenes() -> Vec<Scene> {
         },
         Scene {
             name: "update-badge",
-            what: "a newer release in the header",
+            what: "a newer release in the header once no start has it: U updates",
+            setup: |f| {
+                idle(f);
+                update_available(f);
+                f.unit("acme@0", "web-app");
+            },
+        },
+        Scene {
+            name: "dialog-update",
+            what: "U on a newer release: its changes, breaking first, and the lanes the restart starts again",
+            setup: |f| {
+                update_available(f);
+                f.unit("acme@0", "web-app");
+                f.shifted('U');
+            },
+        },
+        Scene {
+            name: "daemon-older-protocol",
+            what: "the daemon runs a release on an older protocol: U updates, R restarts it",
+            setup: |f| {
+                f.send(Msg::EventsEnded(Some(ApiError::Incompatible {
+                    peer: devlanes_proto::Hello {
+                        protocol: devlanes_proto::PROTOCOL_VERSION - 1,
+                        version: "0.8.4".into(),
+                        build_id: "release".into(),
+                        features: Vec::new(),
+                        managed_processes: 41,
+                    },
+                })));
+            },
+        },
+        Scene {
+            name: "dialog-setup",
+            what: "the setup prompt after the welcome: the CA is not trusted and a lane needs the hosts helper",
             setup: |f| {
                 let mut status = data::daemon_status();
-                status["update"] = json!({
-                    "latest": "1.1.0", "channel": "stable", "bump": "minor",
-                    "state": "available", "checked_at": 1, "notes": [],
-                });
+                status["setup"] = json!({"missing": ["hosts"]});
                 f.send(Msg::DaemonInfo {
                     status: Ok(status),
                     doctor: Ok(data::doctor()),
@@ -1275,7 +1327,7 @@ fn scenes() -> Vec<Scene> {
                     method: InstallMethod::Homebrew,
                     dismissed: vec![devlanes_tui::welcome::KEY.into()],
                 });
-                f.unit("acme@0", "web-app");
+                f.send(Msg::SetupMissing(vec!["ca".into()]));
             },
         },
         Scene {

@@ -1,6 +1,6 @@
 [package]
 name = "devlanes-update"
-description = "How devlanes was installed, its stable path, release versions and update notices"
+description = "How devlanes was installed, its stable path, release checks and installing updates"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -14,12 +14,22 @@ devlanes-core = { path = "../core" }
 dunce.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
-# Release checks run `curl` from the daemon's runtime.
+# Release checks and installs run `curl`, `tar` and package managers from the
+# caller's runtime.
 tokio.workspace = true
+
+# Which processes still run, for the executables they keep.
+[target.'cfg(windows)'.dependencies]
+devlanes-sys = { path = "../sys" }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# `fake-tool` stands in for a release's `devlanes.exe`, where `#!/bin/sh` fakes cannot run.
+[target.'cfg(windows)'.dev-dependencies]
+devlanes-testing = { path = "../testing" }
 
 [lints]
 workspace = true

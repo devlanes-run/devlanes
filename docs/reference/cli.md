@@ -665,6 +665,33 @@ Examples:
   devlanes setup --remove --keep-ca    remove the hosts helper and resolver, keep the CA
 ```
 
+### devlanes update
+
+Install the latest devlanes release the way devlanes was installed, then restart the daemon.
+
+Checks for a newer release, asks once (a minor release before 1.0 may break
+what worked, so it lists those changes and defaults to no), installs it, and
+restarts the daemon, which starts the lanes that ran again. install.sh,
+install.ps1 and standalone binaries download the release archive and check it
+against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx and Homebrew
+installs run their package manager. Other installs, such as cargo or a
+project's own dependency, print the command to run instead. Without a
+terminal, pass --yes.
+
+```text
+devlanes update [OPTIONS]
+```
+
+- `--check`: Only check: show the install method, the running and latest versions and what changed
+- `--version <VERSION>`: Install this release instead of the latest one
+
+```text
+Examples:
+  devlanes update                      install the latest release, asking first
+  devlanes update --check              show the latest release and what changed
+  devlanes update --version 0.9.1 --yes
+```
+
 ### devlanes remote
 
 Connect to boxes and mirror their lanes here

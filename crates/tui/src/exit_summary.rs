@@ -173,16 +173,26 @@ fn lines(
         } else {
             ""
         };
+        // Installed in the background, the next `devlanes` switches to it.
+        let (state, command) = if update.state == "ready" {
+            let version = update.installed.as_deref().unwrap_or(&update.latest);
+            (
+                format!("{version} ready"),
+                Some("run devlanes to switch to it".to_owned()),
+            )
+        } else {
+            (
+                format!("{} available{breaking}", update.latest),
+                method.map(|method| update_command(method, &update.latest)),
+            )
+        };
         let mut spans = vec![
             label("Update"),
-            Span::styled(
-                format!("{} available{breaking}", update.latest),
-                theme.tone(Tone::Attention),
-            ),
+            Span::styled(state, theme.tone(Tone::Attention)),
         ];
-        if let Some(method) = method {
+        if let Some(command) = command {
             spans.push(Span::styled(" · ", theme.quiet()));
-            spans.push(Span::styled(update_command(method, &update.latest), bold));
+            spans.push(Span::styled(command, bold));
         }
         out.push(Line::from(spans));
     }
@@ -249,6 +259,8 @@ mod tests {
             channel: "stable".into(),
             bump: bump.into(),
             state: "available".into(),
+            installed: None,
+            error: None,
             checked_at: 1,
             notes: Vec::new(),
         }
@@ -310,8 +322,30 @@ mod tests {
             [
                 "  Lane      acme@0  running",
                 "  Daemon    running, 1 lane running",
-                "  Update    99.0.1 available · brew upgrade devlanes-run/tap/devlanes",
+                "  Update    99.0.1 available · devlanes update",
                 "  Stop      devlanes stop --lane acme@0",
+            ]
+        );
+        // Installed in the background: the next `devlanes` switches to it.
+        let mut ready = release("99.0.1", "patch");
+        ready.state = "ready".into();
+        ready.installed = Some("99.0.1".into());
+        let daemon = Daemon::Running {
+            lanes: Vec::new(),
+            update: Some(ready),
+        };
+        let rows = text(
+            &theme(Tier::Plain, Glyphs::Ascii),
+            80,
+            None,
+            Some(&InstallMethod::Homebrew),
+            &daemon,
+        );
+        assert_eq!(
+            rows[3..],
+            [
+                "  Daemon    running, no lanes running",
+                "  Update    99.0.1 ready · run devlanes to switch to it",
             ]
         );
         // A minor release says it may break things; without the install

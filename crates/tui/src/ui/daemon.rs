@@ -346,17 +346,6 @@ pub(crate) fn check_blocks(app: &App, width: usize) -> (Vec<CheckBlock>, Vec<Spa
         return (Vec::new(), Vec::new());
     };
     let mut checks = doctor::checks(doctor);
-    // A newer release reads like a warning with its upgrade command as the fix.
-    if let Some((_, text)) = app.release_badge() {
-        let (text, command) = text.split_once(": ").unwrap_or((text.as_str(), ""));
-        checks.push(Check {
-            group: "update",
-            state: CheckState::Warn,
-            text: text.to_owned(),
-            detail: None,
-            fix: (!command.is_empty()).then(|| command.to_owned()),
-        });
-    }
     checks.sort_by_key(|check| match check.state {
         CheckState::Fail => 0,
         CheckState::Warn => 1,
@@ -366,11 +355,9 @@ pub(crate) fn check_blocks(app: &App, width: usize) -> (Vec<CheckBlock>, Vec<Spa
         .iter()
         .filter(|c| c.state == CheckState::Fail)
         .count();
-    // The header badge counts an update apart from issues; so does the title.
-    let update = checks.iter().any(|c| c.group == "update");
     let warns = checks
         .iter()
-        .filter(|c| c.state == CheckState::Warn && c.group != "update")
+        .filter(|c| c.state == CheckState::Warn)
         .count();
     let label = checks
         .iter()
@@ -414,13 +401,7 @@ pub(crate) fn check_blocks(app: &App, width: usize) -> (Vec<CheckBlock>, Vec<Spa
             }
             continue;
         }
-        // The key that hides the notice is for this page; `Y` copies the words without it.
-        let drawn = if check.group == "update" {
-            format!("{} · u hides it", check.text)
-        } else {
-            check.text.clone()
-        };
-        let mut lines = row(check, &drawn, true);
+        let mut lines = row(check, &check.text, true);
         let mut plain = vec![format!(
             "{} {}: {}",
             check.state.word(),
@@ -466,9 +447,6 @@ pub(crate) fn check_blocks(app: &App, width: usize) -> (Vec<CheckBlock>, Vec<Spa
             format!("{warns} warn"),
             theme.tone(Tone::Attention),
         ));
-    }
-    if update {
-        parts.push(Span::styled("update", theme.tone(Tone::Attention)));
     }
     if parts.is_empty() {
         parts.push(Span::styled("all ok", theme.tone(Tone::Ok)));

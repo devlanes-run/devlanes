@@ -50,12 +50,16 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
 fn title(app: &App) -> Line<'static> {
     let (title, hint) = match &app.daemon_state {
         DaemonState::Stopping { restart: true, .. }
-        | DaemonState::Starting { restart: true, .. } => ("devlanes is restarting", None),
-        DaemonState::Stopping { .. } => ("devlanes is stopping", None),
-        DaemonState::Starting { .. } => ("starting the daemon", None),
-        DaemonState::Stopped { .. } => ("the daemon is stopped", Some("s starts it")),
+        | DaemonState::Starting { restart: true, .. } => ("devlanes is restarting".into(), None),
+        DaemonState::Stopping { .. } => ("devlanes is stopping".into(), None),
+        DaemonState::Starting { .. } => ("starting the daemon".into(), None),
+        DaemonState::Stopped { .. } => ("the daemon is stopped".into(), Some("s starts it")),
+        DaemonState::Outdated { version } => (
+            format!("daemon {version} speaks an older protocol"),
+            Some("U update · R restart"),
+        ),
         DaemonState::Unreachable | DaemonState::Online => (
-            "the daemon is not answering",
+            "the daemon is not answering".to_owned(),
             Some("retrying on its own, s starts it"),
         ),
     };

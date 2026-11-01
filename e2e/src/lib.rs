@@ -437,8 +437,15 @@ impl Lab {
 
     /// A `devlanes` command with the lab's isolated environment and `DEVLANES_OUTPUT=json`.
     pub fn command(&self, cwd: &Path, args: &[&str]) -> Result<Command> {
+        let program = bin_dir()?.join(format!("devlanes{EXE_SUFFIX}"));
+        self.command_with(&program, cwd, args)
+    }
+
+    /// Like [`Lab::command`] for another `devlanes` executable, such as a copy
+    /// installed elsewhere.
+    pub fn command_with(&self, program: &Path, cwd: &Path, args: &[&str]) -> Result<Command> {
         let bins = bin_dir()?;
-        let mut command = Command::new(bins.join(format!("devlanes{EXE_SUFFIX}")));
+        let mut command = Command::new(program);
         command.env_clear();
         #[cfg(unix)]
         let passed = ["TMPDIR", "USER", "LOGNAME", "LANG"];

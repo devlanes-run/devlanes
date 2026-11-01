@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use devlanes_cli::Runtime;
 use devlanes_client::Paths;
 use devlanes_core::{
     ExitOutcome, LaunchSpec, OutputChunk, ProcessIdentity, StopPolicy, TerminalSize, Unit,
@@ -33,8 +34,9 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 /// The TUI's progress bar, colors, glyphs and quit choice from the user config,
-/// and the service definition the daemon page's doctor checks compare stop
-/// timeouts with.
+/// the service definition the daemon page's doctor checks compare stop
+/// timeouts with, where a relaunch opens, and the CA trust check of the setup
+/// prompt.
 pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
     use std::io::IsTerminal;
     // An invalid key leaves only that setting on its default, with a warning.
@@ -62,7 +64,17 @@ pub async fn tui_options(paths: &Paths) -> devlanes_tui::Options {
         env: None,
         time_zone: None,
         cwd: None,
+        reopen: crate::relaunch::reopen(),
+        setup_check: Some(setup_check(paths.clone())),
     }
+}
+
+/// The setup steps only this user can check, for the TUI's setup prompt.
+fn setup_check(paths: Paths) -> devlanes_tui::SetupCheck {
+    Arc::new(move || {
+        let paths = paths.clone();
+        Box::pin(async move { crate::setup::client_missing(&paths).await })
+    })
 }
 
 /// A TUI failure as a CLI error.
@@ -75,12 +87,18 @@ pub fn tui_error(error: devlanes_tui::Error) -> RpcError {
     }
 }
 
-/// Opens the TUI; closing it never stops anything.
-pub async fn ui(paths: &Paths) -> Result<u8, RpcError> {
-    devlanes_tui::run_with(paths.clone(), tui_options(paths).await)
+/// Opens the TUI, after applying an installed update; closing it never stops
+/// anything. A TUI that closed to update, reload or set up opens again once
+/// that is done.
+pub async fn ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
+    crate::update::startup(runtime, paths).await?;
+    let relaunch = devlanes_tui::run_with(paths.clone(), tui_options(paths).await)
         .await
-        .map(|()| 0)
-        .map_err(tui_error)
+        .map_err(tui_error)?;
+    match relaunch {
+        Some(relaunch) => crate::relaunch::after(runtime, paths, relaunch).await,
+        None => Ok(0),
+    }
 }
 
 /// How long a daemon a client spawned stays up after the last TUI closed with

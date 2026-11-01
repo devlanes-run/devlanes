@@ -2,7 +2,7 @@
 //! method and channel, reading it with `curl`, and the release notes of a
 //! version. The daemon schedules the checks and caches their answers.
 
-use std::{process::Stdio, time::Duration};
+use std::{path::Path, process::Stdio, time::Duration};
 
 use serde_json::Value;
 
@@ -120,6 +120,10 @@ pub struct Urls {
     pub homebrew: String,
     /// `CHANGELOG.md` at a release tag, with `{version}` where the version goes.
     pub changelog: String,
+    /// The GitHub releases page, under which `latest/download/`,
+    /// `download/next/` and `download/v<version>/` hold each release's
+    /// `SHA256SUMS` and archives.
+    pub releases: String,
 }
 
 impl Default for Urls {
@@ -133,11 +137,42 @@ impl Default for Urls {
             pypi: "https://pypi.org/pypi/devlanes/json".into(),
             homebrew: format!("{raw}/homebrew-tap/main/Formula/devlanes.rb"),
             changelog: format!("{raw}/devlanes/v{{version}}/bins/devlanes/CHANGELOG.md"),
+            releases: format!("{}/releases", devlanes_version::REPOSITORY),
         }
     }
 }
 
+/// Replaces every release address in debug builds, so tests can serve
+/// releases from a directory (`file://`) or a local server.
+pub const BASE_URL_ENV: &str = "DEVLANES_UPDATE_BASE_URL";
+
 impl Urls {
+    /// The real registries, or in a debug build with [`BASE_URL_ENV`] set,
+    /// everything under that address (see [`Urls::under`]).
+    pub fn from_env() -> Self {
+        match base_override() {
+            Some(base) => Self::under(&base),
+            None => Self::default(),
+        }
+    }
+
+    /// Every address under `base`, laid out as GitHub lays out releases:
+    /// `releases/latest/download/`, `releases/download/next/` and
+    /// `releases/download/v<version>/`; the registries and the changelog
+    /// under `npm/`, `pypi/`, `homebrew/` and `changelog/v<version>/`.
+    pub fn under(base: &str) -> Self {
+        let base = base.trim_end_matches('/');
+        Self {
+            github_stable: format!("{base}/releases/latest/download/release-manifest.json"),
+            github_next: format!("{base}/releases/download/next/release-manifest.json"),
+            npm: format!("{base}/npm/devlanes/latest"),
+            pypi: format!("{base}/pypi/devlanes/json"),
+            homebrew: format!("{base}/homebrew/devlanes.rb"),
+            changelog: format!("{base}/changelog/v{{version}}/CHANGELOG.md"),
+            releases: format!("{base}/releases"),
+        }
+    }
+
     /// Where `source` tells the latest version.
     pub fn latest(&self, source: Source) -> &str {
         match source {
@@ -153,6 +188,17 @@ impl Urls {
     pub fn changelog(&self, version: &str) -> String {
         self.changelog.replace("{version}", version)
     }
+}
+
+/// [`BASE_URL_ENV`] when set, in debug builds only: a release build always
+/// reads the real registries.
+pub fn base_override() -> Option<String> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    std::env::var(BASE_URL_ENV)
+        .ok()
+        .filter(|base| !base.is_empty())
 }
 
 /// Why a check found no version.
@@ -177,20 +223,54 @@ pub enum CheckError {
 
 /// Reads `url` with curl, which uses the system's trust store and proxy
 /// settings and follows GitHub's redirects to its asset host. Only HTTPS is
-/// allowed, redirects included, except for a plain HTTP URL a test serves.
+/// allowed, redirects included, except for the plain HTTP or `file://` URL a
+/// test serves.
 pub async fn fetch(url: &str, timeout: Duration, max_bytes: usize) -> Result<Vec<u8>, CheckError> {
+    let output = curl(url, timeout, max_bytes, None).await?;
+    // `--max-filesize` trusts the announced length; a chunked answer has none.
+    if output.len() > max_bytes {
+        return Err(CheckError::TooLarge);
+    }
+    Ok(output)
+}
+
+/// Saves `url` to the file `to` with curl, as [`fetch`] reads it.
+pub async fn download(
+    url: &str,
+    to: &Path,
+    timeout: Duration,
+    max_bytes: usize,
+) -> Result<(), CheckError> {
+    curl(url, timeout, max_bytes, Some(to)).await.map(drop)
+}
+
+/// Runs curl for [`fetch`] and [`download`]: stdout, or nothing when the
+/// answer goes to the file `to`.
+async fn curl(
+    url: &str,
+    timeout: Duration,
+    max_bytes: usize,
+    to: Option<&Path>,
+) -> Result<Vec<u8>, CheckError> {
     let protocols = if url.starts_with("https://") {
         "=https"
+    } else if url.starts_with("file://") {
+        "=file"
     } else {
         "=http,https"
     };
     let seconds = timeout.as_secs().max(1).to_string();
+    let mut command = tokio::process::Command::new("curl");
+    command
+        .args(["-fsSL", "--max-time", &seconds, "--proto", protocols])
+        .args(["--proto-redir", protocols, "--max-filesize"])
+        .arg(max_bytes.to_string());
+    if let Some(to) = to {
+        command.arg("-o").arg(to);
+    }
     let output = tokio::time::timeout(
         timeout + Duration::from_secs(1),
-        tokio::process::Command::new("curl")
-            .args(["-fsSL", "--max-time", &seconds, "--proto", protocols])
-            .args(["--proto-redir", protocols, "--max-filesize"])
-            .arg(max_bytes.to_string())
+        command
             .arg(url)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -205,10 +285,6 @@ pub async fn fetch(url: &str, timeout: Duration, max_bytes: usize) -> Result<Vec
         return Err(CheckError::Request(
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
-    }
-    // `--max-filesize` trusts the announced length; a chunked answer has none.
-    if output.stdout.len() > max_bytes {
-        return Err(CheckError::TooLarge);
     }
     Ok(output.stdout)
 }

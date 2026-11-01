@@ -243,6 +243,9 @@ without the daemon.",
     /// Trust the devlanes CA and set up hostnames for this machine; asks once
     #[command(long_about = SETUP_ABOUT, after_help = SETUP_AFTER)]
     Setup(SetupArgs),
+    /// Install the latest devlanes release the way devlanes was installed, then restart the daemon
+    #[command(long_about = UPDATE_ABOUT, after_help = UPDATE_AFTER)]
+    Update(UpdateArgs),
     /// Connect to boxes and mirror their lanes here
     Remote {
         #[command(subcommand)]
@@ -597,6 +600,50 @@ pub struct SetupArgs {
     pub keep_ca: bool,
 }
 
+const UPDATE_ABOUT: &str = "\
+Install the latest devlanes release the way devlanes was installed, then restart the daemon.
+
+Checks for a newer release, asks once (a minor release before 1.0 may break
+what worked, so it lists those changes and defaults to no), installs it, and
+restarts the daemon, which starts the lanes that ran again. install.sh,
+install.ps1 and standalone binaries download the release archive and check it
+against the release's SHA256SUMS; npm, pnpm, Bun, Yarn, uv, pipx and Homebrew
+installs run their package manager. Other installs, such as cargo or a
+project's own dependency, print the command to run instead. Without a
+terminal, pass --yes.";
+
+const UPDATE_AFTER: &str = "\
+Examples:
+  devlanes update                      install the latest release, asking first
+  devlanes update --check              show the latest release and what changed
+  devlanes update --version 0.9.1 --yes";
+
+#[derive(Debug, Args)]
+pub struct UpdateArgs {
+    /// Only check: show the install method, the running and latest versions and what changed
+    #[arg(long, conflicts_with_all = ["update_version", "finish"])]
+    pub check: bool,
+    /// Install this release instead of the latest one
+    // Own id: `version` is clap's `--version` flag, which the reference skips.
+    #[arg(long = "version", id = "update_version", value_name = "VERSION")]
+    pub version: Option<String>,
+    /// Restart the daemon into this binary after an update (run by devlanes update)
+    #[arg(long, hide = true, conflicts_with = "update_version")]
+    pub finish: bool,
+}
+
+/// What `devlanes update` was asked to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateAction {
+    /// Check now and show the release; installs nothing.
+    Check,
+    /// Install `version` (the latest when `None`); `yes` skips the question.
+    Install { version: Option<String>, yes: bool },
+    /// Run by the newly installed binary: restart the daemon into it and say
+    /// what changed.
+    Finish,
+}
+
 /// What `devlanes setup` was asked to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupAction {
@@ -845,6 +892,8 @@ pub enum Action {
     Ui,
     /// `devlanes setup`: runs in the terminal, never in the daemon.
     Setup(SetupAction),
+    /// `devlanes update`: installs in the terminal, then restarts the daemon.
+    Update(UpdateAction),
     DaemonStart,
     DaemonRestart(Context),
     DaemonLogs {
@@ -1216,6 +1265,18 @@ impl Cli {
                     SetupAction::Check
                 } else {
                     SetupAction::Apply { yes: self.yes }
+                }));
+            }
+            Some(Command::Update(args)) => {
+                return Ok(Action::Update(if args.check {
+                    UpdateAction::Check
+                } else if args.finish {
+                    UpdateAction::Finish
+                } else {
+                    UpdateAction::Install {
+                        version: args.version.clone(),
+                        yes: self.yes,
+                    }
                 }));
             }
             Some(Command::Daemon { command }) => match command {

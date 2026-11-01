@@ -684,11 +684,35 @@ the error list (e): the newest error in full, the header cuts it
 
 ## update-badge
 
-a newer release in the header
+a newer release in the header once no start has it: U updates
 
 - 200x60: [txt](update-badge-200x60.txt) · [png](update-badge-200x60.png) · [ansi](update-badge-200x60.ansi)
 - 120x40: [txt](update-badge-120x40.txt) · [png](update-badge-120x40.png) · [ansi](update-badge-120x40.ansi)
 - 80x24: [txt](update-badge-80x24.txt) · [png](update-badge-80x24.png) · [ansi](update-badge-80x24.ansi)
+
+## dialog-update
+
+U on a newer release: its changes, breaking first, and the lanes the restart starts again
+
+- 200x60: [txt](dialog-update-200x60.txt) · [png](dialog-update-200x60.png) · [ansi](dialog-update-200x60.ansi)
+- 120x40: [txt](dialog-update-120x40.txt) · [png](dialog-update-120x40.png) · [ansi](dialog-update-120x40.ansi)
+- 80x24: [txt](dialog-update-80x24.txt) · [png](dialog-update-80x24.png) · [ansi](dialog-update-80x24.ansi)
+
+## daemon-older-protocol
+
+the daemon runs a release on an older protocol: U updates, R restarts it
+
+- 200x60: [txt](daemon-older-protocol-200x60.txt) · [png](daemon-older-protocol-200x60.png) · [ansi](daemon-older-protocol-200x60.ansi)
+- 120x40: [txt](daemon-older-protocol-120x40.txt) · [png](daemon-older-protocol-120x40.png) · [ansi](daemon-older-protocol-120x40.ansi)
+- 80x24: [txt](daemon-older-protocol-80x24.txt) · [png](daemon-older-protocol-80x24.png) · [ansi](daemon-older-protocol-80x24.ansi)
+
+## dialog-setup
+
+the setup prompt after the welcome: the CA is not trusted and a lane needs the hosts helper
+
+- 200x60: [txt](dialog-setup-200x60.txt) · [png](dialog-setup-200x60.png) · [ansi](dialog-setup-200x60.ansi)
+- 120x40: [txt](dialog-setup-120x40.txt) · [png](dialog-setup-120x40.png) · [ansi](dialog-setup-120x40.ansi)
+- 80x24: [txt](dialog-setup-80x24.txt) · [png](dialog-setup-80x24.png) · [ansi](dialog-setup-80x24.ansi)
 
 ## menu
 

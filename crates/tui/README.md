@@ -5,23 +5,25 @@ The terminal UI opened by bare `devlanes`, `devlanes ui` and `devlanes start` on
 ## Usage
 
 ```rust
-use devlanes_tui::{Options, Paths};
+use devlanes_tui::{ExitReason, Options, Paths};
 
 #[tokio::main]
 async fn main() -> Result<(), devlanes_tui::Error> {
-    let options = Options {
-        // No tab progress bar; theme and glyphs detected from the terminal.
-        progress: None,
-        theme: None,
-        glyphs: None,
-    };
-    devlanes_tui::run_with(Paths::discover()?, options).await
+    // No tab progress bar; theme and glyphs detected from the terminal.
+    let options = Options::default();
+    if let Some((ExitReason::Setup, reopen)) =
+        devlanes_tui::run_with(Paths::discover()?, options).await?
+    {
+        // Run `devlanes setup`, then open the TUI again on `reopen.lane`.
+        println!("{reopen:?}");
+    }
+    Ok(())
 }
 ```
 
-`run_with` connects first, spawning the daemon if needed, and returns `Error::NotATerminal` without a TTY. `run(paths)` is the same with default options.
+`run_with` connects first, spawning the daemon if needed, and returns `Error::NotATerminal` without a TTY. `run(paths)` is the same with default options. It returns `None` when the user quit, or the `ExitReason` the TUI closed for (`Update`, `Reload` or `Setup`) with a `Reopen`, the lane and view to open again on; the binary acts on it and starts a new TUI with that `Reopen` as JSON in `DEVLANES_TUI_REOPEN`, which it passes back as `Options::reopen`.
 
-`run_start` opens the TUI on a start that is already running, for `devlanes start` on a terminal. The binary sends the start request with `events: true`, reads its answer with `start::follow_start`, and waits with `start::await_start` until the daemon accepted it (a refusal comes back as an error for the CLI to print). The TUI then shows the started lane, the running phase in the top bar and, when the result arrives, the result line. `run_start` returns `StartExit::Ready`, `Failed` or `Pending` (quit before the result; the daemon keeps starting).
+`run_start` opens the TUI on a start that is already running, for `devlanes start` on a terminal. The binary sends the start request with `events: true`, reads its answer with `start::follow_start`, and waits with `start::await_start` until the daemon accepted it (a refusal comes back as an error for the CLI to print). The TUI then shows the started lane, the running phase in the top bar and, when the result arrives, the result line. `run_start` returns `StartExit::Ready`, `Failed` or `Pending` (quit before the result; the daemon keeps starting), with what `run_with` returns.
 
 `?` in the TUI lists every key, the current screen's first, with a legend of the state glyphs.
 
@@ -51,7 +53,9 @@ terminal:
 
 Quitting closes connections; units, tasks and containers keep running in the daemon. While lanes of the project on screen run, `q` asks whether to keep them or stop them first, unless `tui.on_quit` (`ask`, `keep` or `stop`) says; the dialog's "remember" box writes that setting.
 
-Once the TUI closed, `run_with` and `run_start` print the devlanes banner, the lane shown last with its state, whether the daemon still runs and how many lanes it runs, and `devlanes stop --lane <lane>` while that lane runs (`exit_summary`). The daemon gets one second to answer `status` for it.
+The header names a release newer than this TUI (`0.9.1 available · U update`, `downloading…`, `ready · U restart`, `update failed · U retry`) and a daemon on another version. `U` asks with the release's changelog lines and the running lanes the restart starts again, then closes for `ExitReason::Update`. A daemon newer than the TUI closes it for `ExitReason::Reload` on `U`, or at once when it speaks a newer protocol; one on an older protocol shows what fixes it instead of the lanes. Once per session, when the daemon's `setup.missing` or `Options::setup_check` (the CA's trust, which only this user can read) names a step, the TUI offers `devlanes setup` and closes for `ExitReason::Setup`.
+
+Once the TUI quit, `run_with` and `run_start` print the devlanes banner, the lane shown last with its state, whether the daemon still runs and how many lanes it runs, and `devlanes stop --lane <lane>` while that lane runs (`exit_summary`). The daemon gets one second to answer `status` for it.
 
 Moving through the list watches a unit without resizing its PTY. Enter, a double click or a click in the pane types into it: the stream becomes the PTY's owner where it is (`attach.role`) and the pane takes over its size, as zoom does. Esc or Ctrl+] ends typing; inside full-screen programs only Ctrl+], which crossterm may report as Ctrl+5. Units on pipes (`pty: false` from the daemon) are never resized.
 

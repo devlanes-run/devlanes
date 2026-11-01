@@ -104,7 +104,7 @@ pub async fn run(
         Some(path) => absolute(&context.cwd, &path),
         None => std::env::temp_dir().join(format!(
             "devlanes-debug-{}.tar.gz",
-            crate::daemon::utc_stamp(
+            devlanes_core::clock::utc_stamp(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|elapsed| elapsed.as_secs())

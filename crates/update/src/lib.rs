@@ -1,17 +1,28 @@
-//! Updating devlanes: how this binary was installed, the command that upgrades
-//! it, the stable path that runs the install after an upgrade, release
-//! versions, release checks and notes, and the notices clients show. The
-//! daemon finds new releases; clients print what it reports.
+//! Updating devlanes: how this binary was installed, the stable path that
+//! runs the install after an upgrade, release versions, release checks and
+//! notes, installing a release the way devlanes was installed, and the
+//! notices clients show. The daemon finds new releases and may download them;
+//! `devlanes update` installs them.
 
 pub mod check;
+pub mod install;
 mod method;
 pub mod notes;
 mod notice;
 #[cfg(windows)]
 mod old_copies;
+#[cfg(windows)]
+mod retain;
 pub mod version;
 
-pub use method::{InstallFacts, InstallMethod, Venv, binstall_lists_devlanes, spawn_exe};
-pub use notice::{NoticeLog, now_ms, skew_key, skew_line, update_command, update_key, update_line};
+pub use method::{
+    InstallFacts, InstallMethod, Venv, binstall_lists_devlanes, running_exe, spawn_exe,
+};
+pub use notice::{
+    NoticeLog, now_ms, ready_key, ready_line, skew_key, skew_line, update_command, update_key,
+    update_line,
+};
 #[cfg(windows)]
 pub use old_copies::{OldCopies, remove_old_copies};
+#[cfg(windows)]
+pub use retain::{Retained, retain_own_exe};

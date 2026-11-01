@@ -70,6 +70,16 @@ pub fn api(error: &ApiError) -> Worded {
             command: None,
             hint: Some("devlanes doctor".into()),
         },
+        ApiError::Incompatible { peer } => Worded {
+            code: None,
+            summary: format!(
+                "the daemon runs devlanes {} with another protocol than this TUI",
+                text::clean(&peer.version)
+            ),
+            detail: Vec::new(),
+            command: None,
+            hint: Some("devlanes update".into()),
+        },
     }
 }
 

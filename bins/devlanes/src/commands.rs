@@ -151,7 +151,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             if code != 0 {
                 return Ok(code);
             }
-            ui().await
+            ui(runtime).await
         }
         Action::RpcThenOfferStart(request) => {
             let data = match call(request.clone()).await {
@@ -187,14 +187,13 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             let action = cli.action(runtime).map_err(|error| usage(&error))?;
             Box::pin(run(&cli, runtime, action)).await
         }
-        Action::Ui => ui().await,
+        Action::Ui => ui(runtime).await,
         Action::StartUi { request, forced } => {
             let paths = paths()?;
             if !forced && !crate::start_ui::open_on_start(&paths) {
                 return rpc(cli, runtime, request).await;
             }
-            let client = connect(&paths).await?;
-            crate::start_ui::run(runtime, &paths, client, request.clone(), |error| {
+            crate::start_ui::run(runtime, &paths, request.clone(), |error| {
                 hint_for(error, &request)
             })
             .await
@@ -322,6 +321,7 @@ async fn run(cli: &Cli, runtime: &Runtime, action: Action) -> Result<u8, RpcErro
             context,
         } => crate::bundle::run(runtime, to, log_lines, args, context).await,
         Action::Setup(action) => crate::setup::run(runtime, action).await,
+        Action::Update(action) => crate::update::run(runtime, &paths()?, action).await,
         Action::DaemonInstall => crate::daemon::install(runtime).await,
         Action::DaemonUninstall => crate::daemon::uninstall(runtime).await,
         Action::DaemonRun => Err(RpcError::new(
@@ -781,7 +781,7 @@ async fn reset_state_offline(runtime: &Runtime, paths: &Paths, yes: bool) -> Res
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or_default();
-    let stamp = crate::daemon::utc_stamp(seconds);
+    let stamp = devlanes_core::clock::utc_stamp(seconds);
     let home = paths.home.clone();
     let data_root = crate::user_config::load(paths)
         .await?
@@ -1195,8 +1195,8 @@ async fn daemon_logs(follow: bool, tail: usize) -> Result<u8, RpcError> {
 }
 
 /// Opens the TUI; it is just another client of the same daemon.
-async fn ui() -> Result<u8, RpcError> {
-    crate::daemon::ui(&paths()?).await
+async fn ui(runtime: &Runtime) -> Result<u8, RpcError> {
+    crate::wiring::ui(runtime, &paths()?).await
 }
 
 #[cfg(test)]

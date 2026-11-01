@@ -29,6 +29,7 @@ mod progress;
 mod queued;
 mod release;
 mod screens;
+mod setup;
 mod start;
 mod terminal;
 mod unavailable;
@@ -421,7 +422,7 @@ async fn help_lists_every_key_with_this_screen_first() -> TestResult {
         "reverse the sort",
         "clean the lanes whose worktree is gone",
         "revoke the selected client",
-        "hide the version notice; quit",
+        "update as the header offers; quit",
     ] {
         assert!(text.contains(expected), "{expected}: {text}");
     }

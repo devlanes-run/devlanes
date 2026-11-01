@@ -20,10 +20,12 @@ mod local_doctor;
 mod notices;
 mod output;
 mod progress;
+mod relaunch;
 mod remote;
 mod setup;
 mod start_ui;
 mod terminal;
+mod update;
 mod user_config;
 mod verbose;
 mod wiring;
@@ -144,6 +146,16 @@ fn main() -> ExitCode {
         version = env!("CARGO_PKG_VERSION"),
         "output mode"
     );
+    // Processes that may run while a package manager replaces devlanes.exe
+    // keep a second link to it, without which Windows refuses the replace.
+    #[cfg(windows)]
+    let _retained = matches!(
+        action,
+        Action::Ui | Action::StartUi { .. } | Action::RpcThenUi(_) | Action::Update(_)
+    )
+    .then(devlanes_client::Paths::discover)
+    .and_then(Result::ok)
+    .and_then(|paths| devlanes_update::retain_own_exe(&paths.home));
     let tokio = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

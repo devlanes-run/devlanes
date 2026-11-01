@@ -78,6 +78,67 @@ pub enum View {
     Boxes,
 }
 
+impl View {
+    /// The name a relaunch carries in [`crate::Reopen::view`].
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Project => "project",
+            Self::Monitor => "monitor",
+            Self::Daemon => "daemon",
+            Self::Boxes => "boxes",
+        }
+    }
+
+    /// The view [`View::name`] names; `None` for any other word.
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::Project, Self::Monitor, Self::Daemon, Self::Boxes]
+            .into_iter()
+            .find(|view| view.name() == name)
+    }
+}
+
+/// What the header offers about versions, and what `U` does about it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseNotice {
+    /// A newer release than this TUI, as the daemon's `update` reports it:
+    /// `state` is `available`, `downloading`, `ready` or `failed`, and
+    /// `breaking` a minor bump. `U` asks, then closes to update.
+    Update {
+        latest: String,
+        state: String,
+        breaking: bool,
+    },
+    /// The daemon runs an older devlanes than this TUI, which is installed
+    /// and ready: `U` asks, then closes to restart the daemon into it.
+    Ready { version: String },
+    /// The daemon runs a newer devlanes than this TUI: `U` closes and runs
+    /// the TUI installed now.
+    Reload { daemon: String },
+}
+
+impl ReleaseNotice {
+    /// The header's words: `0.9.1 available · U update`.
+    pub fn text(&self, own: &str) -> String {
+        match self {
+            Self::Update { latest, state, .. } if state == "downloading" => {
+                format!("{latest} downloading…")
+            }
+            Self::Update { latest, state, .. } if state == "ready" => {
+                format!("{latest} ready · U restart")
+            }
+            Self::Update { state, .. } if state == "failed" => "update failed · U retry".into(),
+            Self::Update {
+                latest,
+                breaking: true,
+                ..
+            } => format!("{latest} available, breaking · U update"),
+            Self::Update { latest, .. } => format!("{latest} available · U update"),
+            Self::Ready { version } => format!("{version} ready · U restart"),
+            Self::Reload { daemon } => format!("daemon {daemon}, TUI {own} · U reload"),
+        }
+    }
+}
+
 /// What a click on a top-bar, lane-bar or footer item does. Rendering records
 /// these with the rectangles it drew, so hit tests match the screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -317,6 +378,9 @@ pub enum DaemonState {
     Stopped { steps: Steps },
     /// Gone without a word for at least one tick; the TUI keeps retrying.
     Unreachable,
+    /// It runs devlanes `version`, which speaks an older protocol than this
+    /// TUI: `U` updates it, `R` restarts it from the installed binary.
+    Outdated { version: String },
 }
 
 impl DaemonState {
@@ -326,17 +390,18 @@ impl DaemonState {
         match self {
             Self::Online => LogoState::Online,
             Self::Stopping { .. } | Self::Starting { .. } => LogoState::Busy,
-            Self::Stopped { .. } | Self::Unreachable => LogoState::Down,
+            Self::Stopped { .. } | Self::Unreachable | Self::Outdated { .. } => LogoState::Down,
         }
     }
 
-    /// The steps the unavailable screen lists; none while online or unreachable.
+    /// The steps the unavailable screen lists; none while online, unreachable
+    /// or outdated.
     pub fn steps(&self) -> Option<&Steps> {
         match self {
             Self::Stopping { steps, .. }
             | Self::Starting { steps, .. }
             | Self::Stopped { steps } => Some(steps),
-            Self::Online | Self::Unreachable => None,
+            Self::Online | Self::Unreachable | Self::Outdated { .. } => None,
         }
     }
 
@@ -352,6 +417,7 @@ impl DaemonState {
             Self::Starting { .. } => "starting",
             Self::Stopped { .. } => "stopped",
             Self::Unreachable => "not answering",
+            Self::Outdated { .. } => "outdated",
         })
     }
 }
@@ -367,6 +433,8 @@ enum Cause {
     Progress(restart::Progress),
     /// The subscription or a request found the daemon gone.
     Lost,
+    /// A daemon on an older protocol answered, running this version.
+    Outdated(String),
     /// A second passed.
     Tick,
     /// The subscription is open again.
@@ -756,6 +824,9 @@ pub enum Msg {
     },
     /// What `update.check` answered: the newer release, or `null`.
     ReleaseChecked(Result<Value, ApiError>),
+    /// The setup steps missing that only this side can see
+    /// ([`crate::api::DaemonApi::setup_missing`]).
+    SetupMissing(Vec<String>),
     Profiles {
         lane: String,
         result: Result<crate::api::ProfileList, ApiError>,
@@ -953,7 +1024,10 @@ pub enum Effect {
     LoadNotices,
     /// Has the daemon look for a newer release, unless it did within the hour.
     CheckRelease,
-    /// Remembers that the release notice `key` was dismissed.
+    /// Asks which setup steps only this side can see are missing, answered
+    /// with [`Msg::SetupMissing`].
+    CheckSetup,
+    /// Remembers that the notice `key` was dismissed.
     DismissNotice(String),
     ReadDaemonLog {
         from: crate::logfile::LogPosition,
@@ -969,6 +1043,8 @@ pub enum Effect {
     /// Reads or edits config.yaml for the options page.
     Settings(crate::settings::Request),
     Quit,
+    /// Closes the TUI for the binary to act on `reason` ([`App::exit`]).
+    Exit(crate::ExitReason),
 }
 
 /// Screen regions shared by rendering, mouse hit-testing and PTY sizing: the
@@ -1238,8 +1314,18 @@ pub struct App {
     pub errors: VecDeque<ErrorEntry>,
     pub daemon: DaemonView,
     pub size: (u16, u16),
-    /// How devlanes was installed (`None` until known) and dismissed release notices.
+    /// How devlanes was installed (`None` until known) and dismissed notices.
     pub release: (Option<devlanes_update::InstallMethod>, Vec<String>),
+    /// Why the TUI closed, when the binary has something to do before it
+    /// opens again; `None` for a plain quit.
+    pub exit: Option<crate::ExitReason>,
+    /// The lane a relaunch opens on, until the first selection.
+    reopen_lane: Option<String>,
+    /// The setup steps missing that only this side can see; `None` until
+    /// the check answered.
+    setup_missing: Option<Vec<String>>,
+    /// The setup prompt showed in this session; it shows once.
+    setup_offered: bool,
     /// Lanes whose task list was fetched again after their config changed.
     tasks_refreshed: HashSet<String>,
     /// Lanes with a clean in flight; their rows say so.
@@ -1384,6 +1470,10 @@ impl App {
             daemon: DaemonView::default(),
             size: (width, height),
             release: (None, Vec::new()),
+            exit: None,
+            reopen_lane: None,
+            setup_missing: None,
+            setup_offered: false,
             tasks_refreshed: HashSet::new(),
             cleaning: HashSet::new(),
             target_errors: HashMap::new(),
@@ -2059,6 +2149,11 @@ impl App {
             Msg::Notices { method, dismissed } => {
                 self.release = (Some(method), dismissed);
                 self.show_welcome();
+                self.offer_setup();
+            }
+            Msg::SetupMissing(missing) => {
+                self.setup_missing = Some(missing);
+                self.offer_setup();
             }
             // A failed check changes nothing: the next `daemon.status` still
             // carries what the daemon knew.
@@ -2070,7 +2165,7 @@ impl App {
                     Some(status) => {
                         status.insert("update".into(), update);
                     }
-                    // The badge reads `daemon.status`, which carries the release now.
+                    // The notice reads `daemon.status`, which carries the release now.
                     None if !update.is_null() => effects.push(Effect::FetchDaemon),
                     None => {}
                 }
@@ -2105,6 +2200,7 @@ impl App {
                     Some((what, error)) => self.report_daemon_once(what, words::api(&error)),
                     None => self.daemon.last_error = None,
                 }
+                self.offer_setup();
             }
             Msg::DaemonLog(Ok(chunk)) => {
                 self.daemon.log_error = None;
@@ -2298,13 +2394,16 @@ impl App {
     /// The one place [`DaemonState`] changes. Leaving `Online` closes what
     /// acted on the daemon and follows its log; coming back fetches its facts.
     fn daemon_moved(&mut self, cause: Cause, effects: &mut Vec<Effect>) {
-        use DaemonState::{Online, Starting, Stopped, Stopping, Unreachable};
+        use DaemonState::{Online, Outdated, Starting, Stopped, Stopping, Unreachable};
         let now = self.now();
         let was_online = self.daemon_state == Online;
         let state = std::mem::take(&mut self.daemon_state);
         self.daemon_state = match (state, cause) {
             (_, Cause::Subscribed) => Online,
-            (Online, Cause::Asked { restart }) => Stopping {
+            (_, Cause::Outdated(version)) => Outdated { version },
+            // It went away; whatever runs next is not known to be outdated.
+            (Outdated { .. }, Cause::Lost) => Unreachable,
+            (Online | Outdated { .. }, Cause::Asked { restart }) => Stopping {
                 restart,
                 steps: Steps::default(),
             },
@@ -2546,11 +2645,26 @@ impl App {
     /// Marks the connection lost and schedules one retry with backoff. The
     /// first loss goes to the error list when nothing announced it; an
     /// announced stop or restart moves on to its next state instead.
+    ///
+    /// A daemon on another protocol is no loss: a newer one closes the TUI
+    /// so the binary runs the TUI installed now, an older one shows the
+    /// unavailable screen with what fixes it, and retries in case someone
+    /// else restarts it.
     fn lost_connection(&mut self, reason: Option<&ApiError>, effects: &mut Vec<Effect>) {
+        let outdated = match reason {
+            Some(ApiError::Incompatible { peer })
+                if peer.protocol > devlanes_proto::PROTOCOL_VERSION =>
+            {
+                self.close_for(crate::ExitReason::Reload, effects);
+                return;
+            }
+            Some(ApiError::Incompatible { peer }) => Some(text::clean(&peer.version)),
+            _ => None,
+        };
         let attempt = match self.connection {
             Connection::Reconnecting { attempt } => attempt.saturating_add(1),
             _ => {
-                if self.daemon_state == DaemonState::Online {
+                if self.daemon_state == DaemonState::Online && outdated.is_none() {
                     let worded = match reason {
                         Some(error) => words::api(error),
                         None => Worded::local("the daemon closed live updates"),
@@ -2561,7 +2675,11 @@ impl App {
             }
         };
         self.connection = Connection::Reconnecting { attempt };
-        self.daemon_moved(Cause::Lost, effects);
+        let cause = match outdated {
+            Some(version) => Cause::Outdated(version),
+            None => Cause::Lost,
+        };
+        self.daemon_moved(cause, effects);
         if !self.reconnect_pending {
             self.reconnect_pending = true;
             let after_ms = (250u64 << attempt.min(5)).min(MAX_BACKOFF_MS);
@@ -2821,6 +2939,9 @@ impl App {
                     row: self.default_row(&lane),
                     lane,
                 });
+            if self.selected.is_some() {
+                self.reopen_lane = None;
+            }
         }
         if let Some(lane) = self.selected.as_ref().map(|s| s.lane.clone()) {
             self.auto_fold(&lane);
@@ -2867,10 +2988,15 @@ impl App {
         self.sync_attach(effects);
     }
 
-    /// The lane to open on: the one whose worktree holds the working
-    /// directory, the one shown last, the first project with something
-    /// running, else the first lane.
+    /// The lane to open on: the one the TUI this one replaces showed, the
+    /// one whose worktree holds the working directory, the first project with
+    /// something running, else the first lane.
     fn initial_lane(&self) -> Option<String> {
+        if let Some(lane) = &self.reopen_lane
+            && self.lane(lane).is_some()
+        {
+            return Some(lane.clone());
+        }
         if let Some(cwd) = &self.cwd
             && let Some(lane) = self
                 .lanes
@@ -3024,6 +3150,27 @@ impl App {
     /// Opens on the lane of `cwd` the first time lanes load.
     pub fn prefer_path(&mut self, cwd: PathBuf) {
         self.cwd = Some(cwd);
+    }
+
+    /// Opens where the TUI this one replaces was: its lane the first time
+    /// lanes load, its view now. Unknown names are ignored.
+    pub fn reopen(&mut self, reopen: &crate::Reopen, effects: &mut Vec<Effect>) {
+        self.reopen_lane.clone_from(&reopen.lane);
+        if let Some(view) = reopen.view.as_deref().and_then(View::parse)
+            && view != self.view
+        {
+            self.set_view(view, effects);
+        }
+    }
+
+    /// Why the TUI closed, with where to open again: the lane and view on
+    /// screen now. `None` after a plain quit.
+    pub fn relaunch(&self) -> Option<crate::Relaunch> {
+        let reopen = crate::Reopen {
+            lane: self.selected.as_ref().map(|selected| selected.lane.clone()),
+            view: Some(self.view.name().to_owned()),
+        };
+        self.exit.map(|reason| (reason, reopen))
     }
 
     /// Where the selection starts in a lane: the row selected there last,
@@ -4316,7 +4463,7 @@ impl App {
         match key.code {
             KeyCode::Char('c') if ctrl => self.quit(effects),
             KeyCode::Char('q') if plain => self.quit(effects),
-            KeyCode::Char('u') if plain => self.dismiss_release(effects),
+            KeyCode::Char('U') if self.release_notice().is_some() => self.update_prompt(effects),
             KeyCode::Tab => self.step_project(1, effects),
             KeyCode::BackTab => self.step_project(-1, effects),
             // Shift+1-9 picks a project. Without the kitty keyboard protocol
@@ -4888,8 +5035,9 @@ impl App {
 
     /// Keys while the daemon is not online: q and Ctrl+C quit at once (the
     /// lanes on screen are stale, so nothing asks about stopping them), `s`
-    /// starts a daemon that is stopped or not answering, and the log keys
-    /// work. Every other key waits for the daemon.
+    /// starts a daemon that is stopped or not answering, `U` and `R` update
+    /// or restart an outdated one, and the log keys work. Every other key
+    /// waits for the daemon.
     fn unavailable_key(&mut self, key: KeyEvent, effects: &mut Vec<Effect>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if key.code == KeyCode::Char('c') && ctrl {
@@ -4915,6 +5063,15 @@ impl App {
             {
                 self.daemon_moved(Cause::Start, effects);
                 effects.push(Effect::StartDaemon);
+            }
+            // The screen names both keys; it serves nothing to stop, so
+            // neither asks first.
+            KeyCode::Char('U') if matches!(self.daemon_state, DaemonState::Outdated { .. }) => {
+                self.close_for(crate::ExitReason::Update, effects);
+            }
+            KeyCode::Char('R') if matches!(self.daemon_state, DaemonState::Outdated { .. }) => {
+                self.daemon_moved(Cause::Asked { restart: true }, effects);
+                effects.push(Effect::RestartDaemon);
             }
             KeyCode::Esc if !self.daemon.filters.text.is_empty() => {
                 self.daemon.filters.text.clear();
@@ -5119,6 +5276,7 @@ impl App {
                 self.set_notice(format!("cleaning {lane}…"));
             }
             Effect::LaneGc => self.daemon.collecting = true,
+            Effect::Exit(reason) => self.exit = Some(*reason),
             Effect::RestartDaemon => self.daemon_moved(Cause::Asked { restart: true }, effects),
             Effect::StopDaemon => self.daemon_moved(Cause::Asked { restart: false }, effects),
             Effect::RevokeClient { name, .. } => self.set_notice(format!("revoking {name}…")),
@@ -6032,6 +6190,8 @@ impl App {
                         KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE),
                         effects,
                     );
+                } else {
+                    self.offer_setup();
                 }
             }
         }
@@ -7437,50 +7597,188 @@ impl App {
             }
         }
         self.daemon_moved(Cause::Tick, effects);
+        // A dialog or typing held the setup prompt back; it may fit now.
+        self.offer_setup();
     }
 
-    /// The release notice for the header and its key: the daemon runs another
-    /// version than this TUI, or a newer release is out. `None` once dismissed.
-    pub fn release_badge(&self) -> Option<(String, String)> {
-        use devlanes_update as update;
+    /// The version notice for the header, from `daemon.status`: a daemon
+    /// newer than this TUI first, then a release newer than this TUI, then a
+    /// daemon older than it. `None` while versions match and nothing is out.
+    pub fn release_notice(&self) -> Option<ReleaseNotice> {
+        use devlanes_update::version::is_newer;
         let status = self.daemon.status.as_ref()?;
         let own = self.version;
-        let daemon = status.get("version").and_then(Value::as_str);
-        let notice = match daemon {
-            Some(daemon) if daemon != own => Some((
-                update::skew_key(daemon, own),
-                format!("daemon {daemon}, TUI {own}: restart the daemon to match (stops units)"),
-            )),
-            _ => None,
-        };
-        let notice = notice.or_else(|| {
-            let info: devlanes_proto::release::UpdateInfo =
-                serde_json::from_value(status.get("update")?.clone()).ok()?;
-            let latest = info.latest.as_str();
-            if !update::version::is_newer(latest, own) {
-                return None;
-            }
-            let command = update::update_command(self.release.0.as_ref()?, latest);
-            let breaking = if info.bump == "minor" {
-                ", breaking changes"
-            } else {
-                ""
-            };
-            Some((
-                update::update_key(latest),
-                format!("{latest} available{breaking}: {command}"),
-            ))
-        })?;
-        (!self.release.1.contains(&notice.0)).then_some(notice)
+        let daemon = status
+            .get("version")
+            .and_then(Value::as_str)
+            .map(text::clean);
+        if let Some(daemon) = daemon.as_deref()
+            && is_newer(daemon, own)
+        {
+            return Some(ReleaseNotice::Reload {
+                daemon: daemon.to_owned(),
+            });
+        }
+        let update = status
+            .get("update")
+            .cloned()
+            .and_then(|update| {
+                serde_json::from_value::<devlanes_proto::release::UpdateInfo>(update).ok()
+            })
+            .filter(|info| is_newer(&info.latest, own));
+        if let Some(info) = update {
+            return Some(ReleaseNotice::Update {
+                latest: text::clean(&info.latest),
+                state: info.state,
+                breaking: info.bump == "minor",
+            });
+        }
+        daemon
+            .filter(|daemon| is_newer(own, daemon))
+            .map(|_| ReleaseNotice::Ready {
+                version: own.to_owned(),
+            })
     }
 
-    /// Hides the release notice for good; a newer version shows again.
-    fn dismiss_release(&mut self, effects: &mut Vec<Effect>) {
-        let Some((key, _)) = self.release_badge() else {
+    /// `U` while the header shows a version notice: a newer daemon reloads
+    /// the TUI at once; an update asks first with what changes and what
+    /// restarts, since the daemon stops every lane and starts them again.
+    fn update_prompt(&mut self, effects: &mut Vec<Effect>) {
+        let Some(notice) = self.release_notice() else {
             return;
         };
-        self.release.1.push(key.clone());
-        effects.push(Effect::DismissNotice(key));
+        let (prompt, action, version) = match &notice {
+            ReleaseNotice::Reload { .. } => {
+                self.close_for(crate::ExitReason::Reload, effects);
+                return;
+            }
+            ReleaseNotice::Update { latest, state, .. } if state == "ready" => (
+                format!("Restart into devlanes {latest}?"),
+                "restart",
+                latest.clone(),
+            ),
+            ReleaseNotice::Update { latest, .. } => (
+                format!("Update devlanes to {latest}?"),
+                "update",
+                latest.clone(),
+            ),
+            ReleaseNotice::Ready { version } => (
+                format!("Restart the daemon into devlanes {version}?"),
+                "restart",
+                version.clone(),
+            ),
+        };
+        let update = self.daemon.status.as_ref().and_then(|s| s.get("update"));
+        let mut detail = Vec::new();
+        if let ReleaseNotice::Update { state, .. } = &notice
+            && state == "failed"
+        {
+            let error = update
+                .and_then(|u| u.get("error"))
+                .and_then(Value::as_str)
+                .map_or_else(|| "it did not finish".to_owned(), text::clean);
+            detail.push(format!("The last try failed: {error}"));
+        }
+        let notes: Vec<devlanes_proto::release::UpdateNote> = update
+            .and_then(|u| u.get("notes"))
+            .cloned()
+            .and_then(|notes| serde_json::from_value(notes).ok())
+            .unwrap_or_default();
+        // What may break comes first; each group keeps the daemon's order.
+        let (minor, patch): (Vec<_>, Vec<_>) = notes
+            .into_iter()
+            .filter(|note| devlanes_update::version::is_newer(&note.version, self.version))
+            .filter(|note| !devlanes_update::version::is_newer(&note.version, &version))
+            .partition(|note| note.level == "minor");
+        detail.extend(
+            minor
+                .iter()
+                .chain(&patch)
+                .map(|note| format!("  {}", text::clean(&note.line))),
+        );
+        let running = self.lanes.iter().filter(|l| tree::lane_is_live(l)).count();
+        detail.push(match running {
+            0 => "The daemon restarts; no lanes run now.".to_owned(),
+            1 => "The daemon restarts and starts the 1 running lane again.".to_owned(),
+            n => format!("The daemon restarts and starts the {n} running lanes again."),
+        });
+        detail.push("This TUI closes and opens again on the same lane.".into());
+        self.dialog = Some(Dialog::Confirm {
+            prompt,
+            detail,
+            action,
+            strict: true,
+            effect: Box::new(Effect::Exit(crate::ExitReason::Update)),
+        });
+    }
+
+    /// Closes the TUI for the binary to act on `reason`.
+    fn close_for(&mut self, reason: crate::ExitReason, effects: &mut Vec<Effect>) {
+        self.exit = Some(reason);
+        effects.push(Effect::Exit(reason));
+    }
+
+    /// Offers `devlanes setup` once per session, when the daemon or this
+    /// side found a step missing: after both answered and the welcome is
+    /// gone, never over another dialog, the unavailable screen or typing.
+    fn offer_setup(&mut self) {
+        let welcomed = self.release.1.iter().any(|key| key == crate::welcome::KEY);
+        let Some(local) = self.setup_missing.as_ref() else {
+            return;
+        };
+        let Some(status) = self.daemon.status.as_ref() else {
+            return;
+        };
+        if self.setup_offered
+            || !welcomed
+            || !self.loaded
+            || self.dialog.is_some()
+            || self.unavailable()
+            || self.focus != Focus::List
+            || self.filter.as_ref().is_some_and(|f| f.editing)
+        {
+            return;
+        }
+        let mut missing: Vec<String> = local.clone();
+        let daemon = status
+            .pointer("/setup/missing")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str);
+        for step in daemon {
+            if !missing.iter().any(|known| known == step) {
+                missing.push(step.to_owned());
+            }
+        }
+        if missing.is_empty() {
+            return;
+        }
+        self.setup_offered = true;
+        let mut detail: Vec<String> = missing
+            .iter()
+            .map(|step| {
+                match step.as_str() {
+                    "ca" => "HTTPS: the devlanes CA is not trusted, so browsers warn on https:// addresses.",
+                    "hosts" => "Hostnames: a lane needs the /etc/hosts helper, which is not installed.",
+                    "resolver" => "Hostnames: hostnames.tld does not reach the devlanes DNS server.",
+                    other => return format!("{}: not set up.", text::clean(other)),
+                }
+                .to_owned()
+            })
+            .collect();
+        detail.push(
+            "devlanes setup runs in this terminal, then the TUI opens again on the same lane."
+                .into(),
+        );
+        detail.push("It may ask for your password once.".into());
+        self.dialog = Some(Dialog::Confirm {
+            prompt: "Set up HTTPS and hostnames?".into(),
+            detail,
+            action: "set up",
+            strict: false,
+            effect: Box::new(Effect::Exit(crate::ExitReason::Setup)),
+        });
     }
 
     /// q, Ctrl+C or the menu's quit: closes at once unless lanes of the

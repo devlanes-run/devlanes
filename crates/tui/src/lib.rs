@@ -41,11 +41,36 @@ use std::{io::IsTerminal, sync::Arc};
 
 pub use api::{
     ApiError, AttachEvent, AttachInput, AttachSession, ClientApi, ConnectEvent, ConnectSession,
-    DaemonApi, DaemonMetrics, EventStream, LaneMetrics, Metrics, MetricsQuery, SystemMetrics,
-    UnitMetrics, Window,
+    DaemonApi, DaemonMetrics, EventStream, LaneMetrics, Metrics, MetricsQuery, SetupCheck,
+    SystemMetrics, UnitMetrics, Window,
 };
 pub use devlanes_client::Paths;
 pub use runtime::{TerminalGuard, drive, drive_start};
+
+/// The variable a relaunched TUI reads its [`Reopen`] from, as JSON.
+pub const REOPEN_ENV: &str = "DEVLANES_TUI_REOPEN";
+
+/// Where a TUI that closed to update, reload or set up opens again: the lane
+/// it showed and its view (`project`, `monitor`, `daemon` or `boxes`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Reopen {
+    pub lane: Option<String>,
+    pub view: Option<String>,
+}
+
+/// Why the TUI closed for the binary to act on, then open it again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExitReason {
+    /// `U` confirmed: install the update, restart the daemon into it.
+    Update,
+    /// The daemon runs a newer devlanes than this TUI: run the TUI installed now.
+    Reload,
+    /// The setup prompt confirmed: run `devlanes setup` in the terminal.
+    Setup,
+}
+
+/// A close the binary acts on: why, and where to open again afterwards.
+pub type Relaunch = (ExitReason, Reopen);
 
 /// Failures that end the TUI before or while it runs.
 #[derive(Debug, thiserror::Error)]
@@ -99,6 +124,12 @@ pub struct Options {
     pub time_zone: Option<jiff::tz::TimeZone>,
     /// The directory whose lane opens first; `None` is the process's.
     pub cwd: Option<std::path::PathBuf>,
+    /// The lane and view of the TUI this one replaces, from [`REOPEN_ENV`];
+    /// the lane wins over `cwd`'s.
+    pub reopen: Option<Reopen>,
+    /// The setup steps only this user can check (the CA's trust), for the
+    /// setup prompt; `None` checks nothing on this side.
+    pub setup_check: Option<SetupCheck>,
 }
 
 impl Options {
@@ -120,17 +151,20 @@ impl Options {
 }
 
 /// Opens the TUI for bare `devlanes` and `devlanes ui` with default options.
-pub async fn run(paths: Paths) -> Result<(), Error> {
+pub async fn run(paths: Paths) -> Result<Option<Relaunch>, Error> {
     run_with(paths, Options::default()).await
 }
 
 /// Opens the TUI with the user config's options.
 ///
 /// Connects (spawning the daemon when needed) before touching the terminal,
-/// so connection errors print normally. Once it closed, prints the
-/// [`exit_summary`].
-pub async fn run_with(paths: Paths, options: Options) -> Result<(), Error> {
-    open(paths, options, None).await.map(drop)
+/// so connection errors print normally. Once the user quit, prints the
+/// [`exit_summary`]; a close for an [`ExitReason`] prints nothing and
+/// returns it with where to open again.
+pub async fn run_with(paths: Paths, options: Options) -> Result<Option<Relaunch>, Error> {
+    open(paths, options, None)
+        .await
+        .map(|(_, relaunch)| relaunch)
 }
 
 /// Opens the TUI on a start the daemon already accepted (see [`start`]) and
@@ -139,22 +173,26 @@ pub async fn run_start(
     paths: Paths,
     options: Options,
     start: start::StartHandoff,
-) -> Result<start::StartExit, Error> {
-    let app = open(paths, options, Some(start)).await?;
-    Ok(app.start_exit().unwrap_or(start::StartExit::Pending))
+) -> Result<(start::StartExit, Option<Relaunch>), Error> {
+    let (app, relaunch) = open(paths, options, Some(start)).await?;
+    Ok((
+        app.start_exit().unwrap_or(start::StartExit::Pending),
+        relaunch,
+    ))
 }
 
-/// Runs the TUI on the real terminal, then prints the [`exit_summary`];
-/// returns the app as it was when the user quit.
+/// Runs the TUI on the real terminal, then prints the [`exit_summary`]
+/// unless it closed for an [`ExitReason`]; returns the app as it was when
+/// it closed, and that reason with where to open again.
 async fn open(
     paths: Paths,
     options: Options,
     start: Option<start::StartHandoff>,
-) -> Result<app::App, Error> {
+) -> Result<(app::App, Option<Relaunch>), Error> {
     if !std::io::stdout().is_terminal() || !std::io::stdin().is_terminal() {
         return Err(Error::NotATerminal);
     }
-    let api: Arc<dyn DaemonApi> = ClientApi::connect(paths).await?;
+    let api: Arc<dyn DaemonApi> = ClientApi::connect(paths, options.setup_check.clone()).await?;
     let guard = TerminalGuard::enter()?;
     let backend = ratatui::backend::CrosstermBackend::new(std::io::stdout());
     let mut terminal = ratatui::Terminal::new(backend)?;
@@ -171,6 +209,9 @@ async fn open(
     .await;
     drop(guard);
     let app = result?;
+    if let Some(relaunch) = app.relaunch() {
+        return Ok((app, Some(relaunch)));
+    }
     // A box's lane is the box's to report; the summary is this machine's.
     let lane = app
         .selected
@@ -178,5 +219,5 @@ async fn open(
         .map(|selected| selected.lane.as_str())
         .filter(|lane| app.box_lane(lane).is_none());
     exit_summary::print(api.as_ref(), &app.theme, lane, app.release.0.as_ref()).await;
-    Ok(app)
+    Ok((app, None))
 }

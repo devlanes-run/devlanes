@@ -12,10 +12,15 @@ const NOTICES_FILE: &str = "notices.json";
 /// A notice repeats at most once per day.
 const REPEAT_MS: u64 = 24 * 3600 * 1000;
 
-/// The command notices name for installing `latest`: the upgrade command of
-/// how this binary was installed.
+/// The command notices name for installing `latest`: `devlanes update` where
+/// devlanes installs releases itself, else the upgrade command of how this
+/// binary was installed.
 pub fn update_command(method: &InstallMethod, latest: &str) -> String {
-    method.upgrade_command(latest)
+    if crate::install::installs_itself(method) {
+        "devlanes update".into()
+    } else {
+        method.upgrade_command(latest)
+    }
 }
 
 /// The notice for a newer release `bump` away from `current`, with the command
@@ -26,6 +31,17 @@ pub fn update_line(latest: &str, current: &str, bump: Bump, command: &str) -> St
         Bump::Patch => "",
     };
     format!("devlanes {latest} is available (this is {current}): {command}{breaking}")
+}
+
+/// The notice for a release the daemon installed or downloaded in the
+/// background, which the next interactive `devlanes` switches to.
+pub fn ready_line(installed: &str, current: &str) -> String {
+    format!("devlanes {installed} is ready (this is {current}): run devlanes to switch to it")
+}
+
+/// Notice key for a release ready to switch to.
+pub fn ready_key(installed: &str) -> String {
+    format!("ready:{installed}")
 }
 
 /// The notice for a daemon that runs another version than this client.
@@ -134,6 +150,28 @@ mod tests {
         assert_eq!(
             update_line("0.10.0", "0.9.0", Bump::Minor, "devlanes update"),
             "devlanes 0.10.0 is available (this is 0.9.0): devlanes update (breaking changes)"
+        );
+    }
+
+    #[test]
+    fn notices_name_devlanes_update_unless_it_cannot_install() {
+        for method in [
+            InstallMethod::Homebrew,
+            InstallMethod::Npm,
+            InstallMethod::Pipx,
+            InstallMethod::Script(std::path::PathBuf::from("/opt/acme/bin")),
+        ] {
+            assert_eq!(update_command(&method, "0.9.1"), "devlanes update");
+        }
+        for method in [InstallMethod::CargoInstall, InstallMethod::Uvx] {
+            assert_eq!(
+                update_command(&method, "0.9.1"),
+                method.upgrade_command("0.9.1")
+            );
+        }
+        assert_eq!(
+            ready_line("0.9.1", "0.9.0"),
+            "devlanes 0.9.1 is ready (this is 0.9.0): run devlanes to switch to it"
         );
     }
 

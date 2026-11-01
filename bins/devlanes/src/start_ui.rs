@@ -41,15 +41,19 @@ fn label(method: Method) -> &'static str {
     }
 }
 
-/// Sends `request` on `client`, then runs the TUI on it. Returns 0 when the
-/// start was ready, 1 when it failed, 130 when the user quit before its result.
+/// Applies an installed update, sends `request` to the daemon (spawning one
+/// when none runs), then runs the TUI on it. Returns 0 when the start was
+/// ready, 1 when it failed, 130 when the user quit before its result; a TUI
+/// that closed to update, reload or set up returns what that did.
 pub async fn run(
     runtime: &Runtime,
     paths: &Paths,
-    mut client: Client,
     request: Request,
     hint: impl Fn(&RpcError) -> Option<Hint>,
 ) -> Result<u8, RpcError> {
+    // Before connecting: applying an update restarts the daemon.
+    crate::update::startup(runtime, paths).await?;
+    let mut client = Client::connect_or_spawn(paths).await.map_err(rpc_error)?;
     let mut params = request.params.clone();
     params["events"] = json!(true);
     let id = client
@@ -77,9 +81,14 @@ pub async fn run(
         return crate::commands::render_result(runtime, request.method, data, None);
     }
     let options = crate::wiring::tui_options(paths).await;
-    let exit = devlanes_tui::run_start(paths.clone(), options, handoff)
+    let (exit, relaunch) = devlanes_tui::run_start(paths.clone(), options, handoff)
         .await
         .map_err(crate::wiring::tui_error)?;
+    // The start goes on in the daemon (an update's restart starts its lanes
+    // again); the TUI that opens next shows it.
+    if let Some(relaunch) = relaunch {
+        return crate::relaunch::after(runtime, paths, relaunch).await;
+    }
     Ok(match exit {
         StartExit::Ready => 0,
         StartExit::Failed => 1,
@@ -121,6 +130,7 @@ fn api_error(error: ApiError) -> RpcError {
             RpcError::new("daemon_unreachable", json!({"message": message}), 4)
         }
         ApiError::Decode(message) => RpcError::new("bad_response", json!({"message": message}), 1),
+        ApiError::Incompatible { peer } => rpc_error(devlanes_client::Error::Incompatible { peer }),
     }
 }
 
