@@ -43,6 +43,14 @@ pub(crate) struct Launched {
     pub held: Vec<devlanes_sys::OpenFile>,
 }
 
+/// A leader that was forked and exec'd but has no recorded identity yet.
+pub(crate) struct Started {
+    pid: u32,
+    master: Option<OwnedFd>,
+    pipes: Vec<(OutputStream, OwnedFd)>,
+    held: Vec<devlanes_sys::OpenFile>,
+}
+
 /// Forks and execs the leader, then records its identity before anything can reap it.
 ///
 /// Blocking: call from `spawn_blocking`. The parent's slave and pipe write ends are
@@ -52,6 +60,15 @@ pub(crate) fn launch(
     stderr: StderrMode,
     nofile: Option<NofileLimit>,
 ) -> Result<Launched, Error> {
+    identify(start(spec, stderr, nofile)?)
+}
+
+/// The fork and exec half of [`launch`]. Blocking.
+fn start(
+    spec: LaunchSpec,
+    stderr: StderrMode,
+    nofile: Option<NofileLimit>,
+) -> Result<Started, Error> {
     if spec.program.is_empty() {
         return Err(Error::InvalidInput("program must not be empty".into()));
     }
@@ -111,7 +128,22 @@ pub(crate) fn launch(
     let pid = child.id();
     // The std handle is dropped without waiting: the supervisor reaps by PID instead.
     drop(child);
+    Ok(Started {
+        pid,
+        master,
+        pipes,
+        held,
+    })
+}
 
+/// The identity half of [`launch`]: the leader may have exited already. Blocking.
+fn identify(started: Started) -> Result<Launched, Error> {
+    let Started {
+        pid,
+        master,
+        pipes,
+        held,
+    } = started;
     match devlanes_sys::process(pid) {
         Ok(Some(info)) => Ok(Launched {
             identity: ProcessIdentity {
@@ -125,6 +157,11 @@ pub(crate) fn launch(
             held,
         }),
         failure => {
+            // On macOS a leader that exits with terminal output nobody read waits
+            // in the kernel until the master is read or closed, so waiting for it
+            // while holding the master would never end.
+            drop(master);
+            drop(pipes);
             // Without an identity the unit cannot be verified later; do not leave it running.
             abandon(pid);
             Err(match failure {
@@ -138,7 +175,8 @@ pub(crate) fn launch(
 /// Kills the session's process group and reaps a leader that cannot be supervised.
 ///
 /// Blocking. Only for leaders this process spawned and has not reaped, so the PID
-/// and group ID cannot have been recycled.
+/// and group ID cannot have been recycled. Close the PTY master first: until
+/// then a macOS leader that already began exiting cannot finish.
 pub(crate) fn abandon(pid: u32) {
     let Some(pid) = i32::try_from(pid)
         .ok()
@@ -220,5 +258,79 @@ mod tests {
         let size = rustix::termios::tcgetwinsize(&slave)?;
         assert_eq!((size.ws_col, size.ws_row), (120, 40));
         Ok(())
+    }
+
+    /// A PTY leader that wrote output and exited before its identity was read
+    /// still gets one, and the launch returns without anyone reading the master.
+    /// On macOS such a leader stays in the kernel's exit path until the master is
+    /// read, where libproc no longer reports it; a start used to hang there.
+    #[test]
+    fn a_leader_that_exits_before_its_identity_is_read_is_identified() -> Result<(), Error> {
+        let spec = LaunchSpec {
+            program: "/bin/sh".into(),
+            args: vec!["-c".into(), "printf boom-line; exit 7".into()],
+            cwd: "/".into(),
+            env: [("PATH".into(), "/usr/bin:/bin".into())].into(),
+            pty: true,
+            size: TerminalSize::default(),
+        };
+        let started = start(spec, StderrMode::Separate, None)?;
+        let pid = started.pid;
+        // Until it has exited; on macOS it stays in the exit path from here on,
+        // since nothing reads the master yet.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while devlanes_sys::process(pid)?.is_some_and(|info| !info.zombie) {
+            if std::time::Instant::now() > deadline {
+                abandon_started(started);
+                panic!("the leader did not exit");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // On a thread, so a regression fails the test instead of hanging it.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = identify(started).map(|launched| {
+                let output = drain(launched.master.as_ref().expect("pty master"));
+                drop(launched);
+                let status = rustix::process::waitpid(
+                    rustix::process::Pid::from_raw(i32::try_from(pid).expect("pid")),
+                    WaitOptions::empty(),
+                );
+                (
+                    output,
+                    status.ok().flatten().and_then(|(_, s)| s.exit_status()),
+                )
+            });
+            let _ = sender.send(result);
+        });
+        let (output, code) = receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("identifying an exited leader returned")?;
+        assert!(output.contains("boom-line"), "{output:?}");
+        assert_eq!(code, Some(7));
+        Ok(())
+    }
+
+    /// Reads a blocking PTY master until the terminal goes away.
+    fn drain(master: &OwnedFd) -> String {
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            match rustix::io::read(master, &mut buffer) {
+                Err(rustix::io::Errno::INTR) => {}
+                // EIO once the terminal is revoked or its last slave closed.
+                Ok(0) | Err(_) => break,
+                Ok(n) => output.extend_from_slice(&buffer[..n]),
+            }
+        }
+        String::from_utf8_lossy(&output).into_owned()
+    }
+
+    /// Cleanup for a test that gives up on a started leader.
+    fn abandon_started(started: Started) {
+        let pid = started.pid;
+        drop(started);
+        abandon(pid);
     }
 }
