@@ -516,7 +516,7 @@ the first launch in a home: banner, features, first keys and the docs link
 
 ## whats-new
 
-the first TUI after an update: the releases since the one seen before, breaking changes first
+the first TUI after an update: release highlights since the one seen before, breaking changes first
 
 - 200x60: [txt](whats-new-200x60.txt) · [png](whats-new-200x60.png) · [ansi](whats-new-200x60.ansi)
 - 120x40: [txt](whats-new-120x40.txt) · [png](whats-new-120x40.png) · [ansi](whats-new-120x40.ansi)
@@ -810,7 +810,7 @@ the Esc menu without room for the banner
 
 ## whats-new-scrolled
 
-What's new from the Esc menu (w), scrolled to its end (G)
+release highlights from the Esc menu (l), scrolled to its end (G)
 
 - 80x24: [txt](whats-new-scrolled-80x24.txt) · [png](whats-new-scrolled-80x24.png) · [ansi](whats-new-scrolled-80x24.ansi)
 

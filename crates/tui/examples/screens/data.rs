@@ -990,17 +990,24 @@ pub fn log_page(unit: &str) -> Vec<LogLine> {
 pub const VERSION: &str = "1.0.0";
 
 /// The release notes since 0.9.0, as the binary hands them to the first TUI
-/// after an update to [`VERSION`].
+/// after an update to [`VERSION`]: two breaking entries and seven
+/// highlights, two more than the dialog lists.
 pub fn whats_new() -> devlanes_update::notes::WhatsNew {
-    use devlanes_update::notes::{Entry, Level, Release, WhatsNew};
-    let release = |version: &str, entries: &[(Level, &str)]| Release {
+    use devlanes_update::notes::{Entry, Highlight, Level, Release, WhatsNew};
+    /// An entry's level, first line and highlight as `(title, body)`.
+    type Row = (Level, &'static str, Option<(&'static str, &'static str)>);
+    let release = |version: &str, entries: &[Row]| Release {
         version: version.into(),
         entries: entries
             .iter()
-            .map(|(level, line)| Entry {
+            .map(|(level, line, highlight)| Entry {
                 level: *level,
                 line: (*line).into(),
                 body: String::new(),
+                highlight: highlight.map(|(title, body)| Highlight {
+                    title: title.into(),
+                    body: body.into(),
+                }),
             })
             .collect(),
     };
@@ -1013,30 +1020,52 @@ pub fn whats_new() -> devlanes_update::notes::WhatsNew {
                     (
                         Level::Minor,
                         "Changed `lanes.hosts_file` to default to `auto`, so lanes on `*.localhost` no longer write the hosts file.",
+                        None,
                     ),
                     (
                         Level::Minor,
-                        "Removed the `--watch` flag of `devlanes logs`; use `devlanes logs -f`.",
+                        "Removed the `--watch` flag of `devlanes logs`.",
+                        Some((
+                            "Follow logs with -f",
+                            "Run `devlanes logs -f` instead of `devlanes logs --watch`.",
+                        )),
                     ),
                     (
                         Level::Patch,
                         "Added `devlanes url --copy`, which copies a service's address.",
+                        Some((
+                            "Copy a service's address",
+                            "Run `devlanes url --copy` to put a service's address on the clipboard.",
+                        )),
                     ),
                     (
                         Level::Patch,
                         "Fixed `devlanes logs` dropping the last line of a unit that exited.",
+                        None,
                     ),
                     (
                         Level::Patch,
                         "Added a CPU column to `devlanes status --long`.",
+                        Some((
+                            "CPU in status",
+                            "`devlanes status --long` shows each service's CPU use.",
+                        )),
                     ),
                     (
                         Level::Patch,
                         "Fixed the monitor's memory box counting a frozen lane twice.",
+                        Some((
+                            "Correct memory in the monitor",
+                            "The monitor's memory box no longer counts a frozen lane twice.",
+                        )),
                     ),
                     (
                         Level::Patch,
                         "Changed `devlanes doctor` to name the config key behind each warning.",
+                        Some((
+                            "Config keys in doctor",
+                            "`devlanes doctor` names the config key behind each warning.",
+                        )),
                     ),
                 ],
             ),
@@ -1046,10 +1075,18 @@ pub fn whats_new() -> devlanes_update::notes::WhatsNew {
                     (
                         Level::Patch,
                         "Fixed the TUI's monitor showing a stopped lane's last CPU sample.",
+                        Some((
+                            "Stopped lanes show no CPU",
+                            "The monitor no longer shows a stopped lane's last CPU sample.",
+                        )),
                     ),
                     (
                         Level::Patch,
                         "Added the `tui.on_quit` choice to the quit dialog.",
+                        Some((
+                            "Choose what quitting does",
+                            "Set `tui.on_quit` to skip the question when you quit.",
+                        )),
                     ),
                 ],
             ),
@@ -1059,10 +1096,15 @@ pub fn whats_new() -> devlanes_update::notes::WhatsNew {
                     (
                         Level::Patch,
                         "Fixed `devlanes start` waiting for a ready check of a service that already exited.",
+                        Some((
+                            "Start no longer hangs",
+                            "`devlanes start` stops waiting for a service that already exited.",
+                        )),
                     ),
                     (
                         Level::Patch,
                         "Fixed `devlanes stop` leaving a lane's containers running.",
+                        None,
                     ),
                 ],
             ),

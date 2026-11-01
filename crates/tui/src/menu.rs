@@ -1,5 +1,5 @@
 //! The Esc menu, after btop's: the devlanes banner and version over lane
-//! lines, then options, what's new, help and quit.
+//! lines, then options, release highlights, help and quit.
 
 use std::cell::RefCell;
 
@@ -28,7 +28,7 @@ pub enum Item {
 /// The items in order, with their key and label.
 pub const ITEMS: [(Item, char, &str); 4] = [
     (Item::Options, 'o', "options"),
-    (Item::WhatsNew, 'w', "what's new"),
+    (Item::WhatsNew, 'l', "highlights"),
     (Item::Help, 'h', "help"),
     (Item::Quit, 'q', "quit"),
 ];
@@ -259,7 +259,7 @@ mod tests {
             Action::Pick(Item::Options)
         );
         assert_eq!(
-            press(&mut menu, KeyCode::Char('w')),
+            press(&mut menu, KeyCode::Char('l')),
             Action::Pick(Item::WhatsNew)
         );
         assert_eq!(
@@ -298,7 +298,7 @@ mod tests {
         app.update(key(KeyCode::Char('x')));
 
         app.update(key(KeyCode::Esc));
-        app.update(key(KeyCode::Char('w')));
+        app.update(key(KeyCode::Char('l')));
         assert!(matches!(app.dialog, Some(Dialog::WhatsNew(_))));
         app.update(key(KeyCode::Esc));
         assert!(app.dialog.is_none());
@@ -371,7 +371,7 @@ mod tests {
                 .draw(|frame| render(&theme, &Menu::default(), "1.2.3", frame, frame.area()))
                 .expect("draw");
             let text = terminal.backend().to_string();
-            for wanted in [banner, "options", "what's new", "help", "quit"] {
+            for wanted in [banner, "options", "highlights", "help", "quit"] {
                 assert!(text.contains(wanted), "{width}x{height}: {wanted}\n{text}");
             }
         }

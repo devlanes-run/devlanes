@@ -1,6 +1,6 @@
-//! "What's new": the release notes the binary hands over open by themselves
-//! once, after the welcome and never stacked on it, scroll when long, and
-//! open again from the Esc menu.
+//! Release highlights: the notes the binary hands over open by themselves
+//! once, after the welcome and never stacked on it, scroll when long, open
+//! again from the Esc menu and open the release page on `o`.
 
 use std::{
     sync::{
@@ -17,7 +17,7 @@ use devlanes_tui::app::{App, Dialog, Msg};
 use devlanes_tui::welcome::KEY as WELCOME;
 use devlanes_update::{
     InstallMethod,
-    notes::{Entry, Level, Release, WhatsNew},
+    notes::{Entry, Highlight, Level, Release, WhatsNew},
 };
 use futures_util::stream;
 use ratatui::Terminal;
@@ -26,7 +26,8 @@ use tokio::sync::mpsc;
 use super::{SharedBackend, TestResult, draw, hermetic_options, key, loaded};
 use crate::fake::{FakeApi, mixed_lanes};
 
-/// Notes since 0.8.0 for `count` releases, each with a minor and a patch entry.
+/// Notes since 0.8.0 for `count` releases, each with a minor entry and a
+/// patch entry that is a highlight.
 fn notes(count: usize) -> WhatsNew {
     WhatsNew {
         since: Some("0.8.0".into()),
@@ -38,11 +39,16 @@ fn notes(count: usize) -> WhatsNew {
                         level: Level::Minor,
                         line: "Removed `--acme`.".into(),
                         body: String::new(),
+                        highlight: None,
                     },
                     Entry {
                         level: Level::Patch,
                         line: format!("Fixed `devlanes logs` in release {index}."),
                         body: String::new(),
+                        highlight: Some(Highlight {
+                            title: format!("Logs in release {index}"),
+                            body: "Run `devlanes logs` to follow a unit.".into(),
+                        }),
                     },
                 ],
             })
@@ -81,11 +87,10 @@ async fn it_follows_the_welcome_once() -> TestResult {
     assert!(matches!(app.dialog, Some(Dialog::WhatsNew(_))));
     let screen = draw(&app)?.backend().to_string();
     for wanted in [
-        "What's new since 0.8.0",
-        "0.9.1",
-        "0.9.0",
+        "Release highlights since 0.8.0",
         "breaking Removed --acme.",
-        "Fixed devlanes logs in release 0.",
+        "Logs in release 0",
+        "Run devlanes logs to follow a unit.",
     ] {
         assert!(screen.contains(wanted), "{wanted}\n{screen}");
     }
@@ -110,7 +115,7 @@ async fn it_waits_for_the_notices_and_other_dialogs() -> TestResult {
     app.update(Msg::Status(Ok(mixed_lanes())));
     assert!(matches!(app.dialog, Some(Dialog::WhatsNew(_))));
     let screen = draw(&app)?.backend().to_string();
-    assert!(screen.contains("What's new in 0.9.0"), "{screen}");
+    assert!(screen.contains("Release highlights in 0.9.0"), "{screen}");
     Ok(())
 }
 
@@ -121,22 +126,55 @@ async fn without_new_notes_it_opens_only_from_the_menu() -> TestResult {
     assert!(app.dialog.is_none());
     app.update(key(KeyCode::Esc));
     assert!(matches!(app.dialog, Some(Dialog::Menu(_))));
-    app.update(key(KeyCode::Char('w')));
+    app.update(key(KeyCode::Char('l')));
     assert!(matches!(app.dialog, Some(Dialog::WhatsNew(_))));
     let screen = draw(&app)?.backend().to_string();
-    assert!(screen.contains("What's new in 0.9.0"), "{screen}");
+    assert!(screen.contains("Release highlights in 0.9.0"), "{screen}");
     app.update(key(KeyCode::Enter));
     assert!(app.dialog.is_none());
 
     // A build without notes says so.
     app.whats_new = None;
     app.update(key(KeyCode::Esc));
-    app.update(key(KeyCode::Char('w')));
+    app.update(key(KeyCode::Char('l')));
     let screen = draw(&app)?.backend().to_string();
     assert!(
-        screen.contains("This build carries no release notes."),
+        screen.contains("This build carries no release highlights."),
         "{screen}"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn o_opens_the_release_page_and_keeps_the_dialog() -> TestResult {
+    use devlanes_tui::app::Effect;
+    let mut app = given(notes(1), true).await;
+    app.update(notices(true));
+    let effects = app.update(key(KeyCode::Char('o')));
+    let urls: Vec<&str> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::OpenUrl(url) => Some(url.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        urls,
+        [format!(
+            "{}/releases/tag/v0.9.0",
+            devlanes_version::REPOSITORY
+        )]
+    );
+    assert!(matches!(app.dialog, Some(Dialog::WhatsNew(_))));
+
+    // Several releases point at the list of releases.
+    let mut app = given(notes(2), true).await;
+    app.update(notices(true));
+    let effects = app.update(key(KeyCode::Char('o')));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::OpenUrl(url) if url.ends_with("/releases")
+    )));
     Ok(())
 }
 
@@ -187,7 +225,7 @@ async fn the_options_open_it_after_the_welcome() -> TestResult {
     let script = {
         let backend = backend.clone();
         async move {
-            backend.wait_for("What's new in 0.9.0").await;
+            backend.wait_for("Release highlights in 0.9.0").await;
             backend.wait_for("breaking Removed --acme.").await;
             let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
             keys_tx.send(Ok(TermEvent::Key(quit))).await.ok();

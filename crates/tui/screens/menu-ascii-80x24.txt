@@ -10,7 +10,7 @@
 |   * api-inventory   | :       :       ||      :       :|ms                   |
 |   * api-notify      | :       >  o  options           :|O job done queue=defa|
 |   * api-reports     | :       :       ||      :       :|ms                   |
-|   * web-app         | :          w  what's new        :|O job done queue=defa|
+|   * web-app         | :          l  highlights        :|O job done queue=defa|
 |   * web-admin       | :       :       ||      :       :|ms                   |
 |   * web-docs        | :          h  help              :|O job done queue=defa|
 |   - web-storybook   | :       :       ||      :       :|ms                   |

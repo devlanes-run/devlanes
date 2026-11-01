@@ -28,7 +28,7 @@
 |   * stub-stripe                              ||                                 | :       :       ||      :       :|                                                                                 |
 |   * stub-s3                                  ||                                 | :       >  o  options           :|                                                                                 |
 |   ! stub-twilio         orphaned · pid 48211 ||                                 | :       :       ||      :       :|                                                                                 |
-|   * stub-sendgrid                            ||                                 | :          w  what's new        :|                                                                                 |
+|   * stub-sendgrid                            ||                                 | :          l  highlights        :|                                                                                 |
 |   * stub-segment                             ||                                 | :       :       ||      :       :|                                                                                 |
 |   * stub-auth0                               ||                                 | :          h  help              :|                                                                                 |
 |   * proxy-edge                               ||                                 | :       :       ||      :       :|                                                                                 |

@@ -7,7 +7,7 @@
 │ │ ╎       ╎       ╎       ║       ╎       ╎       ╎│s│
 │ │ ╎       ╎       ╎    v1.0.0     ╎       ╎       ╎│x│
 │ │ ╎       ╎       ▌  o  options           ╎       ╎│ │
-│ │ ╎       ╎          w  what's new        ╎       ╎│g│
+│ │ ╎       ╎          l  highlights        ╎       ╎│g│
 │ │ ╎       ╎          h  help              ╎       ╎│─┤
 │ │ ╎       ╎          q  quit              ╎       ╎│u│
 │ │ ╎       ╎       ╎       ║       ╎       ╎       ╎│9│

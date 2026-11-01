@@ -17,11 +17,11 @@
 │   │   terminal.notifications                auto│         terminal reports true color (`COLORTERM`) and its      │   │
 │   │   terminal.marks                        auto│         background (`COLORFGBG`); otherwise the terminal's 16  │105│
 │   │   updates.mode                        notify│         colors.                                                │   │
-│   │   lanes.data_dir                     default│ ▌dark   Always use the true-color palette made for a dark      │118│
-│   │   lanes.throttle_after                    5m│         background.                                            │   │
-│   │   lanes.freeze_after                     15m│  light  Always use the true-color palette made for a light     │131│
-│   │   daemon.exit_when_idle                 true│         background.                                            │   │
-│   │                                             │  ansi   Use only the terminal's 16 named colors, so the TUI    │144│
+│   │   updates.highlights                    true│ ▌dark   Always use the true-color palette made for a dark      │118│
+│   │   lanes.data_dir                     default│         background.                                            │   │
+│   │   lanes.throttle_after                    5m│  light  Always use the true-color palette made for a light     │131│
+│   │   lanes.freeze_after                     15m│         background.                                            │   │
+│   │   daemon.exit_when_idle                 true│  ansi   Use only the terminal's 16 named colors, so the TUI    │144│
 │   │                                             │         follows the terminal's color scheme.                   │   │
 │   │                                             │                                                                │157│
 │   │                                             │ default  auto                                                  │   │
@@ -59,11 +59,11 @@
 16: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 60-108 dim, 115 bold, 119 darkgray
 17: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 60-112 dim, 115 bold, 119 darkgray
 18: 0 darkgray, 4 bold, 6 bold, 44-49 dim, 50 darkgray, 60-66 dim, 115 bold, 119 darkgray
-19: 0 darkgray, 4 bold, 6 bold, 43-49 dim, 50 darkgray, 52-59 bold, 60-108 dim, 115 bold, 119 darkgray
-20: 0 darkgray, 4 bold, 6 bold, 48-49 dim, 50 darkgray, 60-70 dim, 115 bold, 119 darkgray
-21: 0 darkgray, 4 bold, 6 bold, 47-49 dim, 50 darkgray, 52 bold, 60-109 dim, 115 bold, 119 darkgray
-22: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 60-70 dim, 115 bold, 119 darkgray
-23: 0 darkgray, 1-3 reversed, 4 bold, 50 darkgray, 52 bold, 60-110 dim, 115 bold, 119 darkgray
+19: 0 darkgray, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 52-59 bold, 60-108 dim, 115 bold, 119 darkgray
+20: 0 darkgray, 4 bold, 6 bold, 43-49 dim, 50 darkgray, 60-70 dim, 115 bold, 119 darkgray
+21: 0 darkgray, 4 bold, 6 bold, 48-49 dim, 50 darkgray, 52 bold, 60-109 dim, 115 bold, 119 darkgray
+22: 0 darkgray, 4 bold, 6 bold, 47-49 dim, 50 darkgray, 60-70 dim, 115 bold, 119 darkgray
+23: 0 darkgray, 1-3 reversed, 4 bold, 6 bold, 46-49 dim, 50 darkgray, 52 bold, 60-110 dim, 115 bold, 119 darkgray
 24: 0 darkgray, 4 bold, 50 darkgray, 60-95 dim, 115 bold, 119 darkgray
 25: 0 darkgray, 4 bold, 50 darkgray, 115 bold, 119 darkgray
 26: 0 darkgray, 4 bold, 50 darkgray, 52-60 dim, 115 bold, 119 darkgray

@@ -564,7 +564,7 @@ pub enum Dialog {
     Targets(TargetPicker),
     /// The first launch in a home (`crate::welcome`).
     Welcome(crate::welcome::Welcome),
-    /// The release notes since the version seen before (`crate::whats_new`).
+    /// The release highlights since the version seen before (`crate::whats_new`).
     WhatsNew(crate::whats_new::WhatsNewDialog),
     /// Every error this TUI kept, one at a time in full.
     Errors(ErrorsDialog),
@@ -1348,9 +1348,9 @@ pub struct App {
     /// The installed devlanes was not newer than this TUI, so a daemon on a
     /// newer protocol is a plain loss from then on.
     reload_refused: bool,
-    /// The release notes "What's new" shows ([`crate::Options::whats_new`]).
+    /// The notes the release highlights come from ([`crate::Options::whats_new`]).
     pub whats_new: Option<devlanes_update::notes::WhatsNew>,
-    /// "What's new" opens by itself once the welcome is gone.
+    /// The release highlights open by themselves once the welcome is gone.
     pub whats_new_pending: bool,
     /// Lanes whose task list was fetched again after their config changed.
     tasks_refreshed: HashSet<String>,
@@ -6203,7 +6203,7 @@ impl App {
 
     /// Opens the welcome once the first status and the dismissed notices are
     /// both in, unless it was closed before in this home. Once it is gone,
-    /// opens "What's new" when the binary asked for it; never over another
+    /// opens the release highlights when the binary asked for it; never over another
     /// dialog.
     fn show_welcome(&mut self) {
         if !self.loaded || self.release.0.is_none() || self.dialog.is_some() {
@@ -6217,8 +6217,8 @@ impl App {
         }
     }
 
-    /// What a key or click in "What's new" asked for. Closing it lets the
-    /// setup prompt show.
+    /// What a key or click in the release highlights asked for. Closing it
+    /// lets the setup prompt show.
     fn whats_new_action(
         &mut self,
         action: crate::whats_new::Action,
@@ -6228,6 +6228,13 @@ impl App {
         use crate::whats_new::Action;
         match action {
             Action::Stay => self.dialog = Some(Dialog::WhatsNew(dialog)),
+            Action::OpenPage => {
+                // No notes, no release to point at.
+                if let Some(notes) = self.whats_new.as_ref().filter(|notes| !notes.is_empty()) {
+                    effects.push(Effect::OpenUrl(notes.url()));
+                }
+                self.dialog = Some(Dialog::WhatsNew(dialog));
+            }
             Action::Close => self.offer_setup(),
             Action::Quit => {
                 self.global_key(

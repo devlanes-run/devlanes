@@ -148,13 +148,13 @@ pub struct Options {
     /// The setup steps only this user can check (the CA's trust), for the
     /// setup prompt; `None` checks nothing on this side.
     pub setup_check: Option<SetupCheck>,
-    /// Reads the release notes "What's new" shows and claims them; `None`
-    /// has none.
+    /// Reads the notes the release highlights come from and claims them;
+    /// `None` has none.
     pub whats_new: Option<WhatsNewClaim>,
 }
 
-/// The release notes "What's new" shows, from the binary's changelog, and
-/// whether they open by themselves after the welcome: those since the
+/// The release notes the highlights dialog draws from, taken from the
+/// binary's changelog, and whether it opens by itself after the welcome: those since the
 /// version seen before when this is the first TUI after an update, else
 /// this version's own for the Esc menu. The binary records them as seen in
 /// the call, under a lock so that one TUI shows them, which is why the TUI

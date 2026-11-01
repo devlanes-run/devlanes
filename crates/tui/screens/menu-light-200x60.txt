@@ -32,7 +32,7 @@
 │   ● stub-segment                          │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │                                           │
 │   ● stub-auth0                            │       ╎       ╎       ╎       ╎       ╎          o  options           ╎       ╎       ╎       ╎       ╎      │                                           │
 │   ● proxy-edge                            │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │                                           │
-│   ● docs-search                           │       ╎       ╎       ╎       ╎       ╎          w  what's new        ╎       ╎       ╎       ╎       ╎      │                                           │
+│   ● docs-search                           │       ╎       ╎       ╎       ╎       ╎          l  highlights        ╎       ╎       ╎       ╎       ╎      │                                           │
 │   ● ml-ranker                             │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │                                           │
 │   ⠋ ml-embed                        starti│       ╎       ╎       ╎       ╎       ╎          h  help              ╎       ╎       ╎       ╎       ╎      │                                           │
 │   ● cache-warm                            │       ╎       ╎       ╎       ╎       ╎       ╎       ║       ╎       ╎       ╎       ╎       ╎       ╎      │                                           │

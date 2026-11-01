@@ -18,7 +18,7 @@
 |   - web-storybook                       | :       :       ||      :       :|b done queue=default id=job_8125 took=105|
 |   * web-landing                         | :       >  o  options           :|                                         |
 |   o wrk-email                           | :       :       ||      :       :|b done queue=default id=job_8126 took=118|
-|   o wrk-billing                         | :          w  what's new        :|                                         |
+|   o wrk-billing                         | :          l  highlights        :|                                         |
 |   o wrk-index                           | :       :       ||      :       :|b done queue=default id=job_8127 took=131|
 |   o wrk-thumbs                          | :          h  help              :|                                         |
 |   x wrk-export               failed · ex| :       :       ||      :       :|b done queue=default id=job_8128 took=144|
