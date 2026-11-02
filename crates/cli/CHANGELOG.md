@@ -1,5 +1,11 @@
 # devlanes-cli
 
+## 0.11.2 — 2026-11-02
+
+### Patch changes
+
+- [fef7c86](https://github.com/devlanes-run/devlanes/commit/fef7c863cf1a266174c8bed86a23767e0a30dee4) Changed a bare `devlanes -v` to print the version, like `-V`, instead of opening the TUI.
+
 ## 0.11.1 — 2026-11-01
 
 ### Patch changes

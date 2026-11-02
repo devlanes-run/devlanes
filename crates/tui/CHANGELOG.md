@@ -1,5 +1,13 @@
 # devlanes-tui
 
+## 0.11.2 — 2026-11-02
+
+### Patch changes
+
+- [fef7c86](https://github.com/devlanes-run/devlanes/commit/fef7c863cf1a266174c8bed86a23767e0a30dee4) Changed `daemon.exit_when_idle` to stop the daemon about 15 seconds after the last TUI closes instead of 30.
+  
+  The summary printed when the TUI closes now says `stopping in 15s` instead of `running` when nothing keeps the daemon up.
+
 ## 0.11.1 — 2026-11-01
 
 ### Patch changes
