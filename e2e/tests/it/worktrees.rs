@@ -66,8 +66,8 @@ fn remove_running_worktree(lab: &Lab, path: &Path) -> Result<()> {
 /// Add, move and remove worktrees while lane 0 runs: a new branch worktree and a
 /// detached one are no lanes until `status` runs in them, then idle lanes with
 /// ports and hostnames; a move keeps the lane; removing a running worktree stops
-/// its lane, and once idle it is cleaned at the next re-list while its logs stay
-/// on disk; lane 0 is never touched.
+/// its lane, which stays until `lane gc --yes` cleans it while its logs stay on
+/// disk; lane 0 is never touched.
 #[test]
 fn worktree_add_move_and_remove_reach_the_running_daemon() -> Result<()> {
     let lab = Lab::new("two-services", BUDGET)?;
@@ -197,14 +197,18 @@ fn worktree_add_move_and_remove_reach_the_running_daemon() -> Result<()> {
         "a removed lane keeps its logs: {logs}"
     );
 
-    // The next re-list cleans the idle lane whose folder is gone; its logs stay.
+    // By default the idle lane whose folder is gone stays until `lane gc`
+    // cleans it; its logs stay.
     lab.json(lab.repo(), &["lane", "ls"])?;
-    // The daemon waits 5 s before it cleans, in case the folder comes back.
-    lab.eventually("lane 1 to be cleaned", Duration::from_secs(20), || {
-        Ok(lane(&watched(&lab)?, "fixture-two@1")
-            .is_none()
-            .then_some(()))
-    })?;
+    let lanes = watched(&lab)?;
+    let kept = need(lane(&lanes, "fixture-two@1"), "lane 1 kept")?;
+    assert_eq!(kept["reason"]["code"], "worktree_missing", "{kept}");
+    let gc = lab.json(lab.repo(), &["lane", "gc", "--yes"])?;
+    assert_eq!(gc["cleaned"], serde_json::json!(["fixture-two@1"]), "{gc}");
+    assert!(
+        lane(&watched(&lab)?, "fixture-two@1").is_none(),
+        "lane gc cleans the lane"
+    );
     assert!(
         lab.home().join("logs/fixture-two/1/api").is_dir(),
         "a cleaned lane keeps its logs"
