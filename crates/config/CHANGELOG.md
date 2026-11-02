@@ -1,5 +1,16 @@
 # devlanes-config
 
+## 0.10.2 — 2026-11-02
+
+### Patch changes
+
+- [fef7c86](https://github.com/devlanes-run/devlanes/commit/fef7c863cf1a266174c8bed86a23767e0a30dee4) Changed `daemon.exit_when_idle` to stop the daemon about 15 seconds after the last TUI closes instead of 30.
+  
+  The summary printed when the TUI closes now says `stopping in 15s` instead of `running` when nothing keeps the daemon up.
+- [36c4aef](https://github.com/devlanes-run/devlanes/commit/36c4aefc33e33d3e7af468e65af7d27762ad866f) Changed a deleted worktree's lane to keep its data and ports until `devlanes lane gc --yes` cleans it.
+  
+  Set `lanes.removed_worktrees: clean` to have the daemon clean these lanes by itself, as before.
+
 ## 0.10.1 — 2026-11-01
 
 ### Patch changes

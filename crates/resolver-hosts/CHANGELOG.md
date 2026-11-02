@@ -1,6 +1,6 @@
 # devlanes-resolver-hosts
 
-## 0.11.1 — 2026-11-01
+## 0.11.1 ... 0.11.2 — 2026-11-02
 
 Version bump only, to follow other packages.
 
