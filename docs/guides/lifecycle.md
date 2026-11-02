@@ -46,6 +46,21 @@ Checking out a branch whose project file names another project moves the worktre
 
 Worktrees on other branches can hold other versions of the project file, and each lane runs its own. `lanes.primary` and `lanes.max` belong to the whole project and come from the primary worktree's file. The shared infra (`infra.compose`, `infra.project_name` and containers that are not `per_lane`) is one set of containers for every lane, so the lane that starts last applies its version. A lane whose file sets any of these differently gets a `project_setting_ignored` or `infra_spec_conflict` warning naming the settings. `devlanes lane gc` keeps the port offsets of every service that some worktree's file still has.
 
+## Removed worktrees
+
+When a worktree's folder is deleted, with `git worktree remove` after a merge or otherwise, the daemon sees it within a few seconds and applies `lanes.removed_worktrees` from that worktree's project file. The default, `stop`, stops what the lane runs and keeps the lane: its index, port block, data folder and per-lane containers stay, and `devlanes status` shows it as `worktree missing`. `devlanes lane gc` lists the lanes whose folder is gone, `devlanes lane gc --yes` cleans those that run nothing, and `devlanes lane clean <lane> --yes` cleans one.
+
+To have the daemon clean these lanes by itself:
+
+```yaml
+lanes:
+  removed_worktrees: clean
+```
+
+A running lane is then cleaned as soon as its folder is gone, and an idle one once the folder has been gone for 5 seconds, so `git worktree move` keeps it. Cleaning stops the lane's processes, removes its own containers and data folder, and frees its index and ports; its logs stay until log retention removes them. `lane.clean` tasks and `infra.teardown` need the worktree to run in, so they are skipped, and what they would drop from shared containers, such as a per-lane database in a shared Postgres, stays.
+
+A worktree removed while the daemon is not running is noticed at the daemon's next start. Its lane is kept even with `clean`, since the daemon can no longer read the deleted file to see that setting; `devlanes lane gc --yes` cleans it.
+
 ## Services that start on demand
 
 ```yaml

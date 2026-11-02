@@ -39,9 +39,25 @@ pub(crate) const MISSING_GRACE: Duration = Duration::from_secs(5);
 /// How often a deferred refresh tries for a lane's `op` again.
 const DEFERRED_REFRESH_POLL: Duration = Duration::from_millis(50);
 
-/// A lane with a record whose folder is gone and that runs nothing.
+/// A lane with a record whose folder is gone, that runs nothing and whose config
+/// sets `removed_worktrees: clean`.
 fn sweepable(st: &LaneSt) -> bool {
-    !st.present && st.record.is_some() && !st.any_running() && st.busy.is_none()
+    !st.present
+        && st.record.is_some()
+        && !st.any_running()
+        && st.busy.is_none()
+        && matches!(removed_policy(st), RemovedWorktrees::Clean)
+}
+
+/// The lane's `lanes.removed_worktrees`, `stop` when unset. Falls back to the last
+/// config that loaded, since the config poller can read a removed worktree's file
+/// as missing before the worktree watcher sees the removal.
+fn removed_policy(st: &LaneSt) -> RemovedWorktrees {
+    st.config
+        .loaded()
+        .or(st.last_good.as_ref())
+        .and_then(|config| config.lanes.removed_worktrees)
+        .unwrap_or(RemovedWorktrees::Stop)
 }
 
 /// Worktree as reported by git (or the single non-git root).
@@ -912,7 +928,7 @@ impl Inner {
     }
 
     /// Re-lists worktrees from git and applies the diff, then cleans idle lanes
-    /// whose folder is gone, in the background.
+    /// whose folder is gone and whose config asks for it, in the background.
     pub(crate) async fn relist(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -2327,11 +2343,12 @@ impl Inner {
         }
     }
 
-    /// Cleans, in the background, the lanes of `project` whose worktree folder has
-    /// been gone for [`MISSING_GRACE`] and that run nothing; their logs stay until
-    /// retention removes them. Lanes that still run something keep showing as
-    /// missing. The grace covers `git worktree move`, which removes the old
-    /// folder before git's record names the new one.
+    /// Cleans, in the background, the lanes of `project` with `removed_worktrees:
+    /// clean` whose worktree folder has been gone for [`MISSING_GRACE`] and that run
+    /// nothing; their logs stay until retention removes them. Other lanes whose
+    /// folder is gone keep showing as missing until `lane gc` cleans them. The
+    /// grace covers `git worktree move`, which removes the old folder before git's
+    /// record names the new one.
     pub(crate) fn sweep_missing(self: &Arc<Self>, project: &Arc<ProjectRt>) {
         let idle: Vec<(Arc<LaneRt>, Duration)> = project
             .lanes()
@@ -2375,7 +2392,7 @@ impl Inner {
     }
 
     /// Runs `removed_worktrees` for lanes of one re-list whose folder went away
-    /// while they ran something, then cleans the idle ones.
+    /// while they ran something, then cleans the idle ones that ask for it.
     pub(crate) async fn apply_policies(
         self: &Arc<Self>,
         project: &Arc<ProjectRt>,
@@ -2383,24 +2400,11 @@ impl Inner {
     ) {
         self.new_lane_policies(project, report.added);
         for lane in report.removed {
-            // Idle lanes are cleaned by the sweep below.
+            // Idle lanes are left to the sweep below.
             if !lane.st().any_running() {
                 continue;
             }
-            // The config poller can read the removed worktree's config as missing
-            // before this runs; its running units still stop, but only a config
-            // that says so cleans.
-            let policy = {
-                let st = lane.st();
-                match st.config.loaded() {
-                    Some(config) => config
-                        .lanes
-                        .removed_worktrees
-                        .unwrap_or(RemovedWorktrees::Stop),
-                    None if st.any_running() => RemovedWorktrees::Stop,
-                    None => continue,
-                }
-            };
+            let policy = removed_policy(&lane.st());
             let engine = self.clone();
             let project = project.clone();
             tokio::spawn(async move {

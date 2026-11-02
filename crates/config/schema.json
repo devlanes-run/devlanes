@@ -1494,12 +1494,12 @@
               "type": "null"
             }
           ],
-          "description": "What happens to a running lane whose worktree folder is deleted. Defaults to `stop`. A lane whose folder is gone and that runs nothing is cleaned; its logs stay until log retention removes them.",
+          "description": "What happens to a lane whose worktree folder is deleted, for example by `git worktree remove` after a merge. Defaults to `stop`, which stops its processes and keeps its data, containers and ports until `devlanes lane gc --yes` or `devlanes lane clean` removes them. Set `clean` to have devlanes clean the lane by itself.",
           "examples": [
             "stop",
             "clean"
           ],
-          "markdownDescription": "What happens to a running lane whose worktree folder is deleted. Defaults to `stop`. A lane whose folder is gone and that runs nothing is cleaned; its logs stay until log retention removes them."
+          "markdownDescription": "What happens to a lane whose worktree folder is deleted, for example by `git worktree remove` after a merge. Defaults to `stop`, which stops its processes and keeps its data, containers and ports until `devlanes lane gc --yes` or `devlanes lane clean` removes them. Set `clean` to have devlanes clean the lane by itself."
         },
         "vars": {
           "additionalProperties": {
@@ -1898,23 +1898,23 @@
       "markdownDescription": "When a unit counts as ready. `devlanes start` waits for it, and `after: services` tasks run only once every started service is ready. Write `started`, or a mapping with one of `tcp`, `http`, `log` or `cmd` and an optional `timeout`."
     },
     "RemovedWorktrees": {
-      "description": "What happens to a running lane whose worktree folder is deleted.",
+      "description": "What happens to a lane whose worktree folder is deleted.",
       "enum": [
         "stop",
         "clean"
       ],
       "enumDescriptions": [
-        "Stop the lane's processes; once nothing runs, the lane is cleaned.",
-        "Clean the lane right away: stop its processes, remove its own containers and free its index and ports. `lane.clean` tasks and `infra.teardown` need the folder to run in, so they are skipped; data they would drop from shared containers stays."
+        "Stop the lane's processes and keep the lane: its data folder, containers, index and ports stay until `devlanes lane gc --yes` or `devlanes lane clean` removes them.",
+        "Clean the lane by itself: stop its processes, remove its own containers and data folder, and free its index and ports. An idle lane is cleaned once its folder has been gone for 5 seconds, so `git worktree move` keeps it. Its logs stay until log retention removes them. `lane.clean` tasks and `infra.teardown` need the folder to run in, so they are skipped; data they would drop from shared containers stays."
       ],
       "examples": [
         "stop",
         "clean"
       ],
-      "markdownDescription": "What happens to a running lane whose worktree folder is deleted.",
+      "markdownDescription": "What happens to a lane whose worktree folder is deleted.",
       "markdownEnumDescriptions": [
-        "Stop the lane's processes; once nothing runs, the lane is cleaned.",
-        "Clean the lane right away: stop its processes, remove its own containers and free its index and ports. `lane.clean` tasks and `infra.teardown` need the folder to run in, so they are skipped; data they would drop from shared containers stays."
+        "Stop the lane's processes and keep the lane: its data folder, containers, index and ports stay until `devlanes lane gc --yes` or `devlanes lane clean` removes them.",
+        "Clean the lane by itself: stop its processes, remove its own containers and data folder, and free its index and ports. An idle lane is cleaned once its folder has been gone for 5 seconds, so `git worktree move` keeps it. Its logs stay until log retention removes them. `lane.clean` tasks and `infra.teardown` need the folder to run in, so they are skipped; data they would drop from shared containers stays."
       ],
       "type": "string"
     },

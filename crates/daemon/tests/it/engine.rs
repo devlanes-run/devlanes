@@ -172,7 +172,8 @@ async fn start(h: &crate::Harness, context: Context, params: Value) -> StartResu
 #[tokio::test(flavor = "multi_thread")]
 /// Lane 0 follows the primary branch; other worktrees get a lane once devlanes
 /// runs in them and keep its index; a worktree moving onto the primary branch
-/// takes lane 0 at its next start; an idle lane whose folder is gone is cleaned.
+/// takes lane 0 at its next start; an idle lane whose folder is gone keeps its
+/// index by default, and the next lane takes the lowest free one.
 async fn lane_indices_and_primary_moves() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -218,17 +219,15 @@ async fn lane_indices_and_primary_moves() {
             &["worktree", "remove", "--force", &a.display().to_string()],
         );
         worktree(&main, &c, "feat/c");
-        let cleaned = eventually(Duration::from_secs(10), || async {
-            let list = lanes(&h, &main).await;
-            list.iter().all(|lane| lane.path != a).then_some(())
-        })
-        .await;
-        assert!(
-            cleaned.is_some(),
-            "an idle lane whose folder is gone is cleaned"
-        );
         let list = lanes(&h, &c).await;
-        assert_eq!(lane_at(&list, &c).index, Some(1), "lowest free index");
+        let kept = lane_at(&list, &a);
+        assert_eq!(kept.index, Some(1), "{kept:?}");
+        assert_eq!(
+            kept.reason.as_ref().map(|r| r.code.as_str()),
+            Some("worktree_missing"),
+            "{kept:?}"
+        );
+        assert_eq!(lane_at(&list, &c).index, Some(2), "lowest free index");
         h.close().await;
     })
     .await
@@ -237,7 +236,8 @@ async fn lane_indices_and_primary_moves() {
 
 #[tokio::test(flavor = "multi_thread")]
 /// A worktree devlanes ran in, moved and removed, shows in `status` without a
-/// re-list request; once removed and idle, its lane is cleaned.
+/// re-list request. Once removed and idle, its lane is cleaned when its file sets
+/// `removed_worktrees: clean`, and kept with its index otherwise.
 async fn worktrees_are_picked_up_live() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
@@ -251,8 +251,22 @@ async fn worktrees_are_picked_up_live() {
         )
         .await;
         assert_eq!(status(&h, cx(&main), json!({})).await.len(), 1);
+        let keep = tmp.path.join("wt-keep");
+        worktree(&main, &keep, "feat/keep");
+        let kept_index = eventually(Duration::from_secs(10), || async {
+            let all = status(&h, cx(&keep), json!({})).await;
+            all.iter().find(|l| l.path == keep).and_then(|l| l.index)
+        })
+        .await
+        .expect("the default worktree devlanes ran in shows up");
         let x = tmp.path.join("wt-x");
         worktree(&main, &x, "feat/x");
+        std::fs::write(
+            x.join("devlanes.yaml"),
+            format!("{BASIC}lanes:\n  removed_worktrees: clean\n"),
+        )
+        .expect("clean config");
+        git(&x, &["commit", "-q", "-am", "clean removed worktrees"]);
         // The watcher sees the worktree, but only a command run in it makes a lane.
         let index = eventually(Duration::from_secs(10), || async {
             let all = status(&h, cx(&x), json!({})).await;
@@ -277,15 +291,24 @@ async fn worktrees_are_picked_up_live() {
         .await
         .expect("moved worktree shows up");
         assert_eq!(moved, index, "a move keeps the lane");
+        // The default lane goes first, so a clean of it would not trail y's.
+        git(&main, &["worktree", "remove", &keep.display().to_string()]);
         git(&main, &["worktree", "remove", &y.display().to_string()]);
         let cleaned = eventually(Duration::from_secs(10), || async {
             let all = status(&h, cx(&main), json!({})).await;
-            all.iter().all(|l| l.path != y).then_some(())
+            all.iter().all(|l| l.path != y).then_some(all)
         })
-        .await;
-        assert!(
-            cleaned.is_some(),
-            "the idle lane of a removed worktree is cleaned"
+        .await
+        .expect("the idle lane of a removed worktree set to clean is cleaned");
+        let kept = cleaned
+            .iter()
+            .find(|l| l.path == keep)
+            .expect("the default keeps the lane of a removed worktree");
+        assert_eq!(kept.index, Some(kept_index), "{kept:?}");
+        assert_eq!(
+            kept.reason.as_ref().map(|r| r.code.as_str()),
+            Some("worktree_missing"),
+            "{kept:?}"
         );
         let start = h
             .call(

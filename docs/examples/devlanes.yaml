@@ -36,7 +36,8 @@ lanes:
   # A worktree gets its lane when devlanes first runs in it. register only reserves the lane;
   # setup also runs infra and lane.create tasks, start also starts services.
   new_worktrees: register
-  # Stop a deleted worktree's processes; its lane is cleaned once nothing runs. clean cleans at once.
+  # Stop a deleted worktree's processes and keep its lane until devlanes lane gc --yes.
+  # clean also removes the lane's containers and data and frees its ports.
   removed_worktrees: stop
   # Ports reserved per lane; by default what the services need plus half again.
   # block_size: 80

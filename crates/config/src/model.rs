@@ -104,9 +104,10 @@ pub struct LanesConfig {
     /// or also start it. Defaults to `register`. A worktree gets a lane the first time
     /// devlanes runs in it, not merely because it exists.
     pub new_worktrees: Option<NewWorktrees>,
-    /// What happens to a running lane whose worktree folder is deleted. Defaults to `stop`.
-    /// A lane whose folder is gone and that runs nothing is cleaned; its logs stay until
-    /// log retention removes them.
+    /// What happens to a lane whose worktree folder is deleted, for example by `git worktree
+    /// remove` after a merge. Defaults to `stop`, which stops its processes and keeps its
+    /// data, containers and ports until `devlanes lane gc --yes` or `devlanes lane clean`
+    /// removes them. Set `clean` to have devlanes clean the lane by itself.
     pub removed_worktrees: Option<RemovedWorktrees>,
     /// Number of ports reserved for each lane. By default devlanes counts the ports the
     /// config needs and adds half again, rounded up to ten. A fixed size smaller than what
@@ -159,13 +160,16 @@ pub enum NewWorktrees {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[schemars(extend("examples" = ["stop","clean"]))]
-/// What happens to a running lane whose worktree folder is deleted.
+/// What happens to a lane whose worktree folder is deleted.
 pub enum RemovedWorktrees {
-    /// Stop the lane's processes; once nothing runs, the lane is cleaned.
+    /// Stop the lane's processes and keep the lane: its data folder, containers, index and
+    /// ports stay until `devlanes lane gc --yes` or `devlanes lane clean` removes them.
     #[schemars(extend("examples" = ["stop"]))]
     Stop,
-    /// Clean the lane right away: stop its processes, remove its own containers and free
-    /// its index and ports. `lane.clean` tasks and `infra.teardown` need the folder to
+    /// Clean the lane by itself: stop its processes, remove its own containers and data
+    /// folder, and free its index and ports. An idle lane is cleaned once its folder has
+    /// been gone for 5 seconds, so `git worktree move` keeps it. Its logs stay until log
+    /// retention removes them. `lane.clean` tasks and `infra.teardown` need the folder to
     /// run in, so they are skipped; data they would drop from shared containers stays.
     #[schemars(extend("examples" = ["clean"]))]
     Clean,
