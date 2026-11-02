@@ -103,7 +103,7 @@ pub struct Cli {
     /// Cap agent-mode output at this many bytes [default: 16384, minimum: 256]
     #[arg(long, global = true, value_parser = parse_budget, value_name = "BYTES", help_heading = GLOBAL)]
     pub budget: Option<usize>,
-    /// Print timestamped diagnostics of the client and daemon to stderr; -vv for more [env: DEVLANES_VERBOSE=1|2]
+    /// Print timestamped diagnostics of the client and daemon to stderr; -vv for more. A bare devlanes -v prints the version [env: DEVLANES_VERBOSE=1|2]
     #[arg(short, long, global = true, action = clap::ArgAction::Count, help_heading = GLOBAL)]
     pub verbose: u8,
 }

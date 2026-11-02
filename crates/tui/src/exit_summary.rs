@@ -39,11 +39,13 @@ const LABEL: usize = 10;
 /// The daemon as it answered after the TUI closed.
 #[derive(Debug, Clone)]
 pub enum Daemon {
-    /// It answered with every lane it knows, and the newer release its
-    /// `daemon.status` reported, if any.
+    /// It answered with every lane it knows, the newer release its
+    /// `daemon.status` reported, if any, and how soon it exits on its own
+    /// when nothing keeps it up ([`stopping_in`]).
     Running {
         lanes: Vec<LaneSummary>,
         update: Option<UpdateInfo>,
+        stopping_in: Option<Duration>,
     },
     /// Nothing listens on its socket any more.
     Stopped,
@@ -58,16 +60,41 @@ impl Daemon {
     pub async fn ask(api: &dyn DaemonApi) -> Self {
         let both = async { tokio::join!(api.status(), api.daemon_status()) };
         match tokio::time::timeout(STATUS_TIMEOUT, both).await {
-            Ok((Ok(lanes), status)) => Self::Running {
-                lanes,
-                update: status
-                    .ok()
-                    .and_then(|status| status.get("update").cloned())
-                    .and_then(|update| serde_json::from_value(update).ok()),
-            },
+            Ok((Ok(lanes), status)) => {
+                let status = status.ok();
+                Self::Running {
+                    lanes,
+                    update: status
+                        .as_ref()
+                        .and_then(|status| status.get("update").cloned())
+                        .and_then(|update| serde_json::from_value(update).ok()),
+                    stopping_in: status.as_ref().and_then(stopping_in),
+                }
+            }
             Ok((Err(ApiError::Disconnected(_)), _)) => Self::Stopped,
             Ok((Err(_), _)) | Err(_) => Self::Unanswered,
         }
+    }
+}
+
+/// How soon the daemon exits on its own now that this TUI closed, from
+/// `daemon.status`'s `idle_exit`; `None` for a daemon that never does, or
+/// while lanes, boxes or another watcher keep it up. This TUI's own event
+/// subscription may not have ended yet when the daemon answers, so one
+/// watcher is taken to be this TUI.
+fn stopping_in(status: &serde_json::Value) -> Option<Duration> {
+    let idle_exit = status.get("idle_exit")?;
+    let idle = idle_exit.get("idle")?.as_bool()?;
+    let watchers = idle_exit.get("watchers")?.as_u64()?;
+    let after = idle_exit.get("after_ms")?.as_u64()?;
+    (idle && watchers <= 1).then(|| Duration::from_millis(after))
+}
+
+/// `15s`, or whole minutes from a minute on.
+fn short_duration(duration: Duration) -> String {
+    match duration.as_secs() {
+        secs @ 0..60 => format!("{secs}s"),
+        secs => format!("{} min", secs / 60),
     }
 }
 
@@ -133,7 +160,7 @@ fn lines(
     let label = |text: &str| Span::styled(format!("{text:<LABEL$}"), theme.quiet());
     let bold = Style::new().add_modifier(Modifier::BOLD);
     let (lanes, update) = match daemon {
-        Daemon::Running { lanes, update } => (lanes.as_slice(), update.as_ref()),
+        Daemon::Running { lanes, update, .. } => (lanes.as_slice(), update.as_ref()),
         Daemon::Stopped | Daemon::Unanswered => (&[][..], None),
     };
     let known = lane.and_then(|reference| lanes.iter().find(|l| l.reference == reference));
@@ -149,14 +176,23 @@ fn lines(
     }
     let mut spans = vec![label("Daemon")];
     match daemon {
-        Daemon::Running { lanes, .. } => {
+        Daemon::Running {
+            lanes, stopping_in, ..
+        } => {
             let live = lanes.iter().filter(|l| tree::lane_is_live(l)).count();
             let running = match live {
                 0 => ", no lanes running".to_owned(),
                 1 => ", 1 lane running".to_owned(),
                 n => format!(", {n} lanes running"),
             };
-            spans.push(Span::styled("running", theme.tone(Tone::Ok)));
+            // "running" alone reads as running until stopped by hand.
+            match stopping_in {
+                Some(after) => spans.push(Span::styled(
+                    format!("stopping in {}", short_duration(*after)),
+                    theme.tone(Tone::Busy),
+                )),
+                None => spans.push(Span::styled("running", theme.tone(Tone::Ok))),
+            }
             spans.push(Span::styled(running, theme.quiet()));
         }
         Daemon::Stopped => spans.push(Span::styled("not running", theme.quiet())),
@@ -247,6 +283,7 @@ mod tests {
         Daemon::Running {
             lanes,
             update: None,
+            stopping_in: None,
         }
     }
 
@@ -306,6 +343,7 @@ mod tests {
         let daemon = Daemon::Running {
             lanes: vec![lane("acme@0", "running")],
             update: Some(release("99.0.1", "patch")),
+            stopping_in: None,
         };
         let rows = text(
             &theme(Tier::Plain, Glyphs::Ascii),
@@ -330,6 +368,7 @@ mod tests {
         let daemon = Daemon::Running {
             lanes: Vec::new(),
             update: Some(ready),
+            stopping_in: None,
         };
         let rows = text(
             &theme(Tier::Plain, Glyphs::Ascii),
@@ -350,6 +389,7 @@ mod tests {
         let daemon = Daemon::Running {
             lanes: Vec::new(),
             update: Some(release("99.0.0", "minor")),
+            stopping_in: None,
         };
         let rows = text(&theme(Tier::Plain, Glyphs::Ascii), 80, None, None, &daemon);
         assert_eq!(
@@ -363,6 +403,7 @@ mod tests {
         let daemon = Daemon::Running {
             lanes: Vec::new(),
             update: Some(release("0.0.1", "patch")),
+            stopping_in: None,
         };
         let rows = text(&theme(Tier::Plain, Glyphs::Ascii), 80, None, None, &daemon);
         assert_eq!(rows[3..], ["  Daemon    running, no lanes running"]);

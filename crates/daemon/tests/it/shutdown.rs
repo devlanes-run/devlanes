@@ -41,7 +41,7 @@ async fn the_engine_goes_idle_after_the_last_subscriber_with_nothing_running() {
         )
         .await;
         let wait = Duration::from_millis(800);
-        // Never watched: a daemon only commands used waits ten grace periods.
+        // Never watched: a daemon only commands used waits `UNWATCHED_IDLE_FACTOR` grace periods.
         assert!(tokio::time::timeout(wait, h.engine.idle()).await.is_err());
         h.call(Method::Start, json!({}), cx(&main))
             .await
@@ -69,7 +69,7 @@ async fn the_engine_goes_idle_after_the_last_subscriber_with_nothing_running() {
 #[tokio::test(flavor = "multi_thread")]
 /// A daemon no subscriber ever watched goes idle after
 /// `UNWATCHED_IDLE_FACTOR` grace periods of quiet, never while a unit runs.
-async fn an_unwatched_engine_goes_idle_after_ten_grace_periods() {
+async fn an_unwatched_engine_goes_idle_after_more_grace_periods() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(

@@ -129,7 +129,7 @@ pub async fn open_ui(runtime: &Runtime, paths: &Paths) -> Result<u8, RpcError> {
 /// How long a daemon a client spawned stays up after the last TUI closed with
 /// nothing running: enough for quitting and reopening the TUI, or for a
 /// command typed right after, not to pay for a new daemon.
-const IDLE_EXIT_GRACE: Duration = Duration::from_secs(30);
+const IDLE_EXIT_GRACE: Duration = Duration::from_secs(15);
 
 /// Builds the daemon engine with every concrete integration. Integrations that
 /// cannot start (no Docker, no CA, a busy proxy port) degrade to reported errors

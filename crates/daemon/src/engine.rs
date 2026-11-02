@@ -36,7 +36,7 @@ use crate::{
 /// How many grace periods ([`EngineOptions::idle_exit`]) a daemon that no
 /// subscriber ever watched waits before it exits: one only commands used has
 /// no TUI whose closing would mark the end of the work.
-pub const UNWATCHED_IDLE_FACTOR: u32 = 10;
+pub const UNWATCHED_IDLE_FACTOR: u32 = 20;
 
 /// Paths and policy the engine needs; supplied by the composition root.
 #[derive(Clone)]
@@ -450,6 +450,27 @@ impl Inner {
             })
     }
 
+    /// `daemon.status`'s `idle_exit`: `null` for a daemon that never exits on
+    /// its own, else `{after_ms, idle, watchers}`: how long it waits once the
+    /// last event subscriber left, whether nothing but subscribers keeps it up
+    /// ([`Self::is_idle`]), and how many subscribers it has now.
+    fn idle_exit_status(&self) -> Value {
+        let Some(grace) = self.opts.idle_exit else {
+            return Value::Null;
+        };
+        let watchers = self.bus.subscribers();
+        let after = if watchers > 0 || self.watched.load(Ordering::Relaxed) {
+            grace
+        } else {
+            grace * UNWATCHED_IDLE_FACTOR
+        };
+        json!({
+            "after_ms": after.as_millis(),
+            "idle": self.is_idle(),
+            "watchers": watchers,
+        })
+    }
+
     /// Every lane of every project.
     pub(crate) fn all_lanes(&self) -> Vec<LanePair> {
         let projects: Vec<_> = lock(&self.projects).values().cloned().collect();
@@ -505,6 +526,7 @@ impl Inner {
                 "https_port": self.integ.routes.https_port(),
                 "ports_range": self.opts.user.ports.range,
                 "setup": self.setup_status().await,
+                "idle_exit": self.idle_exit_status(),
             }))),
             Method::DaemonShutdown => Ok(json!({"stopping": true})),
             Method::DaemonResetState => self.reset_state(&context).await,
