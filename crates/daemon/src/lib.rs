@@ -223,6 +223,10 @@ pub trait Handler: Send + Sync + 'static {
     /// Called once the daemon announced readiness, before the first client is
     /// accepted. Must return at once; work it starts runs in the background.
     fn on_ready(&self) {}
+
+    /// Resolves once the events emitted so far reached their subscribers; the
+    /// server waits for it, bounded, before it closes the connections at exit.
+    async fn flush_events(&self) {}
 }
 
 /// Why the daemon shuts down. Only an explicit shutdown runs the lanes'
@@ -277,6 +281,10 @@ impl Shutdown {
 /// Longest the server waits for explicit `daemon.shutdown` requests to deliver
 /// their answers before it closes the connections.
 const ANSWER_WAIT: Duration = Duration::from_secs(5);
+
+/// Longest the server waits for subscribers to receive the events emitted
+/// before it closes the connections; a client that stops reading holds it up.
+const EVENT_FLUSH_WAIT: Duration = Duration::from_secs(1);
 
 /// The explicit `daemon.shutdown` requests and the report they answer with.
 struct Stops {
@@ -561,6 +569,9 @@ impl Server {
         stops.finish(stopped.clone());
         // `recv` ends once every waiting request delivered its answer.
         let _ = tokio::time::timeout(ANSWER_WAIT, answered.recv()).await;
+        // Subscribers read the shutdown's last steps on their own connections,
+        // which may trail the answer; aborting them now would drop those steps.
+        let _ = tokio::time::timeout(EVENT_FLUSH_WAIT, handler.flush_events()).await;
         clients.abort_all();
         while clients.join_next().await.is_some() {}
         let remove = local::remove(&options.socket).await;

@@ -286,6 +286,11 @@ impl Handler for Engine {
         }))
     }
 
+    /// Waits for every subscriber to receive the events emitted so far.
+    async fn flush_events(&self) {
+        self.inner.bus.flushed().await;
+    }
+
     /// With `idle_exit`, resolves once no subscriber is left and nothing ran
     /// or was in flight for the whole grace period, or for
     /// [`UNWATCHED_IDLE_FACTOR`] grace periods when no subscriber ever came.

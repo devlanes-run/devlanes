@@ -3,7 +3,7 @@
 //! events it missed, then continues with live events.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     sync::{
         Mutex,
         atomic::{AtomicU64, Ordering},
@@ -12,7 +12,7 @@ use std::{
 
 use devlanes_proto::{Event, events};
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::Session;
 
@@ -26,6 +26,34 @@ pub struct EventBus {
     sender: broadcast::Sender<Event>,
     seq: AtomicU64,
     recent: Mutex<VecDeque<Event>>,
+    /// Each client forward by id, with the sequence number of the last event it
+    /// sent or skipped, for [`Self::flushed`].
+    forwarded: watch::Sender<BTreeMap<u64, u64>>,
+    next_forward: AtomicU64,
+}
+
+/// Removes a forward from [`EventBus::forwarded`] when it ends.
+struct Forwarding<'a> {
+    bus: &'a EventBus,
+    id: u64,
+}
+
+impl Forwarding<'_> {
+    /// Records that the forward handled every event up to `seq`.
+    fn handled(&self, seq: u64) {
+        self.bus.forwarded.send_modify(|forwards| {
+            forwards.insert(self.id, seq);
+        });
+    }
+}
+
+impl Drop for Forwarding<'_> {
+    /// A forward that ended holds up no [`EventBus::flushed`].
+    fn drop(&mut self) {
+        self.bus.forwarded.send_modify(|forwards| {
+            forwards.remove(&self.id);
+        });
+    }
 }
 
 impl Default for EventBus {
@@ -42,7 +70,21 @@ impl EventBus {
             sender: broadcast::channel(capacity.max(1)).0,
             seq: AtomicU64::new(1),
             recent: Mutex::new(VecDeque::with_capacity(RECENT)),
+            forwarded: watch::channel(BTreeMap::new()).0,
+            next_forward: AtomicU64::new(1),
         }
+    }
+
+    /// Resolves once every client forward sent or skipped each event emitted
+    /// before the call, so a daemon that is about to close its connections does
+    /// not drop the last ones. A client that stops reading holds it up, so
+    /// callers bound the wait.
+    pub async fn flushed(&self) {
+        let last = self.seq.load(Ordering::Relaxed).saturating_sub(1);
+        let mut forwards = self.forwarded.subscribe();
+        let _ = forwards
+            .wait_for(|forwards| forwards.values().all(|&seq| seq >= last))
+            .await;
     }
 
     /// Publishes an event; having no subscribers is normal. The sequence number
@@ -102,10 +144,17 @@ impl EventBus {
         initial: impl FnOnce(u64) -> Vec<Event>,
         filter: impl Fn(&Event) -> bool,
     ) {
-        let (mut receiver, seq) = {
+        let (mut receiver, seq, forwarding) = {
             // Emits take their number under this lock, so none falls in between.
             let _emits = crate::model::lock(&self.recent);
-            (self.subscribe(), self.seq.fetch_add(1, Ordering::Relaxed))
+            let seq = self.seq.fetch_add(1, Ordering::Relaxed);
+            let forwarding = Forwarding {
+                bus: self,
+                id: self.next_forward.fetch_add(1, Ordering::Relaxed),
+            };
+            // Events before `seq` are not this forward's to send.
+            forwarding.handled(seq);
+            (self.subscribe(), seq, forwarding)
         };
         let disconnected = session.disconnected();
         for event in initial(seq) {
@@ -120,7 +169,10 @@ impl EventBus {
             };
             let event = match next {
                 Ok(event) if filter(&event) => event,
-                Ok(_) => continue,
+                Ok(event) => {
+                    forwarding.handled(event.seq);
+                    continue;
+                }
                 Err(broadcast::error::RecvError::Lagged(missed)) => Event {
                     seq: self.seq.load(Ordering::Relaxed),
                     event: events::RESYNC.into(),
@@ -128,9 +180,11 @@ impl EventBus {
                 },
                 Err(broadcast::error::RecvError::Closed) => return,
             };
+            let handled = event.seq;
             if session.event(event).await.is_err() {
                 return;
             }
+            forwarding.handled(handled);
         }
     }
 }
@@ -165,5 +219,36 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 16_000);
+    }
+
+    #[tokio::test]
+    /// `flushed` returns only once a forward sent every event emitted before it,
+    /// counting the ones its filter skips.
+    async fn flushed_waits_for_forwards_to_send_what_was_emitted() {
+        let bus = std::sync::Arc::new(EventBus::default());
+        let (session, mut frames) = Session::local(1);
+        let forward = {
+            let bus = bus.clone();
+            tokio::spawn(async move { bus.forward(&session, |e| e.event != "skipped").await })
+        };
+        let mut forwards = bus.forwarded.subscribe();
+        forwards
+            .wait_for(|forwards| !forwards.is_empty())
+            .await
+            .expect("the forward registers");
+        for name in ["first", "skipped", "last"] {
+            bus.emit(name, Value::Null);
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(10), bus.flushed())
+            .await
+            .expect("flushed");
+        let mut sent = Vec::new();
+        while let Ok(devlanes_ipc::Frame::Control(devlanes_proto::Control::Event(event))) =
+            frames.try_recv()
+        {
+            sent.push(event.event);
+        }
+        assert_eq!(sent, ["first", "last"]);
+        forward.abort();
     }
 }
