@@ -35,7 +35,74 @@ fn main() -> Result<(), Box<dyn Error>> {
         &devlanes_config::schema_artifact(devlanes_config::user_schema())?,
     )?;
     embed_manifest(Path::new(&manifest));
+    embed_version_info()?;
     embed_notes(Path::new(&manifest))?;
+    Ok(())
+}
+
+/// Embeds a version resource into the `devlanes` binary on Windows (MSVC):
+/// the product, description and version that Explorer's Details tab and Task
+/// Manager show. Antivirus heuristics also count an executable without one
+/// against it. This package's version is the devlanes release version, the one
+/// `devlanes_version::VERSION` reads from this manifest.
+fn embed_version_info() -> Result<(), Box<dyn Error>> {
+    let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !(windows && msvc) {
+        return Ok(());
+    }
+    let version = std::env::var("CARGO_PKG_VERSION")?;
+    let part = |name: &str| -> Result<u16, Box<dyn Error>> { Ok(std::env::var(name)?.parse()?) };
+    let numeric = format!(
+        "{},{},{},0",
+        part("CARGO_PKG_VERSION_MAJOR")?,
+        part("CARGO_PKG_VERSION_MINOR")?,
+        part("CARGO_PKG_VERSION_PATCH")?
+    );
+    let flags = if std::env::var("CARGO_PKG_VERSION_PRE")?.is_empty() {
+        "0"
+    } else {
+        "VS_FF_PRERELEASE"
+    };
+    // Task Manager names the process by FileDescription, so it stays the bare name.
+    let resource = format!(
+        r#"#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION {numeric}
+PRODUCTVERSION {numeric}
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS {flags}
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "devlanes"
+            VALUE "FileDescription", "devlanes"
+            VALUE "FileVersion", "{version}"
+            VALUE "InternalName", "devlanes"
+            VALUE "OriginalFilename", "devlanes.exe"
+            VALUE "ProductName", "devlanes"
+            VALUE "ProductVersion", "{version}"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+"#
+    );
+    let out = std::env::var_os("OUT_DIR").ok_or("missing OUT_DIR")?;
+    let path = Path::new(&out).join("devlanes.rc");
+    write_changed(&path, &resource)?;
+    // Required: the Windows SDK that links devlanes.exe also ships rc.exe, so a
+    // missing compiler is a broken setup, not a reason to ship without the resource.
+    embed_resource::compile_for(&path, ["devlanes"], embed_resource::NONE).manifest_required()?;
     Ok(())
 }
 

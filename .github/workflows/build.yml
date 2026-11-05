@@ -179,6 +179,14 @@ jobs:
       - name: Smoke test
         run: |
           "target/$TARGET/release/devlanes.exe" --version | tr -d '\r' | grep -Fx "devlanes $VERSION"
+      # build.rs embeds it; Explorer, Task Manager and antivirus heuristics read it.
+      - name: Check the version resource
+        shell: pwsh
+        run: |
+          $info = (Get-Item "target/$env:TARGET/release/devlanes.exe").VersionInfo
+          if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne 'devlanes') {
+            throw "unexpected version resource: $($info | Format-List | Out-String)"
+          }
       # The Visual C++ Redistributable is not part of Windows, so the executable must
       # not import its DLLs.
       - name: Check the C runtime is linked statically
