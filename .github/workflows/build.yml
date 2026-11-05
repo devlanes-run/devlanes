@@ -184,7 +184,7 @@ jobs:
         shell: pwsh
         run: |
           $info = (Get-Item "target/$env:TARGET/release/devlanes.exe").VersionInfo
-          if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne 'devlanes') {
+          if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne 'devlanes-cli') {
             throw "unexpected version resource: $($info | Format-List | Out-String)"
           }
       # The Visual C++ Redistributable is not part of Windows, so the executable must

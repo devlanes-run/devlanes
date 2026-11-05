@@ -40,6 +40,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// The devlanes website, named in the Windows version resource.
+const HOMEPAGE: &str = "https://devlanes.run";
+
 /// Embeds a version resource into the `devlanes` binary on Windows (MSVC):
 /// the product, description and version that Explorer's Details tab and Task
 /// Manager show. Antivirus heuristics also count an executable without one
@@ -64,6 +67,13 @@ fn embed_version_info() -> Result<(), Box<dyn Error>> {
     } else {
         "VS_FF_PRERELEASE"
     };
+    // rc.exe strings escape a quote by doubling it.
+    let comments = format!(
+        "{}. Website {HOMEPAGE}, docs {HOMEPAGE}/docs/, source {}",
+        std::env::var("CARGO_PKG_DESCRIPTION")?,
+        std::env::var("CARGO_PKG_REPOSITORY")?
+    )
+    .replace('"', "\"\"");
     // Task Manager names the process by FileDescription, so it stays the bare name.
     let resource = format!(
         r#"#include <winver.h>
@@ -81,12 +91,14 @@ BEGIN
     BEGIN
         BLOCK "040904B0"
         BEGIN
-            VALUE "CompanyName", "devlanes"
+            VALUE "Comments", "{comments}"
+            VALUE "CompanyName", "Devlanes"
             VALUE "FileDescription", "devlanes"
             VALUE "FileVersion", "{version}"
             VALUE "InternalName", "devlanes"
+            VALUE "LegalCopyright", "Copyright (C) Devlanes. Licensed under Apache-2.0."
             VALUE "OriginalFilename", "devlanes.exe"
-            VALUE "ProductName", "devlanes"
+            VALUE "ProductName", "devlanes-cli"
             VALUE "ProductVersion", "{version}"
         END
     END
