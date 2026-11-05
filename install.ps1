@@ -344,6 +344,19 @@
         }
     }
 
+    function Assert-DevlanesPresent {
+        <#
+        Throws when Exe is gone a moment after the script ran it. An antivirus
+        may quarantine a new executable when it first runs or after a background
+        scan, which would leave an install that looks successful.
+        #>
+        param([string]$Exe, [string]$Directory)
+        Start-Sleep -Seconds 2
+        if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
+            throw "devlanes install: $Exe was installed but is gone; an antivirus may have quarantined it. Restore it or exclude $Directory in the antivirus, then run this script again"
+        }
+    }
+
     function Test-DevlanesWritable {
         <# Whether this user can create and delete a file in Directory. #>
         param([string]$Directory)
@@ -576,9 +589,13 @@
             Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
         }
 
+        # A daemon keeps running the binary it started from until it restarts into this
+        # one. This first run of the new executable is also when an antivirus that
+        # distrusts it usually quarantines it.
+        $daemonRuns = Test-DevlanesCommand $exe @('daemon', 'status')
+        Assert-DevlanesPresent -Exe $exe -Directory $dir
         Write-Host "Installed devlanes $version to $dir"
-        # A daemon keeps running the binary it started from until it restarts into this one.
-        if (Test-DevlanesCommand $exe @('daemon', 'status')) {
+        if ($daemonRuns) {
             Invoke-DevlanesDaemonRestart -Exe $exe -Version $version
         } elseif ($inUse) {
             Write-Host "The previous devlanes.exe is still running and keeps running as $inUse."

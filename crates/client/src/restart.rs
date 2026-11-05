@@ -99,7 +99,8 @@ pub async fn restart(
     tokio::task::spawn_blocking(move || owned.prepare()).await??;
     let begun = tokio::time::Instant::now();
     let replace = crate::Replace { pid, plan: line };
-    let (mut lines, _, handover) = crate::start_daemon(paths, &[], begun, Some(replace)).await?;
+    let (mut lines, _, handover, process) =
+        crate::start_daemon(paths, &[], begun, Some(replace)).await?;
     let handover =
         handover.ok_or_else(|| Error::Startup("the new daemon got no restart plan".into()))?;
     // The new daemon reports this step once other clients wait for it. Only
@@ -111,7 +112,7 @@ pub async fn restart(
         match crate::startup_step(&line) {
             Some(step) if step == REPLACE_STEP => break step,
             Some(_) => {}
-            None => return Err(crate::startup_failure(paths, &line, None)),
+            None => return Err(crate::startup_failure(paths, &line, None, process).await),
         }
     };
     handover.go().await?;
@@ -174,7 +175,7 @@ pub async fn restart(
     let failure = match answer {
         // `already-running`: another daemon took the lock first and was handed the lanes.
         Ok(answer) if answer == b"ready\n" || answer == b"already-running\n" => None,
-        Ok(answer) => Some(crate::startup_failure(paths, &answer, Some(step))),
+        Ok(answer) => Some(crate::startup_failure(paths, &answer, Some(step), process).await),
         Err(error) => Some(error),
     };
     if let Some(failure) = failure {

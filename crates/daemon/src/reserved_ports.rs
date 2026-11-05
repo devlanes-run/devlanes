@@ -39,6 +39,9 @@ pub struct Reading {
     pub ranges: Vec<(u16, u16)>,
     /// `family: reason` for each family that failed.
     pub errors: Vec<String>,
+    /// Windows refused to start System32's `netsh` with access denied, which
+    /// an antivirus or application control restricting this process causes.
+    pub spawn_denied: bool,
 }
 
 impl Reading {
@@ -91,7 +94,12 @@ async fn read() -> Reading {
     for (family, result) in FAMILIES.into_iter().zip([ipv4, ipv6]) {
         match result {
             Ok(ranges) => reading.ranges.extend(ranges),
-            Err(error) => reading.errors.push(format!("{family}: {error}")),
+            Err(failure) => {
+                reading.spawn_denied |= failure.spawn_denied;
+                reading
+                    .errors
+                    .push(format!("{family}: {}", failure.message));
+            }
         }
     }
     reading.ranges.sort_unstable();
@@ -99,8 +107,24 @@ async fn read() -> Reading {
     reading
 }
 
+/// Why one family could not be read.
+struct Failure {
+    message: String,
+    /// Starting `netsh` failed with access denied.
+    spawn_denied: bool,
+}
+
+impl From<String> for Failure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            spawn_denied: false,
+        }
+    }
+}
+
 /// One family's ranges from `<System32>\netsh.exe`, never a `netsh` on `PATH`.
-async fn read_family(family: &str) -> Result<Vec<(u16, u16)>, String> {
+async fn read_family(family: &str) -> Result<Vec<(u16, u16)>, Failure> {
     let netsh = devlanes_sys_windows::file::system_directory()
         .map_err(|error| format!("cannot locate System32: {error}"))?
         .join("netsh.exe");
@@ -119,9 +143,12 @@ async fn read_family(family: &str) -> Result<Vec<(u16, u16)>, String> {
     let output = tokio::time::timeout(NETSH_TIMEOUT, output)
         .await
         .map_err(|_| format!("netsh did not answer within {}s", NETSH_TIMEOUT.as_secs()))?
-        .map_err(|error| format!("cannot run netsh: {error}"))?;
+        .map_err(|error| Failure {
+            message: format!("cannot run netsh: {error}"),
+            spawn_denied: error.kind() == std::io::ErrorKind::PermissionDenied,
+        })?;
     if !output.status.success() {
-        return Err(format!("netsh failed ({})", output.status));
+        return Err(format!("netsh failed ({})", output.status).into());
     }
     // The output is in the console code page; only the ASCII digits matter.
     Ok(parse(&String::from_utf8_lossy(&output.stdout)))
@@ -175,8 +202,9 @@ const PROXY_FALLBACKS: [(&str, u16); 2] = [
 ];
 
 /// `doctor`'s `reserved_ports`: `{ranges, pool, pool_overlaps, lanes, proxy,
-/// mirrored, error?, command}`, or `{error, command}` when no family could be
-/// read. `pool` is the inclusive `ports.range` (`None` when invalid, which the
+/// mirrored, error?, spawn_denied, command}`, or `{error, spawn_denied,
+/// command}` when no family could be read. `spawn_denied` is
+/// [`Reading::spawn_denied`]. `pool` is the inclusive `ports.range` (`None` when invalid, which the
 /// user config check reports); `pool_overlaps` are the ranges overlapping it,
 /// which new blocks skip; `lanes` the lanes whose assigned ports fell into a
 /// range since (`[{lane, ports}]`, from `assigned`: lane reference to ports);
@@ -191,7 +219,7 @@ pub fn report(
 ) -> Value {
     let error = (!reading.errors.is_empty()).then(|| reading.errors.join("; "));
     if !reading.any_read() {
-        return json!({"error": error, "command": LIST_COMMAND});
+        return json!({"error": error, "spawn_denied": reading.spawn_denied, "command": LIST_COMMAND});
     }
     let range = |&(start, end): &(u16, u16)| json!({"start": start, "end": end});
     let pool_overlaps: Vec<Value> = pool
@@ -245,6 +273,7 @@ pub fn report(
         "proxy": proxy,
         "mirrored": mirrored,
         "error": error,
+        "spawn_denied": reading.spawn_denied,
         "command": LIST_COMMAND,
     })
 }
@@ -289,13 +318,13 @@ mod tests {
     #[test]
     fn failed_readings_are_retried_soon() {
         let failed = Reading {
-            ranges: Vec::new(),
             errors: vec!["ipv4: x".into(), "ipv6: y".into()],
+            ..Reading::default()
         };
         assert_eq!(fresh_for(&failed), RETRY_AFTER);
         let partial = Reading {
-            ranges: Vec::new(),
             errors: vec!["ipv6: y".into()],
+            ..Reading::default()
         };
         assert_eq!(fresh_for(&partial), CACHE_FOR);
         assert_eq!(fresh_for(&Reading::default()), CACHE_FOR);
@@ -316,7 +345,7 @@ mod tests {
     fn read_ok(ranges: Vec<(u16, u16)>) -> Reading {
         Reading {
             ranges,
-            errors: Vec::new(),
+            ..Reading::default()
         }
     }
 
@@ -377,6 +406,7 @@ mod tests {
         let partial = Reading {
             ranges: vec![(20000, 20010)],
             errors: vec!["ipv6: netsh failed".into()],
+            ..Reading::default()
         };
         let report = report(
             &partial,
@@ -393,6 +423,7 @@ mod tests {
         let failed = Reading {
             ranges: Vec::new(),
             errors: vec!["ipv4: x".into(), "ipv6: y".into()],
+            spawn_denied: true,
         };
         assert_eq!(
             super::report(
@@ -402,7 +433,7 @@ mod tests {
                 [("http", 80), ("https", 443)],
                 &BTreeSet::new()
             ),
-            json!({"error": "ipv4: x; ipv6: y", "command": LIST_COMMAND})
+            json!({"error": "ipv4: x; ipv6: y", "spawn_denied": true, "command": LIST_COMMAND})
         );
     }
 }

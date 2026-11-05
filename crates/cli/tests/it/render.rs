@@ -911,7 +911,7 @@ fn doctor_words_the_windows_facts() {
 /// A lane port, proxy port or mirrored port in a Windows reserved port range is
 /// a warning naming the `netsh` command. A range inside `ports.range` alone is
 /// an ok line, since new lanes skip it, as is no overlap at all; an unreadable
-/// `netsh` is a warning.
+/// `netsh` is a warning, and one Windows refused to start names the cause.
 #[test]
 fn doctor_words_reserved_port_ranges() {
     let command = "netsh int ipv4 show excludedportrange protocol=tcp";
@@ -978,6 +978,19 @@ fn doctor_words_reserved_port_ranges() {
         text.contains("cannot read the Windows reserved port ranges: ipv4: netsh failed"),
         "{text}"
     );
+    assert!(!text.contains("refused to let devlanes start"), "{text}");
+
+    // Access denied starting netsh points at what restricts devlanes.exe.
+    data["reserved_ports"] = json!({
+        "error": "ipv4: cannot run netsh: Access is denied. (os error 5)",
+        "spawn_denied": true, "command": command,
+    });
+    let text = render_text(Method::Doctor, &data);
+    assert!(
+        text.contains("Windows refused to let devlanes start netsh (access denied)"),
+        "{text}"
+    );
+    assert!(text.contains("mark it as trusted"), "{text}");
 }
 
 /// Inside WSL the CLI adds `wsl` and the daemon `windows_drive_worktrees`:

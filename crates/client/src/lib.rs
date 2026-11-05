@@ -7,7 +7,11 @@ pub mod setup;
 
 #[cfg(unix)]
 use std::process::Stdio;
-use std::{collections::VecDeque, path::PathBuf, time::Duration};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use bytes::Bytes;
 pub use devlanes_ipc::Frame;
@@ -357,13 +361,13 @@ impl Client {
                 error
             }
         })?;
-        let (lines, in_job, _) = start_daemon(paths, remove_env, begun, None).await?;
+        let (lines, in_job, _, process) = start_daemon(paths, remove_env, begun, None).await?;
         let Answer {
             line: message,
             step,
         } = read_answer(paths, lines, begun).await?;
         if message != b"ready\n" && message != b"already-running\n" {
-            return Err(startup_failure(paths, &message, step));
+            return Err(startup_failure(paths, &message, step, process).await);
         }
         // Losing the race to another client's daemon means this invocation did not spawn it.
         let spawned = message == b"ready\n";
@@ -799,6 +803,52 @@ fn same_name(name: &str, listed: &str) -> bool {
 /// the pipe closed first. The channel closes after the answer.
 type ReadyLines = tokio::sync::mpsc::Receiver<std::io::Result<Vec<u8>>>;
 
+/// A spawned daemon process. Windows keeps it until the daemon answers, so
+/// one that exits without an answer can be named by its exit code.
+#[cfg(windows)]
+pub(crate) type Process = devlanes_sys_windows::spawn::Child;
+
+/// Unix leaves its spawned daemon to tokio, and the browser build spawns none.
+#[cfg(not(windows))]
+pub(crate) type Process = std::convert::Infallible;
+
+/// What [`start_daemon`] returns: the readiness lines, whether the daemon
+/// started inside this process's job, the restart handover and the process.
+type Started = (ReadyLines, bool, Option<Handover>, Option<Process>);
+
+/// How long a daemon whose readiness pipe closed without an answer gets to
+/// finish exiting before its exit code is read.
+#[cfg(windows)]
+const EXIT_WAIT: Duration = Duration::from_secs(2);
+
+/// How the spawned `process` ended, once its readiness pipe closed without
+/// an answer: `exit code ...`, or `None` when it is unknown or the process
+/// still runs.
+pub(crate) async fn exited(process: Option<Process>) -> Option<String> {
+    #[cfg(windows)]
+    {
+        let process = process?;
+        let code = tokio::task::spawn_blocking(move || process.wait_timeout(EXIT_WAIT))
+            .await
+            .ok()?
+            .ok()??;
+        Some(exit_code(code))
+    }
+    #[cfg(not(windows))]
+    process.and_then(|never| match never {})
+}
+
+/// A Windows exit code as shown in an error: NTSTATUS values, which a crash
+/// or another program ending the process leaves, in hex.
+#[cfg(windows)]
+fn exit_code(code: u32) -> String {
+    if code >= 0xC000_0000 {
+        format!("exit code 0x{code:08X}")
+    } else {
+        format!("exit code {code}")
+    }
+}
+
 /// Most lines the readiness reader holds before the client takes them.
 #[cfg(not(target_family = "wasm"))]
 const READY_LINES_QUEUED: usize = 16;
@@ -861,7 +911,7 @@ async fn start_daemon(
     remove_env: &[&str],
     begun: Instant,
     replace: Option<Replace>,
-) -> Result<(ReadyLines, bool, Option<Handover>)> {
+) -> Result<Started> {
     use tokio::io::AsyncWriteExt;
     let mut command = Command::new(daemon_exe().await?);
     // The daemon outlives this shell and serves every later one, so it keeps
@@ -923,7 +973,7 @@ async fn start_daemon(
     );
     // Tokio reaps the child after this handle is dropped; never kill a potentially live daemon.
     drop(child);
-    Ok((read_lines(stdout), false, handover))
+    Ok((read_lines(stdout), false, handover, None))
 }
 
 /// Whether the reader goes on after `read`: only a whole step line has more
@@ -992,12 +1042,12 @@ async fn start_daemon(
     _remove_env: &[&str],
     _begun: Instant,
     _replace: Option<Replace>,
-) -> Result<(ReadyLines, bool, Option<Handover>)> {
+) -> Result<Started> {
     Err(Error::Startup("no daemon in the browser".into()))
 }
 
-/// Spawns `devlanes daemon run` and returns the lines of its readiness pipe
-/// and whether the daemon started inside this process's job.
+/// Spawns `devlanes daemon run` and returns the lines of its readiness pipe,
+/// whether the daemon started inside this process's job, and its process.
 ///
 /// The daemon inherits only the readiness pipe (as stdout, so
 /// `DEVLANES_READY_FD=1` holds) and NUL: a shell reading this command's output,
@@ -1014,7 +1064,7 @@ async fn start_daemon(
     remove_env: &[&str],
     begun: Instant,
     replace: Option<Replace>,
-) -> Result<(ReadyLines, bool, Option<Handover>)> {
+) -> Result<Started> {
     use std::ffi::{OsStr, OsString};
     use std::os::windows::io::AsHandle;
 
@@ -1120,29 +1170,59 @@ async fn start_daemon(
         elapsed_ms = begun.elapsed().as_millis() as u64,
         "daemon process started; waiting for its readiness line"
     );
-    // Dropping the handle leaves the daemon running.
-    drop(child);
-    Ok((read_lines_blocking(reader)?, in_job, handover))
+    // Dropping the handle later leaves the daemon running.
+    Ok((read_lines_blocking(reader)?, in_job, handover, Some(child)))
 }
 
 /// The error for a spawned daemon's readiness answer `line` other than
 /// `ready`: a refused user config is a structured `config_error`, so the CLI
 /// and the TUI word it like any other; a daemon that died before writing a
-/// reason points at its log, with the last `step` it reported.
-fn startup_failure(paths: &Paths, line: &[u8], step: Option<String>) -> Error {
+/// reason points at its log, with the last `step` it reported and, when
+/// `process` tells, its exit code.
+async fn startup_failure(
+    paths: &Paths,
+    line: &[u8],
+    step: Option<String>,
+    process: Option<Process>,
+) -> Error {
     let reason = String::from_utf8_lossy(line).trim().to_owned();
     if let Some(error) = user_config_startup_error(&reason) {
         return Error::Rpc(error);
     }
-    let log = paths.logs.join("daemon.log");
-    Error::Startup(match (reason.is_empty(), step) {
-        (false, _) => reason,
-        (true, Some(step)) => format!(
-            "the daemon exited in step {step:?} without a reason; see {}",
-            log.display()
-        ),
-        (true, None) => format!("the daemon exited without a reason; see {}", log.display()),
-    })
+    if !reason.is_empty() {
+        return Error::Startup(reason);
+    }
+    let exit = exited(process).await;
+    Error::Startup(silent_exit(
+        &paths.logs.join("daemon.log"),
+        step.as_deref(),
+        exit.as_deref(),
+    ))
+}
+
+/// The message for a spawned daemon that exited without a reason, in `step`
+/// and with `exit` when known (only Windows reads one). A daemon reports its
+/// own startup failures, and a panic leaves its message in the log, so one
+/// that exits silently was most likely stopped from outside.
+fn silent_exit(log: &Path, step: Option<&str>, exit: Option<&str>) -> String {
+    let exited = match exit {
+        Some(exit) => format!("exited with {exit}"),
+        None => "exited".to_owned(),
+    };
+    let during = step
+        .map(|step| format!(" in step {step:?}"))
+        .unwrap_or_default();
+    let mut message = format!(
+        "the daemon {exited}{during} without a reason; see {}",
+        log.display()
+    );
+    if exit.is_some() {
+        message.push_str(
+            ". An antivirus or application control may have stopped it: if `devlanes daemon run` \
+             keeps running in a terminal, mark devlanes.exe as trusted there",
+        );
+    }
+    message
 }
 
 /// The end of a spawned daemon's readiness pipe.

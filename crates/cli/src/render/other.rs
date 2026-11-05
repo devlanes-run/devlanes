@@ -1306,9 +1306,11 @@ pub(crate) fn doctor_failed(data: &Value, runtime: &crate::Runtime) -> bool {
 }
 
 /// Windows' reserved TCP port ranges (`reserved_ports`: `{ranges, pool,
-/// pool_overlaps, lanes, proxy, mirrored, error, command}`), which no program
-/// can bind. New lanes skip them, so an overlap with `ports.range` is only
-/// noted; a lane port, proxy port or mirrored port inside one is a warning.
+/// pool_overlaps, lanes, proxy, mirrored, error, spawn_denied, command}`),
+/// which no program can bind. New lanes skip them, so an overlap with
+/// `ports.range` is only noted; a lane port, proxy port or mirrored port inside
+/// one is a warning. `spawn_denied` (Windows refused to start `netsh`) is a
+/// warning of its own, since lane services would be refused the same way.
 /// Only Windows reports the fact.
 fn reserved_port_checks(reserved: &Value) -> Vec<Check> {
     if !reserved.is_object() {
@@ -1326,6 +1328,16 @@ fn reserved_port_checks(reserved: &Value) -> Vec<Check> {
             .collect()
     };
     let mut checks = Vec::new();
+    if reserved["spawn_denied"].as_bool() == Some(true) {
+        checks.push(
+            Check::new(
+                "ports",
+                Outcome::Skip,
+                "Windows refused to let devlanes start netsh (access denied), so it may not be allowed to start any program",
+            )
+            .fix("an antivirus or application control may restrict devlanes.exe; mark it as trusted there"),
+        );
+    }
     if reserved.get("ranges").is_none() {
         checks.push(
             Check::new(

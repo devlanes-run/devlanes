@@ -654,8 +654,15 @@ pub async fn stage(
     probe.env_remove(crate::version::RUNNING_ENV);
     let reported = probe_version(probe).await;
     if reported.as_deref() != Some(entry.version.as_str()) {
+        // A new executable that does not run at all on Windows is most often
+        // one an antivirus quarantined while it was extracted or first run.
+        let hint = if cfg!(windows) && reported.is_none() {
+            "; an antivirus may have quarantined it"
+        } else {
+            ""
+        };
         return Err(InstallError::Release(format!(
-            "the {} archive's devlanes reports {}",
+            "the {} archive's devlanes reports {}{hint}",
             entry.version,
             reported.as_deref().unwrap_or("no version")
         )));
