@@ -4,7 +4,7 @@ The daemon looks for new devlanes releases, and `devlanes update` or `U` in the 
 
 ## Settings
 
-```yaml
+```yaml devlanes-user
 # ~/.devlanes/config.yaml
 updates:
   mode: notify # disable, notify (the default) or auto

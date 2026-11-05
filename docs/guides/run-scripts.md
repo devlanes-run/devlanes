@@ -15,7 +15,7 @@ Use `run` for everything else: a binary, a pipeline, a multi-line script, a wrap
 
 ## run
 
-```yaml
+```yaml devlanes
 services:
   api:
     run: pnpm --filter api dev                  # a string runs through /bin/sh -c
@@ -34,7 +34,7 @@ devlanes never edits a `run` command, so it cannot be combined with `preset`: `d
 
 ## run_script
 
-```yaml
+```yaml devlanes
 services:
   api:
     run_script:
@@ -118,7 +118,7 @@ Console scripts are entry points, so `run_script` fits a `serve = "acme.server:m
 
 ## Profiles that swap scripts
 
-```yaml
+```yaml devlanes
 profiles:
   e2e:
     include: [+api, +web]
@@ -132,7 +132,7 @@ Every service whose `run_script` names `dev` runs `start` from the same file ins
 
 `run_script` merges per key, so a local override or a template child can change only the name:
 
-```yaml
+```yaml devlanes
 # devlanes.local.yaml
 services:
   api:

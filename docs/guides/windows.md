@@ -42,7 +42,7 @@ Git's `usr\bin` is added to the end of the unit's `PATH`, so scripts find `sleep
 
 The daemon runs `sh.exe` with `MSYS_NO_PATHCONV=1` and `MSYS2_ARG_CONV_EXCL=*`, so arguments and variables reach Windows programs exactly as written. MSYS paths are not converted either: inside a `run:` string, `$PWD` and `pwd` give `/c/src/acme`, which Windows programs do not understand. Use `pwd -W` (`C:/src/acme`) or `cygpath -w "$PWD"` when a Windows program needs the path. `${{ lane.data_path }}` is written with `/` and can be used as it is; `${{ lane.path }}` and `${{ project.primary_path }}` keep their `\`, which `sh` reads as escapes outside quotes, so put them in single quotes:
 
-```yaml
+```yaml devlanes
 services:
   api:
     run: node server.js --root '${{ lane.path }}'
@@ -148,7 +148,7 @@ Windows Server, including Windows Server 2025 on GitHub's `windows-latest` runne
 
 The resolver strategy works as on macOS and Linux:
 
-```yaml
+```yaml devlanes-user
 # ~\.devlanes\config.yaml
 hostnames:
   resolver: resolver

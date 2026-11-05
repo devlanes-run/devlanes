@@ -79,7 +79,7 @@ Forks that come and go are easier with two settings.
 
 When SSH already decides who may reach a fork, set `remote.require_pairing: false` in the image's user config, so a new fork connects without a pairing code:
 
-```yaml
+```yaml devlanes-user
 # ~/.devlanes/config.yaml on the image
 remote:
   require_pairing: false

@@ -57,7 +57,7 @@ Other tools from your shell:
 
 ## Hostnames in config
 
-```yaml
+```yaml devlanes
 services:
   api:
     hosts:
@@ -85,7 +85,7 @@ A browser treats `app.acme2.localhost` and `api.acme2.localhost` as one site: `a
 
 `domain(name)` gives such a name a site of its own in every lane, by the rule `lane.domain` follows. `domain('pages')` is `pages.localhost` in lane 0 and `pages2.localhost` in lane 2. With the [resolver strategy](#programs-that-cannot-resolve-localhost) it is `pages2.test`, unless the project sets `lanes.vars.domain` or `lanes.matrix`. Those projects keep `.localhost`. Use it in `lanes.vars` to name the site once:
 
-```yaml
+```yaml devlanes
 lanes:
   vars:
     pages_domain: ${{ domain('acme-pages') }}
@@ -110,7 +110,7 @@ workerd (Wrangler), musl binaries, pure-Go programs built without cgo, programs 
 
 The second is the resolver strategy:
 
-```yaml
+```yaml devlanes-user
 # ~/.devlanes/config.yaml
 hostnames:
   resolver: resolver
@@ -141,7 +141,7 @@ Windows needs no privilege for the low ports and binds them on loopback. Port 80
 
 A local Caddy, nginx or Traefik on 443 and 80 competes with the daemon for those ports. On macOS and Linux whichever starts second cannot bind them: a daemon that starts second falls back to 8443 and 8080, and another proxy that starts second fails to start. On Windows both start, because the other proxy listens on the wildcard address and the daemon on loopback, and requests to `localhost` on those ports reach only the daemon; `doctor` warns when another program listens on a proxy port. To run both, move the daemon to other ports in `~/.devlanes/config.yaml` and run `devlanes daemon restart`:
 
-```yaml
+```yaml devlanes-user
 proxy:
   https_port: 8443
   http_port: 8080

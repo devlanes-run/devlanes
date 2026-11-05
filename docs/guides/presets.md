@@ -15,7 +15,7 @@ A preset needs `run_script`. The flags go after the script name, placed per pack
 
 ## Vite
 
-```yaml
+```yaml devlanes
 services:
   web:
     preset: vite
@@ -41,7 +41,7 @@ The preset adds `--port <self.port> --strictPort --host 127.0.0.1`, then `vite.a
 
 ## Next
 
-```yaml
+```yaml devlanes
 services:
   web:
     preset: next
@@ -67,7 +67,7 @@ The preset adds `--port <self.port> --hostname 127.0.0.1`, then `next.args`. Not
 
 ## Wrangler
 
-```yaml
+```yaml devlanes
 templates:
   worker:
     platform: node
@@ -99,7 +99,7 @@ lanes:
 
 Durable Objects, D1, KV and R2 local state live under `.wrangler/` in the worker's directory. That is per worktree, so lanes in separate worktrees keep separate state, but lanes of one folder (`devlanes lane new --name`) share it. The same goes for any config file a dev script generates into the worker's directory: two lanes overwrite each other's copy, and a running `wrangler dev` that watches it reloads with the other lane's ports. Write both to the lane data folder instead:
 
-```yaml
+```yaml devlanes
 templates:
   worker:
     preset: wrangler
@@ -129,7 +129,7 @@ Referencing `self.ports.inspector` allocates the port, and the registry variable
 
 ## Tauri
 
-```yaml
+```yaml devlanes
 services:
   desktop-web:
     preset: vite
@@ -176,7 +176,7 @@ By hand, Tauri 2's `--config` also takes inline JSON, but you lose the identifie
 
 ## Services without a preset
 
-```yaml
+```yaml devlanes
 services:
   docs:
     run: pnpm -F @acme/docs exec rspress dev --host 127.0.0.1 --port ${{ self.port }}

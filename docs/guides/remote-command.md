@@ -6,7 +6,7 @@ Some boxes have no SSH server you would connect to: a Docker container, a Kubern
 
 On the client, in `~/.devlanes/config.yaml` (`%USERPROFILE%\.devlanes\config.yaml` on Windows):
 
-```yaml
+```yaml devlanes-user
 remote:
   boxes:
     acme:
@@ -43,7 +43,7 @@ Services in the box listen on its loopback or a wildcard address. The tunnel dia
 
 Docker, with the container already running:
 
-```yaml
+```yaml devlanes-user
 remote:
   boxes:
     acme:
@@ -54,7 +54,7 @@ Use `-i` and never `-t`: a terminal would mangle the binary stream. Add `-u <use
 
 Kubernetes:
 
-```yaml
+```yaml devlanes-user
 remote:
   boxes:
     acme:
@@ -65,7 +65,7 @@ remote:
 
 A WSL distribution, from Windows:
 
-```yaml
+```yaml devlanes-user
 remote:
   boxes:
     ubuntu:
@@ -76,7 +76,7 @@ remote:
 
 A GitHub codespace:
 
-```yaml
+```yaml devlanes-user
 remote:
   boxes:
     codespace:

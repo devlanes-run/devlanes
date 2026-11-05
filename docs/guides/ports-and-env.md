@@ -10,7 +10,7 @@ Ports that browsers refuse to connect to (6000, 6665-6669, 10080 and the rest of
 
 ### The service's port
 
-```yaml
+```yaml devlanes
 services:
   api:
     run: node server.mjs          # reads process.env.PORT
@@ -42,7 +42,7 @@ A literal `PORT` is for stubs that a client has hardcoded. Starting it in a seco
 
 Mention `self.ports.<name>` anywhere in the service and a second port named `<name>` is allocated:
 
-```yaml
+```yaml devlanes
 services:
   api:
     run: node --inspect=127.0.0.1:${{ self.ports.inspect }} server.mjs
@@ -148,7 +148,7 @@ Values may contain `${{ ... }}` (MiniJinja), evaluated per lane. A value that is
 
 `lanes.vars` compute per-lane values once and expose them as `lane.<name>`:
 
-```yaml
+```yaml devlanes
 lanes:
   vars:
     db_name: acme_${{ lane.name }}
@@ -167,7 +167,7 @@ Not every field sees every namespace. `lanes.vars` see `project`, `lane` and `en
 
 `${{ env.X }}` reads the shell that ran devlanes first, then `<worktree>/.env`, falling back to the primary worktree's `.env` (new worktrees have no gitignored files). The `.env` file feeds expressions only; devlanes never injects it into processes. Name what a process needs:
 
-```yaml
+```yaml devlanes
 global_env:
   SENTRY_DSN: ${{ env.SENTRY_DSN | default('') }}
   STRIPE_KEY: ${{ env.STRIPE_KEY }}          # from the shell or .env
@@ -181,7 +181,7 @@ Compose interpolation is separate: `infra.env` and the worktree's `.env` (passed
 
 `devlanes.local.yaml` holds the changes one developer wants on their machine only: a service turned off, a variable pointing at a local tool, a service or an [external port](infra.md#external-ports) that only they run. It sits next to `devlanes.yaml`, takes the same keys and stays out of Git. devlanes does not add it to `.gitignore` for you, so add `devlanes.local.yaml` there. Editors validate it with the same modeline as `devlanes.yaml`, `# yaml-language-server: $schema=https://devlanes.run/v1/schema.json`.
 
-```yaml
+```yaml devlanes
 # devlanes.local.yaml
 services:
   web:
@@ -214,7 +214,7 @@ Nothing can be deleted: turn a service off with `autostart: false`, and empty a 
 
 A project file can build on others with a top-level `extends`, one path or a list, relative to the file that names it:
 
-```yaml
+```yaml devlanes
 # devlanes.prod.yaml
 extends: devlanes.yaml                  # or a list: [devlanes.yaml, devlanes.shared.yaml]
 project: acme-prod
@@ -228,7 +228,7 @@ This top-level `extends` names files; a service's `extends` names a [template](s
 
 Every lane has a folder of its own outside the worktree, for state and generated files that must not be shared with another lane: local database files, emulator state, generated configs, sockets. Expressions read it as `${{ lane.data_path }}` and every process gets it as `DEVLANES_LANE_DATA`.
 
-```yaml
+```yaml devlanes
 services:
   api:
     run_script:
@@ -254,7 +254,7 @@ infra:
 
 It lives at `~/.devlanes/data/<project>/<lane id>`, where the lane id is a number the daemon gives the lane when it creates it. The id does not change when the lane's index does (a lane whose branch becomes the primary one takes index 0), so data stays with its lane. `lanes.data_dir` in `~/.devlanes/config.yaml` moves the root, for example to a faster disk:
 
-```yaml
+```yaml devlanes-user
 # ~/.devlanes/config.yaml
 lanes:
   data_dir: /Volumes/fast/devlanes
