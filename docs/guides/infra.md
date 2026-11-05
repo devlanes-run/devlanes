@@ -8,7 +8,7 @@ devlanes talks to the Docker Engine the `docker` CLI would use (`DOCKER_HOST`, t
 
 ## Compose
 
-```yaml
+```yaml devlanes
 infra:
   compose: docker-compose.yml           # or [base.yml, dev.yml], merged like repeated -f
   project_name: acme                    # fixed name, so docker compose -p acme works outside devlanes
@@ -44,7 +44,7 @@ A shared service that `depends_on` an excluded or per-lane service is refused wi
 
 In `setup`, `docker compose` without flags targets the shared project. The lane project's name is `$DEVLANES_COMPOSE_LANE_PROJECT`:
 
-```yaml
+```yaml devlanes
 infra:
   per_lane: [postgres]
   setup:
@@ -53,7 +53,7 @@ infra:
 
 ## Plain containers
 
-```yaml
+```yaml devlanes
 infra:
   containers:
     cerbos:
@@ -78,7 +78,7 @@ Containers are named `devlanes-<project>-<name>` or `devlanes-<project>-lane<N>-
 
 A server devlanes does not run, such as a pgAdmin you start yourself or a docs server started with `devlanes exec`, joins the lanes under `infra.external`:
 
-```yaml
+```yaml devlanes
 infra:
   external:
     pgadmin:
@@ -97,7 +97,7 @@ Machines connected with `devlanes remote connect` mirror the port and hostnames 
 
 ## Setup and teardown
 
-```yaml
+```yaml devlanes
 lanes:
   vars:
     db_name: acme_${{ lane.name }}
@@ -152,7 +152,7 @@ volumes:
   pgdata:
 ```
 
-```yaml
+```yaml devlanes
 # devlanes.yaml
 lanes:
   vars:
@@ -179,7 +179,7 @@ Extensions or roles the app expects go into the same `setup` entry (`psql -c "CR
 
 For version pinning per branch, or when migrations are destructive:
 
-```yaml
+```yaml devlanes
 infra:
   compose: docker-compose.yml
   per_lane: [postgres]
@@ -208,7 +208,7 @@ services:
       retries: 30
 ```
 
-```yaml
+```yaml devlanes
 infra:
   setup:
     database: docker compose exec -T mysql mysql -uroot -proot -e "CREATE DATABASE IF NOT EXISTS ${{ lane.db_name }}"
@@ -220,7 +220,7 @@ global_env:
 
 ### Redis, one database index per lane
 
-```yaml
+```yaml devlanes
 lanes:
   vars:
     redis_db: "${{ lane.index }}"
@@ -236,7 +236,7 @@ Redis has 16 databases by default; raise `databases` in its config for more lane
 
 ### RabbitMQ, one vhost per lane
 
-```yaml
+```yaml devlanes
 lanes:
   vars:
     vhost: "${{ 'acme' if lane.index == 0 else 'acme_' ~ lane.name }}"
@@ -259,7 +259,7 @@ global_env:
 
 ### MinIO or another S3, one bucket per lane
 
-```yaml
+```yaml devlanes
 lanes:
   vars:
     bucket: "media-${{ lane.name }}"
@@ -292,7 +292,7 @@ services:
     ports: ["127.0.0.1::8025", "127.0.0.1::1025"]
 ```
 
-```yaml
+```yaml devlanes
 infra:
   per_lane: [mailpit]
   hosts:
@@ -306,7 +306,7 @@ Each lane's outgoing mail lands in its own inbox at `https://mail.acme2.localhos
 
 ### A plain container per lane
 
-```yaml
+```yaml devlanes
 infra:
   containers:
     oidc:

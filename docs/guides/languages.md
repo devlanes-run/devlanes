@@ -18,7 +18,7 @@ Every unit also gets `DEVLANES_CA_CERT` (the CA) and `DEVLANES_CA_BUNDLE` (syste
 
 ## Node
 
-```yaml
+```yaml devlanes
 services:
   api:
     run_script:
@@ -40,7 +40,7 @@ Dev servers under a watcher (`tsx watch`, `nodemon`, `node --watch`) keep runnin
 
 ## Bun
 
-```yaml
+```yaml devlanes
 services:
   api:
     run_script:  # bun run dev, when bun.lock or packageManager says bun
@@ -54,7 +54,7 @@ The package manager and the platform are detected separately. `bunfig.toml` alon
 
 ## Deno
 
-```yaml
+```yaml devlanes
 services:
   api:
     run_script:
@@ -74,7 +74,7 @@ and `Deno.serve({ port: Number(Deno.env.get("PORT")), hostname: Deno.env.get("HO
 
 `run_script` only reaches `[project.scripts]` entry points (`uv run <name>` or `poetry run <name>`). Dev servers are usually started by a tool, so `run` is the common form:
 
-```yaml
+```yaml devlanes
 services:
   api:
     platform: python
@@ -106,7 +106,7 @@ Behind the proxy the app sees `http://127.0.0.1:<port>` with `X-Forwarded-Proto:
 
 ## Rust
 
-```yaml
+```yaml devlanes
 services:
   api:
     run_script:  # cargo run --bin server, -p <member> in a workspace

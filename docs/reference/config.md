@@ -268,7 +268,7 @@ Every field of `devlanes.yaml` and of the per-user `config.yaml`, generated from
 
 A project file's local overlay holds the changes one developer wants on their machine only, such as a service turned off or a server they run themselves: `devlanes.local.yaml` for `devlanes.yaml`, `devlanes.prod.local.yaml` for `devlanes.prod.yaml`. It sits next to its project file and takes the same keys, every one optional, and the same modeline, `# yaml-language-server: $schema=https://devlanes.run/v1/schema.json`. Keep it out of Git: add it to `.gitignore`. A lane reads the overlay in its own worktree, else the primary worktree's.
 
-```yaml
+```yaml devlanes
 # devlanes.local.yaml
 services:
   web:

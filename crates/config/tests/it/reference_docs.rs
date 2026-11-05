@@ -100,7 +100,7 @@ its project file and takes the same keys, every one optional, and the same model
 `# yaml-language-server: $schema=https://devlanes.run/v1/schema.json`. Keep it out of Git: \
 add it to `.gitignore`. A lane reads the overlay in its own worktree, else the primary \
 worktree's.\n\n\
-```yaml\n\
+```yaml devlanes\n\
 # devlanes.local.yaml\n\
 services:\n  web:\n    autostart: false   # a plain `devlanes start` skips it unless the lane ran it before or the default profile names it\n\
 infra:\n  external:\n    pgadmin:\n      address: 127.0.0.1:5050\n      hosts: \"pgadmin.${{ lane.domain }}\"\n\

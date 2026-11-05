@@ -15,7 +15,7 @@ A dev server proxy or rewrite sends requests to devlanes, for example to `http:/
 
 Point the proxy at the target service's port. `${{ services.api.port }}` in `devlanes.yaml` gives a service another service's port:
 
-```yaml
+```yaml devlanes
 services:
   web:
     run_script: { file: package.json, name: dev }

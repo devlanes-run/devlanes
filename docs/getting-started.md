@@ -14,7 +14,7 @@ The [README](../README.md#install) lists the Homebrew, npm, PyPI, cargo and `ins
 
 Put a `devlanes.yaml` at the root of the repository and commit it, so every worktree has it:
 
-```yaml
+```yaml devlanes
 project: acme
 services:
   api:
@@ -96,7 +96,7 @@ In CI, `devlanes with -- pnpm test:e2e` starts the lane, runs the command with t
 
 devlanes does not stream windows. A GUI tool that serves HTTP or TCP is an ordinary service: give it the service's port and, for a browser UI, a hostname.
 
-```yaml
+```yaml devlanes
 services:
   ios-sim:
     run: npx serve-sim --port ${{ self.port }}

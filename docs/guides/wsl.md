@@ -31,7 +31,7 @@ Chrome, Edge and Firefox on Windows resolve `*.localhost` to loopback themselves
 
 Browsers on Windows read the Windows certificate store, not the distro's. The `windows` trust target puts the CA into your Windows user root store, which Edge and Chrome read, and Firefox too when `security.enterprise_roots.enabled` is on (the default since Firefox 120). It is opt-in, so add it to `tls.trust`:
 
-```yaml
+```yaml devlanes-user
 # ~/.devlanes/config.yaml
 tls:
   trust: [system, windows]

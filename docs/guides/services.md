@@ -4,7 +4,7 @@ Configurations for the shapes most repositories have. Each one assumes the basic
 
 ## Frontend and API
 
-```yaml
+```yaml devlanes
 services:
   api:
     run_script:
@@ -42,7 +42,7 @@ A frontend that proxies `/api` to the backend itself (Vite `server.proxy`, Next 
 
 ## Workers and consumers
 
-```yaml
+```yaml devlanes
 services:
   queue-worker:
     run_script:
@@ -69,7 +69,7 @@ Nothing to configure. Upgrades are bridged with no idle timeout and streamed res
 
 The proxy speaks HTTP/1.1 to upstreams, so gRPC over HTTP/2 does not go through a hostname. Point clients at the port:
 
-```yaml
+```yaml devlanes
 services:
   grpc-api:
     run: cargo run --bin grpc-api          # listens on PORT
@@ -82,7 +82,7 @@ The same goes for databases, debuggers and anything that is not HTTP. On a conne
 
 ## Several ports, several hostnames
 
-```yaml
+```yaml devlanes
 services:
   realtime:
     run: node server.mjs
@@ -99,7 +99,7 @@ services:
 
 ## Wildcard hostnames
 
-```yaml
+```yaml devlanes
 services:
   tenants:
     run_script:
@@ -120,7 +120,7 @@ Quote wildcard entries: an unquoted leading `*` is a YAML alias. `/etc/hosts` ta
 
 ## Replicas
 
-```yaml
+```yaml devlanes
 services:
   worker:
     run: node worker.mjs
@@ -137,7 +137,7 @@ Each replica is a unit `worker.1`, `worker.2`, `worker.3` with its own `PORT`. `
 
 ## One lane's frontend against another lane's backend
 
-```yaml
+```yaml devlanes
 profiles:
   attach:
     include: [+web]
@@ -155,7 +155,7 @@ Installs, migrations and seeds that run at lane events are covered in [lane life
 
 ## Tags, profiles and templates
 
-```yaml
+```yaml devlanes
 tags:
   api:
     color: cyan
@@ -205,7 +205,7 @@ One `devlanes.yaml` at the repository root, one service per app, `run_script` po
 
 An app can also have its own `devlanes.yaml` in a subdirectory, which makes it a separate project with its own name, lanes, ports and domains. A command uses the nearest `devlanes.yaml` above the current directory, up to the repository root, so `apps/billing/devlanes.yaml` applies anywhere under `apps/billing` and the root file everywhere else. Once devlanes has run in a project, `--project <name>` (or `-p`) picks it instead of the current directory's, as in `devlanes -p billing status`. In a subdirectory project, relative paths start at that subdirectory: `cwd`, the directory `run` starts in when `cwd` is not set, `run_script.file`, `sync` paths, the `cwd` of infra commands and `infra.compose`. `lane.path` is still the worktree root.
 
-```yaml
+```yaml devlanes
 # apps/billing/devlanes.yaml
 project: billing
 services:
@@ -222,7 +222,7 @@ A worktree can hold a lane of each project whose file it has, so one worktree of
 
 A second project file next to `devlanes.yaml` runs the same apps another way, such as a production build next to the dev servers. It extends `devlanes.yaml` and sets its own `project`:
 
-```yaml
+```yaml devlanes
 # devlanes.prod.yaml
 extends: devlanes.yaml
 project: acme-prod

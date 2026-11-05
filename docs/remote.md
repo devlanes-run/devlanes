@@ -114,7 +114,7 @@ A hostname opens on the client through its proxy, on the box's HTTPS port when t
 
 A server devlanes does not run, such as `python -m http.server 8000` started with `devlanes exec` or a pgAdmin you run yourself, reaches clients once the box's config declares it under `infra.external`. Put it in `devlanes.yaml` when the whole team runs it, or in `devlanes.local.yaml` on the box when only you do ([local overrides](guides/ports-and-env.md#local-overrides)):
 
-```yaml
+```yaml devlanes
 # devlanes.local.yaml on the box
 infra:
   external:
@@ -129,7 +129,7 @@ Every lane of the project lists `docs` as a unit of kind `external`, and the box
 
 Mark what must stay on the box:
 
-```yaml
+```yaml devlanes
 services:
   admin:
     run: ./admin-server
@@ -197,7 +197,7 @@ The client daemon marks a box as wanted in its state database each time it conne
 
 GUI streaming is not supported. Tools that already serve HTTP or TCP from the box work as ordinary services through `remote connect`:
 
-```yaml
+```yaml devlanes
 services:
   desktop:
     # Xpra's HTML5 client at https://desktop.<lane domain>

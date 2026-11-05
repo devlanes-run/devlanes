@@ -52,7 +52,7 @@ When a worktree's folder is deleted, with `git worktree remove` after a merge or
 
 To have the daemon clean these lanes by itself:
 
-```yaml
+```yaml devlanes
 lanes:
   removed_worktrees: clean
 ```
@@ -63,7 +63,7 @@ A worktree removed while the daemon is not running is noticed at the daemon's ne
 
 ## Services that start on demand
 
-```yaml
+```yaml devlanes
 services:
   storybook:
     run_script:
@@ -80,7 +80,7 @@ services:
 
 ## Lifecycle tasks
 
-```yaml
+```yaml devlanes
 tasks:
   install:
     run: [pnpm, install, --frozen-lockfile]
@@ -131,7 +131,7 @@ A throttled lane's processes run at background priority and keep serving request
 
 Both settings live in the user config:
 
-```yaml
+```yaml devlanes-user
 # ~/.devlanes/config.yaml
 lanes:
   throttle_after: 5m
@@ -157,7 +157,7 @@ A lane is never throttled or frozen while a start, stop, clean or infra change r
 
 ### Keeping a lane awake
 
-```yaml
+```yaml devlanes
 services:
   queue-worker:
     run_script:

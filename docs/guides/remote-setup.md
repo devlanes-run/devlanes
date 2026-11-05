@@ -51,7 +51,7 @@ On a macOS box, turn on Remote Login (System Settings, General, Sharing) so the 
 
 A client that connects while no daemon runs on the box starts one there. To keep the box daemon under your own control, set this in the box's `~/.devlanes/config.yaml`:
 
-```yaml
+```yaml devlanes-user
 remote:
   start_daemon: false
 ```
@@ -73,7 +73,7 @@ devlanes daemon pair
 
 The client enters it once ([first connection](#first-connection)) and connects with a token from then on, one per box name it connects by. `devlanes daemon clients` lists the paired machines and the ones connected now; `devlanes daemon revoke <name>` removes one and cuts its connection. The boxes view of the TUI on the box (`B`) shows the same list under this machine, and `x` there revokes the selected client. A wrong code voids every code you handed out, and five wrong codes within 10 minutes pause pairing for up to 10 minutes. To let every machine that reaches the box over SSH connect without a code, set this in the box's `~/.devlanes/config.yaml`:
 
-```yaml
+```yaml devlanes-user
 remote:
   require_pairing: false
 ```
@@ -82,7 +82,7 @@ A problem anywhere under `remote` outside `remote.boxes`, or one that makes the 
 
 A machine that no other machine should connect to can turn connections off:
 
-```yaml
+```yaml devlanes-user
 remote:
   allow_connections: false
 ```
@@ -95,7 +95,7 @@ The box daemon inherits the environment of whatever started it. Over SSH that is
 
 ### Hidden units
 
-```yaml
+```yaml devlanes
 services:
   admin:
     run: ./admin
@@ -110,7 +110,7 @@ Hidden units stay on the box: clients do not see them, their ports are not mirro
 
 A server you run on the box outside devlanes, such as `python -m http.server 8000` in an SSH shell, is not mirrored until the box's config declares it. Add it to `devlanes.local.yaml` next to the project's `devlanes.yaml` on the box:
 
-```yaml
+```yaml devlanes
 infra:
   external:
     files:

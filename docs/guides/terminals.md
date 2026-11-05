@@ -2,7 +2,7 @@
 
 devlanes uses a few terminal features beyond plain text: a progress bar and a title in the tab, clickable links, desktop notifications, marks to jump between sections of long output, and the clipboard from the TUI. Each is optional and configured in `~/.devlanes/config.yaml`:
 
-```yaml
+```yaml devlanes-user
 terminal:
   progress: auto        # auto, always or never
   title: auto
