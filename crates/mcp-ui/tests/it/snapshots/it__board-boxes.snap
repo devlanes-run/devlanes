@@ -320,7 +320,9 @@ expression: preview.structured()
       {
         "host": "fork-b",
         "state": "needs_pairing",
-        "fix": "devlanes remote connect fork-b --code CODE"
+        "error": "the box asks for a new pairing",
+        "pairing_retry_at_ms": null,
+        "fix": "devlanes daemon pair on fork-b, then devlanes remote connect fork-b --code <code>"
       },
       {
         "host": "ci-box",

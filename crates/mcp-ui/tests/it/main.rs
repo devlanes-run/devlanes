@@ -11,8 +11,14 @@ use sha2::{Digest, Sha256};
 const BUDGET_BYTES: usize = 80 * 1024;
 
 /// The only URLs the card may contain: XML namespaces Preact sets on SVG
-/// elements, which are names and never fetched.
-const ALLOWED_URLS: &[&str] = &["http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink"];
+/// elements, which are names, and the loopback addresses of mirrored box
+/// ports, which the open button hands to the host. The card fetches neither.
+const ALLOWED_URLS: &[&str] = &[
+    "http://www.w3.org/2000/svg",
+    "http://www.w3.org/1999/xlink",
+    "http://127.0.0.1:${port.port}",
+    "http://[::1]:${port.port}",
+];
 
 #[test]
 fn the_card_fits_its_size_budget() {
@@ -98,6 +104,9 @@ fn the_card_makes_no_requests() {
 fn fixture_results_match_their_snapshots() {
     for preview in fixtures::all() {
         insta::assert_json_snapshot!(preview.name, preview.structured());
+        if let Some(boxes) = preview.remote_ls() {
+            insta::assert_json_snapshot!(format!("{}-remote-ls", preview.name), boxes);
+        }
     }
 }
 

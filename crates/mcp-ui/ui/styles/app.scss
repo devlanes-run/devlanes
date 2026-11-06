@@ -513,6 +513,26 @@ td {
   .lane .link {
     color: $ink;
   }
+
+  // A box lane this machine does not mirror, or one of a box whose link is
+  // down. The sticky button cell keeps its paint so scrolled cells stay hidden.
+  .skipped > :not(.act) {
+    opacity: 0.55;
+  }
+
+  // Where a box lane is managed and why it is not mirrored wrap, so they
+  // never widen the table past the card.
+  .box-lane {
+    .lane,
+    .branch,
+    .state {
+      white-space: normal;
+    }
+
+    .state {
+      min-width: 150px;
+    }
+  }
 }
 
 .lane-mark {
@@ -841,6 +861,15 @@ td {
 
   .lanes .branch {
     max-width: 96px;
+  }
+
+  // The branch cell of a box lane names the box already.
+  .lanes .box-name {
+    display: none;
+  }
+
+  .lanes .box-lane .state {
+    min-width: 0;
   }
 }
 

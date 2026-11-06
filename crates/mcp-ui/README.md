@@ -21,7 +21,7 @@ assert!(resource.2.starts_with("<!doctype html>"));
 | `view` | Card |
 |---|---|
 | `lane` | start phases while a lane comes up, then its services with URLs, CPU, restart and stop |
-| `board` | every lane with its branch, state, who started it, open, start, stop and ask; boxes read-only |
+| `board` | every lane with its branch, state, who started it, open, start, stop and ask; the lanes of linked boxes read-only, with open only |
 | `failure` | why a unit failed and its logs: cursors, grep, load earlier, send a line to the agent |
 | `clean` | the project's lanes with what a clean deletes, checkboxes and a confirm in the card |
 | `pair` | a pairing code with its countdown and copy |
