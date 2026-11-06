@@ -99,32 +99,121 @@ pub enum Error {
     Stopped(#[from] tokio::task::JoinError),
 }
 
-/// Serves MCP on stdin and stdout until the client closes them. Nothing connects
-/// to the daemon here; each tool call runs its own devlanes process.
+/// Serves MCP on stdin and stdout until the client closes stdin or the
+/// process is told to stop (SIGTERM, SIGINT or SIGHUP; on Windows the console
+/// closing or the system shutting down). Nothing connects to the daemon here;
+/// each tool call runs its own devlanes process.
 pub async fn serve(config: Config) -> Result<(), Error> {
-    serve_on(Server::new(config), rmcp::transport::stdio()).await
+    let (stdin, stdout) = rmcp::transport::stdio();
+    serve_on(Server::new(config), stdin, stdout, stop_signal()).await
 }
 
-/// Serves `server` on `transport` until the client leaves, then interrupts the
-/// commands of calls still running and waits for them, so none outlives the
-/// server.
-pub async fn serve_on<T, E, A>(server: Server, transport: T) -> Result<(), Error>
+/// Serves `server` on `reader` and `writer` until `reader` ends or `stop`
+/// resolves, then interrupts the commands of calls still running and waits
+/// for them, so none outlives the server. rmcp waits up to 5 s for calls in
+/// flight once the client leaves, longer than hosts wait before they kill
+/// the server, so the commands stop as soon as the input ends.
+pub async fn serve_on<R, W>(
+    server: Server,
+    reader: R,
+    writer: W,
+    stop: impl Future<Output = ()>,
+) -> Result<(), Error>
 where
-    T: rmcp::transport::IntoTransport<rmcp::RoleServer, E, A>,
-    E: std::error::Error + Send + Sync + 'static,
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     use rmcp::ServiceExt as _;
     // A Ctrl-Break meant for a command's group never ends the server: the
     // console reports it to a registered listener instead.
     #[cfg(windows)]
     let _ctrl_break = tokio::signal::windows::ctrl_break();
+    let ended = tokio_util::sync::CancellationToken::new();
+    let reader = UntilEnd {
+        inner: reader,
+        ended: ended.clone(),
+    };
     let running = server
         .clone()
-        .serve(transport)
+        .serve((reader, writer))
         .await
         .map_err(|error| Error::Initialize(Box::new(error)))?;
-    let waited = running.waiting().await;
+    let service = running.cancellation_token();
+    let waiting = running.waiting();
+    tokio::pin!(waiting);
+    let stopped = tokio::select! {
+        waited = &mut waiting => {
+            server.stop_commands().await;
+            waited?;
+            return Ok(());
+        }
+        () = ended.cancelled() => false,
+        () = stop => true,
+    };
     server.stop_commands().await;
-    waited?;
+    // The input is still open after a signal, so only this ends the service.
+    if stopped {
+        service.cancel();
+    }
+    waiting.await?;
     Ok(())
+}
+
+/// The input of the transport, which cancels `ended` when it ends or fails.
+struct UntilEnd<R> {
+    inner: R,
+    ended: tokio_util::sync::CancellationToken,
+}
+
+impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for UntilEnd<R> {
+    /// Reads from the input; a read of nothing into room for something is its end.
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let (before, room) = (buf.filled().len(), buf.remaining() > 0);
+        let polled = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        match &polled {
+            std::task::Poll::Ready(Ok(())) if room && buf.filled().len() == before => {
+                self.ended.cancel();
+            }
+            std::task::Poll::Ready(Err(_)) => self.ended.cancel(),
+            _ => {}
+        }
+        polled
+    }
+}
+
+/// Resolves when the process is told to stop: SIGTERM, SIGINT or SIGHUP, or
+/// on Windows the console closing or the system shutting down. Never resolves
+/// when the signals cannot be watched.
+async fn stop_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut int), Ok(mut hup)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::interrupt()),
+            signal(SignalKind::hangup()),
+        ) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+            _ = hup.recv() => {}
+        }
+    }
+    #[cfg(windows)]
+    {
+        use tokio::signal::windows::{ctrl_close, ctrl_shutdown};
+        let (Ok(mut close), Ok(mut shutdown)) = (ctrl_close(), ctrl_shutdown()) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = close.recv() => {}
+            _ = shutdown.recv() => {}
+        }
+    }
 }

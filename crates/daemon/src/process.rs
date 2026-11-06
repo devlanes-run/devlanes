@@ -26,7 +26,8 @@ pub fn detach() -> std::io::Result<()> {
 pub fn detach() -> std::io::Result<()> {
     match rustix::process::setsid() {
         Ok(_) => Ok(()),
-        // EPERM means this process already leads a session, e.g. under launchd or systemd.
+        // EPERM means this process already leads a session: the client starts
+        // it in one, and so do launchd and systemd.
         Err(rustix::io::Errno::PERM) => Ok(()),
         Err(error) => Err(error.into()),
     }

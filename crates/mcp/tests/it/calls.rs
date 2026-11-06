@@ -381,32 +381,79 @@ async fn cancelling_ends_what_the_command_left_running() {
 }
 
 #[tokio::test]
+#[cfg(windows)]
+/// A process the command started in a process group of its own, which the
+/// Ctrl-Break does not reach, ends with the command's job after a cancel.
+async fn cancelling_ends_what_left_the_process_group() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ticks = dir.path().join("grandchild");
+        let stop = dir.path().join("stop");
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.env.insert("FAKE_SLEEP_MS".into(), "20000".into());
+            config
+                .env
+                .insert("FAKE_GRANDCHILD_TICKS".into(), ticks.display().to_string());
+            config
+                .env
+                .insert("FAKE_GRANDCHILD_STOP".into(), stop.display().to_string());
+            config
+                .env
+                .insert("FAKE_GRANDCHILD_NEW_GROUP".into(), "1".into());
+        })
+        .await;
+        /// Stops the grandchild when the test ends, also when the job did not.
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            /// Creates the file the grandchild stops at.
+            fn drop(&mut self) {
+                let _ = std::fs::write(&self.0, "");
+            }
+        }
+        let _cleanup = Cleanup(stop);
+        let handle = cancellable(&harness, &["with", "--", "pnpm", "test"]).await;
+        ticked(&ticks, 2).await;
+        handle.cancel(Some("test".into())).await.expect("cancel");
+        settled(&harness.server, Duration::from_secs(15)).await;
+        stops_ticking(&ticks, Duration::from_secs(10)).await;
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
 /// A command that exits while a process it started in the background holds
 /// its stdout returns at once with what it printed.
 async fn a_background_process_does_not_hold_the_result() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         let ticks = dir.path().join("grandchild");
+        let stop = dir.path().join("stop");
         let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
             config
                 .env
                 .insert("FAKE_GRANDCHILD_TICKS".into(), ticks.display().to_string());
             config
                 .env
-                .insert("FAKE_GRANDCHILD_MS".into(), "8000".into());
+                .insert("FAKE_GRANDCHILD_STOP".into(), stop.display().to_string());
         })
         .await;
         let started = std::time::Instant::now();
         let result = harness.call("devlanes", &["url", "open", "web"]).await;
+        // The result comes 0.5 s after the command exits; the background
+        // process holds the pipe for 60 s unless told to stop.
         assert!(
-            started.elapsed() < Duration::from_secs(5),
+            started.elapsed() < Duration::from_secs(20),
             "{:?}",
             started.elapsed()
         );
         assert!(!failed(&result), "{}", text(&result));
         assert!(text(&result).contains("ran --output agent url open web"));
-        // The test's own cleanup: the background process ends on its own.
-        stops_ticking(&ticks, Duration::from_secs(15)).await;
+        // A command that ended by itself leaves its background process running.
+        ticked(&ticks, crate::ticks(&ticks) + 2).await;
+        // The test's own cleanup.
+        std::fs::write(&stop, "").expect("stop");
+        stops_ticking(&ticks, Duration::from_secs(10)).await;
     })
     .await
     .expect("in time");
@@ -414,7 +461,8 @@ async fn a_background_process_does_not_hold_the_result() {
 
 #[tokio::test]
 /// When the client leaves while a call runs, the server stops its command
-/// before it stops serving.
+/// before it stops serving, well before the 5 s rmcp would wait for the call
+/// and before a host kills the server (the TypeScript SDK after 2 s).
 async fn leaving_stops_running_commands() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -434,8 +482,14 @@ async fn leaving_stops_running_commands() {
             server,
             ..
         } = harness;
+        let left = std::time::Instant::now();
         let _ = client.cancel().await;
         served.await.expect("served");
+        assert!(
+            left.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            left.elapsed()
+        );
         assert_eq!(server.running_commands(), 0);
         stops_ticking(&ticks, Duration::from_secs(5)).await;
     })

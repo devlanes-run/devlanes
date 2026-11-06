@@ -193,7 +193,8 @@ pub async fn connect(
     let served = tokio::spawn({
         let server = server.clone();
         async move {
-            let _ = devlanes_mcp::serve_on(server, server_side).await;
+            let (reader, writer) = tokio::io::split(server_side);
+            let _ = devlanes_mcp::serve_on(server, reader, writer, std::future::pending()).await;
         }
     });
     let mode = match lifecycle {

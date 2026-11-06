@@ -17,6 +17,11 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 /// command and units of `with`, before it is killed.
 const GRACE: Duration = Duration::from_secs(5);
 
+/// [`GRACE`] when the server stops: hosts kill the server soon after they
+/// close its stdin (the TypeScript SDK sends SIGTERM 2 s later), and no
+/// command may outlive it.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(1);
+
 /// How long the pipes may stay open once the command ended: a process it left
 /// in the background can hold them for as long as it runs.
 const PIPE_WAIT: Duration = Duration::from_millis(500);
@@ -25,6 +30,10 @@ const PIPE_WAIT: Duration = Duration::from_millis(500);
 /// so a Ctrl-Break can reach it and its children without reaching the server.
 #[cfg(windows)]
 const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+/// `CREATE_SUSPENDED`: the command waits until it is in its job.
+#[cfg(windows)]
+const CREATE_SUSPENDED: u32 = 0x0000_0004;
 
 /// What one command printed.
 #[derive(Debug, Default)]
@@ -48,12 +57,12 @@ pub struct Calls {
 }
 
 impl Calls {
-    /// Interrupts every command still running, as a cancelled call does, and
-    /// waits until they ended.
+    /// Interrupts every command still running, as a cancelled call does but
+    /// with [`SHUTDOWN_GRACE`], and waits until they ended.
     pub async fn stop(&self) {
         self.shutdown.cancel();
         self.tracker.close();
-        let _ = tokio::time::timeout(GRACE + PIPE_WAIT * 4, self.tracker.wait()).await;
+        let _ = tokio::time::timeout(SHUTDOWN_GRACE + PIPE_WAIT * 4, self.tracker.wait()).await;
     }
 
     /// How many commands are running.
@@ -163,46 +172,54 @@ impl Runner {
         command
     }
 
-    /// Spawns `command` in a process group of its own and reads its output
-    /// until it exits or `cancel` fires. The child is watched by a task of
-    /// [`Calls`], so it is interrupted and waited for also when the call is
-    /// dropped or the server stops.
+    /// Spawns `command` in a process group of its own (and on Windows a job)
+    /// and reads its output until it exits or `cancel` fires. The child is
+    /// watched by a task of [`Calls`], so it is interrupted and waited for
+    /// also when the call is dropped or the server stops.
     async fn collect(
         &self,
-        mut command: tokio::process::Command,
+        command: tokio::process::Command,
         cancel: &CancellationToken,
     ) -> std::io::Result<Output> {
         #[cfg(unix)]
-        command.process_group(0);
+        let spawned = {
+            let mut command = command;
+            command.process_group(0);
+            Spawned {
+                child: command.spawn()?,
+            }
+        };
         #[cfg(windows)]
-        command.creation_flags(CREATE_NEW_PROCESS_GROUP);
-        let child = command.spawn()?;
+        let spawned = Spawned::start(command)?;
         let stop = cancel.child_token();
         // Dropping the call, as rmcp does when the client leaves, stops the child too.
         let _dropped = stop.clone().drop_guard();
         let shutdown = self.calls.shutdown.clone();
-        let watched = self.calls.tracker.spawn(watch(child, async move {
+        let watched = self.calls.tracker.spawn(watch(spawned, async move {
             tokio::select! {
-                () = stop.cancelled() => {}
-                () = shutdown.cancelled() => {}
+                () = stop.cancelled() => GRACE,
+                () = shutdown.cancelled() => SHUTDOWN_GRACE,
             }
         }));
         watched.await.map_err(std::io::Error::other)?
     }
 }
 
-/// Reads `child`'s output until it exits, or until `stopped` resolves, which
-/// interrupts it.
+/// Reads the command's output until it exits, or until `stopped` resolves
+/// with the grace it gets, which interrupts it.
 async fn watch(
-    mut child: tokio::process::Child,
-    stopped: impl Future<Output = ()>,
+    mut spawned: Spawned,
+    stopped: impl Future<Output = Duration>,
 ) -> std::io::Result<Output> {
-    let stdout = Pipe::read(child.stdout.take());
-    let stderr = Pipe::read(child.stderr.take());
+    let stdout = Pipe::read(spawned.child.stdout.take());
+    let stderr = Pipe::read(spawned.child.stderr.take());
     let (status, cancelled) = tokio::select! {
-        status = child.wait() => (Some(status?), false),
-        () = stopped => (interrupt(&mut child).await, true),
+        status = spawned.child.wait() => (Some(status?), false),
+        grace = stopped => (spawned.interrupt(grace).await, true),
     };
+    if !cancelled {
+        spawned.release();
+    }
     let (stdout, stderr) = tokio::join!(stdout.finish(), stderr.finish());
     Ok(Output {
         stdout,
@@ -213,49 +230,128 @@ async fn watch(
     })
 }
 
-/// Stops `child` the way Ctrl-C stops a command in a terminal, so `with` can
-/// stop its command and what it started; kills it after [`GRACE`]. Then
-/// processes it left in its group are killed, so none keeps running after the
-/// call. Returns how it ended, if it could be waited for.
-async fn interrupt(child: &mut tokio::process::Child) -> Option<ExitStatus> {
-    let group = child.id();
-    let waited = if group.is_some_and(send_interrupt) {
-        tokio::time::timeout(GRACE, child.wait()).await.ok()
-    } else {
-        None
-    };
-    let status = match waited {
-        Some(status) => status.ok(),
-        None => {
-            let _ = child.start_kill();
-            child.wait().await.ok()
-        }
-    };
-    #[cfg(unix)]
-    if let Some(group) = group.and_then(|pid| i32::try_from(pid).ok()) {
-        // The daemon a command spawned has left the group (setsid) by now.
-        if let Some(group) = rustix::process::Pid::from_raw(group) {
-            let _ = rustix::process::kill_process_group(group, rustix::process::Signal::KILL);
+/// A started command, and on Windows the job that holds it and what it starts.
+/// On Unix its process group does that.
+struct Spawned {
+    child: tokio::process::Child,
+    /// Ends every process in it when the server dies; `None` when Windows
+    /// would not make one.
+    #[cfg(windows)]
+    job: Option<devlanes_sys_windows::job::Job>,
+}
+
+impl Spawned {
+    /// Starts `command` in a new process group and in a job that ends it and
+    /// everything it started when the server dies. The job allows breakaway
+    /// so a daemon the command spawns leaves it; the cost is that Git for
+    /// Windows' MSYS2 programs leave it too (see `devlanes_sys_windows::job`),
+    /// and only the Ctrl-Break reaches those.
+    #[cfg(windows)]
+    fn start(mut command: tokio::process::Command) -> std::io::Result<Self> {
+        use devlanes_sys_windows::job::{Job, JobOptions};
+        let job = Job::create(JobOptions {
+            kill_on_close: true,
+            die_on_unhandled_exception: false,
+        })
+        .and_then(|job| job.allow_breakaway().map(|()| job))
+        .inspect_err(|error| tracing::debug!(%error, "no job for the command"))
+        .ok();
+        // Suspended until it is in the job, so nothing it starts escapes.
+        let suspended = if job.is_some() { CREATE_SUSPENDED } else { 0 };
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | suspended);
+        let mut child = command.spawn()?;
+        let (Some(job), Some(pid)) = (job, child.id()) else {
+            return Ok(Self { child, job: None });
+        };
+        match job.adopt_suspended(pid) {
+            Ok(true) => Ok(Self {
+                child,
+                job: Some(job),
+            }),
+            Ok(false) => {
+                tracing::debug!("the command runs outside its job");
+                Ok(Self { child, job: None })
+            }
+            Err(error) => {
+                let _ = child.start_kill();
+                Err(error)
+            }
         }
     }
-    status
+
+    /// Stops the command the way Ctrl-C stops one in a terminal, so `with`
+    /// can stop its command and what it started; kills it after `grace`.
+    /// What it left in its process group is killed too, so nothing keeps
+    /// running after the call. Returns how it ended, if it could be waited for.
+    #[cfg(unix)]
+    async fn interrupt(&mut self, grace: Duration) -> Option<ExitStatus> {
+        use rustix::process::{Pid, Signal, kill_process, kill_process_group};
+        let pid = self
+            .child
+            .id()
+            .and_then(|pid| i32::try_from(pid).ok())
+            .and_then(Pid::from_raw);
+        if let Some(pid) = pid {
+            // The command forwards SIGINT to the command `with` runs.
+            if kill_process(pid, Signal::INT).is_ok() {
+                let until = tokio::time::Instant::now() + grace;
+                while tokio::time::Instant::now() < until && !exited(pid) {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+            // Not reaped yet, so its PID, which is the group's ID, names no
+            // other group. A daemon the command spawned is in a session of its own.
+            let _ = kill_process_group(pid, Signal::KILL);
+        }
+        let _ = self.child.start_kill();
+        self.child.wait().await.ok()
+    }
+
+    /// Stops the command with a Ctrl-Break to its process group, which the
+    /// command of `with` shares (Ctrl-C cannot target one group), and
+    /// terminates its job after `grace`, as Unix kills the group.
+    #[cfg(windows)]
+    async fn interrupt(&mut self, grace: Duration) -> Option<ExitStatus> {
+        let sent = self
+            .child
+            .id()
+            .is_some_and(|pid| devlanes_sys_windows::console::ctrl_break_group(pid).is_ok());
+        let mut status = None;
+        if sent {
+            status = tokio::time::timeout(grace, self.child.wait())
+                .await
+                .ok()
+                .and_then(Result::ok);
+        }
+        if let Some(job) = &self.job {
+            let _ = job.terminate(1);
+        }
+        if status.is_none() {
+            let _ = self.child.start_kill();
+            status = self.child.wait().await.ok();
+        }
+        status
+    }
+
+    /// After a command that ended by itself, lets what it started in the
+    /// background (a browser `url open` launched) outlive the call, as a
+    /// shell would.
+    fn release(self) {
+        #[cfg(windows)]
+        if let Some(job) = &self.job
+            && let Err(error) = job.set_kill_on_close(false)
+        {
+            tracing::debug!(%error, "the command's background processes end with the call");
+        }
+    }
 }
 
-/// SIGINT to the command, which forwards it to the command `with` runs.
+/// Whether the child `pid` has exited, without reaping it.
 #[cfg(unix)]
-fn send_interrupt(pid: u32) -> bool {
-    i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-        .is_some_and(|pid| rustix::process::kill_process(pid, rustix::process::Signal::INT).is_ok())
-}
-
-/// Ctrl-Break to the command's process group: the command and what it runs in
-/// the foreground, such as the command of `with`, share it. Ctrl-C cannot
-/// target one group.
-#[cfg(windows)]
-fn send_interrupt(pid: u32) -> bool {
-    devlanes_sys_windows::console::ctrl_break_group(pid).is_ok()
+fn exited(pid: rustix::process::Pid) -> bool {
+    use rustix::process::{WaitId, WaitIdOptions, waitid};
+    let options = WaitIdOptions::EXITED | WaitIdOptions::NOWAIT | WaitIdOptions::NOHANG;
+    !matches!(waitid(WaitId::Pid(pid), options), Ok(None))
 }
 
 /// A pipe read to its end in a task, whose bytes so far stay available when a
@@ -294,6 +390,16 @@ impl Pipe {
         }
         let bytes = self.bytes.lock().unwrap_or_else(PoisonError::into_inner);
         String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+impl Drop for Pipe {
+    /// Stops reading when the output is not wanted, such as after waiting
+    /// for the command failed.
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
     }
 }
 

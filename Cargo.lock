@@ -1230,6 +1230,7 @@ dependencies = [
  "devlanes-core",
  "devlanes-ipc",
  "devlanes-proto",
+ "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-update",
  "devlanes-version",
