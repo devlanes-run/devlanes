@@ -98,7 +98,7 @@ extensions:
 
 Flags go after `mcp`, as in `claude mcp add devlanes -- devlanes mcp --read-only` or `"args": ["mcp", "--read-only"]`.
 
-- `--read-only` offers only the `devlanes_read` tool, so the agent can read status, logs and errors and cannot start, stop or change anything.
+- `--read-only` offers only the tools that change nothing, so the agent can read status, logs and errors and cannot start, stop or change anything.
 - `--path DIR` runs calls that name no `cwd` in DIR, which picks that worktree's lane. No shell reads a JSON config, so `~` does not expand there; give an absolute path.
 - `--lane REF` adds `--lane REF` to calls that name neither a `cwd` nor a lane. With `--path` it does nothing.
 
@@ -106,11 +106,17 @@ A call runs in the `cwd` it names (relative to the server's directory), else in 
 
 ## Tools
 
-`devlanes` runs any command, and `devlanes_read` only commands that change nothing. Both take `{"args": [...], "cwd": "..."}`, where `args` is the command line after `devlanes`, with the same arguments the CLI takes: `["start"]`, `["logs", "web", "--tail", "100"]`, `["stop", "--mine"]`. The server checks the line with the CLI's parser and runs the devlanes binary with `--output agent`. The result's text is the command's agent output; `structuredContent.data` holds the JSON that `--json` would print, and a nonzero exit marks the result as an error. `--help` works in both tools.
+Each common command has a tool of its own, named after the command with `_` between words: `status`, `start`, `exec`, `logs`, `stop`, `restart`, `reload`, `wait`, `with`, `run`, `debug_why`, `debug_errors`, `debug_top`, `url_print`, `url_ls`, `env_show`, `lane_ls`, `lane_clean`, `daemon_pair` and `doctor`. The server builds them from the CLI's own definition: a tool's description is the command's help, and its arguments are the command's arguments and options with their help, with `_` in place of `-`. So `devlanes logs web --tail 100` is the `logs` tool with `{"units": ["web"], "tail": 100}`, and `devlanes exec --name web -- pnpm dev` is `exec` with `{"name": "web", "command": ["pnpm", "dev"]}`.
 
-`devlanes_read` accepts `status`, `logs`, `wait`, `doctor`, `run --list`, `lane ls`, `lane clean --dry-run`, the `debug` commands except `freeze`, `thaw` and `bundle`, `env show`, `env export`, `url`, `infra status`, `infra logs`, `config check`, `config get`, `remote ls`, `remote sync`, `daemon status`, `daemon logs` and `daemon clients`. For anything else it tells the agent to call `devlanes` with the same args. `env show` and `env export` print values as the CLI does, so a read-only agent can still read a lane's environment.
+Every tool also takes `lane`, the global `--lane`, and `cwd`. `start`, `restart`, `reload`, `wait`, `with` and `logs` take `timeout`, and `start`, `restart`, `exec` and `run` take `env`, a list of `KEY=VALUE` items. The tools leave out what only matters in a terminal or to the server: the output modes, `--quiet`, `--verbose`, `--budget`, `start --attach`, `--no-ui`, `status --watch` and `status --statusline`. `--project` and `--file` are left out too, since a `project@` lane reference or a `cwd` does the same.
 
-Both tools refuse commands that need a terminal or never end, and say what to run instead: `ui`, `attach`, `start --attach`, `env shell`, `setup`, `update`, `uninstall`, `completions`, `status --statusline`, `daemon run`, `daemon logs -f`, and `logs -f`, `status --watch`, `debug events -f` or `infra logs -f` without `--timeout`.
+The `devlanes` tool runs every other command, such as `infra status`, `debug config`, `config get` or `lane new`. It takes `{"args": [...], "cwd": "..."}`, where `args` is the command line after `devlanes`, with the same arguments the CLI takes: `["infra", "status"]`, `["lane", "new", "--start"]`. `--help` works there too. Its description tells the agent to use the other tools first.
+
+Each call becomes a devlanes command line, which the server checks with the CLI's parser and runs with the devlanes binary and `--output agent`. The result's text is the command's agent output; `structuredContent.data` holds the JSON that `--json` would print, and a nonzero exit marks the result as an error. Tools of commands that change nothing carry `readOnlyHint`, the others `destructiveHint`, by the same rule `--read-only` uses.
+
+With `--read-only` the server offers only `status`, `logs`, `wait`, `debug_why`, `debug_errors`, `debug_top`, `url_print`, `url_ls`, `env_show`, `lane_ls`, `doctor` and the `devlanes` tool, which then runs only commands that change nothing: besides those with a tool, `run --list`, `lane clean --dry-run`, the `debug` commands except `freeze`, `thaw` and `bundle`, `env export`, `url open`, `infra status`, `infra logs`, `config check`, `config get`, `remote ls`, `remote sync`, `daemon status`, `daemon logs` and `daemon clients`. For anything else it tells the agent to ask the user. `env show` and `env export` print values as the CLI does, so a read-only agent can still read a lane's environment.
+
+Every tool refuses commands that need a terminal or never end, and says what to run instead: `ui`, `attach`, `start --attach`, `env shell`, `setup`, `update`, `uninstall`, `completions`, `status --statusline`, `daemon run`, `daemon logs -f`, and `logs -f`, `status --watch`, `debug events -f` or `infra logs -f` without `--timeout`.
 
 Hosts that send a progress token get the lane's phases, such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running. On Windows cancelling also ends every process the command started, such as the program `devlanes with` ran. When the host closes the server's stdin or stops it with SIGTERM, or on Windows closes its console, the server ends its running commands the same way right away.
 
@@ -127,7 +133,7 @@ When one of those commands names no `--timeout`, the server adds one that fits t
 | OpenCode | 30 s (`timeout`) | 25 s |
 | any other host | not known | 60 s |
 
-When the timeout passes, the call returns what is ready so far, such as `2/3 ready, web starting`, and the units keep starting in the daemon; the agent calls `devlanes wait` to continue. A timeout that is too short costs an extra `wait` call, and one longer than the host's limit brings back the bare timeout, so the values lean short.
+When the timeout passes, the call returns what is ready so far, such as `2/3 ready, web starting`, and the units keep starting in the daemon; the agent calls the `wait` tool to continue. A timeout that is too short costs an extra `wait` call, and one longer than the host's limit brings back the bare timeout, so the values lean short.
 
 Claude Code reads `MCP_TOOL_TIMEOUT`, in milliseconds, for every MCP tool call ([Claude Code's time limits on MCP tool calls](https://code.claude.com/docs/en/mcp#time-limits-on-mcp-tool-calls)), and its MCP servers inherit Claude Code's environment, so `devlanes mcp` sees the same value and stays a tenth under it (between 1 s and 10 s under). A per-server `timeout` in `.mcp.json` is not visible to the server; set `MCP_TOOL_TIMEOUT` instead.
 
@@ -141,7 +147,7 @@ Dev servers, watchers, workers, tunnels and other processes that belong to the l
 devlanes exec --name storybook -- pnpm storybook
 ```
 
-Through MCP that is `["exec", "--name", "storybook", "--", "pnpm", "storybook"]`. The daemon owns the process and its logs and gives it the lane's environment, so it survives the agent's shell, and `devlanes logs storybook --tail 100`, `devlanes status` and `devlanes stop storybook` find it by name. The result says once how to read and stop it. Builds, tests and other commands that exit run as usual, or with `devlanes with -- COMMAND` when they need the lane running. The skill and the MCP server's instructions teach the agent the same rules.
+Through MCP that is the `exec` tool with `{"name": "storybook", "command": ["pnpm", "storybook"]}`. The daemon owns the process and its logs and gives it the lane's environment, so it survives the agent's shell, and `devlanes logs storybook --tail 100`, `devlanes status` and `devlanes stop storybook` find it by name. The result says once how to read and stop it. Builds, tests and other commands that exit run as usual, or with `devlanes with -- COMMAND` when they need the lane running. The skill and the MCP server's instructions teach the agent the same rules.
 
 ## Consent prompts
 
@@ -152,9 +158,9 @@ Through MCP, these commands ask the user before they run:
 - `remote connect` and `remote disconnect`
 - `config set` and `config unset` of a `remote.*` key
 
-Any other command that needs confirmation asks too, such as `run` of a task with `confirm:`. When the user accepts, the server runs the command with `--yes`; when they decline, nothing runs. A host without MCP elicitation cannot ask, so there the call fails with the question and `ask the user, then rerun with --yes`, as the CLI does for an agent in a shell.
+Any other command that needs confirmation asks too, such as `run` of a task with `confirm:`. When the user accepts, the server runs the command with `--yes`; when they decline, nothing runs. A host without MCP elicitation cannot ask, so there the call fails with the question and tells the agent to ask the user, then call the tool again with `yes: true` (`--yes` through the `devlanes` tool), as the CLI does for an agent in a shell. `lane_clean`, `daemon_pair` and `run` take `yes` for that.
 
-The prompts help the user catch an agent's mistakes and are not a security boundary: an agent that passes `--yes` is not asked, and any process running as you can reach the daemon without `devlanes mcp` ([processes running as you](../security.md#processes-running-as-you)).
+The prompts help the user catch an agent's mistakes and are not a security boundary: an agent that passes `yes: true` or `--yes` is not asked, and any process running as you can reach the daemon without `devlanes mcp` ([processes running as you](../security.md#processes-running-as-you)).
 
 ## Environment
 
@@ -227,4 +233,4 @@ It reads the directory and session id from the JSON Claude Code writes to its st
 
 ## MCP Apps
 
-Hosts that show MCP Apps, such as Claude Desktop, GitHub Copilot in VS Code, Cursor and Goose, show a card with results such as `start`, `status`, `logs UNIT`, `lane clean` and `daemon pair`; logs read with `--grep`, `--since` or another filter get none. Its buttons run commands themselves without a consent prompt, since the click is the consent: the clean button runs `lane clean --yes`, and new code on a pairing card runs `daemon pair` again. With `--read-only` the card only reads. On the board, a box lane whose link is down shows no open button. Only the newest card of a lane polls the daemon, only while it is visible, and it never starts the daemon. Other hosts, terminal agents among them, get the same text without the card. Recent Claude Desktop builds do not show cards from stdio servers, reported on Windows and macOS ([anthropics/claude-ai-mcp#1069](https://github.com/anthropics/claude-ai-mcp/issues/1069)).
+Hosts that show MCP Apps, such as Claude Desktop, GitHub Copilot in VS Code, Cursor and Goose, show a card with results such as `start`, `status`, `logs UNIT`, `debug top`, `lane clean` and `daemon pair`; logs read with `--grep`, `--since` or another filter get none. Its buttons run commands themselves without a consent prompt, since the click is the consent: the clean button runs `lane clean --yes`, and new code on a pairing card runs `daemon pair` again. With `--read-only` the card only reads. On the board, a box lane whose link is down shows no open button. Only the newest card of a lane polls the daemon, only while it is visible, and it never starts the daemon. Other hosts, terminal agents among them, get the same text without the card. Recent Claude Desktop builds do not show cards from stdio servers, reported on Windows and macOS ([anthropics/claude-ai-mcp#1069](https://github.com/anthropics/claude-ai-mcp/issues/1069)).

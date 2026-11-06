@@ -281,7 +281,7 @@ async fn run(
             let line = action_args(&args.action, args.target.as_deref()).ok_or_else(|| {
                 McpError::invalid_params(format!("unknown action {}", args.action), None)
             })?;
-            let mut call = match Call::parse(&line, Source::Devlanes) {
+            let mut call = match Call::parse(&line, Source::Any) {
                 Ok(call) => call,
                 Err(Rejected::Help(text) | Rejected::Error(text)) => {
                     return Ok(text_result(text, true));

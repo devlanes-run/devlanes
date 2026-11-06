@@ -1,69 +1,81 @@
-//! What agents read: the server instructions and the tool descriptions. A test
-//! parses every `devlanes ...` command and every args array quoted here.
+//! What agents read beyond clap's help: the server instructions, the
+//! `devlanes` tool and the descriptions the curated tools override. A test in
+//! `tools` turns every tool call and args array quoted here into a command
+//! line and parses it.
 
 /// The server `instructions`. Hosts may keep only the start, so the rules that
 /// change what an agent does come in the first 512 characters.
 pub const INSTRUCTIONS: &str = "\
 devlanes runs a dev environment per Git worktree (a lane) with its own ports, URLs and env. \
-Call the devlanes tool with the command line after \"devlanes\" as args.
-- Run dev servers, watchers, workers and tunnels with exec: `devlanes exec --name web -- pnpm dev`. \
-devlanes owns the process and gives it the lane's ports and env. Never use &, nohup or a \
-background shell for them.
+Common commands have tools of their own; the devlanes tool runs the others.
+- Run dev servers, watchers, workers and tunnels with exec: `exec {\"name\": \"web\", \"command\": \
+[\"pnpm\", \"dev\"]}`. devlanes owns the process and gives it the lane's ports and env. Never use \
+&, nohup or a background shell for them.
 - start, restart and wait block until ready or failed: no sleep or curl polling.
 
 More:
-- Read a unit with `devlanes logs web --tail 100`, the lane with `devlanes status`, a failure \
-with `devlanes debug why web`.
+- Read a unit with `logs {\"units\": [\"web\"], \"tail\": 100}`, the lane with status, a failure \
+with `debug_why {\"unit\": \"web\"}`, CPU and memory with debug_top.
 - Run builds, tests, git and other commands that exit in your own shell, or with \
-`devlanes with -- pnpm test` when they need the lane running.
-- Stop what you started with `devlanes stop --mine`. Leave the lane running when you hand work \
+`with {\"command\": [\"pnpm\", \"test\"]}` when they need the lane running.
+- Stop what you started with `stop {\"mine\": true}`. Leave the lane running when you hand work \
 to the user for review.
-- Commands that delete data or reach other machines ask the user first.
+- lane_clean, daemon_pair and other commands that delete data or reach other machines ask the \
+user first.
 - cwd picks the worktree; without it the call uses the project the agent runs in.";
 
-/// The server `instructions` under `--read-only`, where only `devlanes_read`
-/// exists.
+/// The server `instructions` under `--read-only`, where only the tools that
+/// change nothing exist.
 pub const READ_ONLY_INSTRUCTIONS: &str = "\
-devlanes runs a dev environment per Git worktree (a lane) with its own ports, URLs and env. \
-Call the devlanes_read tool with the command line after \"devlanes\" as args. This server only \
-reads: ask the user to start, stop or change anything.
+devlanes runs a dev environment per Git worktree (a lane) with its own ports, URLs and env. This \
+server only reads: ask the user to start, stop or change anything. Common commands have tools of \
+their own; the devlanes tool runs the others that change nothing.
 - wait blocks until ready or failed: no sleep or curl polling.
 
 More:
-- Read a unit with `devlanes logs web --tail 100`, the lane with `devlanes status`, a failure \
-with `devlanes debug why web`.
+- Read a unit with `logs {\"units\": [\"web\"], \"tail\": 100}`, the lane with status, a failure \
+with `debug_why {\"unit\": \"web\"}`, CPU and memory with debug_top.
 - cwd picks the worktree; without it the call uses the project the agent runs in.";
 
-/// Description of the `devlanes` tool.
+/// Description of the `devlanes` tool, which runs any command line.
 pub const DEVLANES: &str = "\
-Run any devlanes command. args is the command line after \"devlanes\", such as [\"start\"], \
-[\"exec\", \"--name\", \"web\", \"--\", \"pnpm\", \"dev\"], [\"stop\", \"--mine\"] or \
-[\"logs\", \"web\", \"--tail\", \"100\"]. Use exec for anything that keeps running \
-(dev servers, watchers, workers, tunnels); its result says how to read and stop it. start, \
-restart and wait return once the units are ready or failed, or at the timeout the server adds, \
-with what is ready so far; then call wait. Returns the command's agent output, with its JSON in \
-structuredContent.";
+Run a devlanes command that has no tool of its own, such as debug config, infra status, remote \
+ls, config get or lane new, or any command with --help. args is the command line after \
+\"devlanes\", such as [\"infra\", \"status\"] or [\"debug\", \"config\"]. Use the other tools first: \
+start, exec, logs, stop and the rest take typed arguments. Returns the command's agent output, \
+with its JSON in structuredContent.";
 
-/// Description of the `devlanes_read` tool under `--read-only`.
+/// Description of the `devlanes` tool under `--read-only`, where it only runs
+/// commands that change nothing.
 pub const DEVLANES_READ_ONLY: &str = "\
-Run a devlanes command that changes nothing, such as status, logs, wait, debug why, debug \
-errors, url print, env show, doctor, lane ls or lane clean --dry-run, or any command with \
---help. args is the command line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \
-\"--tail\", \"100\"].";
+Run a devlanes command that changes nothing and has no tool of its own, such as debug config, \
+infra status, remote ls, config get, run --list or lane clean --dry-run, or any command with \
+--help. args is the command line after \"devlanes\", such as [\"infra\", \"status\"] or \
+[\"lane\", \"clean\", \"2\", \"--dry-run\"]. Use the other tools first.";
 
-/// Description of the `devlanes_read` tool next to the `devlanes` tool.
-pub const DEVLANES_READ: &str = "\
-Run a devlanes command that changes nothing, such as status, logs, wait, debug why, debug \
-errors, url print, env show, doctor, lane ls or lane clean --dry-run, or any command with \
---help. args is the command line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \
-\"--tail\", \"100\"]. Use the devlanes tool for commands that start, stop or change something.";
-
-/// Description of the `args` argument of both tools.
+/// Description of the `args` argument of the `devlanes` tool.
 pub const ARGS: &str = "The devlanes command line without \"devlanes\", one element per argument.";
 
-/// Description of the `cwd` argument of both tools.
-pub const CWD: &str = "Directory to run in, which picks the worktree and its lane. \
-Relative paths start from the server's directory.";
+/// Description of every tool's `cwd` argument.
+pub const CWD: &str = "Worktree directory to run in, which picks its lane; relative to the \
+server's directory.";
+
+/// The descriptions of global options whose CLI help does not fit a tool
+/// call, by argument id.
+pub fn global_help(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "timeout" => {
+            "How long to wait, such as 30s or 5m [default for commands that wait: a little under \
+             the host's tool call limit]"
+        }
+        "env" => "Variables for the processes the command starts, as KEY=VALUE",
+        "yes" => {
+            "Skip the server's question to the user; set it only when the user already agreed in \
+             the chat"
+        }
+        _ => return None,
+    })
+}
 
 /// Description of the app-only `app_snapshot` tool.
 pub const APP_SNAPSHOT: &str = "Lanes and units for the lane card, with metrics when asked, \
@@ -79,56 +91,17 @@ consent: clean and pair run without asking again.";
 
 #[cfg(test)]
 mod tests {
-    use devlanes_cli::{Cli, clap::Parser};
-
     use super::*;
-
-    /// Every `devlanes ...` command between backticks in `text`.
-    fn quoted_commands(text: &str) -> Vec<Vec<String>> {
-        text.split('`')
-            .skip(1)
-            .step_by(2)
-            .filter_map(|quoted| quoted.strip_prefix("devlanes "))
-            .map(|command| command.split(' ').map(str::to_owned).collect())
-            .collect()
-    }
-
-    /// Every `["...", ...]` args array in `text`.
-    fn quoted_args(text: &str) -> Vec<Vec<String>> {
-        text.split('[')
-            .skip(1)
-            .filter_map(|rest| rest.split_once(']'))
-            .filter_map(|(array, _)| serde_json::from_str(&format!("[{array}]")).ok())
-            .collect()
-    }
-
-    /// The commands agents are told to run are valid devlanes command lines.
-    #[test]
-    fn quoted_commands_parse() {
-        let mut commands = quoted_commands(INSTRUCTIONS);
-        assert!(commands.len() >= 6, "{commands:?}");
-        commands.extend(quoted_commands(READ_ONLY_INSTRUCTIONS));
-        for text in [DEVLANES, DEVLANES_READ, DEVLANES_READ_ONLY] {
-            commands.extend(quoted_args(text));
-        }
-        assert!(commands.len() >= 16, "{commands:?}");
-        for args in commands {
-            let parsed =
-                Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.clone()));
-            assert!(
-                parsed.is_ok(),
-                "devlanes {}: {:?}",
-                args.join(" "),
-                parsed.err()
-            );
-        }
-    }
 
     /// The exec rule and the blocking rule fit in the first 512 characters.
     #[test]
     fn key_rules_come_first() {
         let start = &INSTRUCTIONS[..512.min(INSTRUCTIONS.len())];
-        for rule in ["exec --name", "nohup", "block until ready"] {
+        for rule in ["with exec", "\"command\"", "nohup", "block until ready"] {
+            assert!(start.contains(rule), "{rule} is past 512 characters");
+        }
+        let start = &READ_ONLY_INSTRUCTIONS[..512.min(READ_ONLY_INSTRUCTIONS.len())];
+        for rule in ["only reads", "blocks until ready"] {
             assert!(start.contains(rule), "{rule} is past 512 characters");
         }
     }

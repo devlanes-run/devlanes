@@ -12,6 +12,55 @@ async fn tools(harness: &crate::Harness) -> Value {
     serde_json::to_value(tools.tools).expect("json")
 }
 
+/// The names in a `tools/list`.
+fn names(tools: &Value) -> Vec<String> {
+    tools
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The tools of every curated command, in `tools/list` order.
+const CURATED: [&str; 20] = [
+    "status",
+    "start",
+    "exec",
+    "logs",
+    "stop",
+    "restart",
+    "reload",
+    "wait",
+    "with",
+    "run",
+    "debug_why",
+    "debug_errors",
+    "debug_top",
+    "url_print",
+    "url_ls",
+    "env_show",
+    "lane_ls",
+    "lane_clean",
+    "daemon_pair",
+    "doctor",
+];
+
+/// The curated tools that change nothing.
+const READ_ONLY: [&str; 11] = [
+    "status",
+    "logs",
+    "wait",
+    "debug_why",
+    "debug_errors",
+    "debug_top",
+    "url_print",
+    "url_ls",
+    "env_show",
+    "lane_ls",
+    "doctor",
+];
+
 #[tokio::test]
 /// `initialize` at 2025-11-25 gives the instructions and the model-facing tools;
 /// starting the server and listing runs no devlanes process, so no daemon.
@@ -93,24 +142,10 @@ async fn mcp_apps_clients_get_the_cards() {
 async fn discover_then_call() {
     tokio::time::timeout(LIMIT, async {
         let harness = connect(TestClient::new().with_ui(), Lifecycle::Discover, |_| {}).await;
-        let names: Vec<String> = tools(&harness)
-            .await
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
-            .collect();
-        assert_eq!(
-            names,
-            [
-                "devlanes",
-                "devlanes_read",
-                "app_snapshot",
-                "app_logs",
-                "app_action"
-            ]
-        );
-        let result = harness.call("devlanes", &["start"]).await;
+        let mut expected: Vec<&str> = CURATED.to_vec();
+        expected.extend(["devlanes", "app_snapshot", "app_logs", "app_action"]);
+        assert_eq!(names(&tools(&harness).await), expected);
+        let result = harness.call_with("start", json!({})).await;
         assert!(!failed(&result), "{}", text(&result));
         // Claude Code's name gives its timeout and agent.
         assert_eq!(
@@ -124,8 +159,10 @@ async fn discover_then_call() {
 }
 
 #[tokio::test]
-/// `--read-only` offers only `devlanes_read`; calling `devlanes` is an error.
-async fn read_only_offers_one_tool() {
+/// `--read-only` offers only the tools that change nothing, and a `devlanes`
+/// tool that refuses the rest; calling a tool that changes something is an
+/// error.
+async fn read_only_offers_only_reading_tools() {
     tokio::time::timeout(LIMIT, async {
         let harness = connect(
             TestClient::new().with_ui(),
@@ -135,46 +172,39 @@ async fn read_only_offers_one_tool() {
             },
         )
         .await;
-        let names: Vec<String> = tools(&harness)
-            .await
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
-            .collect();
-        assert_eq!(names, ["devlanes_read", "app_snapshot", "app_logs"]);
-        // Nothing they say points at the missing devlanes tool.
+        let mut expected: Vec<&str> = READ_ONLY.to_vec();
+        expected.extend(["devlanes", "app_snapshot", "app_logs"]);
+        assert_eq!(names(&tools(&harness).await), expected);
+        // Nothing they say points at tools that are missing.
         insta::assert_json_snapshot!("tools_read_only", tools(&harness).await);
         let info = harness.client.peer_info().expect("server info");
         insta::assert_snapshot!(
             "instructions_read_only",
             info.instructions.clone().unwrap_or_default()
         );
-        let refused = harness.call("devlanes_read", &["stop"]).await;
-        assert!(failed(&refused));
-        assert!(
-            text(&refused).contains("ask the user to run it"),
-            "{}",
-            text(&refused)
-        );
-        let refused = harness
-            .client
-            .call_tool(
-                rmcp::model::CallToolRequestParams::new("devlanes").with_arguments(
-                    serde_json::from_value(json!({"args": ["stop"]})).expect("args"),
-                ),
-            )
-            .await;
-        assert!(refused.is_err(), "{refused:?}");
-        let refused = harness
-            .client
-            .call_tool(
-                rmcp::model::CallToolRequestParams::new("app_action").with_arguments(
-                    serde_json::from_value(json!({"action": "stop"})).expect("args"),
-                ),
-            )
-            .await;
-        assert!(refused.is_err(), "{refused:?}");
+        for args in [&["stop"][..], &["lane", "clean", "2"]] {
+            let refused = harness.call("devlanes", args).await;
+            assert!(failed(&refused));
+            assert!(
+                text(&refused).contains("ask the user to run it"),
+                "{}",
+                text(&refused)
+            );
+        }
+        for (tool, arguments) in [
+            ("stop", json!({})),
+            ("exec", json!({"name": "web", "command": ["pnpm", "dev"]})),
+            ("app_action", json!({"action": "stop"})),
+        ] {
+            let refused = harness
+                .client
+                .call_tool(
+                    rmcp::model::CallToolRequestParams::new(tool)
+                        .with_arguments(serde_json::from_value(arguments).expect("args")),
+                )
+                .await;
+            assert!(refused.is_err(), "{tool}: {refused:?}");
+        }
         assert!(harness.runs().is_empty(), "ran {:?}", harness.lines());
     })
     .await

@@ -1,5 +1,5 @@
-//! `devlanes mcp` over stdio, as an agent host drives it: exec a server through
-//! the `devlanes` tool, read its logs with `devlanes_read`, stop it, and stop
+//! `devlanes mcp` over stdio, as an agent host drives it: exec a server with
+//! the `exec` tool, read its logs with `logs`, stop it with `stop`, and stop
 //! units of the same agent session with `stop --mine` from either side.
 
 use std::{
@@ -126,15 +126,15 @@ impl Mcp {
         }
     }
 
-    /// Calls `tool` with `args`; the result must not be an error.
-    fn call(&mut self, lab: &Lab, tool: &str, args: &[&str]) -> Result<Value> {
+    /// Calls `tool` with `arguments`; the result must not be an error.
+    fn call(&mut self, lab: &Lab, tool: &str, arguments: Value) -> Result<Value> {
         let result = self.request(
             lab,
             "tools/call",
-            json!({"name": tool, "arguments": {"args": args}}),
+            json!({"name": tool, "arguments": arguments}),
         )?;
         if result["isError"] == true {
-            return Err(Error::Unexpected(format!("{tool} {args:?}: {result}")));
+            return Err(Error::Unexpected(format!("{tool} {arguments}: {result}")));
         }
         Ok(result)
     }
@@ -169,23 +169,18 @@ fn mcp_exec_logs_and_stop() -> Result<()> {
         .flatten()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(names, ["devlanes", "devlanes_read"], "{tools}");
+    for tool in ["exec", "logs", "stop", "devlanes"] {
+        assert!(names.contains(&tool), "no {tool}: {tools}");
+    }
     assert!(!lab.daemon_running(), "the server alone started a daemon");
 
     let exec = mcp.call(
         &lab,
-        "devlanes",
-        &[
-            "exec",
-            "--name",
-            "probe",
-            "--",
-            "fixture-server",
-            "--port",
-            "0",
-            "--log-line",
-            "probe-hello",
-        ],
+        "exec",
+        json!({
+            "name": "probe",
+            "command": ["fixture-server", "--port", "0", "--log-line", "probe-hello"],
+        }),
     )?;
     let unit = &exec["structuredContent"]["data"];
     assert_eq!(unit["name"], "probe", "{exec}");
@@ -200,16 +195,12 @@ fn mcp_exec_logs_and_stop() -> Result<()> {
     )?;
     lab.track(pid);
 
-    lab.eventually(
-        "probe output through devlanes_read",
-        Duration::from_secs(15),
-        || {
-            let logs = mcp.call(&lab, "devlanes_read", &["logs", "probe", "--tail", "5"])?;
-            Ok(text(&logs).contains("probe-hello").then_some(()))
-        },
-    )?;
+    lab.eventually("probe output through logs", Duration::from_secs(15), || {
+        let logs = mcp.call(&lab, "logs", json!({"units": ["probe"], "tail": 5}))?;
+        Ok(text(&logs).contains("probe-hello").then_some(()))
+    })?;
 
-    let stopped = mcp.call(&lab, "devlanes", &["stop", "probe"])?;
+    let stopped = mcp.call(&lab, "stop", json!({"units": ["probe"]}))?;
     assert_eq!(stopped["structuredContent"]["exit_code"], 0, "{stopped}");
     lab.eventually("probe to exit", Duration::from_secs(15), || {
         Ok((!alive(pid)).then_some(()))
@@ -261,9 +252,9 @@ fn cli_stop_mine(lab: &Lab, session: &str) -> Result<Vec<String>> {
     Ok(names(&output.json()?))
 }
 
-/// `stop --mine` through the `devlanes` tool: the names it stopped.
+/// `stop` with `mine` through MCP: the names it stopped.
 fn mcp_stop_mine(mcp: &mut Mcp, lab: &Lab) -> Result<Vec<String>> {
-    let stopped = mcp.call(lab, "devlanes", &["stop", "--mine"])?;
+    let stopped = mcp.call(lab, "stop", json!({"mine": true}))?;
     Ok(names(&stopped["structuredContent"]["data"]))
 }
 
@@ -300,7 +291,8 @@ fn mcp_and_cli_stop_mine_agree() -> Result<()> {
     let other = format!("e2e-{}-other", std::process::id());
     let mut mcp = Mcp::spawn(&lab, as_agent(&lab, &mine, &["mcp"])?)?;
 
-    let exec = mcp.call(&lab, "devlanes", &exec_args("from-mcp"))?;
+    // Through the `devlanes` tool, so both kinds of tool run in this file.
+    let exec = mcp.call(&lab, "devlanes", json!({"args": exec_args("from-mcp")}))?;
     let from_mcp = need(pid(&exec["structuredContent"]["data"]), "from-mcp pid")?;
     lab.track(from_mcp);
     assert_eq!(cli_stop_mine(&lab, &other)?, Vec::<String>::new());

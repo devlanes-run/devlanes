@@ -17,7 +17,7 @@ use crate::command::Call;
 /// - `status`: `lane` for one lane, `board` otherwise;
 /// - `debug why`, `debug errors`, `logs`: `failure`, except for logs an agent
 ///   reads with a query ([`Call::log_query`]), which the text already shows;
-/// - `lane clean`: `clean`; `daemon pair`: `pair`.
+/// - `lane clean`: `clean`; `daemon pair`: `pair`; `debug top`: `top`.
 pub fn select(call: &Call, exit_code: i32, data: &Value) -> Option<&'static str> {
     let failed = || {
         exit_code != 0
@@ -40,6 +40,7 @@ pub fn select(call: &Call, exit_code: i32, data: &Value) -> Option<&'static str>
         "debug why" | "debug errors" | "logs" => Some("failure"),
         "lane clean" => Some("clean"),
         "daemon pair" => Some("pair"),
+        "debug top" => Some("top"),
         _ => None,
     }
 }
@@ -119,7 +120,7 @@ mod tests {
     /// The parsed `devlanes LINE`.
     fn call(line: &str) -> Call {
         let args: Vec<String> = line.split(' ').map(str::to_owned).collect();
-        match Call::parse(&args, Tool::Devlanes) {
+        match Call::parse(&args, Tool::Any) {
             Ok(call) => call,
             Err(_) => panic!("devlanes {line} does not parse"),
         }
@@ -148,6 +149,7 @@ mod tests {
         assert_eq!(select("debug why api", 0, &Value::Null), Some("failure"));
         assert_eq!(select("lane clean acme@4", 0, &Value::Null), Some("clean"));
         assert_eq!(select("daemon pair", 0, &Value::Null), Some("pair"));
+        assert_eq!(select("debug top", 0, &json!({"lanes": []})), Some("top"));
         assert_eq!(select("stop", 0, &Value::Null), None);
     }
 

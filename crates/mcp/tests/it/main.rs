@@ -268,7 +268,7 @@ pub async fn settled(server: &Server, within: Duration) {
 }
 
 impl Harness {
-    /// Calls `tool` with `args` (and `cwd`, when given).
+    /// Calls `tool`, the `devlanes` tool, with the command line `args`.
     pub async fn call(&self, tool: &'static str, args: &[&str]) -> CallToolResult {
         self.call_with(tool, json!({"args": args})).await
     }
