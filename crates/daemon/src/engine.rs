@@ -550,6 +550,7 @@ impl Inner {
             Method::LaneList => self.lane_list(&context).await,
             Method::LaneNew => self.lane_new(params, &context, &session).await,
             Method::LaneClean => self.lane_clean_method(params, &context).await,
+            Method::LaneCleanPlan => self.lane_clean_plan_method(params, &context).await,
             Method::LaneGc => self.lane_gc(&context).await,
             Method::Exec => self.exec_method(params, &context).await,
             Method::Run => self.run_method(params, &context, &session).await,
@@ -716,10 +717,22 @@ impl Inner {
         self: &Arc<Self>,
         context: &Context,
     ) -> Result<LanePair, RpcError> {
+        self.cwd_lane_with(context, true).await
+    }
+
+    /// [`Self::cwd_lane`]; without `claim` a worktree that is no lane yet stays
+    /// one without a lane, for requests that must change nothing.
+    pub(crate) async fn cwd_lane_with(
+        self: &Arc<Self>,
+        context: &Context,
+        claim: bool,
+    ) -> Result<LanePair, RpcError> {
         if let Some(project) = self.project_for(context).await? {
             if let Some(lane) = Self::lane_at(&project, &context.cwd) {
                 // Running devlanes in a worktree is what makes it a lane.
-                self.claim_lane(&project, &lane).await;
+                if claim {
+                    self.claim_lane(&project, &lane).await;
+                }
                 return Ok((project, lane));
             }
         } else if !context.cwd.as_os_str().is_empty() {

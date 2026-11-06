@@ -25,6 +25,7 @@ mod relaunch;
 mod remote;
 mod setup;
 mod start_ui;
+mod statusline;
 mod terminal;
 mod uninstall;
 mod update;
@@ -88,6 +89,11 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Before output policy, agent detection and the multi-threaded runtime: a
+    // status line runs on every refresh, and prints nothing rather than an error.
+    if cli.statusline() {
+        return statusline::run();
+    }
     // `daemon run` makes a hidden console of its own instead, and writes no
     // escape sequences to it.
     #[cfg(windows)]

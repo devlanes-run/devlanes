@@ -163,7 +163,26 @@ async fn docker_lane_container_lifecycle() {
         assert_eq!(lane_entry.key.as_deref(), Some("cache"));
         assert_eq!(lane_entry.ports[&6379], lane.ports[0].host);
 
+        // What a dry run reports is what the removal below deletes.
+        let contents = infra
+            .lane_contents(&project, 1, None)
+            .await
+            .expect("lane contents");
+        let names: Vec<&str> = contents
+            .containers
+            .iter()
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(names, [container_name(&project, "cache", Scope::Lane(1))]);
+        assert_eq!(contents.containers[0].kind, "container");
+        assert_eq!(contents.volumes.len(), 1);
+        assert!(!contents.compose);
+
         let removed = infra.remove_lane(&project, 1).await.expect("remove lane");
+        assert_eq!(
+            contents.volumes[0].name, removed.volumes[0],
+            "the dry run named the volume the removal deleted"
+        );
         assert_eq!(
             removed.containers,
             [container_name(&project, "cache", Scope::Lane(1))]

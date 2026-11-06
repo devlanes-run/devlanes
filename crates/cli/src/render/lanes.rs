@@ -646,7 +646,7 @@ pub(super) fn stop(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 }
 
 /// Service units of a lane.
-fn services(lane: &LaneSummary) -> Vec<&UnitSummary> {
+pub(super) fn services(lane: &LaneSummary) -> Vec<&UnitSummary> {
     lane.units
         .iter()
         .filter(|unit| unit.kind.is_empty() || unit.kind == "service")
@@ -720,7 +720,7 @@ fn lane_warning_lines(lane: &LaneSummary, cx: &Ctx<'_>) -> Vec<String> {
 
 /// Whether `url` goes straight to a port on this machine (`http://127.0.0.1:20101`)
 /// rather than through the proxy by hostname.
-fn loopback(url: &str) -> bool {
+pub(super) fn loopback(url: &str) -> bool {
     let authority = url
         .split_once("://")
         .map_or(url, |(_, rest)| rest)
@@ -1148,6 +1148,115 @@ pub(super) fn lane_clean(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
     if let Some(error) = data.get("infra").and_then(|infra| infra.get("error")) {
         lines.push(format!("  infra: {}", text(error, "message")));
     }
+    lines
+}
+
+/// `lane clean --dry-run`: one row per thing the clean would stop, run, remove,
+/// delete or free, then the command that cleans.
+pub(super) fn lane_clean_plan(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
+    let lane = text(data, "lane");
+    let size = |value: &Value| value.as_u64().map_or_else(|| "size unknown".into(), bytes);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for unit in list(data, "running") {
+        let agent = unit.pointer("/actor/agent_id").and_then(Value::as_str);
+        rows.push(vec![
+            "stop".into(),
+            match (agent, cx.agent()) {
+                (Some(agent), true) => format!("{} actor={}", text(unit, "unit"), clean(agent)),
+                (Some(agent), false) => {
+                    format!("{} (started by {})", text(unit, "unit"), clean(agent))
+                }
+                (None, _) => text(unit, "unit"),
+            },
+        ]);
+    }
+    for (verb, entry) in list(data, "tasks").iter().map(|task| ("run", task)).chain(
+        list(data, "teardown")
+            .iter()
+            .map(|entry| ("teardown", entry)),
+    ) {
+        let mut what = text(entry, "name");
+        let container = text(entry, "container");
+        if !container.is_empty() {
+            what.push_str(&format!(" (in {container})"));
+        }
+        let run = text(entry, "run");
+        if !run.is_empty() {
+            what.push_str(&format!(": {}", super::cap_line(&run, 120)));
+        }
+        rows.push(vec![verb.into(), what]);
+    }
+    for container in list(data, "containers") {
+        let kind = match text(container, "kind").as_str() {
+            "compose" => "compose container",
+            _ => "container",
+        };
+        rows.push(vec![
+            "remove".into(),
+            format!("{kind} {}", text(container, "name")),
+        ]);
+    }
+    let compose = text(data, "compose_project");
+    if !compose.is_empty() {
+        rows.push(vec!["remove".into(), format!("compose project {compose}")]);
+    }
+    for volume in list(data, "volumes") {
+        rows.push(vec![
+            "remove".into(),
+            format!(
+                "volume {} ({})",
+                text(volume, "name"),
+                size(&volume["bytes"])
+            ),
+        ]);
+    }
+    if let Some(dir) = data.get("data_dir").filter(|dir| dir.is_object()) {
+        rows.push(vec![
+            "delete".into(),
+            format!("data {} ({})", text(dir, "path"), size(&dir["bytes"])),
+        ]);
+        rows.push(vec![
+            "delete".into(),
+            format!("logs ({})", size(&data["logs_bytes"])),
+        ]);
+    }
+    if let (Some(start), Some(count)) = (
+        data.pointer("/ports/start").and_then(Value::as_u64),
+        data.pointer("/ports/size").and_then(Value::as_u64),
+    ) {
+        let end = (start + count).saturating_sub(1);
+        rows.push(vec!["free".into(), format!("ports {start}-{end}")]);
+    }
+    let branch = text(data, "branch");
+    let mut lines = vec![if branch.is_empty() {
+        format!("would clean {lane}:")
+    } else {
+        format!("would clean {lane} ({branch}):")
+    }];
+    if rows.is_empty() {
+        lines.push("  nothing to stop, run or delete".into());
+    } else if cx.agent() {
+        lines.extend(rows.iter().map(|row| format!("  {}", row.join(" "))));
+    } else {
+        lines.extend(table(&rows, "  "));
+    }
+    let skipped = text(data, "hooks_skipped");
+    if !skipped.is_empty() {
+        let reason = match skipped.as_str() {
+            "worktree_missing" => "the worktree is gone".to_owned(),
+            "needs_env" => "the lane needs a start from a shell first".to_owned(),
+            "unassigned" => "the worktree has no lane".to_owned(),
+            other => other.replace('_', " "),
+        };
+        lines.push(cx.skipped("lane.clean tasks and teardown", Some(&reason)));
+    }
+    if let Some(error) = data.get("infra_error").and_then(Value::as_str) {
+        lines.push(cx.warning(&format!("containers unknown: {}", clean(error))));
+    }
+    lines.push(format!(
+        "next: {}",
+        Hint::command(["lane", "clean", lane.as_str(), "--yes"]).0
+    ));
     lines
 }
 
