@@ -36,8 +36,6 @@ actionlint
 sh packaging/scripts/check.sh   # release scripts and install.sh against fake binaries
 ```
 
-The agent plugin's hooks run `devlanes __agent-hook`, which lives in `crates/agent-hooks`; `bins/devlanes/tests/it/agent_hook.rs` runs the plugin's hook command lines in the shells the agents use.
-
 `install.ps1`, `package.ps1`, the npm launcher and the Windows wheel have a Windows check against a fake `devlanes.exe`, which CI runs in its `packaging-windows` job. It needs PSScriptAnalyzer (CI pins 1.25.0), both `powershell.exe` and `pwsh`, `node` and `python`. It changes your user `PATH` while it runs and writes the old value back at the end:
 
 ```powershell
@@ -182,13 +180,15 @@ Run a crate's ignored tests with `cargo nextest run -p <crate> --run-ignored onl
 
 `crates/tui/screens/*.txt` and its `index.md` are every TUI state drawn against a fake daemon, as text with the styles of each cell, so a pull request shows what changed on screen. Any change to what the TUI draws changes them, including changes outside `crates/tui`. Rewrite them with `DEVLANES_BLESS=1 cargo nextest run -p devlanes-tui -E 'test(screens_are_current)'`, check the diff and commit them with the change; the test fails in CI while they're stale. `cargo run -p devlanes-tui --example screens` writes the same files plus gitignored PNG and ANSI versions for looking at the screens.
 
+`crates/mcp-ui/ui/dist/lane.html` is the MCP Apps card, built from the pnpm package in `crates/mcp-ui/ui` and embedded in the binary, so building devlanes never needs Node. After changing anything under `crates/mcp-ui/ui`, run `pnpm install` and `pnpm build` there and commit the file; the `mcp-ui` workflow fails while it's stale ([devlanes-mcp-ui](crates/mcp-ui/README.md)).
+
 `.gitattributes` marks these files, `Cargo.lock`, the `.snap` files and `docs/reference/` with `merge=ours`, so a merge or rebase keeps one side instead of stopping on conflict markers. Git ignores that attribute until the driver exists, so run this once per clone:
 
 ```sh
 git config merge.ours.driver true
 ```
 
-After resolving, regenerate before committing: `cargo build` rewrites `Cargo.lock` and the schemas, `DEVLANES_BLESS=1` rewrites the screens and `docs/reference/`, and `INSTA_UPDATE=always` rewrites the snapshots. During a rebase "ours" is the branch you rebase onto, so your side of these files only comes back by regenerating them. `CHANGELOG.md` files use Git's built-in `merge=union` instead, because nothing can regenerate them: both sides' lines are kept without conflict markers, so check that entries sit under the right version.
+After resolving, regenerate before committing: `cargo build` rewrites `Cargo.lock` and the schemas, `DEVLANES_BLESS=1` rewrites the screens and `docs/reference/`, `INSTA_UPDATE=always` rewrites the snapshots, and `pnpm build` in `crates/mcp-ui/ui` rewrites the card. During a rebase "ours" is the branch you rebase onto, so your side of these files only comes back by regenerating them. `CHANGELOG.md` files use Git's built-in `merge=union` instead, because nothing can regenerate them: both sides' lines are kept without conflict markers, so check that entries sit under the right version.
 
 ## Change files
 

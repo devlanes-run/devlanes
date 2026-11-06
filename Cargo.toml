@@ -12,6 +12,8 @@ publish = false
 [workspace.dependencies]
 async-trait = "0.1"
 anyhow = "1"
+# HTML templates of crates/pages; it adds the features it uses.
+askama = { version = "0.16", default-features = false }
 base64 = "0.22"
 bytes = "1"
 clap = { version = "4", features = ["derive", "env"] }
@@ -21,6 +23,11 @@ diesel = { version = "2.3", default-features = false, features = ["sqlite", "ret
 dunce = "1"
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.3"
+# SCSS for the stylesheets crates/pages compiles at build time.
+grass = { version = "0.13", default-features = false }
+# The MCP server of `devlanes mcp` (crates/mcp). Pinned: the protocol revisions it
+# negotiates come with the version.
+rmcp = { version = "=3.9.0", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON output follows struct field order, and the feature is pinned

@@ -1,0 +1,5 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+null

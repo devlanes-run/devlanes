@@ -1,0 +1,877 @@
+// The card is content in the host's chat: it reads only the MCP Apps standard style
+// variables, which the bridge writes onto <html>, and draws no frame of its own (the host
+// does, with prefersBorder). The devlanes palette below sits under the same names as the
+// fallback for hosts that send none; host values land inline on <html> and win per name.
+// Spacing is fixed (4, 8, 12, 16 px) because the standard has no spacing variables.
+
+@use 'tokens' as *;
+
+@mixin light {
+  --color-background-primary: #{$surface-light};
+  --color-background-secondary: #{$well-light};
+  --color-background-inverse: #{$terminal};
+  --color-background-disabled: rgba(233, 231, 225, 0.5);
+  --color-text-primary: #{$ink-light};
+  --color-text-secondary: #{$muted-light};
+  --color-text-tertiary: #{$tertiary-light};
+  --color-text-inverse: #{$terminal-ink};
+  --color-text-info: #{$info-light};
+  --color-text-danger: #{$error-light};
+  --color-text-success: #{$success-light};
+  --color-text-warning: #{$warning-light};
+  --color-text-disabled: rgba(36, 35, 31, 0.45);
+  --color-border-primary: #{$line-light};
+  --color-border-secondary: rgba(36, 35, 31, 0.12);
+  --color-border-tertiary: rgba(36, 35, 31, 0.07);
+  --color-border-disabled: rgba(36, 35, 31, 0.07);
+  --color-ring-primary: #{$focus-light};
+}
+
+@mixin dark {
+  --color-background-primary: #{$terminal};
+  --color-background-secondary: #{$terminal-bar};
+  --color-background-inverse: #{$surface-light};
+  --color-background-disabled: rgba(255, 255, 255, 0.035);
+  --color-text-primary: #{$terminal-ink};
+  --color-text-secondary: #{$dim};
+  --color-text-tertiary: #{$tertiary-dark};
+  --color-text-inverse: #{$ink-light};
+  --color-text-info: #{$frozen};
+  --color-text-danger: #{$failure};
+  --color-text-success: #{$ok};
+  --color-text-warning: #{$attention};
+  --color-text-disabled: rgba(232, 230, 223, 0.45);
+  --color-border-primary: #{$pane-border};
+  --color-border-secondary: rgba(255, 255, 255, 0.16);
+  --color-border-tertiary: rgba(255, 255, 255, 0.07);
+  --color-border-disabled: rgba(255, 255, 255, 0.07);
+  --color-ring-primary: #{$paint};
+}
+
+:root {
+  @include light;
+  --font-sans: #{$prose};
+  --font-mono: #{$mono};
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-text-xs-size: 11px;
+  --font-text-sm-size: 12px;
+  --font-text-md-size: 13px;
+  --font-text-xs-line-height: 1.5;
+  --font-text-sm-line-height: 1.55;
+  --font-text-md-line-height: 1.5;
+  --font-heading-lg-size: 16px;
+  --border-radius-sm: 4px;
+  --border-radius-md: 5px;
+  --border-radius-full: 9999px;
+  --border-width-regular: 1px;
+  --devlanes-accent: #{$paint};
+  --devlanes-on-accent: #{$ink-light};
+
+  // Spacing, type roles and tints derived from the variables above. VS Code sends 10 and
+  // 11 px for xs and sm, under its own chat text, hence the floors.
+  --dl-1: 4px;
+  --dl-2: 8px;
+  --dl-3: 12px;
+  --dl-4: 16px;
+  --dl-title: var(--font-text-md-size);
+  --dl-title-lh: var(--font-text-md-line-height);
+  --dl-body: max(var(--font-text-sm-size), 12px);
+  --dl-body-lh: var(--font-text-sm-line-height);
+  --dl-meta: max(var(--font-text-xs-size), 11px);
+  --dl-meta-lh: var(--font-text-xs-line-height);
+  // ChatGPT omits the state backgrounds in light mode: tint its text tone instead. The
+  // palette above defines none either, so such a host never gets devlanes tints, and the
+  // devlanes look gets the same tint of its own tones.
+  --dl-bg-success: var(
+    --color-background-success,
+    color-mix(in srgb, var(--color-text-success) 12%, transparent)
+  );
+  --dl-bg-danger: var(
+    --color-background-danger,
+    color-mix(in srgb, var(--color-text-danger) 12%, transparent)
+  );
+  --dl-bg-warning: var(
+    --color-background-warning,
+    color-mix(in srgb, var(--color-text-warning) 12%, transparent)
+  );
+  --dl-bg-info: var(
+    --color-background-info,
+    color-mix(in srgb, var(--color-text-info) 12%, transparent)
+  );
+  --dl-neutral: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  // Not --color-background-secondary: VS Code's chat sits on that colour.
+  --dl-well: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  --dl-hover: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  --dl-rule: var(--border-width-regular) solid var(--color-border-tertiary);
+  color-scheme: light dark;
+
+  &[data-theme='dark'] {
+    @include dark;
+  }
+
+  // The yellow accent belongs to the devlanes look only; inside a host it would look foreign.
+  &:not([data-host-styles]) {
+    --dl-accent: var(--devlanes-accent);
+    --dl-on-accent: var(--devlanes-on-accent);
+  }
+}
+
+// Without a theme from the host, the system's.
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    @include dark;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: transparent;
+}
+
+body {
+  // The card inset, plus the host's safe area. Unlayered, so it beats VS Code's
+  // `body { padding: 0 20px }` in its webview's default layer.
+  padding: calc(var(--dl-3) + var(--dl-safe-top, 0px)) calc(var(--dl-3) + var(--dl-safe-right, 0px))
+    calc(var(--dl-3) + var(--dl-safe-bottom, 0px)) calc(var(--dl-3) + var(--dl-safe-left, 0px));
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--dl-body);
+  line-height: var(--dl-body-lh);
+  font-weight: var(--font-weight-normal);
+  -webkit-font-smoothing: antialiased;
+
+  // A result without a card: the host shows its text, so the card is 0 px tall.
+  &:has(> #app:empty) {
+    padding: 0;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-ring-primary);
+  outline-offset: 2px;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+p,
+ul,
+ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  container-type: inline-size;
+  min-width: 0;
+
+  &.dim :is(.rows, .bar, .phase, .well, .code, .reason) {
+    opacity: 0.55;
+  }
+}
+
+// Title line: title, secondary name, the one pill, the read-only caption.
+.hd {
+  display: flex;
+  align-items: center;
+  gap: var(--dl-2);
+  min-width: 0;
+
+  .t {
+    flex: none;
+    font-size: var(--dl-title);
+    line-height: var(--dl-title-lh);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .sub {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-secondary);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .end {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--dl-2);
+    margin-left: auto;
+  }
+}
+
+.meta {
+  color: var(--color-text-secondary);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
+}
+
+.hd + .meta {
+  margin-top: 2px;
+}
+
+.meta .t {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.sec {
+  color: var(--color-text-secondary);
+}
+
+.ter {
+  color: var(--color-text-tertiary);
+}
+
+.danger {
+  color: var(--color-text-danger);
+}
+
+.warn {
+  color: var(--color-text-warning);
+}
+
+.info {
+  color: var(--color-text-info);
+}
+
+// URLs and the text actions: links in the text colour, underlined in the border colour.
+.lk {
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  vertical-align: top;
+  overflow: hidden;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  text-decoration: underline;
+  // From the text colour, not a border colour: VS Code's dark borders vanish under text.
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-overflow: ellipsis;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration-color: currentColor;
+  }
+}
+
+// Status shapes: dot, ring, spinning arc, diamond. Colour from the state text tones only.
+.st {
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--border-radius-full);
+  background: currentColor;
+  color: var(--color-text-tertiary);
+
+  &.ok {
+    color: var(--color-text-success);
+  }
+
+  &.info {
+    color: var(--color-text-info);
+  }
+
+  &.warn {
+    color: var(--color-text-warning);
+  }
+
+  &.fail {
+    width: 7px;
+    height: 7px;
+    margin: 0 0.5px;
+    border-radius: 1px;
+    color: var(--color-text-danger);
+    transform: rotate(45deg);
+  }
+
+  &.idle {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px currentColor;
+  }
+
+  &.busy {
+    background: transparent;
+    border: 1.5px solid var(--color-text-secondary);
+    border-top-color: transparent;
+    animation: dl-spin 1s linear infinite;
+  }
+}
+
+@keyframes dl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--dl-2);
+  border-radius: var(--border-radius-full);
+  background: var(--dl-neutral);
+  color: var(--color-text-secondary);
+  font-size: var(--dl-meta);
+  line-height: 20px;
+  white-space: nowrap;
+
+  &.success {
+    background: var(--dl-bg-success);
+    color: var(--color-text-success);
+  }
+
+  &.danger {
+    background: var(--dl-bg-danger);
+    color: var(--color-text-danger);
+  }
+
+  &.warning {
+    background: var(--dl-bg-warning);
+    color: var(--color-text-warning);
+  }
+
+  &.info {
+    background: var(--dl-bg-info);
+    color: var(--color-text-info);
+  }
+}
+
+.caption {
+  color: var(--color-text-tertiary);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
+}
+
+// Start progress: one phase line over a 4 px bar.
+.phase {
+  display: flex;
+  gap: var(--dl-2);
+  justify-content: space-between;
+  margin-top: var(--dl-3);
+  min-width: 0;
+  color: var(--color-text-secondary);
+
+  > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  > span:last-child {
+    flex: none;
+  }
+}
+
+.bar {
+  height: 4px;
+  margin-top: var(--dl-1);
+  overflow: hidden;
+  border-radius: var(--border-radius-full);
+  background: var(--color-border-tertiary);
+
+  > i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-text-info);
+    transition: width 0.3s ease;
+  }
+}
+
+// The top card's CPU and memory cells: a 40 px bar in the load's tone, then the number.
+.row .use {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--dl-2);
+
+  // Fixed number widths keep the bars of every row in one column.
+  > .n {
+    min-width: 4.5ch;
+    text-align: right;
+  }
+
+  &.mem > .n {
+    min-width: 8ch;
+  }
+}
+
+.meter {
+  display: block;
+  flex: none;
+  width: 40px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--border-radius-full);
+  background: var(--color-border-tertiary);
+
+  > i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: currentColor;
+  }
+}
+
+// Rows: one hairline above each, 8 px above and below, nothing else.
+.rows {
+  margin-top: var(--dl-3);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  column-gap: var(--dl-2);
+  min-width: 0;
+  padding: var(--dl-2) 0;
+  border-top: var(--dl-rule);
+
+  .name {
+    flex: none;
+    font-weight: var(--font-weight-semibold);
+  }
+
+  // Keeps a share for the branch when a URL sits next to it.
+  .grow {
+    flex: 1;
+    min-width: 30%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  // A link next to the growing cell shrinks before it pushes the state off the row.
+  > .lk {
+    flex: 0 1 auto;
+    max-width: 40%;
+  }
+
+  .col {
+    flex: none;
+    color: var(--color-text-secondary);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .end {
+    flex: none;
+    margin-left: auto;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .acts {
+    display: flex;
+    flex: none;
+  }
+
+  // Only a row with a second line wraps; the others shrink their text instead.
+  &:has(> .line2) {
+    flex-wrap: wrap;
+  }
+
+  > .line2 {
+    flex-basis: 100%;
+    min-width: 0;
+    padding-left: calc(8px + var(--dl-2));
+  }
+
+  &.check > .line2 {
+    padding-left: calc(16px + var(--dl-2));
+  }
+
+  &.plain > .line2 {
+    padding-left: 0;
+  }
+
+  &.dim > :not(.end) {
+    color: var(--color-text-tertiary);
+  }
+}
+
+.group {
+  margin-top: var(--dl-3);
+  padding-bottom: var(--dl-1);
+  color: var(--color-text-secondary);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
+  font-weight: var(--font-weight-semibold);
+
+  + .rows {
+    margin-top: 0;
+  }
+}
+
+// One sentence of state: a reason, a warning, an empty list.
+.line {
+  margin-top: var(--dl-3);
+  color: var(--color-text-secondary);
+}
+
+.reason {
+  margin-top: var(--dl-2);
+}
+
+// Literal text only: log lines and commands, in the host's mono font.
+.well {
+  margin-top: var(--dl-2);
+  padding: var(--dl-2) 0;
+  border-radius: var(--border-radius-md);
+  background: var(--dl-well);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
+  font-variant-ligatures: none;
+
+  &.cmd {
+    padding: var(--dl-2) var(--dl-3);
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
+  }
+}
+
+.ln {
+  display: flex;
+  gap: var(--dl-3);
+  width: 100%;
+  margin: 0;
+  padding: 0 var(--dl-3);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+
+  .cur {
+    flex: none;
+    width: 8ch;
+    color: var(--color-text-tertiary);
+  }
+
+  .tx {
+    min-width: 0;
+    padding-left: 2ch;
+    text-indent: -2ch;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  &.e .tx {
+    color: var(--color-text-danger);
+  }
+
+  &.w .tx {
+    color: var(--color-text-warning);
+  }
+}
+
+button.ln {
+  cursor: pointer;
+
+  &:hover {
+    background: var(--dl-hover);
+  }
+
+  &.picked {
+    background: var(--dl-bg-info);
+    box-shadow: inset 2px 0 0 var(--color-text-info);
+
+    .tx,
+    .cur {
+      color: var(--color-text-primary);
+    }
+  }
+}
+
+// Footer: an optional summary on the left, at most two buttons on the right.
+.ft {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--dl-2);
+  margin-top: var(--dl-3);
+
+  .sum {
+    margin-right: auto;
+    color: var(--color-text-secondary);
+
+    &.warn {
+      color: var(--color-text-warning);
+    }
+  }
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 var(--dl-3);
+  border: var(--border-width-regular) solid var(--color-border-primary);
+  border-radius: var(--border-radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--dl-hover);
+  }
+
+  &.primary {
+    border-color: transparent;
+    background: var(--dl-accent, var(--color-background-inverse));
+    color: var(--dl-on-accent, var(--color-text-inverse));
+    font-weight: var(--font-weight-semibold);
+
+    &:hover:not(:disabled) {
+      background: color-mix(
+        in srgb,
+        var(--dl-accent, var(--color-background-inverse)) 88%,
+        var(--color-background-primary, transparent)
+      );
+    }
+  }
+
+  &.danger {
+    color: var(--color-text-danger);
+  }
+
+  &.destroy {
+    border-color: transparent;
+    background: var(--color-text-danger);
+    color: var(--color-background-primary);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  &:disabled {
+    border-color: var(--color-border-disabled);
+    background: var(--color-background-disabled);
+    color: var(--color-text-disabled);
+    cursor: default;
+  }
+}
+
+.ib {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--dl-hover);
+    color: var(--color-text-primary);
+  }
+
+  &:disabled {
+    color: var(--color-text-disabled);
+    cursor: default;
+  }
+
+  &.gap {
+    visibility: hidden;
+  }
+}
+
+.ib svg,
+.search svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--dl-accent, var(--color-text-primary));
+}
+
+// Fullscreen tools: the log filter and "Load earlier".
+.tools {
+  display: flex;
+  gap: var(--dl-2);
+  margin-top: var(--dl-3);
+}
+
+.search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: var(--dl-2);
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 var(--dl-2);
+  border: var(--border-width-regular) solid var(--color-border-primary);
+  border-radius: var(--border-radius-md);
+  color: var(--color-text-tertiary);
+
+  input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: var(--color-text-primary);
+  }
+
+  &:focus-within {
+    outline: 2px solid var(--color-ring-primary);
+    outline-offset: 2px;
+  }
+}
+
+.code {
+  margin-top: var(--dl-3);
+  font-family: var(--font-mono);
+  font-size: var(--font-heading-lg-size);
+  line-height: 1.2;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.08em;
+  font-variant-ligatures: none;
+
+  &.expired {
+    color: var(--color-text-tertiary);
+    text-decoration: line-through;
+  }
+}
+
+.spark {
+  flex: none;
+  width: 56px;
+  height: 16px;
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1.2;
+}
+
+.sk {
+  display: block;
+  height: 10px;
+  border-radius: var(--border-radius-full);
+  background: var(--dl-neutral);
+  animation: dl-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dl-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+// Columns that only fit wide cards.
+.w520,
+.w640 {
+  display: none;
+}
+
+@container (min-width: 520px) {
+  .w520 {
+    display: revert;
+  }
+}
+
+@container (min-width: 640px) {
+  .w640 {
+    display: revert;
+  }
+}
+
+// Narrow cards: the summary takes its own line, the buttons share the next, the cursor
+// gutter goes.
+@container (max-width: 519px) {
+  .ft .sum {
+    flex-basis: 100%;
+  }
+
+  .ft .btn {
+    flex: 1;
+  }
+
+  .ln .cur {
+    display: none;
+  }
+}
+
+// A host that fixes the height, and fullscreen, get a page that scrolls; inline cards
+// fit their content.
+.fixed-height,
+.fullscreen {
+  height: 100%;
+
+  body {
+    height: 100%;
+    overflow: auto;
+  }
+}
+
+// Fullscreen rows stay readable on a wide screen, and their states line up the columns.
+.fullscreen .card {
+  max-width: 960px;
+  margin: 0 auto;
+
+  .row .end {
+    min-width: 11ch;
+  }
+}
+
+.fullscreen body {
+  padding: calc(var(--dl-4) + var(--dl-safe-top, 0px)) calc(var(--dl-4) + var(--dl-safe-right, 0px))
+    calc(var(--dl-4) + var(--dl-safe-bottom, 0px)) calc(var(--dl-4) + var(--dl-safe-left, 0px));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .st.busy,
+  .sk,
+  .bar > i {
+    animation: none;
+    transition: none;
+  }
+}

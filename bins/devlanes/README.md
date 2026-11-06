@@ -23,7 +23,7 @@ On a terminal, `start`, `restart`, `reload`, `lane resume` and `lane new --start
 
 `devlanes with` starts the lane, waits until it is ready, runs the command with the lane's env and `DEVLANES_PUBLIC_URL_<SERVICE>` variables, stops what it started and exits with the command's code.
 
-Configuration examples and design notes are in `docs/` at the repository root. The Claude Code and Codex plugin, with the agent skill, is in `agent-plugin/`.
+Configuration examples and design notes are in `docs/` at the repository root. The agent skill is in `skills/devlanes/`.
 
 ## Config example
 

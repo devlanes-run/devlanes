@@ -699,7 +699,8 @@ pub struct Applied {
 /// into place, so a running devlanes keeps its open executable. When any
 /// step fails, the binaries already swapped get their old files back. On
 /// Windows the running executable is set aside as `<name>.old-<stamp>`, as
-/// `install.ps1` does. The staged files are deleted afterwards. Hold
+/// `install.ps1` does, and a copy or rename that another process blocks for
+/// a moment is tried again. The staged files are deleted afterwards. Hold
 /// [`Lock`]. Blocking.
 pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
     let failed = |target: &Path| {
@@ -717,8 +718,9 @@ pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
         let temporary = staged
             .target
             .join(format!(".{name}.new.{}", std::process::id()));
-        let copied = std::fs::copy(staged.files.join(name), &temporary)
-            .and_then(|_| os::make_executable(&temporary));
+        let copied =
+            os::retry_while_held(|| std::fs::copy(staged.files.join(name), &temporary).map(drop))
+                .and_then(|()| os::make_executable(&temporary));
         placed.push((temporary, target.clone()));
         if let Err(source) = copied {
             remove_new(&placed);
@@ -729,7 +731,7 @@ pub fn apply(home: &Path, staged: &Staged) -> Result<Applied, InstallError> {
     let mut swapped: Vec<(PathBuf, Aside)> = Vec::new();
     for (temporary, target) in &placed {
         let swap = os::set_aside(target).and_then(|aside| {
-            std::fs::rename(temporary, target)
+            os::retry_while_held(|| std::fs::rename(temporary, target))
                 .map(|()| aside.clone())
                 .inspect_err(|_| {
                     if let Aside::Kept(old) = &aside {
@@ -791,7 +793,7 @@ enum Aside {
 /// and a rename between two links of one file does nothing, so the link
 /// left over is deleted.
 fn restore(old: &Path, target: &Path) {
-    let _ = std::fs::rename(old, target);
+    let _ = os::retry_while_held(|| std::fs::rename(old, target));
     let _ = std::fs::remove_file(old);
 }
 
@@ -1060,6 +1062,13 @@ mod os {
         PathBuf::from("tar")
     }
 
+    /// Runs `operation` once: an open file never blocks a rename or copy here.
+    pub(super) fn retry_while_held(
+        mut operation: impl FnMut() -> io::Result<()>,
+    ) -> io::Result<()> {
+        operation()
+    }
+
     /// Mode 755, as `install.sh` sets.
     pub(super) fn make_executable(path: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
@@ -1146,6 +1155,14 @@ mod os {
             .unwrap_or_else(|| PathBuf::from("tar.exe"))
     }
 
+    /// Runs `operation`, a copy or rename of an install's binary, again while
+    /// another process holds the file without sharing delete or write, as an
+    /// antivirus or indexer may for a moment after an executable is written
+    /// or run. Blocks for up to about 0.6 s.
+    pub(super) fn retry_while_held(operation: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+        devlanes_sys_windows::file::retry_while_held(operation)
+    }
+
     /// Windows has no mode bits.
     pub(super) fn make_executable(_path: &Path) -> io::Result<()> {
         Ok(())
@@ -1164,7 +1181,7 @@ mod os {
             old = PathBuf::from(format!("{}.old-{stamp}-{n}", target.display()));
             n += 1;
         }
-        std::fs::rename(target, &old)?;
+        retry_while_held(|| std::fs::rename(target, &old))?;
         Ok(Aside::Kept(old))
     }
 }
@@ -1367,6 +1384,46 @@ mod tests {
             );
         }
         assert_eq!(listing(&target)?, ["devlanes", "devlanes-hosts"]);
+        Ok(())
+    }
+
+    /// A process that holds `devlanes.exe` without sharing delete for a
+    /// moment, as CI runners have done, delays the install instead of
+    /// failing it with a sharing violation.
+    #[cfg(windows)]
+    #[test]
+    fn applying_rides_out_a_brief_hold_on_the_binary() -> std::io::Result<()> {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = tempfile::tempdir()?;
+        let (home, files, target) = (
+            root.path().join("home"),
+            root.path().join("files"),
+            root.path().join("bin"),
+        );
+        std::fs::create_dir_all(&files)?;
+        std::fs::create_dir_all(&target)?;
+        std::fs::write(files.join("devlanes.exe"), "new")?;
+        let entry = target.join("devlanes.exe");
+        std::fs::write(&entry, "old")?;
+        // FILE_SHARE_READ only.
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&entry)?;
+        let holder = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            drop(held);
+        });
+        let staged = Staged {
+            version: "0.9.1".into(),
+            sha256: "a".repeat(64),
+            target: target.clone(),
+            files,
+        };
+        let applied = apply(&home, &staged);
+        let _ = holder.join();
+        assert!(applied.is_ok(), "{applied:?}");
+        assert_eq!(std::fs::read_to_string(&entry)?, "new");
         Ok(())
     }
 

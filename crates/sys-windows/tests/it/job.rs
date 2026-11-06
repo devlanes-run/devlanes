@@ -75,6 +75,43 @@ fn allowing_breakaway_keeps_kill_on_close() -> io::Result<()> {
     Ok(())
 }
 
+/// With kill-on-close turned off again, members outlive the job's handle.
+#[test]
+fn kill_on_close_can_be_turned_off() -> io::Result<()> {
+    let job = test_job()?;
+    let child = long_child(&job)?;
+    job.set_kill_on_close(false)?;
+    drop(job);
+    assert_eq!(
+        child.wait_timeout(std::time::Duration::from_millis(500))?,
+        None
+    );
+    child.terminate(1)?;
+    Ok(())
+}
+
+/// A process started suspended without a job runs once adopted, inside the
+/// job, so terminating the job ends it.
+#[test]
+fn adopts_a_suspended_process() -> io::Result<()> {
+    use std::os::windows::process::CommandExt as _;
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    let job = test_job()?;
+    let mut child = std::process::Command::new(crate::cmd()?)
+        .args(["/d", "/c", "ping -n 30 127.0.0.1 >NUL"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .creation_flags(CREATE_SUSPENDED)
+        .spawn()?;
+    assert!(job.adopt_suspended(child.id())?);
+    assert!(job.members()?.contains(&child.id()));
+    // It runs: the ping it starts joins the job too.
+    assert!(eventually(|| Ok(job.members()?.len() >= 2))?);
+    job.terminate(3)?;
+    assert_eq!(child.wait()?.code(), Some(3));
+    Ok(())
+}
+
 /// A job without limits starts empty; the query about this process's own job
 /// is consistent.
 #[test]

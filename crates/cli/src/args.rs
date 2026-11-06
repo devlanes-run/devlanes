@@ -48,6 +48,15 @@ Examples:
   devlanes logs api -f --timeout 30s
   devlanes logs --all --since start";
 
+const STATUS_AFTER: &str = "\
+Examples:
+  devlanes status                      lanes of this project
+  devlanes status acme@2               one lane with its units
+  devlanes status --statusline         one line, such as: acme@1 3/3 ready · web acme1.localhost
+
+Claude Code shows that line under its prompt with this in ~/.claude/settings.json:
+  \"statusLine\": {\"type\": \"command\", \"command\": \"devlanes status --statusline\"}";
+
 const WITH_AFTER: &str = "\
 Examples:
   devlanes with -- pnpm test
@@ -85,7 +94,7 @@ pub struct Cli {
     // No `-f`: `logs -f` and the other `--follow` flags already take it.
     #[arg(long, global = true, value_name = "FILE", help_heading = GLOBAL)]
     pub file: Option<PathBuf>,
-    /// Use this lane ([project@]lane) instead of the current worktree's
+    /// Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
     #[arg(long, global = true, value_name = "LANE", help_heading = GLOBAL)]
     pub lane: Option<String>,
     /// Confirm actions that would ask first; needed when no terminal can prompt
@@ -150,6 +159,7 @@ what changed."
     )]
     Reload(ReloadArgs),
     /// Show lanes and units with state, ports, URLs, CPU and memory
+    #[command(after_help = STATUS_AFTER)]
     Status(StatusArgs),
     /// Read unit logs; each line carries a cursor to continue from
     #[command(
@@ -165,7 +175,7 @@ terminal the output defaults to the last 100 lines within the output budget.",
 Exits 0 when ready, 1 when it failed (with the reason and log tail) and 124\n\
 when --timeout passes first [default: 180s].")]
     Wait {
-        /// Unit ([lane:]unit) or lane ([project@]lane) to wait for [default: pick from a list]
+        /// Unit ([lane:]unit) or lane ([project@]lane) to wait for, such as api, 2:web or acme@2 [default: pick from a list]
         #[arg(value_name = "TARGET")]
         target: Option<String>,
     },
@@ -272,6 +282,9 @@ without the daemon.",
         #[arg(value_name = "SHELL")]
         shell: clap_complete::Shell,
     },
+    /// Serve devlanes to an AI agent as an MCP server on stdin and stdout
+    #[command(long_about = MCP_ABOUT, after_help = MCP_AFTER)]
+    Mcp(McpArgs),
     /// Serve a client's SSH connection on a box (started by remote connect)
     #[command(hide = true)]
     Tunnel {
@@ -290,7 +303,7 @@ without the daemon.",
 
 #[derive(Debug, Args)]
 pub struct StartArgs {
-    /// Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
+    /// Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
@@ -309,7 +322,7 @@ pub struct StartArgs {
 
 #[derive(Debug, Args)]
 pub struct StopArgs {
-    /// Units to stop ([lane:]unit, globs, +tag) [default: the whole lane]
+    /// Units to stop ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Only stop units this agent session started; with no units, across every lane
@@ -322,7 +335,7 @@ pub struct StopArgs {
 
 #[derive(Debug, Args)]
 pub struct WithArgs {
-    /// Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
+    /// Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
@@ -344,7 +357,7 @@ pub struct WithArgs {
 
 #[derive(Debug, Args)]
 pub struct RestartArgs {
-    /// Units to restart ([lane:]unit, globs, +tag) [default: the whole lane]
+    /// Units to restart ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start every selected service immediately, bypassing the machine-wide start gate for this run
@@ -357,7 +370,7 @@ pub struct RestartArgs {
 
 #[derive(Debug, Args)]
 pub struct ReloadArgs {
-    /// Apply only these units' changes ([lane:]unit) [default: every change in the lane]
+    /// Apply only these units' changes ([lane:]unit, such as api or 2:web) [default: every change in the lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start every selected service immediately, bypassing the machine-wide start gate for this run
@@ -371,7 +384,7 @@ pub struct ReloadArgs {
 #[derive(Debug, Args)]
 pub struct StatusArgs {
     // Own id: `lane` would collide with the global `--lane` and reject `status --lane X`.
-    /// Lane to show ([project@]lane) [default: every lane of the current project]
+    /// Lane to show ([project@]lane, such as 2, feat/checkout or acme@2) [default: every lane of the current project]
     #[arg(id = "status_lane", value_name = "LANE")]
     pub lane: Option<String>,
     /// Keep printing lane changes until interrupted
@@ -380,11 +393,14 @@ pub struct StatusArgs {
     /// Only show units this agent session started
     #[arg(long)]
     pub mine: bool,
+    /// Print one line for this directory's lane, for an agent's status line (reads Claude Code's JSON on stdin and never starts the daemon)
+    #[arg(long, conflicts_with_all = ["watch", "mine", "status_lane"])]
+    pub statusline: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct LogArgs {
-    /// Units to read ([lane:]unit, globs, +tag) [default: pick from a list]
+    /// Units to read ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: pick from a list]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Read every unit of the lane, grouped by unit
@@ -402,7 +418,7 @@ pub struct LogArgs {
     /// Only lines newer than a duration (5m), a time in milliseconds, or start (the lane's last start)
     #[arg(long, value_name = "WHEN")]
     pub since: Option<String>,
-    /// Only lines matching this regular expression
+    /// Only lines matching this regular expression, such as timeout|refused
     #[arg(long, value_name = "REGEX")]
     pub grep: Option<String>,
     /// Only lines at this level or above: debug, info, warn or error
@@ -437,7 +453,7 @@ pub struct RunArgs {
 
 #[derive(Debug, Args)]
 pub struct ExecArgs {
-    /// Unit name for the command, used by logs, stop and attach
+    /// Unit name for the command, such as web, used by logs, stop and attach
     #[arg(long, value_name = "NAME")]
     pub name: String,
     /// Use pipes instead of a pseudoterminal
@@ -448,11 +464,58 @@ pub struct ExecArgs {
     pub command: Vec<String>,
 }
 
+const MCP_ABOUT: &str = "\
+Serve devlanes to an AI agent as an MCP server on stdin and stdout.
+
+The agent gets a tool per common command, such as start, exec, logs, stop and
+debug_why, whose arguments are this command's options, and a devlanes tool that
+takes any other command line. Each call runs this binary as a separate process
+with --output agent, so the server itself never connects to the daemon or
+starts one. Commands that need a terminal, such as ui, attach, env shell and
+setup, are refused, and so are follows without --timeout.
+
+A call runs in the cwd it names, else in --path, else in $CLAUDE_PROJECT_DIR,
+else in the directory the agent started the server in. --lane adds that lane to
+calls that name no cwd.
+
+A lane no shell started gets your login shell's environment on macOS and Linux;
+on Windows set DEVLANES_SHELL_ENV=pwsh (or powershell) in the server's env to
+read your PowerShell profile. docs/guides/mcp.md has the details.";
+
+const MCP_AFTER: &str = "\
+Register it with your agent:
+  Claude Code     claude mcp add devlanes -- devlanes mcp
+  Codex           codex mcp add devlanes -- devlanes mcp
+  OpenCode        in opencode.json:
+                  \"mcp\": {\"devlanes\": {\"type\": \"local\", \"command\": [\"devlanes\", \"mcp\"]}}
+  Cursor          in ~/.cursor/mcp.json or .cursor/mcp.json:
+                  \"mcpServers\": {\"devlanes\": {\"command\": \"devlanes\", \"args\": [\"mcp\"]}}
+  VS Code         code --add-mcp '{\"name\":\"devlanes\",\"command\":\"devlanes\",\"args\":[\"mcp\"]}'
+  Claude Desktop  in claude_desktop_config.json, with the full path (the app does not read your shell's PATH):
+                  \"mcpServers\": {\"devlanes\": {\"command\": \"/path/to/devlanes\", \"args\": [\"mcp\"]}}
+  Goose           goose session --with-extension 'devlanes mcp'
+                  or in config.yaml under extensions:
+                  devlanes: {type: stdio, name: devlanes, cmd: devlanes, args: [mcp], enabled: true}
+
+Examples:
+  devlanes mcp --read-only             only commands that change nothing
+  devlanes mcp --path /src/acme        calls without a cwd use this worktree's lane";
+
+#[derive(Debug, Args)]
+pub struct McpArgs {
+    /// Offer only the tools of commands that change nothing; the devlanes tool refuses the others
+    #[arg(long)]
+    pub read_only: bool,
+    /// Run calls that name no cwd in this directory (the global --lane picks a lane instead)
+    #[arg(long, value_name = "DIR")]
+    pub path: Option<PathBuf>,
+}
+
 #[derive(Debug, Subcommand)]
 pub enum DebugCommand {
     /// Explain why a unit is not running or not ready, with a fix for each reason
     Why {
-        /// Unit to explain ([lane:]unit) [default: pick from a list]
+        /// Unit to explain ([lane:]unit, such as api or 2:web) [default: pick from a list]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
@@ -468,7 +531,7 @@ pub enum DebugCommand {
         #[arg(short, long)]
         follow: bool,
     },
-    /// Show CPU and memory per lane and unit
+    /// Show CPU and memory of the running units and containers of every lane
     Top,
     /// Freeze this lane's processes and own containers now, as if it had been idle for `lanes.freeze_after`
     Freeze {
@@ -513,7 +576,7 @@ them anyway.",
 pub enum EnvCommand {
     /// Print the environment of the lane or of one unit as KEY=VALUE lines
     Show {
-        /// Unit whose environment to print ([lane:]unit) [default: the lane's variables]
+        /// Unit whose environment to print ([lane:]unit, such as api or 2:api) [default: the lane's variables]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
         /// Show where each variable comes from; secret values are hidden
@@ -561,7 +624,7 @@ pub enum ExportShell {
 pub enum UrlCommand {
     /// Print a service's URL, for scripts
     Print {
-        /// Service whose URL to print ([lane:]unit) [default: pick from a list]
+        /// Service whose URL to print ([lane:]unit, such as web or 2:web) [default: pick from a list]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
@@ -571,7 +634,7 @@ pub enum UrlCommand {
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
-    /// List routed hostnames with their lane, unit, port and state
+    /// List the routed hostnames of every lane with their lane, unit, port and state
     Ls,
 }
 
@@ -779,7 +842,7 @@ here that clashes with it starts. A box that is not connected can be chosen too.
 
 #[derive(Debug, Subcommand)]
 pub enum LaneCommand {
-    /// List lanes, including moved, unassigned and missing ones
+    /// List lanes after rereading the project's Git worktrees, including moved, unassigned and missing ones
     Ls,
     /// Add another lane for this folder
     #[command(
@@ -804,9 +867,12 @@ Without --start, a terminal asks whether to start the new lane right away."
     /// Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
     Clean {
         // Own id: `lane` would collide with the global `--lane`.
-        /// Lane to clean ([project@]lane) [default: pick from a list]
+        /// Lane to clean ([project@]lane, such as 4 or acme@chore/deps) [default: pick from a list]
         #[arg(id = "clean_lane", value_name = "LANE")]
         lane: Option<String>,
+        /// Print what the clean would stop, run and delete, with sizes, and change nothing; needs no --yes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
     Gc,
@@ -977,6 +1043,14 @@ pub enum Action {
     },
     ConfigUnset(String),
     Completions(clap_complete::Shell),
+    /// `devlanes mcp`: serves MCP on stdin and stdout until the client leaves.
+    Mcp {
+        read_only: bool,
+        /// `--path`, relative paths taken from the cwd.
+        path: Option<PathBuf>,
+        /// The global `--lane`.
+        lane: Option<String>,
+    },
     Tunnel,
     Askpass(Option<String>),
     /// `devlanes debug bundle`: never spawns a daemon.
@@ -1020,12 +1094,23 @@ impl Cli {
     }
 
     /// Builds requests using injected context without touching global environment in tests.
+    /// The variables `devlanes mcp` sets for this one process
+    /// ([`devlanes_proto::CALL_ENV`]) never go into a request or `with`'s command.
     pub fn action_with(
         &self,
         runtime: &Runtime,
         cwd: PathBuf,
         environment: impl FnOnce() -> BTreeMap<String, String>,
     ) -> Result<Action, Error> {
+        let environment = || {
+            let mut env = environment();
+            env.retain(|name, _| {
+                !devlanes_proto::CALL_ENV
+                    .iter()
+                    .any(|own| name.eq_ignore_ascii_case(own))
+            });
+            env
+        };
         if !self.env.is_empty()
             && !(matches!(
                 &self.command,
@@ -1089,7 +1174,12 @@ impl Cli {
             None => (Method::Status, json!({"mine": false})),
             Some(Command::Ui) => return Ok(Action::Ui),
             Some(Command::With(args)) => {
-                context.env = Some(environment());
+                // The command always gets this shell's env; the start leaves it
+                // out when the lane's own should be reused.
+                let env = environment();
+                if !runtime.env_from_lane {
+                    context.env = Some(env.clone());
+                }
                 let params = serde_json::to_value(Selection {
                     units: args.units.clone(),
                     profiles: args.profiles.clone(),
@@ -1108,6 +1198,7 @@ impl Cli {
                         context,
                     },
                     command: args.command.clone(),
+                    env,
                     logs_dir: args.logs_dir.clone(),
                     keep: args.keep,
                 }));
@@ -1143,6 +1234,12 @@ impl Cli {
                     params["events"] = json!(true);
                 }
                 (Method::Reload, params)
+            }
+            // The binary runs it before any of this: it needs no runtime, request or reporter.
+            Some(Command::Status(args)) if args.statusline => {
+                return Err(Error::Usage(
+                    "status --statusline runs only as a status line command".into(),
+                ));
             }
             Some(Command::Status(args)) => {
                 if runtime.mode == OutputMode::Agent && args.watch && self.timeout.is_none() {
@@ -1275,9 +1372,14 @@ impl Cli {
                     Method::LaneNew,
                     json!({"name": name, "start": start, "events": *start && start_events}),
                 ),
-                LaneCommand::Clean { lane } => {
+                LaneCommand::Clean { lane, dry_run } => {
                     context.lane.clone_from(lane);
-                    (Method::LaneClean, json!({"lane": lane}))
+                    let method = if *dry_run {
+                        Method::LaneCleanPlan
+                    } else {
+                        Method::LaneClean
+                    };
+                    (method, json!({"lane": lane}))
                 }
                 LaneCommand::Gc => (Method::LaneGc, json!({})),
             },
@@ -1400,15 +1502,24 @@ impl Cli {
                 ),
             },
             Some(Command::Completions { shell }) => return Ok(Action::Completions(*shell)),
+            Some(Command::Mcp(args)) => {
+                return Ok(Action::Mcp {
+                    read_only: args.read_only,
+                    path: args.path.as_ref().map(|path| context.cwd.join(path)),
+                    lane: self.lane.clone(),
+                });
+            }
             Some(Command::Tunnel { .. }) => return Ok(Action::Tunnel),
             Some(Command::Askpass { prompt }) => return Ok(Action::Askpass(prompt.clone())),
         };
         // `reload` is absent: it applies the project file, and the lane keeps the env
-        // its last start stored, as when the TUI reloads.
+        // its last start stored, as when the TUI reloads. `devlanes mcp` asks for no
+        // env first, so a lane a shell started keeps that shell's env.
         if matches!(
             method,
             Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
-        ) {
+        ) && !runtime.env_from_lane
+        {
             context.env = Some(environment());
         }
         let request = Request {
@@ -1516,7 +1627,7 @@ impl Cli {
                 (vec!["run"], K::Task, false)
             }
             Some(Command::Lane {
-                command: LaneCommand::Clean { lane: None },
+                command: LaneCommand::Clean { lane: None, .. },
             }) => (vec!["lane", "clean"], K::Lane, false),
             _ => return None,
         };
@@ -1544,6 +1655,11 @@ impl Cli {
         InterruptPolicy::Detach
     }
 
+    /// `status --statusline`, which the binary answers without a runtime or reporter.
+    pub fn statusline(&self) -> bool {
+        matches!(&self.command, Some(Command::Status(args)) if args.statusline)
+    }
+
     /// Identifies commands whose JSON output is an NDJSON stream.
     pub fn streams(&self) -> bool {
         matches!(
@@ -1567,6 +1683,176 @@ impl Cli {
                 })
             )
             || matches!(&self.command, Some(Command::Status(args)) if args.watch)
+    }
+
+    /// Why this command cannot run without a terminal, for callers that have none
+    /// (`devlanes mcp`): it opens a screen, reads a password or answer, or follows
+    /// output until interrupted because it has no `--timeout`. `None` when it can.
+    pub fn terminal_only(&self) -> Option<&'static str> {
+        let unbounded = self.timeout.is_none();
+        let follow = "it follows output until interrupted; add --timeout, such as --timeout 30s";
+        let Some(command) = &self.command else {
+            return None;
+        };
+        match command {
+            Command::Ui => Some("it opens the TUI; run devlanes status instead"),
+            Command::Attach { .. } => {
+                Some("it attaches a terminal to the unit; read its output with devlanes logs UNIT")
+            }
+            Command::Start(args) if args.attach => {
+                Some("--attach opens the TUI; run the start without it")
+            }
+            Command::Status(args) if args.statusline => Some(
+                "it is the line an editor or agent shows under its prompt; run devlanes status instead",
+            ),
+            Command::Logs(args) if args.follow && unbounded => Some(follow),
+            Command::Status(args) if args.watch && unbounded => Some(follow),
+            Command::Start(_)
+            | Command::Stop(_)
+            | Command::Restart(_)
+            | Command::Reload(_)
+            | Command::Status(_)
+            | Command::Logs(_)
+            | Command::Wait { .. }
+            | Command::With(_)
+            | Command::Run(_)
+            | Command::Exec(_)
+            | Command::Doctor
+            | Command::Remote { .. }
+            | Command::Lane { .. }
+            | Command::Url { .. }
+            | Command::Config { .. } => None,
+            Command::Debug { command } => match command {
+                DebugCommand::Events { follow: true } if unbounded => Some(follow),
+                DebugCommand::Events { .. }
+                | DebugCommand::Why { .. }
+                | DebugCommand::Errors { .. }
+                | DebugCommand::Top
+                | DebugCommand::Freeze { .. }
+                | DebugCommand::Thaw { .. }
+                | DebugCommand::Config
+                | DebugCommand::Bundle { .. } => None,
+            },
+            Command::Env { command } => match command {
+                EnvCommand::Shell { .. } => {
+                    Some("it opens a subshell; read the variables with devlanes env show")
+                }
+                EnvCommand::Show { .. } | EnvCommand::Export { .. } => None,
+            },
+            Command::Infra { command } => match command {
+                InfraCommand::Logs { follow: true, .. } if unbounded => Some(follow),
+                InfraCommand::Up
+                | InfraCommand::Down
+                | InfraCommand::Status
+                | InfraCommand::Logs { .. } => None,
+            },
+            Command::Daemon { command } => match command {
+                // `tail -F` underneath, which `--timeout` does not end.
+                DaemonCommand::Logs { follow: true, .. } => {
+                    Some("it follows the daemon log until interrupted; use --tail N instead")
+                }
+                DaemonCommand::Run => Some("the client starts the daemon itself"),
+                DaemonCommand::Start
+                | DaemonCommand::Status
+                | DaemonCommand::Stop
+                | DaemonCommand::Restart
+                | DaemonCommand::Logs { .. }
+                | DaemonCommand::Install
+                | DaemonCommand::Uninstall
+                | DaemonCommand::ResetState
+                | DaemonCommand::Pair
+                | DaemonCommand::Clients
+                | DaemonCommand::Revoke { .. } => None,
+            },
+            Command::Setup(_) | Command::Update(_) | Command::Uninstall(_) => {
+                Some("it asks questions and may ask for a password; run it in a terminal")
+            }
+            Command::Completions { .. } => {
+                Some("it prints a script for a shell's startup file; run it in a terminal")
+            }
+            Command::Mcp(_) => Some("it is the MCP server itself"),
+            Command::Tunnel { .. } | Command::Askpass { .. } => {
+                Some("devlanes runs it itself for remote connections")
+            }
+        }
+    }
+}
+
+impl Command {
+    /// Whether the command only reads: it starts, stops and changes nothing a later
+    /// command would see (`devlanes mcp --read-only` runs only these). Every
+    /// command is listed, so a new one does not compile until it is classified.
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Self::Status(_) | Self::Logs(_) | Self::Wait { .. } | Self::Doctor => true,
+            Self::Run(args) => args.list,
+            Self::Start(_)
+            | Self::Stop(_)
+            | Self::Restart(_)
+            | Self::Reload(_)
+            | Self::With(_)
+            | Self::Exec(_)
+            | Self::Attach { .. }
+            | Self::Ui
+            | Self::Setup(_)
+            | Self::Update(_)
+            | Self::Uninstall(_)
+            | Self::Completions { .. }
+            | Self::Mcp(_)
+            | Self::Tunnel { .. }
+            | Self::Askpass { .. } => false,
+            Self::Lane { command } => match command {
+                LaneCommand::Ls => true,
+                LaneCommand::Clean { dry_run, .. } => *dry_run,
+                LaneCommand::New { .. } | LaneCommand::Gc | LaneCommand::Resume { .. } => false,
+            },
+            Self::Debug { command } => match command {
+                DebugCommand::Why { .. }
+                | DebugCommand::Errors { .. }
+                | DebugCommand::Events { .. }
+                | DebugCommand::Top
+                | DebugCommand::Config => true,
+                // A bundle writes an archive and runs the commands it is given.
+                DebugCommand::Freeze { .. }
+                | DebugCommand::Thaw { .. }
+                | DebugCommand::Bundle { .. } => false,
+            },
+            // Values as `env show` prints them, which hides nothing `export` would not.
+            Self::Env { command } => match command {
+                EnvCommand::Show { .. } | EnvCommand::Export { .. } => true,
+                EnvCommand::Shell { .. } => false,
+            },
+            // `url open` only prints the URL in agent mode, which `devlanes mcp` uses.
+            Self::Url { command } => match command {
+                UrlCommand::Print { .. } | UrlCommand::Open { .. } | UrlCommand::Ls => true,
+            },
+            Self::Infra { command } => match command {
+                InfraCommand::Status | InfraCommand::Logs { .. } => true,
+                InfraCommand::Up | InfraCommand::Down => false,
+            },
+            Self::Config { command } => match command {
+                ConfigCommand::Check | ConfigCommand::Get { .. } => true,
+                ConfigCommand::Set { .. } | ConfigCommand::Unset { .. } => false,
+            },
+            Self::Remote { command } => match command {
+                RemoteCommand::Ls | RemoteCommand::Sync => true,
+                RemoteCommand::Connect { .. }
+                | RemoteCommand::Disconnect { .. }
+                | RemoteCommand::Use { .. } => false,
+            },
+            Self::Daemon { command } => match command {
+                DaemonCommand::Status | DaemonCommand::Logs { .. } | DaemonCommand::Clients => true,
+                DaemonCommand::Start
+                | DaemonCommand::Stop
+                | DaemonCommand::Restart
+                | DaemonCommand::Install
+                | DaemonCommand::Uninstall
+                | DaemonCommand::ResetState
+                | DaemonCommand::Pair
+                | DaemonCommand::Revoke { .. }
+                | DaemonCommand::Run => false,
+            },
+        }
     }
 }
 

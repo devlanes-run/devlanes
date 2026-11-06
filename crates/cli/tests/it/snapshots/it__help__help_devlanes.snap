@@ -38,6 +38,7 @@ Commands:
   daemon       Run, stop and install the background daemon, and pair other machines with it
   doctor       Check the daemon, Docker, proxy, CA, hosts file and output mode, each with a fix; never starts the daemon
   completions  Print shell completions; lane and unit names come from the running daemon
+  mcp          Serve devlanes to an AI agent as an MCP server on stdin and stdout
   help         Print this message or the help of the given subcommand(s)
 
 Options:
@@ -67,7 +68,7 @@ Global options:
           Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 
       --lane <LANE>
-          Use this lane ([project@]lane) instead of the current worktree's
+          Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
 
       --yes
           Confirm actions that would ask first; needed when no terminal can prompt

@@ -1,0 +1,43 @@
+[package]
+name = "devlanes-mcp"
+description = "The MCP server of devlanes mcp: runs devlanes commands for AI agents"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+devlanes-cli = { path = "../cli" }
+devlanes-proto = { path = "../proto" }
+devlanes-version = { path = "../version" }
+rmcp = { workspace = true, features = ["server", "transport-io", "macros", "elicitation"] }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+devlanes-sys = { path = "../sys" }
+rustix = { version = "1", features = ["process"] }
+
+[target.'cfg(windows)'.dependencies]
+devlanes-sys-windows = { path = "../sys-windows" }
+
+[dev-dependencies]
+insta = { version = "1", features = ["json"] }
+is-ai-agent = "0.7"
+rmcp = { workspace = true, features = ["client"] }
+
+[lints]
+workspace = true
+
+# Stands in for the devlanes binary in the server's tests.
+[[bin]]
+name = "devlanes-mcp-fake"
+path = "tests/support/fake.rs"
+test = false
+doc = false

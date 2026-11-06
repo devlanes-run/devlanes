@@ -18,7 +18,7 @@ Usage: devlanes with [OPTIONS] [UNIT]... -- <COMMAND>...
 
 Arguments:
   [UNIT]...
-          Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
+          Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]
 
   <COMMAND>...
           Command and arguments to run once the lane is ready
@@ -59,7 +59,7 @@ Global options:
           Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 
       --lane <LANE>
-          Use this lane ([project@]lane) instead of the current worktree's
+          Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
 
       --yes
           Confirm actions that would ask first; needed when no terminal can prompt

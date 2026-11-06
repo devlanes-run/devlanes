@@ -8,9 +8,10 @@ use bollard::{
     container::LogOutput,
     models::{ContainerCreateBody, ContainerSummary, HostConfig, PortBinding, VolumeCreateRequest},
     query_parameters::{
-        CreateContainerOptionsBuilder, CreateImageOptionsBuilder, EventsOptionsBuilder,
-        ListContainersOptionsBuilder, ListVolumesOptionsBuilder, LogsOptionsBuilder,
-        RemoveContainerOptionsBuilder, RemoveVolumeOptionsBuilder, StopContainerOptionsBuilder,
+        CreateContainerOptionsBuilder, CreateImageOptionsBuilder, DataUsageOptionsBuilder,
+        EventsOptionsBuilder, ListContainersOptionsBuilder, ListVolumesOptionsBuilder,
+        LogsOptionsBuilder, RemoveContainerOptionsBuilder, RemoveVolumeOptionsBuilder,
+        StopContainerOptionsBuilder,
     },
 };
 use bytes::Bytes;
@@ -97,6 +98,42 @@ pub struct Removed {
     pub containers: Vec<String>,
     pub volumes: Vec<String>,
 }
+
+/// What [`DockerInfra::lane_contents`] found: the containers and named volumes
+/// that removing the lane (and taking its Compose project down with volumes)
+/// would delete.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct LaneContents {
+    pub containers: Vec<LaneContainer>,
+    pub volumes: Vec<LaneVolume>,
+    /// The lane's Compose project has a container or volume.
+    pub compose: bool,
+}
+
+/// A container of [`LaneContents`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LaneContainer {
+    pub name: String,
+    /// `container` for a plain `infra.containers` one, `compose` for a service
+    /// of the lane's Compose project.
+    pub kind: &'static str,
+}
+
+/// A named volume of [`LaneContents`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LaneVolume {
+    pub name: String,
+    /// Disk use as the engine reports it; `None` when it does not (other volume
+    /// drivers, engines before API 1.52, or a size query that took too long).
+    pub bytes: Option<u64>,
+}
+
+/// Label Compose puts on the containers and volumes of a project.
+const COMPOSE_PROJECT_LABEL: &str = "com.docker.compose.project";
+
+/// Longest the engine may take to size volumes for [`DockerInfra::lane_contents`];
+/// it walks every volume's files, so on a busy machine it can take seconds.
+const VOLUME_SIZE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Options for [`DockerInfra::logs`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -385,6 +422,95 @@ impl DockerInfra {
             removed.volumes.push(volume.name);
         }
         Ok(removed)
+    }
+
+    /// The lane's containers and named volumes, plain ones by label and those of
+    /// `compose_project` (the lane's Compose project) by Compose's label, with
+    /// volume sizes when the engine reports them in time. Changes nothing.
+    pub async fn lane_contents(
+        &self,
+        project: &str,
+        lane: u32,
+        compose_project: Option<&str>,
+    ) -> Result<LaneContents, Error> {
+        let mut sets = vec![(
+            "container",
+            label_filters(&scope_labels(project, Scope::Lane(lane))),
+        )];
+        if let Some(name) = compose_project {
+            sets.push((
+                "compose",
+                label_filters(&BTreeMap::from([(
+                    COMPOSE_PROJECT_LABEL.to_owned(),
+                    name.to_owned(),
+                )])),
+            ));
+        }
+        let mut contents = LaneContents::default();
+        let mut volumes = Vec::new();
+        for (kind, filters) in &sets {
+            for summary in self.list(filters, true).await? {
+                let name = summary_name(summary.names.as_deref());
+                if !contents.containers.iter().any(|known| known.name == name) {
+                    contents.compose |= *kind == "compose";
+                    contents.containers.push(LaneContainer { name, kind });
+                }
+            }
+            let options = ListVolumesOptionsBuilder::new().filters(filters).build();
+            for volume in self
+                .docker
+                .list_volumes(Some(options))
+                .await?
+                .volumes
+                .unwrap_or_default()
+            {
+                if !volumes.contains(&volume.name) {
+                    contents.compose |= *kind == "compose";
+                    volumes.push(volume.name);
+                }
+            }
+        }
+        let sizes = if volumes.is_empty() {
+            HashMap::new()
+        } else {
+            self.volume_sizes().await
+        };
+        contents.volumes = volumes
+            .into_iter()
+            .map(|name| LaneVolume {
+                bytes: sizes.get(&name).copied(),
+                name,
+            })
+            .collect();
+        Ok(contents)
+    }
+
+    /// Sizes of the engine's volumes by name, from `system df` (what `docker
+    /// system df -v` shows). Empty when the engine does not answer within
+    /// [`VOLUME_SIZE_TIMEOUT`], fails, or reports sizes in a form this API
+    /// version does not read.
+    async fn volume_sizes(&self) -> HashMap<String, u64> {
+        let options = DataUsageOptionsBuilder::new()
+            ._type(vec!["volume".to_owned()])
+            .verbose(true)
+            .build();
+        let Ok(Ok(usage)) =
+            tokio::time::timeout(VOLUME_SIZE_TIMEOUT, self.docker.df(Some(options))).await
+        else {
+            return HashMap::new();
+        };
+        usage
+            .volume_usage
+            .and_then(|usage| usage.items)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|item| {
+                let name = item.get("Name")?.as_str()?;
+                // The engine reports -1 when the volume driver cannot tell.
+                let size = u64::try_from(item.pointer("/UsageData/Size")?.as_i64()?).ok()?;
+                Some((name.to_owned(), size))
+            })
+            .collect()
     }
 
     /// Pauses the lane's own running containers while the lane is frozen. Shared

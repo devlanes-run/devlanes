@@ -1,0 +1,21 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "exec",
+  "args": [
+    "exec",
+    "--name",
+    "storybook",
+    "--",
+    "pnpm",
+    "storybook"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": null,
+  "data": null,
+  "read_only": false,
+  "card": null
+}

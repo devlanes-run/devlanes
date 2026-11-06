@@ -67,12 +67,13 @@ embed-resource = "3"
 
 [dependencies]
 devlanes-version = { path = "../../crates/version" }
-devlanes-agent-hooks = { path = "../../crates/agent-hooks" }
 devlanes-cli = { path = "../../crates/cli" }
 devlanes-client = { path = "../../crates/client" }
 devlanes-config = { path = "../../crates/config" }
 devlanes-daemon = { path = "../../crates/daemon" }
 devlanes-ipc = { path = "../../crates/ipc" }
+devlanes-mcp = { path = "../../crates/mcp" }
+devlanes-mcp-ui = { path = "../../crates/mcp-ui" }
 devlanes-pki = { path = "../../crates/pki" }
 devlanes-proto = { path = "../../crates/proto" }
 devlanes-term = { path = "../../crates/term" }
@@ -85,6 +86,7 @@ devlanes-infra-compose = { path = "../../crates/infra-compose" }
 devlanes-infra-docker = { path = "../../crates/infra-docker" }
 # Same version as devlanes-infra-docker; named only to read Docker's HTTP error status.
 bollard = "0.21"
+dunce.workspace = true
 devlanes-metrics = { path = "../../crates/metrics" }
 devlanes-metrics-docker = { path = "../../crates/metrics-docker" }
 devlanes-metrics-linux = { path = "../../crates/metrics-linux" }

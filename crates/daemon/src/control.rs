@@ -836,6 +836,12 @@ impl Inner {
             lane.st().env = Some(env.clone());
             project.st().last_env = Some(env);
         }
+        // A client that sends no env (`devlanes mcp` first tries without) gets the
+        // lane's, or `needs_env` instead of a process without PATH.
+        if lane.st().env.is_none() {
+            let reference = lane.st().reference(&project.name());
+            return Err(RpcError::new("needs_env", json!({"lane": reference}), 1));
+        }
         let (mut env, lane_env, reference) = {
             let st = lane.st();
             (

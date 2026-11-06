@@ -1,0 +1,458 @@
+---
+source: crates/mcp/tests/it/listing.rs
+expression: tools(&harness).await
+---
+[
+  {
+    "name": "status",
+    "description": "Show lanes and units with state, ports, URLs, CPU and memory. Call it first to see what runs and whether it is ready, and to find the URL that opens a service.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "lane": {
+          "type": "string",
+          "description": "Lane to show ([project@]lane, such as 2, feat/checkout or acme@2) [default: every lane of the current project]"
+        },
+        "mine": {
+          "type": "boolean",
+          "description": "Only show units this agent session started"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes status",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "logs",
+    "description": "Read unit logs; each line carries a cursor to continue from. For why a unit failed or is not ready, call debug_why first; logs reads more of what a unit printed.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Units to read ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: pick from a list]"
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Read every unit of the lane, grouped by unit"
+        },
+        "tail": {
+          "type": "integer",
+          "description": "Show the last N lines [default: 100 in agent mode or without a terminal]"
+        },
+        "head": {
+          "type": "integer",
+          "description": "Show the first N lines of the selected range"
+        },
+        "follow": {
+          "type": "boolean",
+          "description": "Keep streaming new lines; agent mode requires --timeout"
+        },
+        "since": {
+          "type": "string",
+          "description": "Only lines newer than a duration (5m), a time in milliseconds, or start (the lane's last start)"
+        },
+        "grep": {
+          "type": "string",
+          "description": "Only lines matching this regular expression, such as timeout|refused"
+        },
+        "level": {
+          "type": "string",
+          "description": "Only lines at this level or above: debug, info, warn or error"
+        },
+        "around": {
+          "type": "string",
+          "description": "Show the lines around this cursor, such as api#120"
+        },
+        "context": {
+          "type": "integer",
+          "default": 3,
+          "description": "Lines before and after --around"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Continue after this cursor, as printed by an earlier logs call"
+        },
+        "mine": {
+          "type": "boolean",
+          "description": "Only units this agent session started"
+        },
+        "lane": {
+          "type": "string",
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes logs",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "wait",
+    "description": "Wait until a unit or lane is ready or failed. Call it when start, restart or reload returned at their timeout, or for units another client is starting; a failure comes back with its reason and log tail.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "Unit ([lane:]unit) or lane ([project@]lane) to wait for, such as api, 2:web or acme@2 [default: pick from a list]"
+        },
+        "lane": {
+          "type": "string",
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
+        },
+        "timeout": {
+          "type": "string",
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes wait",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "debug_why",
+    "description": "Explain why a unit is not running or not ready, with a fix for each reason. Call it first when a unit failed, exited or stays starting, before reading its logs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "type": "string",
+          "description": "Unit to explain ([lane:]unit, such as api or 2:web) [default: pick from a list]"
+        },
+        "lane": {
+          "type": "string",
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes debug why",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "debug_errors",
+    "description": "List failed units, crash counts, recent error lines and port conflicts. Use it to find what broke when you do not know which unit; debug_why explains one unit.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "since": {
+          "type": "string",
+          "description": "Count crashes and error lines from this long ago, such as 5m or 2h [default: all recorded runs]"
+        },
+        "lane": {
+          "type": "string",
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes debug errors",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "debug_top",
+    "description": "Show CPU and memory of the running units and containers of every lane. It answers any question about which process, service or container uses the most CPU or memory.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes debug top",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "url_print",
+    "description": "Print a service's URL, for scripts. Use it when you know the service; status shows the URLs of every service in the lane.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "type": "string",
+          "description": "Service whose URL to print ([lane:]unit, such as web or 2:web) [default: pick from a list]"
+        },
+        "lane": {
+          "type": "string",
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes url print",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "url_ls",
+    "description": "List the routed hostnames of every lane with their lane, unit, port and state. It tells which lane and service answer a hostname; url_print gives one service's URL.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes url ls",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "env_show",
+    "description": "Print the environment of the lane or of one unit as KEY=VALUE lines. Use it to check the variables a unit gets, including those devlanes adds that no .env file shows.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "unit": {
+          "type": "string",
+          "description": "Unit whose environment to print ([lane:]unit, such as api or 2:api) [default: the lane's variables]"
+        },
+        "explain": {
+          "type": "boolean",
+          "description": "Show where each variable comes from; secret values are hidden"
+        },
+        "lane": {
+          "type": "string",
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes env show",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "lane_ls",
+    "description": "List lanes after rereading the project's Git worktrees, including moved, unassigned and missing ones. Use it to see which lanes exist, such as before cleaning; status shows what runs in them.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes lane ls",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "doctor",
+    "description": "Check the daemon, Docker, proxy, CA, hosts file and output mode, each with a fix; never starts the daemon. Call it when hostnames do not resolve, HTTPS is not trusted or Docker fails, before debugging a single unit.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes doctor",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "devlanes",
+    "description": "Run a devlanes command that changes nothing and has no tool of its own, such as infra status, remote ls, config get, run --list or lane clean --dry-run, or the --help of any command. Use a typed tool when there is one; commands that change something are refused.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The command line after \"devlanes\", one element per argument, such as [\"infra\", \"logs\", \"postgres\", \"--tail\", \"50\"] or [\"remote\", \"ls\"]"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        }
+      },
+      "required": [
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes (read only)",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "app_snapshot",
+    "description": "Lanes and units for the lane card, with metrics when asked, the lanes of linked boxes when no lane is asked for, and the number of each lane's newest card.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        },
+        "lane": {
+          "type": "string"
+        },
+        "metrics": {
+          "type": "boolean"
+        }
+      }
+    },
+    "_meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    }
+  },
+  {
+    "name": "app_logs",
+    "description": "Log lines of units for the card's log viewer.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tail": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "grep": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "units"
+      ]
+    },
+    "_meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    }
+  }
+]
