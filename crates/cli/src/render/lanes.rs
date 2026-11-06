@@ -8,7 +8,7 @@ use super::{
     Ctx, Outcome, bytes, clean, display_value, int, leftover_notes, leftover_notes_of, list,
     percent, plural, table, tail_lines, text, tree, words,
 };
-use crate::Hint;
+use crate::{Hint, OutputMode};
 
 /// Ready units listed by name before the rest fold into `ready +N`.
 const READY_SHOWN: usize = 10;
@@ -1208,12 +1208,15 @@ pub(super) fn exec(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
         line.push_str(&format!(" pid={pid}"));
     }
     let target = format!("{}:{}", unit.lane, unit.name);
+    // Agents cannot follow without --timeout; they read the latest lines instead.
+    let logs = if cx.mode == OutputMode::Agent {
+        Hint::command(["logs", target.as_str(), "--tail", "100"])
+    } else {
+        Hint::command(["logs", target.as_str(), "-f"])
+    };
     vec![
         line,
-        format!(
-            "  logs: {}",
-            Hint::command(["logs", target.as_str(), "-f"]).0
-        ),
+        format!("  logs: {}", logs.0),
         format!("  stop: {}", Hint::command(["stop", target.as_str()]).0),
     ]
 }
