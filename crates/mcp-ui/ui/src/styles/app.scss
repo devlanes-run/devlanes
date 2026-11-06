@@ -10,10 +10,6 @@
   --color-background-primary: #{$surface-light};
   --color-background-secondary: #{$well-light};
   --color-background-inverse: #{$terminal};
-  --color-background-info: #{color-mix(in srgb, $info-light 12%, $surface-light)};
-  --color-background-danger: #{color-mix(in srgb, $error-light 12%, $surface-light)};
-  --color-background-success: #{color-mix(in srgb, $success-light 12%, $surface-light)};
-  --color-background-warning: #{color-mix(in srgb, $warning-light 12%, $surface-light)};
   --color-background-disabled: rgba(233, 231, 225, 0.5);
   --color-text-primary: #{$ink-light};
   --color-text-secondary: #{$muted-light};
@@ -35,10 +31,6 @@
   --color-background-primary: #{$terminal};
   --color-background-secondary: #{$terminal-bar};
   --color-background-inverse: #{$surface-light};
-  --color-background-info: #{color-mix(in srgb, $frozen 14%, $terminal)};
-  --color-background-danger: #{color-mix(in srgb, $failure 14%, $terminal)};
-  --color-background-success: #{color-mix(in srgb, $ok 14%, $terminal)};
-  --color-background-warning: #{color-mix(in srgb, $attention 14%, $terminal)};
   --color-background-disabled: rgba(255, 255, 255, 0.035);
   --color-text-primary: #{$terminal-ink};
   --color-text-secondary: #{$dim};
@@ -88,7 +80,9 @@
   --dl-body-lh: var(--font-text-sm-line-height);
   --dl-meta: max(var(--font-text-xs-size), 11px);
   --dl-meta-lh: var(--font-text-xs-line-height);
-  // ChatGPT omits the state backgrounds in light mode: tint its text tone instead.
+  // ChatGPT omits the state backgrounds in light mode: tint its text tone instead. The
+  // palette above defines none either, so such a host never gets devlanes tints, and the
+  // devlanes look gets the same tint of its own tones.
   --dl-bg-success: var(
     --color-background-success,
     color-mix(in srgb, var(--color-text-success) 12%, transparent)
