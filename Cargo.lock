@@ -2209,6 +2209,7 @@ version = "0.2.2"
 dependencies = [
  "devlanes-core",
  "devlanes-sys",
+ "devlanes-sys-windows",
  "devlanes-testing",
  "devlanes-version",
  "dunce",
