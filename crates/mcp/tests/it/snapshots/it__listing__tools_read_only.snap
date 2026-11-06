@@ -1,0 +1,108 @@
+---
+source: crates/mcp/tests/it/listing.rs
+expression: tools(&harness).await
+---
+[
+  {
+    "name": "devlanes_read",
+    "description": "Run a devlanes command that changes nothing, such as status, logs, wait, debug why, debug errors, url print, env show, doctor, lane ls or lane clean --dry-run, or any command with --help. args is the command line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \"--tail\", \"100\"].",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The devlanes command line without \"devlanes\", one element per argument."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        }
+      },
+      "required": [
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes (read only)",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "app_snapshot",
+    "description": "Lanes and units for the lane card, with metrics when asked, and the lanes of linked boxes when no lane is asked for.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        },
+        "lane": {
+          "type": "string"
+        },
+        "metrics": {
+          "type": "boolean"
+        }
+      }
+    },
+    "_meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    }
+  },
+  {
+    "name": "app_logs",
+    "description": "Log lines of units for the card's log viewer.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tail": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "grep": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "units"
+      ]
+    },
+    "_meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    }
+  }
+]

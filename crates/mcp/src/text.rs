@@ -4,7 +4,7 @@
 /// The server `instructions`. Hosts may keep only the start, so the rules that
 /// change what an agent does come in the first 512 characters.
 pub const INSTRUCTIONS: &str = "\
-devlanes runs a dev environment per git worktree (a lane) with its own ports, URLs and env. \
+devlanes runs a dev environment per Git worktree (a lane) with its own ports, URLs and env. \
 Call the devlanes tool with the command line after \"devlanes\" as args.
 - Run dev servers, watchers, workers and tunnels with exec: `devlanes exec --name web -- pnpm dev`. \
 devlanes owns the process and gives it the lane's ports and env. Never use &, nohup or a \
@@ -14,11 +14,24 @@ background shell for them.
 More:
 - Read a unit with `devlanes logs web --tail 100`, the lane with `devlanes status`, a failure \
 with `devlanes debug why web`.
-- Run builds, tests, git and other commands that exit yourself, or with \
+- Run builds, tests, git and other commands that exit in your own shell, or with \
 `devlanes with -- pnpm test` when they need the lane running.
 - Stop what you started with `devlanes stop --mine`. Leave the lane running when you hand work \
 to the user for review.
 - Commands that delete data or reach other machines ask the user first.
+- cwd picks the worktree; without it the call uses the project the agent runs in.";
+
+/// The server `instructions` under `--read-only`, where only `devlanes_read`
+/// exists.
+pub const READ_ONLY_INSTRUCTIONS: &str = "\
+devlanes runs a dev environment per Git worktree (a lane) with its own ports, URLs and env. \
+Call the devlanes_read tool with the command line after \"devlanes\" as args. This server only \
+reads: ask the user to start, stop or change anything.
+- wait blocks until ready or failed: no sleep or curl polling.
+
+More:
+- Read a unit with `devlanes logs web --tail 100`, the lane with `devlanes status`, a failure \
+with `devlanes debug why web`.
 - cwd picks the worktree; without it the call uses the project the agent runs in.";
 
 /// Description of the `devlanes` tool.
@@ -30,12 +43,19 @@ Run any devlanes command. args is the command line after \"devlanes\", such as [
 restart and wait return once the units are ready or failed. Returns the command's agent output, \
 with its JSON in structuredContent.";
 
-/// Description of the `devlanes_read` tool.
+/// Description of the `devlanes_read` tool under `--read-only`.
+pub const DEVLANES_READ_ONLY: &str = "\
+Run a devlanes command that changes nothing, such as status, logs, wait, debug why, debug \
+errors, url print, env show, doctor, lane ls or lane clean --dry-run, or any command with \
+--help. args is the command line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \
+\"--tail\", \"100\"].";
+
+/// Description of the `devlanes_read` tool next to the `devlanes` tool.
 pub const DEVLANES_READ: &str = "\
-Run a devlanes command that changes nothing: status, logs, wait, debug why, debug errors, url, \
-env show, doctor, lane ls, lane clean --dry-run, remote ls, debug config, debug top, or --help. args is the command \
-line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \"--tail\", \"100\"]. Use \
-the devlanes tool for commands that start, stop or change something.";
+Run a devlanes command that changes nothing, such as status, logs, wait, debug why, debug \
+errors, url print, env show, doctor, lane ls or lane clean --dry-run, or any command with \
+--help. args is the command line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \
+\"--tail\", \"100\"]. Use the devlanes tool for commands that start, stop or change something.";
 
 /// Description of the `args` argument of both tools.
 pub const ARGS: &str = "The devlanes command line without \"devlanes\", one element per argument.";
@@ -85,10 +105,11 @@ mod tests {
     fn quoted_commands_parse() {
         let mut commands = quoted_commands(INSTRUCTIONS);
         assert!(commands.len() >= 6, "{commands:?}");
-        for text in [DEVLANES, DEVLANES_READ] {
+        commands.extend(quoted_commands(READ_ONLY_INSTRUCTIONS));
+        for text in [DEVLANES, DEVLANES_READ, DEVLANES_READ_ONLY] {
             commands.extend(quoted_args(text));
         }
-        assert!(commands.len() >= 11, "{commands:?}");
+        assert!(commands.len() >= 16, "{commands:?}");
         for args in commands {
             let parsed =
                 Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.clone()));

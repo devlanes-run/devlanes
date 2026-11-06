@@ -4,8 +4,8 @@
 use std::time::Duration;
 
 use devlanes_cli::{
-    Cli, Command, ConfigCommand, DaemonCommand, LaneCommand, RemoteCommand, clap::Parser,
-    clap::error::ErrorKind,
+    Cli, Command, ConfigCommand, DaemonCommand, DebugCommand, LaneCommand, RemoteCommand,
+    clap::Parser, clap::error::ErrorKind,
 };
 
 /// A command line ready to run.
@@ -26,10 +26,22 @@ pub enum Rejected {
     Error(String),
 }
 
+/// Which tool a command line came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tool {
+    /// `devlanes`, which runs anything.
+    Devlanes,
+    /// `devlanes_read` next to `devlanes`.
+    Read,
+    /// `devlanes_read` of a server started with `--read-only`, which has no
+    /// `devlanes` tool.
+    ReadOnly,
+}
+
 impl Call {
-    /// Parses `args` as `devlanes ARGS`. `--output` and `--json` are dropped
-    /// first, since every call runs with `--output agent`.
-    pub fn parse(args: &[String], read_only_tool: bool) -> Result<Self, Rejected> {
+    /// Parses `args` as `devlanes ARGS` from `tool`. `--output` and `--json`
+    /// are dropped first, since every call runs with `--output agent`.
+    pub fn parse(args: &[String], tool: Tool) -> Result<Self, Rejected> {
         let args = without_output_flags(args);
         let cli = Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.clone()))
             .map_err(|error| match error.kind() {
@@ -41,17 +53,19 @@ impl Call {
                 &args,
             )),
         })?;
-        let path = devlanes_cli::command_path(&args);
-        let path = if path.is_empty() {
-            "status".to_owned()
-        } else {
-            path.join(" ")
-        };
-        if read_only_tool && !cli.command.as_ref().is_none_or(Command::is_read_only) {
-            return Err(Rejected::Error(format!(
-                "devlanes {path} changes something, and devlanes_read only runs commands that \
-                 change nothing; call the devlanes tool with the same args instead"
-            )));
+        let path = path_of(&args);
+        if tool != Tool::Devlanes && !cli.command.as_ref().is_none_or(Command::is_read_only) {
+            return Err(Rejected::Error(if tool == Tool::ReadOnly {
+                format!(
+                    "devlanes {path} changes something, and devlanes mcp runs with --read-only \
+                     here, so ask the user to run it"
+                )
+            } else {
+                format!(
+                    "devlanes {path} changes something, and devlanes_read only runs commands \
+                     that change nothing; call the devlanes tool with the same args instead"
+                )
+            }));
         }
         if let Some(reason) = cli.terminal_only() {
             return Err(Rejected::Error(format!(
@@ -109,8 +123,15 @@ impl Call {
         }
     }
 
-    /// Adds `--yes` (or the flag a refusal named) unless it is there.
+    /// Adds `--yes` (or the flag a refusal named) unless it is there. For
+    /// `debug bundle -- ARGS` and `with -- devlanes ARGS` it goes to ARGS,
+    /// which is the command that asks.
     pub fn confirm(&mut self, flag: &str) {
+        if let Some((start, mut inner)) = self.nested() {
+            inner.confirm(flag);
+            self.args.splice(start.., inner.args);
+            return;
+        }
         if flag == "--yes" {
             if self.cli.yes {
                 return;
@@ -138,9 +159,42 @@ impl Call {
             .unwrap_or(self.args.len())
     }
 
+    /// The devlanes command line this one runs, as `debug bundle -- ARGS` and
+    /// `with -- devlanes ARGS` do, with the index of its first argument in
+    /// [`Call::args`]. `None` for other commands and for lines that do not parse.
+    fn nested(&self) -> Option<(usize, Call)> {
+        let start = match self.cli.command.as_ref()? {
+            Command::Debug {
+                command: DebugCommand::Bundle { args, .. },
+            } if !args.is_empty() => self.end() + 1,
+            Command::With(with) => {
+                let program = std::path::Path::new(with.command.first()?).file_stem()?;
+                if !program.eq_ignore_ascii_case("devlanes") {
+                    return None;
+                }
+                self.end() + 2
+            }
+            _ => return None,
+        };
+        let args = self.args.get(start..)?.to_vec();
+        let cli =
+            Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.clone())).ok()?;
+        Some((
+            start,
+            Call {
+                cli,
+                path: path_of(&args),
+                args,
+            },
+        ))
+    }
+
     /// The question to ask the user before running this command, or `None` when
     /// it needs no consent or already has `--yes`.
     pub fn consent(&self) -> Option<String> {
+        if let Some((_, inner)) = self.nested() {
+            return inner.consent();
+        }
         if self.cli.yes {
             return None;
         }
@@ -151,13 +205,15 @@ impl Call {
                         lane,
                         dry_run: false,
                     },
-            } => format!(
-                "Clean lane {}? This stops it, runs its clean tasks and teardown, and deletes its \
-                 data and logs.",
-                lane.as_deref()
-                    .or(self.cli.lane.as_deref())
-                    .unwrap_or("of this worktree")
-            ),
+            } => match lane.as_deref().or(self.cli.lane.as_deref()) {
+                Some(lane) => format!(
+                    "Clean lane {lane}? This stops it, runs its clean tasks and teardown, and \
+                     deletes its data and logs."
+                ),
+                None => "Clean this worktree's lane? This stops it, runs its clean tasks and \
+                         teardown, and deletes its data and logs."
+                    .into(),
+            },
             Command::Lane {
                 command: LaneCommand::Gc,
             } => "Clean every lane whose worktree or project file is gone, with its data?".into(),
@@ -205,6 +261,9 @@ impl Call {
     /// The `lane clean --dry-run` arguments for this `lane clean`, whose agent
     /// output shows the user what a clean removes.
     pub fn clean_plan(&self) -> Option<Vec<String>> {
+        if let Some((_, inner)) = self.nested() {
+            return inner.clean_plan();
+        }
         let Some(Command::Lane {
             command: LaneCommand::Clean { dry_run: false, .. },
         }) = &self.cli.command
@@ -214,6 +273,16 @@ impl Call {
         let mut plan = self.args.clone();
         plan.push("--dry-run".into());
         Some(plan)
+    }
+}
+
+/// The subcommand path of `args`, such as `lane clean`; `status` for none.
+fn path_of(args: &[String]) -> String {
+    let path = devlanes_cli::command_path(args);
+    if path.is_empty() {
+        "status".to_owned()
+    } else {
+        path.join(" ")
     }
 }
 
@@ -250,7 +319,7 @@ mod tests {
 
     /// Parses or panics with the rejection.
     fn call(line: &[&str]) -> Call {
-        match Call::parse(&args(line), false) {
+        match Call::parse(&args(line), Tool::Devlanes) {
             Ok(call) => call,
             Err(Rejected::Help(text) | Rejected::Error(text)) => panic!("{line:?}: {text}"),
         }
@@ -299,20 +368,24 @@ mod tests {
     /// with what to do instead; `--help` is text, not an error.
     #[test]
     fn refusals() {
-        let refused = |line: &[&str], read_only| match Call::parse(&args(line), read_only) {
+        let refused = |line: &[&str], tool| match Call::parse(&args(line), tool) {
             Err(Rejected::Error(text)) => text,
             _ => panic!("{line:?} was not refused"),
         };
-        assert!(refused(&["ui"], false).contains("TUI"));
-        assert!(refused(&["logs", "api", "-f"], false).contains("--timeout"));
-        assert!(refused(&["env", "shell"], false).contains("env show"));
-        assert!(refused(&["stop"], true).contains("devlanes tool"));
-        assert!(refused(&["exec", "--name", "x", "--", "y"], true).contains("devlanes tool"));
-        assert!(refused(&["nope"], false).contains("nope"));
-        assert!(Call::parse(&args(&["status"]), true).is_ok());
-        assert!(Call::parse(&args(&[]), true).is_ok_and(|call| call.path == "status"));
+        assert!(refused(&["ui"], Tool::Devlanes).contains("TUI"));
+        assert!(refused(&["logs", "api", "-f"], Tool::Devlanes).contains("--timeout"));
+        assert!(refused(&["env", "shell"], Tool::Devlanes).contains("env show"));
+        assert!(refused(&["stop"], Tool::Read).contains("devlanes tool"));
+        assert!(refused(&["exec", "--name", "x", "--", "y"], Tool::Read).contains("devlanes tool"));
+        // Without the devlanes tool the user runs it.
+        let read_only = refused(&["stop"], Tool::ReadOnly);
+        assert!(read_only.contains("--read-only"), "{read_only}");
+        assert!(!read_only.contains("devlanes tool"), "{read_only}");
+        assert!(refused(&["nope"], Tool::Devlanes).contains("nope"));
+        assert!(Call::parse(&args(&["status"]), Tool::Read).is_ok());
+        assert!(Call::parse(&args(&[]), Tool::Read).is_ok_and(|call| call.path == "status"));
         assert!(matches!(
-            Call::parse(&args(&["logs", "--help"]), true),
+            Call::parse(&args(&["logs", "--help"]), Tool::Read),
             Err(Rejected::Help(text)) if text.contains("--cursor")
         ));
     }
@@ -349,5 +422,54 @@ mod tests {
         clean.confirm("--yes");
         assert_eq!(clean.args, args(&["lane", "clean", "2", "--yes"]));
         assert!(clean.consent().is_none());
+        assert!(
+            call(&["lane", "clean"])
+                .consent()
+                .is_some_and(|question| question.starts_with("Clean this worktree's lane?"))
+        );
+    }
+
+    /// A devlanes command that `debug bundle` or `with` runs asks like itself,
+    /// and the yes goes to it.
+    #[test]
+    fn nested_commands_ask() {
+        let mut bundle = call(&["debug", "bundle", "--", "lane", "clean", "2"]);
+        assert!(bundle.consent().is_some());
+        assert_eq!(
+            bundle.clean_plan(),
+            Some(args(&["lane", "clean", "2", "--dry-run"]))
+        );
+        bundle.confirm("--yes");
+        assert_eq!(
+            bundle.args,
+            args(&["debug", "bundle", "--", "lane", "clean", "2", "--yes"])
+        );
+        assert!(bundle.consent().is_none());
+        let mut with = call(&["with", "--", "devlanes", "daemon", "stop"]);
+        assert!(with.consent().is_some());
+        with.limit(Duration::from_secs(50));
+        with.confirm("--yes");
+        assert_eq!(
+            with.args,
+            args(&[
+                "with",
+                "--timeout",
+                "50s",
+                "--",
+                "devlanes",
+                "daemon",
+                "stop",
+                "--yes"
+            ])
+        );
+        assert!(with.consent().is_none());
+        for line in [
+            &["with", "--", "pnpm", "test"][..],
+            &["with", "--", "devlanes", "status"],
+            &["debug", "bundle"],
+            &["debug", "bundle", "--", "start", "api"],
+        ] {
+            assert!(call(line).consent().is_none(), "{line:?}");
+        }
     }
 }

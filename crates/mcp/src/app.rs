@@ -3,15 +3,17 @@
 
 use rmcp::{
     ErrorData as McpError, RoleServer,
-    model::{CallToolRequestParams, CallToolResponse, JsonObject, MetaObject, Tool},
+    model::{
+        CallToolRequestParams, CallToolResponse, CallToolResult, JsonObject, MetaObject, Tool,
+    },
     service::RequestContext,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    command::{Call, Rejected},
-    server::{Server, arguments, client_name, execute, text_result},
+    command::{Call, Rejected, Tool as Source},
+    server::{Server, arguments, capped, client_name, error_of, execute, text_result},
     text,
 };
 
@@ -114,27 +116,59 @@ struct Action {
     target: Option<String>,
 }
 
-/// Runs the app-only tool `name`.
+/// Runs the app-only tool `name`. Every result says in `read_only` whether the
+/// server runs with `--read-only`, so the cards hide their buttons.
 pub async fn call(
     server: &Server,
     name: &str,
     request: &CallToolRequestParams,
     context: &RequestContext<RoleServer>,
 ) -> Result<CallToolResponse, McpError> {
+    let mut result = run(server, name, request, context).await?;
+    let read_only = Value::Bool(server.read_only());
+    match &mut result.structured_content {
+        Some(Value::Object(structured)) => {
+            structured.insert("read_only".into(), read_only);
+        }
+        structured => *structured = Some(json!({"read_only": read_only})),
+    }
+    Ok(result.into())
+}
+
+/// The result of the app-only tool `name`, without `read_only`.
+async fn run(
+    server: &Server,
+    name: &str,
+    request: &CallToolRequestParams,
+    context: &RequestContext<RoleServer>,
+) -> Result<CallToolResult, McpError> {
     let client = client_name(context);
     let runner = server.runner(&client);
     match name {
         "app_snapshot" => {
             let args: Snapshot = arguments(request)?;
+            if let Some(refused) = flag_like(args.lane.iter()) {
+                return Ok(refused);
+            }
             let (cwd, default_lane) = server.cwd(args.cwd.as_deref());
             let mut status = vec!["status".to_owned()];
             status.extend(args.lane.clone());
             if args.lane.is_none() && default_lane {
                 status.extend(server.lane_flag());
             }
-            let output = runner.json(&cwd, &status, &context.ct).await.map_err(io)?;
+            // The cards poll: none of these commands starts a daemon.
+            let output = runner
+                .json(&cwd, &status, false, &context.ct)
+                .await
+                .map_err(io)?;
+            if error_of(&output.data, "daemon_not_running").is_some() {
+                let mut result = text_result("the daemon is not running".to_owned(), false);
+                result.structured_content =
+                    Some(json!({"status": null, "top": null, "hosts": null, "daemon": "stopped"}));
+                return Ok(result);
+            }
             if output.exit_code != 0 {
-                return Ok(text_result(output.stderr, true).into());
+                return Ok(text_result(output.stderr, true));
             }
             let top = if args.metrics {
                 let mut top = vec!["debug".to_owned(), "top".to_owned()];
@@ -143,7 +177,10 @@ pub async fn call(
                 } else if default_lane {
                     top.extend(server.lane_flag());
                 }
-                let output = runner.json(&cwd, &top, &context.ct).await.map_err(io)?;
+                let output = runner
+                    .json(&cwd, &top, false, &context.ct)
+                    .await
+                    .map_err(io)?;
                 if output.exit_code == 0 {
                     output.data
                 } else {
@@ -162,7 +199,10 @@ pub async fn call(
                 .is_some_and(|hosts| !hosts.is_empty());
             let hosts = if linked && args.lane.is_none() {
                 let ls = ["remote".to_owned(), "ls".to_owned()];
-                let output = runner.json(&cwd, &ls, &context.ct).await.map_err(io)?;
+                let output = runner
+                    .json(&cwd, &ls, false, &context.ct)
+                    .await
+                    .map_err(io)?;
                 if output.exit_code == 0 {
                     output.data
                 } else {
@@ -179,12 +219,15 @@ pub async fn call(
             let mut result = text_result(format!("{lanes} lanes"), false);
             result.structured_content =
                 Some(json!({"status": output.data, "top": top, "hosts": hosts}));
-            Ok(result.into())
+            Ok(result)
         }
         "app_logs" => {
             let args: Logs = arguments(request)?;
             if args.units.is_empty() {
                 return Err(McpError::invalid_params("app_logs needs units", None));
+            }
+            if let Some(refused) = flag_like(args.units.iter()) {
+                return Ok(refused);
             }
             let (cwd, default_lane) = server.cwd(args.cwd.as_deref());
             let mut logs = vec!["logs".to_owned()];
@@ -195,30 +238,37 @@ pub async fn call(
                 ("--grep", args.grep),
                 ("--since", args.since),
             ] {
+                // One argument, so a value that starts with `-` stays a value.
                 if let Some(value) = value {
-                    logs.extend([flag.to_owned(), value]);
+                    logs.push(format!("{flag}={value}"));
                 }
             }
             if default_lane {
                 logs.extend(server.lane_flag());
             }
-            let output = runner.json(&cwd, &logs, &context.ct).await.map_err(io)?;
+            let output = runner
+                .json(&cwd, &logs, true, &context.ct)
+                .await
+                .map_err(io)?;
             if output.exit_code != 0 {
-                return Ok(text_result(output.stderr, true).into());
+                return Ok(text_result(output.stderr, true));
             }
             let mut result = text_result("log lines".to_owned(), false);
             result.structured_content = Some(json!({"logs": output.data}));
-            Ok(result.into())
+            Ok(result)
         }
         "app_action" if !server.read_only() => {
             let args: Action = arguments(request)?;
+            if let Some(refused) = flag_like(args.target.iter()) {
+                return Ok(refused);
+            }
             let line = action_args(&args.action, args.target.as_deref()).ok_or_else(|| {
                 McpError::invalid_params(format!("unknown action {}", args.action), None)
             })?;
-            let mut call = match Call::parse(&line, false) {
+            let mut call = match Call::parse(&line, Source::Devlanes) {
                 Ok(call) => call,
                 Err(Rejected::Help(text) | Rejected::Error(text)) => {
-                    return Ok(text_result(text, true).into());
+                    return Ok(text_result(text, true));
                 }
             };
             let (cwd, default_lane) = server.cwd(args.cwd.as_deref());
@@ -226,7 +276,10 @@ pub async fn call(
                 call.default_lane(lane);
             }
             let limit = call.limit(server.default_timeout(&client));
-            let (output, notes) = execute(&runner, &call, &cwd, limit, context).await?;
+            let (output, notes) = match execute(&runner, &call, &cwd, limit, context).await {
+                Ok(ran) => ran,
+                Err(error) => return Ok(text_result(error, true)),
+            };
             let mut text = output.stdout.clone();
             for extra in std::iter::once(&output.stderr).chain(&notes) {
                 if !extra.trim().is_empty() {
@@ -234,13 +287,15 @@ pub async fn call(
                     text.push('\n');
                 }
             }
+            let (data, truncated) = capped(&output.data);
             let mut result = text_result(text.clone(), output.exit_code != 0);
             result.structured_content = Some(json!({
                 "exit_code": output.exit_code,
                 "text": text,
-                "data": output.data,
+                "data": data,
+                "data_truncated": truncated,
             }));
-            Ok(result.into())
+            Ok(result)
         }
         name => Err(McpError::invalid_params(
             format!("unknown tool {name}"),
@@ -276,6 +331,16 @@ fn action_args(action: &str, target: Option<&str>) -> Option<Vec<String>> {
         "pair" => owned(&["daemon", "pair"]),
         _ => return None,
     })
+}
+
+/// An error result when one of `values` starts with `-`: a card names lanes
+/// and units, and such a value would reach the command line as a flag.
+fn flag_like<'a>(mut values: impl Iterator<Item = &'a String>) -> Option<CallToolResult> {
+    let value = values.find(|value| value.starts_with('-'))?;
+    Some(text_result(
+        format!("{value} is not a lane or unit reference"),
+        true,
+    ))
 }
 
 /// A failure to start the devlanes process.

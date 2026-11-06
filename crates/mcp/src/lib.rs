@@ -98,11 +98,29 @@ pub enum Error {
 /// Serves MCP on stdin and stdout until the client closes them. Nothing connects
 /// to the daemon here; each tool call runs its own devlanes process.
 pub async fn serve(config: Config) -> Result<(), Error> {
+    serve_on(Server::new(config), rmcp::transport::stdio()).await
+}
+
+/// Serves `server` on `transport` until the client leaves, then interrupts the
+/// commands of calls still running and waits for them, so none outlives the
+/// server.
+pub async fn serve_on<T, E, A>(server: Server, transport: T) -> Result<(), Error>
+where
+    T: rmcp::transport::IntoTransport<rmcp::RoleServer, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
     use rmcp::ServiceExt as _;
-    let running = Server::new(config)
-        .serve(rmcp::transport::stdio())
+    // A Ctrl-Break meant for a command's group never ends the server: the
+    // console reports it to a registered listener instead.
+    #[cfg(windows)]
+    let _ctrl_break = tokio::signal::windows::ctrl_break();
+    let running = server
+        .clone()
+        .serve(transport)
         .await
         .map_err(|error| Error::Initialize(Box::new(error)))?;
-    running.waiting().await?;
+    let waited = running.waiting().await;
+    server.stop_commands().await;
+    waited?;
     Ok(())
 }

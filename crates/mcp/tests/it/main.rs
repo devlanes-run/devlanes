@@ -15,7 +15,7 @@ use std::{
 
 use devlanes_mcp::{Config, Server, UI_EXTENSION, UiResource};
 use rmcp::{
-    ClientHandler, ErrorData as McpError, RoleClient, ServiceExt as _,
+    ClientHandler, ErrorData as McpError, RoleClient,
     model::{
         CallToolRequestParams, CallToolResult, ClientCapabilities, ClientConfig,
         ElicitRequestParams, ElicitResult, ElicitationAction, ElicitationCapability,
@@ -143,6 +143,10 @@ impl ClientHandler for TestClient {
 pub struct Harness {
     pub client: RunningService<RoleClient, TestClient>,
     pub handler: TestClient,
+    /// A clone of the server, which shares its commands in flight.
+    pub server: Server,
+    /// Ends once the server stopped serving and its commands ended.
+    pub served: tokio::task::JoinHandle<()>,
     pub dir: tempfile::TempDir,
     pub log: PathBuf,
 }
@@ -182,9 +186,11 @@ pub async fn connect(
     };
     adjust(&mut config);
     let (server_side, client_side) = tokio::io::duplex(1 << 20);
-    tokio::spawn(async move {
-        if let Ok(running) = Server::new(config).serve(server_side).await {
-            let _ = running.waiting().await;
+    let server = Server::new(config);
+    let served = tokio::spawn({
+        let server = server.clone();
+        async move {
+            let _ = devlanes_mcp::serve_on(server, server_side).await;
         }
     });
     let mode = match lifecycle {
@@ -201,8 +207,58 @@ pub async fn connect(
     Harness {
         client,
         handler,
+        server,
+        served,
         dir,
         log,
+    }
+}
+
+/// Lines in the file at `path`, or 0 when there is none.
+pub fn ticks(path: &std::path::Path) -> usize {
+    std::fs::read_to_string(path).map_or(0, |text| text.lines().count())
+}
+
+/// Waits until the process ticking into `path` stopped: the count stays the
+/// same for a second, well over the 50 ms between ticks. Panics after `within`.
+pub async fn stops_ticking(path: &std::path::Path, within: Duration) {
+    let deadline = tokio::time::Instant::now() + within;
+    let mut last = ticks(path);
+    let mut steady_since = tokio::time::Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let now = ticks(path);
+        if now != last {
+            last = now;
+            steady_since = tokio::time::Instant::now();
+        } else if steady_since.elapsed() >= Duration::from_secs(1) {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "{} kept ticking",
+            path.display()
+        );
+    }
+}
+
+/// Waits until `path` has at least `count` ticks.
+pub async fn ticked(path: &std::path::Path, count: usize) {
+    while ticks(path) < count {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Waits until the server runs no command, as after every call settled.
+/// Panics after `within`.
+pub async fn settled(server: &Server, within: Duration) {
+    let deadline = tokio::time::Instant::now() + within;
+    while server.running_commands() > 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "a command still runs"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 

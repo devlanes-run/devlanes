@@ -102,6 +102,50 @@ async fn declined_or_unasked_commands_do_not_run() {
 }
 
 #[tokio::test]
+/// A question the user dismissed is reported as cancelled, not declined, and
+/// nothing runs.
+async fn cancelled_questions_run_nothing() {
+    tokio::time::timeout(LIMIT, async {
+        for lifecycle in [Lifecycle::Initialize, Lifecycle::Discover] {
+            let harness = connect(
+                TestClient::new().answering(ElicitationAction::Cancel),
+                lifecycle,
+                |_| {},
+            )
+            .await;
+            let result = harness.call("devlanes", &["daemon", "stop"]).await;
+            assert!(failed(&result));
+            assert!(text(&result).contains("cancelled"), "{}", text(&result));
+            assert!(!text(&result).contains("declined"), "{}", text(&result));
+            assert!(harness.lines().is_empty(), "{:?}", harness.lines());
+        }
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// `devlanes_read` never answers a command's own question with a yes.
+async fn the_read_tool_does_not_confirm() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(
+            TestClient::new().answering(ElicitationAction::Accept),
+            Lifecycle::Initialize,
+            |config| {
+                config.env.insert("FAKE_CONFIRM".into(), "1".into());
+            },
+        )
+        .await;
+        let result = harness.call("devlanes_read", &["status"]).await;
+        assert!(failed(&result));
+        assert!(harness.handler.questions().is_empty());
+        assert_eq!(harness.lines(), ["--output agent status"]);
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
 /// An agent that passes `--yes` asked the user itself.
 async fn yes_from_the_agent_runs_directly() {
     tokio::time::timeout(LIMIT, async {

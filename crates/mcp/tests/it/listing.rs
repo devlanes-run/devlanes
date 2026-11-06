@@ -137,6 +137,20 @@ async fn read_only_offers_one_tool() {
             .filter_map(|tool| tool["name"].as_str().map(str::to_owned))
             .collect();
         assert_eq!(names, ["devlanes_read", "app_snapshot", "app_logs"]);
+        // Nothing they say points at the missing devlanes tool.
+        insta::assert_json_snapshot!("tools_read_only", tools(&harness).await);
+        let info = harness.client.peer_info().expect("server info");
+        insta::assert_snapshot!(
+            "instructions_read_only",
+            info.instructions.clone().unwrap_or_default()
+        );
+        let refused = harness.call("devlanes_read", &["stop"]).await;
+        assert!(failed(&refused));
+        assert!(
+            text(&refused).contains("ask the user to run it"),
+            "{}",
+            text(&refused)
+        );
         let refused = harness
             .client
             .call_tool(
