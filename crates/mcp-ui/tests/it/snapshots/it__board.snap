@@ -1,0 +1,718 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "status",
+  "args": [
+    "status"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "board",
+  "data": {
+    "items": [
+      {
+        "reference": "acme@0",
+        "project": "acme",
+        "index": 0,
+        "branch": "main",
+        "path": "/work/acme",
+        "state": "running",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api",
+            "lane": "acme@0",
+            "state": "ready",
+            "pid": 60002,
+            "exit_code": null,
+            "ports": {
+              "http": 20002
+            },
+            "urls": [
+              "http://127.0.0.1:20002",
+              "https://api.acme.localhost"
+            ],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api.acme.localhost"
+          },
+          {
+            "name": "web",
+            "lane": "acme@0",
+            "state": "ready",
+            "pid": 60003,
+            "exit_code": null,
+            "ports": {
+              "http": 20003
+            },
+            "urls": [
+              "http://127.0.0.1:20003",
+              "https://acme.localhost"
+            ],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme.localhost"
+          },
+          {
+            "name": "worker",
+            "lane": "acme@0",
+            "state": "ready",
+            "pid": 60004,
+            "exit_code": null,
+            "ports": {
+              "http": 20004
+            },
+            "urls": [
+              "http://127.0.0.1:20004"
+            ],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "storybook",
+            "lane": "acme@0",
+            "state": "ready",
+            "pid": 60005,
+            "exit_code": null,
+            "ports": {
+              "http": 20005
+            },
+            "urls": [
+              "http://127.0.0.1:20005"
+            ],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme.localhost",
+        "port_block": [
+          20000,
+          20009
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": [
+          {
+            "name": "postgres",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          },
+          {
+            "name": "redis",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          }
+        ]
+      },
+      {
+        "reference": "acme@1",
+        "project": "acme",
+        "index": 1,
+        "branch": "feat/checkout",
+        "path": "/work/acme-feat-checkout",
+        "state": "starting",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api",
+            "lane": "acme@1",
+            "state": "starting",
+            "pid": 60012,
+            "exit_code": null,
+            "ports": {
+              "http": 20012
+            },
+            "urls": [
+              "http://127.0.0.1:20012",
+              "https://api.acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api.acme1.localhost"
+          },
+          {
+            "name": "web",
+            "lane": "acme@1",
+            "state": "starting",
+            "pid": 60013,
+            "exit_code": null,
+            "ports": {
+              "http": 20013
+            },
+            "urls": [
+              "http://127.0.0.1:20013",
+              "https://acme1.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme1.localhost"
+          },
+          {
+            "name": "worker",
+            "lane": "acme@1",
+            "state": "starting",
+            "pid": 60014,
+            "exit_code": null,
+            "ports": {
+              "http": 20014
+            },
+            "urls": [
+              "http://127.0.0.1:20014"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "claude-code",
+              "session_id": "claude-code-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "database",
+            "lane": "acme@1",
+            "state": "exited",
+            "pid": null,
+            "exit_code": 0,
+            "ports": {},
+            "urls": [],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "task",
+            "autostart": false,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "pty": false,
+            "role": "setup"
+          },
+          {
+            "name": "migrate",
+            "lane": "acme@1",
+            "state": "exited",
+            "pid": null,
+            "exit_code": 0,
+            "ports": {},
+            "urls": [],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "task",
+            "autostart": false,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "pty": false,
+            "role": "setup"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme1.localhost",
+        "port_block": [
+          20010,
+          20019
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": [
+          {
+            "name": "postgres",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          },
+          {
+            "name": "redis",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          }
+        ]
+      },
+      {
+        "reference": "acme@2",
+        "project": "acme",
+        "index": 2,
+        "branch": "fix/auth-redirect",
+        "path": "/work/acme-fix-auth-redirect",
+        "state": "failed",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api",
+            "lane": "acme@2",
+            "state": "failed",
+            "pid": null,
+            "exit_code": 1,
+            "ports": {
+              "http": 20022
+            },
+            "urls": [
+              "http://127.0.0.1:20022",
+              "https://api.acme2.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "codex",
+              "session_id": "codex-session"
+            },
+            "reason": {
+              "code": "ready_timeout",
+              "data": {
+                "check": "http /health",
+                "timeout_ms": 30000
+              },
+              "exit_code": 1
+            },
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "finished_at_ms": 1793999820000,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api.acme2.localhost"
+          },
+          {
+            "name": "web",
+            "lane": "acme@2",
+            "state": "ready",
+            "pid": 60023,
+            "exit_code": null,
+            "ports": {
+              "http": 20023
+            },
+            "urls": [
+              "http://127.0.0.1:20023",
+              "https://acme2.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "codex",
+              "session_id": "codex-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme2.localhost"
+          },
+          {
+            "name": "worker",
+            "lane": "acme@2",
+            "state": "ready",
+            "pid": 60024,
+            "exit_code": null,
+            "ports": {
+              "http": 20024
+            },
+            "urls": [
+              "http://127.0.0.1:20024"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "codex",
+              "session_id": "codex-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "started",
+            "role": "service"
+          },
+          {
+            "name": "database",
+            "lane": "acme@2",
+            "state": "exited",
+            "pid": null,
+            "exit_code": 0,
+            "ports": {},
+            "urls": [],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "task",
+            "autostart": false,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "pty": false,
+            "role": "setup"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme2.localhost",
+        "port_block": [
+          20020,
+          20029
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": [
+          {
+            "name": "postgres",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          },
+          {
+            "name": "redis",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          }
+        ]
+      },
+      {
+        "reference": "acme@3",
+        "project": "acme",
+        "index": 3,
+        "branch": "feat/search",
+        "path": "/work/acme-feat-search",
+        "state": "running",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api",
+            "lane": "acme@3",
+            "state": "ready",
+            "pid": 60032,
+            "exit_code": null,
+            "ports": {
+              "http": 20032
+            },
+            "urls": [
+              "http://127.0.0.1:20032",
+              "https://api.acme3.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "opencode",
+              "session_id": "opencode-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api.acme3.localhost",
+            "power": "frozen"
+          },
+          {
+            "name": "web",
+            "lane": "acme@3",
+            "state": "ready",
+            "pid": 60033,
+            "exit_code": null,
+            "ports": {
+              "http": 20033
+            },
+            "urls": [
+              "http://127.0.0.1:20033",
+              "https://acme3.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "opencode",
+              "session_id": "opencode-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme3.localhost",
+            "power": "frozen"
+          },
+          {
+            "name": "indexer",
+            "lane": "acme@3",
+            "state": "ready",
+            "pid": 60036,
+            "exit_code": null,
+            "ports": {
+              "http": 20036
+            },
+            "urls": [
+              "http://127.0.0.1:20036"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "opencode",
+              "session_id": "opencode-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "power": "frozen"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme3.localhost",
+        "port_block": [
+          20030,
+          20039
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": [
+          {
+            "name": "postgres",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          },
+          {
+            "name": "redis",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          }
+        ],
+        "power": {
+          "level": "frozen",
+          "since_ms": 1793998680000,
+          "last_activity_ms": 1793997780000,
+          "last_activity": "proxy"
+        }
+      },
+      {
+        "reference": "acme@4",
+        "project": "acme",
+        "index": 4,
+        "branch": "chore/deps",
+        "path": "/work/acme-chore-deps",
+        "state": "idle",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api",
+            "lane": "acme@4",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20042
+            },
+            "urls": [
+              "http://127.0.0.1:20042",
+              "https://api.acme4.localhost"
+            ],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api.acme4.localhost"
+          },
+          {
+            "name": "web",
+            "lane": "acme@4",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20043
+            },
+            "urls": [
+              "http://127.0.0.1:20043",
+              "https://acme4.localhost"
+            ],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme4.localhost"
+          },
+          {
+            "name": "worker",
+            "lane": "acme@4",
+            "state": "idle",
+            "pid": null,
+            "exit_code": null,
+            "ports": {
+              "http": 20044
+            },
+            "urls": [
+              "http://127.0.0.1:20044"
+            ],
+            "actor": {
+              "kind": "human"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": null,
+            "cpu_percent": null,
+            "memory_bytes": null,
+            "ready_check": "started",
+            "role": "service"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme4.localhost",
+        "port_block": [
+          20040,
+          20049
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": []
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  }
+}

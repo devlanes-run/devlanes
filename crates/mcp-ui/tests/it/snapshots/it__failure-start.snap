@@ -1,0 +1,185 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "start",
+  "args": [
+    "start",
+    "--timeout",
+    "170s"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 1,
+  "view": "failure",
+  "data": {
+    "lane": "acme@2",
+    "branch": "fix/auth-redirect",
+    "started": [
+      "acme@2:api",
+      "acme@2:worker"
+    ],
+    "already_running": [],
+    "whole_lane": false,
+    "ready": false,
+    "timed_out": false,
+    "failures": [
+      {
+        "lane": "acme@2",
+        "unit": "api",
+        "exit_code": 1,
+        "log_tail": [
+          "[info] auth: building redirect table",
+          "TypeError: Cannot read properties of undefined (reading 'callbackUrl')",
+          "    at buildRedirect (src/auth/redirect.ts:31:22)"
+        ],
+        "reason": {
+          "code": "exited",
+          "data": {
+            "code": 1,
+            "signal": null
+          },
+          "exit_code": 1
+        }
+      },
+      {
+        "lane": "acme@2",
+        "unit": "worker",
+        "exit_code": 1,
+        "log_tail": [
+          "[error] queue acme_2 does not exist"
+        ],
+        "reason": {
+          "code": "exited",
+          "data": {
+            "code": 1,
+            "signal": null
+          },
+          "exit_code": 1
+        }
+      }
+    ],
+    "skipped_tasks": [],
+    "units": [
+      {
+        "name": "api",
+        "lane": "acme@2",
+        "state": "failed",
+        "pid": null,
+        "exit_code": 1,
+        "ports": {
+          "http": 20022
+        },
+        "urls": [
+          "http://127.0.0.1:20022",
+          "https://api.acme2.localhost"
+        ],
+        "actor": {
+          "kind": "agent",
+          "agent_id": "codex",
+          "session_id": "codex-session"
+        },
+        "reason": {
+          "code": "ready_timeout",
+          "data": {
+            "check": "http /health",
+            "timeout_ms": 30000
+          },
+          "exit_code": 1
+        },
+        "kind": "service",
+        "autostart": true,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": 1793999400000,
+        "finished_at_ms": 1793999820000,
+        "cpu_percent": null,
+        "memory_bytes": null,
+        "ready_check": "http",
+        "role": "service",
+        "public_url": "https://api.acme2.localhost"
+      },
+      {
+        "name": "web",
+        "lane": "acme@2",
+        "state": "ready",
+        "pid": 60023,
+        "exit_code": null,
+        "ports": {
+          "http": 20023
+        },
+        "urls": [
+          "http://127.0.0.1:20023",
+          "https://acme2.localhost"
+        ],
+        "actor": {
+          "kind": "agent",
+          "agent_id": "codex",
+          "session_id": "codex-session"
+        },
+        "reason": null,
+        "kind": "service",
+        "autostart": true,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": 1793999400000,
+        "cpu_percent": 4.0,
+        "memory_bytes": 188743680,
+        "ready_check": "http",
+        "role": "service",
+        "public_url": "https://acme2.localhost"
+      },
+      {
+        "name": "worker",
+        "lane": "acme@2",
+        "state": "ready",
+        "pid": 60024,
+        "exit_code": null,
+        "ports": {
+          "http": 20024
+        },
+        "urls": [
+          "http://127.0.0.1:20024"
+        ],
+        "actor": {
+          "kind": "agent",
+          "agent_id": "codex",
+          "session_id": "codex-session"
+        },
+        "reason": null,
+        "kind": "service",
+        "autostart": true,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": 1793999400000,
+        "cpu_percent": 4.0,
+        "memory_bytes": 188743680,
+        "ready_check": "started",
+        "role": "service"
+      },
+      {
+        "name": "database",
+        "lane": "acme@2",
+        "state": "exited",
+        "pid": null,
+        "exit_code": 0,
+        "ports": {},
+        "urls": [],
+        "actor": {
+          "kind": "human"
+        },
+        "reason": null,
+        "kind": "task",
+        "autostart": false,
+        "hidden": false,
+        "tags": [],
+        "started_at_ms": null,
+        "cpu_percent": null,
+        "memory_bytes": null,
+        "pty": false,
+        "role": "setup"
+      }
+    ],
+    "warnings": []
+  }
+}

@@ -200,8 +200,11 @@ fn mcp(read_only: bool, path: Option<std::path::PathBuf>, lane: Option<String>) 
     config.read_only = read_only;
     config.path = path;
     config.lane = lane;
-    // devlanes-mcp-ui replaces the placeholder once the cards exist.
-    config.ui = Some(devlanes_mcp::UiResource::placeholder());
+    config.ui = Some(devlanes_mcp::UiResource {
+        uri: devlanes_mcp_ui::URI,
+        mime: devlanes_mcp_ui::MIME_TYPE,
+        html: devlanes_mcp_ui::html,
+    });
     let tokio = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

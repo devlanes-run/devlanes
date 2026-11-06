@@ -1,0 +1,3 @@
+# build.rs renders ui/app.html once; the document ships as a string.
+[general]
+dirs = ["ui"]

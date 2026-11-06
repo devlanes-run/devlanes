@@ -29,8 +29,8 @@ pub struct UiResource {
 }
 
 impl UiResource {
-    /// A stand-in page until the cards are built: `ui://devlanes/lane.html`
-    /// served as `text/html;profile=mcp-app`.
+    /// A minimal page at the cards' URI and MIME type, for tests that check the
+    /// resource without depending on `devlanes-mcp-ui`.
     pub fn placeholder() -> Self {
         Self {
             uri: "ui://devlanes/lane.html",

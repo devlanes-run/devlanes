@@ -1,0 +1,26 @@
+[package]
+name = "devlanes-mcp-ui"
+description = "The MCP Apps card devlanes mcp serves to chat hosts, as one self-contained HTML document."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The document is assembled at build time, so none of these ship in the binary.
+[build-dependencies]
+devlanes-version = { path = "../version" }
+# `config` reads askama.toml, which points askama at ui/.
+askama = { version = "0.16", default-features = false, features = ["config", "derive", "std"] }
+base64.workspace = true
+grass = { version = "0.13", default-features = false }
+sha2.workspace = true
+
+[dev-dependencies]
+devlanes-proto = { path = "../proto" }
+insta = { version = "1", features = ["json"] }
+serde_json.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

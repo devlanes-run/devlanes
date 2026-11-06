@@ -291,10 +291,17 @@ impl ServerHandler for Server {
         _context: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResponse, McpError> {
         match &self.config.ui {
-            Some(ui) if request.uri == ui.uri => Ok(ReadResourceResult::new(vec![
-                ResourceContents::text((ui.html)(), ui.uri).with_mime_type(ui.mime),
-            ])
-            .into()),
+            Some(ui) if request.uri == ui.uri => {
+                let mut meta = MetaObject::new();
+                // The card draws its own window, so a host border would frame it twice.
+                meta.insert("ui".into(), json!({"prefersBorder": false}));
+                Ok(ReadResourceResult::new(vec![
+                    ResourceContents::text((ui.html)(), ui.uri)
+                        .with_mime_type(ui.mime)
+                        .with_meta(meta),
+                ])
+                .into())
+            }
             _ => Err(McpError::resource_not_found(
                 format!("no resource {}", request.uri),
                 None,

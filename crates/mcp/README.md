@@ -9,7 +9,11 @@ The MCP server behind `devlanes mcp`. `bins/devlanes` starts it on stdin and std
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = devlanes_mcp::Config::from_process(std::env::current_exe()?)?;
     config.read_only = true;
-    config.ui = Some(devlanes_mcp::UiResource::placeholder());
+    config.ui = Some(devlanes_mcp::UiResource {
+        uri: devlanes_mcp_ui::URI,
+        mime: devlanes_mcp_ui::MIME_TYPE,
+        html: devlanes_mcp_ui::html,
+    });
     devlanes_mcp::serve(config).await?;
     Ok(())
 }
@@ -20,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `serve(config)`: serves MCP on stdio until the client leaves.
 - `Server::new(config)`: the rmcp handler, for serving over another transport (the tests use an in-memory pipe).
 - `Config`: the executable to run, `--read-only`, `--lane`, `--path`, the environment and directory of the calls.
-- `UiResource`: the MCP Apps HTML (`ui://devlanes/lane.html`), given by the binary; `UiResource::placeholder()` until the cards exist.
+- `UiResource`: the MCP Apps HTML (`ui://devlanes/lane.html`), given by the binary from `devlanes-mcp-ui`; `UiResource::placeholder()` is a minimal page for tests.
 
 ## Tools
 
