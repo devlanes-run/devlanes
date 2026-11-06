@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devlanes card previews</title>
+<style>
+:root { --bg: #f4f3ef; --ink: #24231f; --line: #d1cfc7; --panel: #fff; color-scheme: light; }
+:root[data-theme='dark'] { --bg: #141311; --ink: #f2f0ea; --line: #4c4941; --panel: #1c1b18; color-scheme: dark; }
+body { margin: 0; display: grid; grid-template-columns: 240px 1fr; height: 100vh; background: var(--bg); color: var(--ink); font: 13px/1.5 system-ui, sans-serif; }
+nav { padding: 12px; overflow: auto; border-right: 1px solid var(--line); }
+nav h1 { margin: 0 0 8px; font-size: 14px; }
+nav ul { margin: 8px 0; padding: 0; list-style: none; }
+nav li a { display: block; padding: 3px 6px; border-radius: 5px; color: inherit; text-decoration: none; }
+nav li a[aria-current='true'] { background: #f5c542; color: #24231f; }
+fieldset { margin: 0 0 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+legend { font-size: 11px; }
+iframe { width: 100%; height: 100%; border: 0; background: var(--bg); }
+</style>
+</head>
+<body>
+<nav>
+<h1>devlanes card</h1>
+<fieldset><legend>theme</legend>
+<label><input type="radio" name="theme" value="light" checked> light</label>
+<label><input type="radio" name="theme" value="dark"> dark</label>
+</fieldset>
+<fieldset><legend>card width</legend>
+<label><input type="radio" name="width" value="" checked> fixture</label>
+<label><input type="radio" name="width" value="720"> 720</label>
+<label><input type="radio" name="width" value="480"> 480</label>
+<label><input type="radio" name="width" value="340"> 340</label>
+</fieldset>
+<ul>__LINKS__</ul>
+</nav>
+<iframe id="view" title="preview"></iframe>
+<script>
+(() => {
+  const view = document.getElementById('view');
+  let current = '__FIRST__';
+  /** Loads the chosen preview with the chosen theme and width. */
+  function load() {
+    const theme = document.querySelector('input[name=theme]:checked').value;
+    const width = document.querySelector('input[name=width]:checked').value;
+    document.documentElement.dataset.theme = theme;
+    view.src = `${current}-${theme}.html${width ? `?width=${width}` : ''}`;
+    for (const link of document.querySelectorAll('nav li a')) link.setAttribute('aria-current', String(link.dataset.name === current));
+  }
+  for (const link of document.querySelectorAll('nav li a')) {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      current = link.dataset.name;
+      load();
+    });
+  }
+  for (const input of document.querySelectorAll('input')) input.addEventListener('change', load);
+  load();
+})();
+</script>
+</body>
+</html>

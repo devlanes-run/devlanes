@@ -1,0 +1,20 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "daemon pair",
+  "args": [
+    "daemon",
+    "pair",
+    "--yes"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "pair",
+  "data": {
+    "code": "K7QM-3XWD",
+    "expires_at_ms": 1794000600000,
+    "valid_ms": 600000
+  }
+}

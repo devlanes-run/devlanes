@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="{{ csp }}">
+<title>devlanes</title>
+<style>{{ style|safe }}</style>
+</head>
+<body>
+<main id="app"><p class="boot">connecting to the host…</p></main>
+<script type="module">{{ script|safe }}</script>
+</body>
+</html>

@@ -1,0 +1,842 @@
+// The card follows the website (devlanes.run): the page surface of its theme around one
+// terminal window, which stays dark in both themes, with the TUI's state tones inside.
+// Fonts are stacks, never embedded: the card makes no requests.
+
+@use 'tokens' as *;
+
+:root {
+  --surface: #{$surface-light};
+  --ring: #{$focus-light};
+  color-scheme: light;
+
+  &[data-theme='dark'] {
+    --surface: #{$surface-dark};
+    --ring: #{$paint};
+    color-scheme: dark;
+  }
+}
+
+// Without a theme from the host, the system's.
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --surface: #{$surface-dark};
+    --ring: #{$paint};
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  padding: 10px 10px 18px;
+  background: var(--surface);
+  color: $ink;
+  font: 13px/1.5 $prose;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 3px solid var(--ring);
+  outline-offset: 2px;
+}
+
+// Everything focusable sits on the dark window, where the light page's ring is too dark.
+.term :focus-visible {
+  outline-color: $paint;
+}
+
+::selection {
+  background: $paint;
+  color: $terminal;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+
+  &:disabled {
+    cursor: default;
+  }
+}
+
+code,
+pre,
+.term {
+  font-family: $mono;
+  // Terminals print `->` as typed, so the mono font's ligatures stay off.
+  font-variant-ligatures: none;
+}
+
+p,
+ul,
+ol,
+h2 {
+  margin: 0;
+}
+
+ul,
+ol {
+  padding: 0;
+  list-style: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.boot {
+  padding: 20px;
+  color: #63615a;
+  font: 12px $mono;
+
+  [data-theme='dark'] & {
+    color: #b0ada3;
+  }
+}
+
+// The website's terminal window.
+.term {
+  container-type: inline-size;
+  // The containing block of the screen-reader-only labels, so they stay inside it.
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: $terminal;
+  border: 1px solid $terminal-border;
+  border-radius: 12px;
+  box-shadow: $terminal-shadow;
+  color: $ink;
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.term-bar {
+  display: grid;
+  grid-template-columns: 1fr minmax(0, auto) 1fr;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid $rule;
+  background: $terminal-bar;
+  color: #b5b0a3;
+  font-size: 11.5px;
+}
+
+.dots {
+  display: flex;
+  gap: 7px;
+
+  i {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #4a463f;
+  }
+
+  i:first-child {
+    background: $paint;
+  }
+}
+
+.term-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  white-space: nowrap;
+
+  > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  b {
+    color: $ink;
+    font-weight: 700;
+  }
+}
+
+.mark {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: $ink;
+}
+
+.term-tools {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.term-body {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px 16px 16px;
+}
+
+.term-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 12px 8px 16px;
+  border-top: 1px solid $rule;
+  background: rgba(255, 255, 255, 0.035);
+  color: $dim;
+  font-size: 11px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-left: auto;
+}
+
+// The site's compact buttons, on the dark window.
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  background: transparent;
+  color: #c5bfae;
+  font: 11.5px/1.4 $mono;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    border-color: $ink;
+    color: $bright;
+  }
+
+  &:disabled {
+    opacity: 0.45;
+  }
+
+  &.primary {
+    border-color: $paint;
+    background: $paint;
+    color: #24231f;
+    font-weight: 700;
+
+    &:hover:not(:disabled) {
+      border-color: #99731b;
+      background: #ffcf4d;
+      color: #24231f;
+    }
+  }
+
+  &.icon-only {
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+  }
+}
+
+.icon {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+// Names and URLs that act: text, not boxes.
+.link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 4px;
+
+  &:hover {
+    text-decoration-color: currentColor;
+  }
+
+  &.url {
+    color: $url;
+  }
+}
+
+.glyph {
+  display: inline-block;
+  width: 1.1em;
+  text-align: center;
+}
+
+.tone-ok {
+  color: $ok;
+}
+
+.tone-failure {
+  color: $failure;
+}
+
+.tone-attention {
+  color: $attention;
+}
+
+.tone-frozen {
+  color: $frozen;
+}
+
+.tone-quiet,
+.dim {
+  color: $dim;
+}
+
+.url {
+  color: $url;
+}
+
+.term code {
+  color: $url;
+  overflow-wrap: anywhere;
+}
+
+.cmd {
+  color: $bright;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.out {
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  color: #b3ada0;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.warnings li,
+.note {
+  font-size: 11.5px;
+}
+
+.empty {
+  color: $dim;
+}
+
+// The TUI's box: a border with its title in the top edge.
+.pane {
+  margin-top: 6px;
+  padding: 0 10px 8px;
+  border: 1px solid $pane-border;
+}
+
+.pane-title {
+  width: fit-content;
+  margin: 0 -4px 2px;
+  padding: 0 4px;
+  background: $terminal;
+  color: $dim;
+  font-size: 11px;
+  font-weight: 400;
+  transform: translateY(-50%);
+}
+
+.phases li {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+
+  .ph-name {
+    flex: none;
+    width: 64px;
+    color: $dim;
+  }
+
+  .ph-detail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+th,
+td {
+  padding: 5px 8px;
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.units {
+  tr + tr {
+    border-top: 1px dashed $rule;
+  }
+
+  td:first-child {
+    width: 18px;
+    padding-left: 0;
+  }
+
+  th {
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .name {
+    color: $ink;
+    font-weight: 700;
+  }
+
+  .url {
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+.act {
+  width: 1%;
+  padding-right: 0;
+  text-align: right;
+
+  .btn + .btn {
+    margin-left: 4px;
+  }
+}
+
+.spark {
+  display: block;
+
+  polyline {
+    fill: none;
+    stroke: $ok;
+    stroke-width: 1.3;
+  }
+}
+
+.table-scroll {
+  margin: -4px -16px 0;
+  overflow-x: auto;
+}
+
+// The website's lane table.
+.lanes {
+  th,
+  td {
+    padding: 9px 10px;
+  }
+
+  th:first-child,
+  td:first-child {
+    padding-left: 16px;
+  }
+
+  td:last-child {
+    padding-right: 16px;
+  }
+
+  thead th {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    color: #b5b0a3;
+    font-size: 10.5px;
+  }
+
+  tbody tr + tr {
+    border-top: 1px dashed $rule;
+  }
+
+  .lane-zero {
+    background: rgba(245, 197, 66, 0.07);
+  }
+
+  // The buttons stay in view when long names make the table scroll.
+  .act {
+    position: sticky;
+    right: 0;
+    background: $terminal;
+  }
+
+  .lane-zero .act {
+    background: #29251a;
+  }
+
+  .caption th {
+    padding-top: 12px;
+    color: $url;
+  }
+
+  .branch {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: $ink;
+  }
+
+  .lane .link {
+    color: $ink;
+  }
+}
+
+.lane-mark {
+  display: inline-block;
+  width: 13px;
+  height: 5px;
+  margin-right: 8px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+@each $mark in $lane-marks {
+  $i: index($lane-marks, $mark) - 1;
+
+  .lane-#{$i} {
+    background: $mark;
+  }
+}
+
+.actor {
+  display: inline-block;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #c5bfae;
+  font-size: 11px;
+
+  &.you {
+    color: $ink;
+  }
+}
+
+.label {
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.boxes {
+  display: grid;
+  gap: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed $rule;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tab {
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: $dim;
+  font-size: 11.5px;
+
+  &[aria-selected='true'] {
+    border-color: rgba(255, 255, 255, 0.16);
+    color: $ink;
+  }
+}
+
+.banner {
+  display: grid;
+  gap: 2px;
+  padding: 8px 12px;
+  border-left: 3px solid $pane-border;
+  background: rgba(255, 255, 255, 0.035);
+
+  &.failure {
+    border-left-color: $failure;
+  }
+
+  &.confirm {
+    border-left-color: $paint;
+
+    .actions {
+      margin-top: 6px;
+    }
+  }
+}
+
+.logs {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolbar,
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.grep {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 140px;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 5px;
+  color: $dim;
+
+  &:focus-within {
+    border-color: $paint;
+  }
+
+  input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: $ink;
+    font-size: 12px;
+  }
+}
+
+.logview {
+  max-height: 280px;
+  overflow: auto;
+  margin: 0 -16px;
+  padding: 4px 0;
+  border-top: 1px solid $rule;
+  border-bottom: 1px solid $rule;
+  background: #151412;
+
+  .fullscreen & {
+    max-height: calc(100vh - 300px);
+  }
+
+  > li.dim {
+    padding: 2px 16px;
+  }
+}
+
+.line {
+  display: flex;
+  gap: 12px;
+  width: 100%;
+  padding: 0 16px;
+  border: 0;
+  background: none;
+  color: #b3ada0;
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  &.picked {
+    background: $selection;
+    color: $url;
+  }
+
+  &:focus-visible {
+    outline-offset: -3px;
+  }
+
+  .cur {
+    flex: none;
+    min-width: 64px;
+    color: #6b675e;
+  }
+
+  .txt {
+    min-width: 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  &.lvl-error .txt {
+    color: $failure;
+  }
+
+  &.lvl-warn .txt {
+    color: $attention;
+  }
+}
+
+.row > .dim {
+  font-size: 11.5px;
+}
+
+.plan {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: start;
+  gap: 10px;
+  padding: 9px 0;
+
+  & + & {
+    border-top: 1px dashed $rule;
+  }
+
+  &.done {
+    opacity: 0.6;
+  }
+
+  input {
+    margin: 4px 0 0;
+    accent-color: $paint;
+  }
+
+  label {
+    display: grid;
+    min-width: 0;
+    font-size: 11.5px;
+  }
+
+  .head {
+    font-size: 12.5px;
+
+    b {
+      color: $ink;
+    }
+  }
+
+  .size {
+    font-size: 11.5px;
+    white-space: nowrap;
+  }
+}
+
+.code {
+  padding: 10px 0 4px;
+  color: $url;
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  overflow-wrap: anywhere;
+
+  &.expired {
+    color: $dim;
+    text-decoration: line-through;
+  }
+}
+
+// A host that fixes the height gets a window that fills it and scrolls inside.
+.fixed-height,
+.fullscreen {
+  height: 100%;
+
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
+  .term {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .term-body {
+    flex: 1;
+    overflow: auto;
+    align-content: start;
+  }
+}
+
+@container (max-width: 560px) {
+  .lanes .cpu,
+  .lanes .svc,
+  .units .cpu {
+    display: none;
+  }
+}
+
+@container (max-width: 420px) {
+  .units .port,
+  .lanes .by,
+  .lanes .ask,
+  .lanes .lane-mark,
+  .dots {
+    display: none;
+  }
+
+  .lanes th,
+  .lanes td {
+    padding: 8px 6px;
+  }
+
+  .lanes .state {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .term-bar {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .term-body {
+    padding: 12px;
+  }
+
+  .table-scroll,
+  .logview {
+    margin: 0 -12px;
+  }
+
+  .lanes th:first-child,
+  .lanes td:first-child {
+    padding-left: 12px;
+  }
+
+  .units th {
+    max-width: 120px;
+  }
+
+  .lanes .branch {
+    max-width: 96px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

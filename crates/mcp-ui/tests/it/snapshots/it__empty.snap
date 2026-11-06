@@ -1,0 +1,18 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "status",
+  "args": [
+    "status"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "board",
+  "data": {
+    "items": [],
+    "truncated": false,
+    "next_cursor": null
+  }
+}

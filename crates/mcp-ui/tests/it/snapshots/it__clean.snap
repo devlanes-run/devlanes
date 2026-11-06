@@ -1,0 +1,59 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "lane clean",
+  "args": [
+    "lane",
+    "clean",
+    "acme@4",
+    "--dry-run"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "clean",
+  "data": {
+    "lane": "acme@4",
+    "project": "acme",
+    "index": 4,
+    "branch": "chore/deps",
+    "path": "/work/acme-chore-deps",
+    "worktree": "present",
+    "running": [],
+    "tasks": [
+      {
+        "name": "drop-cache",
+        "run": "redis-cli -n 4 flushdb"
+      }
+    ],
+    "teardown": [
+      {
+        "name": "database",
+        "container": "postgres"
+      }
+    ],
+    "containers": [
+      {
+        "name": "devlanes-acme-lane4-redis",
+        "kind": "container"
+      }
+    ],
+    "compose_project": "acme-lane4",
+    "volumes": [
+      {
+        "name": "acme-lane4_pgdata",
+        "bytes": 1288490188
+      }
+    ],
+    "data_dir": {
+      "path": "/home/dev/.devlanes/data/acme/4",
+      "bytes": 325058560
+    },
+    "logs_bytes": 2400000,
+    "ports": {
+      "start": 20040,
+      "size": 10
+    }
+  }
+}
