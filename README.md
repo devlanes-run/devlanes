@@ -70,7 +70,7 @@ devlanes                    # the TUI
 
 [Getting started](docs/getting-started.md) walks from install to two lanes. The [CLI reference](docs/reference/cli.md) and the [config reference](docs/reference/config.md) are generated from the code, and tests fail when they fall behind.
 
-`devlanes --help` lists the commands, and `devlanes <command> --help` describes each one. See [design](docs/design.md), [development conventions](AGENTS.md), [fixtures](fixtures/README.md), [the agent plugin](agent-plugin/README.md) and [M0 commands](docs/milestones/M0.md). mprocs and dekit informed terminal interaction; pitchfork, process-compose, devenv, Coasts, portless, kache, overmind and Conductor informed process and worktree workflows.
+`devlanes --help` lists the commands, and `devlanes <command> --help` describes each one. See [design](docs/design.md), [development conventions](AGENTS.md), [fixtures](fixtures/README.md), [the agent skill](skills/devlanes/SKILL.md) and [M0 commands](docs/milestones/M0.md). mprocs and dekit informed terminal interaction; pitchfork, process-compose, devenv, Coasts, portless, kache, overmind and Conductor informed process and worktree workflows.
 
 ## Config example
 

@@ -48,6 +48,15 @@ Examples:
   devlanes logs api -f --timeout 30s
   devlanes logs --all --since start";
 
+const STATUS_AFTER: &str = "\
+Examples:
+  devlanes status                      lanes of this project
+  devlanes status acme@2               one lane with its units
+  devlanes status --statusline         one line, such as: acme@1 3/3 ready · web acme1.localhost
+
+Claude Code shows that line under its prompt with this in ~/.claude/settings.json:
+  \"statusLine\": {\"type\": \"command\", \"command\": \"devlanes status --statusline\"}";
+
 const WITH_AFTER: &str = "\
 Examples:
   devlanes with -- pnpm test
@@ -150,6 +159,7 @@ what changed."
     )]
     Reload(ReloadArgs),
     /// Show lanes and units with state, ports, URLs, CPU and memory
+    #[command(after_help = STATUS_AFTER)]
     Status(StatusArgs),
     /// Read unit logs; each line carries a cursor to continue from
     #[command(
@@ -383,6 +393,9 @@ pub struct StatusArgs {
     /// Only show units this agent session started
     #[arg(long)]
     pub mine: bool,
+    /// Print one line for the current directory's lane, for an editor or agent status line; reads Claude Code's status line JSON on stdin, never starts the daemon and prints nothing without a lane
+    #[arg(long, conflicts_with_all = ["watch", "mine", "status_lane"])]
+    pub statusline: bool,
 }
 
 #[derive(Debug, Args)]
@@ -852,6 +865,9 @@ Without --start, a terminal asks whether to start the new lane right away."
         /// Lane to clean ([project@]lane) [default: pick from a list]
         #[arg(id = "clean_lane", value_name = "LANE")]
         lane: Option<String>,
+        /// Print what the clean would stop, run and delete, with sizes, and change nothing; needs no --yes
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Clean lanes whose worktree or project file is gone or names another project, and drop unused port offsets (needs --yes)
     Gc,
@@ -1197,6 +1213,12 @@ impl Cli {
                 }
                 (Method::Reload, params)
             }
+            // The binary runs it before any of this: it needs no runtime, request or reporter.
+            Some(Command::Status(args)) if args.statusline => {
+                return Err(Error::Usage(
+                    "status --statusline runs only as a status line command".into(),
+                ));
+            }
             Some(Command::Status(args)) => {
                 if runtime.mode == OutputMode::Agent && args.watch && self.timeout.is_none() {
                     return Err(Error::Usage(
@@ -1328,9 +1350,14 @@ impl Cli {
                     Method::LaneNew,
                     json!({"name": name, "start": start, "events": *start && start_events}),
                 ),
-                LaneCommand::Clean { lane } => {
+                LaneCommand::Clean { lane, dry_run } => {
                     context.lane.clone_from(lane);
-                    (Method::LaneClean, json!({"lane": lane}))
+                    let method = if *dry_run {
+                        Method::LaneCleanPlan
+                    } else {
+                        Method::LaneClean
+                    };
+                    (method, json!({"lane": lane}))
                 }
                 LaneCommand::Gc => (Method::LaneGc, json!({})),
             },
@@ -1578,7 +1605,7 @@ impl Cli {
                 (vec!["run"], K::Task, false)
             }
             Some(Command::Lane {
-                command: LaneCommand::Clean { lane: None },
+                command: LaneCommand::Clean { lane: None, .. },
             }) => (vec!["lane", "clean"], K::Lane, false),
             _ => return None,
         };
@@ -1604,6 +1631,11 @@ impl Cli {
             }
         }
         InterruptPolicy::Detach
+    }
+
+    /// `status --statusline`, which the binary answers without a runtime or reporter.
+    pub fn statusline(&self) -> bool {
+        matches!(&self.command, Some(Command::Status(args)) if args.statusline)
     }
 
     /// Identifies commands whose JSON output is an NDJSON stream.

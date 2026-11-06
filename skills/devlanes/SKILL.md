@@ -9,19 +9,33 @@ devlanes runs each Git worktree of a project as a lane with its own ports, hostn
 
 When the CLI detects an agent it prints terse, size-capped text and never prompts. Add `--json` to any command for complete structured output.
 
+`devlanes mcp` is an optional MCP server with the same commands as tools; [docs/guides/agents.md](https://github.com/devlanes-run/devlanes/blob/main/docs/guides/agents.md) shows how to register it with each agent.
+
 This page covers daily use. Read a reference first when the task is about the config itself:
 
 - [references/configuration.md](references/configuration.md) before creating or editing `devlanes.yaml`, or when a failure comes from the config (a service never ready, wrong port, missing hostname, a task in the wrong place).
 - [references/migration.md](references/migration.md) when the user asks to move an mprocs, dekit, process-compose, Procfile, pm2, tmuxinator, tmuxp, package.json or mise setup to devlanes.
 
+## Long-running processes
+
+Dev servers, watchers, workers, tunnels, storybook and any other process that belongs to the lane's work and should keep running after your command returns go through devlanes:
+
+- The services in `devlanes.yaml`: `devlanes start`, or `devlanes start api web`.
+- Anything else: `devlanes exec --name NAME -- COMMAND`, such as `devlanes exec --name storybook -- pnpm storybook`. The daemon owns the process, gives it the lane's environment and keeps its logs.
+
+Never run these with `&`, `nohup`, `setsid`, `Start-Process` or a background shell, and never track their PIDs. Read a unit's output with `devlanes logs NAME --tail 100`, check it with `devlanes status` and stop it with `devlanes stop NAME`.
+
+One-off commands that exit by themselves (builds, tests, git, scripts) run normally in your shell. When one needs the lane running, such as end-to-end tests, run it with `devlanes with -- COMMAND` ([Running tests](#running-tests)).
+
+When you hand the work to the user for review, leave the lane running so they can try it. Once your units are no longer needed, stop them with `devlanes stop --mine`, which stops only what your session started.
+
 ## Rules
 
-- Never start a long-running process with `&`, `nohup`, `setsid` or a background shell. Use `devlanes start` for the services in `devlanes.yaml` and `devlanes exec --name NAME -- COMMAND` for anything else.
 - `start`, `restart` and `wait` return once units are ready or have failed. Do not poll with `sleep` or `curl` loops.
 - Read logs with `--tail`, `--head` (the first lines, such as how a start began), `--grep` or `--since`. Output is capped at 16 KiB per command, and truncated output ends with the command that fetches the rest. Follow logs (`-f`) only together with `--timeout`.
 - A command that needs confirmation exits 2 and names the flag. Rerun it with `--yes` only when the user asked for that action.
 - A command run without the unit, task or lane it needs (`devlanes url open`, `devlanes run`, `devlanes logs`) exits 2 and lists the options with a command to run; with `--json` they are in `error.data.options`. Pick one from that list. Exit 3 there means nothing can be chosen, such as no devlanes.yaml in this directory or its parents.
-- Clean up with `devlanes stop --mine`. It stops only what your session started. Stopping or restarting a unit a human started works, and the result says so; do it only when the task requires it.
+- Stopping or restarting a unit a human started works, and the result says so; do it only when the task requires it.
 - Interrupting a command (Ctrl-C or a tool timeout) detaches from it. Services keep running.
 
 ## Lanes and units
@@ -117,7 +131,7 @@ devlanes restart api
 # or, after editing devlanes.yaml
 devlanes reload
 devlanes with -- pnpm test
-devlanes stop --mine
+devlanes stop --mine                 # unless the user reviews the running lane
 ```
 
 ## Ports outside the config

@@ -47,7 +47,7 @@ jobs:
             -f "target_url=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
   # Builds every target, and fails when the tag doesn't match the committed Cargo.toml
-  # and plugin.json versions. kache downloads what the next builds of main compiled.
+  # version. kache downloads what the next builds of main compiled.
   build:
     needs: tag-version
     uses: ./.github/workflows/build.yml

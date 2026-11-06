@@ -25,6 +25,7 @@ mod relaunch;
 mod remote;
 mod setup;
 mod start_ui;
+mod statusline;
 mod terminal;
 mod uninstall;
 mod update;
@@ -54,13 +55,6 @@ fn main() -> ExitCode {
     #[cfg(windows)]
     if let Some(code) = remote::askpass_from_env() {
         return ExitCode::from(code);
-    }
-    // The agent plugin's hook, which only reads stdin and writes stdout.
-    if std::env::args_os()
-        .nth(1)
-        .is_some_and(|arg| arg == devlanes_agent_hooks::ARG)
-    {
-        return ExitCode::from(devlanes_agent_hooks::run(std::env::args_os().skip(2)));
     }
     // CompleteEnv must run before any thread exists; it exits when completing.
     completion::install();
@@ -95,6 +89,11 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Before output policy, agent detection and the multi-threaded runtime: a
+    // status line runs on every refresh, and prints nothing rather than an error.
+    if cli.statusline() {
+        return statusline::run();
+    }
     // `daemon run` makes a hidden console of its own instead, and writes no
     // escape sequences to it.
     #[cfg(windows)]
