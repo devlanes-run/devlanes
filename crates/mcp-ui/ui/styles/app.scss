@@ -40,6 +40,11 @@ body {
   color: $ink;
   font: 13px/1.5 $prose;
   -webkit-font-smoothing: antialiased;
+
+  // A result without a card: the host shows its text, so the card is 0 px tall.
+  &:has(> #app:empty) {
+    padding: 0;
+  }
 }
 
 :focus-visible {
@@ -125,6 +130,8 @@ ol {
   border-radius: 12px;
   box-shadow: $terminal-shadow;
   color: $ink;
+  // The window is dark in both themes, so its checkboxes and scrollbars are too.
+  color-scheme: dark;
   font-size: 12.5px;
   line-height: 1.65;
 }
@@ -430,6 +437,16 @@ td {
     color: $ink;
     font-weight: 700;
   }
+
+  // The button inside would be clipped without an ellipsis.
+  .url .link {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 .act {
@@ -580,6 +597,11 @@ td {
   gap: 4px;
   padding-top: 10px;
   border-top: 1px dashed $rule;
+
+  .fix {
+    padding-left: 1.4em;
+    font-size: 11.5px;
+  }
 }
 
 .tabs {
@@ -743,6 +765,10 @@ td {
 
   &.done {
     opacity: 0.6;
+  }
+
+  &.ro {
+    grid-template-columns: 1fr auto;
   }
 
   input {

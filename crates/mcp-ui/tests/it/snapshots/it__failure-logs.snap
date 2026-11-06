@@ -137,5 +137,6 @@ expression: preview.structured()
     ],
     "truncated": true,
     "next_cursor": "before:api#103"
-  }
+  },
+  "read_only": false
 }

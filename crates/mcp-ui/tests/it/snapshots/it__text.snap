@@ -15,5 +15,6 @@ expression: preview.structured()
   "cwd": "/work/acme",
   "exit_code": 0,
   "view": null,
-  "data": null
+  "data": null,
+  "read_only": false
 }

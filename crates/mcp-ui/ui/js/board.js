@@ -4,7 +4,7 @@
 // are read-only here.
 import { html } from '../vendor/standalone.module.js';
 import { Actors, Button, Glyph, LaneMark, Note, Spark, Window } from './ui.js';
-import { FullscreenButton, PollStatus, act, ask, card, openUrl, structured, update } from './store.js';
+import { FullscreenButton, PollStatus, act, ask, card, openUrl, readOnly, structured, update } from './store.js';
 import { activeServices, actorsOf, boxLanes, cpuHistory, laneState, laneUrl, laneWords, servicesOf, toneOf } from './util.js';
 
 /** The lanes board. */
@@ -65,9 +65,11 @@ function Row({ lane }) {
     <td class="cpu"><${Spark} values=${cpuHistory(top, lane.reference)} label=${`${lane.reference} cpu`} /></td>
     <td class="act">
       ${url && html`<${Button} icon="open" label=${`open ${lane.reference}`} iconOnly onClick=${() => openUrl(url)} />`}
-      ${up
-        ? html`<${Button} icon="stop" label=${`stop ${lane.reference}`} iconOnly disabled=${busy} onClick=${() => act('stop', lane.reference, `stopped ${lane.reference}`)} />`
-        : html`<${Button} icon="start" label=${`start ${lane.reference}`} iconOnly disabled=${busy} onClick=${() => act('start', lane.reference, `started ${lane.reference}`)} />`}
+      ${readOnly()
+        ? null
+        : up
+          ? html`<${Button} icon="stop" label=${`stop ${lane.reference}`} iconOnly disabled=${busy} onClick=${() => act('stop', lane.reference, `stopped ${lane.reference}`)} />`
+          : html`<${Button} icon="start" label=${`start ${lane.reference}`} iconOnly disabled=${busy} onClick=${() => act('start', lane.reference, `started ${lane.reference}`)} />`}
       <${Button} icon="ask" label=${`ask the agent about ${lane.reference}`} iconOnly cls="ask" onClick=${() => ask(question)} />
     </td>
   </tr>`;
@@ -102,7 +104,7 @@ function BoxRow({ lane }) {
   return html`<tr class=${`box-lane${lane.skipped || down ? ' skipped' : ''}`} title=${title}>
     <td class="lane"><${LaneMark} index=${lane.index} />@${lane.index} <span class="box-name dim">@${lane.host}</span></td>
     <th scope="row" class="branch dim">manage on ${lane.host}</th>
-    <td class="state"><${Glyph} state=${lane.state === 'running' ? 'ready' : lane.state} /> <span class=${lane.skipped || toneOf(lane.state) === 'quiet' ? 'dim' : lane.state === 'failed' ? 'tone-failure' : ''}>${words}</span></td>
+    <td class="state"><${Glyph} state=${lane.skipped ? 'idle' : lane.state === 'running' ? 'ready' : lane.state} /> <span class=${lane.skipped || toneOf(lane.state) === 'quiet' ? 'dim' : lane.state === 'failed' ? 'tone-failure' : ''}>${words}</span></td>
     <td class="svc dim">${active.length ? `${ready}/${active.length}` : '–'}</td>
     <td class="by"></td>
     <td class="cpu"></td>
@@ -119,9 +121,20 @@ function Boxes({ hosts }) {
   return html`<section class="boxes" aria-label="boxes">
     <h2 class="label">boxes <span class="dim">· read-only here, manage their lanes on the box</span></h2>
     <ul>${hosts.map((host) => html`<li>
-      <${Glyph} state=${host.state} /> <b>${host.host}</b> <span class="dim">${String(host.state || '').replace(/_/g, ' ')}</span>
-      ${host.fix && html` <code>${host.fix}</code>`}
-      ${host.error && html` <span class="dim">${host.error}</span>`}
+      <${Glyph} state=${host.state} /> <b>${host.host}</b> <span class="dim">${[String(host.state || '').replace(/_/g, ' '), host.error].filter(Boolean).join(' · ')}</span>
+      ${host.fix && html`<p class="fix dim">run ${fixWords(host.fix)}</p>`}
     </li>`)}</ul>
   </section>`;
+}
+
+/**
+ * A box's `fix` with only its commands as code, from the daemon's
+ * `devlanes daemon pair on fork-b, then devlanes remote connect fork-b --code <code>`.
+ * @param {string} fix
+ */
+function fixWords(fix) {
+  return fix.split(', then ').map((step, i) => {
+    const [, command, where] = /^(.*?)(?: on (\S+))?$/.exec(step.replace('<code>', 'CODE')) || [];
+    return html`${i ? ', then ' : ''}<code>${command}</code>${where && ` on ${where}`}`;
+  });
 }

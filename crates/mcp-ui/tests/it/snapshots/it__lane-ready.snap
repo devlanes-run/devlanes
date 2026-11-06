@@ -164,5 +164,6 @@ expression: preview.structured()
     ],
     "warnings": [],
     "start_id": 7
-  }
+  },
+  "read_only": false
 }

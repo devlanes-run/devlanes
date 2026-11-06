@@ -6,7 +6,7 @@
 import { html, useEffect, useLayoutEffect, useRef, useState } from '../vendor/standalone.module.js';
 import { Button, Glyph, Icon, Note, Window } from './ui.js';
 import { TextView } from './lane.js';
-import { FullscreenButton, PollStatus, act, ask, bridge, card, cwd, structured, update } from './store.js';
+import { FullscreenButton, PollStatus, act, ask, bridge, card, cwd, readOnly, structured, update } from './store.js';
 import { actorLabel, reasonText, since, unitRef, unitState } from './util.js';
 
 /** Lines the viewer keeps; older ones drop off the top while it follows. */
@@ -134,7 +134,7 @@ function Banner({ subject, ref_ }) {
     <p><${Glyph} state=${state} /> <b class=${failed ? 'tone-failure' : ''}>${state}</b>${facts.length > 0 && html` <span class="dim">· ${facts.join(' · ')}</span>`}</p>
     ${reasons.length > 0 && html`<ul>${reasons.map((reason) => html`<li><span class="dim">reason</span> ${reasonText(reason)}</li>`)}</ul>`}
     ${(subject.conflicts || []).map((c) => html`<p><span class="dim">port</span> ${c.port} is held by ${c.pid ? `pid ${c.pid}` : 'another process'}</p>`)}
-    ${failed && html`<p><span class="dim">next</span> restart it, or <code>devlanes logs ${ref_} --tail 200</code></p>`}
+    ${failed && html`<p><span class="dim">next</span> ${!readOnly() && 'restart it, or '}<code>devlanes logs ${ref_} --tail 200</code></p>`}
   </div>`;
 }
 
@@ -264,7 +264,7 @@ function LogViewer({ subject, ref_ }) {
     <div class="row">
       <span class="dim">${line ? html`picked <span class="url">${cursor || `line ${picked == null ? '' : picked + 1}`}</span>` : 'click a line to pick it'}</span>
       <span class="actions">
-        <${Button} icon="restart" label=${`restart ${subject.unit}`} disabled=${!!busy} onClick=${() => act('restart', ref_, `restarted ${ref_}`)} />
+        ${!readOnly() && html`<${Button} icon="restart" label=${`restart ${subject.unit}`} disabled=${!!busy} onClick=${() => act('restart', ref_, `restarted ${ref_}`)} />`}
         <${Button} icon="ask" label=${cursor ? `send ${cursor} to agent` : 'send line to agent'} primary disabled=${!line} onClick=${send} />
       </span>
     </div>

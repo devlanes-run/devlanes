@@ -8,6 +8,8 @@ import { commandOf, isBusy } from './util.js';
 /** Poll cadence while something starts, and otherwise. */
 const FAST_MS = 1000;
 const SLOW_MS = 3000;
+/** Poll cadence while no daemon runs: the card never starts one, it waits for one. */
+const STOPPED_MS = 10000;
 /** Polling stops after this long without a click or a key press in the card. */
 const IDLE_MS = 15 * 60 * 1000;
 /** Failed snapshots in a row before polling gives up until the next click. */
@@ -61,6 +63,7 @@ let again = false;
 let failures = 0;
 let tornDown = false;
 let lastInteraction = Date.now();
+let onScreen = true;
 
 /**
  * Sets the function that renders the card after each change.
@@ -82,6 +85,22 @@ export function update(patch) {
 /** The tool result's `structuredContent`, null until it arrives. */
 export function structured() {
   return card.result ? card.result.structuredContent || null : null;
+}
+
+/** Whether the server runs with `--read-only`, so the card shows no button that changes anything. */
+export function readOnly() {
+  const sc = structured();
+  return !!((sc && sc.read_only) || (card.snapshot && card.snapshot.read_only));
+}
+
+/** Whether no daemon runs. A start in flight is about to start one, so it does not count. */
+export function daemonStopped() {
+  return !!card.snapshot && card.snapshot.daemon === 'stopped' && !starting();
+}
+
+/** Whether a start, restart, reload or resume runs and has not answered yet. */
+function starting() {
+  return !card.result && STARTS.includes(commandOf(card.input && card.input.args));
 }
 
 /** The working directory the tool ran in, so app tools resolve the same lane. */
@@ -158,19 +177,22 @@ export function findLane(ref) {
   return (dir && lanes.find(here)) || lanes.find((lane) => isBusy(lane.state)) || null;
 }
 
-/** The `app_snapshot` arguments of the current view, or null when it does not poll. */
+/**
+ * The `app_snapshot` arguments of the current view, or null when it does not
+ * poll. Only the lane card and the board draw CPU, so only they ask for metrics.
+ */
 function snapshotArgs() {
   const view = currentView();
-  const base = { cwd: cwd(), metrics: true };
-  if (card.drill && card.drill.unit) return { ...base, lane: card.drill.unit.split(':')[0] };
-  if (view === 'board') return base;
-  if (view === 'lane' || view === 'failure') return { ...base, lane: resultLane(structured()) };
+  if (card.drill && card.drill.unit) return { cwd: cwd(), lane: card.drill.unit.split(':')[0] };
+  if (view === 'board') return { cwd: cwd(), metrics: true };
+  if (view === 'lane') return { cwd: cwd(), lane: resultLane(structured()), metrics: true };
+  if (view === 'failure') return { cwd: cwd(), lane: resultLane(structured()) };
   return null;
 }
 
 /** Whether anything is on its way somewhere, which polls every second. */
 function isFast() {
-  if (!card.result && STARTS.includes(commandOf(card.input && card.input.args))) return true;
+  if (starting()) return true;
   if (Object.keys(card.busy).length) return true;
   const lanes = (card.snapshot && card.snapshot.status && card.snapshot.status.items) || [];
   return lanes.some((lane) => isBusy(lane.state) || (lane.units || []).some((unit) => isBusy(unit.state)));
@@ -185,6 +207,11 @@ function schedule(delay) {
   if (!tornDown) timer = window.setTimeout(tick, delay);
 }
 
+/** How long until the next poll. */
+function every() {
+  return isFast() ? FAST_MS : daemonStopped() ? STOPPED_MS : SLOW_MS;
+}
+
 /** One `app_snapshot`, then the next one, unless hidden, idle or failing. */
 async function tick() {
   if (inFlight) {
@@ -193,7 +220,7 @@ async function tick() {
   }
   const args = snapshotArgs();
   if (!args) return;
-  if (document.visibilityState === 'hidden') return update({ poll: 'paused' });
+  if (document.visibilityState === 'hidden' || !onScreen) return update({ poll: 'paused' });
   if (Date.now() - lastInteraction > IDLE_MS) return update({ poll: 'idle' });
   inFlight = true;
   try {
@@ -207,8 +234,15 @@ async function tick() {
     inFlight = false;
   }
   if (failures >= MAX_FAILURES) return;
-  schedule(again ? 0 : isFast() ? FAST_MS : SLOW_MS);
+  schedule(again ? 0 : every());
   again = false;
+}
+
+/** Polls again after a pause, without counting it as a click. */
+function resume() {
+  if (card.poll !== 'paused' || document.visibilityState === 'hidden' || !onScreen) return;
+  card.poll = 'live';
+  schedule(0);
 }
 
 /** Polls now, also after polling stopped. */
@@ -226,9 +260,13 @@ export function stopPolling() {
   update({ poll: 'off' });
 }
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && card.poll === 'paused') pollNow();
-});
+document.addEventListener('visibilitychange', resume);
+// In a frame, the implicit root is the host's viewport, so this sees the
+// card scrolled out of the chat.
+new IntersectionObserver((entries) => {
+  onScreen = entries[entries.length - 1].isIntersecting;
+  resume();
+}).observe(document.body);
 for (const type of ['pointerdown', 'keydown']) {
   document.addEventListener(
     type,
@@ -331,11 +369,11 @@ export function FullscreenButton() {
 
 /** Whether the card polls now, and a way back when it stopped. */
 export function PollStatus() {
-  const every = isFast() ? '1s' : '3s';
   switch (card.poll) {
     case 'live':
       if (card.pollError) return html`<span class="poll tone-attention">retrying: ${card.pollError}</span>`;
-      return html`<span class="poll"><span class="tone-ok" aria-hidden="true">●</span> live · every ${every}</span>`;
+      if (daemonStopped()) return html`<span class="poll">checking every ${every() / 1000}s</span>`;
+      return html`<span class="poll"><span class="tone-ok" aria-hidden="true">●</span> live · every ${every() / 1000}s</span>`;
     case 'paused':
       return html`<span class="poll">paused while hidden</span>`;
     case 'idle':

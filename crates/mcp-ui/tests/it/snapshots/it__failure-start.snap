@@ -181,5 +181,6 @@ expression: preview.structured()
       }
     ],
     "warnings": []
-  }
+  },
+  "read_only": false
 }

@@ -4,7 +4,7 @@
 // on the confirm is the consent, so `clean` runs with --yes on the server.
 import { html, useEffect, useState } from '../vendor/standalone.module.js';
 import { Actors, Button, Glyph, LaneMark, Note, Window } from './ui.js';
-import { FullscreenButton, act, ask, bridge, card, cwd, structured, tellModel } from './store.js';
+import { FullscreenButton, act, ask, bridge, card, cwd, readOnly, structured, tellModel } from './store.js';
 import { actorLabel, size } from './util.js';
 
 /** Why a clean would skip a lane's tasks and teardown, as `lane clean --dry-run` says it. */
@@ -37,13 +37,17 @@ export function CleanView() {
   const [results, setResults] = useState(/** @type {Record<string, string>} */ (!dryRun && target && !sc.exit_code ? { [target]: 'cleaned' } : {}));
   const [confirm, setConfirm] = useState(false);
   const [error, setError] = useState('');
+  // Read-only servers offer no app_action, so the card shows only the plan the result holds.
+  const ro = readOnly();
 
   useEffect(() => {
+    if (ro) return undefined;
     let gone = false;
     (async () => {
       try {
-        const snap = await bridge.callTool('app_snapshot', { cwd: cwd() });
-        const items = ((snap.structuredContent && snap.structuredContent.status && snap.structuredContent.status.items) || [])
+        const snap = (await bridge.callTool('app_snapshot', { cwd: cwd() })).structuredContent || {};
+        if (snap.daemon === 'stopped') throw new Error('the daemon is not running');
+        const items = ((snap.status && snap.status.items) || [])
           .slice()
           .sort((a, b) => (a.index ?? 0) - (b.index ?? 0));
         if (gone) return;
@@ -87,13 +91,13 @@ export function CleanView() {
   const foot = html`<span class="poll">${chosen.length ? `frees about ${size(total) || '0 B'}` : 'pick the lanes to clean'}</span>
     <span class="actions">
       <${Button} icon="ask" label="ask agent first" onClick=${() => ask(chosen.length ? `Before I clean ${chosen.join(', ')}: is anything there not pushed or not merged?` : 'Which of my lanes are safe to clean?')} />
-      <${Button} label=${`clean ${chosen.length || ''} ${chosen.length === 1 ? 'lane' : 'lanes'}`.replace('  ', ' ')} primary disabled=${!chosen.length || confirm} onClick=${() => setConfirm(true)} />
+      ${!ro && html`<${Button} label=${`clean ${chosen.length || ''} ${chosen.length === 1 ? 'lane' : 'lanes'}`.replace('  ', ' ')} primary disabled=${!chosen.length || confirm} onClick=${() => setConfirm(true)} />`}
     </span>`;
 
   return html`<${Window} title=${html`<b>clean lanes</b>${rows[0] && rows[0].project && html` <span class="dim">· ${rows[0].project}</span>`}`} label="clean planner" tools=${html`<${FullscreenButton} />`} foot=${foot}>
     ${error && html`<p class="note tone-failure" role="status">${error}</p>`}
     ${rows.length === 0 && !error && html`<p class="dim">loading lanes…</p>`}
-    <ul class="plans">${rows.map((lane) => html`<${PlanRow} lane=${lane} plan=${plans[lane.reference]} result=${results[lane.reference]} checked=${checked.includes(lane.reference)} onToggle=${() => toggle(lane.reference)} />`)}</ul>
+    <ul class="plans">${rows.map((lane) => html`<${PlanRow} lane=${lane} plan=${plans[lane.reference]} result=${results[lane.reference]} checked=${checked.includes(lane.reference)} ro=${ro} onToggle=${() => toggle(lane.reference)} />`)}</ul>
     ${confirm && html`<div class="banner confirm" role="alertdialog" aria-label="confirm clean">
       <p><b>clean ${chosen.join(', ')}?</b></p>
       <p>Runs their clean tasks and teardown, deletes the volumes and data folders listed above and frees their ports. This can't be undone.</p>
@@ -104,10 +108,10 @@ export function CleanView() {
 }
 
 /**
- * One lane with what cleaning it deletes.
- * @param {{lane: any, plan: any, result?: string, checked: boolean, onToggle: () => void}} props
+ * One lane with what cleaning it deletes; without a checkbox when `ro`.
+ * @param {{lane: any, plan: any, result?: string, checked: boolean, ro: boolean, onToggle: () => void}} props
  */
-function PlanRow({ lane, plan, result, checked, onToggle }) {
+function PlanRow({ lane, plan, result, checked, ro, onToggle }) {
   const id = `clean-${lane.reference.replace(/[^\w-]/g, '-')}`;
   const bytes = plan && !plan.error ? planBytes(plan) : null;
   const deletes = [];
@@ -121,13 +125,13 @@ function PlanRow({ lane, plan, result, checked, onToggle }) {
   const running = (plan && plan.running) || [];
   const branch = lane.name || lane.branch || (plan && plan.branch) || '';
   const done = result === 'cleaned';
-  return html`<li class=${`plan${done ? ' done' : ''}`}>
-    <input type="checkbox" id=${id} checked=${checked && !done} disabled=${!!result || !plan || !!(plan && plan.error)} onChange=${onToggle} />
+  return html`<li class=${`plan${done ? ' done' : ''}${ro ? ' ro' : ''}`}>
+    ${!ro && html`<input type="checkbox" id=${id} checked=${checked && !done} disabled=${!!result || !plan || !!(plan && plan.error)} onChange=${onToggle} />`}
     <label for=${id}>
       <span class="head"><${LaneMark} index=${lane.index} /><b>${lane.reference}</b> <span class="dim">${branch}</span>
         ${result && html` <span class=${result.startsWith('failed') ? 'tone-failure' : ''}><${Glyph} state=${result === 'cleaning' ? 'cleaning' : done ? 'done' : 'failed'} /> ${result}</span>`}</span>
       ${!plan && html`<span class="dim">reading what a clean deletes…</span>`}
-      ${plan && plan.error && html`<span class="tone-failure">${String(plan.error).split('\n')[0]}</span>`}
+      ${plan && plan.error && html`<span class="tone-attention">${String(plan.error).split('\n')[0].replace(/^error: /, '')}</span>`}
       ${plan && plan.hooks_skipped && html`<span class="tone-attention">! skips its clean tasks and teardown: ${SKIPPED[plan.hooks_skipped] || String(plan.hooks_skipped).replace(/_/g, ' ')}</span>`}
       ${plan && plan.infra_error && html`<span class="tone-attention">! containers unknown: ${plan.infra_error}</span>`}
       ${deletes.length > 0 && html`<span class="dim">${deletes.join(' · ')}</span>`}

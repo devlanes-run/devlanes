@@ -331,5 +331,6 @@ expression: preview.structured()
         "error": "connection refused"
       }
     ]
-  }
+  },
+  "read_only": false
 }

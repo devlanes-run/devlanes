@@ -3,7 +3,7 @@
 // copy button. The code never goes into the model context.
 import { html, useEffect, useState } from '../vendor/standalone.module.js';
 import { Button, Note, Window } from './ui.js';
-import { FullscreenButton, act, card, structured, tellModel } from './store.js';
+import { FullscreenButton, act, card, readOnly, structured, tellModel } from './store.js';
 
 /**
  * Copies text, falling back to a selection and `execCommand` where the host
@@ -66,12 +66,12 @@ export function PairView() {
   const foot = html`<span class="poll">${data.code ? (expired ? 'expired' : `valid ${clock(left)}`) : ''}</span>
     <span class="actions">
       ${data.code && html`<${Button} icon="copy" label=${copied ? 'copied' : 'copy'} disabled=${expired} onClick=${onCopy} />`}
-      <${Button} label="new code" primary=${expired} disabled=${!!card.busy.pair} onClick=${renew} />
+      ${!readOnly() && html`<${Button} label="new code" primary=${expired} disabled=${!!card.busy.pair} onClick=${renew} />`}
     </span>`;
 
   return html`<${Window} title=${html`<b>pair a machine</b>`} label="pairing code" tools=${html`<${FullscreenButton} />`} foot=${foot}>
     ${data.code
-      ? html`<p class="label dim">one-time code, valid once</p>
+      ? html`<p class="label dim">one-time code</p>
           <p class=${`code${expired ? ' expired' : ''}`} aria-live="polite">${data.code}</p>
           <p class="dim">on the other machine, with this box's name</p>
           <p><code>devlanes remote connect BOX --code ${data.code}</code></p>`

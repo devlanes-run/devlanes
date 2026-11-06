@@ -105,7 +105,10 @@
     const rule = fixture.tools[index];
     const n = served.get(index) || 0;
     served.set(index, n + 1);
-    return rebase(rule.results[Math.min(n, rule.results.length - 1)]);
+    const result = rebase(rule.results[Math.min(n, rule.results.length - 1)]);
+    // The server runs `debug top` only when the card asks for metrics.
+    if (call.name === 'app_snapshot' && !args.metrics && result.structuredContent) result.structuredContent.top = null;
+    return result;
   }
 
   let resultSent = false;

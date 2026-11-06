@@ -26,11 +26,11 @@ assert!(resource.2.starts_with("<!doctype html>"));
 | `clean` | the project's lanes with what a clean deletes, checkboxes and a confirm in the card |
 | `pair` | a pairing code with its countdown and copy |
 
-Any other result shows the command and its text. Every button that changes something also sends `ui/update-model-context`, so the agent knows what the person did. Cards poll `app_snapshot` every second while something starts and every 3 seconds otherwise, pause while hidden and stop after 15 minutes without a click or key press.
+Any other result renders nothing and reports a height of 0, since the host shows its text. Every button that changes something also sends `ui/update-model-context`, so the agent knows what the person did; with `structuredContent.read_only` (`devlanes mcp --read-only`) the card shows none of them. Cards poll `app_snapshot` every second while something starts and every 3 seconds otherwise, every 10 seconds while the daemon is not running (they never start it), pause while hidden or scrolled out of view and stop after 15 minutes without a click or key press.
 
 ## Editing the card
 
-Everything is in `ui/`: the askama shell `app.html`, SCSS in `styles/`, and the views in `js/` as plain ES modules with `htm` templates, JSDoc and `// @ts-check` (`ui/jsconfig.json` makes editors check them). There is no Node and no bundler. An inline module script cannot import another inline module, so `build.rs` joins them into one script: the vendored Preact module (`ui/vendor/`) runs inside a function whose exports become constants, then each module in the order `build.rs` lists, with `import` lines, `export` keywords, comments that start a line and indentation removed. All modules share one scope, so two top-level names that collide fail the build. A new module goes into that list after the modules it uses. The build also compiles the SCSS with grass and adds a Content-Security-Policy with the hashes of the inline script and stylesheet.
+Everything is in `ui/`: the askama shell `app.html`, SCSS in `styles/`, and the views in `js/` as plain ES modules with `htm` templates, JSDoc and `// @ts-check` (`ui/jsconfig.json` makes editors check them). There is no Node and no bundler: `build.rs` joins the vendored Preact module (`ui/vendor/`) and the modules, in the order its `MODULES` lists them, into one inline script that shares one scope, so a new module goes after the modules it uses and two top-level names that collide fail the build. It also compiles the SCSS with grass and adds a Content-Security-Policy with the hashes of the inline script and stylesheet.
 
 To look at every view in light and dark, write the previews and serve them (browsers block the card's frame from `file://`):
 

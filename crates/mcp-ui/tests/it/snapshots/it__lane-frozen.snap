@@ -149,5 +149,6 @@ expression: preview.structured()
     ],
     "truncated": false,
     "next_cursor": null
-  }
+  },
+  "read_only": false
 }

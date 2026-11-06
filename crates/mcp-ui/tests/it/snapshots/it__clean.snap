@@ -58,5 +58,6 @@ expression: preview.structured()
       "start": 20040,
       "size": 10
     }
-  }
+  },
+  "read_only": false
 }

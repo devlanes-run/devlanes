@@ -5,9 +5,9 @@ import { html, render } from '../vendor/standalone.module.js';
 import { BoardView } from './board.js';
 import { CleanView } from './clean.js';
 import { FailureView } from './failure.js';
-import { LaneView, PendingView, TextView } from './lane.js';
+import { LaneView, PendingView, StoppedView, TextView } from './lane.js';
 import { PairView } from './pair.js';
-import { FullscreenButton, bridge, card, currentView, onChange, pollNow, stopPolling, update } from './store.js';
+import { FullscreenButton, bridge, card, currentView, daemonStopped, onChange, pollNow, stopPolling, update } from './store.js';
 import { Window } from './ui.js';
 
 /** The view for the current state. */
@@ -19,8 +19,10 @@ function App() {
     <//>`;
   }
   if (!card.connected) return html`<p class="boot">connecting to the host…</p>`;
+  const view = currentView();
+  if (daemonStopped() && (card.drill || ['lane', 'board', 'failure'].includes(String(view)))) return html`<${StoppedView} />`;
   if (card.drill && card.drill.unit) return html`<${FailureView} />`;
-  switch (currentView()) {
+  switch (view) {
     case 'lane':
       return html`<${LaneView} />`;
     case 'board':
@@ -33,6 +35,9 @@ function App() {
       return html`<${PairView} />`;
     case 'pending':
       return html`<${PendingView} tools=${html`<${FullscreenButton} />`} />`;
+    // The host shows the result's text already, and an empty card reports height 0.
+    case null:
+      return null;
     default:
       return html`<${TextView} />`;
   }

@@ -8,6 +8,8 @@ const PROTOCOL_VERSION = '2026-01-26';
 
 /** How long the host gets to answer `ui/initialize` before the card says so. */
 const INITIALIZE_TIMEOUT_MS = 10000;
+/** How long `callTool` waits; a host that drops an answer would stop polling for good. */
+const CALL_TIMEOUT_MS = 30000;
 
 /**
  * @typedef {object} HostContext
@@ -168,14 +170,14 @@ export class Bridge {
 
   /**
    * Calls a tool of the devlanes MCP server through the host. A result with
-   * `isError` rejects with its text.
+   * `isError` rejects with its text, and so does no answer in 30 seconds.
    * @param {string} name
    * @param {object} args
    * @returns {Promise<ToolResult>}
    */
   async callTool(name, args) {
     /** @type {ToolResult} */
-    const result = await this.request('tools/call', { name, arguments: args });
+    const result = await this.request('tools/call', { name, arguments: args }, CALL_TIMEOUT_MS);
     if (result.isError) {
       const text = (result.content || []).map((block) => block.text || '').join('\n').trim();
       throw new Error(text || `${name} failed`);

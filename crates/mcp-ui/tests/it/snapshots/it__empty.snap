@@ -14,5 +14,6 @@ expression: preview.structured()
     "items": [],
     "truncated": false,
     "next_cursor": null
-  }
+  },
+  "read_only": false
 }

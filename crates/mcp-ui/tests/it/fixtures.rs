@@ -79,6 +79,22 @@ pub fn all() -> Vec<Preview> {
         clean(),
         pair(),
         text(),
+        read_only(
+            lane_failed(),
+            "lane-read-only",
+            "lane card of a read-only server",
+        ),
+        read_only(
+            board(),
+            "board-read-only",
+            "lanes board of a read-only server",
+        ),
+        read_only(
+            clean(),
+            "clean-read-only",
+            "clean plan of a read-only server",
+        ),
+        daemon_stopped(),
     ]
 }
 
@@ -260,6 +276,7 @@ fn content(command: &str, args: &[&str], exit_code: i32, view: Option<&str>, dat
         "exit_code": exit_code,
         "view": view,
         "data": data,
+        "read_only": false,
     })
 }
 
@@ -283,9 +300,27 @@ fn rule(name: &str, matches: Value, results: Vec<Value>) -> Value {
     json!({"name": name, "match": matches, "results": results})
 }
 
-/// An app-only tool's result.
-fn app(text: &str, structured: Value) -> Value {
+/// An app-only tool's result, from a server without `--read-only`.
+fn app(text: &str, mut structured: Value) -> Value {
+    structured["read_only"] = json!(false);
     json!({"content": [{"type": "text", "text": text}], "structuredContent": structured})
+}
+
+/// `preview` as a server started with `--read-only` answers it: every
+/// structured content says so, and `app_action` is not there.
+fn read_only(mut preview: Preview, name: &'static str, title: &'static str) -> Preview {
+    preview.name = name;
+    preview.title = title;
+    if let Some(result) = &mut preview.result {
+        result["structuredContent"]["read_only"] = json!(true);
+    }
+    preview.tools.retain(|rule| rule["name"] != "app_action");
+    for rule in &mut preview.tools {
+        for result in rule["results"].as_array_mut().into_iter().flatten() {
+            result["structuredContent"]["read_only"] = json!(true);
+        }
+    }
+    preview
 }
 
 /// `debug top --json` with a CPU history for every ready unit and live lane.
@@ -797,6 +832,24 @@ fn skipped(project: &str, index: u32, cause: &str, winner: Option<&str>) -> Valu
     entry
 }
 
+/// The board of a status the agent ran before the daemon stopped: every
+/// `app_snapshot` since says no daemon runs.
+fn daemon_stopped() -> Preview {
+    let mut preview = board();
+    preview.name = "daemon-stopped";
+    preview.title = "lanes board after the daemon stopped";
+    let stopped = app(
+        "the daemon is not running",
+        json!({"status": null, "top": null, "hosts": null, "daemon": "stopped"}),
+    );
+    for rule in &mut preview.tools {
+        if rule["name"] == "app_snapshot" {
+            rule["results"] = json!([stopped.clone()]);
+        }
+    }
+    preview
+}
+
 fn board_boxes() -> Preview {
     use UnitKind::{Container, Service, Task};
     // `status` lists each box by its link state only.
@@ -1063,7 +1116,7 @@ fn clean() -> Preview {
     };
     let refused = app(
         "refused",
-        json!({"exit_code": 2, "text": "error: acme@0 is the lane of the main worktree", "data": null}),
+        json!({"exit_code": 2, "text": "error: acme@0 is the main worktree's lane", "data": null}),
     );
     let tools = vec![
         rule("app_snapshot", json!({}), vec![snapshot(&refs)]),
@@ -1126,8 +1179,8 @@ fn pair() -> Preview {
     Preview {
         name: "pair",
         title: "pairing code",
-        width: Some(420),
-        display_modes: &["inline"],
+        width: Some(480),
+        display_modes: &["inline", "fullscreen"],
         input: input(&["daemon", "pair"]),
         result: Some(tool_result(
             "K7QM-3XWD (valid 10 minutes)",
@@ -1155,12 +1208,12 @@ fn text() -> Preview {
     let args = ["exec", "--name", "storybook", "--", "pnpm", "storybook"];
     Preview {
         name: "text",
-        title: "a command without a card of its own",
+        title: "a command without a card, which stays empty",
         width: None,
         display_modes: &["inline", "fullscreen"],
         input: input(&args),
         result: Some(tool_result(
-            "started acme@0:storybook (exec) pid 41234\nread its output with devlanes logs storybook; stop it with devlanes stop storybook",
+            "ready acme@0:storybook pid=41234\n  logs: devlanes logs acme@0:storybook --tail 100\n  stop: devlanes stop acme@0:storybook",
             content("exec", &args, 0, None, Value::Null),
         )),
         result_delay_ms: 300,

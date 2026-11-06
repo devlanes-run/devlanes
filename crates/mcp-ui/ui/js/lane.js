@@ -12,6 +12,7 @@ import {
   card,
   findLane,
   openUrl,
+  readOnly,
   resultLane,
   structured,
   update,
@@ -54,13 +55,16 @@ export function LaneView() {
     ? `${lane.reference} (${lane.branch || 'no branch'}): ${failed.join(', ')} failed. Find out why and tell me before changing anything.`
     : `Check ${lane.reference} (${lane.branch || 'no branch'}) and tell me if anything needs attention.`;
 
+  const ro = readOnly();
   const foot = html`<${PollStatus} />
     <span class="actions">
       <${Button} icon="ask" label="ask agent" onClick=${() => ask(question)} />
-      ${lane.config_changed && html`<${Button} icon="restart" label="reload" disabled=${!!busy} onClick=${() => act('reload', lane.reference, `reloaded ${lane.reference}`)} />`}
-      ${up
-        ? html`<${Button} icon="stop" label="stop lane" disabled=${!!busy} onClick=${() => act('stop', lane.reference, `stopped ${lane.reference}`)} />`
-        : html`<${Button} icon="start" label="start lane" disabled=${!!busy} onClick=${() => act('start', lane.reference, `started ${lane.reference}`)} />`}
+      ${!ro && lane.config_changed && html`<${Button} icon="restart" label="reload" disabled=${!!busy} onClick=${() => act('reload', lane.reference, `reloaded ${lane.reference}`)} />`}
+      ${ro
+        ? null
+        : up
+          ? html`<${Button} icon="stop" label="stop lane" disabled=${!!busy} onClick=${() => act('stop', lane.reference, `stopped ${lane.reference}`)} />`
+          : html`<${Button} icon="start" label="start lane" disabled=${!!busy} onClick=${() => act('start', lane.reference, `started ${lane.reference}`)} />`}
       ${url && html`<${Button} icon="open" label="open" primary onClick=${() => openUrl(url)} />`}
     </span>`;
 
@@ -103,6 +107,15 @@ export function TextView() {
   <//>`;
 }
 
+/** A polling card while no daemon runs. The card never starts one, so it keeps checking. */
+export function StoppedView() {
+  const sc = structured() || {};
+  return html`<${Window} title=${html`<b>devlanes ${sc.command || ''}</b>`} label="devlanes" tools=${html`<${FullscreenButton} />`} foot=${html`<${PollStatus} />`}>
+    <p class="status-line"><${Glyph} state="stopped" /> the daemon is not running</p>
+    <p class="dim">the next devlanes command that needs it starts it</p>
+  <//>`;
+}
+
 /**
  * Conditions that need a look without stopping the lane.
  * @param {{lane: any}} props
@@ -137,6 +150,7 @@ function Units({ lane }) {
   const units = servicesOf(lane);
   if (!units.length) return html`<p class="dim">no services; ${lane.state === 'idle' ? 'start the lane to run them' : 'this lane runs none'}</p>`;
   const top = card.snapshot && card.snapshot.top;
+  const ro = readOnly();
   return html`<table class="units" aria-label=${`services of ${lane.reference}`}>
     <tbody>${units.map((unit) => {
       const ref = unitRef(lane.reference, unit.name);
@@ -149,9 +163,9 @@ function Units({ lane }) {
         <td class="port dim">${port && `:${port}`}</td>
         <td class="url">${unit.public_url && unit.state === 'ready' && html`<button type="button" class="link url" onClick=${() => openUrl(unit.public_url)}>${shortUrl(unit.public_url)}</button>`}</td>
         <td class="cpu"><${Spark} values=${cpuHistory(top, lane.reference, unit.name)} label=${`${unit.name} cpu`} /></td>
-        <td class="act">${live
+        ${!ro && html`<td class="act">${live
           ? html`<${Button} icon="restart" label=${`restart ${unit.name}`} iconOnly disabled=${!!card.busy[ref]} onClick=${() => act('restart', ref, `restarted ${ref}`)} /><${Button} icon="stop" label=${`stop ${unit.name}`} iconOnly disabled=${!!card.busy[ref]} onClick=${() => act('stop', ref, `stopped ${ref}`)} />`
-          : html`<${Button} icon=${state === 'failed' ? 'restart' : 'start'} label=${`${state === 'failed' ? 'restart' : 'start'} ${unit.name}`} iconOnly disabled=${!!card.busy[ref]} onClick=${() => act(state === 'failed' ? 'restart' : 'start', ref, `${state === 'failed' ? 'restarted' : 'started'} ${ref}`)} />`}</td>
+          : html`<${Button} icon=${state === 'failed' ? 'restart' : 'start'} label=${`${state === 'failed' ? 'restart' : 'start'} ${unit.name}`} iconOnly disabled=${!!card.busy[ref]} onClick=${() => act(state === 'failed' ? 'restart' : 'start', ref, `${state === 'failed' ? 'restarted' : 'started'} ${ref}`)} />`}</td>`}
       </tr>`;
     })}</tbody>
   </table>`;
