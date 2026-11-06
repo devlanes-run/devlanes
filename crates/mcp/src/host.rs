@@ -104,6 +104,7 @@ mod tests {
         assert_eq!(agent_id(client), agent, "{client}");
     }
 
+    /// Claude Code waits long, so its calls get 170 s.
     #[test]
     fn claude_code() {
         host("claude-code", 170, Some("claude-code"));
@@ -131,23 +132,27 @@ mod tests {
         );
     }
 
+    /// Both names Codex sends get 50 s, under its 60 s default.
     #[test]
     fn codex() {
         host("codex-mcp-client", 50, Some("codex"));
         host("Codex", 50, Some("codex"));
     }
 
+    /// OpenCode waits 30 s, so its calls get 25 s.
     #[test]
     fn opencode() {
         host("opencode", 25, Some("opencode"));
     }
 
+    /// Cursor, also behind mcp-remote, is Cursor and not VS Code.
     #[test]
     fn cursor() {
         host("cursor-vscode", 60, Some("cursor"));
         host("cursor-vscode (via mcp-remote 0.1.37)", 60, Some("cursor"));
     }
 
+    /// VS Code and its Insiders build run Copilot's agent, as the Copilot CLI does.
     #[test]
     fn vs_code_copilot() {
         host("Visual Studio Code", 60, Some("github-copilot"));
@@ -155,22 +160,26 @@ mod tests {
         host("github-copilot-developer", 60, Some("github-copilot"));
     }
 
+    /// Gemini CLI is the agent is-ai-agent calls `gemini-cli`.
     #[test]
     fn gemini_cli() {
         host("gemini-cli-mcp-client", 60, Some("gemini-cli"));
     }
 
+    /// Goose's CLI and desktop app are both Goose.
     #[test]
     fn goose() {
         host("goose-cli", 60, Some("goose"));
         host("goose-desktop", 60, Some("goose"));
     }
 
+    /// Claude Desktop is no coding agent, so its calls name none.
     #[test]
     fn claude_desktop() {
         host("claude-ai", 60, None);
     }
 
+    /// A client the table does not know gets 60 s and no agent.
     #[test]
     fn unknown() {
         host("", 60, None);

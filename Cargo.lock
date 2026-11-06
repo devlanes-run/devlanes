@@ -1481,10 +1481,12 @@ version = "0.1.0"
 dependencies = [
  "devlanes-cli",
  "devlanes-proto",
+ "devlanes-sys-windows",
  "devlanes-version",
  "insta",
  "is-ai-agent",
  "rmcp",
+ "rustix",
  "serde",
  "serde_json",
  "tempfile",

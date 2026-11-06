@@ -35,7 +35,12 @@ impl Mcp {
 
     /// Starts `command`, a `devlanes mcp` command line, and completes the
     /// `initialize` handshake.
-    fn spawn(lab: &Lab, mut command: Command) -> Result<Self> {
+    fn spawn(lab: &Lab, command: Command) -> Result<Self> {
+        Self::spawn_with(lab, command, json!({}))
+    }
+
+    /// Like [`Mcp::spawn`], for a client with these `capabilities`.
+    fn spawn_with(lab: &Lab, mut command: Command, capabilities: Value) -> Result<Self> {
         command.stdin(Stdio::piped());
         let mut child = lab.spawn(command)?;
         let stdin = need(child.stdin.take(), "mcp stdin")?;
@@ -73,7 +78,7 @@ impl Mcp {
             "initialize",
             json!({
                 "protocolVersion": "2025-11-25",
-                "capabilities": {},
+                "capabilities": capabilities,
                 "clientInfo": {"name": "e2e", "version": "1.0.0"},
             }),
         )?;
@@ -206,6 +211,31 @@ fn mcp_exec_logs_and_stop() -> Result<()> {
     lab.eventually("probe to exit", Duration::from_secs(15), || {
         Ok((!alive(pid)).then_some(()))
     })?;
+    Ok(())
+}
+
+/// The cards poll `app_snapshot`, which never starts a daemon: without one it
+/// says the daemon is stopped.
+#[test]
+fn mcp_snapshot_never_spawns() -> Result<()> {
+    let lab = Lab::new("two-services", BUDGET)?;
+    let cards = json!({
+        "extensions": {
+            "io.modelcontextprotocol/ui": {"mimeTypes": ["text/html;profile=mcp-app"]}
+        }
+    });
+    let mut mcp = Mcp::spawn_with(&lab, lab.command(lab.repo(), &["mcp"])?, cards)?;
+    let snapshot = mcp.request(
+        &lab,
+        "tools/call",
+        json!({"name": "app_snapshot", "arguments": {"metrics": true}}),
+    )?;
+    assert_eq!(
+        snapshot["structuredContent"],
+        json!({"status": null, "top": null, "hosts": null, "daemon": "stopped", "read_only": false}),
+        "{snapshot}"
+    );
+    assert!(!lab.daemon_running(), "app_snapshot started a daemon");
     Ok(())
 }
 

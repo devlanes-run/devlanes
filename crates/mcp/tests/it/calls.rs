@@ -12,7 +12,7 @@ use rmcp::{
 };
 use serde_json::{Value, json};
 
-use crate::{LIMIT, Lifecycle, TestClient, connect, failed, text};
+use crate::{LIMIT, Lifecycle, TestClient, connect, failed, settled, stops_ticking, text, ticked};
 
 #[tokio::test]
 /// A call runs the binary with `--output agent` and `DEVLANES_ENV_FROM_LANE`,
@@ -29,6 +29,8 @@ async fn a_call_runs_the_command() {
         assert_eq!(structured["exit_code"], 0);
         assert_eq!(structured["view"], "lane");
         assert_eq!(structured["data"]["items"][0]["reference"], "acme@1");
+        assert_eq!(structured["data_truncated"], false);
+        assert_eq!(structured["read_only"], false);
         assert_eq!(
             structured["cwd"],
             json!(harness.dir.path().display().to_string())
@@ -236,8 +238,12 @@ async fn starts_report_progress() {
     tokio::time::timeout(LIMIT, async {
         let client = TestClient::new();
         let progress = client.progress.clone();
+        let marker = tempfile::tempdir().expect("tempdir");
+        let marker = marker.path().join("seen");
         let harness = connect(client, Lifecycle::Initialize, |config| {
-            config.env.insert("FAKE_SLEEP_MS".into(), "1500".into());
+            config
+                .env
+                .insert("FAKE_WAIT_FOR".into(), marker.display().to_string());
         })
         .await;
         let mut params = CallToolRequestParams::new("devlanes")
@@ -245,13 +251,18 @@ async fn starts_report_progress() {
         params.meta = Some(RequestMetaObject::with_progress_token(ProgressToken(
             NumberOrString::String("start-1".into()),
         )));
-        let result = harness.client.call_tool(params).await.expect("call");
-        assert!(!failed(&result), "{}", text(&result));
-        // The client may handle the notifications after it has the result.
         let seen = || progress.lock().map(|seen| seen.clone()).unwrap_or_default();
-        while seen().len() < 3 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        // The start ends only once the client has every phase, so none is lost
+        // to the follow ending with the start.
+        let release = async {
+            while seen().len() < 3 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            std::fs::write(&marker, "").expect("marker");
+        };
+        let (result, ()) = tokio::join!(harness.client.call_tool(params), release);
+        let result = result.expect("call");
+        assert!(!failed(&result), "{}", text(&result));
         let seen = seen();
         assert_eq!(
             seen,
@@ -280,9 +291,26 @@ async fn starts_report_progress() {
     .expect("in time");
 }
 
+/// Sends a `devlanes` call of `args` that the test cancels.
+async fn cancellable(
+    harness: &crate::Harness,
+    args: &[&str],
+) -> rmcp::service::RequestHandle<rmcp::RoleClient> {
+    let params = CallToolRequestParams::new("devlanes")
+        .with_arguments(serde_json::from_value(json!({"args": args})).expect("args"));
+    harness
+        .client
+        .send_cancellable_request(
+            ClientRequest::CallToolRequest(Request::new(params)),
+            PeerRequestOptions::no_options(),
+        )
+        .await
+        .expect("sent")
+}
+
 #[tokio::test]
-/// `notifications/cancelled` kills the running command.
-async fn cancelling_kills_the_command() {
+/// `notifications/cancelled` stops the running command, and the call settles.
+async fn cancelling_stops_the_command() {
     tokio::time::timeout(LIMIT, async {
         let dir = tempfile::tempdir().expect("tempdir");
         let ticks = dir.path().join("ticks");
@@ -293,31 +321,98 @@ async fn cancelling_kills_the_command() {
                 .insert("FAKE_TICKS".into(), ticks.display().to_string());
         })
         .await;
-        let params = CallToolRequestParams::new("devlanes").with_arguments(
-            serde_json::from_value(json!({"args": ["run", "build"]})).expect("args"),
-        );
-        let handle = harness
-            .client
-            .send_cancellable_request(
-                ClientRequest::CallToolRequest(Request::new(params)),
-                PeerRequestOptions::no_options(),
-            )
-            .await
-            .expect("sent");
-        let count = || {
-            std::fs::read_to_string(&ticks)
-                .map(|text| text.lines().count())
-                .unwrap_or(0)
-        };
-        while count() < 2 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        let handle = cancellable(&harness, &["run", "build"]).await;
+        ticked(&ticks, 2).await;
         handle.cancel(Some("test".into())).await.expect("cancel");
-        // A killed child stops ticking: compare two counts well apart.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        let after = count();
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(count(), after, "the command kept running");
+        settled(&harness.server, Duration::from_secs(15)).await;
+        stops_ticking(&ticks, Duration::from_secs(10)).await;
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// A cancelled `with` settles even when a process its command started keeps
+/// stdout open, and that process does not outlive the call.
+async fn cancelling_ends_what_the_command_left_running() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ticks = dir.path().join("grandchild");
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.env.insert("FAKE_SLEEP_MS".into(), "20000".into());
+            config
+                .env
+                .insert("FAKE_GRANDCHILD_TICKS".into(), ticks.display().to_string());
+        })
+        .await;
+        let handle = cancellable(&harness, &["with", "--", "pnpm", "test"]).await;
+        ticked(&ticks, 2).await;
+        handle.cancel(Some("test".into())).await.expect("cancel");
+        settled(&harness.server, Duration::from_secs(15)).await;
+        stops_ticking(&ticks, Duration::from_secs(10)).await;
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// A command that exits while a process it started in the background holds
+/// its stdout returns at once with what it printed.
+async fn a_background_process_does_not_hold_the_result() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ticks = dir.path().join("grandchild");
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config
+                .env
+                .insert("FAKE_GRANDCHILD_TICKS".into(), ticks.display().to_string());
+            config
+                .env
+                .insert("FAKE_GRANDCHILD_MS".into(), "8000".into());
+        })
+        .await;
+        let started = std::time::Instant::now();
+        let result = harness.call("devlanes", &["url", "open", "web"]).await;
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(!failed(&result), "{}", text(&result));
+        assert!(text(&result).contains("ran --output agent url open web"));
+        // The test's own cleanup: the background process ends on its own.
+        stops_ticking(&ticks, Duration::from_secs(15)).await;
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// When the client leaves while a call runs, the server stops its command
+/// before it stops serving.
+async fn leaving_stops_running_commands() {
+    tokio::time::timeout(LIMIT, async {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ticks = dir.path().join("ticks");
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.env.insert("FAKE_SLEEP_MS".into(), "20000".into());
+            config
+                .env
+                .insert("FAKE_TICKS".into(), ticks.display().to_string());
+        })
+        .await;
+        let _handle = cancellable(&harness, &["with", "--", "pnpm", "test"]).await;
+        ticked(&ticks, 2).await;
+        let crate::Harness {
+            client,
+            served,
+            server,
+            ..
+        } = harness;
+        let _ = client.cancel().await;
+        served.await.expect("served");
+        assert_eq!(server.running_commands(), 0);
+        stops_ticking(&ticks, Duration::from_secs(5)).await;
     })
     .await
     .expect("in time");
@@ -367,6 +462,7 @@ async fn app_tools_return_json() {
             structured["data"],
             json!({"ran": ["--output", "agent", "stop", "acme@1:api"]})
         );
+        assert_eq!(structured["read_only"], false);
         assert_eq!(
             harness.lines(),
             [
@@ -374,10 +470,204 @@ async fn app_tools_return_json() {
                 "--output json debug top --lane acme@1",
                 "--output json status",
                 "--output json remote ls",
-                "--output json logs acme@1:api --tail 50 --grep error",
+                "--output json logs acme@1:api --tail=50 --grep=error",
                 "--output agent stop acme@1:api",
             ]
         );
+        // What the cards poll never starts a daemon; the rest may.
+        let no_spawn: Vec<Value> = harness
+            .runs()
+            .iter()
+            .map(|run| run["no_spawn"].clone())
+            .collect();
+        assert_eq!(
+            no_spawn,
+            [
+                json!("1"),
+                json!("1"),
+                json!("1"),
+                json!("1"),
+                Value::Null,
+                Value::Null
+            ]
+        );
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// Without a daemon, a snapshot says so and starts none.
+async fn snapshots_without_a_daemon() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(
+            TestClient::new().with_ui(),
+            Lifecycle::Initialize,
+            |config| {
+                config.env.insert("FAKE_STOPPED".into(), "1".into());
+                config.read_only = true;
+            },
+        )
+        .await;
+        let snapshot = harness
+            .call_with("app_snapshot", json!({"metrics": true}))
+            .await;
+        assert!(!failed(&snapshot), "{}", text(&snapshot));
+        assert_eq!(
+            snapshot.structured_content.expect("structured content"),
+            json!({"status": null, "top": null, "hosts": null, "daemon": "stopped", "read_only": true})
+        );
+        assert_eq!(harness.lines(), ["--output json status"]);
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// A lane, unit or target that starts with `-` would be a flag: the app tools
+/// refuse it and run nothing.
+async fn app_tools_refuse_flags_as_values() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new().with_ui(), Lifecycle::Initialize, |_| {}).await;
+        for (tool, arguments) in [
+            ("app_snapshot", json!({"lane": "--help"})),
+            ("app_logs", json!({"units": ["api", "-f"]})),
+            ("app_action", json!({"action": "stop", "target": "--all"})),
+        ] {
+            let result = harness.call_with(tool, arguments).await;
+            assert!(failed(&result), "{tool}");
+            assert!(
+                text(&result).contains("not a lane or unit"),
+                "{}",
+                text(&result)
+            );
+            assert_eq!(
+                result.structured_content.expect("structured content")["read_only"],
+                false
+            );
+        }
+        assert!(harness.runs().is_empty(), "ran {:?}", harness.lines());
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// Only clients that show the cards may call the tools the cards use.
+async fn app_tools_need_a_client_with_cards() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
+        for (tool, arguments) in [
+            (
+                "app_action",
+                json!({"action": "stop", "target": "acme@1:api"}),
+            ),
+            ("app_snapshot", json!({})),
+        ] {
+            let refused = harness
+                .client
+                .call_tool(
+                    CallToolRequestParams::new(tool)
+                        .with_arguments(serde_json::from_value(arguments).expect("args")),
+                )
+                .await;
+            assert!(refused.is_err(), "{tool}: {refused:?}");
+        }
+        assert!(harness.runs().is_empty(), "ran {:?}", harness.lines());
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// A cwd that does not exist is an error result, not a protocol error.
+async fn a_missing_cwd_is_an_error_result() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
+        let result = harness
+            .call_with(
+                "devlanes_read",
+                json!({"args": ["status"], "cwd": "no/such/dir"}),
+            )
+            .await;
+        assert!(failed(&result));
+        assert!(text(&result).contains("could not run"), "{}", text(&result));
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// JSON output over 256 KiB stays out of `structuredContent`, which says so.
+async fn large_data_is_left_out() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.env.insert("FAKE_LARGE".into(), "1".into());
+        })
+        .await;
+        let result = harness.call("devlanes_read", &["lane", "ls"]).await;
+        assert!(!failed(&result), "{}", text(&result));
+        assert!(text(&result).contains("over 256 KiB"), "{}", text(&result));
+        let structured = result.structured_content.expect("structured content");
+        assert_eq!(structured["data"], Value::Null);
+        assert_eq!(structured["data_truncated"], true);
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// `with` asks for the lane's env too; on `needs_env` it runs again with the
+/// server's, so the lane's own env is never replaced without a note.
+async fn with_reuses_the_lanes_env() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.env.insert("FAKE_NEEDS_ENV".into(), "1".into());
+            config.env.insert("FAKE_STREAM".into(), "1".into());
+        })
+        .await;
+        let result = harness
+            .call("devlanes", &["with", "--", "pnpm", "test"])
+            .await;
+        assert!(!failed(&result), "{}", text(&result));
+        assert!(
+            text(&result).contains("got the environment of the devlanes mcp server"),
+            "{}",
+            text(&result)
+        );
+        let from_lane: Vec<Value> = harness
+            .runs()
+            .iter()
+            .map(|run| run["from_lane"].clone())
+            .collect();
+        assert_eq!(from_lane, [json!("1"), Value::Null]);
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// The known Codex gap: Codex gives MCP servers no `CODEX_THREAD_ID`, so the
+/// command learns the agent from the client's name and has no session.
+async fn codex_calls_have_the_agent_but_no_session() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(
+            TestClient::new().named("codex-mcp-client"),
+            Lifecycle::Initialize,
+            |_| {},
+        )
+        .await;
+        harness.call("devlanes_read", &["status"]).await;
+        let run = &harness.runs()[0];
+        assert_eq!(run["ai_agent"], "codex");
+        assert_eq!(run["codex_thread_id"], Value::Null);
+        let agent = is_ai_agent::detect_with(
+            |name| (name == "AI_AGENT").then(|| "codex".to_owned()),
+            |_| false,
+        )
+        .expect("detected");
+        assert_eq!(agent.id.as_str(), "codex");
+        assert_eq!(agent.session_id, None);
     })
     .await
     .expect("in time");

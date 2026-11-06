@@ -90,10 +90,10 @@ impl Signals {
                 .and_then(|v| v.trim().parse::<u8>().ok())
                 .unwrap_or(0),
             no_escapes: false,
-            json_out: std::env::var_os("DEVLANES_JSON_OUT")
+            json_out: std::env::var_os(devlanes_proto::JSON_OUT_ENV)
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from),
-            env_from_lane: std::env::var("DEVLANES_ENV_FROM_LANE").as_deref() == Ok("1"),
+            env_from_lane: std::env::var(devlanes_proto::ENV_FROM_LANE_ENV).as_deref() == Ok("1"),
         }
         .with_ci_env(|key| std::env::var(key).ok())
     }

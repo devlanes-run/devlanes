@@ -1,7 +1,7 @@
 //! `lane.clean.plan` (`lane clean --dry-run`): what a clean of a lane would
 //! stop, run and delete, read without stopping, running or deleting anything.
 
-use std::{path::Path, sync::Arc};
+use std::{collections::BTreeSet, path::Path, sync::Arc};
 
 use devlanes_config::{InfraCommand, ProjectConfig, Run, TaskWhen};
 use devlanes_proto::{Context, RpcError};
@@ -85,9 +85,18 @@ impl Inner {
             )
         };
         // As in `clean_lane`: tasks and teardown come from the lane's current
-        // plan, and a plan that fails runs neither.
-        if runnable {
-            match self.resolve_full(&project, &lane).await {
+        // plan, and a plan that fails runs neither. Only they are planned, so a
+        // dry run asks no secret contributor for a service's env.
+        let only = config.as_deref().map(clean_units);
+        if runnable && only.as_ref().is_none_or(|only| !only.is_empty()) {
+            let resolved = match (&config, &only) {
+                (Some(config), Some(only)) => {
+                    self.resolve_config(&project, &lane, config.clone(), Some(only))
+                        .await
+                }
+                _ => self.resolve_full(&project, &lane).await,
+            };
+            match resolved {
                 Ok(resolved) => {
                     let tasks: Vec<Value> = resolved
                         .tasks
@@ -146,6 +155,26 @@ impl Inner {
         }
         Ok(plan)
     }
+}
+
+/// The units a clean runs, as [`devlanes_resolve::ResolveInput::only`] names
+/// them: the `lane.clean` tasks with what their steps run, and every teardown
+/// entry.
+fn clean_units(config: &ProjectConfig) -> BTreeSet<String> {
+    let mut units: BTreeSet<String> = config
+        .infra
+        .teardown
+        .keys()
+        .map(|entry| format!("infra.teardown.{entry}"))
+        .collect();
+    for (name, task) in &config.tasks {
+        if task.when == Some(TaskWhen::Clean)
+            && let Some(task_units) = crate::resolve::task_units(config, name)
+        {
+            units.extend(task_units);
+        }
+    }
+    units
 }
 
 /// Whether the lane's config runs containers (Compose files or

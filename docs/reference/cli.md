@@ -144,7 +144,7 @@ devlanes status [OPTIONS] [LANE]
 - `[LANE]`: Lane to show ([project@]lane) [default: every lane of the current project]
 - `--watch`: Keep printing lane changes until interrupted
 - `--mine`: Only show units this agent session started
-- `--statusline`: Print one line for the current directory's lane, for an editor or agent status line; reads Claude Code's status line JSON on stdin, never starts the daemon and prints nothing without a lane
+- `--statusline`: Print one line for this directory's lane, for an agent's status line (reads Claude Code's JSON on stdin and never starts the daemon)
 
 ```text
 Examples:
@@ -937,9 +937,9 @@ Serve devlanes to an AI agent as an MCP server on stdin and stdout.
 The agent gets two tools that take a devlanes command line: devlanes runs any
 command, devlanes_read only the ones that change nothing. Each call runs this
 binary as a separate process with --output agent, so the server itself never
-connects to the daemon or starts one. Commands that need a terminal (ui,
-attach, env shell, setup, update, uninstall) are refused, and so are follows
-without --timeout.
+connects to the daemon or starts one. Commands that need a terminal, such as
+ui, attach, env shell and setup, are refused, and so are follows without
+--timeout.
 
 A call runs in the cwd it names, else in --path, else in $CLAUDE_PROJECT_DIR,
 else in the directory the agent started the server in. --lane adds that lane to

@@ -24,19 +24,26 @@ use serde_json::{Value, json};
 
 use crate::{
     Config, UI_EXTENSION, app,
-    child::{Output, Runner},
-    command::{Call, Rejected},
-    host, progress, text, view,
+    child::{Calls, Output, Runner},
+    command::{Call, Rejected, Tool as Source},
+    host,
+    progress::{self, Phases},
+    text, view,
 };
 
 /// The key of the consent question in an `InputRequiredResult`.
 const CONSENT: &str = "consent";
 
+/// Most bytes of JSON `structuredContent.data` carries; hosts keep the whole
+/// result in the agent's context, and the text already says what happened.
+const DATA_LIMIT: usize = 256 * 1024;
+
 /// The MCP server of `devlanes mcp`. Cheap to clone; every clone serves the same
-/// config.
+/// config and shares the commands in flight.
 #[derive(Clone)]
 pub struct Server {
     config: Arc<Config>,
+    calls: Calls,
 }
 
 /// `{args, cwd?}`, the arguments of both model-facing tools.
@@ -50,6 +57,9 @@ struct ToolArgs {
 pub(crate) enum Answer {
     Accepted,
     Declined,
+    /// The question went away unanswered: the user dismissed it, or the call
+    /// was cancelled.
+    Cancelled,
     /// The client cannot ask the user.
     Unsupported,
     /// The 2026-07-28 protocol asks through the client: return this result,
@@ -62,7 +72,19 @@ impl Server {
     pub fn new(config: Config) -> Self {
         Self {
             config: Arc::new(config),
+            calls: Calls::default(),
         }
+    }
+
+    /// How many devlanes processes calls are running now.
+    pub fn running_commands(&self) -> usize {
+        self.calls.running()
+    }
+
+    /// Interrupts the commands of calls still in flight, as cancelling them
+    /// would, and waits until they ended.
+    pub(crate) async fn stop_commands(&self) {
+        self.calls.stop().await;
     }
 
     /// The tools this client sees: `devlanes` unless `--read-only`, `devlanes_read`,
@@ -91,8 +113,13 @@ impl Server {
                 ),
             ));
         }
+        let read = if self.config.read_only {
+            text::DEVLANES_READ_ONLY
+        } else {
+            text::DEVLANES_READ
+        };
         tools.push(with_meta(
-            Tool::new("devlanes_read", text::DEVLANES_READ, schema).with_annotations(
+            Tool::new("devlanes_read", read, schema).with_annotations(
                 ToolAnnotations::with_title("devlanes (read only)")
                     .read_only(true)
                     .open_world(false),
@@ -111,8 +138,13 @@ impl Server {
         context: &RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         let read_only_tool = request.name == "devlanes_read";
+        let source = match (read_only_tool, self.config.read_only) {
+            (false, _) => Source::Devlanes,
+            (true, false) => Source::Read,
+            (true, true) => Source::ReadOnly,
+        };
         let arguments: ToolArgs = arguments(request)?;
-        let mut call = match Call::parse(&arguments.args, read_only_tool) {
+        let mut call = match Call::parse(&arguments.args, source) {
             Ok(call) => call,
             Err(Rejected::Help(text)) => return Ok(text_result(text, false).into()),
             Err(Rejected::Error(text)) => return Ok(text_result(text, true).into()),
@@ -126,8 +158,8 @@ impl Server {
         let runner = self.runner(&client);
         // An answer the client gives on its second call (2026-07-28) comes first.
         match consent_answer(request) {
-            Some((true, flag)) => call.confirm(&flag),
-            Some((false, _)) => return Ok(declined(&call).into()),
+            Some((Some(true), flag)) => call.confirm(&flag),
+            Some((answer, _)) => return Ok(declined(&call, answer.is_none()).into()),
             None => {
                 if let Some(question) = call.consent() {
                     // The dry run is only worth its process when the user will see it.
@@ -138,7 +170,8 @@ impl Server {
                     };
                     match ask(context, message, "--yes").await {
                         Answer::Accepted => call.confirm("--yes"),
-                        Answer::Declined => return Ok(declined(&call).into()),
+                        Answer::Declined => return Ok(declined(&call, false).into()),
+                        Answer::Cancelled => return Ok(declined(&call, true).into()),
                         Answer::Unsupported => {
                             return Ok(text_result(
                                 format!(
@@ -154,11 +187,17 @@ impl Server {
                 }
             }
         }
-        let (mut output, mut notes) = execute(&runner, &call, &cwd, limit, context).await?;
-        if !call.cli.yes && error_code(&output.data) == Some("confirmation_required") {
-            let flag = output
-                .data
-                .pointer("/error/data/flag")
+        let (mut output, mut notes) = match execute(&runner, &call, &cwd, limit, context).await {
+            Ok(ran) => ran,
+            Err(error) => return Ok(text_result(error, true).into()),
+        };
+        // devlanes_read runs nothing that asks; a yes there would change something.
+        if !read_only_tool
+            && !call.cli.yes
+            && let Some(error) = error_of(&output.data, "confirmation_required")
+        {
+            let flag = error
+                .pointer("/data/flag")
                 .and_then(Value::as_str)
                 .unwrap_or("--yes")
                 .to_owned();
@@ -166,16 +205,20 @@ impl Server {
             match ask(context, message, &flag).await {
                 Answer::Accepted => {
                     call.confirm(&flag);
-                    (output, notes) = execute(&runner, &call, &cwd, limit, context).await?;
+                    (output, notes) = match execute(&runner, &call, &cwd, limit, context).await {
+                        Ok(ran) => ran,
+                        Err(error) => return Ok(text_result(error, true).into()),
+                    };
                 }
-                Answer::Declined => return Ok(declined(&call).into()),
+                Answer::Declined => return Ok(declined(&call, false).into()),
+                Answer::Cancelled => return Ok(declined(&call, true).into()),
                 Answer::Unsupported => {
                     notes.push(format!("ask the user, then rerun with {flag}"));
                 }
                 Answer::Pending(result) => return Ok(result.into()),
             }
         }
-        Ok(result(&call, &cwd, &output, &notes).into())
+        Ok(result(&call, &cwd, &output, &notes, self.config.read_only).into())
     }
 
     /// The directory a call runs in, and whether `--lane` applies: the call's
@@ -213,6 +256,7 @@ impl Server {
         Runner {
             exe: self.config.exe.clone(),
             env,
+            calls: self.calls.clone(),
         }
     }
 }
@@ -232,7 +276,11 @@ impl ServerHandler for Server {
         }
         ServerConfig::new(capabilities)
             .with_server_info(Implementation::new("devlanes", devlanes_version::VERSION))
-            .with_instructions(text::INSTRUCTIONS)
+            .with_instructions(if self.config.read_only {
+                text::READ_ONLY_INSTRUCTIONS
+            } else {
+                text::INSTRUCTIONS
+            })
     }
 
     /// The tools, per [`Server::tools`] for this request's client.
@@ -255,7 +303,8 @@ impl ServerHandler for Server {
         match request.name.as_ref() {
             "devlanes" if !self.config.read_only => self.command(&request, &context).await,
             "devlanes_read" => self.command(&request, &context).await,
-            name if self.config.ui.is_some() && app::is_app_tool(name) => {
+            // Only the cards call these, so a client that shows none has no use for them.
+            name if app::is_app_tool(name) && self.shows_ui(&context) => {
                 app::call(self, name, &request, &context).await
             }
             name => Err(McpError::invalid_params(
@@ -384,18 +433,20 @@ pub(crate) fn client_name(context: &RequestContext<RoleServer>) -> String {
 
 /// Runs `call` with the lane's env first; when the lane has none, again with the
 /// server's, saying so in a note. Phases go to the client as progress while a
-/// start runs.
+/// start runs, counted over both runs. Fails with the text to show when the
+/// command could not be started, such as for a `cwd` that does not exist.
 pub(crate) async fn execute(
     runner: &Runner,
     call: &Call,
     cwd: &Path,
     limit: Option<Duration>,
     context: &RequestContext<RoleServer>,
-) -> Result<(Output, Vec<String>), McpError> {
+) -> Result<(Output, Vec<String>), String> {
     let mut notes = Vec::new();
-    let mut output = run(runner, call, cwd, limit, true, context).await?;
-    if error_code(&output.data) == Some("needs_env") && !output.cancelled {
-        output = run(runner, call, cwd, limit, false, context).await?;
+    let mut phases = Phases::of(call.cli.lane.as_deref());
+    let mut output = run(runner, call, cwd, limit, true, &mut phases, context).await?;
+    if error_of(&output.data, "needs_env").is_some() && !output.cancelled {
+        output = run(runner, call, cwd, limit, false, &mut phases, context).await?;
         notes.push(
             "note: the lane had no environment from a shell, so it got the environment of the \
              devlanes mcp server"
@@ -412,39 +463,53 @@ async fn run(
     cwd: &Path,
     limit: Option<Duration>,
     from_lane: bool,
+    phases: &mut Phases,
     context: &RequestContext<RoleServer>,
-) -> Result<Output, McpError> {
+) -> Result<Output, String> {
     let token = context.meta.get_progress_token();
     let follow = async {
         if let (true, Some(token), Some(limit)) = (call.starts(), token, limit) {
-            progress::follow(runner, cwd, limit, context.peer.clone(), token).await;
+            progress::follow(runner, cwd, limit, context.peer.clone(), token, phases).await;
         }
         std::future::pending::<()>().await;
     };
     let run = runner.run(cwd, &call.args, from_lane, &context.ct);
+    // `follow` never ends, so the command's end decides.
     let output = tokio::select! {
         output = run => output,
-        () = follow => return Err(McpError::internal_error("progress ended the call", None)),
+        () = follow => unreachable!("following progress never ends"),
     };
     output.map_err(|error| {
-        McpError::internal_error(
-            format!(
-                "could not run {} in {}: {error}",
-                runner.exe.display(),
-                cwd.display()
-            ),
-            None,
+        format!(
+            "could not run {} in {}: {error}",
+            runner.exe.display(),
+            cwd.display()
         )
     })
 }
 
-/// The `error.code` of an `{"error": ...}` document the command wrote.
-pub(crate) fn error_code(data: &Value) -> Option<&str> {
-    data.pointer("/error/code").and_then(Value::as_str)
+/// The `error` of an `{"error": ...}` document with this `code` the command
+/// wrote, also as one line of a stream such as the one `with` writes.
+pub(crate) fn error_of<'a>(data: &'a Value, code: &str) -> Option<&'a Value> {
+    let is = |document: &&'a Value| {
+        document.pointer("/error/code").and_then(Value::as_str) == Some(code)
+    };
+    match data {
+        Value::Array(documents) => documents.iter().find(is),
+        document => Some(document).filter(is),
+    }
+    .and_then(|document| document.get("error"))
 }
 
-/// The tool result of a finished command.
-fn result(call: &Call, cwd: &Path, output: &Output, notes: &[String]) -> CallToolResult {
+/// The tool result of a finished command, for a server with `read_only`.
+fn result(
+    call: &Call,
+    cwd: &Path,
+    output: &Output,
+    notes: &[String],
+    read_only: bool,
+) -> CallToolResult {
+    let (data, truncated) = capped(&output.data);
     let mut text = output.stdout.clone();
     let mut line = |extra: &str| {
         if extra.trim().is_empty() {
@@ -462,9 +527,15 @@ fn result(call: &Call, cwd: &Path, output: &Output, notes: &[String]) -> CallToo
     }
     if output.cancelled {
         line(
-            "cancelled; the daemon keeps doing what was asked and services keep running \
-             (devlanes status shows them)",
+            "cancelled, as Ctrl-C would in a terminal; services keep running (devlanes status \
+             shows them)",
         );
+    }
+    if truncated {
+        line(&format!(
+            "note: the JSON output is over {} KiB, so structuredContent leaves it out",
+            DATA_LIMIT / 1024
+        ));
     }
     if text.trim().is_empty() {
         text = format!("devlanes {} exited {}\n", call.path, output.exit_code);
@@ -476,9 +547,21 @@ fn result(call: &Call, cwd: &Path, output: &Output, notes: &[String]) -> CallToo
         "cwd": cwd,
         "exit_code": output.exit_code,
         "view": view::select(&call.path, output.exit_code, &output.data),
-        "data": output.data,
+        "data": data,
+        "data_truncated": truncated,
+        "read_only": read_only,
     }));
     result
+}
+
+/// `data`, or `Null` and `true` when its JSON is over [`DATA_LIMIT`].
+pub(crate) fn capped(data: &Value) -> (Value, bool) {
+    let size = serde_json::to_vec(data).map_or(0, |bytes| bytes.len());
+    if size > DATA_LIMIT {
+        (Value::Null, true)
+    } else {
+        (data.clone(), false)
+    }
 }
 
 /// A result of one text block.
@@ -488,23 +571,33 @@ pub(crate) fn text_result(text: String, is_error: bool) -> CallToolResult {
     result
 }
 
-/// The result when the user said no.
-fn declined(call: &Call) -> CallToolResult {
+/// The result when the user said no, or when the question was `cancelled`
+/// before the user answered.
+fn declined(call: &Call, cancelled: bool) -> CallToolResult {
+    let why = if cancelled {
+        "the question to the user was cancelled"
+    } else {
+        "the user declined"
+    };
     text_result(
-        format!(
-            "the user declined; devlanes {} did not run",
-            call.args.join(" ")
-        ),
+        format!("{why}; devlanes {} did not run", call.args.join(" ")),
         true,
     )
 }
 
-/// The answer in a retried call (2026-07-28): accepted or not, and the flag
-/// that accepting adds, kept in the request state.
-fn consent_answer(request: &CallToolRequestParams) -> Option<(bool, String)> {
+/// The answer in a retried call (2026-07-28): yes, no, or `None` when the
+/// question was cancelled, and the flag that accepting adds, kept in the
+/// request state.
+fn consent_answer(request: &CallToolRequestParams) -> Option<(Option<bool>, String)> {
     let answer = request.input_responses.as_ref()?.get(CONSENT)?;
-    let accepted = serde_json::from_value::<ElicitResult>(answer.clone())
-        .is_ok_and(|answer| answer.action == ElicitationAction::Accept);
+    let accepted = match serde_json::from_value::<ElicitResult>(answer.clone()) {
+        Ok(answer) => match answer.action {
+            ElicitationAction::Accept => Some(true),
+            ElicitationAction::Cancel => None,
+            _ => Some(false),
+        },
+        Err(_) => Some(false),
+    };
     let flag = request
         .request_state
         .clone()
@@ -579,10 +672,11 @@ pub(crate) async fn ask(
     let asked = context.peer.create_elicitation(params);
     let answer = tokio::select! {
         answer = asked => answer,
-        () = context.ct.cancelled() => return Answer::Declined,
+        () = context.ct.cancelled() => return Answer::Cancelled,
     };
-    match answer {
-        Ok(answer) if answer.action == ElicitationAction::Accept => Answer::Accepted,
+    match answer.map(|answer| answer.action) {
+        Ok(ElicitationAction::Accept) => Answer::Accepted,
+        Ok(ElicitationAction::Cancel) => Answer::Cancelled,
         Ok(_) => Answer::Declined,
         Err(error) => {
             tracing::debug!(%error, "elicitation failed");

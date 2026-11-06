@@ -11,9 +11,9 @@ publish.workspace = true
 [build-dependencies]
 devlanes-version = { path = "../version" }
 # `config` reads askama.toml, which points askama at ui/.
-askama = { version = "0.16", default-features = false, features = ["config", "derive", "std"] }
+askama = { workspace = true, features = ["config", "derive", "std"] }
 base64.workspace = true
-grass = { version = "0.13", default-features = false }
+grass.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

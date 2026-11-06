@@ -149,6 +149,43 @@ async fn a_plan_reports_the_clean_and_changes_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// A plan plans only what a clean runs, its `lane.clean` tasks and teardown,
+/// so no service's env is asked of a contributor such as a secret store.
+async fn a_plan_plans_only_what_a_clean_runs() {
+    tokio::time::timeout(LIMIT, async {
+        let tmp = temp();
+        let main = repo(&tmp.path, "r", CONFIG);
+        let journal = crate::PlanJournal::default();
+        let h = harness(
+            &tmp.path.join("home"),
+            Setup {
+                infra: true,
+                contributors: vec![std::sync::Arc::new(journal.clone())],
+                ..Setup::default()
+            },
+        )
+        .await;
+        h.call(Method::Start, json!({}), cx(&main))
+            .await
+            .expect("start");
+        journal.planned.0.lock().expect("lock").clear();
+        let plan = h
+            .call(Method::LaneCleanPlan, json!({}), cx(&main))
+            .await
+            .expect("plan");
+        assert_eq!(plan["tasks"][0]["name"], "drop-cache", "{plan}");
+        assert_eq!(plan["teardown"][0]["name"], "database", "{plan}");
+        let mut planned = journal.planned.entries();
+        planned.sort();
+        planned.dedup();
+        assert_eq!(planned, ["InfraCommand database", "Task drop-cache"]);
+        h.close().await;
+    })
+    .await
+    .expect("timeout");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 /// When Docker cannot list the containers, the plan still answers: a project
 /// that declares containers says they are unknown, one that declares none
 /// says nothing about them.

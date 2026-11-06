@@ -382,19 +382,31 @@ struct JsonTee {
 }
 
 impl JsonTee {
-    /// Appends `text`; a failed write costs only the structured copy.
+    /// Appends `text`; a failed write costs only the structured copy. Reporters
+    /// render on the runtime's threads too, so on a multi-threaded runtime the
+    /// write moves the thread's other tasks elsewhere first.
     fn append(&self, text: &str) {
         use std::io::Write as _;
         if text.is_empty() {
             return;
         }
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-        {
-            let _ = file.write_all(text.as_bytes());
+        let write = || {
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+            {
+                let _ = file.write_all(text.as_bytes());
+            }
+        };
+        #[cfg(not(target_family = "wasm"))]
+        if tokio::runtime::Handle::try_current().is_ok_and(|runtime| {
+            runtime.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread
+        }) {
+            tokio::task::block_in_place(write);
+            return;
         }
+        write();
     }
 }
 
