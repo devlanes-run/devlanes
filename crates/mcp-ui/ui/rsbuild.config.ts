@@ -18,10 +18,17 @@ async function sha256(text: string): Promise<string> {
 }
 
 /**
+ * Where hosts serve the fonts their `styles.css.fonts` names: Claude's Anthropic Sans.
+ * The only origin the card may load from; the request carries no devlanes data, and
+ * the devlanes MCP server lists the same origin in `_meta.ui.csp.resourceDomains`.
+ */
+const FONT_ORIGINS = ['https://assets.claude.ai'];
+
+/**
  * Fills the card's Content-Security-Policy with the hashes of its inline script
  * and stylesheet once rsbuild has inlined them, so the card runs no other code
- * or style and makes no requests (`default-src 'none'`). Fails the build on an
- * external script, which the policy would block in the host anyway.
+ * or style and requests nothing but host fonts (`default-src 'none'`). Fails the
+ * build on an external script, which the policy would block in the host anyway.
  */
 function pluginCsp(): RsbuildPlugin {
   return {
@@ -49,6 +56,7 @@ function pluginCsp(): RsbuildPlugin {
           "default-src 'none'",
           `script-src ${await sources(scripts.map((match) => match[2] ?? ''))}`,
           `style-src ${await sources(styles.map((match) => match[1] ?? ''))}`,
+          `font-src ${FONT_ORIGINS.join(' ')}`,
           "base-uri 'none'",
           "form-action 'none'"
         ].join('; ');

@@ -3,15 +3,16 @@
 
 import { render } from 'preact';
 import type { HostContext } from './bridge';
+import { applyHostStyles } from './bridge/styles';
 import { App } from './components/app';
 import { bridge, card, onChange, update } from './store/card';
 import { pollNow, stopPolling, watchActivity } from './store/poll';
 import './styles/app.scss';
 
-/** Applies the host context: theme, fullscreen and the container's size rules. */
+/** Applies the host context: styles, fullscreen and the container's size rules. */
 function applyContext(context: HostContext): void {
   const root = document.documentElement;
-  if (context.theme === 'light' || context.theme === 'dark') root.dataset.theme = context.theme;
+  applyHostStyles(context);
   root.classList.toggle('fullscreen', context.displayMode === 'fullscreen');
   const dims = context.containerDimensions || {};
   root.classList.toggle('fixed-height', typeof dims.height === 'number');
@@ -33,7 +34,7 @@ async function boot(): Promise<void> {
     pollNow();
   });
   bridge.on('ui/notifications/tool-result', (params) => {
-    update({ result: params, resultAt: Date.now() });
+    update({ result: params, resultAt: Date.now(), updatedAt: Date.now() });
     pollNow();
   });
   bridge.on('ui/notifications/tool-cancelled', (params) =>

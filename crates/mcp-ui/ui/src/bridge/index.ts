@@ -16,9 +16,16 @@ const CALL_TIMEOUT_MS = 30_000;
 /** The host context of `ui/initialize` and `ui/notifications/host-context-changed`. */
 export interface HostContext {
   theme?: 'light' | 'dark';
+  /** Standard style variables (`--color-text-primary`...) and `@font-face` rules for them. */
+  styles?: {
+    variables?: Record<string, string | undefined>;
+    css?: { fonts?: string };
+  };
   displayMode?: string;
   availableDisplayModes?: string[];
   containerDimensions?: { width?: number; maxWidth?: number; height?: number; maxHeight?: number };
+  /** Pixels the host covers at each edge, such as a mobile notch or a fullscreen composer. */
+  safeAreaInsets?: { top?: number; right?: number; bottom?: number; left?: number };
 }
 
 /** A JSON-RPC error object. */
