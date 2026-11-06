@@ -917,3 +917,44 @@ devlanes completions [OPTIONS] <SHELL>
 
 - `<SHELL>`: Shell to generate completions for
   Values: `bash`, `elvish`, `fish`, `powershell`, `zsh`.
+
+### devlanes mcp
+
+Serve devlanes to an AI agent as an MCP server on stdin and stdout.
+
+The agent gets two tools that take a devlanes command line: devlanes runs any
+command, devlanes_read only the ones that change nothing. Each call runs this
+binary as a separate process with --output agent, so the server itself never
+connects to the daemon or starts one. Commands that need a terminal (ui,
+attach, env shell, setup, update, uninstall) are refused, and so are follows
+without --timeout.
+
+A call runs in the cwd it names, else in --path, else with --lane, else in
+$CLAUDE_PROJECT_DIR, else in the directory the agent started the server in.
+
+```text
+devlanes mcp [OPTIONS]
+```
+
+- `--read-only`: Offer only the devlanes_read tool, which refuses commands that change something
+- `--path <DIR>`: Run calls that name no cwd in this directory (the global --lane picks a lane instead)
+
+```text
+Register it with your agent:
+  Claude Code     claude mcp add devlanes -- devlanes mcp
+  Codex           codex mcp add devlanes -- devlanes mcp
+  OpenCode        in opencode.json:
+                  "mcp": {"devlanes": {"type": "local", "command": ["devlanes", "mcp"]}}
+  Cursor          in ~/.cursor/mcp.json or .cursor/mcp.json:
+                  "mcpServers": {"devlanes": {"command": "devlanes", "args": ["mcp"]}}
+  VS Code         code --add-mcp '{"name":"devlanes","command":"devlanes","args":["mcp"]}'
+  Claude Desktop  in claude_desktop_config.json, with the full path (the app does not read your shell's PATH):
+                  "mcpServers": {"devlanes": {"command": "/path/to/devlanes", "args": ["mcp"]}}
+  Goose           goose session --with-extension 'devlanes mcp'
+                  or in config.yaml under extensions:
+                  devlanes: {type: stdio, name: devlanes, cmd: devlanes, args: [mcp], enabled: true}
+
+Examples:
+  devlanes mcp --read-only             only commands that change nothing
+  devlanes mcp --path ~/src/acme       calls without a cwd use this worktree's lane
+```

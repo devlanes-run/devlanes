@@ -272,6 +272,9 @@ without the daemon.",
         #[arg(value_name = "SHELL")]
         shell: clap_complete::Shell,
     },
+    /// Serve devlanes to an AI agent as an MCP server on stdin and stdout
+    #[command(long_about = MCP_ABOUT, after_help = MCP_AFTER)]
+    Mcp(McpArgs),
     /// Serve a client's SSH connection on a box (started by remote connect)
     #[command(hide = true)]
     Tunnel {
@@ -446,6 +449,48 @@ pub struct ExecArgs {
     /// Command and arguments to run
     #[arg(last = true, required = true, value_name = "COMMAND")]
     pub command: Vec<String>,
+}
+
+const MCP_ABOUT: &str = "\
+Serve devlanes to an AI agent as an MCP server on stdin and stdout.
+
+The agent gets two tools that take a devlanes command line: devlanes runs any
+command, devlanes_read only the ones that change nothing. Each call runs this
+binary as a separate process with --output agent, so the server itself never
+connects to the daemon or starts one. Commands that need a terminal (ui,
+attach, env shell, setup, update, uninstall) are refused, and so are follows
+without --timeout.
+
+A call runs in the cwd it names, else in --path, else with --lane, else in
+$CLAUDE_PROJECT_DIR, else in the directory the agent started the server in.";
+
+const MCP_AFTER: &str = "\
+Register it with your agent:
+  Claude Code     claude mcp add devlanes -- devlanes mcp
+  Codex           codex mcp add devlanes -- devlanes mcp
+  OpenCode        in opencode.json:
+                  \"mcp\": {\"devlanes\": {\"type\": \"local\", \"command\": [\"devlanes\", \"mcp\"]}}
+  Cursor          in ~/.cursor/mcp.json or .cursor/mcp.json:
+                  \"mcpServers\": {\"devlanes\": {\"command\": \"devlanes\", \"args\": [\"mcp\"]}}
+  VS Code         code --add-mcp '{\"name\":\"devlanes\",\"command\":\"devlanes\",\"args\":[\"mcp\"]}'
+  Claude Desktop  in claude_desktop_config.json, with the full path (the app does not read your shell's PATH):
+                  \"mcpServers\": {\"devlanes\": {\"command\": \"/path/to/devlanes\", \"args\": [\"mcp\"]}}
+  Goose           goose session --with-extension 'devlanes mcp'
+                  or in config.yaml under extensions:
+                  devlanes: {type: stdio, name: devlanes, cmd: devlanes, args: [mcp], enabled: true}
+
+Examples:
+  devlanes mcp --read-only             only commands that change nothing
+  devlanes mcp --path ~/src/acme       calls without a cwd use this worktree's lane";
+
+#[derive(Debug, Args)]
+pub struct McpArgs {
+    /// Offer only the devlanes_read tool, which refuses commands that change something
+    #[arg(long)]
+    pub read_only: bool,
+    /// Run calls that name no cwd in this directory (the global --lane picks a lane instead)
+    #[arg(long, value_name = "DIR")]
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -977,6 +1022,14 @@ pub enum Action {
     },
     ConfigUnset(String),
     Completions(clap_complete::Shell),
+    /// `devlanes mcp`: serves MCP on stdin and stdout until the client leaves.
+    Mcp {
+        read_only: bool,
+        /// `--path`, relative paths taken from the cwd.
+        path: Option<PathBuf>,
+        /// The global `--lane`.
+        lane: Option<String>,
+    },
     Tunnel,
     Askpass(Option<String>),
     /// `devlanes debug bundle`: never spawns a daemon.
@@ -1400,15 +1453,24 @@ impl Cli {
                 ),
             },
             Some(Command::Completions { shell }) => return Ok(Action::Completions(*shell)),
+            Some(Command::Mcp(args)) => {
+                return Ok(Action::Mcp {
+                    read_only: args.read_only,
+                    path: args.path.as_ref().map(|path| context.cwd.join(path)),
+                    lane: self.lane.clone(),
+                });
+            }
             Some(Command::Tunnel { .. }) => return Ok(Action::Tunnel),
             Some(Command::Askpass { prompt }) => return Ok(Action::Askpass(prompt.clone())),
         };
         // `reload` is absent: it applies the project file, and the lane keeps the env
-        // its last start stored, as when the TUI reloads.
+        // its last start stored, as when the TUI reloads. `devlanes mcp` asks for no
+        // env first, so a lane a shell started keeps that shell's env.
         if matches!(
             method,
             Method::Start | Method::Restart | Method::Run | Method::Exec | Method::Resume
-        ) {
+        ) && !runtime.env_from_lane
+        {
             context.env = Some(environment());
         }
         let request = Request {
@@ -1567,6 +1629,175 @@ impl Cli {
                 })
             )
             || matches!(&self.command, Some(Command::Status(args)) if args.watch)
+    }
+
+    /// Why this command cannot run without a terminal, for callers that have none
+    /// (`devlanes mcp`): it opens a screen, reads a password or answer, or follows
+    /// output until interrupted because it has no `--timeout`. `None` when it can.
+    pub fn terminal_only(&self) -> Option<&'static str> {
+        let unbounded = self.timeout.is_none();
+        let follow = "it follows output until interrupted; add --timeout, such as --timeout 30s";
+        let Some(command) = &self.command else {
+            return None;
+        };
+        match command {
+            Command::Ui => Some("it opens the TUI; run devlanes status instead"),
+            Command::Attach { .. } => {
+                Some("it attaches a terminal to the unit; read its output with devlanes logs UNIT")
+            }
+            Command::Start(args) if args.attach => {
+                Some("--attach opens the TUI; run the start without it")
+            }
+            Command::Logs(args) if args.follow && unbounded => Some(follow),
+            Command::Status(args) if args.watch && unbounded => Some(follow),
+            Command::Start(_)
+            | Command::Stop(_)
+            | Command::Restart(_)
+            | Command::Reload(_)
+            | Command::Status(_)
+            | Command::Logs(_)
+            | Command::Wait { .. }
+            | Command::With(_)
+            | Command::Run(_)
+            | Command::Exec(_)
+            | Command::Doctor
+            | Command::Remote { .. }
+            | Command::Lane { .. }
+            | Command::Url { .. }
+            | Command::Config { .. } => None,
+            Command::Debug { command } => match command {
+                DebugCommand::Events { follow: true } if unbounded => Some(follow),
+                DebugCommand::Events { .. }
+                | DebugCommand::Why { .. }
+                | DebugCommand::Errors { .. }
+                | DebugCommand::Top
+                | DebugCommand::Freeze { .. }
+                | DebugCommand::Thaw { .. }
+                | DebugCommand::Config
+                | DebugCommand::Bundle { .. } => None,
+            },
+            Command::Env { command } => match command {
+                EnvCommand::Shell { .. } => {
+                    Some("it opens a subshell; read the variables with devlanes env show")
+                }
+                EnvCommand::Show { .. } | EnvCommand::Export { .. } => None,
+            },
+            Command::Infra { command } => match command {
+                InfraCommand::Logs { follow: true, .. } if unbounded => Some(follow),
+                InfraCommand::Up
+                | InfraCommand::Down
+                | InfraCommand::Status
+                | InfraCommand::Logs { .. } => None,
+            },
+            Command::Daemon { command } => match command {
+                // `tail -F` underneath, which `--timeout` does not end.
+                DaemonCommand::Logs { follow: true, .. } => {
+                    Some("it follows the daemon log until interrupted; use --tail N instead")
+                }
+                DaemonCommand::Run => Some("the client starts the daemon itself"),
+                DaemonCommand::Start
+                | DaemonCommand::Status
+                | DaemonCommand::Stop
+                | DaemonCommand::Restart
+                | DaemonCommand::Logs { .. }
+                | DaemonCommand::Install
+                | DaemonCommand::Uninstall
+                | DaemonCommand::ResetState
+                | DaemonCommand::Pair
+                | DaemonCommand::Clients
+                | DaemonCommand::Revoke { .. } => None,
+            },
+            Command::Setup(_) | Command::Update(_) | Command::Uninstall(_) => {
+                Some("it asks questions and may ask for a password; run it in a terminal")
+            }
+            Command::Completions { .. } => {
+                Some("it prints a script for a shell's startup file; run it in a terminal")
+            }
+            Command::Mcp(_) => Some("it is the MCP server itself"),
+            Command::Tunnel { .. } | Command::Askpass { .. } => {
+                Some("devlanes runs it itself for remote connections")
+            }
+        }
+    }
+}
+
+impl Command {
+    /// Whether the command only reads: it starts, stops and changes nothing a later
+    /// command would see (`devlanes mcp`'s `devlanes_read` runs only these). Every
+    /// command is listed, so a new one does not compile until it is classified.
+    pub fn is_read_only(&self) -> bool {
+        match self {
+            Self::Status(_) | Self::Logs(_) | Self::Wait { .. } | Self::Doctor => true,
+            Self::Run(args) => args.list,
+            Self::Start(_)
+            | Self::Stop(_)
+            | Self::Restart(_)
+            | Self::Reload(_)
+            | Self::With(_)
+            | Self::Exec(_)
+            | Self::Attach { .. }
+            | Self::Ui
+            | Self::Setup(_)
+            | Self::Update(_)
+            | Self::Uninstall(_)
+            | Self::Completions { .. }
+            | Self::Mcp(_)
+            | Self::Tunnel { .. }
+            | Self::Askpass { .. } => false,
+            Self::Lane { command } => match command {
+                LaneCommand::Ls => true,
+                LaneCommand::New { .. }
+                | LaneCommand::Clean { .. }
+                | LaneCommand::Gc
+                | LaneCommand::Resume { .. } => false,
+            },
+            Self::Debug { command } => match command {
+                DebugCommand::Why { .. }
+                | DebugCommand::Errors { .. }
+                | DebugCommand::Events { .. }
+                | DebugCommand::Top
+                | DebugCommand::Config => true,
+                // A bundle writes an archive and runs the commands it is given.
+                DebugCommand::Freeze { .. }
+                | DebugCommand::Thaw { .. }
+                | DebugCommand::Bundle { .. } => false,
+            },
+            // Values as `env show` prints them, which hides nothing `export` would not.
+            Self::Env { command } => match command {
+                EnvCommand::Show { .. } | EnvCommand::Export { .. } => true,
+                EnvCommand::Shell { .. } => false,
+            },
+            // `url open` only prints the URL in agent mode, which `devlanes mcp` uses.
+            Self::Url { command } => match command {
+                UrlCommand::Print { .. } | UrlCommand::Open { .. } | UrlCommand::Ls => true,
+            },
+            Self::Infra { command } => match command {
+                InfraCommand::Status | InfraCommand::Logs { .. } => true,
+                InfraCommand::Up | InfraCommand::Down => false,
+            },
+            Self::Config { command } => match command {
+                ConfigCommand::Check | ConfigCommand::Get { .. } => true,
+                ConfigCommand::Set { .. } | ConfigCommand::Unset { .. } => false,
+            },
+            Self::Remote { command } => match command {
+                RemoteCommand::Ls | RemoteCommand::Sync => true,
+                RemoteCommand::Connect { .. }
+                | RemoteCommand::Disconnect { .. }
+                | RemoteCommand::Use { .. } => false,
+            },
+            Self::Daemon { command } => match command {
+                DaemonCommand::Status | DaemonCommand::Logs { .. } | DaemonCommand::Clients => true,
+                DaemonCommand::Start
+                | DaemonCommand::Stop
+                | DaemonCommand::Restart
+                | DaemonCommand::Install
+                | DaemonCommand::Uninstall
+                | DaemonCommand::ResetState
+                | DaemonCommand::Pair
+                | DaemonCommand::Revoke { .. }
+                | DaemonCommand::Run => false,
+            },
+        }
     }
 }
 

@@ -53,6 +53,12 @@ pub struct Signals {
     /// human output. Set by the binary, which owns the console calls; always
     /// false on Unix.
     pub no_escapes: bool,
+    /// `DEVLANES_JSON_OUT`, set by `devlanes mcp` for the commands it runs: the
+    /// file that also gets what `--output json` would print.
+    pub json_out: Option<PathBuf>,
+    /// `DEVLANES_ENV_FROM_LANE=1`, set by `devlanes mcp`: send no shell
+    /// environment, so the daemon uses the one the lane already has.
+    pub env_from_lane: bool,
 }
 
 impl Signals {
@@ -84,6 +90,10 @@ impl Signals {
                 .and_then(|v| v.trim().parse::<u8>().ok())
                 .unwrap_or(0),
             no_escapes: false,
+            json_out: std::env::var_os("DEVLANES_JSON_OUT")
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from),
+            env_from_lane: std::env::var("DEVLANES_ENV_FROM_LANE").as_deref() == Ok("1"),
         }
         .with_ci_env(|key| std::env::var(key).ok())
     }
@@ -122,6 +132,10 @@ pub struct Runtime {
     /// none until the binary reads the user's `terminal` settings
     /// ([`Runtime::detect_terminal`]).
     pub terminal: devlanes_term::Features,
+    /// See [`Signals::json_out`].
+    pub json_out: Option<PathBuf>,
+    /// See [`Signals::env_from_lane`].
+    pub env_from_lane: bool,
 }
 
 impl Runtime {
@@ -174,6 +188,8 @@ impl Runtime {
             no_ui: signals.no_ui,
             verbose: cli.verbose.max(signals.env_verbose).min(2),
             terminal: devlanes_term::Features::default(),
+            json_out: signals.json_out,
+            env_from_lane: signals.env_from_lane,
         })
     }
 

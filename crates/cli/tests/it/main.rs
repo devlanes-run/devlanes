@@ -1687,6 +1687,7 @@ fn completion_is_lazy_and_filters_existing_candidates() {
 mod agent_guide;
 mod choose;
 mod ci;
+mod classify;
 mod codes;
 mod diagnostics;
 mod help;

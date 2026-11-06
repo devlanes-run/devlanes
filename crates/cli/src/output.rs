@@ -371,9 +371,90 @@ reporter!(PlainReporter, Plain);
 reporter!(AgentReporter, Agent);
 reporter!(JsonReporter, Json);
 
+/// Renders like `inner` and also appends what `--output json` would print to
+/// `path` ([`Runtime::json_out`]): one document per result, an NDJSON line per
+/// event, and `{"error": ...}` for an error. `devlanes mcp` reads the file into
+/// the tool result's structured content.
+struct JsonTee {
+    inner: Box<dyn Reporter>,
+    json: JsonReporter,
+    path: std::path::PathBuf,
+}
+
+impl JsonTee {
+    /// Appends `text`; a failed write costs only the structured copy.
+    fn append(&self, text: &str) {
+        use std::io::Write as _;
+        if text.is_empty() {
+            return;
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let _ = file.write_all(text.as_bytes());
+        }
+    }
+}
+
+impl Reporter for JsonTee {
+    /// The mode of the rendering the caller sees.
+    fn mode(&self) -> OutputMode {
+        self.inner.mode()
+    }
+
+    /// The caller's runtime, not the JSON copy's.
+    fn runtime(&self) -> &Runtime {
+        self.inner.runtime()
+    }
+
+    /// Renders with `inner`, after appending the JSON document.
+    fn result(&self, report: &Report<'_>) -> Result<Rendered, serde_json::Error> {
+        if let Ok(json) = self.json.result(report) {
+            self.append(&json.stdout);
+        }
+        self.inner.result(report)
+    }
+
+    /// Renders with `inner`, after appending the event's NDJSON line.
+    fn event(&self, method: Method, event: &Event) -> Result<Rendered, serde_json::Error> {
+        if let Ok(json) = self.json.event(method, event) {
+            self.append(&json.stdout);
+        }
+        self.inner.event(method, event)
+    }
+
+    /// Renders with `inner`, after appending `{"error": {code, data, exit_code}}`.
+    fn error(&self, error: &RpcError, hint: Option<&Hint>) -> Rendered {
+        if let Ok(line) = serde_json::to_string(&json!({"error": error})) {
+            self.append(&format!("{line}\n"));
+        }
+        self.inner.error(error, hint)
+    }
+}
+
 impl Runtime {
-    /// Selects one of the four reporter implementations without transport coupling.
+    /// Selects one of the four reporter implementations without transport coupling,
+    /// copying JSON to [`Runtime::json_out`] when it is set.
     pub fn reporter(&self) -> Box<dyn Reporter> {
+        let reporter = self.mode_reporter();
+        match &self.json_out {
+            Some(path) => Box::new(JsonTee {
+                inner: reporter,
+                json: JsonReporter(Runtime {
+                    mode: OutputMode::Json,
+                    json_out: None,
+                    ..self.clone()
+                }),
+                path: path.clone(),
+            }),
+            None => reporter,
+        }
+    }
+
+    /// The reporter of this runtime's output mode.
+    fn mode_reporter(&self) -> Box<dyn Reporter> {
         match self.mode {
             OutputMode::Human => Box::new(HumanReporter(self.clone())),
             OutputMode::Plain if self.ci.is_some() => Box::new(crate::CiPlainReporter::new(
