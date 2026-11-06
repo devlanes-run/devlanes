@@ -34,6 +34,16 @@ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes
 
 Run `devlanes doctor` once after installing. The home is `%USERPROFILE%\.devlanes` (`DEVLANES_HOME` overrides it; `HOME`, which Git Bash sets, is ignored). It must be private: only your account, SYSTEM and Administrators may have access, and `doctor` prints the `icacls` commands that fix a home others can reach. The daemon listens on a named pipe, `\\.\pipe\devlanes-<hash>`, that only your account can open; there is no `daemon.sock`.
 
+### Antivirus
+
+devlanes releases are not code-signed yet, and some antivirus or application control products (Kaspersky, AppLocker, Smart App Control) distrust a new unsigned `devlanes.exe`. They may quarantine it, or let it run but refuse to let it start other programs, which the daemon needs for every unit. devlanes reports this where it shows:
+
+- `install.ps1` stops with "was installed but is gone" when the new `devlanes.exe` disappears right after it runs.
+- `devlanes daemon start` fails with "the daemon exited with exit code ... without a reason" when the daemon is stopped before it can write a reason. If `devlanes daemon run` keeps running in a terminal, something outside devlanes stopped the background one.
+- `devlanes doctor` warns that Windows refused to let devlanes start `netsh`.
+
+Restore `devlanes.exe` from quarantine if needed, then exclude the install directory (`%LOCALAPPDATA%\Programs\devlanes` by default) or mark `devlanes.exe` as trusted. In Kaspersky that is Application Control: move `devlanes.exe` to the Trusted group. Prefer a rule by path over one by file hash, since every update replaces the file.
+
 ## Shells
 
 `run:` strings and `ready.cmd` are POSIX `sh` on every OS, so one `devlanes.yaml` works on macOS, Linux and Windows. The daemon runs them with Git for Windows' `usr\bin\sh.exe`, which it looks up once when it starts, from the `git` on its `PATH` (`git --exec-path`, else where `git.exe` sits). MSYS2's and Cygwin's own Git are not used. After installing Git for Windows, run `devlanes daemon restart`.
