@@ -213,6 +213,33 @@ async fn a_lane_without_env_gets_the_servers() {
             .map(|run| run["from_lane"].clone())
             .collect();
         assert_eq!(from_lane, [json!("1"), Value::Null]);
+        // The second run gets what is left of the 170 s for Claude Code.
+        let lines = harness.lines();
+        assert_eq!(lines[0], "--output agent start --timeout 170s");
+        let left: u64 = lines[1]
+            .strip_prefix("--output agent start --timeout ")
+            .and_then(|left| left.strip_suffix('s'))
+            .and_then(|left| left.parse().ok())
+            .unwrap_or_else(|| panic!("{}", lines[1]));
+        assert!((150..170).contains(&left), "{left}");
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// `reload` sends no env, so a lane without one is not run again and gets no
+/// note about an environment it did not get.
+async fn a_reload_without_env_is_not_run_again() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.env.insert("FAKE_NEEDS_ENV".into(), "1".into());
+        })
+        .await;
+        let result = harness.call("devlanes", &["reload"]).await;
+        assert!(failed(&result));
+        assert!(!text(&result).contains("note:"), "{}", text(&result));
+        assert_eq!(harness.runs().len(), 1);
     })
     .await
     .expect("in time");
@@ -235,6 +262,7 @@ async fn refusals_run_nothing() {
             ("devlanes", &["uninstall"], "terminal"),
             ("devlanes", &["completions", "bash"], "terminal"),
             ("devlanes", &["mcp"], "MCP server"),
+            ("devlanes", &["with", "--", "devlanes", "ui"], "TUI"),
             ("devlanes_read", &["logs", "api", "-f"], "--timeout"),
             ("devlanes_read", &["status", "--watch"], "--timeout"),
             ("devlanes_read", &["debug", "events", "-f"], "--timeout"),

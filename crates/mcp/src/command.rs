@@ -72,7 +72,58 @@ impl Call {
                 "devlanes {path} does not run here: {reason}"
             )));
         }
-        Ok(Self { cli, path, args })
+        let call = Self { cli, path, args };
+        // `with -- devlanes ...` and `debug bundle -- ...` run another devlanes
+        // command line, which needs a terminal just as much.
+        if let Some((_, inner)) = call.nested()
+            && let Some(reason) = inner.cli.terminal_only()
+        {
+            return Err(Rejected::Error(format!(
+                "devlanes {} does not run here: {reason}",
+                inner.path
+            )));
+        }
+        Ok(call)
+    }
+
+    /// Whether the command sends the daemon this process's environment, so a
+    /// run without [`devlanes_proto::ENV_FROM_LANE_ENV`] can give a lane one.
+    /// `reload` keeps the env the lane has.
+    pub fn sends_env(&self) -> bool {
+        matches!(
+            &self.cli.command,
+            Some(
+                Command::Start(_)
+                    | Command::Restart(_)
+                    | Command::Run(_)
+                    | Command::Exec(_)
+                    | Command::With(_)
+                    | Command::Lane {
+                        command: LaneCommand::Resume { .. }
+                    }
+            )
+        )
+    }
+
+    /// The arguments with `--timeout` set to `timeout` in whole seconds, at
+    /// least 1, in place of any the line has.
+    pub fn with_timeout(&self, timeout: Duration) -> Vec<String> {
+        let end = self.end();
+        let mut args = Vec::with_capacity(self.args.len() + 2);
+        let mut flags = self.args[..end].iter();
+        while let Some(arg) = flags.next() {
+            if arg == "--timeout" {
+                flags.next();
+            } else if !arg.starts_with("--timeout=") {
+                args.push(arg.clone());
+            }
+        }
+        args.extend([
+            "--timeout".to_owned(),
+            format!("{}s", timeout.as_secs().max(1)),
+        ]);
+        args.extend(self.args[end..].iter().cloned());
+        args
     }
 
     /// Whether the command blocks until units are ready (`start`, `restart`,
@@ -362,6 +413,60 @@ mod tests {
         let mut status = call(&["status"]);
         assert_eq!(status.limit(Duration::from_secs(25)), None);
         assert_eq!(status.args, args(&["status"]));
+    }
+
+    /// A second run gets a new `--timeout` in place of the first's, in either
+    /// spelling, before a `--`.
+    #[test]
+    fn a_rerun_gets_the_time_left() {
+        let mut start = call(&["start", "api"]);
+        start.limit(Duration::from_secs(50));
+        assert_eq!(
+            start.with_timeout(Duration::from_millis(41_700)),
+            args(&["start", "api", "--timeout", "41s"])
+        );
+        let with = call(&[
+            "with",
+            "--timeout=30s",
+            "--",
+            "devlanes",
+            "start",
+            "--timeout",
+            "9s",
+        ]);
+        assert_eq!(
+            with.with_timeout(Duration::ZERO),
+            args(&[
+                "with",
+                "--timeout",
+                "1s",
+                "--",
+                "devlanes",
+                "start",
+                "--timeout",
+                "9s"
+            ])
+        );
+        assert!(start.sends_env() && with.sends_env());
+        assert!(!call(&["reload"]).sends_env());
+        assert!(!call(&["status"]).sends_env());
+    }
+
+    /// A devlanes command line that `with` or `debug bundle` runs is refused
+    /// when it needs a terminal, as it would be on its own.
+    #[test]
+    fn nested_terminal_commands_are_refused() {
+        for line in [
+            &["with", "--", "devlanes", "ui"][..],
+            &["with", "--", "devlanes", "logs", "api", "-f"],
+            &["debug", "bundle", "--", "attach", "api"],
+        ] {
+            match Call::parse(&args(line), Tool::Devlanes) {
+                Err(Rejected::Error(text)) => assert!(text.contains("does not run here"), "{text}"),
+                _ => panic!("{line:?} was not refused"),
+            }
+        }
+        assert!(Call::parse(&args(&["with", "--", "devlanes", "status"]), Tool::Devlanes).is_ok());
     }
 
     /// Terminal-only commands and write commands on the read tool are refused

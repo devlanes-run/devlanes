@@ -234,3 +234,35 @@ async fn discover_clients_answer_by_calling_again() {
     .await
     .expect("in time");
 }
+
+#[tokio::test]
+/// A yes whose request state the server did not give for this command line
+/// is no answer: the server asks the user again.
+async fn a_yes_for_another_command_asks_again() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(
+            TestClient::new().answering(ElicitationAction::Decline),
+            Lifecycle::Discover,
+            |_| {},
+        )
+        .await;
+        let mut params = rmcp::model::CallToolRequestParams::new("devlanes").with_arguments(
+            serde_json::from_value(serde_json::json!({"args": ["daemon", "stop"]})).expect("args"),
+        );
+        params.input_responses = Some(
+            [(
+                "consent".to_owned(),
+                serde_json::json!({"action": "accept"}),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        params.request_state = Some("--yes 0000000000000000".into());
+        let result = harness.client.call_tool(params).await.expect("call");
+        assert!(failed(&result), "{}", text(&result));
+        assert_eq!(harness.handler.questions().len(), 1);
+        assert!(harness.lines().is_empty(), "{:?}", harness.lines());
+    })
+    .await
+    .expect("in time");
+}

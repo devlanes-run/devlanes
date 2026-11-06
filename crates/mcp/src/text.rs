@@ -40,8 +40,9 @@ Run any devlanes command. args is the command line after \"devlanes\", such as [
 [\"exec\", \"--name\", \"web\", \"--\", \"pnpm\", \"dev\"], [\"stop\", \"--mine\"] or \
 [\"logs\", \"web\", \"--tail\", \"100\"]. Use exec for anything that keeps running \
 (dev servers, watchers, workers, tunnels); its result says how to read and stop it. start, \
-restart and wait return once the units are ready or failed. Returns the command's agent output, \
-with its JSON in structuredContent.";
+restart and wait return once the units are ready or failed, or at the timeout the server adds, \
+with what is ready so far; then call wait. Returns the command's agent output, with its JSON in \
+structuredContent.";
 
 /// Description of the `devlanes_read` tool under `--read-only`.
 pub const DEVLANES_READ_ONLY: &str = "\
@@ -73,7 +74,8 @@ pub const APP_LOGS: &str = "Log lines of units for the card's log viewer.";
 
 /// Description of the app-only `app_action` tool.
 pub const APP_ACTION: &str = "A button of the card: start, stop, restart, reload, clean, \
-clean_plan or pair, on a lane or unit.";
+clean_plan or pair, on a lane or unit. Only the user's click calls it, and the click is the \
+consent: clean and pair run without asking again.";
 
 #[cfg(test)]
 mod tests {
