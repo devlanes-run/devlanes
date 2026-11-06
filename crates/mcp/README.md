@@ -21,21 +21,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## API
 
-- `serve(config)`: serves MCP on stdio until the client leaves.
-- `Server::new(config)`: the rmcp handler, for serving over another transport (the tests use an in-memory pipe).
+- `serve(config)`: serves MCP on stdio until the client closes stdin or the process gets SIGTERM, SIGINT or SIGHUP.
+- `Server::new(config)` and `serve_on(server, reader, writer, stop)`: the rmcp handler and the loop around it, for serving over another stream (the tests use an in-memory pipe).
 - `Config`: the executable to run, `--read-only`, `--lane`, `--path`, the environment and directory of the calls.
 - `shell_env::resolve` and `shell_env::print_payload`: read the login shell's environment, and the `devlanes __shell-env MARK` side that prints it.
 - `UiResource`: the MCP Apps HTML (`ui://devlanes/lane.html`), given by the binary from `devlanes-mcp-ui`; `UiResource::placeholder()` is a minimal page for tests.
 
 ## Tools
 
-`devlanes` runs any command and `devlanes_read` only those `Command::is_read_only` accepts; both take `{args: string[], cwd?: string}`. `--read-only` offers only `devlanes_read`. Commands that need a terminal, and follows without `--timeout`, are refused. Blocking commands without `--timeout` get one a little under the host's own tool timeout, chosen from the client's name. Clients that advertise the `io.modelcontextprotocol/ui` extension also see `app_snapshot`, `app_logs` and `app_action`, marked `_meta.ui.visibility: ["app"]`, and the cards resource.
+`devlanes` runs any command and `devlanes_read` only those `Command::is_read_only` accepts; both take `{args: string[], cwd?: string}`. `--read-only` offers only `devlanes_read`. Commands that need a terminal, and follows without `--timeout`, are refused. Blocking commands without `--timeout` get one a little under the host's own tool timeout, chosen from the client's name, or 60 s for a host it does not know. Clients that advertise the `io.modelcontextprotocol/ui` extension also see `app_snapshot`, `app_logs` and `app_action`, marked `_meta.ui.visibility: ["app"]`, and the cards resource.
 
-A result's text is the command's stdout and stderr; `structuredContent` holds `{command, args, cwd, exit_code, view, data}`, where `data` is what `--output json` would have printed (written by the child to the file `DEVLANES_JSON_OUT` names, with `{"error": ...}` for a failure) and `view` names the card for it.
+A result's text is the command's stdout and stderr; `structuredContent` holds `{command, args, cwd, exit_code, view, data, read_only}`, where `data` is what `--output json` would have printed (written by the child to the file `DEVLANES_JSON_OUT` names, with `{"error": ...}` for a failure), `view` names the card for it and `read_only` says whether the server runs with `--read-only`. Above 256 KiB of JSON, `data` is null and `data_truncated` is `true`.
 
 ## Child processes
 
-Nothing connects to the daemon when the server starts. Each call spawns the devlanes binary with stdin closed and stdout and stderr piped, so the protocol stream stays clean. The first run sets `DEVLANES_ENV_FROM_LANE=1`, so a lane a shell started keeps that shell's environment; when the daemon answers `needs_env`, the call runs again with the environment of the user's login shell over the server's (`shell_env`, read once per server: `$SHELL` on Unix unless `SHLVL` is above 0, PowerShell on Windows only with `DEVLANES_SHELL_ENV=pwsh` or `powershell`), or with the server's alone when that fails, and the result says which. When the environment names no agent, `AI_AGENT` comes from the client's name. Cancelling a call kills its child; the daemon keeps doing what was asked.
+Nothing connects to the daemon when the server starts. Each call spawns the devlanes binary with stdin closed and stdout and stderr piped, so the protocol stream stays clean. The first run sets `DEVLANES_ENV_FROM_LANE=1`, so a lane a shell started keeps that shell's environment; when the daemon answers `needs_env`, the call runs again with the environment of the user's login shell over the server's (`shell_env`, read once per server: `$SHELL` on Unix unless `SHLVL` is above 0, PowerShell on Windows only with `DEVLANES_SHELL_ENV=pwsh` or `powershell`), or with the server's alone when that fails, and the result says which. When the environment names no agent, `AI_AGENT` comes from the client's name.
+
+Each child leads a process group of its own, and on Windows also runs in a job that ends it when the server dies. Cancelling a call interrupts the child as Ctrl-C would and, 5 s later, kills it and what is left in its group or job; the daemon keeps doing what was asked. When the client closes stdin or the server is told to stop, running commands get 1 s instead, since hosts kill the server soon after.
 
 ## Codex on Windows
 

@@ -74,7 +74,7 @@ export function PairView() {
       ? html`<p class="label dim">one-time code</p>
           <p class=${`code${expired ? ' expired' : ''}`} aria-live="polite">${data.code}</p>
           <p class="dim">on the other machine, with this box's name</p>
-          <p><code>devlanes remote connect BOX --code ${data.code}</code></p>`
+          <p><code>devlanes remote connect BOX --code <span class="nowrap">${data.code}</span></code></p>`
       : html`<p class="tone-failure">${text || 'no pairing code'}</p>`}
     <${Note} note=${card.note} />
   <//>`;
