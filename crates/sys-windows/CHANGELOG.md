@@ -1,5 +1,11 @@
 # devlanes-sys-windows
 
+## 0.6.1 — 2026-11-06
+
+### Patch changes
+
+- [91c4f2b](https://github.com/devlanes-run/devlanes/commit/91c4f2b60a70695afc248f0b045a499292336a43) Added a `devlanes doctor` warning when Windows refuses to let devlanes start programs.
+
 ## 0.6.0 — 2026-10-28
 
 ### Patch changes
