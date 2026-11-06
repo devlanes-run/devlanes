@@ -71,6 +71,7 @@ devlanes-client = { path = "../../crates/client" }
 devlanes-config = { path = "../../crates/config" }
 devlanes-daemon = { path = "../../crates/daemon" }
 devlanes-ipc = { path = "../../crates/ipc" }
+devlanes-mcp = { path = "../../crates/mcp" }
 devlanes-pki = { path = "../../crates/pki" }
 devlanes-proto = { path = "../../crates/proto" }
 devlanes-term = { path = "../../crates/term" }

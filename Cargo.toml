@@ -21,6 +21,9 @@ diesel = { version = "2.3", default-features = false, features = ["sqlite", "ret
 dunce = "1"
 futures-util = { version = "0.3", features = ["sink"] }
 getrandom = "0.3"
+# The MCP server of `devlanes mcp` (crates/mcp). Pinned: the protocol revisions it
+# negotiates come with the version.
+rmcp = { version = "=3.9.0", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: JSON output follows struct field order, and the feature is pinned

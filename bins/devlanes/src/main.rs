@@ -129,6 +129,16 @@ fn main() -> ExitCode {
     if matches!(action, Action::DaemonRun) {
         return daemon::run();
     }
+    // Before anything that could write to stdout, which carries the protocol.
+    if let Action::Mcp {
+        read_only,
+        path,
+        lane,
+    } = action
+    {
+        verbose::init(runtime.verbose);
+        return mcp(read_only, path, lane);
+    }
     // Links, marks, titles and the like; read once, before any output.
     runtime.terminal = terminal::detect(&runtime);
     // None of them on a console without VT processing, even for an explicit
@@ -178,6 +188,34 @@ fn main() -> ExitCode {
     tokio.shutdown_background();
     verbose::finish(verbose, code);
     ExitCode::from(code)
+}
+
+/// `devlanes mcp`: serves MCP on stdio until the client leaves. Each tool call
+/// runs this executable again as a child process.
+fn mcp(read_only: bool, path: Option<std::path::PathBuf>, lane: Option<String>) -> ExitCode {
+    let config = std::env::current_exe().and_then(devlanes_mcp::Config::from_process);
+    let mut config = match config {
+        Ok(config) => config,
+        Err(error) => return output::local_error(&error.to_string(), 1),
+    };
+    config.read_only = read_only;
+    config.path = path;
+    config.lane = lane;
+    // devlanes-mcp-ui replaces the placeholder once the cards exist.
+    config.ui = Some(devlanes_mcp::UiResource::placeholder());
+    let tokio = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(tokio) => tokio,
+        Err(error) => return output::local_error(&error.to_string(), 1),
+    };
+    let served = tokio.block_on(devlanes_mcp::serve(config));
+    tokio.shutdown_background();
+    match served {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => output::local_error(&error.to_string(), 1),
+    }
 }
 
 /// Prints `devlanes <version>` for `-V`, `--version` and a bare `-v`.
