@@ -64,6 +64,11 @@ async fn line() -> Option<String> {
         Some(cwd) => cwd,
         None => std::env::current_dir().ok()?,
     };
+    // Lane paths are canonical, and a host's directory may not be: on macOS a
+    // temp dir is /var/... for the host and /private/var/... for the daemon.
+    let cwd = tokio::task::spawn_blocking(move || dunce::canonicalize(&cwd).unwrap_or(cwd))
+        .await
+        .ok()?;
     let paths = Paths::discover().ok()?;
     // `connect` never spawns a daemon, unlike the other commands' connect.
     let mut client = Client::connect(&paths).await.ok()?;

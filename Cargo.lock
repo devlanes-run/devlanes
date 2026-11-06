@@ -1183,6 +1183,7 @@ dependencies = [
  "devlanes-tunnel",
  "devlanes-update",
  "devlanes-version",
+ "dunce",
  "embed-resource",
  "futures-util",
  "ratatui",

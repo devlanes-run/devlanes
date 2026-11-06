@@ -86,6 +86,7 @@ devlanes-infra-compose = { path = "../../crates/infra-compose" }
 devlanes-infra-docker = { path = "../../crates/infra-docker" }
 # Same version as devlanes-infra-docker; named only to read Docker's HTTP error status.
 bollard = "0.21"
+dunce.workspace = true
 devlanes-metrics = { path = "../../crates/metrics" }
 devlanes-metrics-docker = { path = "../../crates/metrics-docker" }
 devlanes-metrics-linux = { path = "../../crates/metrics-linux" }
