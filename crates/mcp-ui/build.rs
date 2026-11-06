@@ -68,7 +68,7 @@ fn main() {
 
 /// The one inline module: the vendored file wrapped in a function whose exports
 /// become top-level constants, then each module with its `import` lines,
-/// `export` keywords, comments and indentation removed. An inline module cannot
+/// `export` keywords, comments and needless whitespace removed. An inline module cannot
 /// import another inline module, so they share one scope instead; a name two of
 /// them declare fails the build here rather than in the browser.
 fn script() -> String {
@@ -91,9 +91,142 @@ fn script() -> String {
     ));
     for module in MODULES {
         let path = Path::new("ui/js").join(module);
-        out.push_str(&module_body(&read(&path), module, &mut names));
+        out.push_str(&squeeze(&module_body(&read(&path), module, &mut names)));
+        out.push('\n');
     }
     out
+}
+
+/// `code` without the whitespace JavaScript does not need, so the card stays
+/// in its size budget. Strings and regular expressions stay as written. In
+/// template literals only a line break between two tags goes, which htm drops
+/// anyway. The modules end every statement with `;`, so no line break is
+/// needed for automatic semicolon insertion.
+fn squeeze(code: &str) -> String {
+    let chars: Vec<char> = code.chars().collect();
+    let mut out = String::with_capacity(code.len());
+    // The brace depth at each open `${`, whose `}` returns to the template text.
+    let mut open: Vec<usize> = Vec::new();
+    let mut depth = 0;
+    let mut template = false;
+    let mut space = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        if template {
+            match c {
+                '`' => template = false,
+                '\\' => {
+                    out.push(c);
+                    i += 1;
+                    out.extend(next);
+                }
+                '$' if next == Some('{') => {
+                    out.push_str("${");
+                    open.push(depth);
+                    template = false;
+                    i += 2;
+                    continue;
+                }
+                '\n' if out.ends_with('>') && next == Some('<') => {
+                    i += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            if c != '\\' {
+                out.push(c);
+            }
+            i += 1;
+            continue;
+        }
+        if c.is_whitespace() {
+            space = true;
+            i += 1;
+            continue;
+        }
+        let last = out.chars().last();
+        if space && last.is_some_and(|last| joins(last, c)) {
+            out.push(' ');
+        }
+        space = false;
+        match c {
+            '\'' | '"' => i = copy_until(&chars, i, &mut out, c),
+            '/' if last.is_none_or(|last| "(,=:[!&|?{};>+-*%~^<".contains(last)) => {
+                i = copy_regex(&chars, i, &mut out);
+            }
+            '`' => {
+                template = true;
+                out.push(c);
+                i += 1;
+            }
+            '}' if open.last() == Some(&depth) => {
+                open.pop();
+                template = true;
+                out.push(c);
+                i += 1;
+            }
+            _ => {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Whether two tokens that whitespace separated need a space to stay apart:
+/// two names or keywords, or `+ +` and `- -`.
+fn joins(last: char, next: char) -> bool {
+    let word = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    (word(last) && word(next)) || (last == next && matches!(last, '+' | '-'))
+}
+
+/// Copies the string literal at `start`, quotes and escapes included, and
+/// returns the index after it.
+fn copy_until(chars: &[char], start: usize, out: &mut String, quote: char) -> usize {
+    let mut i = start + 1;
+    out.push(quote);
+    while let Some(&c) = chars.get(i) {
+        out.push(c);
+        i += 1;
+        if c == '\\' {
+            out.extend(chars.get(i));
+            i += 1;
+        } else if c == quote {
+            break;
+        }
+    }
+    i
+}
+
+/// Copies the regular expression literal at `start` up to its closing `/`
+/// (its flags follow as code) and returns the index after it.
+fn copy_regex(chars: &[char], start: usize, out: &mut String) -> usize {
+    let mut i = start + 1;
+    let mut class = false;
+    out.push('/');
+    while let Some(&c) = chars.get(i) {
+        out.push(c);
+        i += 1;
+        match c {
+            '\\' => {
+                out.extend(chars.get(i));
+                i += 1;
+            }
+            '[' => class = true,
+            ']' => class = false,
+            '/' if !class => break,
+            _ => {}
+        }
+    }
+    i
 }
 
 /// Splits the vendored module into its code and its final `export{a as h,...}`
