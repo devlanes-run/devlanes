@@ -313,9 +313,10 @@
         <#
         Whether Exe exits with 0 for Arguments (single words), run without a window,
         with stdin closed and its output discarded. A program that does not start or
-        takes over a minute counts as failing.
+        takes over a minute counts as failing. With RefusedHint, a start that Windows
+        or a security product refuses throws instead, with the hint.
         #>
-        param([string]$Exe, [string[]]$Arguments)
+        param([string]$Exe, [string[]]$Arguments, [string]$RefusedHint)
         $start = New-Object Diagnostics.ProcessStartInfo $Exe
         $start.Arguments = $Arguments -join ' '
         $start.UseShellExecute = $false
@@ -326,6 +327,13 @@
         try {
             $process = [Diagnostics.Process]::Start($start)
         } catch {
+            $win32 = $_.Exception
+            while ($win32 -and $win32 -isnot [ComponentModel.Win32Exception]) { $win32 = $win32.InnerException }
+            # Access denied, a virus verdict, an invalid image hash (WDAC), an AppLocker
+            # or software restriction policy, and a code integrity policy (Smart App Control).
+            if ($RefusedHint -and $win32 -and @(5, 225, 226, 577, 1260, 4551) -contains $win32.NativeErrorCode) {
+                throw "devlanes install: Windows refused to run ${Exe}: $($win32.Message); $RefusedHint"
+            }
             return $false
         }
         try {
@@ -341,6 +349,19 @@
             return $process.ExitCode -eq 0
         } finally {
             $process.Dispose()
+        }
+    }
+
+    function Assert-DevlanesPresent {
+        <#
+        Throws when Exe is gone a moment after the script ran it. An antivirus
+        may quarantine a new executable when it first runs or after a background
+        scan, which would leave an install that looks successful.
+        #>
+        param([string]$Exe, [string]$Directory)
+        Start-Sleep -Seconds 2
+        if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
+            throw "devlanes install: $Exe was installed but is gone; an antivirus may have quarantined it. Restore it or exclude $Directory in the antivirus, then run this script again"
         }
     }
 
@@ -568,6 +589,11 @@
             } finally {
                 $zip.Dispose()
             }
+            # An antivirus that scans new files as they are written may already have
+            # taken it.
+            if (-not (Test-Path -LiteralPath $staged -PathType Leaf)) {
+                throw "devlanes install: the extracted devlanes.exe ($staged) is gone; an antivirus may have quarantined it. Restore it or exclude $dir in the antivirus, then run this script again"
+            }
 
             Clear-DevlanesOldCopy $dir
             $inUse = Install-DevlanesFile -Staged $staged -Directory $dir -Name 'devlanes.exe'
@@ -576,9 +602,14 @@
             Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue
         }
 
+        # A daemon keeps running the binary it started from until it restarts into this
+        # one. This first run of the new executable is also when an antivirus that
+        # distrusts it usually quarantines it.
+        $refused = "an antivirus or application control may block it. Exclude $dir in it or mark devlanes.exe as trusted, then run this script again"
+        $daemonRuns = Test-DevlanesCommand $exe @('daemon', 'status') -RefusedHint $refused
+        Assert-DevlanesPresent -Exe $exe -Directory $dir
         Write-Host "Installed devlanes $version to $dir"
-        # A daemon keeps running the binary it started from until it restarts into this one.
-        if (Test-DevlanesCommand $exe @('daemon', 'status')) {
+        if ($daemonRuns) {
             Invoke-DevlanesDaemonRestart -Exe $exe -Version $version
         } elseif ($inUse) {
             Write-Host "The previous devlanes.exe is still running and keeps running as $inUse."

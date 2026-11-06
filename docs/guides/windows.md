@@ -34,6 +34,17 @@ cargo binstall --git https://github.com/devlanes-run/devlanes devlanes
 
 Run `devlanes doctor` once after installing. The home is `%USERPROFILE%\.devlanes` (`DEVLANES_HOME` overrides it; `HOME`, which Git Bash sets, is ignored). It must be private: only your account, SYSTEM and Administrators may have access, and `doctor` prints the `icacls` commands that fix a home others can reach. The daemon listens on a named pipe, `\\.\pipe\devlanes-<hash>`, that only your account can open; there is no `daemon.sock`.
 
+### Antivirus
+
+devlanes releases are not code-signed yet, and some antivirus or application control products, such as Kaspersky or Smart App Control, distrust a new unsigned `devlanes.exe`. They may quarantine or block it, or let it run but refuse to let it start the programs the daemon runs for every unit. devlanes reports this:
+
+- `install.ps1` stops when Windows refuses to run the new `devlanes.exe`, or when it "was installed but is gone".
+- `devlanes update` says "an antivirus may have quarantined it" when the new version does not run.
+- Starting the daemon (`devlanes daemon start`, or any command that starts it) fails with "Windows refused to start the daemon", or with "the daemon exited (exit code ...) without a reason" when it was stopped before it could write one. If `devlanes daemon run` keeps running in a terminal, something outside devlanes stopped the background one.
+- `devlanes doctor` warns that Windows refused to let devlanes start `netsh`.
+
+Restore `devlanes.exe` from quarantine if needed, then exclude its directory or mark `devlanes.exe` as trusted. The directory is `%LOCALAPPDATA%\Programs\devlanes` for `install.ps1`; `(Get-Command devlanes).Source` shows it for other installers. Exclude `%USERPROFILE%\.devlanes\update` too, where `devlanes update` unpacks and first runs a new version. In Kaspersky, move `devlanes.exe` to the Trusted group under Application Control. Prefer a rule by path over one by file hash, since every update replaces the file. Smart App Control has no per-program exception; the only way past it is turning it off. AppLocker rules come from your administrator.
+
 ## Shells
 
 `run:` strings and `ready.cmd` are POSIX `sh` on every OS, so one `devlanes.yaml` works on macOS, Linux and Windows. The daemon runs them with Git for Windows' `usr\bin\sh.exe`, which it looks up once when it starts, from the `git` on its `PATH` (`git --exec-path`, else where `git.exe` sits). MSYS2's and Cygwin's own Git are not used. After installing Git for Windows, run `devlanes daemon restart`.

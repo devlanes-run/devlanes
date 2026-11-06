@@ -32,6 +32,29 @@ use crate::job::Job;
 use crate::proc::{creation_time, exit_code_of, has_exited, wait_handle};
 use crate::util::{owned, raw, wide};
 
+/// Whether a failed process start means Windows or a security product
+/// refused the executable: access denied, a virus verdict, an AppLocker or
+/// software restriction policy, or a code integrity policy (WDAC, Smart App
+/// Control).
+pub fn refused_to_start(error: &io::Error) -> bool {
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, ERROR_ACCESS_DISABLED_BY_POLICY, ERROR_INVALID_IMAGE_HASH,
+        ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION, ERROR_VIRUS_DELETED, ERROR_VIRUS_INFECTED,
+    };
+    error.raw_os_error().is_some_and(|code| {
+        [
+            ERROR_ACCESS_DENIED,
+            ERROR_VIRUS_INFECTED,
+            ERROR_VIRUS_DELETED,
+            ERROR_INVALID_IMAGE_HASH,
+            ERROR_ACCESS_DISABLED_BY_POLICY,
+            ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION,
+        ]
+        .iter()
+        .any(|refused| i32::try_from(*refused) == Ok(code))
+    })
+}
+
 /// Where one standard stream of the child goes.
 #[derive(Debug, Clone, Copy)]
 pub enum Stream<'a> {
