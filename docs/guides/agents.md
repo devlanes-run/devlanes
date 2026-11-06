@@ -120,6 +120,8 @@ Both tools refuse commands that need a terminal or never end, and say what to ru
 | Codex | 50 s |
 | OpenCode and other hosts | 25 s |
 
+Codex waits 60 s by default (`tool_timeout_sec` in [its MCP docs](https://developers.openai.com/codex/extend/mcp)). If you raise `tool_timeout_sec` or the host's own limit, the agent can pass a longer `--timeout` itself.
+
 When it passes, the call returns what is ready so far and the units keep starting; `devlanes wait` continues from there. Hosts that send a progress token get the lane's phases, such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running.
 
 ## Long-running processes

@@ -20,7 +20,10 @@
 use std::time::Duration;
 
 /// The `--timeout` added to blocking commands that have none: a little under
-/// what the host waits for a tool call before it gives up on it.
+/// what the host waits for a tool call before it gives up on it. Codex's
+/// documented `tool_timeout_sec` default is 60 s
+/// (developers.openai.com/codex/extend/mcp), so its 50 s holds even where newer
+/// builds wait longer.
 pub fn default_timeout(client: &str) -> Duration {
     let client = client.to_ascii_lowercase();
     Duration::from_secs(if client.contains("claude-code") {
