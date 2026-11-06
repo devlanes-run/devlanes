@@ -112,17 +112,26 @@ A call runs in the `cwd` it names (relative to the server's directory), else in 
 
 Both tools refuse commands that need a terminal or never end, and say what to run instead: `ui`, `attach`, `start --attach`, `env shell`, `setup`, `update`, `uninstall`, `completions`, `status --statusline`, `daemon run`, `daemon logs -f`, and `logs -f`, `status --watch`, `debug events -f` or `infra logs -f` without `--timeout`.
 
-`start`, `restart`, `reload`, `wait`, `with` and `lane resume` without `--timeout` get one a little under the time the host waits for a tool call:
+Hosts that send a progress token get the lane's phases, such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running.
 
-| Host | Timeout |
-|---|---|
-| Claude Code | 170 s |
-| Codex | 50 s |
-| OpenCode and other hosts | 25 s |
+## Tool call timeouts
 
-Codex waits 60 s by default (`tool_timeout_sec` in [its MCP docs](https://developers.openai.com/codex/extend/mcp)). If you raise `tool_timeout_sec` or the host's own limit, the agent can pass a longer `--timeout` itself.
+Most calls answer in milliseconds. `start`, `restart`, `reload`, `wait`, `with` and `lane resume` wait for the project instead: containers turning healthy, setup steps, first compiles, a test run. Every host also gives up on a tool call after a while, and when the host gives up first the agent gets a bare timeout with no devlanes output, so it cannot tell what came up or what failed.
 
-When it passes, the call returns what is ready so far and the units keep starting; `devlanes wait` continues from there. Hosts that send a progress token get the lane's phases, such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running.
+So when one of those commands names no `--timeout`, the server adds one a little under the host's limit, chosen from the name the host sends when it connects:
+
+| Host | Host's limit | `--timeout` added |
+|---|---|---|
+| Claude Code | about 28 hours, or `MCP_TOOL_TIMEOUT` | 170 s, or a little under `MCP_TOOL_TIMEOUT` |
+| Codex | 60 s (`tool_timeout_sec`) | 50 s |
+| OpenCode | 30 s | 25 s |
+| any other host | not known | 60 s |
+
+When the timeout passes, the call returns what is ready so far, such as `2/3 ready, web starting`, and the units keep starting in the daemon; the agent calls `devlanes wait` to continue. A timeout that is too short costs an extra `wait` call, and one longer than the host's limit brings back the bare timeout, so the values lean short. A `--timeout` the agent passes itself is never changed.
+
+Claude Code reads `MCP_TOOL_TIMEOUT`, in milliseconds, for every MCP tool call, and its MCP servers inherit Claude Code's environment, so `devlanes mcp` sees the same value and stays a tenth under it (between 1 s and 10 s under). A per-server `timeout` in `.mcp.json` is not visible to the server; set `MCP_TOOL_TIMEOUT` instead, or let the agent pass `--timeout`. See [Claude Code's time limits on MCP tool calls](https://code.claude.com/docs/en/mcp#time-limits-on-mcp-tool-calls).
+
+Codex documents a 60 s default for `tool_timeout_sec` ([Codex MCP docs](https://developers.openai.com/codex/extend/mcp)). If you raise it under `[mcp_servers.devlanes]` in `config.toml`, the server still adds 50 s; the agent can pass a longer `--timeout` itself.
 
 ## Long-running processes
 

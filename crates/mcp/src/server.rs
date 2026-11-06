@@ -122,7 +122,7 @@ impl Server {
             call.default_lane(lane);
         }
         let client = client_name(context);
-        let limit = call.limit(host::default_timeout(&client));
+        let limit = call.limit(self.default_timeout(&client));
         let runner = self.runner(&client);
         // An answer the client gives on its second call (2026-07-28) comes first.
         match consent_answer(request) {
@@ -314,6 +314,11 @@ impl Server {
     /// `--read-only`.
     pub(crate) fn read_only(&self) -> bool {
         self.config.read_only
+    }
+
+    /// The `--timeout` for blocking commands of `client` that name none.
+    pub(crate) fn default_timeout(&self, client: &str) -> std::time::Duration {
+        host::default_timeout(client, &self.config.env)
     }
 
     /// `--lane`.

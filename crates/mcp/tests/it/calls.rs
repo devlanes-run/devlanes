@@ -95,6 +95,39 @@ async fn blocking_commands_get_the_hosts_timeout() {
 }
 
 #[tokio::test]
+/// Claude Code's `MCP_TOOL_TIMEOUT` in the server's environment sets the
+/// limit, and a client the server does not know gets 60 s.
+async fn the_hosts_tool_timeout_sets_the_limit() {
+    tokio::time::timeout(LIMIT, async {
+        let claude = connect(
+            TestClient::new().named("claude-code"),
+            Lifecycle::Initialize,
+            |config| {
+                config.agent_detected = true;
+                config
+                    .env
+                    .insert("MCP_TOOL_TIMEOUT".into(), "600000".into());
+            },
+        )
+        .await;
+        claude.call("devlanes", &["start"]).await;
+        let other = connect(
+            TestClient::new().named("acme-client"),
+            Lifecycle::Initialize,
+            |config| {
+                config.agent_detected = true;
+            },
+        )
+        .await;
+        other.call("devlanes", &["start"]).await;
+        assert_eq!(claude.lines(), ["--output agent start --timeout 590s"]);
+        assert_eq!(other.lines(), ["--output agent start --timeout 60s"]);
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
 /// The directory: the call's cwd first, then `--path`; `--lane` adds the flag.
 async fn calls_run_where_asked() {
     tokio::time::timeout(LIMIT, async {

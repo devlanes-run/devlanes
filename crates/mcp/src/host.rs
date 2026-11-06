@@ -17,23 +17,55 @@
 //!   (`crates/goose/src/agents/services.rs`).
 //! - Claude Desktop: `claude-ai` (canimcp.dev).
 
-use std::time::Duration;
+use std::{collections::BTreeMap, time::Duration};
+
+/// Claude Code's limit for every MCP tool call, in milliseconds
+/// (code.claude.com/docs/en/mcp, "Time limits on MCP tool calls"). Its servers
+/// inherit Claude Code's environment, so a value set there reaches this one.
+const CLAUDE_CODE_TOOL_TIMEOUT: &str = "MCP_TOOL_TIMEOUT";
 
 /// The `--timeout` added to blocking commands that have none: a little under
-/// what the host waits for a tool call before it gives up on it. Codex's
-/// documented `tool_timeout_sec` default is 60 s
+/// what the host waits for a tool call before it gives up on it.
+///
+/// Codex's documented `tool_timeout_sec` default is 60 s
 /// (developers.openai.com/codex/extend/mcp), so its 50 s holds even where newer
-/// builds wait longer.
-pub fn default_timeout(client: &str) -> Duration {
+/// builds wait longer. OpenCode waits 30 s. Claude Code waits about 28 hours
+/// unless `MCP_TOOL_TIMEOUT` says otherwise; without it the CLI's own 180 s
+/// default would do, and 170 s keeps the result in the call rather than in a
+/// background task for longer. Other hosts get 60 s, the default request
+/// timeout of the MCP TypeScript SDK many clients are built on.
+pub fn default_timeout(client: &str, env: &BTreeMap<String, String>) -> Duration {
     let client = client.to_ascii_lowercase();
-    Duration::from_secs(if client.contains("claude-code") {
-        170
-    } else if client.contains("codex") {
+    if client.contains("claude-code") {
+        return claude_code_limit(env)
+            .map(under)
+            .unwrap_or(Duration::from_secs(170));
+    }
+    Duration::from_secs(if client.contains("codex") {
         50
-    } else {
-        // OpenCode waits 30 s by default; unknown hosts get the same margin.
+    } else if client.contains("opencode") {
         25
+    } else {
+        60
     })
+}
+
+/// `MCP_TOOL_TIMEOUT` as Claude Code reads it: whole milliseconds, where values
+/// below 1000 are ignored.
+fn claude_code_limit(env: &BTreeMap<String, String>) -> Option<Duration> {
+    env.get(CLAUDE_CODE_TOOL_TIMEOUT)?
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .filter(|ms| *ms >= 1000)
+        .map(Duration::from_millis)
+}
+
+/// A little under `limit`, so devlanes answers before the host gives up: a
+/// tenth of it, between 1 s and 10 s, and never below 1 s in total.
+fn under(limit: Duration) -> Duration {
+    let margin = (limit / 10).clamp(Duration::from_secs(1), Duration::from_secs(10));
+    limit.saturating_sub(margin).max(Duration::from_secs(1))
 }
 
 /// The `AI_AGENT` value is-ai-agent 0.7 knows for this client (`claude-code`,
@@ -65,7 +97,7 @@ mod tests {
     /// Asserts the timeout and agent id for a `clientInfo.name`.
     fn host(client: &str, timeout: u64, agent: Option<&str>) {
         assert_eq!(
-            default_timeout(client),
+            default_timeout(client, &BTreeMap::new()),
             Duration::from_secs(timeout),
             "{client}"
         );
@@ -75,6 +107,28 @@ mod tests {
     #[test]
     fn claude_code() {
         host("claude-code", 170, Some("claude-code"));
+    }
+
+    /// Claude Code's `MCP_TOOL_TIMEOUT` sets the limit; values Claude Code
+    /// ignores (below 1000 ms, not a number) leave the default.
+    #[test]
+    fn claude_code_tool_timeout() {
+        let limit = |value: &str| {
+            let env = BTreeMap::from([(CLAUDE_CODE_TOOL_TIMEOUT.to_owned(), value.to_owned())]);
+            default_timeout("claude-code", &env)
+        };
+        assert_eq!(limit("600000"), Duration::from_secs(590));
+        assert_eq!(limit("60000"), Duration::from_secs(54));
+        assert_eq!(limit("5000"), Duration::from_secs(4));
+        assert_eq!(limit("1000"), Duration::from_secs(1));
+        assert_eq!(limit("999"), Duration::from_secs(170));
+        assert_eq!(limit("ten minutes"), Duration::from_secs(170));
+        // Only Claude Code reads the variable.
+        let env = BTreeMap::from([(CLAUDE_CODE_TOOL_TIMEOUT.to_owned(), "600000".to_owned())]);
+        assert_eq!(
+            default_timeout("codex-mcp-client", &env),
+            Duration::from_secs(50)
+        );
     }
 
     #[test]
@@ -90,37 +144,37 @@ mod tests {
 
     #[test]
     fn cursor() {
-        host("cursor-vscode", 25, Some("cursor"));
-        host("cursor-vscode (via mcp-remote 0.1.37)", 25, Some("cursor"));
+        host("cursor-vscode", 60, Some("cursor"));
+        host("cursor-vscode (via mcp-remote 0.1.37)", 60, Some("cursor"));
     }
 
     #[test]
     fn vs_code_copilot() {
-        host("Visual Studio Code", 25, Some("github-copilot"));
-        host("Visual Studio Code - Insiders", 25, Some("github-copilot"));
-        host("github-copilot-developer", 25, Some("github-copilot"));
+        host("Visual Studio Code", 60, Some("github-copilot"));
+        host("Visual Studio Code - Insiders", 60, Some("github-copilot"));
+        host("github-copilot-developer", 60, Some("github-copilot"));
     }
 
     #[test]
     fn gemini_cli() {
-        host("gemini-cli-mcp-client", 25, Some("gemini-cli"));
+        host("gemini-cli-mcp-client", 60, Some("gemini-cli"));
     }
 
     #[test]
     fn goose() {
-        host("goose-cli", 25, Some("goose"));
-        host("goose-desktop", 25, Some("goose"));
+        host("goose-cli", 60, Some("goose"));
+        host("goose-desktop", 60, Some("goose"));
     }
 
     #[test]
     fn claude_desktop() {
-        host("claude-ai", 25, None);
+        host("claude-ai", 60, None);
     }
 
     #[test]
     fn unknown() {
-        host("", 25, None);
-        host("acme-client", 25, None);
+        host("", 60, None);
+        host("acme-client", 60, None);
     }
 
     /// Every id the table sets is one is-ai-agent 0.7 classifies as that agent,

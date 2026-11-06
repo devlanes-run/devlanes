@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 
 use crate::{
     command::{Call, Rejected},
-    host,
     server::{Server, arguments, client_name, execute, text_result},
     text,
 };
@@ -206,7 +205,7 @@ pub async fn call(
             if default_lane && let Some(lane) = server.lane() {
                 call.default_lane(lane);
             }
-            let limit = call.limit(host::default_timeout(&client));
+            let limit = call.limit(server.default_timeout(&client));
             let (output, notes) = execute(&runner, &call, &cwd, limit, context).await?;
             let mut text = output.stdout.clone();
             for extra in std::iter::once(&output.stderr).chain(&notes) {

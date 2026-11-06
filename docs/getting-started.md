@@ -88,7 +88,7 @@ Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every 
 
 ## Coding agents
 
-Agents should start services through devlanes instead of backgrounding `pnpm dev &` in their shell. The devlanes skill teaches them how; install it with `npx skills add devlanes-run/devlanes --skill devlanes`. [Coding agents](guides/agents.md) also covers `devlanes mcp`, an optional MCP server. When devlanes detects an agent it switches to terse output with failures first; `devlanes exec --name NAME -- COMMAND` runs a long-running process that is not in `devlanes.yaml` as a unit, and `devlanes wait` and budgeted `devlanes logs` let the agent check on it.
+Agents should start services through devlanes instead of backgrounding `pnpm dev &` in their shell. The devlanes skill teaches them how; install it with `npx skills add devlanes-run/devlanes --skill devlanes`. [Coding agents](guides/mcp.md) also covers `devlanes mcp`, an optional MCP server. When devlanes detects an agent it switches to terse output with failures first; `devlanes exec --name NAME -- COMMAND` runs a long-running process that is not in `devlanes.yaml` as a unit, and `devlanes wait` and budgeted `devlanes logs` let the agent check on it.
 
 In CI, `devlanes with -- pnpm test:e2e` starts the lane, runs the command with the lane's URLs in its environment, stops what it started and exits with the command's code.
 
@@ -126,7 +126,7 @@ For more detail in the daemon's log, restart it with a level: `DEVLANES_LOG=debu
 
 - [CLI reference](reference/cli.md): every command and option.
 - [Config reference](reference/config.md): every field of `devlanes.yaml` and the user `config.yaml`.
-- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [lane lifecycle](guides/lifecycle.md), [terminals](guides/terminals.md), [coding agents](guides/agents.md), [remote setup](guides/remote-setup.md).
+- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [lane lifecycle](guides/lifecycle.md), [terminals](guides/terminals.md), [coding agents](guides/mcp.md), [remote setup](guides/remote-setup.md).
 - [Remote boxes](remote.md): run lanes on another machine and use them locally.
 - [Design](design.md): lanes, ports, the daemon and startup order.
 - [Observability](observability.md): the daemon's spans and diagnostics, and plans for tracing and benchmarks.

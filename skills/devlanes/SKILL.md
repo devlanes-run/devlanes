@@ -9,7 +9,7 @@ devlanes runs each Git worktree of a project as a lane with its own ports, hostn
 
 When the CLI detects an agent it prints terse, size-capped text and never prompts. Add `--json` to any command for complete structured output.
 
-`devlanes mcp` is an optional MCP server with the same commands as tools; [docs/guides/agents.md](https://github.com/devlanes-run/devlanes/blob/main/docs/guides/agents.md) shows how to register it with each agent.
+`devlanes mcp` is an optional MCP server with the same commands as tools; [docs/guides/mcp.md](https://github.com/devlanes-run/devlanes/blob/main/docs/guides/mcp.md) shows how to register it with each agent.
 
 This page covers daily use. Read a reference first when the task is about the config itself:
 

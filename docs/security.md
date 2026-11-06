@@ -30,7 +30,7 @@ On Windows an elevated daemon still accepts your unelevated processes ([elevated
 
 ### Sandboxes
 
-A command that finds no daemon starts one, except when it looks sandboxed. It refuses with `auto-spawn refused in sandbox (...)` when `CODEX_SANDBOX` or `APP_SANDBOX_CONTAINER_ID` is set, when connecting to an existing socket or pipe is denied, when it may not create the daemon's directories, or when it cannot create a throwaway socket next to the real one (a throwaway pipe on Windows). The message says to start devlanes outside the sandbox, to run `devlanes daemon install`, or to register `devlanes mcp` with the agent, whose MCP servers run outside its sandbox ([agents](guides/agents.md)).
+A command that finds no daemon starts one, except when it looks sandboxed. It refuses with `auto-spawn refused in sandbox (...)` when `CODEX_SANDBOX` or `APP_SANDBOX_CONTAINER_ID` is set, when connecting to an existing socket or pipe is denied, when it may not create the daemon's directories, or when it cannot create a throwaway socket next to the real one (a throwaway pipe on Windows). The message says to start devlanes outside the sandbox, to run `devlanes daemon install`, or to register `devlanes mcp` with the agent, whose MCP servers run outside its sandbox ([coding agents](guides/mcp.md)).
 
 A daemon started outside the sandbox stays outside it. A sandboxed process that is allowed to reach that daemon's endpoint can use every method, and what it asks for runs with the daemon's rights, outside the sandbox. On Windows the pipe's label refuses low-integrity processes; on Unix it depends on whether the sandbox lets the process connect to the socket.
 
