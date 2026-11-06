@@ -48,6 +48,15 @@ Examples:
   devlanes logs api -f --timeout 30s
   devlanes logs --all --since start";
 
+const STATUS_AFTER: &str = "\
+Examples:
+  devlanes status                      lanes of this project
+  devlanes status acme@2               one lane with its units
+  devlanes status --statusline         one line, such as: acme@1 3/3 ready · web acme1.localhost
+
+Claude Code shows that line under its prompt with this in ~/.claude/settings.json:
+  \"statusLine\": {\"type\": \"command\", \"command\": \"devlanes status --statusline\"}";
+
 const WITH_AFTER: &str = "\
 Examples:
   devlanes with -- pnpm test
@@ -150,6 +159,7 @@ what changed."
     )]
     Reload(ReloadArgs),
     /// Show lanes and units with state, ports, URLs, CPU and memory
+    #[command(after_help = STATUS_AFTER)]
     Status(StatusArgs),
     /// Read unit logs; each line carries a cursor to continue from
     #[command(
@@ -380,6 +390,9 @@ pub struct StatusArgs {
     /// Only show units this agent session started
     #[arg(long)]
     pub mine: bool,
+    /// Print one line for the current directory's lane, for an editor or agent status line; reads Claude Code's status line JSON on stdin, never starts the daemon and prints nothing without a lane
+    #[arg(long, conflicts_with_all = ["watch", "mine", "status_lane"])]
+    pub statusline: bool,
 }
 
 #[derive(Debug, Args)]
@@ -1144,6 +1157,12 @@ impl Cli {
                 }
                 (Method::Reload, params)
             }
+            // The binary runs it before any of this: it needs no runtime, request or reporter.
+            Some(Command::Status(args)) if args.statusline => {
+                return Err(Error::Usage(
+                    "status --statusline runs only as a status line command".into(),
+                ));
+            }
             Some(Command::Status(args)) => {
                 if runtime.mode == OutputMode::Agent && args.watch && self.timeout.is_none() {
                     return Err(Error::Usage(
@@ -1542,6 +1561,11 @@ impl Cli {
             }
         }
         InterruptPolicy::Detach
+    }
+
+    /// `status --statusline`, which the binary answers without a runtime or reporter.
+    pub fn statusline(&self) -> bool {
+        matches!(&self.command, Some(Command::Status(args)) if args.statusline)
     }
 
     /// Identifies commands whose JSON output is an NDJSON stream.

@@ -144,6 +144,17 @@ devlanes status [OPTIONS] [LANE]
 - `[LANE]`: Lane to show ([project@]lane) [default: every lane of the current project]
 - `--watch`: Keep printing lane changes until interrupted
 - `--mine`: Only show units this agent session started
+- `--statusline`: Print one line for the current directory's lane, for an editor or agent status line; reads Claude Code's status line JSON on stdin, never starts the daemon and prints nothing without a lane
+
+```text
+Examples:
+  devlanes status                      lanes of this project
+  devlanes status acme@2               one lane with its units
+  devlanes status --statusline         one line, such as: acme@1 3/3 ready · web acme1.localhost
+
+Claude Code shows that line under its prompt with this in ~/.claude/settings.json:
+  "statusLine": {"type": "command", "command": "devlanes status --statusline"}
+```
 
 ### devlanes logs
 

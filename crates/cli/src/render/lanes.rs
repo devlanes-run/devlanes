@@ -646,7 +646,7 @@ pub(super) fn stop(data: &Value, cx: &Ctx<'_>) -> Vec<String> {
 }
 
 /// Service units of a lane.
-fn services(lane: &LaneSummary) -> Vec<&UnitSummary> {
+pub(super) fn services(lane: &LaneSummary) -> Vec<&UnitSummary> {
     lane.units
         .iter()
         .filter(|unit| unit.kind.is_empty() || unit.kind == "service")
@@ -720,7 +720,7 @@ fn lane_warning_lines(lane: &LaneSummary, cx: &Ctx<'_>) -> Vec<String> {
 
 /// Whether `url` goes straight to a port on this machine (`http://127.0.0.1:20101`)
 /// rather than through the proxy by hostname.
-fn loopback(url: &str) -> bool {
+pub(super) fn loopback(url: &str) -> bool {
     let authority = url
         .split_once("://")
         .map_or(url, |(_, rest)| rest)
