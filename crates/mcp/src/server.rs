@@ -28,7 +28,7 @@ use crate::{
     command::{Call, Rejected, Tool as Source},
     host,
     progress::{self, Phases},
-    text, view,
+    shell_env, text, view,
 };
 
 /// The key of the consent question in an `InputRequiredResult`.
@@ -44,6 +44,7 @@ const DATA_LIMIT: usize = 256 * 1024;
 pub struct Server {
     config: Arc<Config>,
     calls: Calls,
+    shell_env: shell_env::Cache,
 }
 
 /// `{args, cwd?}`, the arguments of both model-facing tools.
@@ -70,9 +71,12 @@ pub(crate) enum Answer {
 impl Server {
     /// A server for `config`. It starts no process until a tool is called.
     pub fn new(config: Config) -> Self {
+        let shell_env =
+            shell_env::Cache::new(config.shell_env, config.exe.clone(), config.env.clone());
         Self {
             config: Arc::new(config),
             calls: Calls::default(),
+            shell_env,
         }
     }
 
@@ -257,6 +261,7 @@ impl Server {
             exe: self.config.exe.clone(),
             env,
             calls: self.calls.clone(),
+            shell_env: self.shell_env.clone(),
         }
     }
 }
@@ -432,9 +437,11 @@ pub(crate) fn client_name(context: &RequestContext<RoleServer>) -> String {
 }
 
 /// Runs `call` with the lane's env first; when the lane has none, again with the
-/// server's, saying so in a note. Phases go to the client as progress while a
-/// start runs, counted over both runs. Fails with the text to show when the
-/// command could not be started, such as for a `cwd` that does not exist.
+/// login shell's environment over the server's, or with the server's alone when
+/// the login shell's cannot be read, saying so in a note. Phases go to the
+/// client as progress while a start runs, counted over both runs. Fails with
+/// the text to show when the command could not be started, such as for a `cwd`
+/// that does not exist.
 pub(crate) async fn execute(
     runner: &Runner,
     call: &Call,
@@ -445,15 +452,47 @@ pub(crate) async fn execute(
     let mut notes = Vec::new();
     let mut phases = Phases::of(call.cli.lane.as_deref());
     let mut output = run(runner, call, cwd, limit, true, &mut phases, context).await?;
-    if error_of(&output.data, "needs_env").is_some() && !output.cancelled {
-        output = run(runner, call, cwd, limit, false, &mut phases, context).await?;
-        notes.push(
-            "note: the lane had no environment from a shell, so it got the environment of the \
-             devlanes mcp server"
-                .to_owned(),
-        );
+    let Some(needs_env) = error_of(&output.data, "needs_env").filter(|_| !output.cancelled) else {
+        return Ok((output, notes));
+    };
+    let lane = needs_env
+        .pointer("/data/lane")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or_else(|| call.cli.lane.clone());
+    let resolved = tokio::select! {
+        resolved = runner.shell_env.get() => resolved,
+        () = context.ct.cancelled() => {
+            output.cancelled = true;
+            return Ok((output, notes));
+        }
+    };
+    match resolved {
+        Ok(shell) => {
+            let runner = runner.with_shell_env(&shell.env);
+            output = run(&runner, call, cwd, limit, false, &mut phases, context).await?;
+            notes.push(shell_env::resolved_note(&shell.shell));
+        }
+        Err(error) => {
+            output = run(runner, call, cwd, limit, false, &mut phases, context).await?;
+            notes.push(
+                "note: the lane had no environment from a shell, so it got the environment of \
+                 the devlanes mcp server"
+                    .to_owned(),
+            );
+            if command_not_found(&output) {
+                notes.push(shell_env::not_found_hint(lane.as_deref(), error));
+            }
+        }
     }
     Ok((output, notes))
+}
+
+/// Whether a unit of the command failed because its program is not on the
+/// lane's `PATH`, in the words the CLI's output uses for it.
+fn command_not_found(output: &Output) -> bool {
+    const NOT_FOUND: &str = "command not found on PATH";
+    output.stdout.contains(NOT_FOUND) || output.stderr.contains(NOT_FOUND)
 }
 
 /// One run of `call`, with progress for starts when the request asked for it.

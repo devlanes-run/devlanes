@@ -16,6 +16,10 @@ const GRANDCHILD: &str = "--fake-grandchild";
 
 /// Runs one invocation.
 fn main() -> ExitCode {
+    // The payload a login shell runs, as `devlanes __shell-env MARK` does.
+    if std::env::args().nth(1).as_deref() == Some(devlanes_mcp::shell_env::PAYLOAD_ARG) {
+        return devlanes_mcp::shell_env::print_payload(std::env::args_os().skip(2));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     // A process the command leaves running with its stdout: ticks into
@@ -54,6 +58,7 @@ fn main() -> ExitCode {
             "codex_thread_id": var("CODEX_THREAD_ID"),
             "no_spawn": var("DEVLANES_NO_SPAWN"),
             "json_out": var("DEVLANES_JSON_OUT").is_some(),
+            "profile": var("FAKE_PROFILE"),
         });
         append(&log, &record.to_string());
     }
@@ -95,6 +100,14 @@ fn main() -> ExitCode {
             json_out(json!({"event": "with.summary", "lane": "acme@1", "items": []}));
         }
         eprintln!("error: the daemon restarted and lost this lane's shell environment");
+        return ExitCode::from(1);
+    }
+    // A unit whose program is not on the lane's PATH, as the agent output says it.
+    if var("FAKE_NOT_FOUND").is_some() {
+        println!(
+            "acme@1 (main): not ready, 1 failed\nfailed api\n  couldn't start: pnpm: command not \
+             found on PATH"
+        );
         return ExitCode::from(1);
     }
     if var("FAKE_CONFIRM").is_some() && !has("--yes") {

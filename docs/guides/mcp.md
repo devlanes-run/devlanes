@@ -162,13 +162,42 @@ The prompts help the user catch an agent's mistakes and are not a security bound
 
 ## Environment
 
-Units get the environment of the shell that started their lane ([environment](ports-and-env.md#environment)). An MCP call first sends no environment, so a lane started from a shell keeps that shell's environment for `start`, `restart`, `exec` and the other commands that start processes. When the lane has none, because no shell started it since the daemon started, the call runs again with the environment the host gave the MCP server, and the result ends with:
+Units get the environment of the shell that started their lane ([environment](ports-and-env.md#environment)). An MCP call first sends no environment, so a lane started from a shell keeps that shell's environment for `start`, `restart`, `exec` and the other commands that start processes. When the lane has none, because no shell started it since the daemon started, the call runs again with another environment, and the lane keeps it for later calls.
+
+The environment the host gives the MCP server is often thinner than a shell's: apps opened from the Dock or the Start menu, such as Claude Desktop, get a `PATH` without what your shell profile adds (nvm, fnm or mise directories, `export` lines), and Codex passes MCP servers only a few variables. So on macOS and Linux the server first reads the environment of your login shell, the way VS Code, JetBrains IDEs and Zed do when opened from the desktop: it runs `$SHELL` as an interactive login shell in your home directory, which runs your profile and then has the devlanes binary print the environment. It does this once per server process, on the first call that needs it, and keeps the result (or the failure) in memory only. The result says so:
+
+```text
+note: the lane had no environment from a shell, so devlanes mcp read it from your login shell (zsh)
+```
+
+The server skips this when `SHLVL` is set and above 0 in its own environment, which means a terminal started the host and its environment already went through your profile. Two variables in the host's MCP config change this:
+
+- `DEVLANES_SHELL_ENV=0` never reads the login shell; `DEVLANES_SHELL_ENV=1` reads it even when `SHLVL` is set.
+- `DEVLANES_SHELL_ENV_TIMEOUT` is how many seconds the shell may take, 10 by default, from 1 to 120. A shell that takes longer is stopped.
+
+When the login shell cannot be read, the call uses the server's own environment and the result ends with:
 
 ```text
 note: the lane had no environment from a shell, so it got the environment of the devlanes mcp server
 ```
 
-The lane keeps that environment for later calls. It is often thinner than a shell's: apps opened from the desktop, such as Claude Desktop, get a short `PATH`, and Codex passes MCP servers only a few variables, so services can fail with `command not found on PATH`. Run `devlanes restart` in the worktree from a terminal once; the lane then keeps that terminal's environment, and MCP calls use it until the daemon stops ([bringing a lane back](lifecycle.md#bringing-a-lane-back)).
+If a service then fails with `command not found on PATH`, the result adds a line with the fix and, on macOS and Linux, why the login shell failed. Running `devlanes restart` in the worktree from a terminal once always works: the lane then keeps that terminal's environment, and MCP calls use it until the daemon stops ([bringing a lane back](lifecycle.md#bringing-a-lane-back)).
+
+On Windows the server does not read a profile unless you ask, since apps started from the Start menu already get your user and system `PATH`. Tools that add to `PATH` only from a PowerShell profile, such as fnm with `fnm env --use-on-cd | Out-String | Invoke-Expression`, are missing then. Set `DEVLANES_SHELL_ENV` to `pwsh` (PowerShell 7) or `powershell` (Windows PowerShell 5.1) in the MCP server's `env`, and the server runs it with your profile, under your execution policy:
+
+```json
+{
+  "mcpServers": {
+    "devlanes": {
+      "command": "C:\\Users\\acme\\AppData\\Local\\Programs\\devlanes\\devlanes.exe",
+      "args": ["mcp"],
+      "env": {"DEVLANES_SHELL_ENV": "pwsh"}
+    }
+  }
+}
+```
+
+For fnm there is also a fixed directory to add to your user `PATH` instead: `<FNM_DIR>\aliases\default` (by default `%APPDATA%\fnm\aliases\default`) always points at the default Node version, so every app finds `node` and `pnpm` without a profile.
 
 ## Actors and --mine
 

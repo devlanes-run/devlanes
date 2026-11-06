@@ -69,9 +69,19 @@ pub struct Runner {
     /// The child's whole environment.
     pub env: BTreeMap<String, String>,
     pub calls: Calls,
+    /// The login shell's environment, for a lane that has none from a shell.
+    pub shell_env: crate::shell_env::Cache,
 }
 
 impl Runner {
+    /// This runner with the variables of `shell` set over its environment.
+    pub fn with_shell_env(&self, shell: &BTreeMap<String, String>) -> Self {
+        Self {
+            env: crate::shell_env::merge(&self.env, shell),
+            ..self.clone()
+        }
+    }
+
     /// Runs `exe --output agent ARGS` in `cwd` until it exits or `cancel` fires,
     /// which interrupts it. With `from_lane` the child sends the daemon no env.
     /// Stdin is closed and stdout piped, so the child never touches the MCP stream.

@@ -9,6 +9,7 @@ mod command;
 mod host;
 mod progress;
 mod server;
+pub mod shell_env;
 mod text;
 mod view;
 
@@ -64,6 +65,8 @@ pub struct Config {
     /// Whether the environment already names an AI agent, so the client's name
     /// is not needed to tell the commands who runs them.
     pub agent_detected: bool,
+    /// Reads the login shell's environment when a lane has none from a shell.
+    pub shell_env: shell_env::Resolver,
 }
 
 impl Config {
@@ -82,6 +85,7 @@ impl Config {
                 .collect(),
             cwd: std::env::current_dir()?,
             agent_detected: devlanes_cli::Signals::detect().detected_actor.is_some(),
+            shell_env: shell_env::resolve,
         })
     }
 }

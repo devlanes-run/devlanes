@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 - `serve(config)`: serves MCP on stdio until the client leaves.
 - `Server::new(config)`: the rmcp handler, for serving over another transport (the tests use an in-memory pipe).
 - `Config`: the executable to run, `--read-only`, `--lane`, `--path`, the environment and directory of the calls.
+- `shell_env::resolve` and `shell_env::print_payload`: read the login shell's environment, and the `devlanes __shell-env MARK` side that prints it.
 - `UiResource`: the MCP Apps HTML (`ui://devlanes/lane.html`), given by the binary from `devlanes-mcp-ui`; `UiResource::placeholder()` is a minimal page for tests.
 
 ## Tools
@@ -34,7 +35,7 @@ A result's text is the command's stdout and stderr; `structuredContent` holds `{
 
 ## Child processes
 
-Nothing connects to the daemon when the server starts. Each call spawns the devlanes binary with stdin closed and stdout and stderr piped, so the protocol stream stays clean. The first run sets `DEVLANES_ENV_FROM_LANE=1`, so a lane a shell started keeps that shell's environment; when the daemon answers `needs_env`, the call runs again with the server's environment and the result says so. When the environment names no agent, `AI_AGENT` comes from the client's name. Cancelling a call kills its child; the daemon keeps doing what was asked.
+Nothing connects to the daemon when the server starts. Each call spawns the devlanes binary with stdin closed and stdout and stderr piped, so the protocol stream stays clean. The first run sets `DEVLANES_ENV_FROM_LANE=1`, so a lane a shell started keeps that shell's environment; when the daemon answers `needs_env`, the call runs again with the environment of the user's login shell over the server's (`shell_env`, read once per server: `$SHELL` on Unix unless `SHLVL` is above 0, PowerShell on Windows only with `DEVLANES_SHELL_ENV=pwsh` or `powershell`), or with the server's alone when that fails, and the result says which. When the environment names no agent, `AI_AGENT` comes from the client's name. Cancelling a call kills its child; the daemon keeps doing what was asked.
 
 ## Codex on Windows
 

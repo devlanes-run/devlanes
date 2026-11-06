@@ -1483,6 +1483,7 @@ version = "0.1.0"
 dependencies = [
  "devlanes-cli",
  "devlanes-proto",
+ "devlanes-sys",
  "devlanes-sys-windows",
  "devlanes-version",
  "insta",
