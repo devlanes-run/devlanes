@@ -168,6 +168,10 @@ jobs:
             rm "$manifest.orig"
           done
           cargo update --workspace --quiet
+      # build.rs puts it in the version resource's source link; a step of its own, so
+      # a failing git fails the job.
+      - name: Built commit
+        run: echo "DEVLANES_BUILD_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       # devlanes-hosts is Unix-only; .cargo/config.toml links the C runtime statically.
       - name: Build
         env:
@@ -179,6 +183,15 @@ jobs:
       - name: Smoke test
         run: |
           "target/$TARGET/release/devlanes.exe" --version | tr -d '\r' | grep -Fx "devlanes $VERSION"
+      # build.rs embeds it; Explorer, Task Manager and antivirus heuristics read it.
+      - name: Check the version resource
+        shell: pwsh
+        run: |
+          $info = (Get-Item "target/$env:TARGET/release/devlanes.exe").VersionInfo
+          if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne 'devlanes-cli' -or
+              -not ([string]$info.Comments).Contains("/tree/$env:DEVLANES_BUILD_COMMIT")) {
+            throw "unexpected version resource: $($info | Format-List | Out-String)"
+          }
       # The Visual C++ Redistributable is not part of Windows, so the executable must
       # not import its DLLs.
       - name: Check the C runtime is linked statically

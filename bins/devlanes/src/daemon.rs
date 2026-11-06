@@ -24,22 +24,18 @@ const LOG_ROTATE_BYTES: u64 = 10 * 1024 * 1024;
 
 /// `devlanes daemon run`: detach, take the lock, reconcile, announce readiness, serve.
 pub fn run() -> ExitCode {
+    // Only reads the environment, so it may come before detaching.
+    let readiness = Readiness::from_env();
     // Leave the spawning terminal's session before any thread exists.
     if let Err(error) = detach() {
-        eprintln!("error: cannot detach daemon: {error}");
-        return ExitCode::from(1);
+        return early_failure(readiness, &format!("cannot detach daemon: {error}"));
     }
-    let readiness = Readiness::from_env();
     let paths = match Paths::discover() {
         Ok(paths) => paths,
-        Err(error) => {
-            eprintln!("error: {error}");
-            return ExitCode::from(1);
-        }
+        Err(error) => return early_failure(readiness, &error.to_string()),
     };
     if let Err(error) = paths.prepare() {
-        eprintln!("error: {error}");
-        return ExitCode::from(1);
+        return early_failure(readiness, &error.to_string());
     }
     let _log_guard = init_logging(&paths);
     // Panics would otherwise go to the detached stderr and leave no trace.
@@ -64,6 +60,7 @@ pub fn run() -> ExitCode {
         Ok(tokio) => tokio,
         Err(error) => {
             tracing::error!(%error, "runtime");
+            let _ = readiness.failed(&format!("cannot start the async runtime: {error}"));
             return ExitCode::from(1);
         }
     };
@@ -168,6 +165,15 @@ pub fn run() -> ExitCode {
     // watchers), which can keep a stopped daemon alive indefinitely; bound the wait.
     tokio.shutdown_timeout(std::time::Duration::from_secs(5));
     ExitCode::from(code)
+}
+
+/// Reports a failure from before the daemon log exists: on stderr for a
+/// daemon run in a terminal, and as the readiness answer for a spawning
+/// client, which gives the daemon no stderr.
+fn early_failure(readiness: Readiness, message: &str) -> ExitCode {
+    eprintln!("error: {message}");
+    let _ = readiness.failed(message);
+    ExitCode::from(1)
 }
 
 /// What a daemon started by `daemon restart` takes over with.

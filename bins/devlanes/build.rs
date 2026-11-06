@@ -35,7 +35,101 @@ fn main() -> Result<(), Box<dyn Error>> {
         &devlanes_config::schema_artifact(devlanes_config::user_schema())?,
     )?;
     embed_manifest(Path::new(&manifest));
+    embed_version_info()?;
     embed_notes(Path::new(&manifest))?;
+    Ok(())
+}
+
+/// The devlanes website, named in the Windows version resource.
+const HOMEPAGE: &str = "https://devlanes.run";
+
+/// Embeds a version resource into the `devlanes` binary on Windows (MSVC):
+/// the product, description and version that Explorer's Details tab and Task
+/// Manager show. Antivirus heuristics also count an executable without one
+/// against it. This package's version is the devlanes release version, the one
+/// `devlanes_version::VERSION` reads from this manifest.
+fn embed_version_info() -> Result<(), Box<dyn Error>> {
+    let windows = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    let msvc = std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if !(windows && msvc) {
+        return Ok(());
+    }
+    let version = std::env::var("CARGO_PKG_VERSION")?;
+    let part = |name: &str| -> Result<u16, Box<dyn Error>> { Ok(std::env::var(name)?.parse()?) };
+    let numeric = format!(
+        "{},{},{},0",
+        part("CARGO_PKG_VERSION_MAJOR")?,
+        part("CARGO_PKG_VERSION_MINOR")?,
+        part("CARGO_PKG_VERSION_PATCH")?
+    );
+    let flags = if std::env::var("CARGO_PKG_VERSION_PRE")?.is_empty() {
+        "0"
+    } else {
+        "VS_FF_PRERELEASE"
+    };
+    // Release builds set the commit they built (build.yml), so the source link
+    // names it; other builds link the repository.
+    println!("cargo:rerun-if-env-changed=DEVLANES_BUILD_COMMIT");
+    let repository = std::env::var("CARGO_PKG_REPOSITORY")?;
+    let source = match std::env::var("DEVLANES_BUILD_COMMIT") {
+        Ok(commit) if commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            format!("{repository}/tree/{commit}")
+        }
+        Ok(commit) if !commit.is_empty() => {
+            return Err(format!("DEVLANES_BUILD_COMMIT is no commit hash: {commit:?}").into());
+        }
+        _ => repository,
+    };
+    // rc.exe strings escape a quote by doubling it and read `\` as an escape.
+    let comments = format!(
+        "{}. Website {HOMEPAGE}, docs {HOMEPAGE}/docs/, source {source}",
+        std::env::var("CARGO_PKG_DESCRIPTION")?,
+    )
+    .replace('\\', "\\\\")
+    .replace('"', "\"\"");
+    // Task Manager names the process by FileDescription, so it stays the bare
+    // name. The file is UTF-8, which rc.exe reads only with the pragma.
+    let resource = format!(
+        r#"#pragma code_page(65001)
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION {numeric}
+PRODUCTVERSION {numeric}
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS {flags}
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "Comments", "{comments}"
+            VALUE "CompanyName", "Devlanes"
+            VALUE "FileDescription", "devlanes"
+            VALUE "FileVersion", "{version}"
+            VALUE "InternalName", "devlanes"
+            VALUE "LegalCopyright", "Copyright (C) Devlanes. Licensed under Apache-2.0."
+            VALUE "OriginalFilename", "devlanes.exe"
+            VALUE "ProductName", "devlanes-cli"
+            VALUE "ProductVersion", "{version}"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
+"#
+    );
+    let out = std::env::var_os("OUT_DIR").ok_or("missing OUT_DIR")?;
+    let path = Path::new(&out).join("devlanes.rc");
+    write_changed(&path, &resource)?;
+    // Required: the Windows SDK that links devlanes.exe also ships rc.exe, so a
+    // missing compiler is a broken setup, not a reason to ship without the resource.
+    embed_resource::compile_for(&path, ["devlanes"], embed_resource::NONE).manifest_required()?;
     Ok(())
 }
 

@@ -283,6 +283,27 @@ try {
     }
     Remove-Item -LiteralPath $handing -Recurse -Force
 
+    # An antivirus or policy that refuses devlanes.exe makes starting it fail with
+    # access denied, as a copy this user may not execute does: the post-install run
+    # then stops the install with its hint. A quarantined one is gone.
+    $refused = Join-Path $work 'refused'
+    New-Item -ItemType Directory -Path $refused | Out-Null
+    $refusedExe = Join-Path $refused 'devlanes.exe'
+    Copy-Item -LiteralPath $cmd -Destination $refusedExe
+    $user = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $null = & (Join-Path $env:SystemRoot 'System32\icacls.exe') $refusedExe /deny "*${user}:(X)"
+    Assert-Equal $LASTEXITCODE 0 'deny execute on the refused copy'
+    Assert-True (-not (Test-DevlanesCommand $refusedExe @('/d', '/c', 'exit', '0'))) 'a refused start counts as failing'
+    $message = $null
+    try { $null = Test-DevlanesCommand $refusedExe @('/d', '/c', 'exit', '0') -RefusedHint 'the hint' } catch { $message = $_.Exception.Message }
+    Assert-True ($message -and $message.Contains('Windows refused to run') -and $message.EndsWith('the hint')) "a refused start with a hint throws: $message"
+    Assert-True (-not (Test-DevlanesCommand 'C:\nonexistent\devlanes.exe' @('daemon', 'status') -RefusedHint 'the hint')) 'a missing program is no refusal'
+    Assert-DevlanesPresent -Exe $refusedExe -Directory $refused
+    $message = $null
+    try { Assert-DevlanesPresent -Exe (Join-Path $refused 'gone.exe') -Directory $refused } catch { $message = $_.Exception.Message }
+    Assert-True ($message -and $message.Contains('was installed but is gone')) "a quarantined devlanes.exe stops the install: $message"
+    Remove-Item -LiteralPath $refused -Recurse -Force
+
     # After installing, `update --finish` restarts the daemon, and a failed restart
     # fails the install. The batch fake logs its calls.
     $restarting = Join-Path $work 'restarting'
