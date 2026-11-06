@@ -162,7 +162,7 @@ export function TopCard() {
         {busiest && canHandOff() && (
           <Button
             key="ask"
-            label="Ask agent"
+            label={`Ask agent about ${busiest.unit}`}
             kind="primary"
             onClick={() =>
               ask(

@@ -5,13 +5,13 @@ expression: tools
 [
   {
     "name": "status",
-    "description": "Show lanes and units with state, ports, URLs, CPU and memory.",
+    "description": "Show lanes and units with state, ports, URLs, CPU and memory. Call it first to see what runs and whether it is ready, and to find the URL that opens a service.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "lane": {
           "type": "string",
-          "description": "Lane to show ([project@]lane) [default: every lane of the current project]"
+          "description": "Lane to show ([project@]lane, such as 2, feat/checkout or acme@2) [default: every lane of the current project]"
         },
         "mine": {
           "type": "boolean",
@@ -19,7 +19,7 @@ expression: tools
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -37,7 +37,7 @@ expression: tools
   },
   {
     "name": "start",
-    "description": "Bring up a lane: infra, setup, tasks and services, then wait until ready. Starts the lane of the current worktree, or only the named units. Units that already run are left alone, so starting twice is safe. Waits until every started unit is ready or one fails; Ctrl-C detaches and leaves everything running. Without units or --profile it brings back the services the lane ran before, such as after a reboot or daemon crash. A lane stopped with devlanes stop has nothing to bring back and starts its default profile; start.restore: false in ~/.devlanes/config.yaml always does that. Returns once the units are ready or one failed, or at the timeout the server adds with what is ready so far; then call wait. No sleep or curl polling.",
+    "description": "Bring up a lane: infra, setup, tasks and services, then wait until ready. To run a command devlanes.yaml does not define, use exec. It returns once every unit is ready or one failed, or at the timeout with what is ready so far; then call wait instead of sleeping or polling.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -46,7 +46,7 @@ expression: tools
           "items": {
             "type": "string"
           },
-          "description": "Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]"
+          "description": "Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]"
         },
         "profile": {
           "type": "array",
@@ -61,22 +61,22 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "timeout": {
           "type": "string",
-          "description": "How long to wait, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
         },
         "env": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Variables for the processes the command starts, as KEY=VALUE"
+          "description": "Variables for the processes the command starts, as KEY=VALUE such as DEBUG=1"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -96,13 +96,13 @@ expression: tools
   },
   {
     "name": "exec",
-    "description": "Run an ad-hoc command as a unit of the lane instead of backgrounding it with &. The daemon owns the process: logs, stop, attach and status work on it by its --name, and it gets the lane's environment. Use it for dev servers, watchers, workers, tunnels and anything else that keeps running, never nohup or a background shell. command is the program and its arguments. The result says how to read and stop the unit.",
+    "description": "Run an ad-hoc command as a unit of the lane instead of backgrounding it with &. Use it for dev servers, watchers, workers and tunnels, never nohup or a background shell: the process gets the lane's ports and env, and logs, status and stop find it by name.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "name": {
           "type": "string",
-          "description": "Unit name for the command, used by logs, stop and attach"
+          "description": "Unit name for the command, such as web, used by logs, stop and attach"
         },
         "no_pty": {
           "type": "boolean",
@@ -117,18 +117,18 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "env": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Variables for the processes the command starts, as KEY=VALUE"
+          "description": "Variables for the processes the command starts, as KEY=VALUE such as DEBUG=1"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false,
@@ -146,7 +146,7 @@ expression: tools
   },
   {
     "name": "logs",
-    "description": "Read unit logs; each line carries a cursor to continue from. Lines of several units are merged by time. Each line starts with a cursor such as api#120 that --cursor and --around accept. In agent mode and without a terminal the output defaults to the last 100 lines within the output budget. follow needs timeout.",
+    "description": "Read unit logs; each line carries a cursor to continue from. For why a unit failed or is not ready, call debug_why first; logs reads more of what a unit printed.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -155,7 +155,7 @@ expression: tools
           "items": {
             "type": "string"
           },
-          "description": "Units to read ([lane:]unit, globs, +tag) [default: pick from a list]"
+          "description": "Units to read ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: pick from a list]"
         },
         "all": {
           "type": "boolean",
@@ -179,7 +179,7 @@ expression: tools
         },
         "grep": {
           "type": "string",
-          "description": "Only lines matching this regular expression"
+          "description": "Only lines matching this regular expression, such as timeout|refused"
         },
         "level": {
           "type": "string",
@@ -204,15 +204,15 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "timeout": {
           "type": "string",
-          "description": "How long to wait, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -230,7 +230,7 @@ expression: tools
   },
   {
     "name": "stop",
-    "description": "Stop units, or the whole lane when none are named. Stopped services are left out of what a plain devlanes start brings back. A whole-lane stop also forgets the lane's profiles, so its next plain start uses the default profile. Stop your own units with mine when they are done, and leave the lane running when you hand work to the user for review.",
+    "description": "Stop units, or the whole lane when none are named. Call it with mine to stop what you started once you are done. Leave the lane running when you hand work to the user for review.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -239,7 +239,7 @@ expression: tools
           "items": {
             "type": "string"
           },
-          "description": "Units to stop ([lane:]unit, globs, +tag) [default: the whole lane]"
+          "description": "Units to stop ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]"
         },
         "mine": {
           "type": "boolean",
@@ -251,11 +251,11 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -270,7 +270,7 @@ expression: tools
   },
   {
     "name": "restart",
-    "description": "Stop and start units again with a fresh environment, or the whole lane when none are named. A whole-lane restart stops everything, keeps the lane's saved profiles and services, and starts it again as a plain devlanes start does: infra, setup, tasks, services and any port change in the project file. Returns once the units are ready or one failed, or at the timeout the server adds with what is ready so far; then call wait. No sleep or curl polling.",
+    "description": "Stop and start units again with a fresh environment, or the whole lane when none are named. Call it when a service has to pick up code or env it reads only at startup; after editing devlanes.yaml or .env, reload restarts only what changed. It returns once the units are ready or one failed, or at the timeout with what is ready so far; then call wait.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -279,7 +279,7 @@ expression: tools
           "items": {
             "type": "string"
           },
-          "description": "Units to restart ([lane:]unit, globs, +tag) [default: the whole lane]"
+          "description": "Units to restart ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]"
         },
         "all_at_once": {
           "type": "boolean",
@@ -287,22 +287,22 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "timeout": {
           "type": "string",
-          "description": "How long to wait, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
         },
         "env": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Variables for the processes the command starts, as KEY=VALUE"
+          "description": "Variables for the processes the command starts, as KEY=VALUE such as DEBUG=1"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -321,7 +321,7 @@ expression: tools
   },
   {
     "name": "reload",
-    "description": "Apply project file and .env changes to the running lane. Stops the units the file removed, restarts the ones it changed and starts the ones it added. Without units, a change to infra or ports restarts the whole lane instead. With units, it applies only their changes. devlanes status shows what changed. Returns once the units are ready or one failed, or at the timeout the server adds with what is ready so far; then call wait. No sleep or curl polling.",
+    "description": "Apply project file and .env changes to the running lane. Call it after editing devlanes.yaml or .env instead of restarting the lane. It returns once the units are ready or one failed, or at the timeout with what is ready so far; then call wait.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -330,7 +330,7 @@ expression: tools
           "items": {
             "type": "string"
           },
-          "description": "Apply only these units' changes ([lane:]unit) [default: every change in the lane]"
+          "description": "Apply only these units' changes ([lane:]unit, such as api or 2:web) [default: every change in the lane]"
         },
         "all_at_once": {
           "type": "boolean",
@@ -338,15 +338,15 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "timeout": {
           "type": "string",
-          "description": "How long to wait, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -366,25 +366,25 @@ expression: tools
   },
   {
     "name": "wait",
-    "description": "Wait until a unit or lane is ready or failed. Returns the reason and log tail of a failure, or what is ready at the timeout. Call it when start, restart or reload returned at their timeout.",
+    "description": "Wait until a unit or lane is ready or failed. Call it when start, restart or reload returned at their timeout, or for units another client is starting; a failure comes back with its reason and log tail.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "target": {
           "type": "string",
-          "description": "Unit ([lane:]unit) or lane ([project@]lane) to wait for [default: pick from a list]"
+          "description": "Unit ([lane:]unit) or lane ([project@]lane) to wait for, such as api, 2:web or acme@2 [default: pick from a list]"
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "timeout": {
           "type": "string",
-          "description": "How long to wait, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -397,7 +397,7 @@ expression: tools
   },
   {
     "name": "with",
-    "description": "Start the lane, run a command against it, then stop what was started. Use it for tests and other commands that exit and need the lane running. The command runs once the units are ready, with the lane's environment, and the result has its exit code and output.",
+    "description": "Start the lane, run a command against it, then stop what was started. Use it for tests and other commands that exit and need the lane running; the command gets the lane's env and service URLs, and the result has its exit code and output. Run commands that do not need the lane in your own shell.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -406,7 +406,7 @@ expression: tools
           "items": {
             "type": "string"
           },
-          "description": "Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]"
+          "description": "Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]"
         },
         "profile": {
           "type": "array",
@@ -436,15 +436,15 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "timeout": {
           "type": "string",
-          "description": "How long to wait, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
+          "description": "How long to wait or stream, such as 30s or 5m [default for commands that wait: a little under the host's tool call limit]"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false,
@@ -461,7 +461,7 @@ expression: tools
   },
   {
     "name": "run",
-    "description": "Run a task from devlanes.yaml and exit with its exit code. The result has the task's output. The server asks the user before a task with confirm: runs.",
+    "description": "Run a task from devlanes.yaml and exit with its exit code. Use it for project tasks such as migrations or seeds; the server asks the user first when the task sets confirm.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -479,14 +479,14 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "env": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Variables for the processes the command starts, as KEY=VALUE"
+          "description": "Variables for the processes the command starts, as KEY=VALUE such as DEBUG=1"
         },
         "yes": {
           "type": "boolean",
@@ -494,7 +494,7 @@ expression: tools
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -508,21 +508,21 @@ expression: tools
   },
   {
     "name": "debug_why",
-    "description": "Explain why a unit is not running or not ready, with a fix for each reason. Call it first when a unit failed or is not ready.",
+    "description": "Explain why a unit is not running or not ready, with a fix for each reason. Call it first when a unit failed, exited or stays starting, before reading its logs.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "unit": {
           "type": "string",
-          "description": "Unit to explain ([lane:]unit) [default: pick from a list]"
+          "description": "Unit to explain ([lane:]unit, such as api or 2:web) [default: pick from a list]"
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -540,7 +540,7 @@ expression: tools
   },
   {
     "name": "debug_errors",
-    "description": "List failed units, crash counts, recent error lines and port conflicts.",
+    "description": "List failed units, crash counts, recent error lines and port conflicts. Use it to find what broke when you do not know which unit; debug_why explains one unit.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -550,11 +550,11 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -572,17 +572,13 @@ expression: tools
   },
   {
     "name": "debug_top",
-    "description": "Show CPU and memory per lane and unit. The tool for any question about what uses CPU or memory: units and containers per lane, with the system's totals.",
+    "description": "Show CPU and memory of the running units and containers of every lane. It answers any question about which process, service or container uses the most CPU or memory.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "lane": {
-          "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
-        },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -600,21 +596,21 @@ expression: tools
   },
   {
     "name": "url_print",
-    "description": "Print a service's URL, for scripts.",
+    "description": "Print a service's URL, for scripts. Use it when you know the service; status shows the URLs of every service in the lane.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "unit": {
           "type": "string",
-          "description": "Service whose URL to print ([lane:]unit) [default: pick from a list]"
+          "description": "Service whose URL to print ([lane:]unit, such as web or 2:web) [default: pick from a list]"
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -627,17 +623,13 @@ expression: tools
   },
   {
     "name": "url_ls",
-    "description": "List routed hostnames with their lane, unit, port and state.",
+    "description": "List the routed hostnames of every lane with their lane, unit, port and state. It tells which lane and service answer a hostname; url_print gives one service's URL.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "lane": {
-          "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
-        },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -650,13 +642,13 @@ expression: tools
   },
   {
     "name": "env_show",
-    "description": "Print the environment of the lane or of one unit as KEY=VALUE lines.",
+    "description": "Print the environment of the lane or of one unit as KEY=VALUE lines. Use it to check the variables a unit gets, including those devlanes adds that no .env file shows.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "unit": {
           "type": "string",
-          "description": "Unit whose environment to print ([lane:]unit) [default: the lane's variables]"
+          "description": "Unit whose environment to print ([lane:]unit, such as api or 2:api) [default: the lane's variables]"
         },
         "explain": {
           "type": "boolean",
@@ -664,11 +656,11 @@ expression: tools
         },
         "lane": {
           "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
+          "description": "Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -681,17 +673,13 @@ expression: tools
   },
   {
     "name": "lane_ls",
-    "description": "List lanes, including moved, unassigned and missing ones.",
+    "description": "List lanes after rereading the project's Git worktrees, including moved, unassigned and missing ones. Use it to see which lanes exist, such as before cleaning; status shows what runs in them.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "lane": {
-          "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
-        },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -704,13 +692,13 @@ expression: tools
   },
   {
     "name": "lane_clean",
-    "description": "Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports. The server shows the user what the clean removes and asks first. dry_run lists it without asking or changing anything.",
+    "description": "Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports. The server shows the user a dry run and asks before deleting anything. To choose lanes to delete, list them with lane_ls, then call this with dry_run on each to see what it frees.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "lane": {
           "type": "string",
-          "description": "Lane to clean ([project@]lane) [default: pick from a list]"
+          "description": "Lane to clean ([project@]lane, such as 4 or acme@chore/deps) [default: pick from a list]"
         },
         "dry_run": {
           "type": "boolean",
@@ -722,7 +710,7 @@ expression: tools
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -741,21 +729,17 @@ expression: tools
   },
   {
     "name": "daemon_pair",
-    "description": "Print a one-time code that pairs another machine with this one. The server asks the user first. The code is in the text.",
+    "description": "Print a one-time code that pairs another machine with this one. Call it on the box the user wants to reach from another machine; the result has the command to run there. The server asks the user first.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "lane": {
-          "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
-        },
         "yes": {
           "type": "boolean",
           "description": "Skip the server's question to the user; set it only when the user already agreed in the chat"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -774,17 +758,13 @@ expression: tools
   },
   {
     "name": "doctor",
-    "description": "Check the daemon, Docker, proxy, CA, hosts file and output mode, each with a fix; never starts the daemon.",
+    "description": "Check the daemon, Docker, proxy, CA, hosts file and output mode, each with a fix; never starts the daemon. Call it when hostnames do not resolve, HTTPS is not trusted or Docker fails, before debugging a single unit.",
     "inputSchema": {
       "type": "object",
       "properties": {
-        "lane": {
-          "type": "string",
-          "description": "Use this lane ([project@]lane) instead of the current worktree's"
-        },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "additionalProperties": false
@@ -797,7 +777,7 @@ expression: tools
   },
   {
     "name": "devlanes",
-    "description": "Run a devlanes command that has no tool of its own, such as debug config, infra status, remote ls, config get or lane new, or any command with --help. args is the command line after \"devlanes\", such as [\"infra\", \"status\"] or [\"debug\", \"config\"]. Use the other tools first: start, exec, logs, stop and the rest take typed arguments. Returns the command's agent output, with its JSON in structuredContent.",
+    "description": "Run a devlanes command that has no tool of its own, such as infra status, remote ls, config get, debug config or lane new, or the --help of any command. Use a typed tool when there is one. Returns the command's agent output, with its JSON in structuredContent.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -806,11 +786,11 @@ expression: tools
           "items": {
             "type": "string"
           },
-          "description": "The devlanes command line without \"devlanes\", one element per argument."
+          "description": "The command line after \"devlanes\", one element per argument, such as [\"infra\", \"logs\", \"postgres\", \"--tail\", \"50\"] or [\"remote\", \"ls\"]"
         },
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         }
       },
       "required": [
@@ -838,7 +818,7 @@ expression: tools
       "properties": {
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         },
         "lane": {
           "type": "string"
@@ -864,7 +844,7 @@ expression: tools
       "properties": {
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         },
         "units": {
           "type": "array",
@@ -906,7 +886,7 @@ expression: tools
       "properties": {
         "cwd": {
           "type": "string",
-          "description": "Worktree directory to run in, which picks its lane; relative to the server's directory."
+          "description": "Worktree directory to run in, which picks the project and lane [default: the agent's project]"
         },
         "action": {
           "type": "string",

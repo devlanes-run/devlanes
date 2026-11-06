@@ -10,7 +10,7 @@ Commands:
   why     Explain why a unit is not running or not ready, with a fix for each reason
   errors  List failed units, crash counts, recent error lines and port conflicts
   events  Print the daemon's event stream: lane, unit, task and port events
-  top     Show CPU and memory per lane and unit
+  top     Show CPU and memory of the running units and containers of every lane
   freeze  Freeze this lane's processes and own containers now, as if it had been idle for `lanes.freeze_after`
   thaw    Resume a throttled or frozen lane
   config  Print the lane's project config as YAML after merging its files and templates; expressions stay unevaluated
@@ -41,7 +41,7 @@ Global options:
           Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
 
       --lane <LANE>
-          Use this lane ([project@]lane) instead of the current worktree's
+          Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
 
       --yes
           Confirm actions that would ask first; needed when no terminal can prompt

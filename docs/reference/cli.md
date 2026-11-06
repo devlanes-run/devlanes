@@ -41,7 +41,7 @@ Accepted by every command, before or after the command name.
   Values: `human` (Colors and symbols, for a terminal), `plain` (The same information without color, one line per event), `agent` (Terse lines for AI agents: failures first, with next commands, size-capped), `json` (The daemon's data as JSON, or NDJSON for streams).
 - `-p, --project <PROJECT>`: Use this project instead of the one containing the current directory [env: DEVLANES_PROJECT]
 - `--file <FILE>`: Use this project file instead of the nearest devlanes.yaml (for example devlanes.prod.yaml); after the first use, -p <name> finds its project
-- `--lane <LANE>`: Use this lane ([project@]lane) instead of the current worktree's
+- `--lane <LANE>`: Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
 - `--yes`: Confirm actions that would ask first; needed when no terminal can prompt
 - `--quiet`: Print nothing on success; errors still go to stderr
 - `--env <KEY=VALUE>`: Set a variable for started processes (start, restart, run TASK, exec); repeatable
@@ -69,7 +69,7 @@ nothing to bring back and starts its default profile; start.restore: false in
 devlanes start [OPTIONS] [UNIT]...
 ```
 
-- `[UNIT]...`: Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
+- `[UNIT]...`: Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]
 - `--profile <PROFILE>`: Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
 - `--attach`: Run the start in the TUI even when DEVLANES_NO_UI or tui.open_on_start turn that off [default on a terminal]
 - `--no-ui`: Print the start as text instead of running it in the TUI
@@ -96,7 +96,7 @@ the default profile.
 devlanes stop [OPTIONS] [UNIT]...
 ```
 
-- `[UNIT]...`: Units to stop ([lane:]unit, globs, +tag) [default: the whole lane]
+- `[UNIT]...`: Units to stop ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]
 - `--mine`: Only stop units this agent session started; with no units, across every lane
 - `--logs-dir <DIR>`: Write each unit's log of this run to DIR as text files, for CI artifacts
 
@@ -112,7 +112,7 @@ tasks, services and any port change in the project file.
 devlanes restart [OPTIONS] [UNIT]...
 ```
 
-- `[UNIT]...`: Units to restart ([lane:]unit, globs, +tag) [default: the whole lane]
+- `[UNIT]...`: Units to restart ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]
 - `--all-at-once`: Start every selected service immediately, bypassing the machine-wide start gate for this run
 - `--no-ui`: Print the restart as text instead of running it in the TUI
 
@@ -129,7 +129,7 @@ what changed.
 devlanes reload [OPTIONS] [UNIT]...
 ```
 
-- `[UNIT]...`: Apply only these units' changes ([lane:]unit) [default: every change in the lane]
+- `[UNIT]...`: Apply only these units' changes ([lane:]unit, such as api or 2:web) [default: every change in the lane]
 - `--all-at-once`: Start every selected service immediately, bypassing the machine-wide start gate for this run
 - `--no-ui`: Print the reload as text instead of running it in the TUI
 
@@ -141,7 +141,7 @@ Show lanes and units with state, ports, URLs, CPU and memory
 devlanes status [OPTIONS] [LANE]
 ```
 
-- `[LANE]`: Lane to show ([project@]lane) [default: every lane of the current project]
+- `[LANE]`: Lane to show ([project@]lane, such as 2, feat/checkout or acme@2) [default: every lane of the current project]
 - `--watch`: Keep printing lane changes until interrupted
 - `--mine`: Only show units this agent session started
 - `--statusline`: Print one line for this directory's lane, for an agent's status line (reads Claude Code's JSON on stdin and never starts the daemon)
@@ -168,13 +168,13 @@ terminal the output defaults to the last 100 lines within the output budget.
 devlanes logs [OPTIONS] [UNIT]...
 ```
 
-- `[UNIT]...`: Units to read ([lane:]unit, globs, +tag) [default: pick from a list]
+- `[UNIT]...`: Units to read ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: pick from a list]
 - `--all`: Read every unit of the lane, grouped by unit
 - `--tail <N>`: Show the last N lines [default: 100 in agent mode or without a terminal]
 - `--head <N>`: Show the first N lines of the selected range
 - `-f, --follow`: Keep streaming new lines; agent mode requires --timeout
 - `--since <WHEN>`: Only lines newer than a duration (5m), a time in milliseconds, or start (the lane's last start)
-- `--grep <REGEX>`: Only lines matching this regular expression
+- `--grep <REGEX>`: Only lines matching this regular expression, such as timeout|refused
 - `--level <LEVEL>`: Only lines at this level or above: debug, info, warn or error
 - `--around <CURSOR>`: Show the lines around this cursor, such as api#120
 - `-C, --context <N>`: Lines before and after --around
@@ -201,7 +201,7 @@ when --timeout passes first [default: 180s].
 devlanes wait [OPTIONS] [TARGET]
 ```
 
-- `[TARGET]`: Unit ([lane:]unit) or lane ([project@]lane) to wait for [default: pick from a list]
+- `[TARGET]`: Unit ([lane:]unit) or lane ([project@]lane) to wait for, such as api, 2:web or acme@2 [default: pick from a list]
 
 ### devlanes with
 
@@ -221,7 +221,7 @@ command's exit code.
 devlanes with [OPTIONS] [UNIT]... -- <COMMAND>...
 ```
 
-- `[UNIT]...`: Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
+- `[UNIT]...`: Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]
 - `--profile <PROFILE>`: Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
 - `--logs-dir <DIR>`: Write every unit's log of the run to DIR as text files, for CI artifacts
 - `--keep`: Leave the lane running afterwards, for debugging
@@ -262,7 +262,7 @@ The daemon owns the process: logs, stop, attach and status work on it by its
 devlanes exec [OPTIONS] --name <NAME> -- <COMMAND>...
 ```
 
-- `--name <NAME>`: Unit name for the command, used by logs, stop and attach
+- `--name <NAME>`: Unit name for the command, such as web, used by logs, stop and attach
 - `--no-pty`: Use pipes instead of a pseudoterminal
 - `<COMMAND>...`: Command and arguments to run
 
@@ -294,7 +294,7 @@ devlanes lane [OPTIONS] <COMMAND>
 
 ### devlanes lane ls
 
-List lanes, including moved, unassigned and missing ones
+List lanes after rereading the project's Git worktrees, including moved, unassigned and missing ones
 
 ```text
 devlanes lane ls [OPTIONS]
@@ -327,7 +327,7 @@ Stop a lane, run its clean tasks and teardown, delete its data and logs, and fre
 devlanes lane clean [OPTIONS] [LANE]
 ```
 
-- `[LANE]`: Lane to clean ([project@]lane) [default: pick from a list]
+- `[LANE]`: Lane to clean ([project@]lane, such as 4 or acme@chore/deps) [default: pick from a list]
 - `--dry-run`: Print what the clean would stop, run and delete, with sizes, and change nothing; needs no --yes
 
 ### devlanes lane gc
@@ -370,7 +370,7 @@ Explain why a unit is not running or not ready, with a fix for each reason
 devlanes debug why [OPTIONS] [UNIT]
 ```
 
-- `[UNIT]`: Unit to explain ([lane:]unit) [default: pick from a list]
+- `[UNIT]`: Unit to explain ([lane:]unit, such as api or 2:web) [default: pick from a list]
 
 ### devlanes debug errors
 
@@ -394,7 +394,7 @@ devlanes debug events [OPTIONS]
 
 ### devlanes debug top
 
-Show CPU and memory per lane and unit
+Show CPU and memory of the running units and containers of every lane
 
 ```text
 devlanes debug top [OPTIONS]
@@ -469,7 +469,7 @@ Print the environment of the lane or of one unit as KEY=VALUE lines
 devlanes env show [OPTIONS] [UNIT]
 ```
 
-- `[UNIT]`: Unit whose environment to print ([lane:]unit) [default: the lane's variables]
+- `[UNIT]`: Unit whose environment to print ([lane:]unit, such as api or 2:api) [default: the lane's variables]
 - `--explain`: Show where each variable comes from; secret values are hidden
 
 ### devlanes env export
@@ -520,7 +520,7 @@ Print a service's URL, for scripts
 devlanes url print [OPTIONS] [UNIT]
 ```
 
-- `[UNIT]`: Service whose URL to print ([lane:]unit) [default: pick from a list]
+- `[UNIT]`: Service whose URL to print ([lane:]unit, such as web or 2:web) [default: pick from a list]
 
 ### devlanes url open
 
@@ -534,7 +534,7 @@ devlanes url open [OPTIONS] [UNIT]
 
 ### devlanes url ls
 
-List routed hostnames with their lane, unit, port and state
+List the routed hostnames of every lane with their lane, unit, port and state
 
 ```text
 devlanes url ls [OPTIONS]

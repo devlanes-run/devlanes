@@ -2,11 +2,11 @@
 //! definition, and the way back from a call's arguments to the command line.
 //!
 //! clap stays the single source of truth: a tool's name is its subcommand
-//! path, its description the command's help, and its input schema one
+//! path, its description the command's about line, and its input schema one
 //! property per argument, so a new flag on a curated command reaches its tool
-//! without a change here. A [`Spec`] only says which commands get a tool,
-//! which of their arguments make no sense through MCP, and what an agent needs
-//! to know beyond the help text.
+//! without a change here. A [`Spec`] only says which commands get a tool and
+//! which of their arguments make no sense through MCP; [`text::GUIDANCE`]
+//! adds when to pick a tool over the others.
 
 use std::any::TypeId;
 
@@ -26,12 +26,9 @@ pub struct Spec {
     pub path: &'static [&'static str],
     /// Ids of the command's own arguments the tool leaves out.
     pub skip: &'static [&'static str],
-    /// Global options the tool offers besides `lane`, from [`GLOBALS`].
+    /// Global options the tool offers, from [`GLOBALS`]: only those the
+    /// command uses, so `lane` is missing where the command ignores it.
     pub globals: &'static [&'static str],
-    /// Whether the long help after its first paragraph goes in the description.
-    pub long_help: bool,
-    /// What an agent should know beyond the help text.
-    pub guidance: &'static str,
     /// Calling it again with the same arguments changes nothing more.
     pub idempotent: bool,
     /// Whether its results can carry an MCP Apps card, so the tool names the
@@ -45,25 +42,20 @@ impl Spec {
         path: &[],
         skip: &[],
         globals: &[],
-        long_help: false,
-        guidance: "",
         idempotent: false,
         card: false,
     };
 }
 
-/// The global options a tool may offer. Every tool takes `lane`, unless the
-/// command has a positional lane of its own; the others only where
-/// [`Spec::globals`] names them. Output modes, `--quiet`, `--verbose` and
-/// `--budget` belong to the server, and `--project` and `--file` are rare
-/// enough for the `devlanes` tool.
+/// The global options a tool may offer, where [`Spec::globals`] names them.
+/// Output modes, `--quiet`, `--verbose` and `--budget` belong to the server,
+/// and `--project` and `--file` are rare enough for the `devlanes` tool.
 pub const GLOBALS: [&str; 4] = ["lane", "timeout", "env", "yes"];
 
-/// Guidance shared by the commands that wait for units.
-const BLOCKS: &str = "Returns once the units are ready or one failed, or at the timeout the \
-server adds with what is ready so far; then call wait. No sleep or curl polling.";
-
-/// The curated commands, in the order of `tools/list`.
+/// The curated commands, in the order of `tools/list`. `status` and
+/// `lane clean` take a lane of their own, and `debug top`, `url ls`,
+/// `lane ls`, `daemon pair` and `doctor` ignore `--lane`, so none of them
+/// offers it.
 pub const CURATED: &[Spec] = &[
     Spec {
         path: &["status"],
@@ -76,99 +68,76 @@ pub const CURATED: &[Spec] = &[
         path: &["start"],
         // The TUI, which an MCP call never shows.
         skip: &["attach", "no_ui"],
-        globals: &["timeout", "env"],
-        long_help: true,
-        guidance: BLOCKS,
+        globals: &["lane", "timeout", "env"],
         idempotent: true,
         card: true,
     },
     Spec {
         path: &["exec"],
-        globals: &["env"],
-        long_help: true,
-        guidance: "Use it for dev servers, watchers, workers, tunnels and anything else that \
-keeps running, never nohup or a background shell. command is the program and its arguments. The \
-result says how to read and stop the unit.",
+        globals: &["lane", "env"],
         ..Spec::NONE
     },
     Spec {
         path: &["logs"],
-        globals: &["timeout"],
-        long_help: true,
-        guidance: "follow needs timeout.",
+        globals: &["lane", "timeout"],
         card: true,
         ..Spec::NONE
     },
     Spec {
         path: &["stop"],
-        long_help: true,
-        guidance: "Stop your own units with mine when they are done, and leave the lane running \
-when you hand work to the user for review.",
+        globals: &["lane"],
         idempotent: true,
         ..Spec::NONE
     },
     Spec {
         path: &["restart"],
         skip: &["no_ui"],
-        globals: &["timeout", "env"],
-        long_help: true,
-        guidance: BLOCKS,
+        globals: &["lane", "timeout", "env"],
         card: true,
         ..Spec::NONE
     },
     Spec {
         path: &["reload"],
         skip: &["no_ui"],
-        globals: &["timeout"],
-        long_help: true,
-        guidance: BLOCKS,
+        globals: &["lane", "timeout"],
         idempotent: true,
         card: true,
     },
     Spec {
         path: &["wait"],
-        globals: &["timeout"],
-        // Its long help is about exit codes and the CLI's default timeout.
-        guidance: "Returns the reason and log tail of a failure, or what is ready at the \
-timeout. Call it when start, restart or reload returned at their timeout.",
+        globals: &["lane", "timeout"],
         ..Spec::NONE
     },
     Spec {
         path: &["with"],
-        globals: &["timeout"],
-        guidance: "Use it for tests and other commands that exit and need the lane running. The \
-command runs once the units are ready, with the lane's environment, and the result has its exit \
-code and output.",
+        globals: &["lane", "timeout"],
         ..Spec::NONE
     },
     Spec {
         path: &["run"],
-        globals: &["env", "yes"],
-        // Its long help is about terminals and Ctrl-C.
-        guidance: "The result has the task's output. The server asks the user before a task with \
-confirm: runs.",
+        globals: &["lane", "env", "yes"],
         ..Spec::NONE
     },
     Spec {
         path: &["debug", "why"],
-        guidance: "Call it first when a unit failed or is not ready.",
+        globals: &["lane"],
         card: true,
         ..Spec::NONE
     },
     Spec {
         path: &["debug", "errors"],
+        globals: &["lane"],
         card: true,
         ..Spec::NONE
     },
     Spec {
         path: &["debug", "top"],
-        guidance: "The tool for any question about what uses CPU or memory: units and \
-containers per lane, with the system's totals.",
         card: true,
         ..Spec::NONE
     },
     Spec {
         path: &["url", "print"],
+        globals: &["lane"],
         ..Spec::NONE
     },
     Spec {
@@ -177,6 +146,7 @@ containers per lane, with the system's totals.",
     },
     Spec {
         path: &["env", "show"],
+        globals: &["lane"],
         ..Spec::NONE
     },
     Spec {
@@ -186,15 +156,12 @@ containers per lane, with the system's totals.",
     Spec {
         path: &["lane", "clean"],
         globals: &["yes"],
-        guidance: "The server shows the user what the clean removes and asks first. dry_run \
-lists it without asking or changing anything.",
         card: true,
         ..Spec::NONE
     },
     Spec {
         path: &["daemon", "pair"],
         globals: &["yes"],
-        guidance: "The server asks the user first. The code is in the text.",
         card: true,
         ..Spec::NONE
     },
@@ -331,15 +298,15 @@ fn generate(
         properties.insert(param.property.clone(), schema(arg, param.kind, None));
         params.push(param);
     }
+    if let Some(unknown) = spec.globals.iter().find(|id| !GLOBALS.contains(id)) {
+        return Err(format!("{name} names the global option {unknown}"));
+    }
     for id in GLOBALS {
-        let offered = if id == "lane" {
-            // A command's own lane argument says the same.
-            !properties.contains_key("lane")
-        } else {
-            spec.globals.contains(&id)
-        };
-        if !offered {
+        if !spec.globals.contains(&id) {
             continue;
+        }
+        if properties.contains_key(id) {
+            return Err(format!("{name} has an argument {id} of its own"));
         }
         let arg = root
             .get_arguments()
@@ -351,13 +318,6 @@ fn generate(
             schema(arg, param.kind, text::global_help(id)),
         );
         params.push(param);
-    }
-    if let Some(unknown) = spec
-        .globals
-        .iter()
-        .find(|id| **id == "lane" || !GLOBALS.contains(id))
-    {
-        return Err(format!("{name} names the global option {unknown}"));
     }
     properties.insert(
         "cwd".into(),
@@ -397,7 +357,7 @@ fn generate(
     }
     .open_world(false);
     let tool =
-        Tool::new(name.clone(), description(command, spec), input).with_annotations(annotations);
+        Tool::new(name.clone(), description(command, &name), input).with_annotations(annotations);
     Ok(Generated {
         name,
         tool,
@@ -511,9 +471,10 @@ fn schema(arg: &clap::Arg, kind: Kind, help: Option<&str>) -> Value {
     schema
 }
 
-/// The tool's description: the command's about line, its long help after the
-/// first paragraph when the spec asks for it, unwrapped, and the guidance.
-fn description(command: &clap::Command, spec: &Spec) -> String {
+/// The description of the tool `name`: the command's about line, then its
+/// entry in [`text::GUIDANCE`] when it has one. The long help stays out: it
+/// is written for a terminal, and the arguments' own help is in the schema.
+fn description(command: &clap::Command, name: &str) -> String {
     let about = command
         .get_about()
         .map(ToString::to_string)
@@ -521,21 +482,10 @@ fn description(command: &clap::Command, spec: &Spec) -> String {
     // The server asks the user instead, and the tool has `yes` for a consent
     // given in the chat.
     let about = about.trim_end_matches(" (needs --yes)");
-    let mut text = format!("{about}.");
-    if spec.long_help
-        && let Some(long) = command.get_long_about()
-    {
-        // The first paragraph repeats the about line.
-        for paragraph in long.to_string().split("\n\n").skip(1) {
-            text.push(' ');
-            text.push_str(&paragraph.split_whitespace().collect::<Vec<_>>().join(" "));
-        }
+    match text::guidance(name) {
+        Some(guidance) => format!("{about}. {guidance}"),
+        None => format!("{about}."),
     }
-    if !spec.guidance.is_empty() {
-        text.push(' ');
-        text.push_str(spec.guidance);
-    }
-    text
 }
 
 /// The shortest valid command line of a tool: its path, with a placeholder
@@ -745,9 +695,19 @@ mod tests {
             for global in spec.globals {
                 assert!(properties.contains_key(*global), "{name} has no {global}");
             }
+            assert!(properties.contains_key("cwd"), "{name}");
+        }
+    }
+
+    /// Every guidance entry belongs to a tool, so a renamed command cannot
+    /// lose its guidance without notice.
+    #[test]
+    fn guidance_names_real_tools() {
+        let catalog = Catalog::new(false);
+        for (tool, _) in text::GUIDANCE {
             assert!(
-                properties.contains_key("cwd") && properties.contains_key("lane"),
-                "{name}"
+                catalog.get(tool).is_some(),
+                "guidance for {tool}, which is no tool"
             );
         }
     }
@@ -758,6 +718,7 @@ mod tests {
     fn new_flags_need_no_mcp_code() {
         static SPEC: Spec = Spec {
             path: &["probe"],
+            globals: &["lane"],
             ..Spec::NONE
         };
         let mut root = clap::Command::new("devlanes")
@@ -877,11 +838,7 @@ mod tests {
                 json!({"since": "5m"}),
                 "debug errors --since=5m",
             ),
-            (
-                "debug_top",
-                json!({"lane": "acme@1"}),
-                "debug top --lane=acme@1",
-            ),
+            ("debug_top", json!({}), "debug top"),
             ("url_print", json!({"unit": "web"}), "url print web"),
             ("url_ls", json!({}), "url ls"),
             (
@@ -1031,7 +988,7 @@ mod tests {
 
     /// The calls agents are told to make become valid devlanes command lines,
     /// the read-only instructions name only tools a `--read-only` server has,
-    /// and the args arrays of the `devlanes` tool's descriptions parse too.
+    /// and the args arrays of the `devlanes` tool's texts parse too.
     #[test]
     fn quoted_calls_parse() {
         let catalog = Catalog::new(false);
@@ -1048,10 +1005,10 @@ mod tests {
         }
         assert!(lines.len() >= 7, "{lines:?}");
         let before = lines.len();
-        for text in [text::DEVLANES, text::DEVLANES_READ_ONLY] {
+        for text in [text::DEVLANES, text::DEVLANES_READ_ONLY, text::ARGS] {
             lines.extend(quoted_args(text));
         }
-        assert!(lines.len() >= before + 4, "{lines:?}");
+        assert!(lines.len() >= before + 2, "{lines:?}");
         for args in lines {
             if let Err(Rejected::Error(text) | Rejected::Help(text)) =
                 Call::parse(&args, Scope::Any)

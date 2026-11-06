@@ -94,7 +94,7 @@ pub struct Cli {
     // No `-f`: `logs -f` and the other `--follow` flags already take it.
     #[arg(long, global = true, value_name = "FILE", help_heading = GLOBAL)]
     pub file: Option<PathBuf>,
-    /// Use this lane ([project@]lane) instead of the current worktree's
+    /// Use this lane ([project@]lane, such as 2, feat/checkout or acme@2) instead of the current worktree's
     #[arg(long, global = true, value_name = "LANE", help_heading = GLOBAL)]
     pub lane: Option<String>,
     /// Confirm actions that would ask first; needed when no terminal can prompt
@@ -175,7 +175,7 @@ terminal the output defaults to the last 100 lines within the output budget.",
 Exits 0 when ready, 1 when it failed (with the reason and log tail) and 124\n\
 when --timeout passes first [default: 180s].")]
     Wait {
-        /// Unit ([lane:]unit) or lane ([project@]lane) to wait for [default: pick from a list]
+        /// Unit ([lane:]unit) or lane ([project@]lane) to wait for, such as api, 2:web or acme@2 [default: pick from a list]
         #[arg(value_name = "TARGET")]
         target: Option<String>,
     },
@@ -303,7 +303,7 @@ without the daemon.",
 
 #[derive(Debug, Args)]
 pub struct StartArgs {
-    /// Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
+    /// Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
@@ -322,7 +322,7 @@ pub struct StartArgs {
 
 #[derive(Debug, Args)]
 pub struct StopArgs {
-    /// Units to stop ([lane:]unit, globs, +tag) [default: the whole lane]
+    /// Units to stop ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Only stop units this agent session started; with no units, across every lane
@@ -335,7 +335,7 @@ pub struct StopArgs {
 
 #[derive(Debug, Args)]
 pub struct WithArgs {
-    /// Units to start ([lane:]unit, globs, +tag) [default: what the lane ran before, else its default profile]
+    /// Units to start ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: what the lane ran before, else its default profile]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start the units of this profile from devlanes.yaml; repeat to combine profiles (later ones win on env)
@@ -357,7 +357,7 @@ pub struct WithArgs {
 
 #[derive(Debug, Args)]
 pub struct RestartArgs {
-    /// Units to restart ([lane:]unit, globs, +tag) [default: the whole lane]
+    /// Units to restart ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: the whole lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start every selected service immediately, bypassing the machine-wide start gate for this run
@@ -370,7 +370,7 @@ pub struct RestartArgs {
 
 #[derive(Debug, Args)]
 pub struct ReloadArgs {
-    /// Apply only these units' changes ([lane:]unit) [default: every change in the lane]
+    /// Apply only these units' changes ([lane:]unit, such as api or 2:web) [default: every change in the lane]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Start every selected service immediately, bypassing the machine-wide start gate for this run
@@ -384,7 +384,7 @@ pub struct ReloadArgs {
 #[derive(Debug, Args)]
 pub struct StatusArgs {
     // Own id: `lane` would collide with the global `--lane` and reject `status --lane X`.
-    /// Lane to show ([project@]lane) [default: every lane of the current project]
+    /// Lane to show ([project@]lane, such as 2, feat/checkout or acme@2) [default: every lane of the current project]
     #[arg(id = "status_lane", value_name = "LANE")]
     pub lane: Option<String>,
     /// Keep printing lane changes until interrupted
@@ -400,7 +400,7 @@ pub struct StatusArgs {
 
 #[derive(Debug, Args)]
 pub struct LogArgs {
-    /// Units to read ([lane:]unit, globs, +tag) [default: pick from a list]
+    /// Units to read ([lane:]unit, a glob or +tag, such as api, 2:web, api-* or +backend) [default: pick from a list]
     #[arg(value_name = "UNIT")]
     pub units: Vec<String>,
     /// Read every unit of the lane, grouped by unit
@@ -418,7 +418,7 @@ pub struct LogArgs {
     /// Only lines newer than a duration (5m), a time in milliseconds, or start (the lane's last start)
     #[arg(long, value_name = "WHEN")]
     pub since: Option<String>,
-    /// Only lines matching this regular expression
+    /// Only lines matching this regular expression, such as timeout|refused
     #[arg(long, value_name = "REGEX")]
     pub grep: Option<String>,
     /// Only lines at this level or above: debug, info, warn or error
@@ -453,7 +453,7 @@ pub struct RunArgs {
 
 #[derive(Debug, Args)]
 pub struct ExecArgs {
-    /// Unit name for the command, used by logs, stop and attach
+    /// Unit name for the command, such as web, used by logs, stop and attach
     #[arg(long, value_name = "NAME")]
     pub name: String,
     /// Use pipes instead of a pseudoterminal
@@ -515,7 +515,7 @@ pub struct McpArgs {
 pub enum DebugCommand {
     /// Explain why a unit is not running or not ready, with a fix for each reason
     Why {
-        /// Unit to explain ([lane:]unit) [default: pick from a list]
+        /// Unit to explain ([lane:]unit, such as api or 2:web) [default: pick from a list]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
@@ -531,7 +531,7 @@ pub enum DebugCommand {
         #[arg(short, long)]
         follow: bool,
     },
-    /// Show CPU and memory per lane and unit
+    /// Show CPU and memory of the running units and containers of every lane
     Top,
     /// Freeze this lane's processes and own containers now, as if it had been idle for `lanes.freeze_after`
     Freeze {
@@ -576,7 +576,7 @@ them anyway.",
 pub enum EnvCommand {
     /// Print the environment of the lane or of one unit as KEY=VALUE lines
     Show {
-        /// Unit whose environment to print ([lane:]unit) [default: the lane's variables]
+        /// Unit whose environment to print ([lane:]unit, such as api or 2:api) [default: the lane's variables]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
         /// Show where each variable comes from; secret values are hidden
@@ -624,7 +624,7 @@ pub enum ExportShell {
 pub enum UrlCommand {
     /// Print a service's URL, for scripts
     Print {
-        /// Service whose URL to print ([lane:]unit) [default: pick from a list]
+        /// Service whose URL to print ([lane:]unit, such as web or 2:web) [default: pick from a list]
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
@@ -634,7 +634,7 @@ pub enum UrlCommand {
         #[arg(value_name = "UNIT")]
         unit: Option<String>,
     },
-    /// List routed hostnames with their lane, unit, port and state
+    /// List the routed hostnames of every lane with their lane, unit, port and state
     Ls,
 }
 
@@ -842,7 +842,7 @@ here that clashes with it starts. A box that is not connected can be chosen too.
 
 #[derive(Debug, Subcommand)]
 pub enum LaneCommand {
-    /// List lanes, including moved, unassigned and missing ones
+    /// List lanes after rereading the project's Git worktrees, including moved, unassigned and missing ones
     Ls,
     /// Add another lane for this folder
     #[command(
@@ -867,7 +867,7 @@ Without --start, a terminal asks whether to start the new lane right away."
     /// Stop a lane, run its clean tasks and teardown, delete its data and logs, and free its ports (needs --yes)
     Clean {
         // Own id: `lane` would collide with the global `--lane`.
-        /// Lane to clean ([project@]lane) [default: pick from a list]
+        /// Lane to clean ([project@]lane, such as 4 or acme@chore/deps) [default: pick from a list]
         #[arg(id = "clean_lane", value_name = "LANE")]
         lane: Option<String>,
         /// Print what the clean would stop, run and delete, with sizes, and change nothing; needs no --yes
