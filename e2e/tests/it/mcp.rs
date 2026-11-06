@@ -1,15 +1,16 @@
 //! `devlanes mcp` over stdio, as an agent host drives it: exec a server through
-//! the `devlanes` tool, read its logs with `devlanes_read`, stop it.
+//! the `devlanes` tool, read its logs with `devlanes_read`, stop it, and stop
+//! units of the same agent session with `stop --mine` from either side.
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    process::{Child, ChildStdin, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
-use devlanes_e2e::{Error, Lab, Result, alive};
+use devlanes_e2e::{Error, Lab, Result, alive, pid};
 use serde_json::{Value, json};
 
 use crate::{BUDGET, need};
@@ -29,7 +30,12 @@ struct Mcp {
 impl Mcp {
     /// Starts `devlanes mcp` in the lab's repository.
     fn start(lab: &Lab) -> Result<Self> {
-        let mut command = lab.command(lab.repo(), &["mcp"])?;
+        Self::spawn(lab, lab.command(lab.repo(), &["mcp"])?)
+    }
+
+    /// Starts `command`, a `devlanes mcp` command line, and completes the
+    /// `initialize` handshake.
+    fn spawn(lab: &Lab, mut command: Command) -> Result<Self> {
         command.stdin(Stdio::piped());
         let mut child = lab.spawn(command)?;
         let stdin = need(child.stdin.take(), "mcp stdin")?;
@@ -55,13 +61,25 @@ impl Mcp {
                 stderr.push_str(&text);
             }
         });
-        Ok(Self {
+        let mut mcp = Self {
             child,
             stdin,
             lines,
             stderr,
             next_id: 1,
-        })
+        };
+        let init = mcp.request(
+            lab,
+            "initialize",
+            json!({
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "e2e", "version": "1.0.0"},
+            }),
+        )?;
+        assert_eq!(init["serverInfo"]["name"], "devlanes", "{init}");
+        mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
+        Ok(mcp)
     }
 
     /// Writes one JSON-RPC message.
@@ -136,17 +154,6 @@ fn text(result: &Value) -> String {
 fn mcp_exec_logs_and_stop() -> Result<()> {
     let lab = Lab::new("two-services", BUDGET)?;
     let mut mcp = Mcp::start(&lab)?;
-    let init = mcp.request(
-        &lab,
-        "initialize",
-        json!({
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {"name": "e2e", "version": "1.0.0"},
-        }),
-    )?;
-    assert_eq!(init["serverInfo"]["name"], "devlanes", "{init}");
-    mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
     let tools = mcp.request(&lab, "tools/list", json!({}))?;
     let names: Vec<&str> = tools["tools"]
         .as_array()
@@ -198,6 +205,87 @@ fn mcp_exec_logs_and_stop() -> Result<()> {
     assert_eq!(stopped["structuredContent"]["exit_code"], 0, "{stopped}");
     lab.eventually("probe to exit", Duration::from_secs(15), || {
         Ok((!alive(pid)).then_some(()))
+    })?;
+    Ok(())
+}
+
+/// A `devlanes` command in the lab's repository that runs as Claude Code
+/// session `session` would: is-ai-agent reads the session id from
+/// `CLAUDE_CODE_SESSION_ID`.
+fn as_agent(lab: &Lab, session: &str, args: &[&str]) -> Result<Command> {
+    let mut command = lab.command(lab.repo(), args)?;
+    command
+        .env_remove("DEVLANES_AGENT")
+        .env("CLAUDECODE", "1")
+        .env("CLAUDE_CODE_SESSION_ID", session);
+    Ok(command)
+}
+
+/// `devlanes stop --mine` from the CLI, as `session`: the names it stopped.
+fn cli_stop_mine(lab: &Lab, session: &str) -> Result<Vec<String>> {
+    let output = lab.run(as_agent(lab, session, &["stop", "--mine"])?, RESPONSE)?;
+    output.expect_code(0)?;
+    Ok(names(&output.json()?))
+}
+
+/// `stop --mine` through the `devlanes` tool: the names it stopped.
+fn mcp_stop_mine(mcp: &mut Mcp, lab: &Lab) -> Result<Vec<String>> {
+    let stopped = mcp.call(lab, "devlanes", &["stop", "--mine"])?;
+    Ok(names(&stopped["structuredContent"]["data"]))
+}
+
+/// The unit names in a `stop` result.
+fn names(stopped: &Value) -> Vec<String> {
+    stopped["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|unit| unit["name"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The `fixture-server` command line of an exec named `name`.
+fn exec_args(name: &str) -> [&str; 7] {
+    [
+        "exec",
+        "--name",
+        name,
+        "--",
+        "fixture-server",
+        "--port",
+        "0",
+    ]
+}
+
+/// Units started through `devlanes mcp` and through the CLI carry the same
+/// actor, so `stop --mine` from either side stops them for the same agent
+/// session and leaves them running for another one.
+#[test]
+fn mcp_and_cli_stop_mine_agree() -> Result<()> {
+    let lab = Lab::new("two-services", BUDGET)?;
+    let mine = format!("e2e-{}-mine", std::process::id());
+    let other = format!("e2e-{}-other", std::process::id());
+    let mut mcp = Mcp::spawn(&lab, as_agent(&lab, &mine, &["mcp"])?)?;
+
+    let exec = mcp.call(&lab, "devlanes", &exec_args("from-mcp"))?;
+    let from_mcp = need(pid(&exec["structuredContent"]["data"]), "from-mcp pid")?;
+    lab.track(from_mcp);
+    assert_eq!(cli_stop_mine(&lab, &other)?, Vec::<String>::new());
+    assert!(alive(from_mcp), "another session stopped from-mcp");
+    assert_eq!(cli_stop_mine(&lab, &mine)?, ["from-mcp"]);
+    lab.eventually("from-mcp to exit", Duration::from_secs(15), || {
+        Ok((!alive(from_mcp)).then_some(()))
+    })?;
+
+    let exec = lab.run(as_agent(&lab, &mine, &exec_args("from-cli"))?, RESPONSE)?;
+    exec.expect_code(0)?;
+    let from_cli = need(pid(&exec.json()?), "from-cli pid")?;
+    let mut elsewhere = Mcp::spawn(&lab, as_agent(&lab, &other, &["mcp"])?)?;
+    assert_eq!(mcp_stop_mine(&mut elsewhere, &lab)?, Vec::<String>::new());
+    assert!(alive(from_cli), "another session stopped from-cli");
+    assert_eq!(mcp_stop_mine(&mut mcp, &lab)?, ["from-cli"]);
+    lab.eventually("from-cli to exit", Duration::from_secs(15), || {
+        Ok((!alive(from_cli)).then_some(()))
     })?;
     Ok(())
 }
