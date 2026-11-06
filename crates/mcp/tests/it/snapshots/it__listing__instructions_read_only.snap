@@ -2,9 +2,9 @@
 source: crates/mcp/tests/it/listing.rs
 expression: info.instructions.clone().unwrap_or_default()
 ---
-devlanes runs a dev environment per Git worktree (a lane) with its own ports, URLs and env. Call the devlanes_read tool with the command line after "devlanes" as args. This server only reads: ask the user to start, stop or change anything.
+devlanes runs a dev environment per Git worktree (a lane) with its own ports, URLs and env. This server only reads: ask the user to start, stop or change anything. Common commands have tools of their own; the devlanes tool runs the others that change nothing.
 - wait blocks until ready or failed: no sleep or curl polling.
 
 More:
-- Read a unit with `devlanes logs web --tail 100`, the lane with `devlanes status`, a failure with `devlanes debug why web`.
+- Read a unit with `logs {"units": ["web"], "tail": 100}`, the lane with status, a failure with `debug_why {"unit": "web"}`, CPU and memory with debug_top.
 - cwd picks the worktree; without it the call uses the project the agent runs in.

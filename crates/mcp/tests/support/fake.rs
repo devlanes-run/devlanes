@@ -177,13 +177,19 @@ fn main() -> ExitCode {
         status
     } else if has("remote") && has("ls") {
         json!({"items": [{"host": "hetzner", "state": "connected", "registry": {"lanes": [], "units": []}}]})
-    } else if has("start") && has("--lane") {
-        let lane = args
-            .iter()
-            .skip_while(|arg| *arg != "--lane")
-            .nth(1)
-            .cloned()
-            .unwrap_or_default();
+    } else if let Some(lane) = has("start")
+        .then(|| {
+            // `--lane REF` from the devlanes tool, `--lane=REF` from start's own.
+            args.iter()
+                .enumerate()
+                .find_map(|(at, arg)| match arg.strip_prefix("--lane") {
+                    Some("") => args.get(at + 1).cloned(),
+                    Some(value) => value.strip_prefix('=').map(str::to_owned),
+                    None => None,
+                })
+        })
+        .flatten()
+    {
         json!({"lane": lane, "ready": true, "units": [], "failures": []})
     } else if has("top") {
         json!({"lanes": []})

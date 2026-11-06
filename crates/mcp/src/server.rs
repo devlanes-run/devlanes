@@ -28,7 +28,9 @@ use crate::{
     command::{Call, Rejected, Tool as Source},
     host,
     progress::{self, Phases},
-    shell_env, text, view,
+    shell_env, text,
+    tools::{self, Catalog, Generated},
+    view,
 };
 
 /// The key of the consent question in an `InputRequiredResult`.
@@ -43,6 +45,8 @@ const DATA_LIMIT: usize = 256 * 1024;
 #[derive(Clone)]
 pub struct Server {
     config: Arc<Config>,
+    /// The tools of the curated commands this server offers.
+    catalog: Arc<Catalog>,
     calls: Calls,
     shell_env: shell_env::Cache,
     /// Numbers each lane's cards, for `structuredContent.card`.
@@ -52,7 +56,7 @@ pub struct Server {
     consent_key: std::hash::RandomState,
 }
 
-/// `{args, cwd?}`, the arguments of both model-facing tools.
+/// `{args, cwd?}`, the arguments of the `devlanes` tool.
 #[derive(Deserialize)]
 struct ToolArgs {
     args: Vec<String>,
@@ -79,6 +83,7 @@ impl Server {
         let shell_env =
             shell_env::Cache::new(config.shell_env, config.exe.clone(), config.env.clone());
         Self {
+            catalog: Arc::new(Catalog::new(config.read_only)),
             config: Arc::new(config),
             calls: Calls::default(),
             shell_env,
@@ -105,43 +110,44 @@ impl Server {
         self.calls.stop().await;
     }
 
-    /// The tools this client sees: `devlanes` unless `--read-only`, `devlanes_read`,
-    /// and the app-only tools when it shows MCP Apps.
+    /// The tools this client sees: one per curated command (only the read-only
+    /// ones under `--read-only`), `devlanes` for every other command, and the
+    /// app-only tools when it shows MCP Apps. Only tools whose results can
+    /// have a card name the cards resource, so hosts load it for no other.
     fn tools(&self, ui: bool) -> Vec<Tool> {
-        let schema = tool_schema();
         let mut meta = MetaObject::new();
         if ui && let Some(resource) = &self.config.ui {
             meta.insert("ui".into(), json!({"resourceUri": resource.uri}));
         }
-        let with_meta = |tool: Tool| {
-            if meta.is_empty() {
+        let with_meta = |tool: Tool, card: bool| {
+            if meta.is_empty() || !card {
                 tool
             } else {
                 tool.with_meta(meta.clone())
             }
         };
-        let mut tools = Vec::new();
-        if !self.config.read_only {
-            tools.push(with_meta(
-                Tool::new("devlanes", text::DEVLANES, schema.clone()).with_annotations(
-                    ToolAnnotations::with_title("devlanes")
-                        .read_only(false)
-                        .destructive(true)
-                        .open_world(false),
-                ),
-            ));
-        }
-        let read = if self.config.read_only {
-            text::DEVLANES_READ_ONLY
+        let mut tools: Vec<Tool> = self
+            .catalog
+            .iter()
+            .map(|generated| with_meta(generated.tool.clone(), generated.spec.card))
+            .collect();
+        let (description, annotations) = if self.config.read_only {
+            (
+                text::DEVLANES_READ_ONLY,
+                ToolAnnotations::with_title("devlanes (read only)").read_only(true),
+            )
         } else {
-            text::DEVLANES_READ
+            (
+                text::DEVLANES,
+                ToolAnnotations::with_title("devlanes")
+                    .read_only(false)
+                    .destructive(true),
+            )
         };
         tools.push(with_meta(
-            Tool::new("devlanes_read", read, schema).with_annotations(
-                ToolAnnotations::with_title("devlanes (read only)")
-                    .read_only(true)
-                    .open_world(false),
-            ),
+            Tool::new("devlanes", description, tool_schema())
+                .with_annotations(annotations.open_world(false)),
+            true,
         ));
         if ui && self.config.ui.is_some() {
             tools.extend(app::tools(self.config.read_only));
@@ -149,25 +155,41 @@ impl Server {
         tools
     }
 
-    /// Runs a call of `devlanes` or `devlanes_read`.
+    /// Runs a call of the `devlanes` tool, or of the curated tool `named`.
     async fn command(
         &self,
         request: &CallToolRequestParams,
         context: &RequestContext<RoleServer>,
+        named: Option<&Generated>,
     ) -> Result<CallToolResponse, McpError> {
-        let read_only_tool = request.name == "devlanes_read";
-        let source = match (read_only_tool, self.config.read_only) {
-            (false, _) => Source::Devlanes,
-            (true, false) => Source::Read,
-            (true, true) => Source::ReadOnly,
+        let line = match named {
+            None => {
+                let arguments: ToolArgs = arguments(request)?;
+                tools::Line {
+                    args: arguments.args,
+                    cwd: arguments.cwd,
+                }
+            }
+            Some(tool) => match tool.line(&request.arguments.clone().unwrap_or_default()) {
+                Ok(line) => line,
+                Err(text) => return Ok(text_result(text, true).into()),
+            },
         };
-        let arguments: ToolArgs = arguments(request)?;
-        let mut call = match Call::parse(&arguments.args, source) {
+        let source = if self.config.read_only {
+            Source::ReadOnly
+        } else {
+            Source::Any
+        };
+        // A tool that only reads never answers a command's own question with
+        // a yes: that yes would change something.
+        let may_confirm = !self.config.read_only && named.is_none_or(|tool| !tool.read_only);
+        let rerun = |flag: &str| rerun_hint(named, flag);
+        let mut call = match Call::parse(&line.args, source) {
             Ok(call) => call,
             Err(Rejected::Help(text)) => return Ok(text_result(text, false).into()),
             Err(Rejected::Error(text)) => return Ok(text_result(text, true).into()),
         };
-        let (cwd, default_lane) = self.cwd(arguments.cwd.as_deref());
+        let (cwd, default_lane) = self.cwd(line.cwd.as_deref());
         if default_lane && let Some(lane) = &self.config.lane {
             call.default_lane(lane);
         }
@@ -194,7 +216,8 @@ impl Server {
                             return Ok(text_result(
                                 format!(
                                     "{question}\nThis needs the user's consent and this client \
-                                     cannot ask: ask the user, then rerun with --yes"
+                                     cannot ask: {}",
+                                    rerun("--yes")
                                 ),
                                 true,
                             )
@@ -209,8 +232,7 @@ impl Server {
             Ok(ran) => ran,
             Err(error) => return Ok(text_result(error, true).into()),
         };
-        // devlanes_read runs nothing that asks; a yes there would change something.
-        if !read_only_tool
+        if may_confirm
             && !call.cli.yes
             && let Some(error) = error_of(&output.data, "confirmation_required")
         {
@@ -230,9 +252,7 @@ impl Server {
                 }
                 Answer::Declined => return Ok(declined(&call, false).into()),
                 Answer::Cancelled => return Ok(declined(&call, true).into()),
-                Answer::Unsupported => {
-                    notes.push(format!("ask the user, then rerun with {flag}"));
-                }
+                Answer::Unsupported => notes.push(rerun(&flag)),
                 Answer::Pending(result) => return Ok(result.into()),
             }
         }
@@ -328,8 +348,10 @@ impl ServerHandler for Server {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         match request.name.as_ref() {
-            "devlanes" if !self.config.read_only => self.command(&request, &context).await,
-            "devlanes_read" => self.command(&request, &context).await,
+            "devlanes" => self.command(&request, &context, None).await,
+            name if let Some(tool) = self.catalog.get(name) => {
+                self.command(&request, &context, Some(tool)).await
+            }
             // Only the cards call these, so a client that shows none has no use for them.
             name if app::is_app_tool(name) && self.shows_ui(&context) => {
                 app::call(self, name, &request, &context).await
@@ -439,7 +461,19 @@ impl Server {
     }
 }
 
-/// The input schema both model-facing tools share.
+/// What to do when the client cannot ask the user about a command that needs
+/// `flag`, in the terms of the tool `named` (the `devlanes` tool for `None`).
+fn rerun_hint(named: Option<&Generated>, flag: &str) -> String {
+    match named {
+        None => format!("ask the user, then rerun with {flag}"),
+        Some(tool) if flag == "--yes" && tool.takes("yes") => {
+            format!("ask the user, then call {} again with yes: true", tool.name)
+        }
+        Some(_) => format!("ask the user, then run it with the devlanes tool and {flag}"),
+    }
+}
+
+/// The input schema of the `devlanes` tool.
 fn tool_schema() -> JsonObject {
     let schema = json!({
         "type": "object",

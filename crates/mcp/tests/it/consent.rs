@@ -2,6 +2,7 @@
 //! run, and run with `--yes` only after a yes.
 
 use rmcp::model::ElicitationAction;
+use serde_json::json;
 
 use crate::{LIMIT, Lifecycle, TestClient, connect, failed, text};
 
@@ -125,8 +126,56 @@ async fn cancelled_questions_run_nothing() {
 }
 
 #[tokio::test]
-/// `devlanes_read` never answers a command's own question with a yes.
-async fn the_read_tool_does_not_confirm() {
+/// The tools of commands that ask ask the same way, and say how to answer
+/// in their own terms when the client cannot ask.
+async fn named_tools_ask_too() {
+    tokio::time::timeout(LIMIT, async {
+        for (tool, arguments, line) in [
+            ("lane_clean", json!({"lane": "2"}), "lane clean 2"),
+            ("daemon_pair", json!({}), "daemon pair"),
+        ] {
+            let accepting = connect(
+                TestClient::new().answering(ElicitationAction::Accept),
+                Lifecycle::Initialize,
+                |_| {},
+            )
+            .await;
+            let result = accepting.call_with(tool, arguments.clone()).await;
+            assert!(!failed(&result), "{tool}: {}", text(&result));
+            assert_eq!(accepting.handler.questions().len(), 1, "{tool}");
+            assert_eq!(ran(&accepting), [format!("--output agent {line} --yes")]);
+            let declining = connect(
+                TestClient::new().answering(ElicitationAction::Decline),
+                Lifecycle::Initialize,
+                |_| {},
+            )
+            .await;
+            let result = declining.call_with(tool, arguments.clone()).await;
+            assert!(failed(&result) && text(&result).contains("declined"));
+            assert!(ran(&declining).is_empty(), "{:?}", declining.lines());
+            let unasked = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
+            let result = unasked.call_with(tool, arguments.clone()).await;
+            assert!(failed(&result));
+            assert!(
+                text(&result).contains(&format!("then call {tool} again with yes: true")),
+                "{}",
+                text(&result)
+            );
+            assert!(unasked.lines().is_empty(), "{:?}", unasked.lines());
+            let mut agreed = arguments;
+            agreed["yes"] = json!(true);
+            let result = unasked.call_with(tool, agreed).await;
+            assert!(!failed(&result), "{tool}: {}", text(&result));
+            assert_eq!(unasked.lines(), [format!("--output agent {line} --yes")]);
+        }
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
+/// A tool that only reads never answers a command's own question with a yes.
+async fn reading_tools_do_not_confirm() {
     tokio::time::timeout(LIMIT, async {
         let harness = connect(
             TestClient::new().answering(ElicitationAction::Accept),
@@ -136,7 +185,7 @@ async fn the_read_tool_does_not_confirm() {
             },
         )
         .await;
-        let result = harness.call("devlanes_read", &["status"]).await;
+        let result = harness.call_with("status", json!({})).await;
         assert!(failed(&result));
         assert!(harness.handler.questions().is_empty());
         assert_eq!(harness.lines(), ["--output agent status"]);
@@ -179,7 +228,7 @@ async fn confirmation_required_is_asked_and_rerun() {
             },
         )
         .await;
-        let result = harness.call("devlanes", &["run", "deploy"]).await;
+        let result = harness.call_with("run", json!({"task": "deploy"})).await;
         assert!(!failed(&result), "{}", text(&result));
         assert!(harness.handler.questions()[0].contains("deploy now?"));
         assert_eq!(
@@ -193,14 +242,23 @@ async fn confirmation_required_is_asked_and_rerun() {
             config.env.insert("FAKE_CONFIRM".into(), "1".into());
         })
         .await;
-        let result = unasked.call("devlanes", &["run", "deploy"]).await;
+        let result = unasked.call_with("run", json!({"task": "deploy"})).await;
         assert!(failed(&result));
+        assert!(
+            text(&result).contains("ask the user, then call run again with yes: true"),
+            "{}",
+            text(&result)
+        );
+        let result = unasked.call("devlanes", &["run", "deploy"]).await;
         assert!(
             text(&result).contains("ask the user, then rerun with --yes"),
             "{}",
             text(&result)
         );
-        assert_eq!(unasked.lines(), ["--output agent run deploy"]);
+        assert_eq!(
+            unasked.lines(),
+            ["--output agent run deploy", "--output agent run deploy"]
+        );
     })
     .await
     .expect("in time");

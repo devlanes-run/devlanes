@@ -20,7 +20,7 @@ use crate::{LIMIT, Lifecycle, TestClient, connect, failed, settled, stops_tickin
 async fn a_call_runs_the_command() {
     tokio::time::timeout(LIMIT, async {
         let harness = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
-        let result = harness.call("devlanes_read", &["--json", "status"]).await;
+        let result = harness.call_with("status", json!({})).await;
         assert!(!failed(&result), "{}", text(&result));
         assert_eq!(text(&result), "ran --output agent status\n");
         let structured = result.structured_content.expect("structured content");
@@ -53,7 +53,7 @@ async fn read_only_results_say_so() {
             config.read_only = true;
         })
         .await;
-        let result = harness.call("devlanes_read", &["status"]).await;
+        let result = harness.call_with("status", json!({})).await;
         assert!(!failed(&result), "{}", text(&result));
         assert_eq!(
             result.structured_content.expect("structured content")["read_only"],
@@ -72,7 +72,7 @@ async fn a_failed_command_is_an_error() {
             config.env.insert("FAKE_EXIT".into(), "3".into());
         })
         .await;
-        let result = harness.call("devlanes", &["stop", "api"]).await;
+        let result = harness.call_with("stop", json!({"units": ["api"]})).await;
         assert!(failed(&result));
         let structured = result.structured_content.expect("structured content");
         assert_eq!(structured["exit_code"], 3);
@@ -95,19 +95,21 @@ async fn blocking_commands_get_the_hosts_timeout() {
             },
         )
         .await;
-        harness.call("devlanes", &["restart", "api"]).await;
         harness
-            .call("devlanes", &["with", "--", "pnpm", "test"])
+            .call_with("restart", json!({"units": ["api"]}))
             .await;
         harness
-            .call("devlanes", &["wait", "api", "--timeout", "5s"])
+            .call_with("with", json!({"command": ["pnpm", "test"]}))
+            .await;
+        harness
+            .call_with("wait", json!({"target": "api", "timeout": "5s"}))
             .await;
         assert_eq!(
             harness.lines(),
             [
                 "--output agent restart api --timeout 50s",
                 "--output agent with --timeout 50s -- pnpm test",
-                "--output agent wait api --timeout 5s",
+                "--output agent wait api --timeout=5s",
             ]
         );
         assert_eq!(harness.runs()[0]["ai_agent"], Value::Null);
@@ -132,7 +134,7 @@ async fn the_hosts_tool_timeout_sets_the_limit() {
             },
         )
         .await;
-        claude.call("devlanes", &["start"]).await;
+        claude.call_with("start", json!({})).await;
         let other = connect(
             TestClient::new().named("acme-client"),
             Lifecycle::Initialize,
@@ -141,7 +143,7 @@ async fn the_hosts_tool_timeout_sets_the_limit() {
             },
         )
         .await;
-        other.call("devlanes", &["start"]).await;
+        other.call_with("start", json!({})).await;
         assert_eq!(claude.lines(), ["--output agent start --timeout 590s"]);
         assert_eq!(other.lines(), ["--output agent start --timeout 60s"]);
     })
@@ -159,10 +161,8 @@ async fn calls_run_where_asked() {
         .await;
         let sub = harness.dir.path().join("sub");
         std::fs::create_dir(&sub).expect("sub");
-        harness
-            .call_with("devlanes_read", json!({"args": ["status"], "cwd": "sub"}))
-            .await;
-        harness.call("devlanes_read", &["status"]).await;
+        harness.call_with("status", json!({"cwd": "sub"})).await;
+        harness.call_with("status", json!({})).await;
         let runs = harness.runs();
         assert_eq!(runs[0]["args"], json!(["--output", "agent", "status"]));
         assert_eq!(
@@ -177,7 +177,7 @@ async fn calls_run_where_asked() {
             config.path = Some(sub.clone());
         })
         .await;
-        other.call("devlanes_read", &["status"]).await;
+        other.call_with("status", json!({})).await;
         assert_eq!(
             std::fs::canonicalize(other.runs()[0]["cwd"].as_str().unwrap_or_default()).ok(),
             std::fs::canonicalize(&sub).ok()
@@ -195,7 +195,7 @@ async fn a_lane_without_env_gets_the_servers() {
             config.env.insert("FAKE_NEEDS_ENV".into(), "1".into());
         })
         .await;
-        let result = harness.call("devlanes", &["start"]).await;
+        let result = harness.call_with("start", json!({})).await;
         assert!(!failed(&result), "{}", text(&result));
         assert!(
             text(&result).contains("got the environment of the devlanes mcp server"),
@@ -237,7 +237,7 @@ async fn a_reload_without_env_is_not_run_again() {
             config.env.insert("FAKE_NEEDS_ENV".into(), "1".into());
         })
         .await;
-        let result = harness.call("devlanes", &["reload"]).await;
+        let result = harness.call_with("reload", json!({})).await;
         assert!(failed(&result));
         assert!(!text(&result).contains("note:"), "{}", text(&result));
         assert_eq!(harness.runs().len(), 1);
@@ -247,37 +247,53 @@ async fn a_reload_without_env_is_not_run_again() {
 }
 
 #[tokio::test]
-/// Terminal-only commands, follows without `--timeout`, write commands on
-/// `devlanes_read` and parse errors are refused without running anything;
+/// Terminal-only commands, follows without `--timeout`, parse errors and
+/// arguments a tool does not take are refused without running anything;
 /// `--help` is answered from the parser.
 async fn refusals_run_nothing() {
     tokio::time::timeout(LIMIT, async {
         let harness = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
-        for (tool, args, says) in [
-            ("devlanes", &["ui"][..], "TUI"),
-            ("devlanes", &["attach", "api"], "logs"),
-            ("devlanes", &["env", "shell"], "env show"),
-            ("devlanes", &["start", "--attach"], "--attach"),
-            ("devlanes", &["setup"], "terminal"),
-            ("devlanes", &["update"], "terminal"),
-            ("devlanes", &["uninstall"], "terminal"),
-            ("devlanes", &["completions", "bash"], "terminal"),
-            ("devlanes", &["mcp"], "MCP server"),
-            ("devlanes", &["with", "--", "devlanes", "ui"], "TUI"),
-            ("devlanes_read", &["logs", "api", "-f"], "--timeout"),
-            ("devlanes_read", &["status", "--watch"], "--timeout"),
-            ("devlanes_read", &["debug", "events", "-f"], "--timeout"),
-            ("devlanes_read", &["infra", "logs", "db", "-f"], "--timeout"),
-            ("devlanes_read", &["daemon", "logs", "-f"], "--tail"),
-            ("devlanes_read", &["stop"], "devlanes tool"),
-            ("devlanes_read", &["lane", "clean", "2"], "devlanes tool"),
-            ("devlanes", &["no-such-command"], "no-such-command"),
+        for (args, says) in [
+            (&["ui"][..], "TUI"),
+            (&["attach", "api"], "logs"),
+            (&["env", "shell"], "env show"),
+            (&["start", "--attach"], "--attach"),
+            (&["setup"], "terminal"),
+            (&["update"], "terminal"),
+            (&["uninstall"], "terminal"),
+            (&["completions", "bash"], "terminal"),
+            (&["mcp"], "MCP server"),
+            (&["status", "--watch"], "--timeout"),
+            (&["debug", "events", "-f"], "--timeout"),
+            (&["infra", "logs", "db", "-f"], "--timeout"),
+            (&["daemon", "logs", "-f"], "--tail"),
+            (&["no-such-command"], "no-such-command"),
         ] {
-            let result = harness.call(tool, args).await;
+            let result = harness.call("devlanes", args).await;
             assert!(failed(&result), "{args:?} was not refused");
             assert!(text(&result).contains(says), "{args:?}: {}", text(&result));
         }
-        let help = harness.call("devlanes_read", &["logs", "--help"]).await;
+        for (tool, arguments, says) in [
+            (
+                "logs",
+                json!({"units": ["api"], "follow": true}),
+                "--timeout",
+            ),
+            ("with", json!({"command": ["devlanes", "ui"]}), "TUI"),
+            ("stop", json!({"units": ["--all"]}), "read as a flag"),
+            ("logs", json!({"unit": "api"}), "takes no argument unit"),
+            ("exec", json!({"name": "web"}), "needs command"),
+            ("logs", json!({"tail": "many"}), "--tail"),
+        ] {
+            let result = harness.call_with(tool, arguments.clone()).await;
+            assert!(failed(&result), "{tool} {arguments} was not refused");
+            assert!(
+                text(&result).contains(says),
+                "{tool} {arguments}: {}",
+                text(&result)
+            );
+        }
+        let help = harness.call("devlanes", &["logs", "--help"]).await;
         assert!(!failed(&help));
         assert!(text(&help).contains("--cursor"), "{}", text(&help));
         assert!(harness.runs().is_empty(), "ran {:?}", harness.lines());
@@ -300,8 +316,7 @@ async fn starts_report_progress() {
                 .insert("FAKE_WAIT_FOR".into(), marker.display().to_string());
         })
         .await;
-        let mut params = CallToolRequestParams::new("devlanes")
-            .with_arguments(serde_json::from_value(json!({"args": ["start"]})).expect("args"));
+        let mut params = CallToolRequestParams::new("start");
         params.meta = Some(RequestMetaObject::with_progress_token(ProgressToken(
             NumberOrString::String("start-1".into()),
         )));
@@ -345,13 +360,14 @@ async fn starts_report_progress() {
     .expect("in time");
 }
 
-/// Sends a `devlanes` call of `args` that the test cancels.
+/// Sends a call of `tool` with `arguments` that the test cancels.
 async fn cancellable(
     harness: &crate::Harness,
-    args: &[&str],
+    tool: &'static str,
+    arguments: Value,
 ) -> rmcp::service::RequestHandle<rmcp::RoleClient> {
-    let params = CallToolRequestParams::new("devlanes")
-        .with_arguments(serde_json::from_value(json!({"args": args})).expect("args"));
+    let params = CallToolRequestParams::new(tool)
+        .with_arguments(serde_json::from_value(arguments).expect("args"));
     harness
         .client
         .send_cancellable_request(
@@ -375,7 +391,7 @@ async fn cancelling_stops_the_command() {
                 .insert("FAKE_TICKS".into(), ticks.display().to_string());
         })
         .await;
-        let handle = cancellable(&harness, &["run", "build"]).await;
+        let handle = cancellable(&harness, "run", json!({"task": "build"})).await;
         ticked(&ticks, 2).await;
         handle.cancel(Some("test".into())).await.expect("cancel");
         settled(&harness.server, Duration::from_secs(15)).await;
@@ -399,7 +415,7 @@ async fn cancelling_ends_what_the_command_left_running() {
                 .insert("FAKE_GRANDCHILD_TICKS".into(), ticks.display().to_string());
         })
         .await;
-        let handle = cancellable(&harness, &["with", "--", "pnpm", "test"]).await;
+        let handle = cancellable(&harness, "with", json!({"command": ["pnpm", "test"]})).await;
         ticked(&ticks, 2).await;
         handle.cancel(Some("test".into())).await.expect("cancel");
         settled(&harness.server, Duration::from_secs(15)).await;
@@ -440,7 +456,7 @@ async fn cancelling_ends_what_left_the_process_group() {
             }
         }
         let _cleanup = Cleanup(stop);
-        let handle = cancellable(&harness, &["with", "--", "pnpm", "test"]).await;
+        let handle = cancellable(&harness, "with", json!({"command": ["pnpm", "test"]})).await;
         ticked(&ticks, 2).await;
         handle.cancel(Some("test".into())).await.expect("cancel");
         settled(&harness.server, Duration::from_secs(15)).await;
@@ -503,7 +519,7 @@ async fn leaving_stops_running_commands() {
                 .insert("FAKE_TICKS".into(), ticks.display().to_string());
         })
         .await;
-        let _handle = cancellable(&harness, &["with", "--", "pnpm", "test"]).await;
+        let _handle = cancellable(&harness, "with", json!({"command": ["pnpm", "test"]})).await;
         ticked(&ticks, 2).await;
         let crate::Harness {
             client,
@@ -693,10 +709,7 @@ async fn a_missing_cwd_is_an_error_result() {
     tokio::time::timeout(LIMIT, async {
         let harness = connect(TestClient::new(), Lifecycle::Initialize, |_| {}).await;
         let result = harness
-            .call_with(
-                "devlanes_read",
-                json!({"args": ["status"], "cwd": "no/such/dir"}),
-            )
+            .call_with("status", json!({"cwd": "no/such/dir"}))
             .await;
         assert!(failed(&result));
         assert!(text(&result).contains("could not run"), "{}", text(&result));
@@ -713,7 +726,7 @@ async fn large_data_is_left_out() {
             config.env.insert("FAKE_LARGE".into(), "1".into());
         })
         .await;
-        let result = harness.call("devlanes_read", &["lane", "ls"]).await;
+        let result = harness.call_with("lane_ls", json!({})).await;
         assert!(!failed(&result), "{}", text(&result));
         assert!(text(&result).contains("over 256 KiB"), "{}", text(&result));
         let structured = result.structured_content.expect("structured content");
@@ -735,7 +748,7 @@ async fn with_reuses_the_lanes_env() {
         })
         .await;
         let result = harness
-            .call("devlanes", &["with", "--", "pnpm", "test"])
+            .call_with("with", json!({"command": ["pnpm", "test"]}))
             .await;
         assert!(!failed(&result), "{}", text(&result));
         assert!(
@@ -765,7 +778,7 @@ async fn codex_calls_have_the_agent_but_no_session() {
             |_| {},
         )
         .await;
-        harness.call("devlanes_read", &["status"]).await;
+        harness.call_with("status", json!({})).await;
         let run = &harness.runs()[0];
         assert_eq!(run["ai_agent"], "codex");
         assert_eq!(run["codex_thread_id"], Value::Null);

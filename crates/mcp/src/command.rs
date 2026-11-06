@@ -26,21 +26,20 @@ pub enum Rejected {
     Error(String),
 }
 
-/// Which tool a command line came from.
+/// Which commands a call may run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
-    /// `devlanes`, which runs anything.
-    Devlanes,
-    /// `devlanes_read` next to `devlanes`.
-    Read,
-    /// `devlanes_read` of a server started with `--read-only`, which has no
-    /// `devlanes` tool.
+    /// Any command.
+    Any,
+    /// Only commands that change nothing: every tool of a server started
+    /// with `--read-only`.
     ReadOnly,
 }
 
 impl Call {
-    /// Parses `args` as `devlanes ARGS` from `tool`. `--output` and `--json`
-    /// are dropped first, since every call runs with `--output agent`.
+    /// Parses `args` as `devlanes ARGS` for a call that may run `tool`'s
+    /// commands. `--output` and `--json` are dropped first, since every call
+    /// runs with `--output agent`.
     pub fn parse(args: &[String], tool: Tool) -> Result<Self, Rejected> {
         let args = without_output_flags(args);
         let cli = Cli::try_parse_from(std::iter::once("devlanes".to_owned()).chain(args.clone()))
@@ -54,18 +53,11 @@ impl Call {
             )),
         })?;
         let path = path_of(&args);
-        if tool != Tool::Devlanes && !cli.command.as_ref().is_none_or(Command::is_read_only) {
-            return Err(Rejected::Error(if tool == Tool::ReadOnly {
-                format!(
-                    "devlanes {path} changes something, and devlanes mcp runs with --read-only \
-                     here, so ask the user to run it"
-                )
-            } else {
-                format!(
-                    "devlanes {path} changes something, and devlanes_read only runs commands \
-                     that change nothing; call the devlanes tool with the same args instead"
-                )
-            }));
+        if tool == Tool::ReadOnly && !cli.command.as_ref().is_none_or(Command::is_read_only) {
+            return Err(Rejected::Error(format!(
+                "devlanes {path} changes something, and devlanes mcp runs with --read-only here, \
+                 so ask the user to run it"
+            )));
         }
         if let Some(reason) = cli.terminal_only() {
             return Err(Rejected::Error(format!(
@@ -384,7 +376,7 @@ mod tests {
 
     /// Parses or panics with the rejection.
     fn call(line: &[&str]) -> Call {
-        match Call::parse(&args(line), Tool::Devlanes) {
+        match Call::parse(&args(line), Tool::Any) {
             Ok(call) => call,
             Err(Rejected::Help(text) | Rejected::Error(text)) => panic!("{line:?}: {text}"),
         }
@@ -475,12 +467,12 @@ mod tests {
             &["with", "--", "devlanes", "logs", "api", "-f"],
             &["debug", "bundle", "--", "attach", "api"],
         ] {
-            match Call::parse(&args(line), Tool::Devlanes) {
+            match Call::parse(&args(line), Tool::Any) {
                 Err(Rejected::Error(text)) => assert!(text.contains("does not run here"), "{text}"),
                 _ => panic!("{line:?} was not refused"),
             }
         }
-        assert!(Call::parse(&args(&["with", "--", "devlanes", "status"]), Tool::Devlanes).is_ok());
+        assert!(Call::parse(&args(&["with", "--", "devlanes", "status"]), Tool::Any).is_ok());
     }
 
     /// Terminal-only commands and write commands on the read tool are refused
@@ -491,20 +483,19 @@ mod tests {
             Err(Rejected::Error(text)) => text,
             _ => panic!("{line:?} was not refused"),
         };
-        assert!(refused(&["ui"], Tool::Devlanes).contains("TUI"));
-        assert!(refused(&["logs", "api", "-f"], Tool::Devlanes).contains("--timeout"));
-        assert!(refused(&["env", "shell"], Tool::Devlanes).contains("env show"));
-        assert!(refused(&["stop"], Tool::Read).contains("devlanes tool"));
-        assert!(refused(&["exec", "--name", "x", "--", "y"], Tool::Read).contains("devlanes tool"));
-        // Without the devlanes tool the user runs it.
-        let read_only = refused(&["stop"], Tool::ReadOnly);
-        assert!(read_only.contains("--read-only"), "{read_only}");
-        assert!(!read_only.contains("devlanes tool"), "{read_only}");
-        assert!(refused(&["nope"], Tool::Devlanes).contains("nope"));
-        assert!(Call::parse(&args(&["status"]), Tool::Read).is_ok());
-        assert!(Call::parse(&args(&[]), Tool::Read).is_ok_and(|call| call.path == "status"));
+        assert!(refused(&["ui"], Tool::Any).contains("TUI"));
+        assert!(refused(&["logs", "api", "-f"], Tool::Any).contains("--timeout"));
+        assert!(refused(&["env", "shell"], Tool::Any).contains("env show"));
+        // Under --read-only the user runs it.
+        for line in [&["stop"][..], &["exec", "--name", "x", "--", "y"]] {
+            let read_only = refused(line, Tool::ReadOnly);
+            assert!(read_only.contains("ask the user"), "{read_only}");
+        }
+        assert!(refused(&["nope"], Tool::Any).contains("nope"));
+        assert!(Call::parse(&args(&["status"]), Tool::ReadOnly).is_ok());
+        assert!(Call::parse(&args(&[]), Tool::ReadOnly).is_ok_and(|call| call.path == "status"));
         assert!(matches!(
-            Call::parse(&args(&["logs", "--help"]), Tool::Read),
+            Call::parse(&args(&["logs", "--help"]), Tool::ReadOnly),
             Err(Rejected::Help(text)) if text.contains("--cursor")
         ));
     }

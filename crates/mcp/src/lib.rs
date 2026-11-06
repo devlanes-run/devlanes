@@ -1,7 +1,9 @@
-//! The MCP server behind `devlanes mcp`. Tool calls name a devlanes command
-//! line; the server checks it with the CLI's parser and runs it as a child
-//! process of the devlanes binary, so every command behaves as in a shell and
-//! nothing but the protocol reaches stdout.
+//! The MCP server behind `devlanes mcp`. Each curated command has a tool
+//! generated from the CLI's clap definition, and the `devlanes` tool takes any
+//! other command line. A call becomes a devlanes command line, which the
+//! server checks with the CLI's parser and runs as a child process of the
+//! devlanes binary, so every command behaves as in a shell and nothing but
+//! the protocol reaches stdout.
 
 mod app;
 mod child;
@@ -11,6 +13,7 @@ mod progress;
 mod server;
 pub mod shell_env;
 mod text;
+mod tools;
 mod view;
 
 use std::{collections::BTreeMap, path::PathBuf};
@@ -50,7 +53,8 @@ const PLACEHOLDER_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8
 pub struct Config {
     /// The devlanes executable each tool call runs.
     pub exe: PathBuf,
-    /// Offer only `devlanes_read` (and the app tools that only read).
+    /// Offer only the tools that change nothing, with `devlanes` limited to
+    /// such commands, and the app tools that only read.
     pub read_only: bool,
     /// `--lane`: the lane of calls that name no cwd.
     pub lane: Option<String>,
