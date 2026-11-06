@@ -118,20 +118,24 @@ Hosts that send a progress token get the lane's phases, such as `acme@1 infra st
 
 Most calls answer in milliseconds. `start`, `restart`, `reload`, `wait`, `with` and `lane resume` wait for the project instead: containers turning healthy, setup steps, first compiles, a test run. Every host also gives up on a tool call after a while, and when the host gives up first the agent gets a bare timeout with no devlanes output, so it cannot tell what came up or what failed.
 
-So when one of those commands names no `--timeout`, the server adds one a little under the host's limit, chosen from the name the host sends when it connects:
+When one of those commands names no `--timeout`, the server adds one that fits the host, chosen from the name the host sends when it connects:
 
 | Host | Host's limit | `--timeout` added |
 |---|---|---|
 | Claude Code | about 28 hours, or `MCP_TOOL_TIMEOUT` | 170 s, or a little under `MCP_TOOL_TIMEOUT` |
 | Codex | 60 s (`tool_timeout_sec`) | 50 s |
-| OpenCode | 30 s | 25 s |
+| OpenCode | 30 s (`timeout`) | 25 s |
 | any other host | not known | 60 s |
+
+Claude Code waits about 28 hours by default, so 170 s there is the CLI's own 180 s default minus a margin.
 
 When the timeout passes, the call returns what is ready so far, such as `2/3 ready, web starting`, and the units keep starting in the daemon; the agent calls `devlanes wait` to continue. A timeout that is too short costs an extra `wait` call, and one longer than the host's limit brings back the bare timeout, so the values lean short. A `--timeout` the agent passes itself is never changed.
 
 Claude Code reads `MCP_TOOL_TIMEOUT`, in milliseconds, for every MCP tool call, and its MCP servers inherit Claude Code's environment, so `devlanes mcp` sees the same value and stays a tenth under it (between 1 s and 10 s under). A per-server `timeout` in `.mcp.json` is not visible to the server; set `MCP_TOOL_TIMEOUT` instead, or let the agent pass `--timeout`. See [Claude Code's time limits on MCP tool calls](https://code.claude.com/docs/en/mcp#time-limits-on-mcp-tool-calls).
 
 Codex documents a 60 s default for `tool_timeout_sec` ([Codex MCP docs](https://developers.openai.com/codex/extend/mcp)). If you raise it under `[mcp_servers.devlanes]` in `config.toml`, the server still adds 50 s; the agent can pass a longer `--timeout` itself.
+
+OpenCode's per-server `timeout` in `opencode.json` sets its limit. If you raise it, the server still adds 25 s; the agent can pass a longer `--timeout` itself.
 
 ## Long-running processes
 
@@ -166,7 +170,7 @@ note: the lane had no environment from a shell, so it got the environment of the
 
 The lane keeps that environment for later calls. It is often thinner than a shell's: apps opened from the desktop, such as Claude Desktop, get a short `PATH`, and Codex passes MCP servers only a few variables, so services can fail with `command not found on PATH`. Run `devlanes restart` in the worktree from a terminal once; the lane then keeps that terminal's environment, and MCP calls use it until the daemon stops ([bringing a lane back](lifecycle.md#bringing-a-lane-back)).
 
-## Who started what
+## Actors and --mine
 
 Each command tells the daemon who runs it, a person or an agent with its session, and the daemon records that on the units it starts (`actor` in `status --json`). `devlanes stop --mine` stops only what the current agent session started, and `status --mine` and `logs --mine` show only those units. MCP calls detect the agent from the server's environment the same way, so when a host gives its MCP servers the variables it gives its shell, `--mine` covers what the session started through either path. When the environment names no agent, the host's client name does (`claude-code`, `codex`, `cursor`, `goose` and others).
 
@@ -196,4 +200,4 @@ It reads the directory and session id from the JSON Claude Code writes to its st
 
 ## MCP Apps
 
-Hosts that show MCP Apps, such as Claude Desktop, GitHub Copilot in VS Code, Cursor and Goose, show a lane card with results such as `start` and `status`. Other hosts, terminal agents among them, get the same text without the card.
+Hosts that show MCP Apps, such as Claude Desktop, GitHub Copilot in VS Code, Cursor and Goose, show a card with results such as `start`, `status`, `logs`, `lane clean` and `daemon pair`. Its buttons run commands themselves, and the clean button runs `lane clean --yes`: the click is the consent. With `--read-only` the card only reads. A card polls the daemon only while it is visible and never starts it. Other hosts, terminal agents among them, get the same text without the card. Claude Desktop on Windows does not show cards from stdio servers yet ([anthropics/claude-ai-mcp#1069](https://github.com/anthropics/claude-ai-mcp/issues/1069)).

@@ -185,6 +185,10 @@ Some terminals end every process they started when they close. `doctor` warns wh
 
 cargo binstall, `cargo install` and pip installs are left to you: `devlanes update`, the update notice and `doctor` print their command. The link can only be made when `devlanes.exe` is on the same drive as `%USERPROFILE%`; for an install on another drive, run `devlanes daemon stop` first, which stops every unit.
 
+## Coding agents
+
+A shell inside the Codex sandbox cannot reach the daemon's pipe, even when the daemon runs, and `devlanes daemon install` does not help there. Codex starts MCP servers outside its sandbox, so register `devlanes mcp` with Codex instead ([Codex](mcp.md#codex)).
+
 ## Remote boxes
 
 A Windows machine can be a box that other machines connect to with `devlanes remote connect`, through Windows' OpenSSH Server; [Windows boxes](remote-setup.md#windows-boxes) has the setup. Connecting from Windows to a Linux, macOS or Windows box works too, with the differences in [Windows clients](remote-setup.md#windows-clients).
