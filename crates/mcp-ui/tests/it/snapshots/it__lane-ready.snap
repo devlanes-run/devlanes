@@ -165,5 +165,6 @@ expression: preview.structured()
     "warnings": [],
     "start_id": 7
   },
-  "read_only": false
+  "read_only": false,
+  "card": 1
 }

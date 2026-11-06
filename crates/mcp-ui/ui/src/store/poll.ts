@@ -1,6 +1,7 @@
-// The `app_snapshot` poll: every second while something starts, every 3 seconds
-// otherwise, every 10 while no daemon runs. It pauses while the card is hidden
-// or scrolled out of the chat and stops after 15 minutes without a click or key.
+// The `app_snapshot` poll: every second while this card's own lane starts, every 3
+// seconds otherwise, every 10 while no daemon runs. It pauses while the card is hidden
+// or scrolled out of the chat, stops after 15 minutes without a click or key, and stops
+// for good once a newer card for the same lane is in the chat.
 
 import type { Snapshot } from '../types/results';
 import { isBusy } from '../utils/state';
@@ -10,6 +11,7 @@ import {
   currentView,
   cwd,
   daemonStopped,
+  isFullscreen,
   resultLane,
   snapshotLanes,
   starting,
@@ -17,7 +19,7 @@ import {
   update
 } from './card';
 
-/** Poll cadence while something starts, and otherwise. */
+/** Poll cadence while something of this card starts, and otherwise. */
 const FAST_MS = 1000;
 const SLOW_MS = 3000;
 /** Poll cadence while no daemon runs: the card never starts one, it waits for one. */
@@ -35,37 +37,69 @@ let tornDown = false;
 let lastInteraction = Date.now();
 let onScreen = true;
 
-/**
- * The `app_snapshot` arguments of the current view, or null when it does not
- * poll. Only the lane card and the board draw CPU, so only they ask for metrics.
- */
-function snapshotArgs(): Record<string, unknown> | null {
-  const view = currentView();
-  if (card.drill?.unit) return { cwd: cwd(), lane: card.drill.unit.split(':')[0] };
-  if (view === 'board') return { cwd: cwd(), metrics: true };
-  if (view === 'lane') return { cwd: cwd(), lane: resultLane(structured()), metrics: true };
-  if (view === 'failure') return { cwd: cwd(), lane: resultLane(structured()) };
-  return null;
+/** Whether a result's data lists no lane and no box, which an empty board shows once. */
+function emptyBoard(): boolean {
+  const data = structured()?.data || {};
+  return !(data.items || []).length && !(data.hosts || []).length;
 }
 
-/** Whether anything is on its way somewhere, which polls every second. */
+/**
+ * The `app_snapshot` arguments of the current view, or null when it does not poll.
+ * Only the fullscreen board draws CPU, so only it asks for metrics.
+ */
+function snapshotArgs(): Record<string, unknown> | null {
+  if (card.superseded) return null;
+  switch (currentView()) {
+    case 'board':
+      return card.result && emptyBoard() ? null : { cwd: cwd(), metrics: isFullscreen() };
+    case 'lane':
+    case 'failure':
+      return { cwd: cwd(), lane: resultLane(structured()) };
+    case 'clean':
+      // Read-only servers have no clean_plan, so the planner shows the result alone.
+      return structured()?.read_only ? null : { cwd: cwd() };
+    default:
+      return null;
+  }
+}
+
+/**
+ * Whether something this card is waiting for is on its way: its own start, an action
+ * it runs, or a lane it started. Other agents' lanes starting on the board do not count.
+ */
 function isFast(): boolean {
-  if (starting()) return true;
-  if (Object.keys(card.busy).length) return true;
-  return snapshotLanes().some(
-    (lane) => isBusy(lane.state) || (lane.units || []).some((unit) => isBusy(unit.state))
-  );
+  if (starting() || Object.keys(card.busy).length) return true;
+  const busy = (ref: string) => {
+    const lane = snapshotLanes().find((l) => l.reference === ref);
+    return !!lane && (isBusy(lane.state) || lane.units.some((unit) => isBusy(unit.state)));
+  };
+  if (currentView() === 'lane') {
+    const ref = resultLane(structured());
+    return !!ref && busy(ref);
+  }
+  return card.started.some(busy);
 }
 
 /** Runs the next poll after `delay`; one runs at a time. */
 function schedule(delay: number): void {
   clearTimeout(timer);
-  if (!tornDown) timer = window.setTimeout(tick, delay);
+  if (!tornDown && !card.superseded) timer = window.setTimeout(tick, delay);
 }
 
 /** How long until the next poll. */
-export function every(): number {
+function every(): number {
   return isFast() ? FAST_MS : daemonStopped() ? STOPPED_MS : SLOW_MS;
+}
+
+/**
+ * Whether the snapshot names a newer card for this card's lane. A card counts only
+ * once its own result carries a number.
+ */
+function supersededBy(snapshot: Snapshot | null): boolean {
+  const own = structured()?.card;
+  const lane = resultLane(structured());
+  const newest = lane ? snapshot?.newest_card?.[lane] : undefined;
+  return typeof own === 'number' && typeof newest === 'number' && newest > own;
 }
 
 /** One `app_snapshot`, then the next one, unless hidden, idle or failing. */
@@ -81,12 +115,24 @@ async function tick(): Promise<void> {
   inFlight = true;
   try {
     const result = await bridge.callTool<Snapshot>('app_snapshot', args);
+    const snapshot = result.structuredContent || null;
     failures = 0;
+    if (supersededBy(snapshot)) {
+      clearTimeout(timer);
+      update({ superseded: true, poll: 'off' });
+      return;
+    }
+    const started = card.started.filter((ref) =>
+      (snapshot?.status?.items || []).some((lane) => lane.reference === ref && isBusy(lane.state))
+    );
     update({
-      snapshot: result.structuredContent || null,
+      snapshot,
       snapshotSeq: card.snapshotSeq + 1,
       poll: 'live',
-      pollError: ''
+      pollError: '',
+      updatedAt: Date.now(),
+      // A lane it started stays fast only while it starts.
+      started: Object.keys(card.busy).length ? card.started : started
     });
   } catch (error) {
     failures++;
@@ -97,7 +143,7 @@ async function tick(): Promise<void> {
   } finally {
     inFlight = false;
   }
-  if (failures >= MAX_FAILURES) return;
+  if (failures >= MAX_FAILURES || card.superseded) return;
   schedule(again ? 0 : every());
   again = false;
 }
@@ -109,11 +155,14 @@ function resume(): void {
   schedule(0);
 }
 
-/** Polls now, also after polling stopped. */
+/** Polls now, also after polling stopped; a superseded card stays stopped. */
 export function pollNow(): void {
+  if (card.superseded) return;
   lastInteraction = Date.now();
   failures = 0;
-  if (card.poll === 'error' || card.poll === 'idle' || card.poll === 'paused') card.poll = 'live';
+  if (card.poll === 'error' || card.poll === 'idle' || card.poll === 'paused') {
+    update({ poll: 'live' });
+  }
   schedule(0);
 }
 

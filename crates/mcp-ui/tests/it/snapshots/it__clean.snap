@@ -59,5 +59,6 @@ expression: preview.structured()
       "size": 10
     }
   },
-  "read_only": false
+  "read_only": false,
+  "card": 1
 }

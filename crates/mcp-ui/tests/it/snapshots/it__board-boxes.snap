@@ -332,5 +332,6 @@ expression: preview.structured()
       }
     ]
   },
-  "read_only": false
+  "read_only": false,
+  "card": null
 }

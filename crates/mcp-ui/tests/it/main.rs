@@ -12,12 +12,18 @@ use sha2::{Digest, Sha256};
 const BUDGET_BYTES: usize = 80 * 1024;
 
 /// The only URLs the card may contain: XML namespaces Preact sets on elements,
-/// which are names. The card fetches none of them.
+/// which are names the card fetches nothing from, and the one origin its policy
+/// lets it load host fonts from.
 const ALLOWED_URLS: &[&str] = &[
     "http://www.w3.org/2000/svg",
     "http://www.w3.org/1999/xhtml",
     "http://www.w3.org/1998/Math/MathML",
+    FONT_ORIGIN,
 ];
+
+/// Where Claude serves the fonts its `styles.css.fonts` names; the card's
+/// `font-src` and the server's `resourceDomains` list it and nothing else.
+const FONT_ORIGIN: &str = "https://assets.claude.ai";
 
 /// The loopback addresses of mirrored box ports, which the open button hands to
 /// the host; the minifier renames the port variable inside `${...}`.
@@ -62,11 +68,12 @@ fn the_card_fits_its_size_budget() {
     );
 }
 
-/// The error pages and the card share the website's tokens but cannot share one SCSS
-/// partial (grass compiles the pages, Sass in `ui/` the card), so this keeps the
-/// copies equal.
+/// The card's fallback palette (the devlanes look, for hosts that send no style
+/// variables) is the website's, as the error pages have it. The two cannot share
+/// one SCSS partial (grass compiles the pages, Sass in `ui/` the card), so this
+/// keeps the copies equal.
 #[test]
-fn the_card_and_the_error_pages_share_tokens() {
+fn the_card_fallback_palette_matches_the_error_pages() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let card =
         fs::read_to_string(root.join("ui/src/styles/_tokens.scss")).expect("read the tokens");
@@ -80,9 +87,15 @@ fn the_card_and_the_error_pages_share_tokens() {
     let pages_has = |line: &str| pages.lines().any(|candidate| candidate.trim() == line);
     for (card_name, pages_line) in [
         ("surface-light", "--surface: {};"),
-        ("surface-dark", "--surface: {};"),
-        ("paint", "$paint: {};"),
+        ("ink-light", "--ink: {};"),
+        ("muted-light", "--muted: {};"),
+        ("line-light", "--line: {};"),
+        ("info-light", "--info: {};"),
+        ("warning-light", "--warning: {};"),
+        ("error-light", "--error: {};"),
         ("terminal", "$terminal: {};"),
+        ("terminal-ink", "$terminal-ink: {};"),
+        ("paint", "$paint: {};"),
         ("mono", "$mono: {};"),
         ("prose", "$prose: {};"),
     ] {
@@ -140,6 +153,7 @@ fn the_card_policy_allows_only_its_own_code() {
             .unwrap_or_else(|| panic!("the policy has no {name}"))
     };
     assert_eq!(directive("default-src"), "'none'");
+    assert_eq!(directive("font-src"), FONT_ORIGIN);
     for (name, tag) in [("script-src", "script"), ("style-src", "style")] {
         let expected: Vec<String> = bodies(html, tag).into_iter().map(hash_source).collect();
         assert!(!expected.is_empty(), "the card has no inline {tag}");
@@ -158,7 +172,7 @@ fn the_card_makes_no_requests() {
     while let Some(start) = rest.find("http") {
         let url: String = rest[start..]
             .chars()
-            .take_while(|c| !matches!(c, '"' | '\'' | '`' | ' ' | ')' | '<'))
+            .take_while(|c| !matches!(c, '"' | '\'' | '`' | ' ' | ')' | '<' | ';'))
             .collect();
         if url.starts_with("http://") || url.starts_with("https://") {
             assert!(

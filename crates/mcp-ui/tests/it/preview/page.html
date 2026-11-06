@@ -1,47 +1,64 @@
 <!doctype html>
-<html lang="en" data-theme="__THEME__">
+<html lang="en" data-theme="light" data-host="devlanes">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="data:,">
 <title>__TITLE__ · devlanes card preview</title>
 <style>
-:root { --bg: #f4f3ef; --ink: #24231f; --muted: #63615a; --line: #d1cfc7; --panel: #fff; color-scheme: light; }
-:root[data-theme='dark'] { --bg: #141311; --ink: #f2f0ea; --muted: #b0ada3; --line: #4c4941; --panel: #1c1b18; color-scheme: dark; }
+/* The chat around the card, styled from the simulated host's own variables (host.js sets
+   them on this page too). The devlanes look sends none, so it gets these. */
+:root[data-host='devlanes'] { --color-background-primary: #e9e7e1; --color-text-primary: #24231f; --color-text-secondary: #63615a; --color-border-tertiary: rgba(36, 35, 31, 0.12); --font-sans: system-ui, sans-serif; --font-text-md-size: 14px; }
+:root[data-host='devlanes'][data-theme='dark'] { --color-background-primary: #1a1917; --color-text-primary: #e8e6df; --color-text-secondary: #a39e91; --color-border-tertiary: rgba(255, 255, 255, 0.09); }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.5 system-ui, sans-serif; }
-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
-header h1 { margin: 0 12px 0 0; font-size: 14px; }
+body { margin: 0; background: var(--page); color: var(--color-text-primary); font: var(--font-text-md-size, 14px)/1.5 var(--font-sans, system-ui), sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 16px; border-bottom: 1px solid var(--color-border-tertiary); font: 12px/1.4 system-ui, sans-serif; color: var(--color-text-secondary); }
+header h1 { margin: 0 8px 0 0; font-size: 13px; color: var(--color-text-primary); }
 header a { color: inherit; }
-button { font: 12px ui-monospace, monospace; padding: 4px 8px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--ink); cursor: pointer; }
-main { display: grid; grid-template-columns: minmax(0, 1fr) 420px; gap: 16px; padding: 16px; align-items: start; }
-.chat { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-.chat p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+header select, header button { font: 12px system-ui, sans-serif; padding: 2px 6px; border: 1px solid var(--color-border-tertiary); border-radius: 5px; background: transparent; color: inherit; cursor: pointer; }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 24px; padding: 20px 24px; align-items: start; }
+.chat { display: flex; flex-direction: column; gap: 12px; max-width: 780px; }
+.msg { margin: 0; }
+.msg.tool { color: var(--color-text-secondary); font-size: 0.85em; }
 #box { max-width: 100%; }
-#box.fullscreen { position: fixed; inset: 0; z-index: 5; width: 100% !important; background: var(--bg); }
+/* prefersBorder: true. Claude, ChatGPT, Goose and basic-host draw a frame; VS Code does not. */
+#box.bordered { border: var(--border-width-regular, 1px) solid var(--color-border-tertiary); border-radius: var(--border-radius-xl, 12px); background: var(--color-background-primary); overflow: hidden; }
+#box.fullscreen { position: fixed; inset: 0; z-index: 5; width: 100% !important; border: 0; border-radius: 0; background: var(--color-background-primary); }
 #box.fullscreen iframe { height: 100% !important; }
-iframe { display: block; width: 100%; height: 200px; border: 0; }
-aside { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 32px); }
+iframe { display: block; width: 100%; height: 0; border: 0; background: transparent; }
+aside { position: sticky; top: 16px; display: flex; flex-direction: column; gap: 6px; max-height: calc(100vh - 80px); font: 12px/1.4 system-ui, sans-serif; }
 aside h2 { display: flex; justify-content: space-between; align-items: center; margin: 0; font-size: 12px; }
-#log { flex: 1; margin: 0; padding: 0; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); font: 11.5px ui-monospace, monospace; }
-#log li { padding: 2px 8px; border-bottom: 1px solid var(--line); }
+aside button { font: 11px system-ui, sans-serif; border: 1px solid var(--color-border-tertiary); border-radius: 5px; background: transparent; color: inherit; }
+#log { flex: 1; margin: 0; padding: 0; overflow: auto; list-style: none; border: 1px solid var(--color-border-tertiary); border-radius: 8px; font: 11px ui-monospace, monospace; }
+#log li { padding: 2px 8px; border-bottom: 1px solid var(--color-border-tertiary); }
 #log li.in summary { color: #b3541e; }
 :root[data-theme='dark'] #log li.in summary { color: #e8a13c; }
-#log pre { margin: 4px 0; white-space: pre-wrap; word-break: break-all; color: var(--muted); }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } aside { position: static; max-height: 420px; } }
+#log pre { margin: 4px 0; white-space: pre-wrap; word-break: break-all; color: var(--color-text-secondary); }
+@media (max-width: 1000px) { main { grid-template-columns: 1fr; } aside { position: static; max-height: 360px; } }
 </style>
 </head>
 <body>
 <header>
 <h1>__TITLE__</h1>
 <a href="index.html">all previews</a>
-<button type="button" data-action="theme">toggle theme</button>
+<label>host <select data-switch="host">
+<option value="devlanes">devlanes (no variables)</option>
+<option value="claude">Claude</option>
+<option value="chatgpt">ChatGPT</option>
+<option value="vscode">VS Code</option>
+<option value="goose">Goose</option>
+<option value="basic-host">basic-host</option>
+</select></label>
+<label>theme <select data-switch="theme"><option value="light">light</option><option value="dark">dark</option></select></label>
+<label>width <select data-switch="width"><option value="">full</option><option value="720">720</option><option value="560">560</option><option value="400">400</option><option value="340">340</option></select></label>
 <button type="button" data-action="result">send result now</button>
 <button type="button" data-action="cancel">cancel the call</button>
 <button type="button" data-action="teardown">tear down</button>
 </header>
 <main>
 <section class="chat">
-<p>__ARGS__</p>
+<p class="msg tool">__ARGS__</p>
 <div id="box"><iframe id="card" title="devlanes card" sandbox="allow-scripts" allow="clipboard-write"></iframe></div>
 </section>
 <aside>
@@ -50,6 +67,7 @@ aside h2 { display: flex; justify-content: space-between; align-items: center; m
 </aside>
 </main>
 <script>window.PREVIEW = __PREVIEW__;</script>
-<script>__HOST__</script>
+<script src="hosts.js"></script>
+<script src="host.js"></script>
 </body>
 </html>

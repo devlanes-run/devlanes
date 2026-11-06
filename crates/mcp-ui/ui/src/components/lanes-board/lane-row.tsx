@@ -1,102 +1,95 @@
 import { act, ask, openUrl } from '../../store/actions';
-import { card, readOnly, update } from '../../store/card';
+import { canHandOff, card, daemonStopped, readOnly } from '../../store/card';
 import type { LaneSummary } from '../../types/proto';
+import { atIndex, shortUrl } from '../../utils/format';
 import {
-  activeServices,
   actorsOf,
   cpuHistory,
+  domainService,
   laneState,
-  laneUrl,
   laneWords,
   servicesOf
 } from '../../utils/lanes';
-import { toneOf } from '../../utils/state';
-import { Button } from '../button';
-import { Actors, LaneMark } from '../chips';
-import { Glyph } from '../glyph';
+import { wordClass } from '../../utils/state';
+import { IconButton, LinkButton } from '../button';
+import { Shape } from '../card';
 import { Spark } from '../spark';
 
-/** One lane of this machine in the board; the project's caption names the project. */
-export function LaneRow({ lane }: { lane: LaneSummary }) {
-  const now = Date.now();
+/** The question "Ask agent about @2" sends for a lane with failed services. */
+export function failedQuestion(lane: LaneSummary): string {
+  const failed = lane.units.filter((unit) => unit.state === 'failed').map((unit) => unit.name);
+  const branch = lane.name || lane.branch;
+  return `${lane.reference}${branch ? ` (${branch})` : ''}: ${failed.join(', ') || 'a service'} failed. Why?`;
+}
+
+/** The URL a lane opens at: its domain's service once that is ready. */
+export function openTarget(lane: LaneSummary): string | undefined {
+  const web = domainService(lane);
+  return web?.state === 'ready' && web.public_url ? web.public_url : undefined;
+}
+
+/**
+ * One lane of this machine: shape, `@2`, branch, who started it from 520 px, the lane's
+ * URL and its state with the ready count. `manage` adds the fullscreen columns: CPU and
+ * a button each to open, stop or start, and ask about the lane.
+ */
+export function LaneRow({ lane, manage }: { lane: LaneSummary; manage: boolean }) {
   const busy = card.busy[lane.reference];
-  const state = busy ? 'starting' : laneState(lane);
-  const active = activeServices(lane);
-  const ready = active.filter((unit) => unit.state === 'ready').length;
-  const url = laneUrl(lane);
+  const state = laneState(lane);
+  const url = daemonStopped() ? undefined : openTarget(lane);
   const up = !['idle', 'stopped', 'no-config', 'unassigned'].includes(state);
-  const branch = lane.name || lane.branch || '–';
-  const failed = (lane.units || [])
-    .filter((unit) => unit.state === 'failed')
-    .map((unit) => unit.name);
-  const question = failed.length
-    ? `${lane.reference} (${branch}): ${failed.join(', ')} failed. Find out why and tell me before changing anything.`
-    : `What is the state of ${lane.reference} (${branch})?`;
-  const words = state === 'failed' ? 'tone-failure' : toneOf(state) === 'quiet' ? 'dim' : '';
+  const actors = actorsOf(servicesOf(lane));
+  const ref = lane.reference;
+  const label = busy
+    ? `${busy === 'stop' ? 'stopping' : 'starting'}…`
+    : laneWords(lane, Date.now());
   return (
-    <tr class={lane.index === 0 ? 'lane-zero' : ''}>
-      <td class="lane">
-        <LaneMark index={lane.index} />
-        <button
-          type="button"
-          class="link"
-          title={`show ${lane.reference}`}
-          onClick={() => update({ drill: { lane: lane.reference } })}
-        >
-          {lane.index == null ? lane.reference : `@${lane.index}`}
-        </button>
-      </td>
-      <th scope="row" class="branch" title={branch}>
-        {branch}
-      </th>
-      <td class="state">
-        <Glyph state={state === 'running' ? 'ready' : state} />{' '}
-        <span class={words}>{busy ? `${busy}…` : laneWords(lane, now)}</span>
-      </td>
-      <td class="svc dim">{active.length ? `${ready}/${active.length}` : '–'}</td>
-      <td class="by">
-        <Actors actors={actorsOf(servicesOf(lane))} />
-      </td>
-      <td class="cpu">
-        <Spark
-          values={cpuHistory(card.snapshot?.top, lane.reference)}
-          label={`${lane.reference} cpu`}
-        />
-      </td>
-      <td class="act">
-        {url && (
-          <Button
+    <li class="row">
+      <Shape state={busy ? 'starting' : state} />
+      <span class="name num">{lane.index == null ? ref : atIndex(ref)}</span>
+      <span class="grow">{lane.name || lane.branch || ''}</span>
+      {actors.length > 0 && <span class="col meta w520">{actors.join(', ')}</span>}
+      {!manage && url && (
+        <LinkButton title={url} onClick={() => openUrl(url)}>
+          {shortUrl(url)}
+        </LinkButton>
+      )}
+      {manage && (
+        <span class="w640">
+          <Spark values={cpuHistory(card.snapshot?.top, ref)} label={`${ref} cpu`} />
+        </span>
+      )}
+      <span class={`end ${wordClass(state)}`}>{label}</span>
+      {manage && (
+        <span class="acts">
+          <IconButton
             icon="open"
-            label={`open ${lane.reference}`}
-            iconOnly
-            onClick={() => openUrl(url)}
+            label={`Open ${ref}`}
+            onClick={url ? () => openUrl(url) : undefined}
           />
-        )}
-        {readOnly() ? null : up ? (
-          <Button
-            icon="stop"
-            label={`stop ${lane.reference}`}
-            iconOnly
+          <IconButton
+            icon={up ? 'stop' : 'start'}
+            label={`${up ? 'Stop' : 'Start'} ${ref}`}
             disabled={!!busy}
-            onClick={() => act('stop', lane.reference, `stopped ${lane.reference}`)}
+            onClick={
+              readOnly()
+                ? undefined
+                : () =>
+                    up ? act('stop', ref, `stopped ${ref}`) : act('start', ref, `started ${ref}`)
+            }
           />
-        ) : (
-          <Button
-            icon="start"
-            label={`start ${lane.reference}`}
-            iconOnly
-            disabled={!!busy}
-            onClick={() => act('start', lane.reference, `started ${lane.reference}`)}
+          <IconButton
+            icon="ask"
+            label={`Ask agent about ${ref}`}
+            onClick={
+              canHandOff()
+                ? () =>
+                    ask(state === 'failed' ? failedQuestion(lane) : `What is going on in ${ref}?`)
+                : undefined
+            }
           />
-        )}
-        <Button
-          icon="ask"
-          label={`ask the agent about ${lane.reference}`}
-          iconOnly
-          cls="ask"
-          onClick={() => ask(question)}
-        />
-      </td>
-    </tr>
+        </span>
+      )}
+    </li>
   );
 }

@@ -17,5 +17,6 @@ expression: preview.structured()
     "expires_at_ms": 1794000600000,
     "valid_ms": 600000
   },
-  "read_only": false
+  "read_only": false,
+  "card": null
 }

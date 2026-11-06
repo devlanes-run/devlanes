@@ -1,45 +1,151 @@
-// The card follows the website (devlanes.run): the page surface of its theme around one
-// terminal window, which stays dark in both themes, with the TUI's state tones inside.
-// Fonts are stacks, never embedded: the card makes no requests.
+// The card is content in the host's chat: it reads only the MCP Apps standard style
+// variables, which the bridge writes onto <html>, and draws no frame of its own (the host
+// does, with prefersBorder). The devlanes palette below sits under the same names as the
+// fallback for hosts that send none; host values land inline on <html> and win per name.
+// Spacing is fixed (4, 8, 12, 16 px) because the standard has no spacing variables.
 
-@use 'sass:list';
 @use 'tokens' as *;
 
+@mixin light {
+  --color-background-primary: #{$surface-light};
+  --color-background-secondary: #{$well-light};
+  --color-background-inverse: #{$terminal};
+  --color-background-disabled: rgba(233, 231, 225, 0.5);
+  --color-text-primary: #{$ink-light};
+  --color-text-secondary: #{$muted-light};
+  --color-text-tertiary: #{$tertiary-light};
+  --color-text-inverse: #{$terminal-ink};
+  --color-text-info: #{$info-light};
+  --color-text-danger: #{$error-light};
+  --color-text-success: #{$success-light};
+  --color-text-warning: #{$warning-light};
+  --color-text-disabled: rgba(36, 35, 31, 0.45);
+  --color-border-primary: #{$line-light};
+  --color-border-secondary: rgba(36, 35, 31, 0.12);
+  --color-border-tertiary: rgba(36, 35, 31, 0.07);
+  --color-border-disabled: rgba(36, 35, 31, 0.07);
+  --color-ring-primary: #{$focus-light};
+}
+
+@mixin dark {
+  --color-background-primary: #{$terminal};
+  --color-background-secondary: #{$terminal-bar};
+  --color-background-inverse: #{$surface-light};
+  --color-background-disabled: rgba(255, 255, 255, 0.035);
+  --color-text-primary: #{$terminal-ink};
+  --color-text-secondary: #{$dim};
+  --color-text-tertiary: #{$tertiary-dark};
+  --color-text-inverse: #{$ink-light};
+  --color-text-info: #{$frozen};
+  --color-text-danger: #{$failure};
+  --color-text-success: #{$ok};
+  --color-text-warning: #{$attention};
+  --color-text-disabled: rgba(232, 230, 223, 0.45);
+  --color-border-primary: #{$pane-border};
+  --color-border-secondary: rgba(255, 255, 255, 0.16);
+  --color-border-tertiary: rgba(255, 255, 255, 0.07);
+  --color-border-disabled: rgba(255, 255, 255, 0.07);
+  --color-ring-primary: #{$paint};
+}
+
 :root {
-  --surface: #{$surface-light};
-  --ring: #{$focus-light};
-  color-scheme: light;
+  @include light;
+  --font-sans: #{$prose};
+  --font-mono: #{$mono};
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-text-xs-size: 11px;
+  --font-text-sm-size: 12px;
+  --font-text-md-size: 13px;
+  --font-text-xs-line-height: 1.5;
+  --font-text-sm-line-height: 1.55;
+  --font-text-md-line-height: 1.5;
+  --font-heading-lg-size: 16px;
+  --border-radius-sm: 4px;
+  --border-radius-md: 5px;
+  --border-radius-full: 9999px;
+  --border-width-regular: 1px;
+  --devlanes-accent: #{$paint};
+  --devlanes-on-accent: #{$ink-light};
+
+  // Spacing, type roles and tints derived from the variables above. VS Code sends 10 and
+  // 11 px for xs and sm, under its own chat text, hence the floors.
+  --dl-1: 4px;
+  --dl-2: 8px;
+  --dl-3: 12px;
+  --dl-4: 16px;
+  --dl-title: var(--font-text-md-size);
+  --dl-title-lh: var(--font-text-md-line-height);
+  --dl-body: max(var(--font-text-sm-size), 12px);
+  --dl-body-lh: var(--font-text-sm-line-height);
+  --dl-meta: max(var(--font-text-xs-size), 11px);
+  --dl-meta-lh: var(--font-text-xs-line-height);
+  // ChatGPT omits the state backgrounds in light mode: tint its text tone instead. The
+  // palette above defines none either, so such a host never gets devlanes tints, and the
+  // devlanes look gets the same tint of its own tones.
+  --dl-bg-success: var(
+    --color-background-success,
+    color-mix(in srgb, var(--color-text-success) 12%, transparent)
+  );
+  --dl-bg-danger: var(
+    --color-background-danger,
+    color-mix(in srgb, var(--color-text-danger) 12%, transparent)
+  );
+  --dl-bg-warning: var(
+    --color-background-warning,
+    color-mix(in srgb, var(--color-text-warning) 12%, transparent)
+  );
+  --dl-bg-info: var(
+    --color-background-info,
+    color-mix(in srgb, var(--color-text-info) 12%, transparent)
+  );
+  --dl-neutral: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  // Not --color-background-secondary: VS Code's chat sits on that colour.
+  --dl-well: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  --dl-hover: color-mix(in srgb, var(--color-text-primary) 6%, transparent);
+  --dl-rule: var(--border-width-regular) solid var(--color-border-tertiary);
+  color-scheme: light dark;
 
   &[data-theme='dark'] {
-    --surface: #{$surface-dark};
-    --ring: #{$paint};
-    color-scheme: dark;
+    @include dark;
+  }
+
+  // The yellow accent belongs to the devlanes look only; inside a host it would look foreign.
+  &:not([data-host-styles]) {
+    --dl-accent: var(--devlanes-accent);
+    --dl-on-accent: var(--devlanes-on-accent);
   }
 }
 
 // Without a theme from the host, the system's.
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
-    --surface: #{$surface-dark};
-    --ring: #{$paint};
-    color-scheme: dark;
+    @include dark;
   }
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
 }
 
 html,
 body {
   margin: 0;
+  background: transparent;
 }
 
 body {
-  padding: 10px 10px 18px;
-  background: var(--surface);
-  color: $ink;
-  font: 13px / 1.5 $prose;
+  // The card inset, plus the host's safe area. Unlayered, so it beats VS Code's
+  // `body { padding: 0 20px }` in its webview's default layer.
+  padding: calc(var(--dl-3) + var(--dl-safe-top, 0px)) calc(var(--dl-3) + var(--dl-safe-right, 0px))
+    calc(var(--dl-3) + var(--dl-safe-bottom, 0px)) calc(var(--dl-3) + var(--dl-safe-left, 0px));
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--dl-body);
+  line-height: var(--dl-body-lh);
+  font-weight: var(--font-weight-normal);
   -webkit-font-smoothing: antialiased;
 
   // A result without a card: the host shows its text, so the card is 0 px tall.
@@ -49,18 +155,8 @@ body {
 }
 
 :focus-visible {
-  outline: 3px solid var(--ring);
+  outline: 2px solid var(--color-ring-primary);
   outline-offset: 2px;
-}
-
-// Everything focusable sits on the dark window, where the light page's ring is too dark.
-.term :focus-visible {
-  outline-color: $paint;
-}
-
-::selection {
-  background: $paint;
-  color: $terminal;
 }
 
 button,
@@ -69,615 +165,549 @@ input {
   color: inherit;
 }
 
-button {
-  cursor: pointer;
-
-  &:disabled {
-    cursor: default;
-  }
-}
-
-code,
-pre,
-.term {
-  font-family: $mono;
-  // Terminals print `->` as typed, so the mono font's ligatures stay off.
-  font-variant-ligatures: none;
-}
-
 p,
 ul,
-ol,
-h2 {
-  margin: 0;
-}
-
-ul,
 ol {
+  margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
-}
-
-.boot {
-  padding: 20px;
-  color: #63615a;
-  font: 12px $mono;
-
-  [data-theme='dark'] & {
-    color: #b0ada3;
-  }
-}
-
-// The website's terminal window.
-.term {
+.card {
   container-type: inline-size;
-  // The containing block of the screen-reader-only labels, so they stay inside it.
-  position: relative;
-  display: flex;
-  flex-direction: column;
   min-width: 0;
-  overflow: hidden;
-  background: $terminal;
-  border: 1px solid $terminal-border;
-  border-radius: 12px;
-  box-shadow: $terminal-shadow;
-  color: $ink;
-  // The window is dark in both themes, so its checkboxes and scrollbars are too.
-  color-scheme: dark;
-  font-size: 12.5px;
-  line-height: 1.65;
-}
 
-.term-bar {
-  display: grid;
-  grid-template-columns: 1fr minmax(0, auto) 1fr;
-  align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 0 8px 0 14px;
-  border-bottom: 1px solid $rule;
-  background: $terminal-bar;
-  color: #b5b0a3;
-  font-size: 11.5px;
-}
-
-.dots {
-  display: flex;
-  gap: 7px;
-
-  i {
-    width: 11px;
-    height: 11px;
-    border-radius: 50%;
-    background: #4a463f;
-  }
-
-  i:first-child {
-    background: $paint;
+  &.dim :is(.rows, .bar, .phase, .well, .code, .reason) {
+    opacity: 0.55;
   }
 }
 
-.term-title {
+// Title line: title, secondary name, the one pill, the read-only caption.
+.hd {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: var(--dl-2);
   min-width: 0;
-  white-space: nowrap;
 
-  > span {
+  .t {
+    flex: none;
+    font-size: var(--dl-title);
+    line-height: var(--dl-title-lh);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .sub {
+    min-width: 0;
     overflow: hidden;
+    color: var(--color-text-secondary);
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  b {
-    color: $ink;
-    font-weight: 700;
-  }
-}
-
-.mark {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  color: $ink;
-}
-
-.term-tools {
-  display: flex;
-  justify-content: flex-end;
-  gap: 4px;
-}
-
-.term-body {
-  display: grid;
-  // One column no wider than the window, whatever a table inside asks for.
-  grid-template-columns: minmax(0, 1fr);
-  gap: 12px;
-  min-height: 0;
-  padding: 14px 16px 16px;
-}
-
-.term-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-  padding: 8px 12px 8px 16px;
-  border-top: 1px solid $rule;
-  background: rgba(255, 255, 255, 0.035);
-  color: $dim;
-  font-size: 11px;
-}
-
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-left: auto;
-}
-
-// The site's compact buttons, on the dark window.
-.btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 9px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 5px;
-  background: transparent;
-  color: #c5bfae;
-  font: 11.5px / 1.4 $mono;
-  white-space: nowrap;
-
-  &:hover:not(:disabled) {
-    border-color: $ink;
-    color: $bright;
-  }
-
-  &:disabled {
-    opacity: 0.45;
-  }
-
-  &.primary {
-    border-color: $paint;
-    background: $paint;
-    color: #24231f;
-    font-weight: 700;
-
-    &:hover:not(:disabled) {
-      border-color: #99731b;
-      background: #ffcf4d;
-      color: #24231f;
-    }
-  }
-
-  &.icon-only {
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    padding: 0;
+  .end {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--dl-2);
+    margin-left: auto;
   }
 }
 
-.icon {
-  width: 14px;
-  height: 14px;
-  fill: currentColor;
+.meta {
+  color: var(--color-text-secondary);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
 }
 
-// Names and URLs that act: text, not boxes.
-.link {
+.hd + .meta {
+  margin-top: 2px;
+}
+
+.meta .t {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.sec {
+  color: var(--color-text-secondary);
+}
+
+.ter {
+  color: var(--color-text-tertiary);
+}
+
+.danger {
+  color: var(--color-text-danger);
+}
+
+.warn {
+  color: var(--color-text-warning);
+}
+
+.info {
+  color: var(--color-text-info);
+}
+
+// URLs and the text actions: links in the text colour, underlined in the border colour.
+.lk {
+  min-width: 0;
+  max-width: 100%;
   padding: 0;
+  vertical-align: top;
+  overflow: hidden;
   border: 0;
   background: none;
-  font: inherit;
+  color: inherit;
   text-align: left;
   text-decoration: underline;
-  text-decoration-color: transparent;
-  text-underline-offset: 4px;
+  // From the text colour, not a border colour: VS Code's dark borders vanish under text.
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-overflow: ellipsis;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  cursor: pointer;
 
   &:hover {
     text-decoration-color: currentColor;
   }
-
-  &.url {
-    color: $url;
-  }
 }
 
-.glyph {
+// Status shapes: dot, ring, spinning arc, diamond. Colour from the state text tones only.
+.st {
   display: inline-block;
-  width: 1.1em;
-  text-align: center;
-}
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--border-radius-full);
+  background: currentColor;
+  color: var(--color-text-tertiary);
 
-.tone-ok {
-  color: $ok;
-}
-
-.tone-failure {
-  color: $failure;
-}
-
-.tone-attention {
-  color: $attention;
-}
-
-.tone-frozen {
-  color: $frozen;
-}
-
-.tone-quiet,
-.dim {
-  color: $dim;
-}
-
-.nowrap {
-  white-space: nowrap;
-}
-
-.url {
-  color: $url;
-}
-
-.term code {
-  color: $url;
-  overflow-wrap: anywhere;
-}
-
-.cmd {
-  color: $bright;
-  font-weight: 700;
-  overflow-wrap: anywhere;
-}
-
-.out {
-  margin: 0;
-  max-height: 360px;
-  overflow: auto;
-  color: #b3ada0;
-  font: inherit;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.warnings li,
-.note {
-  font-size: 11.5px;
-}
-
-.empty {
-  color: $dim;
-}
-
-// The TUI's box: a border with its title in the top edge.
-.pane {
-  margin-top: 6px;
-  padding: 0 10px 8px;
-  border: 1px solid $pane-border;
-}
-
-.pane-title {
-  width: fit-content;
-  margin: 0 -4px 2px;
-  padding: 0 4px;
-  background: $terminal;
-  color: $dim;
-  font-size: 11px;
-  font-weight: 400;
-  transform: translateY(-50%);
-}
-
-.phases li {
-  display: flex;
-  gap: 8px;
-  min-width: 0;
-
-  .ph-name {
-    flex: none;
-    width: 64px;
-    color: $dim;
+  &.ok {
+    color: var(--color-text-success);
   }
 
-  .ph-detail {
+  &.info {
+    color: var(--color-text-info);
+  }
+
+  &.warn {
+    color: var(--color-text-warning);
+  }
+
+  &.fail {
+    width: 7px;
+    height: 7px;
+    margin: 0 0.5px;
+    border-radius: 1px;
+    color: var(--color-text-danger);
+    transform: rotate(45deg);
+  }
+
+  &.idle {
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px currentColor;
+  }
+
+  &.busy {
+    background: transparent;
+    border: 1.5px solid var(--color-text-secondary);
+    border-top-color: transparent;
+    animation: dl-spin 1s linear infinite;
+  }
+}
+
+@keyframes dl-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--dl-2);
+  border-radius: var(--border-radius-full);
+  background: var(--dl-neutral);
+  color: var(--color-text-secondary);
+  font-size: var(--dl-meta);
+  line-height: 20px;
+  white-space: nowrap;
+
+  &.success {
+    background: var(--dl-bg-success);
+    color: var(--color-text-success);
+  }
+
+  &.danger {
+    background: var(--dl-bg-danger);
+    color: var(--color-text-danger);
+  }
+
+  &.warning {
+    background: var(--dl-bg-warning);
+    color: var(--color-text-warning);
+  }
+
+  &.info {
+    background: var(--dl-bg-info);
+    color: var(--color-text-info);
+  }
+}
+
+.caption {
+  color: var(--color-text-tertiary);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
+}
+
+// Start progress: one phase line over a 4 px bar.
+.phase {
+  display: flex;
+  gap: var(--dl-2);
+  justify-content: space-between;
+  margin-top: var(--dl-3);
+  min-width: 0;
+  color: var(--color-text-secondary);
+
+  > span:first-child {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+
+  > span:last-child {
+    flex: none;
+  }
 }
 
-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
+.bar {
+  height: 4px;
+  margin-top: var(--dl-1);
+  overflow: hidden;
+  border-radius: var(--border-radius-full);
+  background: var(--color-border-tertiary);
+
+  > i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-text-info);
+    transition: width 0.3s ease;
+  }
 }
 
-th,
-td {
-  padding: 5px 8px;
-  font-weight: 400;
-  text-align: left;
-  white-space: nowrap;
+// Rows: one hairline above each, 8 px above and below, nothing else.
+.rows {
+  margin-top: var(--dl-3);
 }
 
-// Fixed columns, so names and URLs shorten instead of pushing the buttons out.
-.units {
-  table-layout: fixed;
+.row {
+  display: flex;
+  align-items: center;
+  column-gap: var(--dl-2);
+  min-width: 0;
+  padding: var(--dl-2) 0;
+  border-top: var(--dl-rule);
 
-  tr + tr {
-    border-top: 1px dashed $rule;
+  .name {
+    flex: none;
+    font-weight: var(--font-weight-semibold);
   }
 
-  th,
-  td {
+  // Keeps a share for the branch when a URL sits next to it.
+  .grow {
+    flex: 1;
+    min-width: 30%;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
-  .g {
-    width: 22px;
+  // A link next to the growing cell shrinks before it pushes the state off the row.
+  > .lk {
+    flex: 0 1 auto;
+    max-width: 40%;
+  }
+
+  .col {
+    flex: none;
+    color: var(--color-text-secondary);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .end {
+    flex: none;
+    margin-left: auto;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .acts {
+    display: flex;
+    flex: none;
+  }
+
+  // Only a row with a second line wraps; the others shrink their text instead.
+  &:has(> .line2) {
+    flex-wrap: wrap;
+  }
+
+  > .line2 {
+    flex-basis: 100%;
+    min-width: 0;
+    padding-left: calc(8px + var(--dl-2));
+  }
+
+  &.check > .line2 {
+    padding-left: calc(16px + var(--dl-2));
+  }
+
+  &.plain > .line2 {
     padding-left: 0;
   }
 
-  .port,
-  .cpu {
-    width: 76px;
-  }
-
-  .act {
-    width: 72px;
-  }
-
-  .name {
-    color: $ink;
-    font-weight: 700;
-  }
-
-  // The button inside would be clipped without an ellipsis.
-  .url .link {
-    display: block;
-    min-width: 0;
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  &.dim > :not(.end) {
+    color: var(--color-text-tertiary);
   }
 }
 
-// biome-ignore lint/style/noDescendingSpecificity: the table rules above win by specificity, not order
-.act {
-  width: 1%;
-  padding-right: 0;
-  text-align: right;
+.group {
+  margin-top: var(--dl-3);
+  padding-bottom: var(--dl-1);
+  color: var(--color-text-secondary);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
+  font-weight: var(--font-weight-semibold);
 
-  .btn + .btn {
-    margin-left: 4px;
+  + .rows {
+    margin-top: 0;
   }
 }
 
-.spark {
-  display: block;
+// One sentence of state: a reason, a warning, an empty list.
+.line {
+  margin-top: var(--dl-3);
+  color: var(--color-text-secondary);
+}
 
-  polyline {
-    fill: none;
-    stroke: $ok;
-    stroke-width: 1.3;
+.reason {
+  margin-top: var(--dl-2);
+}
+
+// Literal text only: log lines and commands, in the host's mono font.
+.well {
+  margin-top: var(--dl-2);
+  padding: var(--dl-2) 0;
+  border-radius: var(--border-radius-md);
+  background: var(--dl-well);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--dl-meta);
+  line-height: var(--dl-meta-lh);
+  font-variant-ligatures: none;
+
+  &.cmd {
+    padding: var(--dl-2) var(--dl-3);
+    color: var(--color-text-primary);
+    overflow-wrap: anywhere;
   }
 }
 
-.table-scroll {
-  margin: -4px -16px 0;
-  overflow-x: auto;
-}
-
-// The website's lane table.
-.lanes {
-  th,
-  td {
-    padding: 9px 10px;
-  }
-
-  th:first-child,
-  td:first-child {
-    padding-left: 16px;
-  }
-
-  td:last-child {
-    padding-right: 16px;
-  }
-
-  thead th {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-    color: #b5b0a3;
-    font-size: 10.5px;
-  }
-
-  tbody tr + tr {
-    border-top: 1px dashed $rule;
-  }
-
-  .lane-zero {
-    background: rgba(245, 197, 66, 0.07);
-  }
-
-  // The buttons stay in view when long names make the table scroll.
-  .act {
-    position: sticky;
-    right: 0;
-    background: $terminal;
-  }
-
-  .lane-zero .act {
-    background: #29251a;
-  }
-
-  .caption th {
-    padding-top: 12px;
-    color: $url;
-  }
-
-  .branch {
-    max-width: 200px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    color: $ink;
-  }
-
-  .lane .link {
-    color: $ink;
-  }
-
-  // A box lane this machine does not mirror, or one of a box whose link is
-  // down. The sticky button cell keeps its paint so scrolled cells stay hidden.
-  .skipped > :not(.act) {
-    opacity: 0.55;
-  }
-
-  // Where a box lane is managed and why it is not mirrored wrap, so they
-  // never widen the table past the card.
-  .box-lane {
-    .lane,
-    .branch,
-    .state {
-      white-space: normal;
-    }
-
-    .state {
-      min-width: 150px;
-    }
-  }
-}
-
-.lane-mark {
-  display: inline-block;
-  width: 13px;
-  height: 5px;
-  margin-right: 8px;
-  border-radius: 3px;
-  vertical-align: middle;
-}
-
-@each $mark in $lane-marks {
-  $i: list.index($lane-marks, $mark) - 1;
-
-  .lane-#{$i} {
-    background: $mark;
-  }
-}
-
-.actor {
-  display: inline-block;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  vertical-align: middle;
-  margin-right: 4px;
-  padding: 0 6px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.07);
-  color: #c5bfae;
-  font-size: 11px;
-
-  &.you {
-    color: $ink;
-  }
-}
-
-.label {
-  font-size: 11px;
-  font-weight: 400;
-}
-
-.boxes {
-  display: grid;
-  gap: 4px;
-  padding-top: 10px;
-  border-top: 1px dashed $rule;
-
-  .fix {
-    padding-left: 1.4em;
-    font-size: 11.5px;
-  }
-}
-
-.tabs {
+.ln {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.tab {
-  padding: 2px 8px;
-  border: 1px solid transparent;
-  border-radius: 5px;
+  gap: var(--dl-3);
+  width: 100%;
+  margin: 0;
+  padding: 0 var(--dl-3);
+  border: 0;
   background: none;
-  color: $dim;
-  font-size: 11.5px;
+  color: inherit;
+  font: inherit;
+  text-align: left;
 
-  &[aria-selected='true'] {
-    border-color: rgba(255, 255, 255, 0.16);
-    color: $ink;
+  .cur {
+    flex: none;
+    width: 8ch;
+    color: var(--color-text-tertiary);
+  }
+
+  .tx {
+    min-width: 0;
+    padding-left: 2ch;
+    text-indent: -2ch;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  &.e .tx {
+    color: var(--color-text-danger);
+  }
+
+  &.w .tx {
+    color: var(--color-text-warning);
   }
 }
 
-.banner {
-  display: grid;
-  gap: 2px;
-  padding: 8px 12px;
-  border-left: 3px solid $pane-border;
-  background: rgba(255, 255, 255, 0.035);
+button.ln {
+  cursor: pointer;
 
-  &.failure {
-    border-left-color: $failure;
+  &:hover {
+    background: var(--dl-hover);
   }
 
-  &.confirm {
-    border-left-color: $paint;
+  &.picked {
+    background: var(--dl-bg-info);
+    box-shadow: inset 2px 0 0 var(--color-text-info);
 
-    .actions {
-      margin-top: 6px;
+    .tx,
+    .cur {
+      color: var(--color-text-primary);
     }
   }
 }
 
-.logs {
-  display: grid;
-  gap: 8px;
-  min-width: 0;
-}
-
-.toolbar,
-.row {
+// Footer: an optional summary on the left, at most two buttons on the right.
+.ft {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  gap: var(--dl-2);
+  margin-top: var(--dl-3);
+
+  .sum {
+    margin-right: auto;
+    color: var(--color-text-secondary);
+
+    &.warn {
+      color: var(--color-text-warning);
+    }
+  }
 }
 
-.grep {
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 var(--dl-3);
+  border: var(--border-width-regular) solid var(--color-border-primary);
+  border-radius: var(--border-radius-md);
+  background: transparent;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--dl-hover);
+  }
+
+  &.primary {
+    border-color: transparent;
+    background: var(--dl-accent, var(--color-background-inverse));
+    color: var(--dl-on-accent, var(--color-text-inverse));
+    font-weight: var(--font-weight-semibold);
+
+    &:hover:not(:disabled) {
+      background: color-mix(
+        in srgb,
+        var(--dl-accent, var(--color-background-inverse)) 88%,
+        var(--color-background-primary, transparent)
+      );
+    }
+  }
+
+  &.danger {
+    color: var(--color-text-danger);
+  }
+
+  &.destroy {
+    border-color: transparent;
+    background: var(--color-text-danger);
+    color: var(--color-background-primary);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  &:disabled {
+    border-color: var(--color-border-disabled);
+    background: var(--color-background-disabled);
+    color: var(--color-text-disabled);
+    cursor: default;
+  }
+}
+
+.ib {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--border-radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+
+  &:hover:not(:disabled) {
+    background: var(--dl-hover);
+    color: var(--color-text-primary);
+  }
+
+  &:disabled {
+    color: var(--color-text-disabled);
+    cursor: default;
+  }
+
+  &.gap {
+    visibility: hidden;
+  }
+}
+
+.ib svg,
+.search svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+input[type='checkbox'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--dl-accent, var(--color-text-primary));
+}
+
+// Fullscreen tools: the log filter and "Load earlier".
+.tools {
+  display: flex;
+  gap: var(--dl-2);
+  margin-top: var(--dl-3);
+}
+
+.search {
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 6px;
-  min-width: 140px;
-  padding: 3px 8px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 5px;
-  color: $dim;
-
-  &:focus-within {
-    border-color: $paint;
-  }
+  gap: var(--dl-2);
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 var(--dl-2);
+  border: var(--border-width-regular) solid var(--color-border-primary);
+  border-radius: var(--border-radius-md);
+  color: var(--color-text-tertiary);
 
   input {
     flex: 1;
@@ -685,231 +715,128 @@ td {
     border: 0;
     outline: 0;
     background: none;
-    color: $ink;
-    font-size: 12px;
-  }
-}
-
-.logview {
-  max-height: 280px;
-  overflow: auto;
-  margin: 0 -16px;
-  padding: 4px 0;
-  border-top: 1px solid $rule;
-  border-bottom: 1px solid $rule;
-  background: #151412;
-
-  .fullscreen & {
-    max-height: calc(100vh - 300px);
+    color: var(--color-text-primary);
   }
 
-  > li.dim {
-    padding: 2px 16px;
-  }
-}
-
-.line {
-  display: flex;
-  gap: 12px;
-  width: 100%;
-  padding: 0 16px;
-  border: 0;
-  background: none;
-  color: #b3ada0;
-  font-size: 12px;
-  line-height: 1.55;
-  text-align: left;
-
-  &:hover {
-    background: rgba(255, 255, 255, 0.04);
-  }
-
-  &.picked {
-    background: $selection;
-    color: $url;
-  }
-
-  &:focus-visible {
-    outline-offset: -3px;
-  }
-
-  .cur {
-    flex: none;
-    min-width: 64px;
-    color: #6b675e;
-  }
-
-  .txt {
-    min-width: 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  &.lvl-error .txt {
-    color: $failure;
-  }
-
-  &.lvl-warn .txt {
-    color: $attention;
-  }
-}
-
-.row > .dim {
-  font-size: 11.5px;
-}
-
-.plan {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  align-items: start;
-  gap: 10px;
-  padding: 9px 0;
-
-  & + & {
-    border-top: 1px dashed $rule;
-  }
-
-  &.done {
-    opacity: 0.6;
-  }
-
-  &.ro {
-    grid-template-columns: 1fr auto;
-  }
-
-  input {
-    margin: 4px 0 0;
-    accent-color: $paint;
-  }
-
-  label {
-    display: grid;
-    min-width: 0;
-    font-size: 11.5px;
-  }
-
-  .head {
-    font-size: 12.5px;
-
-    b {
-      color: $ink;
-    }
-  }
-
-  .size {
-    font-size: 11.5px;
-    white-space: nowrap;
+  &:focus-within {
+    outline: 2px solid var(--color-ring-primary);
+    outline-offset: 2px;
   }
 }
 
 .code {
-  padding: 10px 0 4px;
-  color: $url;
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: 4px;
-  overflow-wrap: anywhere;
+  margin-top: var(--dl-3);
+  font-family: var(--font-mono);
+  font-size: var(--font-heading-lg-size);
+  line-height: 1.2;
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.08em;
+  font-variant-ligatures: none;
 
   &.expired {
-    color: $dim;
+    color: var(--color-text-tertiary);
     text-decoration: line-through;
   }
 }
 
-// A host that fixes the height gets a window that fills it and scrolls inside.
+.spark {
+  flex: none;
+  width: 56px;
+  height: 16px;
+  fill: none;
+  stroke: var(--color-text-secondary);
+  stroke-width: 1.2;
+}
+
+.sk {
+  display: block;
+  height: 10px;
+  border-radius: var(--border-radius-full);
+  background: var(--dl-neutral);
+  animation: dl-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes dl-pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+// Columns that only fit wide cards.
+.w520,
+.w640 {
+  display: none;
+}
+
+@container (min-width: 520px) {
+  .w520 {
+    display: revert;
+  }
+}
+
+@container (min-width: 640px) {
+  .w640 {
+    display: revert;
+  }
+}
+
+// Narrow cards: the summary takes its own line, the buttons share the next, the cursor
+// gutter goes.
+@container (max-width: 519px) {
+  .ft .sum {
+    flex-basis: 100%;
+  }
+
+  .ft .btn {
+    flex: 1;
+  }
+
+  .ln .cur {
+    display: none;
+  }
+}
+
+// A host that fixes the height, and fullscreen, get a page that scrolls; inline cards
+// fit their content.
 .fixed-height,
 .fullscreen {
   height: 100%;
 
-  body,
-  #app {
-    display: flex;
-    flex-direction: column;
+  body {
     height: 100%;
-    min-height: 0;
-  }
-
-  .term {
-    flex: 1;
-    min-height: 0;
-  }
-
-  .term-body {
-    flex: 1;
     overflow: auto;
-    align-content: start;
   }
 }
 
-@container (max-width: 560px) {
-  .lanes .cpu,
-  .lanes .svc,
-  .units .cpu {
-    display: none;
+// Fullscreen rows stay readable on a wide screen, and their states line up the columns.
+.fullscreen .card {
+  max-width: 960px;
+  margin: 0 auto;
+
+  .row .end {
+    min-width: 11ch;
   }
 }
 
-@container (max-width: 420px) {
-  .units .port,
-  .lanes .by,
-  .lanes .ask,
-  .lanes .lane-mark,
-  .dots {
-    display: none;
-  }
-
-  .lanes th,
-  .lanes td {
-    padding: 8px 6px;
-  }
-
-  .lanes .state {
-    max-width: 120px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .term-bar {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
-
-  .term-body {
-    padding: 12px;
-  }
-
-  .table-scroll,
-  .logview {
-    margin: 0 -12px;
-  }
-
-  .lanes th:first-child,
-  .lanes td:first-child {
-    padding-left: 12px;
-  }
-
-  .units .exit {
-    display: none;
-  }
-
-  .lanes .branch {
-    max-width: 96px;
-  }
-
-  // The branch cell of a box lane names the box already.
-  .lanes .box-name {
-    display: none;
-  }
-
-  .lanes .box-lane .state {
-    min-width: 0;
-  }
+.fullscreen body {
+  padding: calc(var(--dl-4) + var(--dl-safe-top, 0px)) calc(var(--dl-4) + var(--dl-safe-right, 0px))
+    calc(var(--dl-4) + var(--dl-safe-bottom, 0px)) calc(var(--dl-4) + var(--dl-safe-left, 0px));
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * {
-    // biome-ignore-start lint/complexity/noImportantStyles: reduced motion must win over every rule that animates
-    transition: none !important;
-    animation: none !important;
-    // biome-ignore-end lint/complexity/noImportantStyles: see above
+  .st.busy,
+  .sk,
+  .bar > i {
+    animation: none;
+    transition: none;
   }
 }

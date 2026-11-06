@@ -1,17 +1,16 @@
 import type { CleanPlan } from '../../types/clean';
 import type { LaneSummary } from '../../types/proto';
-import { actorLabel, size } from '../../utils/format';
-import { Actors, LaneMark } from '../chips';
-import { Glyph } from '../glyph';
+import { actorLabel, atIndex, size } from '../../utils/format';
+import { Pill, Shape } from '../card';
 
 /** A lane's plan, or why the card could not read it. */
 export type PlanOrError = CleanPlan | { error: string };
 
 /** Why a clean would skip a lane's tasks and teardown, as `lane clean --dry-run` says it. */
 const SKIPPED: Record<string, string> = {
-  worktree_missing: 'the worktree is gone',
-  needs_env: 'the lane needs a start from a shell first',
-  unassigned: 'the worktree has no lane'
+  worktree_missing: "The worktree is gone, so teardown won't run",
+  needs_env: "Needs a start from a shell first, so teardown won't run",
+  unassigned: "The worktree has no lane, so teardown won't run"
 };
 
 /** The bytes a plan frees, or null when the daemon knows none of its sizes. */
@@ -25,6 +24,26 @@ export function planBytes(plan: CleanPlan): number | null {
   return known.length ? known.reduce((a, b) => a + b, 0) : null;
 }
 
+/** A volume's name without the compose project or lane prefix the whole row already names. */
+function volumeName(plan: CleanPlan, name: string): string {
+  const prefix = plan.compose_project ? `${plan.compose_project}_` : '';
+  return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
+}
+
+/** The one thing to know before cleaning a lane, in the warning tone, or null. */
+function catchOf(plan: CleanPlan): string | null {
+  const running = plan.running || [];
+  if (running.length) {
+    const units = running.map((r) => r.unit.split(':').pop()).join(', ');
+    const by = [...new Set(running.map((r) => actorLabel(r.actor)))].join(', ');
+    return `Stops ${units} started by ${by}`;
+  }
+  if (plan.hooks_skipped)
+    return SKIPPED[plan.hooks_skipped] || plan.hooks_skipped.replace(/_/g, ' ');
+  if (plan.infra_error) return `Containers unknown: ${plan.infra_error}`;
+  return null;
+}
+
 /** The props of {@link PlanRow}. */
 interface PlanRowProps {
   lane: Pick<LaneSummary, 'reference'> & Partial<LaneSummary>;
@@ -36,25 +55,40 @@ interface PlanRowProps {
   onToggle: () => void;
 }
 
-/** One lane with what cleaning it deletes; without a checkbox when `ro`. */
+/**
+ * One lane: checkbox, `@4`, branch and size, then one line of what goes or the catch,
+ * and from 640 px the teardown and tasks a clean runs. A cleaned lane keeps only its pill.
+ */
 export function PlanRow({ lane, plan, result, checked, ro, onToggle }: PlanRowProps) {
   const id = `clean-${lane.reference.replace(/[^\w-]/g, '-')}`;
-  const failedPlan = plan && 'error' in plan ? plan.error : null;
+  const refused = plan && 'error' in plan ? plan.error : null;
   const good = plan && !('error' in plan) ? plan : null;
   const bytes = good ? planBytes(good) : null;
-  const deletes: string[] = [];
+  const branch = lane.name || lane.branch || good?.branch || '';
+  if (result === 'cleaned' || result === 'cleaning') {
+    return (
+      <li class="row">
+        {result === 'cleaning' && <Shape state="cleaning" />}
+        <span class="name num">{atIndex(lane.reference)}</span>
+        <span class="grow sec">{branch}</span>
+        <span class="end">
+          {result === 'cleaned' ? (
+            <Pill tone="success">Cleaned</Pill>
+          ) : (
+            <span class="sec">cleaning…</span>
+          )}
+        </span>
+      </li>
+    );
+  }
+  const goes: string[] = [];
   if (good) {
-    for (const v of good.volumes || []) {
-      deletes.push(`volume ${v.name}${v.bytes != null ? ` ${size(v.bytes)}` : ''}`);
-    }
+    for (const v of good.volumes || [])
+      goes.push(`${volumeName(good, v.name)} ${size(v.bytes)}`.trim());
+    if (good.data_dir) goes.push(`data ${size(good.data_dir.bytes)}`.trim());
+    if (good.logs_bytes) goes.push(`logs ${size(good.logs_bytes)}`);
     const containers = good.containers?.length ?? 0;
-    if (containers) deletes.push(`${containers} ${containers === 1 ? 'container' : 'containers'}`);
-    if (good.data_dir) {
-      deletes.push(
-        `data folder${good.data_dir.bytes != null ? ` ${size(good.data_dir.bytes)}` : ''}`
-      );
-    }
-    if (good.logs_bytes) deletes.push(`logs ${size(good.logs_bytes)}`);
+    if (containers) goes.push(`${containers} ${containers === 1 ? 'container' : 'containers'}`);
   }
   const steps = good
     ? [
@@ -62,61 +96,36 @@ export function PlanRow({ lane, plan, result, checked, ro, onToggle }: PlanRowPr
         ...(good.tasks || []).map((t) => `task ${t.name}`)
       ]
     : [];
-  const running = good?.running || [];
-  const branch = lane.name || lane.branch || good?.branch || '';
-  const done = result === 'cleaned';
+  const caught = good ? catchOf(good) : null;
+  const failed = result?.startsWith('failed') ? result.slice('failed: '.length) : null;
+  const line = failed || refused?.split('\n')[0]?.replace(/^error: /, '') || caught;
   return (
-    <li class={`plan${done ? ' done' : ''}${ro ? ' ro' : ''}`}>
+    <li class={`row${refused ? ' dim' : ''}${ro ? ' plain' : ' check'}`}>
       {!ro && (
         <input
           type="checkbox"
           id={id}
-          checked={checked && !done}
-          disabled={!!result || !plan || !!failedPlan}
+          checked={checked}
+          disabled={!plan || !!refused}
           onChange={onToggle}
+          aria-label={`Clean ${lane.reference}`}
         />
       )}
-      <label for={id}>
-        <span class="head">
-          <LaneMark index={lane.index} />
-          <b>{lane.reference}</b> <span class="dim">{branch}</span>
-          {result && (
-            <>
-              {' '}
-              <span class={result.startsWith('failed') ? 'tone-failure' : ''}>
-                <Glyph state={result === 'cleaning' ? 'cleaning' : done ? 'done' : 'failed'} />{' '}
-                {result}
-              </span>
-            </>
-          )}
-        </span>
-        {!plan && <span class="dim">reading what a clean deletes…</span>}
-        {failedPlan && (
-          <span class="tone-attention">
-            {String(failedPlan)
-              .split('\n')[0]
-              ?.replace(/^error: /, '')}
-          </span>
-        )}
-        {good?.hooks_skipped && (
-          <span class="tone-attention">
-            ! skips its clean tasks and teardown:{' '}
-            {SKIPPED[good.hooks_skipped] || String(good.hooks_skipped).replace(/_/g, ' ')}
-          </span>
-        )}
-        {good?.infra_error && (
-          <span class="tone-attention">! containers unknown: {good.infra_error}</span>
-        )}
-        {deletes.length > 0 && <span class="dim">{deletes.join(' · ')}</span>}
-        {steps.length > 0 && <span class="dim">runs {steps.join(' · ')}</span>}
-        {running.length > 0 && (
-          <span class="tone-attention">
-            ! stops {running.map((r) => r.unit.split(':').pop()).join(', ')} started by{' '}
-            <Actors actors={[...new Set(running.map((r) => actorLabel(r.actor)))]} />
-          </span>
-        )}
+      <label class="name num" for={id}>
+        {atIndex(lane.reference)}
       </label>
-      <span class="size dim">{bytes != null ? size(bytes) : ''}</span>
+      <span class="grow sec">{branch}</span>
+      <span class="end num">{size(bytes)}</span>
+      <span class="line2 meta">
+        {!plan ? (
+          'Reading what a clean deletes…'
+        ) : line ? (
+          <span class={failed ? 'danger' : refused ? '' : 'warn'}>{line}</span>
+        ) : (
+          goes.join(' · ')
+        )}
+        {steps.length > 0 && !line && <span class="w640"> · runs {steps.join(', ')}</span>}
+      </span>
     </li>
   );
 }

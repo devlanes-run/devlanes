@@ -14,16 +14,10 @@ const STARTS = ['start', 'restart', 'reload', 'lane resume'];
 /** Whether the card polls: live, paused while hidden, idle after 15 minutes, or given up. */
 export type PollState = 'off' | 'live' | 'paused' | 'idle' | 'error';
 
-/** A one-line note under the card. */
+/** A line above the buttons, for an action that failed. */
 export interface NoteState {
   text: string;
   tone?: string;
-}
-
-/** A lane or unit opened from inside the card. */
-export interface Drill {
-  lane?: string;
-  unit?: string;
 }
 
 /** The view to render, plus `pending` for a call that has not answered yet. */
@@ -46,11 +40,16 @@ export interface CardState {
   snapshotSeq: number;
   poll: PollState;
   pollError: string;
-  drill: Drill | null;
+  /** When the data on screen was last fresh, for "updated 14:02" once polling stops. */
+  updatedAt: number;
+  /** A newer card for this lane is in the chat, so this one stopped and shrank. */
+  superseded: boolean;
   /** The lines sent as model context. */
   actions: string[];
   /** The action running for a lane or unit reference. */
   busy: Record<string, string>;
+  /** Lanes this card started or restarted, which the board polls fast for. */
+  started: string[];
   note: NoteState | null;
 }
 
@@ -69,9 +68,11 @@ export const card: CardState = {
   snapshotSeq: 0,
   poll: 'off',
   pollError: '',
-  drill: null,
+  updatedAt: 0,
+  superseded: false,
   actions: [],
   busy: {},
+  started: [],
   note: null
 };
 
@@ -103,9 +104,37 @@ export function daemonStopped(): boolean {
   return card.snapshot?.daemon === 'stopped' && !starting();
 }
 
+/** Whether the agent's own tool call is still running: its input came, its result not yet. */
+export function callRunning(): boolean {
+  return !!card.input && !card.result && !card.cancelled;
+}
+
+/**
+ * Whether the card may hand something to the agent. Not while the agent's own call
+ * runs, which would post a second request into a turn that has not finished.
+ */
+export function canHandOff(): boolean {
+  return !callRunning() && !card.superseded;
+}
+
 /** Whether a start, restart, reload or resume runs and has not answered yet. */
 export function starting(): boolean {
   return !card.result && STARTS.includes(commandOf(card.input?.args));
+}
+
+/** Whether the host offers fullscreen, where the log viewer and board management go. */
+export function canFullscreen(): boolean {
+  return (card.context.availableDisplayModes || []).includes('fullscreen');
+}
+
+/** Whether the card is shown fullscreen. */
+export function isFullscreen(): boolean {
+  return card.context.displayMode === 'fullscreen';
+}
+
+/** Whether polling stopped for good (idle or failing), so the card shows when it was fresh. */
+export function pollStopped(): boolean {
+  return card.poll === 'idle' || card.poll === 'error';
 }
 
 /** The working directory the tool ran in, so app tools resolve the same lane. */

@@ -1,4 +1,4 @@
-import { card, snapshotLanes } from '../../store/card';
+import { snapshotLanes } from '../../store/card';
 import type {
   ErrorsItem,
   LogLine,
@@ -28,10 +28,6 @@ export interface Subject {
 
 /** The units a result is about, in the order it lists them. */
 export function subjectsOf(sc: Envelope | null): Subject[] {
-  if (card.drill?.unit) {
-    const [lane, unit = ''] = card.drill.unit.split(':');
-    return [{ lane, unit }];
-  }
   const data = sc?.data || {};
   if (Array.isArray(data.reasons)) {
     return [{ lane: data.lane, unit: data.unit, state: data.state, reasons: data.reasons }];

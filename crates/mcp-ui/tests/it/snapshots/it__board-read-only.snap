@@ -715,5 +715,6 @@ expression: preview.structured()
     "truncated": false,
     "next_cursor": null
   },
-  "read_only": true
+  "read_only": true,
+  "card": null
 }
