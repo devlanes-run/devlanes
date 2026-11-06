@@ -1052,7 +1052,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-cli"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1164,7 +1164,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-client"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "bytes",
  "devlanes-core",
@@ -1226,7 +1226,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-daemon"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1346,7 +1346,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-hosts-helper"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "sha2",
  "tempfile",
@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-resolver-hosts"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "async-trait",
  "devlanes-hosts-helper",
@@ -1892,7 +1892,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-sys-windows"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "devlanes-sys-windows",
  "rcgen",
@@ -2045,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui"
-version = "0.11.2"
+version = "0.11.3"
 dependencies = [
  "ab_glyph",
  "async-trait",
@@ -2082,7 +2082,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tui-web"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "console_error_panic_hook",
  "devlanes-client",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-tunnel"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2124,7 +2124,7 @@ dependencies = [
 
 [[package]]
 name = "devlanes-update"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "devlanes-core",
  "devlanes-sys",

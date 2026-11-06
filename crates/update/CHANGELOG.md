@@ -1,5 +1,11 @@
 # devlanes-update
 
+## 0.2.2 — 2026-11-06
+
+### Patch changes
+
+- [91c4f2b](https://github.com/devlanes-run/devlanes/commit/91c4f2b60a70695afc248f0b045a499292336a43) Fixed `install.ps1` and `devlanes update` not saying when an antivirus quarantined the new `devlanes.exe`.
+
 ## 0.2.1 — 2026-11-01
 
 ### Patch changes
