@@ -70,6 +70,12 @@ async fn mcp_apps_clients_get_the_cards() {
         };
         assert_eq!(mime_type.as_deref(), Some("text/html;profile=mcp-app"));
         assert!(text.contains("<html"), "{text}");
+        // The host frames the card, and Claude's fonts may load.
+        let contents = serde_json::to_value(&read.contents[0]).expect("json");
+        assert_eq!(
+            contents["_meta"]["ui"],
+            json!({"prefersBorder": true, "csp": {"resourceDomains": ["https://assets.claude.ai"]}})
+        );
         let missing = harness
             .client
             .read_resource(ReadResourceRequestParams::new("ui://devlanes/other.html"))

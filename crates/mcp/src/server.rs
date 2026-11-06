@@ -358,8 +358,18 @@ impl ServerHandler for Server {
         match &self.config.ui {
             Some(ui) if request.uri == ui.uri => {
                 let mut meta = MetaObject::new();
-                // The card draws its own window, so a host border would frame it twice.
-                meta.insert("ui".into(), json!({"prefersBorder": false}));
+                // The card is content in the chat, so the host draws its frame.
+                // `csp.resourceDomains` sets the CSP `font-src` among others
+                // (ext-apps spec 2026-01-26, `McpUiResourceCsp`), so the fonts
+                // Claude sends in `styles.css.fonts` can load. This list is the
+                // only per-host data: the card never names a host.
+                meta.insert(
+                    "ui".into(),
+                    json!({
+                        "prefersBorder": true,
+                        "csp": {"resourceDomains": ["https://assets.claude.ai"]},
+                    }),
+                );
                 Ok(ReadResourceResult::new(vec![
                     ResourceContents::text((ui.html)(), ui.uri)
                         .with_mime_type(ui.mime)
