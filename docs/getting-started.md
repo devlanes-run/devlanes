@@ -126,7 +126,7 @@ For more detail in the daemon's log, restart it with a level: `DEVLANES_LOG=debu
 
 - [CLI reference](reference/cli.md): every command and option.
 - [Config reference](reference/config.md): every field of `devlanes.yaml` and the user `config.yaml`.
-- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [lane lifecycle](guides/lifecycle.md), [terminals](guides/terminals.md), [remote setup](guides/remote-setup.md).
+- Guides: [run and run_script](guides/run-scripts.md), [languages](guides/languages.md), [framework presets](guides/presets.md), [ports and environment](guides/ports-and-env.md), [hostnames and HTTPS](guides/https.md), [infra](guides/infra.md), [service patterns](guides/services.md), [lane lifecycle](guides/lifecycle.md), [terminals](guides/terminals.md), [coding agents](guides/agents.md), [remote setup](guides/remote-setup.md).
 - [Remote boxes](remote.md): run lanes on another machine and use them locally.
 - [Design](design.md): lanes, ports, the daemon and startup order.
 - [Observability](observability.md): the daemon's spans and diagnostics, and plans for tracing and benchmarks.
