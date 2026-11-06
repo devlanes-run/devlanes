@@ -144,7 +144,7 @@ pub enum Error {
     #[error("{}; see {}", stalled_message(.step.as_deref()), .log.display())]
     StartupStalled { step: Option<String>, log: PathBuf },
     #[error(
-        "auto-spawn refused in sandbox ({0}); start devlanes outside the sandbox or run devlanes daemon install"
+        "auto-spawn refused in sandbox ({0}); start devlanes outside the sandbox, run devlanes daemon install, or register devlanes mcp with the agent"
     )]
     Sandbox(&'static str),
     #[error("HOME or DEVLANES_HOME is required")]

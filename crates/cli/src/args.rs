@@ -474,8 +474,9 @@ connects to the daemon or starts one. Commands that need a terminal (ui,
 attach, env shell, setup, update, uninstall) are refused, and so are follows
 without --timeout.
 
-A call runs in the cwd it names, else in --path, else with --lane, else in
-$CLAUDE_PROJECT_DIR, else in the directory the agent started the server in.";
+A call runs in the cwd it names, else in --path, else in $CLAUDE_PROJECT_DIR,
+else in the directory the agent started the server in. --lane adds that lane to
+calls that name no cwd.";
 
 const MCP_AFTER: &str = "\
 Register it with your agent:
