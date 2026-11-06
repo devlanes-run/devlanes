@@ -104,13 +104,10 @@ pub enum ShellEnvError {
     Timeout { shell: String, seconds: u64 },
     #[error("{shell} printed over 4 MiB")]
     TooLarge { shell: String },
-    #[error("{shell} ended ({status}) without printing the environment{detail}")]
-    NoOutput {
-        shell: String,
-        status: String,
-        /// `: ` and the last line of the shell's stderr, or nothing.
-        detail: String,
-    },
+    /// The profile's own output stays out of the message, which reaches the
+    /// agent: a profile can print secrets.
+    #[error("{shell} ended ({status}) without printing the environment")]
+    NoOutput { shell: String, status: String },
     #[error("{shell} printed an environment that is not a JSON object of strings: {message}")]
     Invalid { shell: String, message: String },
 }
@@ -181,9 +178,9 @@ pub fn resolve(
             seconds: limit.as_secs(),
         },
     })?;
-    let stderr = String::from_utf8_lossy(&captured.stderr);
-    if !stderr.trim().is_empty() {
-        tracing::debug!(%shell, stderr = %stderr.trim_end(), "login shell wrote to stderr");
+    // Only the size: a profile can print secrets, and the log may be shared.
+    if !captured.stderr.is_empty() {
+        tracing::debug!(%shell, bytes = captured.stderr.len(), "login shell wrote to stderr");
     }
     if captured.stdout.len() > OUTPUT_LIMIT {
         return Err(ShellEnvError::TooLarge { shell });
@@ -205,13 +202,6 @@ pub fn resolve(
         None => Err(ShellEnvError::NoOutput {
             shell,
             status: captured.status,
-            detail: stderr
-                .lines()
-                .rev()
-                .map(str::trim)
-                .find(|line| !line.is_empty())
-                .map(|line| format!(": {}", truncate(line, 200)))
-                .unwrap_or_default(),
         }),
     }
 }
@@ -231,7 +221,11 @@ pub(crate) fn merge(
 /// (https://github.com/microsoft/vscode/blob/6ed5cb783e62e1dc65aa5c56b42265bb30ceb610/src/vs/platform/shell/node/shellEnv.ts#L63-L67).
 #[derive(Debug, Clone)]
 pub(crate) struct Cache {
-    cell: Arc<tokio::sync::OnceCell<Result<ShellEnv, ShellEnvError>>>,
+    cell: Arc<std::sync::OnceLock<Result<ShellEnv, ShellEnvError>>>,
+    /// Set once the read started, so only the first caller starts it.
+    started: Arc<std::sync::atomic::AtomicBool>,
+    /// Wakes the callers waiting for the read.
+    ready: Arc<tokio::sync::Notify>,
     resolve: Resolver,
     exe: PathBuf,
     env: Arc<BTreeMap<String, String>>,
@@ -243,39 +237,53 @@ impl Cache {
     pub(crate) fn new(resolve: Resolver, exe: PathBuf, env: BTreeMap<String, String>) -> Self {
         Self {
             cell: Arc::default(),
+            started: Arc::default(),
+            ready: Arc::default(),
             resolve,
             exe,
             env: Arc::new(env),
         }
     }
 
-    /// The login shell's environment, reading it on a blocking thread the
-    /// first time.
+    /// The login shell's environment, read on a blocking thread the first
+    /// time. The read runs in a task of its own, so a call cancelled while
+    /// the shell runs leaves the result to the next call instead of starting
+    /// the shell again.
     pub(crate) async fn get(&self) -> &Result<ShellEnv, ShellEnvError> {
-        self.cell
-            .get_or_init(|| {
-                let (resolve, exe, env) = (self.resolve, self.exe.clone(), self.env.clone());
-                async move {
-                    let resolved = tokio::task::spawn_blocking(move || resolve(&exe, &env))
-                        .await
-                        .unwrap_or_else(|error| {
-                            Err(ShellEnvError::Spawn {
-                                shell: "the login shell".to_owned(),
-                                message: error.to_string(),
-                            })
-                        });
-                    match &resolved {
-                        Ok(shell) => tracing::debug!(
-                            shell = %shell.shell,
-                            variables = shell.env.len(),
-                            "read the login shell's environment"
-                        ),
-                        Err(error) => tracing::debug!(%error, "no login shell environment"),
-                    }
-                    resolved
+        if !self.started.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let (cell, ready) = (self.cell.clone(), self.ready.clone());
+            let (resolve, exe, env) = (self.resolve, self.exe.clone(), self.env.clone());
+            tokio::spawn(async move {
+                let resolved = tokio::task::spawn_blocking(move || resolve(&exe, &env))
+                    .await
+                    .unwrap_or_else(|error| {
+                        Err(ShellEnvError::Spawn {
+                            shell: "the login shell".to_owned(),
+                            message: error.to_string(),
+                        })
+                    });
+                match &resolved {
+                    Ok(shell) => tracing::debug!(
+                        shell = %shell.shell,
+                        variables = shell.env.len(),
+                        "read the login shell's environment"
+                    ),
+                    Err(error) => tracing::debug!(%error, "no login shell environment"),
                 }
-            })
-            .await
+                let _ = cell.set(resolved);
+                ready.notify_waiters();
+            });
+        }
+        loop {
+            let notified = self.ready.notified();
+            tokio::pin!(notified);
+            // Registered before the check, so a result set in between still wakes it.
+            notified.as_mut().enable();
+            if let Some(resolved) = self.cell.get() {
+                return resolved;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -332,7 +340,11 @@ fn invocation(
         || std::fs::read_to_string("/etc/passwd").ok(),
         rustix::process::getuid().as_raw(),
     );
-    Ok(unix_invocation(&shell, &quotable(exe, false)?, mark))
+    Ok(unix_invocation(
+        &shell,
+        &quotable(exe, &shell_name(&shell))?,
+        mark,
+    ))
 }
 
 /// The PowerShell to run on Windows, when `DEVLANES_SHELL_ENV` names one.
@@ -344,7 +356,7 @@ fn invocation(
 ) -> Result<Invocation, ShellEnvError> {
     let name = windows_shell(env)?;
     let shell = locate_powershell(name, env).ok_or_else(|| ShellEnvError::NotFound(name.into()))?;
-    Ok(windows_invocation(&shell, &quotable(exe, true)?, mark))
+    Ok(windows_invocation(&shell, &quotable(exe, name)?, mark))
 }
 
 /// Whether the server's environment lets it read the login shell on Unix:
@@ -450,7 +462,6 @@ fn unix_invocation(shell: &Path, exe: &str, mark: &str) -> Invocation {
 }
 
 /// Whether `name` is PowerShell's, as VS Code matches it.
-#[cfg(any(unix, test))]
 fn is_powershell(name: &str) -> bool {
     let name = name.strip_suffix("-preview").unwrap_or(name);
     name == "pwsh" || name == "powershell"
@@ -509,15 +520,23 @@ fn locate_powershell(name: &str, env: &BTreeMap<String, String>) -> Option<PathB
     std::env::split_paths(path)
         .map(|dir| dir.join(&file))
         .chain(installed)
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| std::fs::symlink_metadata(candidate).is_ok_and(|meta| !meta.is_dir()))
 }
 
-/// `exe` as text that fits between single quotes in every supported shell:
-/// none can escape a `'` there, bash, zsh and csh expand `!` even inside
-/// them in an interactive shell, and a newline ends the command.
-fn quotable(exe: &Path, windows: bool) -> Result<String, ShellEnvError> {
+/// `exe` as text that fits between single quotes for the shell `shell` (a
+/// [`shell_name`]): no shell can escape a `'` there and a newline ends the
+/// command. bash, zsh and csh expand `!` even inside them in an interactive
+/// shell; PowerShell also ends the quotes at the typographic quotes ‘ ’ ‚ ‛;
+/// fish reads `\\` and `\'` inside them as escapes.
+fn quotable(exe: &Path, shell: &str) -> Result<String, ShellEnvError> {
     let text = exe.to_string_lossy();
-    let unsafe_char = |c: char| c == '\'' || c == '\n' || c == '\r' || (!windows && c == '!');
+    let unsafe_char = |c: char| match c {
+        '\'' | '\n' | '\r' => true,
+        '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => is_powershell(shell),
+        '!' => !is_powershell(shell),
+        '\\' => shell == "fish",
+        _ => false,
+    };
     if exe.to_str().is_none() || text.contains(unsafe_char) {
         return Err(ShellEnvError::Unquotable(text.into_owned()));
     }
@@ -633,6 +652,13 @@ fn clean(
         // The policy a host set for its own PowerShell, which the lane's
         // scripts should not inherit.
         remove(&mut env, "PSExecutionPolicyPreference", true);
+        // pwsh 7 puts its own module folders first when it starts, and
+        // Windows PowerShell 5.1 started from the lane would then load
+        // pwsh's modules.
+        remove(&mut env, "PSModulePath", true);
+        if let Some((name, value)) = lookup(server, "PSModulePath", true) {
+            env.insert(name.clone(), value.clone());
+        }
         if let Some(path) = remove(&mut env, "PATH", true) {
             env.insert("PATH".to_owned(), path);
         }
@@ -683,15 +709,6 @@ fn remove(env: &mut BTreeMap<String, String>, name: &str, ignore_case: bool) -> 
         removed = env.remove(&key).or(removed);
     }
     removed
-}
-
-/// At most `limit` bytes of `text`, cut at a character boundary.
-fn truncate(text: &str, limit: usize) -> &str {
-    let mut end = limit.min(text.len());
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
 }
 
 /// What the shell printed and how it ended.
@@ -864,7 +881,11 @@ fn run(
 
 /// A pipe read on a thread of its own up to just over [`OUTPUT_LIMIT`],
 /// whose bytes so far stay available when a process the profile started
-/// keeps the pipe open.
+/// keeps the pipe open. After a timeout the shell's process group (its job on
+/// Windows) is killed, which closes the pipe. A process the profile left
+/// running after a shell that exited keeps the thread blocked until it exits
+/// or closes the pipe; the result is cached, so that is at most two threads
+/// for the life of the server.
 struct Capture {
     bytes: Arc<Mutex<Vec<u8>>>,
     done: mpsc::Receiver<()>,
@@ -1051,8 +1072,14 @@ mod tests {
     /// Paths a single-quoted word cannot hold are refused.
     #[test]
     fn refuses_unquotable_paths() {
+        let refused = |path: &str, shell: &str| {
+            matches!(
+                quotable(Path::new(path), shell),
+                Err(ShellEnvError::Unquotable(_))
+            )
+        };
         assert_eq!(
-            quotable(Path::new("/opt/acme/devlanes"), false).as_deref(),
+            quotable(Path::new("/opt/acme/devlanes"), "bash").as_deref(),
             Ok("/opt/acme/devlanes")
         );
         for path in [
@@ -1060,17 +1087,44 @@ mod tests {
             "/opt/acme!/devlanes",
             "/opt/a\ncme/devlanes",
         ] {
-            assert!(
-                matches!(
-                    quotable(Path::new(path), false),
-                    Err(ShellEnvError::Unquotable(_))
-                ),
-                "{path}"
-            );
+            assert!(refused(path, "bash"), "{path}");
         }
-        // PowerShell does not expand `!`.
-        assert!(quotable(Path::new(r"C:\acme!\devlanes.exe"), true).is_ok());
-        assert!(quotable(Path::new(r"C:\it's\devlanes.exe"), true).is_err());
+        // PowerShell does not expand `!`, but ends a quote at a typographic one.
+        assert!(quotable(Path::new(r"C:\acme!\devlanes.exe"), "pwsh").is_ok());
+        assert!(quotable(Path::new(r"C:\acme\devlanes.exe"), "powershell").is_ok());
+        for quote in ['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'] {
+            let path = format!(r"C:\it{quote}s\devlanes.exe");
+            assert!(refused(&path, "pwsh"), "{path}");
+            assert!(refused(&path, "powershell"), "{path}");
+        }
+        assert!(quotable(Path::new("/opt/it\u{2019}s/devlanes"), "bash").is_ok());
+        // fish reads `\\` and `\'` as escapes inside single quotes.
+        assert!(refused(r"/opt/ac\me/devlanes", "fish"));
+        assert!(quotable(Path::new(r"/opt/ac\me/devlanes"), "zsh").is_ok());
+    }
+
+    /// The shell does not get the variables of the server's own call.
+    #[test]
+    fn the_shell_gets_no_call_env() {
+        let server = env(&[
+            ("PATH", "/usr/bin"),
+            (devlanes_proto::JSON_OUT_ENV, "/tmp/x.json"),
+            (devlanes_proto::ENV_FROM_LANE_ENV, "1"),
+            (devlanes_proto::NO_SPAWN_ENV, "1"),
+        ]);
+        let child = child_env(&server, false);
+        for name in devlanes_proto::CALL_ENV {
+            assert!(!child.contains_key(name), "{name}");
+        }
+        assert_eq!(child.get("PATH").map(String::as_str), Some("/usr/bin"));
+        assert_eq!(child.get(RESOLVING_ENV).map(String::as_str), Some("1"));
+        assert_eq!(
+            child.get("DISABLE_AUTO_UPDATE").map(String::as_str),
+            Some("true")
+        );
+        // On Windows in any spelling.
+        let server = env(&[("devlanes_json_out", "C:\\x.json")]);
+        assert!(!child_env(&server, true).contains_key("devlanes_json_out"));
     }
 
     /// `DEVLANES_SHELL_ENV` decides first; otherwise a positive or unreadable
@@ -1184,16 +1238,31 @@ mod tests {
         );
     }
 
-    /// On Windows `Path` becomes `PATH`, names match without case, and the
-    /// host's execution policy does not reach the lane.
+    /// On Windows `Path` becomes `PATH`, names match without case, the
+    /// host's execution policy does not reach the lane, and PSModulePath is
+    /// the server's rather than the one pwsh 7 made.
     #[test]
     fn windows_path_and_case() {
+        let pwsh_modules =
+            r"C:\Users\acme\Documents\PowerShell\Modules;C:\Program Files\PowerShell\7\Modules";
         let shell = env(&[
             ("Path", r"C:\fnm;C:\Windows"),
             ("PSExecutionPolicyPreference", "Bypass"),
+            ("PSModulePath", pwsh_modules),
             ("devlanes_resolving_environment", "1"),
             ("FROM_PROFILE", "1"),
         ]);
+        let server_modules = r"C:\WINDOWS\system32\WindowsPowerShell\v1.0\Modules";
+        assert_eq!(
+            clean(
+                shell.clone(),
+                &env(&[("PSModulePath", server_modules)]),
+                true
+            )
+            .get("PSModulePath")
+            .map(String::as_str),
+            Some(server_modules)
+        );
         let cleaned = clean(shell, &env(&[]), true);
         assert_eq!(
             cleaned,
