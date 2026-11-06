@@ -172,7 +172,8 @@ jobs:
       - name: Build
         env:
           DEVLANES_BUILD_ID: v${{ inputs.version }}
-        run: cargo build --release --locked --target "$TARGET" -p devlanes
+        # The commit goes into the version resource's source link (build.rs).
+        run: DEVLANES_BUILD_COMMIT=$(git rev-parse HEAD) cargo build --release --locked --target "$TARGET" -p devlanes
       # .gitattributes checks the schemas out with LF on Windows too, as build.rs writes them.
       - name: Check the committed schemas
         run: git diff --exit-code crates/config/schema.json crates/config/user-schema.json
@@ -184,7 +185,9 @@ jobs:
         shell: pwsh
         run: |
           $info = (Get-Item "target/$env:TARGET/release/devlanes.exe").VersionInfo
-          if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne 'devlanes-cli') {
+          $commit = git rev-parse HEAD
+          if ($info.ProductVersion -cne $env:VERSION -or $info.ProductName -cne 'devlanes-cli' -or
+              -not $info.Comments.Contains("/tree/$commit")) {
             throw "unexpected version resource: $($info | Format-List | Out-String)"
           }
       # The Visual C++ Redistributable is not part of Windows, so the executable must

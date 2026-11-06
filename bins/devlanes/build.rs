@@ -67,11 +67,23 @@ fn embed_version_info() -> Result<(), Box<dyn Error>> {
     } else {
         "VS_FF_PRERELEASE"
     };
+    // Release builds set the commit they built (build.yml), so the source link
+    // names it; other builds link the repository.
+    println!("cargo:rerun-if-env-changed=DEVLANES_BUILD_COMMIT");
+    let repository = std::env::var("CARGO_PKG_REPOSITORY")?;
+    let source = match std::env::var("DEVLANES_BUILD_COMMIT") {
+        Ok(commit) if commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()) => {
+            format!("{repository}/tree/{commit}")
+        }
+        Ok(commit) if !commit.is_empty() => {
+            return Err(format!("DEVLANES_BUILD_COMMIT is no commit hash: {commit:?}").into());
+        }
+        _ => repository,
+    };
     // rc.exe strings escape a quote by doubling it.
     let comments = format!(
-        "{}. Website {HOMEPAGE}, docs {HOMEPAGE}/docs/, source {}",
+        "{}. Website {HOMEPAGE}, docs {HOMEPAGE}/docs/, source {source}",
         std::env::var("CARGO_PKG_DESCRIPTION")?,
-        std::env::var("CARGO_PKG_REPOSITORY")?
     )
     .replace('"', "\"\"");
     // Task Manager names the process by FileDescription, so it stays the bare name.
