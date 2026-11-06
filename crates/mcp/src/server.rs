@@ -130,7 +130,12 @@ impl Server {
             Some((false, _)) => return Ok(declined(&call).into()),
             None => {
                 if let Some(question) = call.consent() {
-                    let message = consent_message(&runner, &call, &cwd, &question, context).await;
+                    // The dry run is only worth its process when the user will see it.
+                    let message = if can_ask(context) {
+                        consent_message(&runner, &call, &cwd, &question, context).await
+                    } else {
+                        question.clone()
+                    };
                     match ask(context, message, "--yes").await {
                         Answer::Accepted => call.confirm("--yes"),
                         Answer::Declined => return Ok(declined(&call).into()),
@@ -270,7 +275,7 @@ impl ServerHandler for Server {
             Some(ui) if self.shows_ui(&context) => vec![
                 Resource::new(ui.uri, "devlanes lanes")
                     .with_description(
-                        "Cards for devlanes results: lanes, failures, cleans and pairing",
+                        "Cards for devlanes results: lanes, failures, clean plans and pairing codes",
                     )
                     .with_mime_type(ui.mime),
             ],
@@ -522,6 +527,13 @@ async fn consent_message(
     message
 }
 
+/// Whether the client of this request can put a question to the user.
+fn can_ask(context: &RequestContext<RoleServer>) -> bool {
+    context
+        .client_capabilities()
+        .is_some_and(|capabilities| capabilities.elicitation.is_some())
+}
+
 /// Asks the user `message` through the client. Before 2026-07-28 that is an
 /// `elicitation/create` request; from then on a result that makes the client ask
 /// and call again, with `flag` in its state.
@@ -530,10 +542,7 @@ pub(crate) async fn ask(
     message: String,
     flag: &str,
 ) -> Answer {
-    if !context
-        .client_capabilities()
-        .is_some_and(|capabilities| capabilities.elicitation.is_some())
-    {
+    if !can_ask(context) {
         return Answer::Unsupported;
     }
     let params = ElicitRequestParams::FormElicitationParams {

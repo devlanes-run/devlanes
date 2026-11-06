@@ -1,0 +1,65 @@
+---
+source: crates/mcp/tests/it/listing.rs
+expression: tools(&harness).await
+---
+[
+  {
+    "name": "devlanes",
+    "description": "Run any devlanes command. args is the command line after \"devlanes\", such as [\"start\"], [\"exec\", \"--name\", \"web\", \"--\", \"pnpm\", \"dev\"], [\"stop\", \"--mine\"] or [\"logs\", \"web\", \"--tail\", \"100\"]. Use exec for anything that keeps running (dev servers, watchers, workers, tunnels); its result says how to read and stop it. start, restart and wait return once the units are ready or failed. Returns the command's agent output, with its JSON in structuredContent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The devlanes command line without \"devlanes\", one element per argument."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        }
+      },
+      "required": [
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
+    "name": "devlanes_read",
+    "description": "Run a devlanes command that changes nothing: status, logs, wait, debug why, debug errors, url, env show, doctor, lane ls, remote ls, debug config, debug top, or --help. args is the command line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \"--tail\", \"100\"]. Use the devlanes tool for commands that start, stop or change something.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The devlanes command line without \"devlanes\", one element per argument."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        }
+      },
+      "required": [
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes (read only)",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    }
+  }
+]

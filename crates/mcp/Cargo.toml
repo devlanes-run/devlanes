@@ -26,3 +26,10 @@ rmcp = { workspace = true, features = ["client"] }
 
 [lints]
 workspace = true
+
+# Stands in for the devlanes binary in the server's tests.
+[[bin]]
+name = "devlanes-mcp-fake"
+path = "tests/support/fake.rs"
+test = false
+doc = false

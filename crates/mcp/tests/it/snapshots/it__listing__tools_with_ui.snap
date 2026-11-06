@@ -1,0 +1,181 @@
+---
+source: crates/mcp/tests/it/listing.rs
+expression: tools
+---
+[
+  {
+    "name": "devlanes",
+    "description": "Run any devlanes command. args is the command line after \"devlanes\", such as [\"start\"], [\"exec\", \"--name\", \"web\", \"--\", \"pnpm\", \"dev\"], [\"stop\", \"--mine\"] or [\"logs\", \"web\", \"--tail\", \"100\"]. Use exec for anything that keeps running (dev servers, watchers, workers, tunnels); its result says how to read and stop it. start, restart and wait return once the units are ready or failed. Returns the command's agent output, with its JSON in structuredContent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The devlanes command line without \"devlanes\", one element per argument."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        }
+      },
+      "required": [
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes",
+      "readOnlyHint": false,
+      "destructiveHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "devlanes_read",
+    "description": "Run a devlanes command that changes nothing: status, logs, wait, debug why, debug errors, url, env show, doctor, lane ls, remote ls, debug config, debug top, or --help. args is the command line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \"--tail\", \"100\"]. Use the devlanes tool for commands that start, stop or change something.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The devlanes command line without \"devlanes\", one element per argument."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        }
+      },
+      "required": [
+        "args"
+      ],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "title": "devlanes (read only)",
+      "readOnlyHint": true,
+      "openWorldHint": false
+    },
+    "_meta": {
+      "ui": {
+        "resourceUri": "ui://devlanes/lane.html"
+      }
+    }
+  },
+  {
+    "name": "app_snapshot",
+    "description": "Lanes and units for the lane card, with metrics when asked.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        },
+        "lane": {
+          "type": "string"
+        },
+        "metrics": {
+          "type": "boolean"
+        }
+      }
+    },
+    "_meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    }
+  },
+  {
+    "name": "app_logs",
+    "description": "Log lines of units for the card's log viewer.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tail": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "grep": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "units"
+      ]
+    },
+    "_meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    }
+  },
+  {
+    "name": "app_action",
+    "description": "A button of the card: start, stop, restart, reload, clean, clean_plan or pair, on a lane or unit.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "description": "Directory to run in, which picks the worktree and its lane. Relative paths start from the server's directory."
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "start",
+            "stop",
+            "restart",
+            "reload",
+            "clean",
+            "clean_plan",
+            "pair"
+          ]
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    },
+    "_meta": {
+      "ui": {
+        "visibility": [
+          "app"
+        ]
+      }
+    }
+  }
+]
