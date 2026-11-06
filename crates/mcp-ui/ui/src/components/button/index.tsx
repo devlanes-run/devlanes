@@ -57,18 +57,23 @@ export function IconButton({
   );
 }
 
-/** A button that reads as a link: URLs in rows, "Refresh", "All lines". */
+/**
+ * A button that reads as a link: URLs in rows, "Refresh", "All lines", "Show all".
+ * `expanded` is set on buttons that show and hide more of the card.
+ */
 export function LinkButton({
   onClick,
   title,
+  expanded,
   children
 }: {
   onClick: () => void;
   title?: string;
+  expanded?: boolean;
   children: ComponentChildren;
 }) {
   return (
-    <button type="button" class="lk" title={title} onClick={onClick}>
+    <button type="button" class="lk" title={title} aria-expanded={expanded} onClick={onClick}>
       {children}
     </button>
   );

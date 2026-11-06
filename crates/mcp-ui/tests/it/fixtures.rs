@@ -73,6 +73,7 @@ pub fn all() -> Vec<Preview> {
         lane_ready(),
         lane_failed(),
         lane_frozen(),
+        lane_many(),
         board(),
         board_boxes(),
         board_long_names(),
@@ -240,14 +241,15 @@ fn containers(waiting: bool) -> Vec<ContainerSummary> {
 }
 
 /// acme@1 on feat/checkout as a status shows it at each stage of a start:
-/// 0 infra, 1 and 2 setup, 3 services starting, 4 two ready, 5 running.
+/// 0 infra, 1 and 2 setup, 3 services starting, 4 two ready, 5 running. The
+/// daemon shows services the start has not reached yet as `queued`.
 fn checkout(stage: u8) -> LaneSummary {
     let actor = agent("claude-code");
     let unit = |name: &str, ready_at: u8| {
         let state = match stage {
             s if s >= ready_at => "ready",
             s if s >= 3 => "starting",
-            _ => "idle",
+            _ => "queued",
         };
         service("acme", 1, name, state, &actor)
     };
@@ -646,6 +648,118 @@ fn lane_frozen() -> Preview {
         input: input(&args),
         result: Some(tool_result(
             "running acme@3 feat/search 3/3 power=frozen",
+            content("status", &args, 0, Some("lane"), page(vec![lane])),
+        )),
+        result_delay_ms: 300,
+        tools,
+    }
+}
+
+/// acme@1 on feat/billing-v2 with 40 services, as a large monorepo has them.
+/// Of the four the agent started, one is ready, one failed and two still
+/// start; the other 36 stay idle.
+fn billing() -> LaneSummary {
+    const API: [&str; 14] = [
+        "Admin",
+        "User",
+        "Auth",
+        "Billing",
+        "Catalog",
+        "Orders",
+        "Payments",
+        "Search",
+        "Inventory",
+        "Notifications",
+        "Reports",
+        "Gateway",
+        "Webhooks",
+        "Media",
+    ];
+    const WEB: [&str; 12] = [
+        "User",
+        "Admin",
+        "Docs",
+        "Status",
+        "Partner",
+        "Checkout",
+        "Marketing",
+        "Help",
+        "Studio",
+        "Onboarding",
+        "Blog",
+        "Account",
+    ];
+    const WRK: [&str; 14] = [
+        "Atlas",
+        "Mailer",
+        "Indexer",
+        "Reports",
+        "Billing",
+        "Thumbnails",
+        "Exports",
+        "Imports",
+        "Scheduler",
+        "Cleanup",
+        "Sync",
+        "Ledger",
+        "Audit",
+        "Digest",
+    ];
+    let actor = agent("claude-code");
+    let names = API
+        .iter()
+        .map(|name| ("API", *name))
+        .chain(WEB.iter().map(|name| ("WEB", *name)))
+        .chain(WRK.iter().map(|name| ("WRK", *name)));
+    let units = names
+        .enumerate()
+        .map(|(n, (group, name))| {
+            let id = format!("{}-{}", group.to_lowercase(), name.to_lowercase());
+            let state = match id.as_str() {
+                "api-user" => "ready",
+                "api-billing" => "failed",
+                "web-user" | "wrk-billing" => "starting",
+                _ => "idle",
+            };
+            let mut unit = service("acme", 1, &id, state, &actor);
+            let port = 20_100 + n as u16;
+            let public_url = match (group, name) {
+                ("WRK", _) => None,
+                ("WEB", "User") => Some("https://acme1.localhost".to_owned()),
+                _ => Some(format!("https://{id}.acme1.localhost")),
+            };
+            unit.display_name = Some(format!("{group} {name}"));
+            unit.ports = BTreeMap::from([("http".to_owned(), port)]);
+            unit.pid = unit.pid.map(|_| 40_000 + u32::from(port));
+            unit.urls = std::iter::once(format!("http://127.0.0.1:{port}"))
+                .chain(public_url.clone())
+                .collect();
+            unit.ready_check = Some(if group == "WRK" { "started" } else { "http" }.to_owned());
+            unit.public_url = public_url;
+            unit
+        })
+        .collect();
+    let mut lane = lane("acme", 1, "feat/billing-v2", "starting", units);
+    lane.port_block = Some((20_100, 20_199));
+    lane.containers = containers(false);
+    lane
+}
+
+fn lane_many() -> Preview {
+    let lane = billing();
+    let mut tools = vec![rule("app_snapshot", json!({}), vec![snapshot(&[&lane])])];
+    tools.extend(actions());
+    let args = ["status", "--lane", "feat/billing-v2"];
+    Preview {
+        name: "lane-many",
+        title: "lane card with 40 services",
+        width: None,
+        display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
+        input: input(&args),
+        result: Some(tool_result(
+            "starting acme@1 feat/billing-v2 1/4 failed=api-billing\nfailed acme@1:api-billing exit=1 ready check http /health did not pass in 30s",
             content("status", &args, 0, Some("lane"), page(vec![lane])),
         )),
         result_delay_ms: 300,

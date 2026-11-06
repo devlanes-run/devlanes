@@ -4,7 +4,7 @@
 import type { LaneSummary, TopPage, UnitSummary } from '../types/proto';
 import type { BoxLane, RegistryUnit, RemoteHost, RemoteList } from '../types/remote';
 import { actorLabel, since } from './format';
-import { isBusy, unitState } from './state';
+import { isBusy, shapeOf, unitState } from './state';
 
 /** One start phase row of the lane card. */
 export interface Phase {
@@ -26,6 +26,21 @@ export function servicesOf(lane: Pick<LaneSummary, 'units'>): UnitSummary[] {
   return (lane.units || []).filter(
     (unit) => !unit.hidden && ['service', 'exec', 'external'].includes(roleOf(unit))
   );
+}
+
+/**
+ * Units in the order a long list needs them: failed, then on their way (starting,
+ * queued), then running, then idle and stopped. The sort is stable, so each group
+ * keeps the config order.
+ */
+export function byAttention(units: UnitSummary[]): UnitSummary[] {
+  const rank = (unit: UnitSummary) => {
+    const shape = shapeOf(unitState(unit));
+    if (shape === 'fail') return 0;
+    if (shape === 'busy') return 1;
+    return shape === 'ok' || shape === 'info' ? 2 : 3;
+  };
+  return [...units].sort((a, b) => rank(a) - rank(b));
 }
 
 /** Services counted as selected: running or on their way, plus failed ones. */

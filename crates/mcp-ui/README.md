@@ -20,13 +20,13 @@ assert!(resource.2.starts_with("<!doctype html>"));
 
 | `view` | Card |
 |---|---|
-| `lane` | the lane's state as a pill, the start phase and a progress bar while it comes up, one row per service with its URL; Stop lane and Open, or Restart and Ask agent why when a service failed |
+| `lane` | the lane's state as a pill next to how many services run, the start phase and a progress bar while it comes up, one row per service with its URL (failed first, then starting, running and idle); Stop lane and Open, or Restart and Ask agent why when a service failed |
 | `board` | one row per lane grouped by project with its branch, state, who started it and URL; the lanes of linked boxes that work here as read-only rows, the others summed up in one line; Manage lanes opens fullscreen with CPU and a stop, start, open and ask button per row |
 | `failure` | why a unit failed and the last lines of its log around the error; All lines opens fullscreen with every line, a filter, earlier pages and a line to ask the agent about |
 | `clean` | the project's lanes with what a clean deletes and checkboxes; the clean asks to confirm in the action bar |
 | `pair` | a pairing code with its countdown and the command to copy |
 
-Any other result renders nothing and reports a height of 0, since the host shows its text. Inline cards never scroll and have at most two buttons; the fullscreen views appear only where the host lists fullscreen. Every button that changes something also sends `ui/update-model-context`, so the agent knows what the person did; with `structuredContent.read_only` (`devlanes mcp --read-only`) the card shows none of them. Buttons that ask the agent send a plain question with the evidence through `ui/message`, and only once the agent's own call has its result.
+Any other result renders nothing and reports a height of 0, since the host shows its text. Inline cards never scroll and have at most two buttons; a list longer than 15 rows shows the first 15 and sums up the rest in one line whose "Show all" grows the card. The fullscreen views appear only where the host lists fullscreen. Every button that changes something also sends `ui/update-model-context`, so the agent knows what the person did; with `structuredContent.read_only` (`devlanes mcp --read-only`) the card shows none of them. Buttons that ask the agent send a plain question with the evidence through `ui/message`, and only once the agent's own call has its result.
 
 Cards poll `app_snapshot` every second while their own lane starts and every 3 seconds otherwise, every 10 seconds while the daemon is not running (they never start it, and keep its last data dimmed), pause while hidden or scrolled out of view and stop after 15 minutes without a click or key press, then show when they were last updated. An empty board does not poll. A result about one lane carries the server's card number for that lane (`structuredContent.card`); when `app_snapshot` reports a higher one in `newest_card`, the older card stops polling and shrinks to one line.
 
