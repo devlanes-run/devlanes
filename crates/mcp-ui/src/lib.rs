@@ -3,7 +3,8 @@
 //! with its logs, the clean planner or a pairing code, picked from the result's
 //! `structuredContent.view`, and reads fresh data through the server's app-only
 //! tools. `pnpm build` in `ui/` writes it to `ui/dist/lane.html`, which is
-//! committed, so building devlanes needs no Node; it makes no requests of its own.
+//! committed, so building devlanes needs no Node. Its only requests are for the
+//! fonts a host names in its styles, from the one origin its policy allows.
 
 use std::sync::LazyLock;
 
