@@ -200,6 +200,8 @@ cargo binstall, `cargo install` and pip installs are left to you: `devlanes upda
 
 A shell inside the Codex sandbox cannot reach the daemon's pipe, even when the daemon runs, and `devlanes daemon install` does not help there. Codex starts MCP servers outside its sandbox, so register `devlanes mcp` with Codex instead ([Codex](mcp.md#codex)).
 
+Apps started from the Start menu, Claude Desktop among them, get no PowerShell profile. When a tool such as fnm adds to `PATH` only from the profile, set `DEVLANES_SHELL_ENV=pwsh` in the MCP server's `env` ([environment](mcp.md#environment)).
+
 ## Remote boxes
 
 A Windows machine can be a box that other machines connect to with `devlanes remote connect`, through Windows' OpenSSH Server; [Windows boxes](remote-setup.md#windows-boxes) has the setup. Connecting from Windows to a Linux, macOS or Windows box works too, with the differences in [Windows clients](remote-setup.md#windows-clients).

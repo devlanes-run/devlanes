@@ -106,13 +106,13 @@ A call runs in the `cwd` it names (relative to the server's directory), else in 
 
 ## Tools
 
-`devlanes` runs any command, and `devlanes_read` only commands that change nothing. Both take `{"args": [...], "cwd": "..."}`, where `args` is the command line after `devlanes`, with the same arguments the CLI takes: `["start"]`, `["logs", "web", "--tail", "100"]`, `["stop", "--mine"]`. The server checks the line with the CLI's parser and runs the devlanes binary with `--output agent`. The result's text is the command's agent output; `structuredContent` holds the JSON that `--json` would print, and a nonzero exit marks the result as an error. `--help` works in both tools.
+`devlanes` runs any command, and `devlanes_read` only commands that change nothing. Both take `{"args": [...], "cwd": "..."}`, where `args` is the command line after `devlanes`, with the same arguments the CLI takes: `["start"]`, `["logs", "web", "--tail", "100"]`, `["stop", "--mine"]`. The server checks the line with the CLI's parser and runs the devlanes binary with `--output agent`. The result's text is the command's agent output; `structuredContent.data` holds the JSON that `--json` would print, and a nonzero exit marks the result as an error. `--help` works in both tools.
 
 `devlanes_read` accepts `status`, `logs`, `wait`, `doctor`, `run --list`, `lane ls`, `lane clean --dry-run`, the `debug` commands except `freeze`, `thaw` and `bundle`, `env show`, `env export`, `url`, `infra status`, `infra logs`, `config check`, `config get`, `remote ls`, `remote sync`, `daemon status`, `daemon logs` and `daemon clients`. For anything else it tells the agent to call `devlanes` with the same args. `env show` and `env export` print values as the CLI does, so a read-only agent can still read a lane's environment.
 
 Both tools refuse commands that need a terminal or never end, and say what to run instead: `ui`, `attach`, `start --attach`, `env shell`, `setup`, `update`, `uninstall`, `completions`, `status --statusline`, `daemon run`, `daemon logs -f`, and `logs -f`, `status --watch`, `debug events -f` or `infra logs -f` without `--timeout`.
 
-Hosts that send a progress token get the lane's phases, such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running.
+Hosts that send a progress token get the lane's phases, such as `acme@1 infra started`, as progress notifications. Cancelling a call is like Ctrl-C in a terminal: the command detaches and services keep running. On Windows cancelling also ends every process the command started, such as the program `devlanes with` ran. When the host closes the server's stdin or stops it with SIGTERM, or on Windows closes its console, the server ends its running commands the same way right away.
 
 ## Tool call timeouts
 
@@ -127,15 +127,11 @@ When one of those commands names no `--timeout`, the server adds one that fits t
 | OpenCode | 30 s (`timeout`) | 25 s |
 | any other host | not known | 60 s |
 
-Claude Code waits about 28 hours by default, so 170 s there is the CLI's own 180 s default minus a margin.
+When the timeout passes, the call returns what is ready so far, such as `2/3 ready, web starting`, and the units keep starting in the daemon; the agent calls `devlanes wait` to continue. A timeout that is too short costs an extra `wait` call, and one longer than the host's limit brings back the bare timeout, so the values lean short.
 
-When the timeout passes, the call returns what is ready so far, such as `2/3 ready, web starting`, and the units keep starting in the daemon; the agent calls `devlanes wait` to continue. A timeout that is too short costs an extra `wait` call, and one longer than the host's limit brings back the bare timeout, so the values lean short. A `--timeout` the agent passes itself is never changed.
+Claude Code reads `MCP_TOOL_TIMEOUT`, in milliseconds, for every MCP tool call ([Claude Code's time limits on MCP tool calls](https://code.claude.com/docs/en/mcp#time-limits-on-mcp-tool-calls)), and its MCP servers inherit Claude Code's environment, so `devlanes mcp` sees the same value and stays a tenth under it (between 1 s and 10 s under). A per-server `timeout` in `.mcp.json` is not visible to the server; set `MCP_TOOL_TIMEOUT` instead.
 
-Claude Code reads `MCP_TOOL_TIMEOUT`, in milliseconds, for every MCP tool call, and its MCP servers inherit Claude Code's environment, so `devlanes mcp` sees the same value and stays a tenth under it (between 1 s and 10 s under). A per-server `timeout` in `.mcp.json` is not visible to the server; set `MCP_TOOL_TIMEOUT` instead, or let the agent pass `--timeout`. See [Claude Code's time limits on MCP tool calls](https://code.claude.com/docs/en/mcp#time-limits-on-mcp-tool-calls).
-
-Codex documents a 60 s default for `tool_timeout_sec` ([Codex MCP docs](https://developers.openai.com/codex/extend/mcp)). If you raise it under `[mcp_servers.devlanes]` in `config.toml`, the server still adds 50 s; the agent can pass a longer `--timeout` itself.
-
-OpenCode's per-server `timeout` in `opencode.json` sets its limit. If you raise it, the server still adds 25 s; the agent can pass a longer `--timeout` itself.
+Codex documents a 60 s default for `tool_timeout_sec` ([Codex MCP docs](https://developers.openai.com/codex/extend/mcp)), and OpenCode's per-server `timeout` in `opencode.json` sets its limit. Raising either leaves the 50 s or 25 s the server adds as they are. A `--timeout` the agent passes is never changed, so it can always ask for longer.
 
 ## Long-running processes
 
@@ -162,9 +158,9 @@ The prompts help the user catch an agent's mistakes and are not a security bound
 
 ## Environment
 
-Units get the environment of the shell that started their lane ([environment](ports-and-env.md#environment)). An MCP call first sends no environment, so a lane started from a shell keeps that shell's environment for `start`, `restart`, `exec` and the other commands that start processes. When the lane has none, because no shell started it since the daemon started, the call runs again with another environment, and the lane keeps it for later calls.
+Units get the environment of the shell that started their lane ([environment](ports-and-env.md#environment)). An MCP call first sends no environment, so a lane started from a shell keeps that shell's environment for `start`, `restart`, `exec` and the other commands that start processes. When the lane has none, because no shell started it since the daemon started, the call runs again with the environment described below, and the lane keeps it for later calls.
 
-The environment the host gives the MCP server is often thinner than a shell's: apps opened from the Dock or the Start menu, such as Claude Desktop, get a `PATH` without what your shell profile adds (nvm, fnm or mise directories, `export` lines), and Codex passes MCP servers only a few variables. So on macOS and Linux the server first reads the environment of your login shell, the way VS Code, JetBrains IDEs and Zed do when opened from the desktop: it runs `$SHELL` as an interactive login shell in your home directory, which runs your profile and then has the devlanes binary print the environment. It does this once per server process, on the first call that needs it, and keeps the result (or the failure) in memory only. The result says so:
+The environment the host gives the MCP server is often thinner than a shell's: apps opened from the Dock or the Start menu, such as Claude Desktop, get a `PATH` without what your shell profile adds (nvm, fnm or mise directories, `export` lines), and Codex passes MCP servers only a few variables. So on macOS and Linux the server first reads the environment of your login shell, the way VS Code, JetBrains IDEs and Zed do when opened from the desktop: it runs `$SHELL` as an interactive login shell in your home directory, which runs your profile and then has the devlanes binary print the environment. What the profile itself prints never reaches a result. The server does this once per process, on the first call that needs it, and keeps the environment or the failure in memory only. A failure stays until the host restarts the server. When reading worked, the result says so:
 
 ```text
 note: the lane had no environment from a shell, so devlanes mcp read it from your login shell (zsh)
@@ -172,7 +168,7 @@ note: the lane had no environment from a shell, so devlanes mcp read it from you
 
 The server skips this when `SHLVL` is set and above 0 in its own environment, which means a terminal started the host and its environment already went through your profile. Two variables in the host's MCP config change this:
 
-- `DEVLANES_SHELL_ENV=0` never reads the login shell; `DEVLANES_SHELL_ENV=1` reads it even when `SHLVL` is set.
+- On macOS and Linux, `DEVLANES_SHELL_ENV=0` never reads the login shell and `DEVLANES_SHELL_ENV=1` reads it even when `SHLVL` is set.
 - `DEVLANES_SHELL_ENV_TIMEOUT` is how many seconds the shell may take, 10 by default, from 1 to 120. A shell that takes longer is stopped.
 
 When the login shell cannot be read, the call uses the server's own environment and the result ends with:
@@ -181,7 +177,7 @@ When the login shell cannot be read, the call uses the server's own environment 
 note: the lane had no environment from a shell, so it got the environment of the devlanes mcp server
 ```
 
-If a service then fails with `command not found on PATH`, the result adds a line with the fix and, on macOS and Linux, why the login shell failed. Running `devlanes restart` in the worktree from a terminal once always works: the lane then keeps that terminal's environment, and MCP calls use it until the daemon stops ([bringing a lane back](lifecycle.md#bringing-a-lane-back)).
+If a service then fails with `command not found on PATH`, the result adds a line with the fix: why the login shell failed, or on Windows without `DEVLANES_SHELL_ENV`, how to set it. Running `devlanes restart` in the worktree from a terminal once always works: the lane then keeps that terminal's environment, and MCP calls use it until the daemon stops ([bringing a lane back](lifecycle.md#bringing-a-lane-back)).
 
 On Windows the server does not read a profile unless you ask, since apps started from the Start menu already get your user and system `PATH`. Tools that add to `PATH` only from a PowerShell profile, such as fnm with `fnm env --use-on-cd | Out-String | Invoke-Expression`, are missing then. Set `DEVLANES_SHELL_ENV` to `pwsh` (PowerShell 7) or `powershell` (Windows PowerShell 5.1) in the MCP server's `env`, and the server runs it with your profile, under your execution policy:
 
@@ -197,7 +193,9 @@ On Windows the server does not read a profile unless you ask, since apps started
 }
 ```
 
-For fnm there is also a fixed directory to add to your user `PATH` instead: `<FNM_DIR>\aliases\default` (by default `%APPDATA%\fnm\aliases\default`) always points at the default Node version, so every app finds `node` and `pnpm` without a profile.
+The lane gets the profile's environment except `PSModulePath`, which stays the server's so that a unit running the other PowerShell still finds its own modules.
+
+For fnm there is also a fixed directory to add to your user `PATH` instead: `<FNM_DIR>\aliases\default` (by default `%APPDATA%\fnm\aliases\default`) always points at the default Node version, so every app finds `node` and the tools installed with it.
 
 ## Actors and --mine
 
@@ -229,4 +227,4 @@ It reads the directory and session id from the JSON Claude Code writes to its st
 
 ## MCP Apps
 
-Hosts that show MCP Apps, such as Claude Desktop, GitHub Copilot in VS Code, Cursor and Goose, show a card with results such as `start`, `status`, `logs`, `lane clean` and `daemon pair`. Its buttons run commands themselves, and the clean button runs `lane clean --yes`: the click is the consent. With `--read-only` the card only reads. A card polls the daemon only while it is visible and never starts it. Other hosts, terminal agents among them, get the same text without the card. Recent Claude Desktop builds do not show cards from stdio servers, reported on Windows and macOS ([anthropics/claude-ai-mcp#1069](https://github.com/anthropics/claude-ai-mcp/issues/1069)).
+Hosts that show MCP Apps, such as Claude Desktop, GitHub Copilot in VS Code, Cursor and Goose, show a card with results such as `start`, `status`, `logs`, `lane clean` and `daemon pair`. Its buttons run commands themselves without a consent prompt, since the click is the consent: the clean button runs `lane clean --yes`, and new code on a pairing card runs `daemon pair` again. With `--read-only` the card only reads. On the board, a box lane whose link is down shows no open button. A card polls the daemon only while it is visible and never starts it. Other hosts, terminal agents among them, get the same text without the card. Recent Claude Desktop builds do not show cards from stdio servers, reported on Windows and macOS ([anthropics/claude-ai-mcp#1069](https://github.com/anthropics/claude-ai-mcp/issues/1069)).
