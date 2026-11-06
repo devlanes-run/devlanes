@@ -80,15 +80,18 @@ fn embed_version_info() -> Result<(), Box<dyn Error>> {
         }
         _ => repository,
     };
-    // rc.exe strings escape a quote by doubling it.
+    // rc.exe strings escape a quote by doubling it and read `\` as an escape.
     let comments = format!(
         "{}. Website {HOMEPAGE}, docs {HOMEPAGE}/docs/, source {source}",
         std::env::var("CARGO_PKG_DESCRIPTION")?,
     )
+    .replace('\\', "\\\\")
     .replace('"', "\"\"");
-    // Task Manager names the process by FileDescription, so it stays the bare name.
+    // Task Manager names the process by FileDescription, so it stays the bare
+    // name. The file is UTF-8, which rc.exe reads only with the pragma.
     let resource = format!(
-        r#"#include <winver.h>
+        r#"#pragma code_page(65001)
+#include <winver.h>
 
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION {numeric}

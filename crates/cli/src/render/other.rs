@@ -1333,7 +1333,7 @@ fn reserved_port_checks(reserved: &Value) -> Vec<Check> {
             Check::new(
                 "ports",
                 Outcome::Skip,
-                "Windows refused to let devlanes start netsh (access denied), so it may not be allowed to start any program",
+                "Windows refused to let devlanes start netsh, so it may not be allowed to start any program",
             )
             .fix("an antivirus or application control may restrict devlanes.exe; mark it as trusted there"),
         );

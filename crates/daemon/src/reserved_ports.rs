@@ -39,8 +39,9 @@ pub struct Reading {
     pub ranges: Vec<(u16, u16)>,
     /// `family: reason` for each family that failed.
     pub errors: Vec<String>,
-    /// Windows refused to start System32's `netsh` with access denied, which
-    /// an antivirus or application control restricting this process causes.
+    /// Windows or a security product refused to start System32's `netsh`,
+    /// which an antivirus or application control restricting this process
+    /// causes.
     pub spawn_denied: bool,
 }
 
@@ -110,7 +111,7 @@ async fn read() -> Reading {
 /// Why one family could not be read.
 struct Failure {
     message: String,
-    /// Starting `netsh` failed with access denied.
+    /// Windows or a security product refused to start `netsh`.
     spawn_denied: bool,
 }
 
@@ -145,7 +146,7 @@ async fn read_family(family: &str) -> Result<Vec<(u16, u16)>, Failure> {
         .map_err(|_| format!("netsh did not answer within {}s", NETSH_TIMEOUT.as_secs()))?
         .map_err(|error| Failure {
             message: format!("cannot run netsh: {error}"),
-            spawn_denied: error.kind() == std::io::ErrorKind::PermissionDenied,
+            spawn_denied: devlanes_sys_windows::spawn::refused_to_start(&error),
         })?;
     if !output.status.success() {
         return Err(format!("netsh failed ({})", output.status).into());

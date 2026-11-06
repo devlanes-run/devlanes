@@ -36,13 +36,14 @@ Run `devlanes doctor` once after installing. The home is `%USERPROFILE%\.devlane
 
 ### Antivirus
 
-devlanes releases are not code-signed yet, and some antivirus or application control products (Kaspersky, AppLocker, Smart App Control) distrust a new unsigned `devlanes.exe`. They may quarantine it, or let it run but refuse to let it start other programs, which the daemon needs for every unit. devlanes reports this where it shows:
+devlanes releases are not code-signed yet, and some antivirus or application control products, such as Kaspersky or Smart App Control, distrust a new unsigned `devlanes.exe`. They may quarantine or block it, or let it run but refuse to let it start the programs the daemon runs for every unit. devlanes reports this:
 
-- `install.ps1` stops with "was installed but is gone" when the new `devlanes.exe` disappears right after it runs.
-- `devlanes daemon start` fails with "the daemon exited with exit code ... without a reason" when the daemon is stopped before it can write a reason. If `devlanes daemon run` keeps running in a terminal, something outside devlanes stopped the background one.
+- `install.ps1` stops when Windows refuses to run the new `devlanes.exe`, or when it "was installed but is gone".
+- `devlanes update` says "an antivirus may have quarantined it" when the new version does not run.
+- Starting the daemon (`devlanes daemon start`, or any command that starts it) fails with "Windows refused to start the daemon", or with "the daemon exited (exit code ...) without a reason" when it was stopped before it could write one. If `devlanes daemon run` keeps running in a terminal, something outside devlanes stopped the background one.
 - `devlanes doctor` warns that Windows refused to let devlanes start `netsh`.
 
-Restore `devlanes.exe` from quarantine if needed, then exclude the install directory (`%LOCALAPPDATA%\Programs\devlanes` by default) or mark `devlanes.exe` as trusted. In Kaspersky that is Application Control: move `devlanes.exe` to the Trusted group. Prefer a rule by path over one by file hash, since every update replaces the file.
+Restore `devlanes.exe` from quarantine if needed, then exclude its directory or mark `devlanes.exe` as trusted. The directory is `%LOCALAPPDATA%\Programs\devlanes` for `install.ps1`; `(Get-Command devlanes).Source` shows it for other installers. Exclude `%USERPROFILE%\.devlanes\update` too, where `devlanes update` unpacks and first runs a new version. In Kaspersky, move `devlanes.exe` to the Trusted group under Application Control. Prefer a rule by path over one by file hash, since every update replaces the file. Smart App Control has no per-program exception; the only way past it is turning it off. AppLocker rules come from your administrator.
 
 ## Shells
 

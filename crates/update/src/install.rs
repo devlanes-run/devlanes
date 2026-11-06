@@ -654,8 +654,8 @@ pub async fn stage(
     probe.env_remove(crate::version::RUNNING_ENV);
     let reported = probe_version(probe).await;
     if reported.as_deref() != Some(entry.version.as_str()) {
-        // A new executable that does not run at all on Windows is most often
-        // one an antivirus quarantined while it was extracted or first run.
+        // On Windows, a new executable that reports no version at all may be
+        // one an antivirus quarantined or blocked when it was extracted or run.
         let hint = if cfg!(windows) && reported.is_none() {
             "; an antivirus may have quarantined it"
         } else {

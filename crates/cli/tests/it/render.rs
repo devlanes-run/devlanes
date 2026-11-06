@@ -987,7 +987,7 @@ fn doctor_words_reserved_port_ranges() {
     });
     let text = render_text(Method::Doctor, &data);
     assert!(
-        text.contains("Windows refused to let devlanes start netsh (access denied)"),
+        text.contains("Windows refused to let devlanes start netsh"),
         "{text}"
     );
     assert!(text.contains("mark it as trusted"), "{text}");

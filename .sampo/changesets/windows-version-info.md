@@ -2,4 +2,4 @@
 cargo/devlanes: patch
 ---
 
-Added product and version details to `devlanes.exe`, shown in its Windows file properties.
+Added version and product details to the Windows file properties of `devlanes.exe`.

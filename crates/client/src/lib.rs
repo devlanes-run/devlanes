@@ -821,26 +821,26 @@ type Started = (ReadyLines, bool, Option<Handover>, Option<Process>);
 #[cfg(windows)]
 const EXIT_WAIT: Duration = Duration::from_secs(2);
 
-/// How the spawned `process` ended, once its readiness pipe closed without
-/// an answer: `exit code ...`, or `None` when it is unknown or the process
-/// still runs.
-pub(crate) async fn exited(process: Option<Process>) -> Option<String> {
+/// The exit code of the spawned `process`, once its readiness pipe closed
+/// without an answer, or `None` when it is unknown or the process still runs.
+pub(crate) async fn exited(process: Option<Process>) -> Option<u32> {
     #[cfg(windows)]
     {
         let process = process?;
-        let code = tokio::task::spawn_blocking(move || process.wait_timeout(EXIT_WAIT))
+        tokio::task::spawn_blocking(move || process.wait_timeout(EXIT_WAIT))
             .await
             .ok()?
-            .ok()??;
-        Some(exit_code(code))
+            .ok()?
     }
     #[cfg(not(windows))]
     process.and_then(|never| match never {})
 }
 
+/// Exit code of a Rust panic that unwinds out of `main`.
+const PANIC_EXIT: u32 = 101;
+
 /// A Windows exit code as shown in an error: NTSTATUS values, which a crash
 /// or another program ending the process leaves, in hex.
-#[cfg(windows)]
 fn exit_code(code: u32) -> String {
     if code >= 0xC000_0000 {
         format!("exit code 0x{code:08X}")
@@ -1126,12 +1126,25 @@ async fn start_daemon(
             ..CreationFlags::default()
         },
     };
+    // A refusal that is not the job's breakaway rule (or that repeats inside
+    // the job) comes from whatever restricts devlanes.exe.
+    let refused = |error: std::io::Error| {
+        if spawn::refused_to_start(&error) {
+            Error::Startup(format!(
+                "Windows refused to start the daemon ({}): {error}. An antivirus or application \
+                 control may restrict devlanes.exe; mark it as trusted there",
+                exe.display()
+            ))
+        } else {
+            error.into()
+        }
+    };
     let (child, in_job) = match spawn::spawn(&spec(true)) {
         Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
             tracing::debug!("the terminal's job refuses breakaway; the daemon starts inside it");
-            (spawn::spawn(&spec(false))?, true)
+            (spawn::spawn(&spec(false)).map_err(refused)?, true)
         }
-        result => (result?, false),
+        result => (result.map_err(refused)?, false),
     };
     // Only the daemon may hold the writing end, or the reader never sees its end.
     drop(writer);
@@ -1192,34 +1205,35 @@ async fn startup_failure(
     if !reason.is_empty() {
         return Error::Startup(reason);
     }
-    let exit = exited(process).await;
+    let code = exited(process).await;
     Error::Startup(silent_exit(
         &paths.logs.join("daemon.log"),
         step.as_deref(),
-        exit.as_deref(),
+        code,
     ))
 }
 
 /// The message for a spawned daemon that exited without a reason, in `step`
-/// and with `exit` when known (only Windows reads one). A daemon reports its
-/// own startup failures, and a panic leaves its message in the log, so one
-/// that exits silently was most likely stopped from outside.
-fn silent_exit(log: &Path, step: Option<&str>, exit: Option<&str>) -> String {
-    let exited = match exit {
-        Some(exit) => format!("exited with {exit}"),
-        None => "exited".to_owned(),
-    };
+/// and with its exit `code` when known (only Windows reads one). The daemon
+/// reports its own startup failures, exiting with 1, and a panic exits with
+/// 101; any other code most likely means something outside stopped it.
+fn silent_exit(log: &Path, step: Option<&str>, code: Option<u32>) -> String {
     let during = step
         .map(|step| format!(" in step {step:?}"))
         .unwrap_or_default();
+    let how = match code {
+        Some(PANIC_EXIT) => " (it panicked)".to_owned(),
+        Some(code) => format!(" ({})", exit_code(code)),
+        None => String::new(),
+    };
     let mut message = format!(
-        "the daemon {exited}{during} without a reason; see {}",
+        "the daemon exited{during}{how} without a reason; see {}",
         log.display()
     );
-    if exit.is_some() {
+    if code.is_some_and(|code| code != 1 && code != PANIC_EXIT) {
         message.push_str(
-            ". An antivirus or application control may have stopped it: if `devlanes daemon run` \
-             keeps running in a terminal, mark devlanes.exe as trusted there",
+            ". An antivirus or application control may have stopped it. Run `devlanes daemon run` \
+             in a terminal: if it keeps running there, mark devlanes.exe as trusted in the antivirus",
         );
     }
     message
