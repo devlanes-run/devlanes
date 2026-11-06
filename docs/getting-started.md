@@ -40,7 +40,7 @@ Commands find the project from the current directory: the nearest `devlanes.yaml
 
 ### Coming from another process manager
 
-If the repository already runs its dev processes with mprocs, dekit, process-compose, a Procfile (foreman, overmind, hivemind, honcho), pm2, tmuxinator, tmuxp, `concurrently` or `npm-run-all` in package.json, mise tasks or Docker Compose, install the [devlanes skill](../agent-plugin/README.md) and ask your coding agent to migrate it. The skill's [references/migration.md](../agent-plugin/skills/devlanes/references/migration.md) maps each tool to `devlanes.yaml`: fixed ports become each lane's own port, one-shot commands become tasks, containers become infra, and the agent tells you what devlanes cannot express (restart policies, dependencies between services, `.env` loading).
+If the repository already runs its dev processes with mprocs, dekit, process-compose, a Procfile (foreman, overmind, hivemind, honcho), pm2, tmuxinator, tmuxp, `concurrently` or `npm-run-all` in package.json, mise tasks or Docker Compose, install the [devlanes skill](../skills/devlanes/SKILL.md) (`npx skills add devlanes-run/devlanes --skill devlanes`) and ask your coding agent to migrate it. The skill's [references/migration.md](../skills/devlanes/references/migration.md) maps each tool to `devlanes.yaml`: fixed ports become each lane's own port, one-shot commands become tasks, containers become infra, and the agent tells you what devlanes cannot express (restart policies, dependencies between services, `.env` loading).
 
 ## Start and inspect
 
@@ -88,7 +88,7 @@ Run `devlanes` with no command (or `devlanes ui`) on a terminal. It lists every 
 
 ## Coding agents
 
-Agents should start services through devlanes instead of backgrounding `pnpm dev &` in their shell. The [agent plugin](../agent-plugin/README.md) packages a guide for them as a Claude Code and Codex plugin, a skill for the skills CLI and a Codex `AGENTS.md` to paste into a repository; the plugin also has a hook that rejects backgrounded dev servers. When devlanes detects an agent it switches to terse output with failures first; `devlanes exec --name NAME -- COMMAND` runs a one-off process as a unit, and `devlanes wait` and budgeted `devlanes logs` let the agent check on it.
+Agents should start services through devlanes instead of backgrounding `pnpm dev &` in their shell. The devlanes skill teaches them how; install it with `npx skills add devlanes-run/devlanes --skill devlanes`. [Coding agents](guides/agents.md) also covers `devlanes mcp`, an optional MCP server. When devlanes detects an agent it switches to terse output with failures first; `devlanes exec --name NAME -- COMMAND` runs a long-running process that is not in `devlanes.yaml` as a unit, and `devlanes wait` and budgeted `devlanes logs` let the agent check on it.
 
 In CI, `devlanes with -- pnpm test:e2e` starts the lane, runs the command with the lane's URLs in its environment, stops what it started and exits with the command's code.
 

@@ -122,7 +122,7 @@ The box's lanes then list the unit `files`, and clients mirror port 8000 and `ht
 
 ### URLs to give out
 
-On the box, `devlanes url print web` prints the box's URL and, in a terminal, `on <client>: <url>` for each connected client, the URL that opens there, or why the unit does not open there (a port taken on that machine, a lane it skips). Agents working on the box read the same from `devlanes url print web --json` under `clients`; the bundled devlanes skill tells them to give you the client's URL. When no client is connected, an agent runs `devlanes daemon pair` on the box and asks you to run `devlanes remote connect <box>` on your machine with the code it got; a machine that is paired already needs no code.
+On the box, `devlanes url print web` prints the box's URL and, in a terminal, `on <client>: <url>` for each connected client, the URL that opens there, or why the unit does not open there (a port taken on that machine, a lane it skips). Agents working on the box read the same from `devlanes url print web --json` under `clients`; the [devlanes skill](../../skills/devlanes/SKILL.md) tells them to give you the client's URL. When no client is connected, an agent runs `devlanes daemon pair` on the box and asks you to run `devlanes remote connect <box>` on your machine with the code it got; a machine that is paired already needs no code.
 
 ### Windows boxes
 
