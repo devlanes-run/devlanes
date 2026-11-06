@@ -637,6 +637,24 @@ pub const REPLACE_STEP: &str = "waiting for the old daemon";
 /// the plan, right before it asks the old daemon to stop.
 pub const REPLACE_GO: &str = "go";
 
+/// Set by `devlanes mcp` for each command it runs: the file that also gets
+/// what `--output json` would print.
+pub const JSON_OUT_ENV: &str = "DEVLANES_JSON_OUT";
+
+/// Set to `1` by `devlanes mcp` for each command it runs: the command sends
+/// no shell environment, so the daemon uses the one the lane already has.
+pub const ENV_FROM_LANE_ENV: &str = "DEVLANES_ENV_FROM_LANE";
+
+/// Set to `1` by `devlanes mcp` for the commands its cards poll with: the
+/// command never starts the daemon and fails with `daemon_not_running` when
+/// none runs.
+pub const NO_SPAWN_ENV: &str = "DEVLANES_NO_SPAWN";
+
+/// Variables that belong to the one devlanes process `devlanes mcp` started
+/// with them. They never reach an auto-spawned daemon, a client environment
+/// sent to the daemon, or the command `with` runs.
+pub const CALL_ENV: [&str; 3] = [JSON_OUT_ENV, ENV_FROM_LANE_ENV, NO_SPAWN_ENV];
+
 impl Selection {
     /// Requested profiles: `profile` first, then `profiles`, without repeats and
     /// blank names. Empty means "the lane's saved profiles".

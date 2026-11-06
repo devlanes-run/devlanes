@@ -1090,12 +1090,23 @@ impl Cli {
     }
 
     /// Builds requests using injected context without touching global environment in tests.
+    /// The variables `devlanes mcp` sets for this one process
+    /// ([`devlanes_proto::CALL_ENV`]) never go into a request or `with`'s command.
     pub fn action_with(
         &self,
         runtime: &Runtime,
         cwd: PathBuf,
         environment: impl FnOnce() -> BTreeMap<String, String>,
     ) -> Result<Action, Error> {
+        let environment = || {
+            let mut env = environment();
+            env.retain(|name, _| {
+                !devlanes_proto::CALL_ENV
+                    .iter()
+                    .any(|own| name.eq_ignore_ascii_case(own))
+            });
+            env
+        };
         if !self.env.is_empty()
             && !(matches!(
                 &self.command,
@@ -1159,7 +1170,12 @@ impl Cli {
             None => (Method::Status, json!({"mine": false})),
             Some(Command::Ui) => return Ok(Action::Ui),
             Some(Command::With(args)) => {
-                context.env = Some(environment());
+                // The command always gets this shell's env; the start leaves it
+                // out when the lane's own should be reused.
+                let env = environment();
+                if !runtime.env_from_lane {
+                    context.env = Some(env.clone());
+                }
                 let params = serde_json::to_value(Selection {
                     units: args.units.clone(),
                     profiles: args.profiles.clone(),
@@ -1178,6 +1194,7 @@ impl Cli {
                         context,
                     },
                     command: args.command.clone(),
+                    env,
                     logs_dir: args.logs_dir.clone(),
                     keep: args.keep,
                 }));

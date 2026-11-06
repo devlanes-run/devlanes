@@ -212,3 +212,64 @@ fn env_from_lane_sends_no_env() {
         }
     }
 }
+
+/// A shell env with the variables `devlanes mcp` sets for one command.
+fn mcp_child_env() -> std::collections::BTreeMap<String, String> {
+    [
+        ("PATH", "/bin"),
+        ("DEVLANES_JSON_OUT", "/tmp/devlanes-mcp-1.json"),
+        ("DEVLANES_ENV_FROM_LANE", "1"),
+    ]
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .into()
+}
+
+#[test]
+/// `DEVLANES_JSON_OUT` and `DEVLANES_ENV_FROM_LANE` belong to the one process
+/// `devlanes mcp` started: no request env and no `with` command gets them.
+fn mcp_call_variables_stay_in_the_process() {
+    let runtime = hooked(None, false);
+    for args in [
+        &["start"][..],
+        &["exec", "--name", "web", "--", "pnpm", "dev"],
+        &["daemon", "restart"],
+    ] {
+        let cli = Cli::try_parse_from(std::iter::once("devlanes").chain(args.iter().copied()))
+            .expect("parse");
+        let action = cli
+            .action_with(&runtime, PathBuf::from("/fixture/worktree"), mcp_child_env)
+            .expect("action");
+        let env = match action {
+            Action::Rpc(request) => request.context.env,
+            Action::DaemonRestart(context) => context.env,
+            _ => panic!("{args:?}: unexpected action"),
+        }
+        .expect("an env");
+        assert_eq!(env.keys().collect::<Vec<_>>(), ["PATH"], "{args:?}");
+    }
+    let cli = Cli::parse_from(["devlanes", "with", "--", "pnpm", "test"]);
+    let Ok(Action::With(plan)) =
+        cli.action_with(&runtime, PathBuf::from("/fixture/worktree"), mcp_child_env)
+    else {
+        panic!("with plan");
+    };
+    assert_eq!(plan.env.keys().collect::<Vec<_>>(), ["PATH"]);
+    let start = plan.start.context.env.expect("start env");
+    assert_eq!(start.keys().collect::<Vec<_>>(), ["PATH"]);
+}
+
+#[test]
+/// With `DEVLANES_ENV_FROM_LANE` the start of `with` sends no env, so the lane
+/// keeps its own, while the command still gets the shell's.
+fn with_reuses_the_lanes_env() {
+    let cli = Cli::parse_from(["devlanes", "with", "--", "pnpm", "test"]);
+    let Ok(Action::With(plan)) = cli.action_with(
+        &hooked(None, true),
+        PathBuf::from("/fixture/worktree"),
+        mcp_child_env,
+    ) else {
+        panic!("with plan");
+    };
+    assert!(plan.start.context.env.is_none());
+    assert_eq!(plan.env["PATH"], "/bin");
+}
