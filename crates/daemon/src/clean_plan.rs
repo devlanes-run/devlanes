@@ -85,17 +85,14 @@ impl Inner {
             )
         };
         // As in `clean_lane`: tasks and teardown come from the lane's current
-        // plan, and a plan that fails runs neither. Only they are planned, so a
-        // dry run asks no secret contributor for a service's env.
+        // plan, and a plan that fails runs neither. Only they are planned, and
+        // dry, so no contributor such as a secret store is asked and the data
+        // folder is not created.
         let only = config.as_deref().map(clean_units);
         if runnable && only.as_ref().is_none_or(|only| !only.is_empty()) {
-            let resolved = match (&config, &only) {
-                (Some(config), Some(only)) => {
-                    self.resolve_config(&project, &lane, config.clone(), Some(only))
-                        .await
-                }
-                _ => self.resolve_full(&project, &lane).await,
-            };
+            let resolved = self
+                .resolve_dry(&project, &lane, config.clone(), only.as_ref())
+                .await;
             match resolved {
                 Ok(resolved) => {
                     let tasks: Vec<Value> = resolved

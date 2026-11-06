@@ -149,9 +149,10 @@ async fn a_plan_reports_the_clean_and_changes_nothing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-/// A plan plans only what a clean runs, its `lane.clean` tasks and teardown,
-/// so no service's env is asked of a contributor such as a secret store.
-async fn a_plan_plans_only_what_a_clean_runs() {
+/// A plan lists the `lane.clean` tasks and teardown without asking any
+/// contributor, such as a secret store, and without creating the lane's data
+/// folder.
+async fn a_plan_asks_no_contributor_and_creates_nothing() {
     tokio::time::timeout(LIMIT, async {
         let tmp = temp();
         let main = repo(&tmp.path, "r", CONFIG);
@@ -168,6 +169,12 @@ async fn a_plan_plans_only_what_a_clean_runs() {
         h.call(Method::Start, json!({}), cx(&main))
             .await
             .expect("start");
+        let first = h
+            .call(Method::LaneCleanPlan, json!({}), cx(&main))
+            .await
+            .expect("plan");
+        let data_dir = std::path::PathBuf::from(first["data_dir"]["path"].as_str().expect("path"));
+        std::fs::remove_dir_all(&data_dir).expect("remove the data folder");
         journal.planned.0.lock().expect("lock").clear();
         let plan = h
             .call(Method::LaneCleanPlan, json!({}), cx(&main))
@@ -175,10 +182,13 @@ async fn a_plan_plans_only_what_a_clean_runs() {
             .expect("plan");
         assert_eq!(plan["tasks"][0]["name"], "drop-cache", "{plan}");
         assert_eq!(plan["teardown"][0]["name"], "database", "{plan}");
-        let mut planned = journal.planned.entries();
-        planned.sort();
-        planned.dedup();
-        assert_eq!(planned, ["InfraCommand database", "Task drop-cache"]);
+        assert_eq!(plan["teardown"][0]["container"], "db", "{plan}");
+        assert_eq!(
+            journal.planned.entries(),
+            Vec::<String>::new(),
+            "no contributor ran"
+        );
+        assert!(!data_dir.exists(), "the plan created the data folder");
         h.close().await;
     })
     .await
