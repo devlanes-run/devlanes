@@ -46,7 +46,10 @@ fn the_card_and_the_error_pages_share_tokens() {
         ("prose", "$prose: {};"),
     ] {
         let line = pages_line.replace("{}", &card_value(card_name));
-        assert!(pages_has(&line), "crates/pages/styles/page.scss lacks `{line}`");
+        assert!(
+            pages_has(&line),
+            "crates/pages/styles/page.scss lacks `{line}`"
+        );
     }
 }
 
