@@ -5,6 +5,7 @@
 // opened from a lane card.
 import { html, useEffect, useLayoutEffect, useRef, useState } from '../vendor/standalone.module.js';
 import { Button, Glyph, Icon, Note, Window } from './ui.js';
+import { TextView } from './lane.js';
 import { FullscreenButton, PollStatus, act, ask, bridge, card, cwd, structured, update } from './store.js';
 import { actorLabel, reasonText, since, unitRef, unitState } from './util.js';
 
@@ -61,8 +62,15 @@ function subjectsOf(sc) {
     }));
   }
   if (items[0] && 'seq' in items[0]) {
+    // Log lines name their unit only; a lane the command named (`acme@2:api`) goes with it.
+    const named = ((sc && sc.args) || []).map((arg) => /^([^\s:]+@\d+):/.exec(arg)).find(Boolean);
     const units = [...new Set(items.map((line) => line.unit))];
-    return units.map((unit) => ({ unit, lines: items.filter((line) => line.unit === unit), next: units.length === 1 ? data.next_cursor : null }));
+    return units.map((unit) => ({
+      lane: named ? named[1] : undefined,
+      unit,
+      lines: items.filter((line) => line.unit === unit),
+      next: units.length === 1 ? data.next_cursor : null,
+    }));
   }
   return [];
 }
@@ -87,7 +95,10 @@ export function FailureView() {
   const tools = html`${back}<${FullscreenButton} />`;
   const subject = subjects[Math.min(index, subjects.length - 1)];
   if (!subject) {
-    const command = (structured() || {}).command || '';
+    const sc = structured() || {};
+    // A command that failed before it had a unit to show, such as an unknown lane.
+    if (sc.exit_code || (sc.data && sc.data.error)) return html`<${TextView} />`;
+    const command = sc.command || '';
     return html`<${Window} title=${html`<b>devlanes ${command}</b>`} label="failures" tools=${tools}>
       <p class="status-line"><${Glyph} state="ready" /> ${command === 'logs' ? 'no lines' : 'nothing failed'}</p>
     <//>`;

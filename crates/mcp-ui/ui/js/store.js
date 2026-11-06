@@ -14,6 +14,8 @@ const IDLE_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 5;
 /** Commands whose card shows a lane while it starts. */
 const STARTS = ['start', 'restart', 'reload', 'lane resume'];
+/** How long a note under the card stays. */
+const NOTE_MS = 6000;
 
 export const bridge = new Bridge(window.parent);
 
@@ -260,14 +262,17 @@ export async function act(action, target, done) {
   const key = target || action;
   update({ busy: { ...card.busy, [key]: action }, note: null });
   try {
-    const result = await bridge.callTool('app_action', { cwd: cwd(), action, target });
-    const out = result.structuredContent || {};
+    // Not callTool: a command that exits nonzero comes back with isError, and
+    // its structured content still says what happened.
+    /** @type {import('./bridge.js').ToolResult} */
+    const result = await bridge.request('tools/call', { name: 'app_action', arguments: { cwd: cwd(), action, target } });
+    const out = result.structuredContent || { exit_code: 1, text: (result.content || []).map((b) => b.text || '').join('\n') };
     const first = String(out.text || '').trim().split('\n')[0];
     if (done) tellModel(`user ${done} from the card${out.exit_code ? `; it exited ${out.exit_code}: ${first}` : ''}`);
-    if (out.exit_code) update({ note: { text: first || `${action} exited ${out.exit_code}`, tone: 'failure' } });
+    if (out.exit_code) flash({ text: first || `${action} exited ${out.exit_code}`, tone: 'failure' });
     return out;
   } catch (error) {
-    update({ note: { text: `${action} ${target || ''}: ${/** @type {Error} */ (error).message}`, tone: 'failure' } });
+    flash({ text: `${action} ${target || ''}: ${/** @type {Error} */ (error).message}`, tone: 'failure' });
     return null;
   } finally {
     const busy = { ...card.busy };
@@ -278,14 +283,25 @@ export async function act(action, target, done) {
 }
 
 /**
+ * Shows a note under the card for a few seconds.
+ * @param {{text: string, tone?: string}} note
+ */
+export function flash(note) {
+  update({ note });
+  setTimeout(() => {
+    if (card.note === note) update({ note: null });
+  }, NOTE_MS);
+}
+
+/**
  * Sends a message to the agent as the person.
  * @param {string} text
  */
 export function ask(text) {
   bridge
     .sendMessage(text)
-    .then(() => update({ note: { text: 'sent to the agent' } }))
-    .catch((error) => update({ note: { text: `not sent: ${error.message}`, tone: 'failure' } }));
+    .then(() => flash({ text: 'sent to the agent' }))
+    .catch((error) => flash({ text: `not sent: ${error.message}`, tone: 'failure' }));
 }
 
 /**
@@ -293,7 +309,7 @@ export function ask(text) {
  * @param {string} url
  */
 export function openUrl(url) {
-  bridge.openLink(url).catch((error) => update({ note: { text: `not opened: ${error.message}`, tone: 'failure' } }));
+  bridge.openLink(url).catch((error) => flash({ text: `not opened: ${error.message}`, tone: 'failure' }));
 }
 
 /** The fullscreen toggle, shown only where the host offers fullscreen. */
@@ -307,7 +323,7 @@ export function FullscreenButton() {
       update({ context: { ...card.context, displayMode: mode } });
       document.documentElement.classList.toggle('fullscreen', mode === 'fullscreen');
     } catch (error) {
-      update({ note: { text: `no fullscreen: ${/** @type {Error} */ (error).message}`, tone: 'failure' } });
+      flash({ text: `no fullscreen: ${/** @type {Error} */ (error).message}`, tone: 'failure' });
     }
   };
   return html`<${Button} icon=${full ? 'inline' : 'fullscreen'} label=${full ? 'exit fullscreen' : 'fullscreen'} iconOnly onClick=${toggle} />`;

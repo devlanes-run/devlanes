@@ -191,6 +191,8 @@ ol {
 
 .term-body {
   display: grid;
+  // One column no wider than the window, whatever a table inside asks for.
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
   padding: 14px 16px 16px;
@@ -396,31 +398,37 @@ td {
   white-space: nowrap;
 }
 
+// Fixed columns, so names and URLs shorten instead of pushing the buttons out.
 .units {
+  table-layout: fixed;
+
   tr + tr {
     border-top: 1px dashed $rule;
   }
 
-  td:first-child {
-    width: 18px;
+  th,
+  td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .g {
+    width: 22px;
     padding-left: 0;
   }
 
-  th {
-    max-width: 220px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .port,
+  .cpu {
+    width: 76px;
+  }
+
+  .act {
+    width: 72px;
   }
 
   .name {
     color: $ink;
     font-weight: 700;
-  }
-
-  .url {
-    max-width: 260px;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 }
 
@@ -761,10 +769,12 @@ td {
 .fullscreen {
   height: 100%;
 
-  body {
+  body,
+  #app {
     display: flex;
     flex-direction: column;
     height: 100%;
+    min-height: 0;
   }
 
   .term {
@@ -825,8 +835,8 @@ td {
     padding-left: 12px;
   }
 
-  .units th {
-    max-width: 120px;
+  .units .exit {
+    display: none;
   }
 
   .lanes .branch {

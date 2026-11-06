@@ -5,11 +5,10 @@ import { html, render } from '../vendor/standalone.module.js';
 import { BoardView } from './board.js';
 import { CleanView } from './clean.js';
 import { FailureView } from './failure.js';
-import { LaneView, PendingView } from './lane.js';
+import { LaneView, PendingView, TextView } from './lane.js';
 import { PairView } from './pair.js';
-import { FullscreenButton, bridge, card, currentView, onChange, pollNow, stopPolling, structured, update } from './store.js';
+import { FullscreenButton, bridge, card, currentView, onChange, pollNow, stopPolling, update } from './store.js';
 import { Window } from './ui.js';
-import { commandLine } from './util.js';
 
 /** The view for the current state. */
 function App() {
@@ -37,18 +36,6 @@ function App() {
     default:
       return html`<${TextView} />`;
   }
-}
-
-/** A result without a card of its own: the command and its text, as the agent got it. */
-function TextView() {
-  const sc = structured() || {};
-  const text = ((card.result && card.result.content) || []).map((block) => block.text || '').join('\n').trim();
-  const failed = (card.result && card.result.isError) || sc.exit_code;
-  return html`<${Window} title=${html`<b>devlanes ${sc.command || ''}</b>`} label="devlanes output" tools=${html`<${FullscreenButton} />`}>
-    <p class="cmd">$ ${commandLine(sc.args || (card.input && card.input.args) || [])}</p>
-    <pre class=${`out${failed ? ' tone-failure' : ''}`}>${text || 'no output'}</pre>
-    ${sc.exit_code ? html`<p class="tone-failure">exit ${sc.exit_code}</p>` : null}
-  <//>`;
 }
 
 /**

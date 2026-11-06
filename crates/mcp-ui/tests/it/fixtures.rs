@@ -834,6 +834,8 @@ fn dry_run(lane: &LaneSummary, worktree: &str, volume: (&str, u64), data: u64) -
         .filter(|unit| matches!(unit.state.as_str(), "ready" | "starting"))
         .map(|unit| json!({"unit": format!("{}:{}", lane.reference, unit.name), "actor": unit.actor}))
         .collect();
+    // A clean runs no tasks or teardown for a lane whose worktree is gone.
+    let hooks = worktree == "present";
     json!({
         "lane": lane.reference,
         "project": lane.project,
@@ -842,11 +844,13 @@ fn dry_run(lane: &LaneSummary, worktree: &str, volume: (&str, u64), data: u64) -
         "path": lane.path,
         "worktree": worktree,
         "running": running,
-        "tasks": [{"name": "drop-cache", "run": "redis-cli -n 4 flushdb"}],
-        "teardown": [{"name": "database", "container": "postgres"}],
+        "tasks": if hooks { json!([{"name": "drop-cache", "run": "redis-cli -n ${{ lane.index }} flushdb"}]) } else { json!([]) },
+        "teardown": if hooks { json!([{"name": "database", "run": "dropdb acme_${{ lane.index }}", "container": "postgres"}]) } else { json!([]) },
+        "hooks_skipped": if hooks { Value::Null } else { json!("worktree_missing") },
         "containers": [{"name": format!("devlanes-acme-lane{index}-redis"), "kind": "container"}],
         "compose_project": format!("acme-lane{index}"),
         "volumes": [{"name": volume.0, "bytes": volume.1}],
+        "infra_error": null,
         "data_dir": {"path": format!("/home/dev/.devlanes/data/acme/{index}"), "bytes": data},
         "logs_bytes": 2_400_000,
         "ports": {"start": 20_000 + index * 10, "size": 10},

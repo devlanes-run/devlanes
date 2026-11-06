@@ -7,6 +7,13 @@ import { Actors, Button, Glyph, LaneMark, Note, Window } from './ui.js';
 import { FullscreenButton, act, ask, bridge, card, cwd, structured, tellModel } from './store.js';
 import { actorLabel, size } from './util.js';
 
+/** Why a clean would skip a lane's tasks and teardown, as `lane clean --dry-run` says it. */
+const SKIPPED = {
+  worktree_missing: 'the worktree is gone',
+  needs_env: 'the lane needs a start from a shell first',
+  unassigned: 'the worktree has no lane',
+};
+
 /**
  * The bytes a plan frees, or null when the daemon knows none of its sizes.
  * @param {any} plan the `lane clean --dry-run --json` output
@@ -121,7 +128,8 @@ function PlanRow({ lane, plan, result, checked, onToggle }) {
         ${result && html` <span class=${result.startsWith('failed') ? 'tone-failure' : ''}><${Glyph} state=${result === 'cleaning' ? 'cleaning' : done ? 'done' : 'failed'} /> ${result}</span>`}</span>
       ${!plan && html`<span class="dim">reading what a clean deletes…</span>`}
       ${plan && plan.error && html`<span class="tone-failure">${String(plan.error).split('\n')[0]}</span>`}
-      ${plan && plan.worktree === 'missing' && html`<span class="tone-attention">! worktree missing</span>`}
+      ${plan && plan.hooks_skipped && html`<span class="tone-attention">! skips its clean tasks and teardown: ${SKIPPED[plan.hooks_skipped] || String(plan.hooks_skipped).replace(/_/g, ' ')}</span>`}
+      ${plan && plan.infra_error && html`<span class="tone-attention">! containers unknown: ${plan.infra_error}</span>`}
       ${deletes.length > 0 && html`<span class="dim">${deletes.join(' · ')}</span>`}
       ${steps.length > 0 && html`<span class="dim">runs ${steps.join(' · ')}</span>`}
       ${running.length > 0 && html`<span class="tone-attention">! stops ${running.map((r) => r.unit.split(':').pop()).join(', ')} started by <${Actors} actors=${[...new Set(running.map((r) => actorLabel(r.actor)))]} /></span>`}

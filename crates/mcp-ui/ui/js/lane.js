@@ -39,7 +39,7 @@ export function LaneView() {
   const lane = findLane(ref);
   const back = card.drill && html`<${Button} icon="back" label="back to every lane" iconOnly onClick=${() => update({ drill: null })} />`;
   const tools = html`${back}<${FullscreenButton} />`;
-  if (!lane) return html`<${PendingView} tools=${tools} />`;
+  if (!lane) return card.result ? html`<${TextView} />` : html`<${PendingView} tools=${tools} />`;
 
   const now = Date.now();
   const state = laneState(lane);
@@ -89,6 +89,21 @@ export function PendingView({ tools }) {
 }
 
 /**
+ * A result without a card of its own, or a command that failed before it had
+ * anything to show: the command and its text, as the agent got it.
+ */
+export function TextView() {
+  const sc = structured() || {};
+  const text = ((card.result && card.result.content) || []).map((block) => block.text || '').join('\n').trim();
+  const failed = (card.result && card.result.isError) || sc.exit_code;
+  return html`<${Window} title=${html`<b>devlanes ${sc.command || ''}</b>`} label="devlanes output" tools=${html`<${FullscreenButton} />`}>
+    <p class="cmd">$ ${commandLine(sc.args || (card.input && card.input.args) || [])}</p>
+    <pre class=${`out${failed ? ' tone-failure' : ''}`}>${text || 'no output'}</pre>
+    ${sc.exit_code ? html`<p class="tone-failure">exit ${sc.exit_code}</p>` : null}
+  <//>`;
+}
+
+/**
  * Conditions that need a look without stopping the lane.
  * @param {{lane: any}} props
  */
@@ -122,8 +137,7 @@ function Units({ lane }) {
   const units = servicesOf(lane);
   if (!units.length) return html`<p class="dim">no services; ${lane.state === 'idle' ? 'start the lane to run them' : 'this lane runs none'}</p>`;
   const top = card.snapshot && card.snapshot.top;
-  return html`<table class="units">
-    <caption class="sr-only">services of ${lane.reference}</caption>
+  return html`<table class="units" aria-label=${`services of ${lane.reference}`}>
     <tbody>${units.map((unit) => {
       const ref = unitRef(lane.reference, unit.name);
       const state = card.busy[ref] ? 'starting' : unitState(unit);
@@ -131,7 +145,7 @@ function Units({ lane }) {
       const live = unit.state === 'ready' || isBusy(unit.state);
       return html`<tr key=${unit.name}>
         <td class="g"><${Glyph} state=${state} /></td>
-        <th scope="row"><button type="button" class="link name" title=${`logs of ${ref}`} onClick=${() => update({ drill: { ...card.drill, unit: ref } })}>${unit.display_name || unit.name}</button>${!isQuiet(state) && html` <span class=${`word tone-${state === 'failed' ? 'failure' : 'plain'}`}>${card.busy[ref] ? `${card.busy[ref]}…` : state}${unit.exit_code != null && state !== 'done' ? ` · exit ${unit.exit_code}` : ''}</span>`}</th>
+        <th scope="row"><button type="button" class="link name" title=${`logs of ${ref}`} onClick=${() => update({ drill: { ...card.drill, unit: ref } })}>${unit.display_name || unit.name}</button>${!isQuiet(state) && html` <span class=${`word tone-${state === 'failed' ? 'failure' : 'plain'}`}>${card.busy[ref] ? `${card.busy[ref]}…` : state}${unit.exit_code != null && state !== 'done' && html`<span class="exit"> · exit ${unit.exit_code}</span>`}</span>`}</th>
         <td class="port dim">${port && `:${port}`}</td>
         <td class="url">${unit.public_url && unit.state === 'ready' && html`<button type="button" class="link url" onClick=${() => openUrl(unit.public_url)}>${shortUrl(unit.public_url)}</button>`}</td>
         <td class="cpu"><${Spark} values=${cpuHistory(top, lane.reference, unit.name)} label=${`${unit.name} cpu`} /></td>

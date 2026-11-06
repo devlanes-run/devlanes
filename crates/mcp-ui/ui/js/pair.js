@@ -39,15 +39,16 @@ function clock(ms) {
 export function PairView() {
   const sc = structured() || {};
   const [pairing, setPairing] = useState({ data: sc.data, at: card.resultAt || Date.now() });
-  const [now, setNow] = useState(Date.now());
+  const [, setTick] = useState(0);
   const [copied, setCopied] = useState(false);
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(timer);
   }, []);
 
   const data = pairing.data || {};
-  const left = (data.valid_ms ?? 0) - (now - pairing.at);
+  // From the time the code arrived, so the countdown needs no clock shared with the box.
+  const left = (data.valid_ms ?? 0) - (Date.now() - pairing.at);
   const expired = !data.code || left <= 0;
   const text = (card.result && card.result.content || []).map((block) => block.text || '').join('\n').trim();
   const renew = async () => {
