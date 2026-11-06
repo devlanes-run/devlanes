@@ -934,12 +934,12 @@ devlanes completions [OPTIONS] <SHELL>
 
 Serve devlanes to an AI agent as an MCP server on stdin and stdout.
 
-The agent gets two tools that take a devlanes command line: devlanes runs any
-command, devlanes_read only the ones that change nothing. Each call runs this
-binary as a separate process with --output agent, so the server itself never
-connects to the daemon or starts one. Commands that need a terminal, such as
-ui, attach, env shell and setup, are refused, and so are follows without
---timeout.
+The agent gets a tool per common command, such as start, exec, logs, stop and
+debug_why, whose arguments are this command's options, and a devlanes tool that
+takes any other command line. Each call runs this binary as a separate process
+with --output agent, so the server itself never connects to the daemon or
+starts one. Commands that need a terminal, such as ui, attach, env shell and
+setup, are refused, and so are follows without --timeout.
 
 A call runs in the cwd it names, else in --path, else in $CLAUDE_PROJECT_DIR,
 else in the directory the agent started the server in. --lane adds that lane to
@@ -953,7 +953,7 @@ read your PowerShell profile. docs/guides/mcp.md has the details.
 devlanes mcp [OPTIONS]
 ```
 
-- `--read-only`: Offer only the devlanes_read tool, which refuses commands that change something
+- `--read-only`: Offer only the tools of commands that change nothing; the devlanes tool refuses the others
 - `--path <DIR>`: Run calls that name no cwd in this directory (the global --lane picks a lane instead)
 
 ```text

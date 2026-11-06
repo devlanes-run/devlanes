@@ -467,12 +467,12 @@ pub struct ExecArgs {
 const MCP_ABOUT: &str = "\
 Serve devlanes to an AI agent as an MCP server on stdin and stdout.
 
-The agent gets two tools that take a devlanes command line: devlanes runs any
-command, devlanes_read only the ones that change nothing. Each call runs this
-binary as a separate process with --output agent, so the server itself never
-connects to the daemon or starts one. Commands that need a terminal, such as
-ui, attach, env shell and setup, are refused, and so are follows without
---timeout.
+The agent gets a tool per common command, such as start, exec, logs, stop and
+debug_why, whose arguments are this command's options, and a devlanes tool that
+takes any other command line. Each call runs this binary as a separate process
+with --output agent, so the server itself never connects to the daemon or
+starts one. Commands that need a terminal, such as ui, attach, env shell and
+setup, are refused, and so are follows without --timeout.
 
 A call runs in the cwd it names, else in --path, else in $CLAUDE_PROJECT_DIR,
 else in the directory the agent started the server in. --lane adds that lane to
@@ -503,7 +503,7 @@ Examples:
 
 #[derive(Debug, Args)]
 pub struct McpArgs {
-    /// Offer only the devlanes_read tool, which refuses commands that change something
+    /// Offer only the tools of commands that change nothing; the devlanes tool refuses the others
     #[arg(long)]
     pub read_only: bool,
     /// Run calls that name no cwd in this directory (the global --lane picks a lane instead)
@@ -1780,7 +1780,7 @@ impl Cli {
 
 impl Command {
     /// Whether the command only reads: it starts, stops and changes nothing a later
-    /// command would see (`devlanes mcp`'s `devlanes_read` runs only these). Every
+    /// command would see (`devlanes mcp --read-only` runs only these). Every
     /// command is listed, so a new one does not compile until it is classified.
     pub fn is_read_only(&self) -> bool {
         match self {
