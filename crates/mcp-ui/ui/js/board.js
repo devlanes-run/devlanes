@@ -86,7 +86,8 @@ const LINK_WORDS = {
 /**
  * A lane of a linked box: read-only, so its only button opens it, with the URL
  * that works on this machine. A lane this machine does not mirror, and every
- * lane of a box whose link is down, is dimmed with why. `remote ls` has no
+ * lane of a box whose link is down, is dimmed with why and has no open button,
+ * since its URL may not answer. `remote ls` has no
  * branch for box lanes, so that cell says where to manage the lane.
  * @param {{lane: any}} props
  */
@@ -94,7 +95,7 @@ function BoxRow({ lane }) {
   const active = activeServices(lane);
   const ready = active.filter((unit) => unit.state === 'ready').length;
   const down = lane.link !== 'connected';
-  const url = lane.skipped ? undefined : laneUrl(lane);
+  const url = lane.skipped || down ? undefined : laneUrl(lane);
   const words = lane.skipped
     ? `not mirrored: ${lane.skipped.reason || 'its hostnames are served already'}`
     : `${laneWords(lane, Date.now())}${down ? ' · last known' : ''}`;

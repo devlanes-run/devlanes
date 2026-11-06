@@ -45,6 +45,9 @@ pub struct Server {
     config: Arc<Config>,
     calls: Calls,
     shell_env: shell_env::Cache,
+    /// Keys the hash that ties a consent answer (2026-07-28) to its command
+    /// line, so a client cannot carry a yes over to another command.
+    consent_key: std::hash::RandomState,
 }
 
 /// `{args, cwd?}`, the arguments of both model-facing tools.
@@ -77,7 +80,15 @@ impl Server {
             config: Arc::new(config),
             calls: Calls::default(),
             shell_env,
+            consent_key: std::hash::RandomState::new(),
         }
+    }
+
+    /// The request state of a consent question about `call` (2026-07-28):
+    /// the flag accepting adds and a keyed hash of the command line.
+    fn consent_state(&self, call: &Call, flag: &str) -> String {
+        use std::hash::BuildHasher as _;
+        format!("{flag} {:016x}", self.consent_key.hash_one(&call.args))
     }
 
     /// How many devlanes processes calls are running now.
@@ -161,7 +172,7 @@ impl Server {
         let limit = call.limit(self.default_timeout(&client));
         let runner = self.runner(&client);
         // An answer the client gives on its second call (2026-07-28) comes first.
-        match consent_answer(request) {
+        match consent_answer(request, |flag| self.consent_state(&call, flag)) {
             Some((Some(true), flag)) => call.confirm(&flag),
             Some((answer, _)) => return Ok(declined(&call, answer.is_none()).into()),
             None => {
@@ -172,7 +183,7 @@ impl Server {
                     } else {
                         question.clone()
                     };
-                    match ask(context, message, "--yes").await {
+                    match ask(context, message, self.consent_state(&call, "--yes")).await {
                         Answer::Accepted => call.confirm("--yes"),
                         Answer::Declined => return Ok(declined(&call, false).into()),
                         Answer::Cancelled => return Ok(declined(&call, true).into()),
@@ -206,7 +217,7 @@ impl Server {
                 .unwrap_or("--yes")
                 .to_owned();
             let message = format!("devlanes {}\n{}", call.args.join(" "), output.stderr.trim());
-            match ask(context, message, &flag).await {
+            match ask(context, message, self.consent_state(&call, &flag)).await {
                 Answer::Accepted => {
                     call.confirm(&flag);
                     (output, notes) = match execute(&runner, &call, &cwd, limit, context).await {
@@ -449,12 +460,35 @@ pub(crate) async fn execute(
     limit: Option<Duration>,
     context: &RequestContext<RoleServer>,
 ) -> Result<(Output, Vec<String>), String> {
+    let started = std::time::Instant::now();
     let mut notes = Vec::new();
     let mut phases = Phases::of(call.cli.lane.as_deref());
-    let mut output = run(runner, call, cwd, limit, true, &mut phases, context).await?;
-    let Some(needs_env) = error_of(&output.data, "needs_env").filter(|_| !output.cancelled) else {
+    let progress = |limit: Option<Duration>| limit.filter(|_| call.starts());
+    let mut output = run(
+        runner,
+        &call.args,
+        cwd,
+        progress(limit),
+        true,
+        &mut phases,
+        context,
+    )
+    .await?;
+    // A command that sends no env, such as reload, would fail the same way again.
+    let Some(needs_env) =
+        error_of(&output.data, "needs_env").filter(|_| !output.cancelled && call.sends_env())
+    else {
         return Ok((output, notes));
     };
+    // The second run gets what is left of the first's limit, at least 1 s:
+    // the host's timeout covers the whole call, and so does a --timeout the
+    // agent gave, which says how long it wants to wait for the call.
+    let limit = limit.map(|limit| {
+        limit
+            .saturating_sub(started.elapsed())
+            .max(Duration::from_secs(1))
+    });
+    let args = limit.map_or_else(|| call.args.clone(), |limit| call.with_timeout(limit));
     let lane = needs_env
         .pointer("/data/lane")
         .and_then(Value::as_str)
@@ -470,11 +504,29 @@ pub(crate) async fn execute(
     match resolved {
         Ok(shell) => {
             let runner = runner.with_shell_env(&shell.env);
-            output = run(&runner, call, cwd, limit, false, &mut phases, context).await?;
+            output = run(
+                &runner,
+                &args,
+                cwd,
+                progress(limit),
+                false,
+                &mut phases,
+                context,
+            )
+            .await?;
             notes.push(shell_env::resolved_note(&shell.shell));
         }
         Err(error) => {
-            output = run(runner, call, cwd, limit, false, &mut phases, context).await?;
+            output = run(
+                runner,
+                &args,
+                cwd,
+                progress(limit),
+                false,
+                &mut phases,
+                context,
+            )
+            .await?;
             notes.push(
                 "note: the lane had no environment from a shell, so it got the environment of \
                  the devlanes mcp server"
@@ -495,24 +547,25 @@ fn command_not_found(output: &Output) -> bool {
     output.stdout.contains(NOT_FOUND) || output.stderr.contains(NOT_FOUND)
 }
 
-/// One run of `call`, with progress for starts when the request asked for it.
+/// One run of `args`. With `progress`, the limit of a start, its phases go to
+/// the client when the request asked for progress.
 async fn run(
     runner: &Runner,
-    call: &Call,
+    args: &[String],
     cwd: &Path,
-    limit: Option<Duration>,
+    progress: Option<Duration>,
     from_lane: bool,
     phases: &mut Phases,
     context: &RequestContext<RoleServer>,
 ) -> Result<Output, String> {
     let token = context.meta.get_progress_token();
     let follow = async {
-        if let (true, Some(token), Some(limit)) = (call.starts(), token, limit) {
+        if let (Some(token), Some(limit)) = (token, progress) {
             progress::follow(runner, cwd, limit, context.peer.clone(), token, phases).await;
         }
         std::future::pending::<()>().await;
     };
-    let run = runner.run(cwd, &call.args, from_lane, &context.ct);
+    let run = runner.run(cwd, args, from_lane, &context.ct);
     // `follow` never ends, so the command's end decides.
     let output = tokio::select! {
         output = run => output,
@@ -626,9 +679,21 @@ fn declined(call: &Call, cancelled: bool) -> CallToolResult {
 
 /// The answer in a retried call (2026-07-28): yes, no, or `None` when the
 /// question was cancelled, and the flag that accepting adds, kept in the
-/// request state.
-fn consent_answer(request: &CallToolRequestParams) -> Option<(Option<bool>, String)> {
+/// request state. `None` when the call carries no answer, or a state that is
+/// not `state_of(flag)` for this command line, which then asks again.
+fn consent_answer(
+    request: &CallToolRequestParams,
+    state_of: impl Fn(&str) -> String,
+) -> Option<(Option<bool>, String)> {
     let answer = request.input_responses.as_ref()?.get(CONSENT)?;
+    let state = request.request_state.as_deref()?;
+    let (flag, _) = state.split_once(' ')?;
+    let valid = flag.starts_with("--")
+        && flag.len() > 2
+        && !flag.contains(|c: char| c.is_whitespace() || c == '=');
+    if !valid || state != state_of(flag) {
+        return None;
+    }
     let accepted = match serde_json::from_value::<ElicitResult>(answer.clone()) {
         Ok(answer) => match answer.action {
             ElicitationAction::Accept => Some(true),
@@ -637,16 +702,7 @@ fn consent_answer(request: &CallToolRequestParams) -> Option<(Option<bool>, Stri
         },
         Err(_) => Some(false),
     };
-    let flag = request
-        .request_state
-        .clone()
-        .filter(|flag| {
-            flag.starts_with("--")
-                && flag.len() > 2
-                && !flag.contains(|c: char| c.is_whitespace() || c == '=')
-        })
-        .unwrap_or_else(|| "--yes".into());
-    Some((accepted, flag))
+    Some((accepted, flag.to_owned()))
 }
 
 /// The consent question with what is at stake: for `lane clean`, what its dry
@@ -680,11 +736,11 @@ fn can_ask(context: &RequestContext<RoleServer>) -> bool {
 
 /// Asks the user `message` through the client. Before 2026-07-28 that is an
 /// `elicitation/create` request; from then on a result that makes the client ask
-/// and call again, with `flag` in its state.
+/// and call again with `state`, from [`Server::consent_state`].
 pub(crate) async fn ask(
     context: &RequestContext<RoleServer>,
     message: String,
-    flag: &str,
+    state: String,
 ) -> Answer {
     if !can_ask(context) {
         return Answer::Unsupported;
@@ -703,10 +759,7 @@ pub(crate) async fn ask(
             CONSENT.into(),
             InputRequest::Elicitation(ElicitRequest::new(params)),
         );
-        return Answer::Pending(InputRequiredResult::new(
-            Some(requests),
-            Some(flag.to_owned()),
-        ));
+        return Answer::Pending(InputRequiredResult::new(Some(requests), Some(state)));
     }
     let asked = context.peer.create_elicitation(params);
     let answer = tokio::select! {

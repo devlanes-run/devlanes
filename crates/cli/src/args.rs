@@ -476,7 +476,11 @@ ui, attach, env shell and setup, are refused, and so are follows without
 
 A call runs in the cwd it names, else in --path, else in $CLAUDE_PROJECT_DIR,
 else in the directory the agent started the server in. --lane adds that lane to
-calls that name no cwd.";
+calls that name no cwd.
+
+A lane no shell started gets your login shell's environment on macOS and Linux;
+on Windows set DEVLANES_SHELL_ENV=pwsh (or powershell) in the server's env to
+read your PowerShell profile. docs/guides/mcp.md has the details.";
 
 const MCP_AFTER: &str = "\
 Register it with your agent:
@@ -495,7 +499,7 @@ Register it with your agent:
 
 Examples:
   devlanes mcp --read-only             only commands that change nothing
-  devlanes mcp --path ~/src/acme       calls without a cwd use this worktree's lane";
+  devlanes mcp --path /src/acme        calls without a cwd use this worktree's lane";
 
 #[derive(Debug, Args)]
 pub struct McpArgs {

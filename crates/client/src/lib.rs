@@ -929,6 +929,10 @@ async fn start_daemon(
         Some(replace) => command.env(devlanes_proto::REPLACE_ENV, replace.pid.to_string()),
         None => command.env_remove(devlanes_proto::REPLACE_ENV),
     };
+    // A session of its own from the first instruction, so a signal to this
+    // command's process group, such as `devlanes mcp` killing a cancelled
+    // call's group, cannot reach a daemon that has not detached yet.
+    devlanes_sys::new_session(command.as_std_mut());
     let mut child = command
         .args(["daemon", "run"])
         .env("DEVLANES_HOME", &paths.home)

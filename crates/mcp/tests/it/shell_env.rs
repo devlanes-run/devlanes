@@ -4,10 +4,14 @@
 use std::{
     collections::BTreeMap,
     path::Path,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use devlanes_mcp::shell_env::{ShellEnv, ShellEnvError};
+use rmcp::{
+    model::{CallToolRequestParams, ClientRequest, Request},
+    service::PeerRequestOptions,
+};
 use serde_json::{Value, json};
 
 use crate::{LIMIT, Lifecycle, TestClient, connect, failed, text};
@@ -62,6 +66,82 @@ async fn a_lane_without_env_gets_the_login_shells() {
             [lane_then_profile.clone(), lane_then_profile].concat()
         );
         assert_eq!(RESOLVED.load(Ordering::SeqCst), 1);
+    })
+    .await
+    .expect("in time");
+}
+
+/// How often [`slow_resolver`] ran.
+static SLOW_RESOLVED: AtomicUsize = AtomicUsize::new(0);
+
+/// Lets [`slow_resolver`] finish.
+static SLOW_RELEASED: AtomicBool = AtomicBool::new(false);
+
+/// A login shell that takes until the test releases it, at most 20 s.
+fn slow_resolver(_exe: &Path, env: &BTreeMap<String, String>) -> Result<ShellEnv, ShellEnvError> {
+    SLOW_RESOLVED.fetch_add(1, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while !SLOW_RELEASED.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let mut env = env.clone();
+    env.insert("FAKE_PROFILE".into(), "1".into());
+    Ok(ShellEnv {
+        shell: "zsh".into(),
+        env,
+    })
+}
+
+#[tokio::test]
+/// A call cancelled while the login shell is read leaves the read going: the
+/// next call gets its result, and the shell ran once.
+async fn a_cancelled_call_keeps_the_shell_read() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.env.insert("FAKE_NEEDS_ENV".into(), "1".into());
+            config.shell_env = slow_resolver;
+        })
+        .await;
+        let params = CallToolRequestParams::new("devlanes")
+            .with_arguments(serde_json::from_value(json!({"args": ["start"]})).expect("args"));
+        let handle = harness
+            .client
+            .send_cancellable_request(
+                ClientRequest::CallToolRequest(Request::new(params)),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .expect("sent");
+        while SLOW_RESOLVED.load(Ordering::SeqCst) == 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        handle.cancel(Some("test".into())).await.expect("cancel");
+        // The server handles messages in order, so the cancel arrived first.
+        harness.client.list_tools(None).await.expect("tools");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        SLOW_RELEASED.store(true, Ordering::SeqCst);
+        let result = harness.call("devlanes", &["start"]).await;
+        assert!(!failed(&result), "{}", text(&result));
+        assert!(
+            text(&result).contains("read it from your"),
+            "{}",
+            text(&result)
+        );
+        assert_eq!(SLOW_RESOLVED.load(Ordering::SeqCst), 1);
+        let runs: Vec<(Value, Value)> = harness
+            .runs()
+            .iter()
+            .map(|run| (run["from_lane"].clone(), run["profile"].clone()))
+            .collect();
+        // The cancelled call ran only its first try.
+        assert_eq!(
+            runs,
+            [
+                (json!("1"), Value::Null),
+                (json!("1"), Value::Null),
+                (Value::Null, json!("1"))
+            ]
+        );
     })
     .await
     .expect("in time");
@@ -153,7 +233,14 @@ fn a_hanging_profile_times_out() {
         return;
     }
     let home = tempfile::tempdir().expect("home");
-    std::fs::write(home.path().join(".bash_profile"), "sleep 30\n").expect("profile");
+    let pid_file = home.path().join("sleep.pid");
+    // Without a terminal bash has no job control, so the sleep stays in the
+    // shell's process group.
+    std::fs::write(
+        home.path().join(".bash_profile"),
+        "sleep 30 &\necho $! > \"$HOME/sleep.pid\"\nwait $!\n",
+    )
+    .expect("profile");
     let mut env = unix_env(home.path());
     env.insert(devlanes_mcp::shell_env::TIMEOUT_ENV.into(), "1".into());
     let started = std::time::Instant::now();
@@ -166,10 +253,22 @@ fn a_hanging_profile_times_out() {
         })
     );
     assert!(started.elapsed() < std::time::Duration::from_secs(10));
+    let pid = std::fs::read_to_string(&pid_file)
+        .ok()
+        .and_then(|pid| pid.trim().parse::<i32>().ok())
+        .and_then(rustix::process::Pid::from_raw)
+        .expect("the profile wrote the sleep's PID");
+    // Gone once its parent, the killed shell, is reaped and init reaps it.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while rustix::process::test_kill_process(pid).is_ok() {
+        assert!(std::time::Instant::now() < deadline, "the sleep still runs");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
 }
 
 #[test]
 #[cfg(windows)]
+#[ignore = "needs pwsh or Windows PowerShell, and runs this machine's PowerShell profile"]
 /// With `DEVLANES_SHELL_ENV=pwsh` or `=powershell` the payload's environment
 /// comes back through that PowerShell, when it is installed. Its profile
 /// cannot be pointed at a test file (PowerShell finds it through the Documents
@@ -179,7 +278,7 @@ fn reads_through_powershell() {
     for shell in ["pwsh", "powershell"] {
         let mut env: BTreeMap<String, String> = std::env::vars().collect();
         env.insert(devlanes_mcp::shell_env::SWITCH_ENV.into(), shell.into());
-        env.insert(devlanes_mcp::shell_env::TIMEOUT_ENV.into(), "60".into());
+        env.insert(devlanes_mcp::shell_env::TIMEOUT_ENV.into(), "15".into());
         env.insert("DEVLANES_TEST_ROUNDTRIP".into(), "acme".into());
         match devlanes_mcp::shell_env::resolve(Path::new(crate::FAKE), &env) {
             Err(ShellEnvError::NotFound(shell)) => eprintln!("skipped: no {shell}"),

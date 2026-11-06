@@ -23,13 +23,19 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let var = |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     // A process the command leaves running with its stdout: ticks into
-    // `FAKE_GRANDCHILD_TICKS` for `FAKE_GRANDCHILD_MS` (60 s by default).
+    // `FAKE_GRANDCHILD_TICKS` for `FAKE_GRANDCHILD_MS` (60 s by default), or
+    // until the file `FAKE_GRANDCHILD_STOP` names exists.
     if args.first().map(String::as_str) == Some(GRANDCHILD) {
         let ms = var("FAKE_GRANDCHILD_MS")
             .and_then(|ms| ms.parse().ok())
             .unwrap_or(60_000);
         let until = Instant::now() + Duration::from_millis(ms);
-        while Instant::now() < until {
+        let stop = var("FAKE_GRANDCHILD_STOP");
+        while Instant::now() < until
+            && !stop
+                .as_ref()
+                .is_some_and(|stop| std::path::Path::new(stop).exists())
+        {
             if let Some(ticks) = var("FAKE_GRANDCHILD_TICKS") {
                 append(&ticks, "tick");
             }
@@ -40,10 +46,18 @@ fn main() -> ExitCode {
     if var("FAKE_GRANDCHILD_TICKS").is_some()
         && let Ok(exe) = std::env::current_exe()
     {
-        let _ = std::process::Command::new(exe)
+        let mut grandchild = std::process::Command::new(exe);
+        grandchild
             .arg(GRANDCHILD)
-            .stdin(std::process::Stdio::null())
-            .spawn();
+            .stdin(std::process::Stdio::null());
+        // `FAKE_GRANDCHILD_NEW_GROUP`: a process group of its own, which a
+        // Ctrl-Break to the command's group does not reach.
+        #[cfg(windows)]
+        if var("FAKE_GRANDCHILD_NEW_GROUP").is_some() {
+            use std::os::windows::process::CommandExt as _;
+            grandchild.creation_flags(0x0000_0200);
+        }
+        let _ = grandchild.spawn();
     }
     let has = |flag: &str| args.iter().any(|arg| arg == flag);
     let cwd = std::env::current_dir()

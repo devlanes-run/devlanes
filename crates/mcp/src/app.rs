@@ -305,7 +305,10 @@ async fn run(
 }
 
 /// The command line of a card's button. A target with `:` names a unit, any
-/// other a lane. `clean` passes `--yes`: the click in the card is the consent.
+/// other a lane. `clean` passes `--yes` and `pair` runs without asking: only
+/// the user clicks the card's buttons, so the click is the consent. Accepted
+/// risk: a host that let the agent call app tools could pair or clean
+/// without a question.
 fn action_args(action: &str, target: Option<&str>) -> Option<Vec<String>> {
     let owned = |args: &[&str]| args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
     let units = |command: &str| match target {
