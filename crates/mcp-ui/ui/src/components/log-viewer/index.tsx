@@ -66,7 +66,11 @@ export function LogViewer({
   useEffect(() => {
     setPicked(null);
     if (!filter) {
+      // A filtered fetch still in flight was cancelled by the cleanup, so its finally
+      // never runs: reset what it would have reset.
       setFound(null);
+      setLoading(false);
+      setError('');
       return undefined;
     }
     let gone = false;
