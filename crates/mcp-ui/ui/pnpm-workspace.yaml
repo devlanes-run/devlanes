@@ -1,0 +1,3 @@
+# Makes this folder its own pnpm root. No dependency needs an install script:
+# rspack, Biome, TypeScript and Sass ship native binaries as optional packages.
+allowBuilds: {}

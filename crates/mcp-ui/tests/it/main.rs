@@ -5,20 +5,53 @@ mod preview;
 
 use std::{fs, path::Path};
 
+use base64::Engine;
 use sha2::{Digest, Sha256};
 
 /// Most hosts load the resource on every card; this keeps it from growing unnoticed.
 const BUDGET_BYTES: usize = 80 * 1024;
 
-/// The only URLs the card may contain: XML namespaces Preact sets on SVG
-/// elements, which are names, and the loopback addresses of mirrored box
-/// ports, which the open button hands to the host. The card fetches neither.
+/// The only URLs the card may contain: XML namespaces Preact sets on elements,
+/// which are names. The card fetches none of them.
 const ALLOWED_URLS: &[&str] = &[
     "http://www.w3.org/2000/svg",
-    "http://www.w3.org/1999/xlink",
-    "http://127.0.0.1:${port.port}",
-    "http://[::1]:${port.port}",
+    "http://www.w3.org/1999/xhtml",
+    "http://www.w3.org/1998/Math/MathML",
 ];
+
+/// The loopback addresses of mirrored box ports, which the open button hands to
+/// the host; the minifier renames the port variable inside `${...}`.
+const ALLOWED_URL_TEMPLATES: &[&str] = &["http://127.0.0.1:${", "http://[::1]:${"];
+
+/// The committed build of `ui/`, as `pnpm build` wrote it.
+fn committed() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/dist/lane.html");
+    fs::read_to_string(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+/// The text of every `<tag>...</tag>` element in `html`.
+fn bodies<'a>(html: &'a str, tag: &str) -> Vec<&'a str> {
+    let (open, close) = (format!("<{tag}"), format!("</{tag}>"));
+    let mut found = Vec::new();
+    let mut rest = html;
+    while let Some(start) = rest.find(&open) {
+        let after = &rest[start..];
+        let body_start = after.find('>').expect("the tag closes") + 1;
+        let body_end = after.find(&close).expect("the element ends");
+        found.push(&after[body_start..body_end]);
+        rest = &after[body_end + close.len()..];
+    }
+    found
+}
+
+/// The `'sha256-...'` source of a CSP hash.
+fn hash_source(text: &str) -> String {
+    let digest = Sha256::digest(text.as_bytes());
+    format!(
+        "'sha256-{}'",
+        base64::engine::general_purpose::STANDARD.encode(digest)
+    )
+}
 
 #[test]
 fn the_card_fits_its_size_budget() {
@@ -30,11 +63,13 @@ fn the_card_fits_its_size_budget() {
 }
 
 /// The error pages and the card share the website's tokens but cannot share one SCSS
-/// partial (each crate compiles its own stylesheet), so this keeps the copies equal.
+/// partial (grass compiles the pages, Sass in `ui/` the card), so this keeps the
+/// copies equal.
 #[test]
 fn the_card_and_the_error_pages_share_tokens() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let card = fs::read_to_string(root.join("ui/styles/_tokens.scss")).expect("read the tokens");
+    let card =
+        fs::read_to_string(root.join("ui/src/styles/_tokens.scss")).expect("read the tokens");
     let pages = fs::read_to_string(root.join("../pages/styles/page.scss")).expect("read pages");
     let card_value = |name: &str| {
         card.lines()
@@ -59,25 +94,61 @@ fn the_card_and_the_error_pages_share_tokens() {
     }
 }
 
+/// The binary serves the committed file with only the version filled in. A file
+/// a merge left stale or broken fails here; CI's `pnpm build` check catches one
+/// that no longer matches `ui/src`.
 #[test]
-fn the_vendored_module_is_the_pinned_release() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("ui/vendor");
-    let module = fs::read(dir.join("standalone.module.js")).expect("read the vendored module");
-    let readme = fs::read_to_string(dir.join("README.md")).expect("read ui/vendor/README.md");
-    let pinned = readme
-        .lines()
-        .find_map(|line| line.strip_prefix("SHA-256: "))
-        .map(|hash| hash.trim().trim_matches('`'))
-        .expect("ui/vendor/README.md records the SHA-256");
-    let actual: String = Sha256::digest(&module)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    assert_eq!(actual, pinned, "ui/vendor/standalone.module.js changed");
-    // The card ships the checked file: its code up to the export statement is inline.
-    let text = String::from_utf8(module).expect("the module is UTF-8");
-    let body = &text[..text.rfind("export{").expect("the module exports")];
-    assert!(devlanes_mcp_ui::html().contains(body.trim_end()));
+fn the_card_is_the_committed_build() {
+    let committed = committed();
+    assert_eq!(
+        committed
+            .matches(devlanes_mcp_ui::VERSION_PLACEHOLDER)
+            .count(),
+        1,
+        "ui/dist/lane.html holds the version placeholder once"
+    );
+    assert_eq!(
+        devlanes_mcp_ui::html(),
+        committed.replace(
+            devlanes_mcp_ui::VERSION_PLACEHOLDER,
+            devlanes_version::VERSION
+        )
+    );
+    for marker in ["<<<<<<<", ">>>>>>>"] {
+        assert!(
+            !committed.contains(marker),
+            "ui/dist/lane.html has merge conflict markers; run `pnpm build` in crates/mcp-ui/ui"
+        );
+    }
+}
+
+/// The policy allows the card's own inline script and stylesheet by hash and
+/// nothing else, so a hand edit of the built file stops it from running.
+#[test]
+fn the_card_policy_allows_only_its_own_code() {
+    let html = devlanes_mcp_ui::html();
+    let csp = html
+        .split("http-equiv=\"Content-Security-Policy\" content=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the card has a Content-Security-Policy meta tag");
+    let directive = |name: &str| {
+        csp.split(';')
+            .map(str::trim)
+            .find_map(|part| part.strip_prefix(name))
+            .map(str::trim)
+            .unwrap_or_else(|| panic!("the policy has no {name}"))
+    };
+    assert_eq!(directive("default-src"), "'none'");
+    for (name, tag) in [("script-src", "script"), ("style-src", "style")] {
+        let expected: Vec<String> = bodies(html, tag).into_iter().map(hash_source).collect();
+        assert!(!expected.is_empty(), "the card has no inline {tag}");
+        assert_eq!(
+            directive(name),
+            expected.join(" "),
+            "{name} lists exactly the hashes of the inline {tag} elements"
+        );
+    }
 }
 
 #[test]
@@ -90,13 +161,19 @@ fn the_card_makes_no_requests() {
             .take_while(|c| !matches!(c, '"' | '\'' | '`' | ' ' | ')' | '<'))
             .collect();
         if url.starts_with("http://") || url.starts_with("https://") {
-            assert!(ALLOWED_URLS.contains(&url.as_str()), "the card names {url}");
+            assert!(
+                ALLOWED_URLS.contains(&url.as_str())
+                    || ALLOWED_URL_TEMPLATES
+                        .iter()
+                        .any(|prefix| url.starts_with(prefix)),
+                "the card names {url}"
+            );
         }
         rest = &rest[start + 4..];
     }
     assert!(
-        html.contains("default-src &#39;none&#39;"),
-        "the card's own policy blocks every request"
+        !html.contains(" src=") && !html.contains(" href="),
+        "the card loads no file"
     );
 }
 
