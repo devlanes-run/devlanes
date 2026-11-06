@@ -5,7 +5,7 @@ import type { LogsPage, StatusPage, TopPage } from './proto';
 import type { RemoteList } from './remote';
 
 /** The card a result asks for; null renders nothing. */
-export type View = 'lane' | 'board' | 'failure' | 'clean' | 'pair' | null;
+export type View = 'lane' | 'board' | 'failure' | 'clean' | 'pair' | 'top' | null;
 
 /** `structuredContent` of a `devlanes` or `devlanes_read` result. */
 export interface Envelope {

@@ -45,7 +45,7 @@ function emptyBoard(): boolean {
 
 /**
  * The `app_snapshot` arguments of the current view, or null when it does not poll.
- * Only the fullscreen board draws CPU, so only it asks for metrics.
+ * Only the top card and the fullscreen board draw CPU, so only they ask for metrics.
  */
 function snapshotArgs(): Record<string, unknown> | null {
   if (card.superseded) return null;
@@ -55,6 +55,8 @@ function snapshotArgs(): Record<string, unknown> | null {
     case 'lane':
     case 'failure':
       return { cwd: cwd(), lane: resultLane(structured()) };
+    case 'top':
+      return { cwd: cwd(), metrics: true };
     case 'clean':
       // Read-only servers have no clean_plan, so the planner shows the result alone.
       return structured()?.read_only ? null : { cwd: cwd() };

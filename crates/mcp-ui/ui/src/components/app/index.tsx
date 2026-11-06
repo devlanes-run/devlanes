@@ -6,6 +6,7 @@ import { LaneCard } from '../lane-card';
 import { LanesBoard } from '../lanes-board';
 import { PairingCard } from '../pairing-card';
 import { TextCard } from '../text-card';
+import { TopCard } from '../top-card';
 
 /** An older card once a newer one for its lane is in the chat: one line, no buttons. */
 function Superseded() {
@@ -40,6 +41,8 @@ export function App() {
       return <CleanPlanner />;
     case 'pair':
       return <PairingCard />;
+    case 'top':
+      return <TopCard />;
     // The host shows its own progress while a call runs and the result's text after
     // it, so these render nothing and report a height of 0.
     case 'pending':

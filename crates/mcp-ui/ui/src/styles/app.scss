@@ -401,6 +401,41 @@ ol {
   }
 }
 
+// The top card's CPU and memory cells: a 40 px bar in the load's tone, then the number.
+.row .use {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--dl-2);
+
+  // Fixed number widths keep the bars of every row in one column.
+  > .n {
+    min-width: 4.5ch;
+    text-align: right;
+  }
+
+  &.mem > .n {
+    min-width: 8ch;
+  }
+}
+
+.meter {
+  display: block;
+  flex: none;
+  width: 40px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: var(--border-radius-full);
+  background: var(--color-border-tertiary);
+
+  > i {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: currentColor;
+  }
+}
+
 // Rows: one hairline above each, 8 px above and below, nothing else.
 .rows {
   margin-top: var(--dl-3);

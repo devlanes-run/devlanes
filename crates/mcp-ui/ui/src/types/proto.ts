@@ -147,16 +147,39 @@ export interface WhyResult {
 
 /** One row of `devlanes debug top --json`: `history` holds `[time_ms, cpu_percent, ...]`. */
 export interface TopRow {
+  /** The lane's reference; a container's Compose group, which shared infra shares. */
   lane: string;
   unit?: string;
+  /** `service`, `exec`, `task` or `container`. */
+  kind?: string;
+  role?: string | null;
+  shared?: boolean;
+  /** Share of one CPU core, so above 100 on several cores; absent on ended rows. */
+  cpu_percent?: number | null;
+  memory_bytes?: number | null;
+  /** Not running now: kept while its newest sample is inside the range. */
   ended?: boolean;
+  /** Of a lane that no longer exists. */
+  removed?: boolean;
   history?: number[][];
+}
+
+/** `system` of `devlanes debug top --json`, sent where the daemon reads system pressure. */
+export interface TopSystem {
+  cpus?: number | null;
+  memory_total_bytes?: number | null;
+  available_memory_bytes?: number | null;
+  /** Busy share of all CPUs, 0-100. */
+  cpu_percent?: number | null;
+  /** `normal`, `warn` or `critical`. */
+  memory_pressure?: string | null;
 }
 
 /** `devlanes debug top --json`. */
 export interface TopPage {
   lanes?: TopRow[];
   units?: TopRow[];
+  system?: TopSystem;
 }
 
 /** `devlanes daemon pair --json`. */

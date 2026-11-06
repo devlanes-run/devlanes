@@ -1,5 +1,5 @@
-// The lane card: the lane's state as a pill, its start progress while it comes up, one
-// row per service with its URL, and at most two buttons. Shown for start, restart,
+// The lane card: the lane's state as a pill with how many services run, its start
+// progress while it comes up, one row per service with its URL, and at most two buttons. Shown for start, restart,
 // reload and the status of one lane.
 
 import { useEffect, useState } from 'preact/hooks';
@@ -40,7 +40,11 @@ export function lanePill(lane: LaneSummary, now: number) {
   if (state === 'running') return <Pill tone="success">Ready</Pill>;
   if (state === 'frozen' || state === 'throttled') {
     const word = laneWords(lane, now);
-    return <Pill tone="info">{word.charAt(0).toUpperCase() + word.slice(1)}</Pill>;
+    return (
+      <Pill tone="info" state={state}>
+        {word.charAt(0).toUpperCase() + word.slice(1)}
+      </Pill>
+    );
   }
   const word = state.replace(/_/g, ' ');
   return <Pill>{word.charAt(0).toUpperCase() + word.slice(1)}</Pill>;
@@ -182,7 +186,17 @@ export function LaneCard() {
       <Head
         title={ref}
         sub={lane.name || lane.branch}
-        pill={lanePill(lane, now)}
+        pill={
+          <>
+            {services.length > 0 && (
+              <span class="caption num">
+                {services.filter((unit) => unit.state === 'ready').length} of {services.length}{' '}
+                running
+              </span>
+            )}
+            {lanePill(lane, now)}
+          </>
+        }
         meta={[actors.length > 0 && `started by ${actors.join(', ')}`]}
       />
       {progress && (
@@ -206,7 +220,7 @@ export function LaneCard() {
         </>
       )}
       {notes.length > 0 && <Line tone="warn">{notes.join(' ')}</Line>}
-      <Units lane={lane} waiting={isBusy(lane.state)} />
+      <Units lane={lane} />
       <Actions>{buttons}</Actions>
     </Card>
   );
