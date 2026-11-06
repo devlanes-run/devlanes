@@ -33,7 +33,7 @@ with its JSON in structuredContent.";
 /// Description of the `devlanes_read` tool.
 pub const DEVLANES_READ: &str = "\
 Run a devlanes command that changes nothing: status, logs, wait, debug why, debug errors, url, \
-env show, doctor, lane ls, remote ls, debug config, debug top, or --help. args is the command \
+env show, doctor, lane ls, lane clean --dry-run, remote ls, debug config, debug top, or --help. args is the command \
 line after \"devlanes\", such as [\"status\"] or [\"logs\", \"web\", \"--tail\", \"100\"]. Use \
 the devlanes tool for commands that start, stop or change something.";
 

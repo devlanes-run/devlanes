@@ -1680,6 +1680,9 @@ impl Cli {
             Command::Start(args) if args.attach => {
                 Some("--attach opens the TUI; run the start without it")
             }
+            Command::Status(args) if args.statusline => Some(
+                "it is the line an editor or agent shows under its prompt; run devlanes status instead",
+            ),
             Command::Logs(args) if args.follow && unbounded => Some(follow),
             Command::Status(args) if args.watch && unbounded => Some(follow),
             Command::Start(_)
@@ -1778,10 +1781,8 @@ impl Command {
             | Self::Askpass { .. } => false,
             Self::Lane { command } => match command {
                 LaneCommand::Ls => true,
-                LaneCommand::New { .. }
-                | LaneCommand::Clean { .. }
-                | LaneCommand::Gc
-                | LaneCommand::Resume { .. } => false,
+                LaneCommand::Clean { dry_run, .. } => *dry_run,
+                LaneCommand::New { .. } | LaneCommand::Gc | LaneCommand::Resume { .. } => false,
             },
             Self::Debug { command } => match command {
                 DebugCommand::Why { .. }

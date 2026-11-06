@@ -146,7 +146,11 @@ impl Call {
         }
         let question = match self.cli.command.as_ref()? {
             Command::Lane {
-                command: LaneCommand::Clean { lane },
+                command:
+                    LaneCommand::Clean {
+                        lane,
+                        dry_run: false,
+                    },
             } => format!(
                 "Clean lane {}? This stops it, runs its clean tasks and teardown, and deletes its \
                  data and logs.",
@@ -198,11 +202,11 @@ impl Call {
         Some(question)
     }
 
-    /// The `lane clean --dry-run` arguments for this `lane clean`, whose output
-    /// shows the user what a clean removes.
+    /// The `lane clean --dry-run` arguments for this `lane clean`, whose agent
+    /// output shows the user what a clean removes.
     pub fn clean_plan(&self) -> Option<Vec<String>> {
         let Some(Command::Lane {
-            command: LaneCommand::Clean { .. },
+            command: LaneCommand::Clean { dry_run: false, .. },
         }) = &self.cli.command
         else {
             return None;
@@ -333,6 +337,7 @@ mod tests {
         }
         for line in [
             &["lane", "clean", "2", "--yes"][..],
+            &["lane", "clean", "2", "--dry-run"],
             &["config", "set", "tui.theme", "dark"],
             &["stop"],
             &["daemon", "status"],

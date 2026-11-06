@@ -32,6 +32,10 @@ A result's text is the command's stdout and stderr; `structuredContent` holds `{
 
 Nothing connects to the daemon when the server starts. Each call spawns the devlanes binary with stdin closed and stdout and stderr piped, so the protocol stream stays clean. The first run sets `DEVLANES_ENV_FROM_LANE=1`, so a lane a shell started keeps that shell's environment; when the daemon answers `needs_env`, the call runs again with the server's environment and the result says so. When the environment names no agent, `AI_AGENT` comes from the client's name. Cancelling a call kills its child; the daemon keeps doing what was asked.
 
+## Codex on Windows
+
+A shell inside the Codex sandbox on Windows cannot open the daemon's pipe, even when the daemon already runs. Codex starts MCP servers outside its sandbox, so there `devlanes mcp` is how Codex reaches devlanes.
+
 ## Protocol versions
 
 rmcp negotiates every revision it knows: the `initialize` handshake up to 2025-11-25, and `server/discover` with per-request metadata from 2026-07-28. Consent questions are `elicitation/create` requests before 2026-07-28 and an `InputRequiredResult` the client answers by calling again from then on. Clients without elicitation get "ask the user, then rerun with --yes".

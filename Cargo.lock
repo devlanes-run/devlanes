@@ -1110,7 +1110,6 @@ dependencies = [
  "bollard",
  "bytes",
  "crossterm",
- "devlanes-agent-hooks",
  "devlanes-cli",
  "devlanes-client",
  "devlanes-config",
@@ -1179,14 +1178,6 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "devlanes-agent-hooks"
-version = "0.4.0"
-dependencies = [
- "serde_json",
- "tempfile",
 ]
 
 [[package]]
