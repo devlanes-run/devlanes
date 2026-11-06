@@ -8,6 +8,7 @@ mod docker_pg_redis;
 mod idle;
 mod lanes;
 mod lifecycle;
+mod mcp;
 mod proxy;
 mod remote;
 mod shutdown;
