@@ -45,6 +45,25 @@ async fn a_call_runs_the_command() {
 }
 
 #[tokio::test]
+/// Under `--read-only` every result says so, so the cards hide their buttons.
+async fn read_only_results_say_so() {
+    tokio::time::timeout(LIMIT, async {
+        let harness = connect(TestClient::new(), Lifecycle::Initialize, |config| {
+            config.read_only = true;
+        })
+        .await;
+        let result = harness.call("devlanes_read", &["status"]).await;
+        assert!(!failed(&result), "{}", text(&result));
+        assert_eq!(
+            result.structured_content.expect("structured content")["read_only"],
+            true
+        );
+    })
+    .await
+    .expect("in time");
+}
+
+#[tokio::test]
 /// A nonzero exit is `isError`; stderr follows stdout in the text.
 async fn a_failed_command_is_an_error() {
     tokio::time::timeout(LIMIT, async {
