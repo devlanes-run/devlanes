@@ -31,7 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 `devlanes` runs any command and `devlanes_read` only those `Command::is_read_only` accepts; both take `{args: string[], cwd?: string}`. `--read-only` offers only `devlanes_read`. Commands that need a terminal, and follows without `--timeout`, are refused. Blocking commands without `--timeout` get one a little under the host's own tool timeout, chosen from the client's name, or 60 s for a host it does not know. Clients that advertise the `io.modelcontextprotocol/ui` extension also see `app_snapshot`, `app_logs` and `app_action`, marked `_meta.ui.visibility: ["app"]`, and the cards resource.
 
-A result's text is the command's stdout and stderr; `structuredContent` holds `{command, args, cwd, exit_code, view, data, read_only}`, where `data` is what `--output json` would have printed (written by the child to the file `DEVLANES_JSON_OUT` names, with `{"error": ...}` for a failure), `view` names the card for it and `read_only` says whether the server runs with `--read-only`. Above 256 KiB of JSON, `data` is null and `data_truncated` is `true`.
+A result's text is the command's stdout and stderr; `structuredContent` holds `{command, args, cwd, exit_code, view, card, data, read_only}`, where `data` is what `--output json` would have printed (written by the child to the file `DEVLANES_JSON_OUT` names, with `{"error": ...}` for a failure), `view` names the card for it, `card` numbers the cards about one lane (1, 2, 3... per lane while the server runs, null for other results; `app_snapshot` returns the newest in `newest_card`) and `read_only` says whether the server runs with `--read-only`. Above 256 KiB of JSON, `data` is null and `data_truncated` is `true`.
 
 ## Child processes
 
