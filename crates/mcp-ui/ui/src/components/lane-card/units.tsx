@@ -4,19 +4,14 @@ import { daemonStopped, isFullscreen } from '../../store/card';
 import type { LaneSummary, UnitSummary } from '../../types/proto';
 import { reasonText, shortUrl } from '../../utils/format';
 import { byAttention, portOf, servicesOf } from '../../utils/lanes';
-import { capital, unitState, wordClass, words } from '../../utils/state';
+import { capital, powerHint, unitState, wordClass, words } from '../../utils/state';
 import { LinkButton } from '../button';
-import { Line, Shape } from '../card';
-
-/** Rows an inline card shows before the rest fold into one line. */
-const SHOWN = 15;
+import { Fold, Hint, Line, SHOWN, Shape } from '../card';
 
 /**
  * One row per service: shape, name, URL link, port from 520 px, state word. A failed
- * service says why on a second line. Failed and starting services come first; past
- * {@link SHOWN} rows the rest fold into one line with "Show all", which grows the
- * card instead of scrolling it, since hosts discourage scrolling inside a card.
- * Fullscreen shows every row.
+ * service says why on a second line. Failed and starting services come first, and past
+ * {@link SHOWN} rows the rest fold into one line. Fullscreen shows every row.
  */
 export function Units({ lane }: { lane: LaneSummary }) {
   const [all, setAll] = useState(false);
@@ -30,14 +25,7 @@ export function Units({ lane }: { lane: LaneSummary }) {
         <UnitRow key={unit.name} unit={unit} />
       ))}
       {folds && (
-        <li class="row">
-          <span class="grow sec">
-            {!all && `${moreText(units.slice(SHOWN))} · `}
-            <LinkButton expanded={all} onClick={() => setAll(!all)}>
-              {all ? 'Show fewer' : 'Show all'}
-            </LinkButton>
-          </span>
-        </li>
+        <Fold open={all} text={moreText(units.slice(SHOWN))} onToggle={() => setAll(!all)} />
       )}
     </ul>
   );
@@ -85,7 +73,10 @@ function UnitRow({ unit }: { unit: UnitSummary }) {
         )}
       </span>
       {port && <span class="col num w520">:{port}</span>}
-      <span class={`end ${wordClass(state)}`}>{words(state)}</span>
+      <span class={`end ${wordClass(state)}`} title={powerHint(state)}>
+        {words(state)}
+        <Hint state={state} />
+      </span>
       {why && <span class="line2 meta danger">{why}</span>}
     </li>
   );

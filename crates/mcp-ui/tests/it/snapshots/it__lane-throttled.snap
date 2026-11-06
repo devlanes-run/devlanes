@@ -1,0 +1,155 @@
+---
+source: crates/mcp-ui/tests/it/main.rs
+expression: preview.structured()
+---
+{
+  "command": "status",
+  "args": [
+    "status",
+    "--lane",
+    "feat/search"
+  ],
+  "cwd": "/work/acme",
+  "exit_code": 0,
+  "view": "lane",
+  "data": {
+    "items": [
+      {
+        "reference": "acme@3",
+        "project": "acme",
+        "index": 3,
+        "branch": "feat/search",
+        "path": "/work/acme-feat-search",
+        "state": "running",
+        "config_changed": false,
+        "units": [
+          {
+            "name": "api",
+            "lane": "acme@3",
+            "state": "ready",
+            "pid": 60032,
+            "exit_code": null,
+            "ports": {
+              "http": 20032
+            },
+            "urls": [
+              "http://127.0.0.1:20032",
+              "https://api.acme3.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "opencode",
+              "session_id": "opencode-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://api.acme3.localhost",
+            "power": "throttled"
+          },
+          {
+            "name": "web",
+            "lane": "acme@3",
+            "state": "ready",
+            "pid": 60033,
+            "exit_code": null,
+            "ports": {
+              "http": 20033
+            },
+            "urls": [
+              "http://127.0.0.1:20033",
+              "https://acme3.localhost"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "opencode",
+              "session_id": "opencode-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "public_url": "https://acme3.localhost",
+            "power": "throttled"
+          },
+          {
+            "name": "indexer",
+            "lane": "acme@3",
+            "state": "ready",
+            "pid": 60036,
+            "exit_code": null,
+            "ports": {
+              "http": 20036
+            },
+            "urls": [
+              "http://127.0.0.1:20036"
+            ],
+            "actor": {
+              "kind": "agent",
+              "agent_id": "opencode",
+              "session_id": "opencode-session"
+            },
+            "reason": null,
+            "kind": "service",
+            "autostart": true,
+            "hidden": false,
+            "tags": [],
+            "started_at_ms": 1793999400000,
+            "cpu_percent": 4.0,
+            "memory_bytes": 188743680,
+            "ready_check": "http",
+            "role": "service",
+            "power": "throttled"
+          }
+        ],
+        "profile": null,
+        "profiles": [],
+        "moves_to": null,
+        "domain": "acme3.localhost",
+        "port_block": [
+          20030,
+          20039
+        ],
+        "reason": null,
+        "needs_env": false,
+        "containers": [
+          {
+            "name": "postgres",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          },
+          {
+            "name": "redis",
+            "ports": {},
+            "hidden": false,
+            "state": "healthy"
+          }
+        ],
+        "power": {
+          "level": "throttled",
+          "since_ms": 1793999760000,
+          "last_activity_ms": 1793999460000,
+          "last_activity": "proxy"
+        }
+      }
+    ],
+    "truncated": false,
+    "next_cursor": null
+  },
+  "read_only": false,
+  "card": 1
+}

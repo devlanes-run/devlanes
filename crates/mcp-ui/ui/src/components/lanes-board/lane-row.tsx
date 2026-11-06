@@ -10,9 +10,9 @@ import {
   laneWords,
   servicesOf
 } from '../../utils/lanes';
-import { wordClass } from '../../utils/state';
+import { powerHint, wordClass } from '../../utils/state';
 import { IconButton, LinkButton } from '../button';
-import { Shape } from '../card';
+import { Hint, Shape } from '../card';
 import { Spark } from '../spark';
 
 /** The question "Ask agent about @2" sends for a lane with failed services. */
@@ -59,7 +59,10 @@ export function LaneRow({ lane, manage }: { lane: LaneSummary; manage: boolean }
           <Spark values={cpuHistory(card.snapshot?.top, ref)} label={`${ref} cpu`} />
         </span>
       )}
-      <span class={`end ${wordClass(state)}`}>{label}</span>
+      <span class={`end ${wordClass(state)}`} title={busy ? undefined : powerHint(state)}>
+        {label}
+        {!busy && <Hint state={state} />}
+      </span>
       {manage && (
         <span class="acts">
           <IconButton

@@ -73,7 +73,10 @@ pub fn all() -> Vec<Preview> {
         lane_ready(),
         lane_failed(),
         lane_frozen(),
+        lane_throttled(),
         lane_many(),
+        top_one(),
+        top_many(),
         board(),
         board_boxes(),
         board_long_names(),
@@ -653,6 +656,181 @@ fn lane_frozen() -> Preview {
         result_delay_ms: 300,
         tools,
     }
+}
+
+/// acme@3 throttled 4 minutes ago, before it freezes.
+fn lane_throttled() -> Preview {
+    let mut lane = search();
+    for unit in &mut lane.units {
+        unit.power = Some("throttled".to_owned());
+    }
+    if let Some(power) = &mut lane.power {
+        power.level = "throttled".to_owned();
+        power.since_ms = NOW - 4 * 60_000;
+        power.last_activity_ms = Some(NOW - 9 * 60_000);
+    }
+    let mut tools = vec![rule("app_snapshot", json!({}), vec![snapshot(&[&lane])])];
+    tools.extend(actions());
+    let args = ["status", "--lane", "feat/search"];
+    Preview {
+        name: "lane-throttled",
+        title: "lane card, throttled",
+        width: None,
+        display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
+        input: input(&args),
+        result: Some(tool_result(
+            "running acme@3 feat/search 3/3 power=throttled",
+            content("status", &args, 0, Some("lane"), page(vec![lane])),
+        )),
+        result_delay_ms: 300,
+        tools,
+    }
+}
+
+/// One running row of `debug top --json` as the daemon's `metrics` reply has
+/// it: a service of `lane`, or with `kind` `container` one of its Compose
+/// group (a lane, or `<project> (shared)` for shared infra).
+fn top_row(lane: &str, unit: &str, kind: &str, cpu: f64, memory_mib: u64) -> Value {
+    let memory = memory_mib << 20;
+    let history: Vec<Value> = (0..10u64)
+        .map(|i| json!([NOW - (10 - i) * 2_000, cpu, memory]))
+        .collect();
+    let mut row = json!({
+        "lane": lane,
+        "unit": unit,
+        "kind": kind,
+        "series": format!("{lane}/{unit}"),
+        "ended": false,
+        "removed": false,
+        "cpu_percent": cpu,
+        "memory_bytes": memory,
+        "history": history,
+    });
+    if kind == "container" {
+        let shared = lane.ends_with("(shared)");
+        let project = lane.split(['@', ' ']).next().unwrap_or(lane);
+        row["container"] = json!(format!("{project}-{unit}-1"));
+        row["shared"] = json!(shared);
+        row["lanes"] = json!(if shared {
+            vec!["acme@0", "acme@1", "acme@2"]
+        } else {
+            vec![lane]
+        });
+    } else {
+        row["role"] = json!(kind);
+        row["peak_cpu_percent"] = json!(cpu * 1.6);
+        row["peak_memory_bytes"] = json!(memory + (64 << 20));
+    }
+    row
+}
+
+/// The `system` object of `debug top --json` on a 10-core machine with 32 GiB.
+fn top_system(cpu: f64, available_gib: f64, pressure: &str) -> Value {
+    json!({
+        "cpus": 10,
+        "memory_total_bytes": 32u64 << 30,
+        "available_memory_bytes": (available_gib * (1u64 << 30) as f64) as u64,
+        "cpu_percent": cpu,
+        "memory_pressure": pressure,
+        "cpu_stall_percent": null,
+        "core_percents": [41.0, 18.5, 30.2, 12.0, 9.8, 22.4, 15.1, 35.0, 28.7, 21.3],
+        "history": [],
+    })
+}
+
+/// A `debug top` preview: the result and every snapshot carry `top`.
+fn top_preview(
+    name: &'static str,
+    title: &'static str,
+    lanes: Vec<LaneSummary>,
+    top: Value,
+) -> Preview {
+    let refs: Vec<&LaneSummary> = lanes.iter().collect();
+    let mut answer = snapshot(&refs);
+    answer["structuredContent"]["top"] = top.clone();
+    let args = ["debug", "top"];
+    Preview {
+        name,
+        title,
+        width: None,
+        display_modes: &["inline", "fullscreen"],
+        display_mode: "inline",
+        steps: Vec::new(),
+        input: input(&args),
+        result: Some(tool_result(
+            "acme@1:web cpu=112.4% mem=690MiB\nacme@1:api cpu=38.0% mem=412MiB",
+            content("debug top", &args, 0, Some("top"), top),
+        )),
+        result_delay_ms: 300,
+        tools: vec![rule("app_snapshot", json!({}), vec![answer])],
+    }
+}
+
+/// `debug top` while acme@1 runs alone, its web server compiling.
+fn top_one() -> Preview {
+    let lane = "acme@1";
+    let rows = vec![
+        top_row(lane, "api", "service", 38.0, 412),
+        top_row(lane, "web", "service", 112.4, 690),
+        top_row(lane, "worker", "service", 3.2, 160),
+        top_row(lane, "postgres", "container", 6.5, 240),
+        top_row(lane, "redis", "container", 0.4, 12),
+    ];
+    let data = json!({
+        "units": rows,
+        "lanes": [],
+        "range_ms": 60_000,
+        "system": top_system(23.4, 14.5, "normal"),
+    });
+    top_preview("top", "CPU and memory of one lane", vec![checkout(5)], data)
+}
+
+/// `debug top` with three lanes, shared infra and a unit that just ended,
+/// more rows than the card shows inline, under memory pressure.
+fn top_many() -> Preview {
+    let shared = "acme (shared)";
+    let mut rows = vec![
+        top_row("acme@0", "api", "service", 12.0, 380),
+        top_row("acme@0", "web", "service", 4.1, 520),
+        top_row("acme@0", "worker", "service", 0.8, 150),
+        top_row("acme@0", "storybook", "service", 62.5, 840),
+        top_row("acme@1", "api", "service", 38.0, 412),
+        top_row("acme@1", "web", "service", 112.4, 690),
+        top_row("acme@1", "worker", "service", 3.2, 160),
+        top_row("acme@1", "indexer", "service", 91.0, 2_150),
+        top_row("acme@1", "mailer", "service", 0.2, 96),
+        top_row("acme@1", "minio", "container", 1.1, 210),
+        top_row("acme@1", "mailpit", "container", 0.3, 40),
+        top_row("acme@2", "web", "service", 2.4, 610),
+        top_row("acme@2", "worker", "service", 0.6, 140),
+        top_row("acme@2", "elastic", "container", 24.0, 3_100),
+        top_row("acme@2", "kafka", "container", 8.7, 1_020),
+        top_row(shared, "postgres", "container", 14.2, 980),
+        top_row(shared, "redis", "container", 1.9, 64),
+        top_row(shared, "clickhouse", "container", 5.5, 1_400),
+        top_row("acme@0", "exec-1", "exec", 0.0, 22),
+        top_row("acme@1", "seed", "task", 47.0, 300),
+    ];
+    // acme@2's api failed inside the range: its graph keeps its past, top skips it.
+    let mut ended = top_row("acme@2", "api", "service", 0.0, 0);
+    ended["ended"] = json!(true);
+    ended["cpu_percent"] = Value::Null;
+    ended["memory_bytes"] = Value::Null;
+    rows.push(ended);
+    let data = json!({
+        "units": rows,
+        "lanes": [],
+        "range_ms": 60_000,
+        "system": top_system(61.8, 3.2, "warn"),
+    });
+    top_preview(
+        "top-many",
+        "CPU and memory of three lanes",
+        vec![main_lane(), checkout(5), auth_redirect()],
+        data,
+    )
 }
 
 /// acme@1 on feat/billing-v2 with 40 services, as a large monorepo has them.

@@ -64,6 +64,20 @@ export function words(state: string): string {
   return String(state || '').replace(/_/g, ' ');
 }
 
+/**
+ * What a lane's power state means, from "Idle lanes" in docs/guides/lifecycle.md, for
+ * the hover and screen readers; undefined for every other state.
+ */
+export function powerHint(state: string): string | undefined {
+  if (state === 'throttled') {
+    return 'The lane has been idle, so its processes run at background priority.';
+  }
+  if (state === 'frozen') {
+    return 'The lane has been idle, so its processes are suspended. They resume on the next request or activity, with their ports, PIDs and state.';
+  }
+  return undefined;
+}
+
 /** A word with a capital first letter, for pills. */
 export function capital(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);

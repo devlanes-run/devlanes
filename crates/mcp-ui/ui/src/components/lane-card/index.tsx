@@ -40,7 +40,11 @@ export function lanePill(lane: LaneSummary, now: number) {
   if (state === 'running') return <Pill tone="success">Ready</Pill>;
   if (state === 'frozen' || state === 'throttled') {
     const word = laneWords(lane, now);
-    return <Pill tone="info">{word.charAt(0).toUpperCase() + word.slice(1)}</Pill>;
+    return (
+      <Pill tone="info" state={state}>
+        {word.charAt(0).toUpperCase() + word.slice(1)}
+      </Pill>
+    );
   }
   const word = state.replace(/_/g, ' ');
   return <Pill>{word.charAt(0).toUpperCase() + word.slice(1)}</Pill>;
