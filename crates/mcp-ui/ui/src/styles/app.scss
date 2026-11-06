@@ -414,7 +414,6 @@ ol {
 
 .row {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   column-gap: var(--dl-2);
   min-width: 0;
@@ -426,9 +425,10 @@ ol {
     font-weight: var(--font-weight-semibold);
   }
 
+  // Keeps a share for the branch when a URL sits next to it.
   .grow {
     flex: 1;
-    min-width: 0;
+    min-width: 30%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -437,7 +437,7 @@ ol {
   // A link next to the growing cell shrinks before it pushes the state off the row.
   > .lk {
     flex: 0 1 auto;
-    max-width: 45%;
+    max-width: 40%;
   }
 
   .col {
@@ -457,6 +457,11 @@ ol {
   .acts {
     display: flex;
     flex: none;
+  }
+
+  // Only a row with a second line wraps; the others shrink their text instead.
+  &:has(> .line2) {
+    flex-wrap: wrap;
   }
 
   > .line2 {

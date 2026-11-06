@@ -32,6 +32,8 @@
     return hosts[host].fullscreen ? fixture.displayModes : ['inline'];
   }
 
+  if (!modes().includes(displayMode)) displayMode = 'inline';
+
   /** ChatGPT keeps its composer over the bottom of a fullscreen app. */
   function insets() {
     return { top: 0, right: 0, bottom: host === 'chatgpt' && displayMode === 'fullscreen' ? 92 : 0, left: 0 };
