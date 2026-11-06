@@ -20,6 +20,12 @@ export interface Envelope {
   data?: any;
   read_only?: boolean;
   data_truncated?: boolean;
+  /**
+   * This card's number for its lane: the server counts the results that name one lane,
+   * per lane, so a higher number in `Snapshot.newest_card` means a newer card exists.
+   * Null for results about no lane or several.
+   */
+  card?: number | null;
 }
 
 /** One block of a tool result's `content`. */
@@ -48,6 +54,8 @@ export interface Snapshot {
   hosts: RemoteList | null;
   daemon?: 'stopped';
   read_only?: boolean;
+  /** The newest card number of each lane in `status`. */
+  newest_card?: Record<string, number>;
 }
 
 /** `app_logs`'s result. */

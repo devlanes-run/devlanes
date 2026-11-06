@@ -1,33 +1,75 @@
+import type { ComponentChildren } from 'preact';
 import { Icon, type IconName } from '../icon';
 
 /** The props of {@link Button}. */
 export interface ButtonProps {
-  icon?: IconName;
   label: string;
   onClick?: () => void;
-  primary?: boolean;
+  /** `primary` is the next step (one per card), `danger` and `destroy` delete things. */
+  kind?: 'primary' | 'danger' | 'destroy';
   disabled?: boolean;
-  iconOnly?: boolean;
-  cls?: string;
+  /** Why the button is disabled, or what it acts on. */
+  title?: string;
 }
 
-/**
- * A compact site button. With `iconOnly` the label becomes its accessible name
- * and tooltip.
- */
-export function Button({ icon, label, onClick, primary, disabled, iconOnly, cls }: ButtonProps) {
-  const classes = `btn${primary ? ' primary' : ''}${iconOnly ? ' icon-only' : ''}${cls ? ` ${cls}` : ''}`;
+/** A labelled button of the action bar. */
+export function Button({ label, onClick, kind, disabled, title }: ButtonProps) {
   return (
     <button
       type="button"
-      class={classes}
+      class={`btn${kind ? ` ${kind}` : ''}`}
       onClick={onClick}
       disabled={disabled}
-      aria-label={iconOnly ? label : undefined}
-      title={iconOnly ? label : undefined}
+      title={title}
     >
-      {icon && <Icon name={icon} />}
-      {!iconOnly && <span>{label}</span>}
+      {label}
+    </button>
+  );
+}
+
+/**
+ * A 28 px icon button for a fullscreen row; its label is its accessible name and
+ * tooltip. Without `onClick` it only keeps the row's columns aligned.
+ */
+export function IconButton({
+  icon,
+  label,
+  onClick,
+  disabled
+}: {
+  icon: IconName;
+  label: string;
+  onClick?: (() => void) | undefined;
+  disabled?: boolean;
+}) {
+  if (!onClick) return <span class="ib gap" aria-hidden="true" />;
+  return (
+    <button
+      type="button"
+      class="ib"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      <Icon name={icon} />
+    </button>
+  );
+}
+
+/** A button that reads as a link: URLs in rows, "Refresh", "All lines". */
+export function LinkButton({
+  onClick,
+  title,
+  children
+}: {
+  onClick: () => void;
+  title?: string;
+  children: ComponentChildren;
+}) {
+  return (
+    <button type="button" class="lk" title={title} onClick={onClick}>
+      {children}
     </button>
   );
 }

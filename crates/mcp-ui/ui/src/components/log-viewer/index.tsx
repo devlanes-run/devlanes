@@ -1,22 +1,24 @@
-// The log viewer of the failure card: lines with their cursors, grep, "load
-// earlier" and a picked line the agent can read around.
+// The fullscreen log viewer of the failure card: every line with its cursor, a filter,
+// earlier pages, and a picked line the agent gets asked about. Inline cards show an
+// excerpt instead, since they must not scroll.
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { act, ask } from '../../store/actions';
-import { bridge, card, cwd, readOnly } from '../../store/card';
+import type { ComponentChildren } from 'preact';
+import { useEffect, useState } from 'preact/hooks';
+import { ask } from '../../store/actions';
+import { bridge, canHandOff, card, cwd } from '../../store/card';
 import type { LogLine, LogsPage } from '../../types/proto';
 import type { LogsResult } from '../../types/results';
 import { Button } from '../button';
-import type { Subject } from '../failure-card/subjects';
+import { Actions, Line } from '../card';
+import { Excerpt } from '../failure-card/excerpt';
 import { Icon } from '../icon';
-import { Note } from '../note';
 
 /** Lines the viewer keeps; older ones drop off the top while it follows. */
 const MAX_LINES = 2000;
 /** Lines each fetch asks for. */
 const PAGE = 200;
-/** How long typing in grep settles before the viewer fetches. */
-const GREP_DEBOUNCE_MS = 300;
+/** How long typing in the filter settles before the viewer fetches. */
+const FILTER_DEBOUNCE_MS = 300;
 
 /** Fetches a page of one unit's logs through `app_logs`. */
 async function fetchLogs(ref: string, args: Record<string, unknown>): Promise<LogsPage> {
@@ -33,68 +35,69 @@ function cursorOf(line: LogLine | null | undefined): string | null {
   return line && line.seq != null ? `${line.unit}#${line.seq}` : null;
 }
 
-/**
- * The log viewer. Lines carry their cursor (`api#118`); a click picks one, and
- * "send to agent" hands the agent that cursor instead of the whole log.
- */
-export function LogViewer({ subject, unitRef }: { subject: Subject; unitRef: string }) {
-  const fromResult: LogLine[] =
-    subject.lines ||
-    (subject.tail || []).map((text) => ({ unit: subject.unit, seq: null, text, level: null }));
-  const [lines, setLines] = useState<LogLine[]>(fromResult);
-  const [earlier, setEarlier] = useState<string | null>(subject.next || null);
-  const [grep, setGrep] = useState('');
+/** The props of {@link LogViewer}: the card's lines, which the viewer extends. */
+interface LogViewerProps {
+  unitRef: string;
+  lines: LogLine[];
+  setLines: (update: (old: LogLine[]) => LogLine[]) => void;
+  earlier: string | null;
+  setEarlier: (cursor: string | null) => void;
+  restart: ComponentChildren;
+}
+
+/** The log viewer. */
+export function LogViewer({
+  unitRef,
+  lines,
+  setLines,
+  earlier,
+  setEarlier,
+  restart
+}: LogViewerProps) {
+  const [filter, setFilter] = useState('');
+  const [found, setFound] = useState<{ lines: LogLine[]; earlier: string | null } | null>(null);
   const [picked, setPicked] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const list = useRef<HTMLOListElement | null>(null);
-  const stick = useRef(true);
-  const first = useRef(true);
+  const shown = found ? found.lines : lines;
+  const before = found ? found.earlier : earlier;
 
+  // A filter reads its own matches; clearing it goes back to the card's lines.
   useEffect(() => {
-    // A logs result already holds the latest page; anything else fetches it.
-    if (first.current && subject.lines && !grep) {
-      first.current = false;
+    setPicked(null);
+    if (!filter) {
+      setFound(null);
       return undefined;
     }
-    first.current = false;
     let gone = false;
-    const timer = setTimeout(
-      async () => {
-        setLoading(true);
-        try {
-          const page = await fetchLogs(unitRef, { tail: PAGE, grep: grep || undefined });
-          if (gone) return;
-          setLines(page.items || []);
-          setEarlier(page.next_cursor || null);
-          setPicked(null);
-          setError('');
-          stick.current = true;
-        } catch (e) {
-          if (!gone) setError((e as Error).message);
-        } finally {
-          if (!gone) setLoading(false);
-        }
-      },
-      grep ? GREP_DEBOUNCE_MS : 0
-    );
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const page = await fetchLogs(unitRef, { tail: PAGE, grep: filter });
+        if (!gone) setFound({ lines: page.items || [], earlier: page.next_cursor || null });
+        if (!gone) setError('');
+      } catch (e) {
+        if (!gone) setError((e as Error).message);
+      } finally {
+        if (!gone) setLoading(false);
+      }
+    }, FILTER_DEBOUNCE_MS);
     return () => {
       gone = true;
       clearTimeout(timer);
     };
-  }, [unitRef, grep]);
+  }, [unitRef, filter]);
 
-  // Each snapshot tick also reads the lines after the last one, unless a grep
-  // narrows the view or the lines came without cursors.
+  // Each snapshot also reads the lines after the last one, unless a filter narrows the
+  // view or the lines came without cursors.
   useEffect(() => {
     const cursor = cursorOf(lines[lines.length - 1]);
-    if (grep || !cursor || card.snapshotSeq === 0) return undefined;
+    if (filter || !cursor || card.snapshotSeq === 0) return undefined;
     let gone = false;
     fetchLogs(unitRef, { cursor })
       .then((page) => {
         const items = page.items || [];
-        if (gone || !items.length) return;
-        setLines((old) => [...old, ...items].slice(-MAX_LINES));
+        if (!gone && items.length) setLines((old) => [...old, ...items].slice(-MAX_LINES));
       })
       .catch(() => {});
     return () => {
@@ -102,25 +105,22 @@ export function LogViewer({ subject, unitRef }: { subject: Subject; unitRef: str
     };
   }, [card.snapshotSeq]);
 
-  useLayoutEffect(() => {
-    const el = list.current;
-    if (el && stick.current) el.scrollTop = el.scrollHeight;
-  }, [lines]);
-
   const loadEarlier = async () => {
-    if (!earlier) return;
+    if (!before) return;
     setLoading(true);
     try {
       const page = await fetchLogs(unitRef, {
         tail: PAGE,
-        cursor: earlier,
-        grep: grep || undefined
+        cursor: before,
+        grep: filter || undefined
       });
       const items = page.items || [];
-      stick.current = false;
-      setLines((old) => [...items, ...old]);
+      if (found) setFound({ lines: [...items, ...found.lines], earlier: page.next_cursor || null });
+      else {
+        setLines((old) => [...items, ...old]);
+        setEarlier(page.next_cursor || null);
+      }
       setPicked((p) => (p == null ? p : p + items.length));
-      setEarlier(page.next_cursor || null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -128,98 +128,52 @@ export function LogViewer({ subject, unitRef }: { subject: Subject; unitRef: str
     }
   };
 
-  const onScroll = () => {
-    const el = list.current;
-    if (el) stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
-  };
-
-  const line = picked == null ? null : lines[picked];
+  const line = picked == null ? null : shown[picked];
   const cursor = cursorOf(line);
-  const send = () => {
-    if (!line) return;
-    ask(
-      cursor
-        ? `Look at ${unitRef} around ${cursor}: devlanes logs ${unitRef} --around ${cursor} -C 10`
-        : `Look at this line from ${unitRef}: ${line.text}`
-    );
-  };
-  const busy = card.busy[unitRef];
-
   return (
-    <div class="logs">
-      <div class="toolbar">
-        <label class="grep">
-          <Icon name="grep" />
-          <span class="sr-only">grep the logs of {unitRef}</span>
+    <>
+      <div class="tools">
+        <label class="search">
+          <Icon name="search" />
+          <span class="sr-only">Filter the logs of {unitRef}</span>
           <input
             type="search"
-            placeholder="grep"
-            value={grep}
-            onInput={(e) => setGrep(e.currentTarget.value)}
+            placeholder="Filter lines"
+            value={filter}
+            onInput={(e) => setFilter(e.currentTarget.value)}
             spellcheck={false}
             autocomplete="off"
           />
         </label>
-        <Button label="load earlier" disabled={!earlier || loading} onClick={loadEarlier} />
+        <Button
+          label={loading ? 'Loading…' : 'Load earlier'}
+          disabled={!before || loading}
+          onClick={loadEarlier}
+        />
       </div>
-      <ol
-        class="logview"
-        ref={list}
-        onScroll={onScroll}
-        aria-label={`logs of ${unitRef}`}
-        aria-busy={loading}
-      >
-        {lines.length === 0 && (
-          <li class="dim">{loading ? 'loading…' : grep ? 'no line matches' : 'no lines'}</li>
-        )}
-        {lines.map((l, i) => (
-          <li key={cursorOf(l) ?? i}>
-            <button
-              type="button"
-              class={`line${i === picked ? ' picked' : ''}${l.level === 'error' ? ' lvl-error' : l.level === 'warn' ? ' lvl-warn' : ''}`}
-              aria-pressed={i === picked}
-              onClick={() => setPicked(i === picked ? null : i)}
-            >
-              {l.seq != null && <span class="cur">{cursorOf(l)}</span>}
-              <span class="txt">{l.text}</span>
-            </button>
-          </li>
-        ))}
-      </ol>
-      {error && (
-        <p class="note tone-failure" role="status">
-          {error}
-        </p>
+      {shown.length ? (
+        <Excerpt
+          lines={shown}
+          picked={picked}
+          onPick={(i) => setPicked(i === picked ? null : i)}
+          label={`logs of ${unitRef}`}
+        />
+      ) : (
+        <Line>{loading ? 'Loading…' : filter ? 'No line matches.' : 'No lines.'}</Line>
       )}
-      <Note note={card.note} />
-      <div class="row">
-        <span class="dim">
-          {line ? (
-            <>
-              picked <span class="url">{cursor || `line ${picked == null ? '' : picked + 1}`}</span>
-            </>
-          ) : (
-            'click a line to pick it'
-          )}
-        </span>
-        <span class="actions">
-          {!readOnly() && (
-            <Button
-              icon="restart"
-              label={`restart ${subject.unit}`}
-              disabled={!!busy}
-              onClick={() => act('restart', unitRef, `restarted ${unitRef}`)}
-            />
-          )}
+      {error && <Line tone="danger">{error}</Line>}
+      <Actions summary={line ? `${cursor || 'One line'} selected` : undefined}>
+        {restart}
+        {canHandOff() && (
           <Button
-            icon="ask"
-            label={cursor ? `send ${cursor} to agent` : 'send line to agent'}
-            primary
+            key="ask"
+            label={cursor ? `Ask agent about ${cursor}` : 'Ask agent about this line'}
+            kind="primary"
             disabled={!line}
-            onClick={send}
+            onClick={() => line && ask(`${unitRef} logged: ${line.text.trim()}. Why?`)}
           />
-        </span>
-      </div>
-    </div>
+        )}
+      </Actions>
+    </>
   );
 }

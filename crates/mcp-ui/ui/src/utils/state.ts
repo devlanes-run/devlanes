@@ -1,47 +1,23 @@
-// States, glyphs and tones as the TUI draws them (crates/tui/src/theme.rs).
+// States as the card shows them: a shape, a tone and a word.
 
 import type { UnitSummary } from '../types/proto';
 
-/** The TUI's glyph for each state a unit or lane shows. */
-const GLYPHS: Record<string, string> = {
-  ready: '●',
-  running: '◉',
-  queued: '…',
-  failed: '✕',
-  exited: '■',
-  stopped: '·',
-  idle: '·',
-  done: '✓',
-  orphaned: '◆',
-  frozen: '❄',
-  throttled: 'z',
-  connected: '●',
-  needs_auth: '!',
-  needs_pairing: '!'
-};
+/** The status shapes the stylesheet draws: dot, ring, spinning arc, diamond. */
+export type Shape = 'ok' | 'info' | 'warn' | 'busy' | 'fail' | 'idle';
 
-/** States drawn with the glyph alone: the TUI keeps healthy rows quiet. */
-const QUIET = ['ready', 'running', 'stopped', 'idle', 'done', 'frozen', 'throttled'];
+/** The tones of pills and words, after the standard `--color-text-<tone>` names. */
+export type Tone = 'success' | 'danger' | 'warning' | 'info' | 'neutral';
 
-/** The braille spinner frames of the TUI. */
-export const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
-
-/** The tone classes the stylesheet paints. */
-export type Tone = 'ok' | 'failure' | 'attention' | 'frozen' | 'quiet' | 'busy';
-
-/** Whether a state is on its way somewhere, so it gets the spinner. */
+/** Whether a state is on its way somewhere, so it spins. */
 export function isBusy(state: string): boolean {
-  return ['starting', 'stopping', 'cleaning', 'connecting', 'reconnecting'].includes(state);
+  return ['starting', 'stopping', 'cleaning', 'connecting', 'reconnecting', 'queued'].includes(
+    state
+  );
 }
 
-/** The glyph of a state, or null for one that spins. */
-export function glyphOf(state: string): string | null {
-  if (isBusy(state)) return null;
-  return GLYPHS[state] || '·';
-}
-
-/** The tone of a state, after `Tone` in crates/tui/src/theme.rs. */
-export function toneOf(state: string): Tone {
+/** The shape of a state. Failed gets the diamond: in Claude's light theme colour alone is too close to the text. */
+export function shapeOf(state: string): Shape {
+  if (isBusy(state)) return 'busy';
   switch (state) {
     case 'ready':
     case 'running':
@@ -49,27 +25,48 @@ export function toneOf(state: string): Tone {
     case 'connected':
       return 'ok';
     case 'failed':
-      return 'failure';
+      return 'fail';
+    case 'frozen':
+    case 'throttled':
+      return 'info';
     case 'orphaned':
     case 'needs_auth':
     case 'needs_pairing':
-      return 'attention';
-    case 'frozen':
-      return 'frozen';
-    case 'starting':
-    case 'stopping':
-    case 'queued':
-    case 'connecting':
-    case 'reconnecting':
-      return 'busy';
+      return 'warn';
     default:
-      return 'quiet';
+      return 'idle';
   }
 }
 
-/** Whether a state goes without its word next to the glyph. */
-export function isQuiet(state: string): boolean {
-  return QUIET.includes(state);
+/** The tone of a state's word. Healthy states stay quiet. */
+export function toneOf(state: string): Tone {
+  switch (shapeOf(state)) {
+    case 'fail':
+      return 'danger';
+    case 'info':
+      return 'info';
+    case 'warn':
+      return 'warning';
+    default:
+      return 'neutral';
+  }
+}
+
+/** The class that colours a state's word in a row. */
+export function wordClass(state: string): string {
+  const tone = toneOf(state);
+  if (tone === 'neutral') return shapeOf(state) === 'idle' ? 'ter' : 'sec';
+  return tone === 'warning' ? 'warn' : tone;
+}
+
+/** A state code as words: `needs_pairing` is `needs pairing`. */
+export function words(state: string): string {
+  return String(state || '').replace(/_/g, ' ');
+}
+
+/** A word with a capital first letter, for pills. */
+export function capital(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /**

@@ -1,117 +1,57 @@
-import { act, openUrl } from '../../store/actions';
-import { card, readOnly, update } from '../../store/card';
+import { openUrl } from '../../store/actions';
+import { daemonStopped } from '../../store/card';
 import type { LaneSummary, UnitSummary } from '../../types/proto';
-import { shortUrl, unitRef } from '../../utils/format';
-import { cpuHistory, portOf, servicesOf } from '../../utils/lanes';
-import { isBusy, isQuiet, unitState } from '../../utils/state';
-import { Button } from '../button';
-import { Glyph } from '../glyph';
-import { Spark } from '../spark';
+import { reasonText, shortUrl } from '../../utils/format';
+import { portOf, servicesOf } from '../../utils/lanes';
+import { capital, unitState, wordClass, words } from '../../utils/state';
+import { LinkButton } from '../button';
+import { Line, Shape } from '../card';
 
 /**
- * One row per service: glyph, name (opens its logs), state when it needs a
- * word, port, URL, CPU and buttons.
+ * One row per service: shape, name, URL link, port from 520 px, state word. A failed
+ * service says why on a second line. `waiting` names the services a start has not
+ * reached yet.
  */
-export function Units({ lane }: { lane: LaneSummary }) {
+export function Units({ lane, waiting }: { lane: LaneSummary; waiting: boolean }) {
   const units = servicesOf(lane);
-  if (!units.length) {
-    return (
-      <p class="dim">
-        no services; {lane.state === 'idle' ? 'start the lane to run them' : 'this lane runs none'}
-      </p>
-    );
-  }
+  if (!units.length) return <Line>No services.</Line>;
   return (
-    <table class="units" aria-label={`services of ${lane.reference}`}>
-      <tbody>
-        {units.map((unit) => (
-          <UnitRow key={unit.name} lane={lane} unit={unit} />
-        ))}
-      </tbody>
-    </table>
+    <ul class="rows" aria-label={`services of ${lane.reference}`}>
+      {units.map((unit) => (
+        <UnitRow key={unit.name} unit={unit} waiting={waiting} />
+      ))}
+    </ul>
   );
 }
 
 /** One service of {@link Units}. */
-function UnitRow({ lane, unit }: { lane: LaneSummary; unit: UnitSummary }) {
-  const ref = unitRef(lane.reference, unit.name);
-  const busy = card.busy[ref];
-  const state = busy ? 'starting' : unitState(unit);
+function UnitRow({ unit, waiting }: { unit: UnitSummary; waiting: boolean }) {
+  const shown = unitState(unit);
+  const state = waiting && ['idle', 'stopped'].includes(shown) ? 'waiting' : shown;
   const port = portOf(unit);
-  const live = unit.state === 'ready' || isBusy(unit.state);
   const url = unit.public_url;
-  // A failed unit restarts; a stopped one starts.
-  const revive = state === 'failed' ? 'restart' : 'start';
+  const failed = state === 'failed';
+  const why = failed
+    ? [capital(reasonText(unit.reason)), unit.exit_code != null && `Exit ${unit.exit_code}`]
+        .filter(Boolean)
+        .join(' · ')
+    : '';
   return (
-    <tr>
-      <td class="g">
-        <Glyph state={state} />
-      </td>
-      <th scope="row">
-        <button
-          type="button"
-          class="link name"
-          title={`logs of ${ref}`}
-          onClick={() => update({ drill: { ...card.drill, unit: ref } })}
-        >
-          {unit.display_name || unit.name}
-        </button>
-        {!isQuiet(state) && (
-          <>
-            {' '}
-            <span class={`word tone-${state === 'failed' ? 'failure' : 'plain'}`}>
-              {busy ? `${busy}…` : state}
-              {unit.exit_code != null && state !== 'done' && (
-                <span class="exit"> · exit {unit.exit_code}</span>
-              )}
-            </span>
-          </>
-        )}
-      </th>
-      <td class="port dim">{port && `:${port}`}</td>
-      <td class="url">
-        {url && unit.state === 'ready' && (
-          <button type="button" class="link url" onClick={() => openUrl(url)}>
+    <li class="row">
+      <Shape state={state === 'waiting' ? 'idle' : state} />
+      <span class="name">{unit.display_name || unit.name}</span>
+      <span class="grow">
+        {url && unit.state === 'ready' && !daemonStopped() ? (
+          <LinkButton title={url} onClick={() => openUrl(url)}>
             {shortUrl(url)}
-          </button>
+          </LinkButton>
+        ) : (
+          url && <span class="ter">{shortUrl(url)}</span>
         )}
-      </td>
-      <td class="cpu">
-        <Spark
-          values={cpuHistory(card.snapshot?.top, lane.reference, unit.name)}
-          label={`${unit.name} cpu`}
-        />
-      </td>
-      {!readOnly() && (
-        <td class="act">
-          {live ? (
-            <>
-              <Button
-                icon="restart"
-                label={`restart ${unit.name}`}
-                iconOnly
-                disabled={!!busy}
-                onClick={() => act('restart', ref, `restarted ${ref}`)}
-              />
-              <Button
-                icon="stop"
-                label={`stop ${unit.name}`}
-                iconOnly
-                disabled={!!busy}
-                onClick={() => act('stop', ref, `stopped ${ref}`)}
-              />
-            </>
-          ) : (
-            <Button
-              icon={revive}
-              label={`${revive} ${unit.name}`}
-              iconOnly
-              disabled={!!busy}
-              onClick={() => act(revive, ref, `${revive}ed ${ref}`)}
-            />
-          )}
-        </td>
-      )}
-    </tr>
+      </span>
+      {port && <span class="col num w520">:{port}</span>}
+      <span class={`end ${wordClass(state === 'waiting' ? 'idle' : state)}`}>{words(state)}</span>
+      {why && <span class="line2 meta danger">{why}</span>}
+    </li>
   );
 }

@@ -1,49 +1,48 @@
-import { card, currentView, daemonStopped } from '../../store/card';
+import { card, currentView, resultLane, structured } from '../../store/card';
+import { Card, Line } from '../card';
 import { CleanPlanner } from '../clean-planner';
 import { FailureCard } from '../failure-card';
-import { FullscreenButton } from '../fullscreen-button';
 import { LaneCard } from '../lane-card';
 import { LanesBoard } from '../lanes-board';
 import { PairingCard } from '../pairing-card';
-import { PendingCard } from '../pending-card';
-import { StoppedCard } from '../stopped-card';
 import { TextCard } from '../text-card';
-import { Window } from '../window';
+
+/** An older card once a newer one for its lane is in the chat: one line, no buttons. */
+function Superseded() {
+  return (
+    <section class="card" aria-label="older card">
+      <p class="meta">
+        <span class="t">{resultLane(structured())}</span> · newer card below
+      </p>
+    </section>
+  );
+}
 
 /** The card for the current state. */
 export function App() {
   if (card.failed) {
     return (
-      <Window title={<b>devlanes</b>} label="devlanes">
-        <p class="tone-attention">! {card.failed}</p>
-        <p class="dim">this card runs inside an MCP Apps host, which answers its ui/initialize</p>
-      </Window>
+      <Card label="devlanes">
+        <Line tone="warn">{card.failed}</Line>
+      </Card>
     );
   }
-  if (!card.connected) return <p class="boot">connecting to the host…</p>;
-  const view = currentView();
-  // Only the views that poll the daemon have nothing to show without one.
-  if (
-    daemonStopped() &&
-    (card.drill || view === 'lane' || view === 'board' || view === 'failure')
-  ) {
-    return <StoppedCard />;
-  }
-  if (card.drill?.unit) return <FailureCard />;
-  switch (view) {
+  if (!card.connected) return null;
+  if (card.superseded) return <Superseded />;
+  switch (currentView()) {
     case 'lane':
       return <LaneCard />;
     case 'board':
-      return card.drill?.lane ? <LaneCard /> : <LanesBoard />;
+      return <LanesBoard />;
     case 'failure':
       return <FailureCard />;
     case 'clean':
       return <CleanPlanner />;
     case 'pair':
       return <PairingCard />;
+    // The host shows its own progress while a call runs and the result's text after
+    // it, so these render nothing and report a height of 0.
     case 'pending':
-      return <PendingCard tools={<FullscreenButton />} />;
-    // The host shows the result's text already, and an empty card reports height 0.
     case null:
       return null;
     default:

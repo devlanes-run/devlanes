@@ -59,11 +59,27 @@ export function reasonText(reason: RpcError | null | undefined): string {
   return String(reason.code || '').replace(/_/g, ' ');
 }
 
-/** The words of a command line, for the `$ devlanes ...` line. */
-export function commandLine(args: string[] | undefined): string {
-  return ['devlanes', ...(args || [])]
-    .map((word) => (/[\s"']/.test(word) ? JSON.stringify(word) : word))
-    .join(' ');
+/** A time of day as `14:02`, for "updated 14:02". */
+export function clock(ms: number): string {
+  const date = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** The lane part of a unit reference: `acme@2` of `acme@2:api`. */
+export function laneOf(ref: string): string {
+  return ref.split(':')[0] || ref;
+}
+
+/** The unit part of a unit reference: `api` of `acme@2:api`. */
+export function unitOf(ref: string): string {
+  return ref.includes(':') ? ref.slice(ref.indexOf(':') + 1) : ref;
+}
+
+/** A lane reference as its row shows it: `@2` of `acme@2`. */
+export function atIndex(ref: string): string {
+  const at = ref.indexOf('@');
+  return at < 0 ? ref : ref.slice(at);
 }
 
 /**

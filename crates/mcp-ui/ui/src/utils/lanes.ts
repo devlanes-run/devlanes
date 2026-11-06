@@ -77,11 +77,7 @@ export function phasesOf(lane: LaneSummary): Phase[] {
           .join(', ')
       });
     } else if (running) {
-      rows.push({
-        name,
-        state: 'starting',
-        detail: `${running.name} (${done.length + 1} of ${steps.length})`
-      });
+      rows.push({ name, state: 'starting', detail: running.name });
     } else if (done.length) {
       rows.push({
         name,
@@ -101,6 +97,54 @@ export function phasesOf(lane: LaneSummary): Phase[] {
     rows.push({ name: 'services', state, detail });
   }
   return rows;
+}
+
+/** Where a start is: the running phase as `Setup: migrate`, its place, and the bar's share. */
+export interface Progress {
+  label: string;
+  step: number;
+  steps: number;
+  share: number;
+}
+
+/** The progress of a lane's start from its phases, or null when every phase is done. */
+export function progressOf(lane: LaneSummary): Progress | null {
+  const phases = phasesOf(lane);
+  const index = phases.findIndex((phase) => phase.state !== 'done');
+  const current = phases[index];
+  if (!current) return null;
+  const name = current.name.charAt(0).toUpperCase() + current.name.slice(1);
+  let within = 0.5;
+  if (current.name === 'services') {
+    const active = activeServices(lane);
+    within = active.length ? active.filter((u) => u.state === 'ready').length / active.length : 0;
+  }
+  // Services get their phase once one runs; count it from the start so "2 of 3" holds.
+  const later = phases.some((phase) => phase.name === 'services')
+    ? 0
+    : servicesOf(lane).length
+      ? 1
+      : 0;
+  const steps = phases.length + later;
+  return {
+    label: `${name}: ${current.detail}`,
+    step: index + 1,
+    steps,
+    share: Math.min(1, (index + within) / steps)
+  };
+}
+
+/**
+ * The service whose URL is the lane's domain (usually `web`), which "Open" opens;
+ * without a domain, the first service with a public URL.
+ */
+export function domainService(
+  lane: Pick<LaneSummary, 'units' | 'domain'>
+): UnitSummary | undefined {
+  const services = servicesOf(lane).filter((u) => u.public_url);
+  const host = (url: string) => url.replace(/^\w+:\/\//, '').replace(/[/:].*$/, '');
+  const domain = lane.domain?.toLowerCase();
+  return (domain && services.find((u) => host(u.public_url || '') === domain)) || services[0];
 }
 
 /** The state a lane row shows: frozen and throttled come from its power. */
@@ -124,7 +168,8 @@ export function laneWords(lane: LaneLike, now: number): string {
     return `${state} ${since(now - lane.power.since_ms)}`;
   }
   if (state === 'running') return `${ready}/${active.length} ready`;
-  return state;
+  if (state === 'starting' && active.length) return `starting ${ready}/${active.length}`;
+  return state.replace(/_/g, ' ');
 }
 
 /** Who started the running units of a lane, one label each. */
