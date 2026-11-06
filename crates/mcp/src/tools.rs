@@ -128,8 +128,9 @@ when you hand work to the user for review.",
     Spec {
         path: &["wait"],
         globals: &["timeout"],
-        long_help: true,
-        guidance: "Call it when start, restart or reload returned at their timeout.",
+        // Its long help is about exit codes and the CLI's default timeout.
+        guidance: "Returns the reason and log tail of a failure, or what is ready at the \
+timeout. Call it when start, restart or reload returned at their timeout.",
         ..Spec::NONE
     },
     Spec {

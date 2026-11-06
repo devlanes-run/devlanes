@@ -341,7 +341,7 @@ expression: tools(&harness).await
   },
   {
     "name": "wait",
-    "description": "Wait until a unit or lane is ready or failed. Exits 0 when ready, 1 when it failed (with the reason and log tail) and 124 when --timeout passes first [default: 180s]. Call it when start, restart or reload returned at their timeout.",
+    "description": "Wait until a unit or lane is ready or failed. Returns the reason and log tail of a failure, or what is ready at the timeout. Call it when start, restart or reload returned at their timeout.",
     "inputSchema": {
       "type": "object",
       "properties": {
