@@ -41,6 +41,9 @@ impl Mcp {
 
     /// Like [`Mcp::spawn`], for a client with these `capabilities`.
     fn spawn_with(lab: &Lab, mut command: Command, capabilities: Value) -> Result<Self> {
+        // The runner's login shell is not the test's to read: without this the
+        // environment notes depend on the CI image's profile.
+        command.env("DEVLANES_SHELL_ENV", "0");
         command.stdin(Stdio::piped());
         let mut child = lab.spawn(command)?;
         let stdin = need(child.stdin.take(), "mcp stdin")?;

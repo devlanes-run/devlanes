@@ -167,6 +167,9 @@ fn main() -> ExitCode {
 /// Appends one line to the file at `path`.
 fn append(path: &str, line: &str) {
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(file, "{line}");
+        // One write per line: a start's events child appends to the same log at
+        // the same time, and `writeln!` may split the line and its newline into
+        // two writes that the other process's line can land between.
+        let _ = file.write_all(format!("{line}\n").as_bytes());
     }
 }
