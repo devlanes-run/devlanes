@@ -925,6 +925,11 @@ pub(crate) fn carries_env(context: &Context) -> Option<Arc<crate::model::EnvMap>
     })
 }
 
+/// Sets the daemon-wide flag once; true for the first caller.
+pub(crate) fn once(flag: &AtomicBool) -> bool {
+    !flag.swap(true, Ordering::SeqCst)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -973,9 +978,4 @@ mod tests {
         assert_eq!(names, ["DEVLANES_HOME", "PATH"]);
         assert!(carries_env(&Context::default()).is_none());
     }
-}
-
-/// Sets the daemon-wide flag once; true for the first caller.
-pub(crate) fn once(flag: &AtomicBool) -> bool {
-    !flag.swap(true, Ordering::SeqCst)
 }
