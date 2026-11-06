@@ -3,6 +3,7 @@
 //! was asked, so no daemon is involved.
 
 mod calls;
+mod cards;
 mod consent;
 mod listing;
 mod shell_env;

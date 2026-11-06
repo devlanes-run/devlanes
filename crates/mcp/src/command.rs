@@ -105,6 +105,20 @@ impl Call {
         )
     }
 
+    /// Whether this is `logs` with a query an agent narrows its reading with
+    /// (`--around`, `--grep`, `--cursor`, `--since`, `--head`, `--level`,
+    /// `--follow`), rather than a plain read of the latest lines.
+    pub fn log_query(&self) -> bool {
+        matches!(
+            &self.cli.command,
+            Some(Command::Logs(args)) if args.follow
+                || args.head.is_some()
+                || [&args.around, &args.grep, &args.cursor, &args.since, &args.level]
+                    .iter()
+                    .any(|value| value.is_some())
+        )
+    }
+
     /// The arguments with `--timeout` set to `timeout` in whole seconds, at
     /// least 1, in place of any the line has.
     pub fn with_timeout(&self, timeout: Duration) -> Vec<String> {

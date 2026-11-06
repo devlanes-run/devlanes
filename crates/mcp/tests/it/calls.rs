@@ -28,6 +28,7 @@ async fn a_call_runs_the_command() {
         assert_eq!(structured["args"], json!(["status"]));
         assert_eq!(structured["exit_code"], 0);
         assert_eq!(structured["view"], "lane");
+        assert_eq!(structured["card"], 1);
         assert_eq!(structured["data"]["items"][0]["reference"], "acme@1");
         assert_eq!(structured["data_truncated"], false);
         assert_eq!(structured["read_only"], false);
@@ -622,7 +623,7 @@ async fn snapshots_without_a_daemon() {
         assert!(!failed(&snapshot), "{}", text(&snapshot));
         assert_eq!(
             snapshot.structured_content.expect("structured content"),
-            json!({"status": null, "top": null, "hosts": null, "daemon": "stopped", "read_only": true})
+            json!({"status": null, "top": null, "hosts": null, "daemon": "stopped", "newest_card": {}, "read_only": true})
         );
         assert_eq!(harness.lines(), ["--output json status"]);
     })

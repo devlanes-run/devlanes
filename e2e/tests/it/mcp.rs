@@ -235,7 +235,7 @@ fn mcp_snapshot_never_spawns() -> Result<()> {
     )?;
     assert_eq!(
         snapshot["structuredContent"],
-        json!({"status": null, "top": null, "hosts": null, "daemon": "stopped", "read_only": false}),
+        json!({"status": null, "top": null, "hosts": null, "daemon": "stopped", "newest_card": {}, "read_only": false}),
         "{snapshot}"
     );
     assert!(!lab.daemon_running(), "app_snapshot started a daemon");

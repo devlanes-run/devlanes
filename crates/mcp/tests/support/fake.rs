@@ -147,11 +147,29 @@ fn main() -> ExitCode {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
-    let data = if var("FAKE_LARGE").is_some() {
+    let data = if let Some(data) =
+        var("FAKE_DATA").and_then(|data| serde_json::from_str(&data).ok())
+    {
+        data
+    } else if var("FAKE_LARGE").is_some() {
         json!({"items": ["x".repeat(300 * 1024)]})
     } else if has("status") {
-        let mut status =
-            json!({"items": [{"reference": "acme@1", "state": "running", "units": []}]});
+        // The lane `status LANE` names, two lanes with `FAKE_BOARD`, else acme@1.
+        let named = args
+            .iter()
+            .skip_while(|arg| *arg != "status")
+            .nth(1)
+            .filter(|arg| !arg.starts_with('-'));
+        let lanes = match named {
+            Some(lane) => vec![lane.as_str()],
+            None if var("FAKE_BOARD").is_some() => vec!["acme@1", "acme@2"],
+            None => vec!["acme@1"],
+        };
+        let items: Vec<Value> = lanes
+            .into_iter()
+            .map(|lane| json!({"reference": lane, "state": "running", "units": []}))
+            .collect();
+        let mut status = json!({"items": items});
         // A linked box, which `status` lists by its link state only.
         if var("FAKE_HOSTS").is_some() {
             status["hosts"] = json!([{"host": "hetzner", "state": "connected"}]);
@@ -159,6 +177,14 @@ fn main() -> ExitCode {
         status
     } else if has("remote") && has("ls") {
         json!({"items": [{"host": "hetzner", "state": "connected", "registry": {"lanes": [], "units": []}}]})
+    } else if has("start") && has("--lane") {
+        let lane = args
+            .iter()
+            .skip_while(|arg| *arg != "--lane")
+            .nth(1)
+            .cloned()
+            .unwrap_or_default();
+        json!({"lane": lane, "ready": true, "units": [], "failures": []})
     } else if has("top") {
         json!({"lanes": []})
     } else if has("logs") {

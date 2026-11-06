@@ -67,7 +67,7 @@ Relative paths start from the server's directory.";
 
 /// Description of the app-only `app_snapshot` tool.
 pub const APP_SNAPSHOT: &str = "Lanes and units for the lane card, with metrics when asked, \
-and the lanes of linked boxes when no lane is asked for.";
+the lanes of linked boxes when no lane is asked for, and the number of each lane's newest card.";
 
 /// Description of the app-only `app_logs` tool.
 pub const APP_LOGS: &str = "Log lines of units for the card's log viewer.";

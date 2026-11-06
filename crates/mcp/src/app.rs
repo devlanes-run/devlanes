@@ -163,8 +163,13 @@ async fn run(
                 .map_err(io)?;
             if error_of(&output.data, "daemon_not_running").is_some() {
                 let mut result = text_result("the daemon is not running".to_owned(), false);
-                result.structured_content =
-                    Some(json!({"status": null, "top": null, "hosts": null, "daemon": "stopped"}));
+                result.structured_content = Some(json!({
+                    "status": null,
+                    "top": null,
+                    "hosts": null,
+                    "daemon": "stopped",
+                    "newest_card": {},
+                }));
                 return Ok(result);
             }
             if output.exit_code != 0 {
@@ -215,10 +220,21 @@ async fn run(
                 .data
                 .get("items")
                 .and_then(Value::as_array)
-                .map_or(0, Vec::len);
-            let mut result = text_result(format!("{lanes} lanes"), false);
-            result.structured_content =
-                Some(json!({"status": output.data, "top": top, "hosts": hosts}));
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            // A card that is not its lane's newest stops polling.
+            let newest_card = server.cards().newest(
+                lanes
+                    .iter()
+                    .filter_map(|lane| lane.get("reference").and_then(Value::as_str)),
+            );
+            let mut result = text_result(format!("{} lanes", lanes.len()), false);
+            result.structured_content = Some(json!({
+                "status": output.data,
+                "top": top,
+                "hosts": hosts,
+                "newest_card": newest_card,
+            }));
             Ok(result)
         }
         "app_logs" => {

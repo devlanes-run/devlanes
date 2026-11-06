@@ -39,7 +39,7 @@ expression: tools(&harness).await
   },
   {
     "name": "app_snapshot",
-    "description": "Lanes and units for the lane card, with metrics when asked, and the lanes of linked boxes when no lane is asked for.",
+    "description": "Lanes and units for the lane card, with metrics when asked, the lanes of linked boxes when no lane is asked for, and the number of each lane's newest card.",
     "inputSchema": {
       "type": "object",
       "properties": {

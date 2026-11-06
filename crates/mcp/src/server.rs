@@ -45,6 +45,8 @@ pub struct Server {
     config: Arc<Config>,
     calls: Calls,
     shell_env: shell_env::Cache,
+    /// Numbers each lane's cards, for `structuredContent.card`.
+    cards: view::Cards,
     /// Keys the hash that ties a consent answer (2026-07-28) to its command
     /// line, so a client cannot carry a yes over to another command.
     consent_key: std::hash::RandomState,
@@ -80,6 +82,7 @@ impl Server {
             config: Arc::new(config),
             calls: Calls::default(),
             shell_env,
+            cards: view::Cards::default(),
             consent_key: std::hash::RandomState::new(),
         }
     }
@@ -233,7 +236,15 @@ impl Server {
                 Answer::Pending(result) => return Ok(result.into()),
             }
         }
-        Ok(result(&call, &cwd, &output, &notes, self.config.read_only).into())
+        Ok(result(
+            &call,
+            &cwd,
+            &output,
+            &notes,
+            self.config.read_only,
+            &self.cards,
+        )
+        .into())
     }
 
     /// The directory a call runs in, and whether `--lane` applies: the call's
@@ -394,6 +405,11 @@ impl Server {
     /// The `--timeout` for blocking commands of `client` that name none.
     pub(crate) fn default_timeout(&self, client: &str) -> std::time::Duration {
         host::default_timeout(client, &self.config.env)
+    }
+
+    /// The card numbers of each lane.
+    pub(crate) fn cards(&self) -> &view::Cards {
+        &self.cards
     }
 
     /// `--lane`.
@@ -603,13 +619,16 @@ pub(crate) fn error_of<'a>(data: &'a Value, code: &str) -> Option<&'a Value> {
     .and_then(|document| document.get("error"))
 }
 
-/// The tool result of a finished command, for a server with `read_only`.
+/// The tool result of a finished command, for a server with `read_only`. A
+/// result with a card about one lane takes that lane's next number from
+/// `cards`, so the lane's older cards can tell they are no longer the newest.
 fn result(
     call: &Call,
     cwd: &Path,
     output: &Output,
     notes: &[String],
     read_only: bool,
+    cards: &view::Cards,
 ) -> CallToolResult {
     let (data, truncated) = capped(&output.data);
     let mut text = output.stdout.clone();
@@ -642,13 +661,20 @@ fn result(
     if text.trim().is_empty() {
         text = format!("devlanes {} exited {}\n", call.path, output.exit_code);
     }
+    let view = view::select(call, output.exit_code, &output.data);
+    // A result without a card shows nothing, so it must not make a lane's
+    // card look older than the one the user sees.
+    let card = view
+        .and_then(|_| view::lane_of(&output.data))
+        .map(|lane| cards.next(lane));
     let mut result = text_result(text, output.exit_code != 0 || output.cancelled);
     result.structured_content = Some(json!({
         "command": call.path,
         "args": call.args,
         "cwd": cwd,
         "exit_code": output.exit_code,
-        "view": view::select(&call.path, output.exit_code, &output.data),
+        "view": view,
+        "card": card,
         "data": data,
         "data_truncated": truncated,
         "read_only": read_only,
