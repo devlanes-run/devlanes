@@ -36,8 +36,6 @@ actionlint
 sh packaging/scripts/check.sh   # release scripts and install.sh against fake binaries
 ```
 
-The agent plugin's hooks run `devlanes __agent-hook`, which lives in `crates/agent-hooks`; `bins/devlanes/tests/it/agent_hook.rs` runs the plugin's hook command lines in the shells the agents use.
-
 `install.ps1`, `package.ps1`, the npm launcher and the Windows wheel have a Windows check against a fake `devlanes.exe`, which CI runs in its `packaging-windows` job. It needs PSScriptAnalyzer (CI pins 1.25.0), both `powershell.exe` and `pwsh`, `node` and `python`. It changes your user `PATH` while it runs and writes the old value back at the end:
 
 ```powershell

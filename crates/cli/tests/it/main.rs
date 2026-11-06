@@ -1684,7 +1684,6 @@ fn completion_is_lazy_and_filters_existing_candidates() {
             .contains("COMPLETE=")
     );
 }
-mod agent_guide;
 mod choose;
 mod ci;
 mod codes;

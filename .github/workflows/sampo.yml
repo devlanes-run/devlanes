@@ -1,8 +1,8 @@
 name: Sampo
 # Sampo's action keeps the release pull request (branch release/main) up to date while
-# change files are pending, and tags the new devlanes version once it merges. The steps
-# after it cover what Sampo doesn't know about: the plugin manifests carry the version,
-# and its tags don't start release.yml. packaging/README.md has the details.
+# change files are pending, and tags the new devlanes version once it merges. The step
+# after it starts release.yml, which Sampo's tags don't. packaging/README.md has the
+# details.
 on:
   push:
     branches: [main]
@@ -23,7 +23,6 @@ jobs:
       pull-requests: write
       actions: write
     env:
-      BRANCH: release/main
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,24 +40,6 @@ jobs:
         uses: bruits/sampo/crates/sampo-github-action@01b484549021f6f458c5aa93820d4a63a39d9485 # cargo-sampo-github-action-v0.22.0
         env:
           GITHUB_TOKEN: ${{ github.token }}
-
-      - name: Version the plugin manifests on the release branch
-        if: steps.sampo.outputs.released == 'true'
-        run: |
-          git fetch origin "$BRANCH"
-          git switch --force-create "$BRANCH" "origin/$BRANCH"
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("bins/devlanes/Cargo.toml", "rb"))["package"]["version"])')
-          # sed keeps the file's formatting, which jq would rewrite.
-          for plugin in agent-plugin/.claude-plugin/plugin.json agent-plugin/.codex-plugin/plugin.json; do
-            sed -i "s/^  \"version\": \"[^\"]*\"/  \"version\": \"$version\"/" "$plugin"
-            jq -e --arg version "$version" '.version == $version' "$plugin" >/dev/null
-          done
-          git add agent-plugin/.claude-plugin/plugin.json agent-plugin/.codex-plugin/plugin.json
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit --quiet -m "Version the plugin manifests for $version"
-          git push origin "$BRANCH"
 
       # `published` means publish created a tag, and `tag_unpublished` in
       # .sampo/config.toml leaves the devlanes one as the only candidate.
