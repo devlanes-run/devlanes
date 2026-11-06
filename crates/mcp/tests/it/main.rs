@@ -5,6 +5,7 @@
 mod calls;
 mod consent;
 mod listing;
+mod shell_env;
 
 use std::{
     collections::BTreeMap,
@@ -13,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-use devlanes_mcp::{Config, Server, UI_EXTENSION, UiResource};
+use devlanes_mcp::{Config, Server, UI_EXTENSION, UiResource, shell_env::ShellEnvError};
 use rmcp::{
     ClientHandler, ErrorData as McpError, RoleClient,
     model::{
@@ -33,7 +34,7 @@ use serde_json::{Value, json};
 pub const LIMIT: Duration = Duration::from_secs(30);
 
 /// The fake devlanes binary.
-const FAKE: &str = env!("CARGO_BIN_EXE_devlanes-mcp-fake");
+pub const FAKE: &str = env!("CARGO_BIN_EXE_devlanes-mcp-fake");
 
 /// A test client: its name and capabilities, its answer to consent questions,
 /// and what the server sent it.
@@ -183,6 +184,8 @@ pub async fn connect(
         env,
         cwd: dir.path().to_path_buf(),
         agent_detected: false,
+        // No test reads the login shell of whoever runs it.
+        shell_env: |_, _| Err(ShellEnvError::Disabled),
     };
     adjust(&mut config);
     let (server_side, client_side) = tokio::io::duplex(1 << 20);

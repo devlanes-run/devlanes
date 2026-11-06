@@ -56,6 +56,15 @@ fn main() -> ExitCode {
     if let Some(code) = remote::askpass_from_env() {
         return ExitCode::from(code);
     }
+    // The payload `devlanes mcp` has the user's login shell run to print the
+    // environment its profile set up, as VS Code runs itself as Node and Zed
+    // runs `zed --printenv`. Not part of the CLI, and nothing else may print.
+    if std::env::args_os()
+        .nth(1)
+        .is_some_and(|arg| arg == devlanes_mcp::shell_env::PAYLOAD_ARG)
+    {
+        return devlanes_mcp::shell_env::print_payload(std::env::args_os().skip(2));
+    }
     // CompleteEnv must run before any thread exists; it exits when completing.
     completion::install();
     // A bare `-v` is how most tools print their version, and the TUI it would

@@ -182,6 +182,12 @@ async fn a_lane_without_env_gets_the_servers() {
             "{}",
             text(&result)
         );
+        // Nothing failed, so there is nothing to fix.
+        assert!(
+            !text(&result).contains("devlanes restart"),
+            "{}",
+            text(&result)
+        );
         let from_lane: Vec<Value> = harness
             .runs()
             .iter()
